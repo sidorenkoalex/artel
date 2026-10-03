@@ -1039,6 +1039,10 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
         path.mkdir(parents=True, exist_ok=True)
     if task_id is not None:
         from . import acceptance, artifact_branch
+        # Сначала забрать `tasks/<id>/` рабочей копии кода в ссылку, потом
+        # убирать: иначе файл, оставленный там между шагами, пропал бы до
+        # запуска роли, и сбор в конце шага его уже не увидел бы.
+        harvested = checkpoint.harvest_code_copy_docs(conn, task_id, target)
         acceptance.drop_from_code_copy(task_id, path)
         # Каталог документов заводит сама выкладка (ссылка есть с `new`);
         # отдельный `mkdir` здесь завёл бы его и без ссылки — в том числе
@@ -1047,7 +1051,20 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
             task_id, artifact_branch.docs_root(target))
         store.update_task(conn, task_id,
                           materialized_artifact_sha=materialized_sha or None)
+        if harvested and not materialized_sha:
+            _place_harvested_docs(harvested, artifact_branch.docs_root(target))
     return path
+
+
+def _place_harvested_docs(files: dict[str, bytes], docs_root: Path) -> None:
+    """Файлы, забранные из рабочей копии кода (`checkpoint.
+    harvest_code_copy_docs`), — в каталог документов, когда выкладка из
+    ссылки не состоялась: роль увидит их там, а автокоммит конца шага
+    заберёт их тем же путём, что и правку роли."""
+    for rel, content in files.items():
+        dest = docs_root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
 
 
 def _step_docs_dir(conn, task_id: str) -> Path:

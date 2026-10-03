@@ -72,6 +72,55 @@ class RoleCwdLaysDocsOutsideCodeCopyTest(DocsDirSandbox):
                          SPEC_TEXT)
         self.assertFalse((self.wt / "tasks" / TASK).exists())
 
+    def test_code_copy_doc_left_before_step_reaches_ref_and_docs_dir(self):
+        """Документ, оставленный в `tasks/<id>/` кода до шага, не теряется.
+
+        Сценарий: до старта шага в рабочей копии кода лежит PLAN.md
+        (прерванный шаг на прежнем правиле путей, песочница теста).
+        `runner.role_cwd` забирает его в ссылку новым коммитом поверх
+        прежней головы, выкладывает в каталог документов и убирает
+        `tasks/<id>/` из рабочей копии кода.
+
+        Ловит мутацию: `role_cwd` не зовёт `checkpoint.
+        harvest_code_copy_docs` и сразу убирает каталог — PLAN.md нет ни в
+        ссылке, ни в каталоге документов."""
+        before = artifact_branch.ref_head(TASK)
+        left = self.wt / "tasks" / TASK / "PLAN.md"
+        left.parent.mkdir(parents=True)
+        left.write_text("план до шага\n", encoding="utf-8")
+
+        runner.role_cwd(self.conn, TASK, config.DEFAULT_TARGET)
+
+        self.assertEqual(self.ref_text("PLAN.md"), "план до шага\n")
+        self.assertNotEqual(artifact_branch.ref_head(TASK), before)
+        self.assertEqual((self.docs / "PLAN.md").read_text(encoding="utf-8"),
+                         "план до шага\n")
+        self.assertFalse((self.wt / "tasks" / TASK).exists())
+        self.assertIsNone(fixation.check_integrity(self.conn, TASK))
+
+    def test_code_copy_doc_lands_in_docs_dir_when_layout_fails(self):
+        """Выкладка из ссылки не состоялась — забранный документ всё равно в
+        каталоге документов.
+
+        Сценарий: `materialize_task_dir` отвечает пустой строкой (git не
+        ответил); PLAN.md из `tasks/<id>/` кода оказывается в каталоге
+        документов, в рабочей копии кода его нет.
+
+        Ловит мутацию: `role_cwd` не кладёт забранные файлы в каталог
+        документов при несостоявшейся выкладке — PLAN.md пропадает до
+        запуска роли."""
+        left = self.wt / "tasks" / TASK / "PLAN.md"
+        left.parent.mkdir(parents=True)
+        left.write_text("план до шага\n", encoding="utf-8")
+
+        with mock.patch.object(artifact_branch, "materialize_task_dir",
+                               return_value=""):
+            runner.role_cwd(self.conn, TASK, config.DEFAULT_TARGET)
+
+        self.assertEqual((self.docs / "PLAN.md").read_text(encoding="utf-8"),
+                         "план до шага\n")
+        self.assertFalse((self.wt / "tasks" / TASK).exists())
+
 
 class StepAutocommitFromDocsDirTest(DocsDirSandbox):
 

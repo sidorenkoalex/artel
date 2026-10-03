@@ -1,5 +1,5 @@
 ---
-built_at_sha: 579c4567fccbda07e8fce2791cc5d4a9ffd094e5
+built_at_sha: f0f48847bbea45a71e410b33a4b5d34f74b194b5
 ---
 
 # Codebase-map пульта
@@ -378,6 +378,7 @@ built_at_sha: 579c4567fccbda07e8fce2791cc5d4a9ffd094e5
 - `commit_step_artifacts`
 - `commit_success_checkpoint`
 - `commit_timeout_checkpoint`
+- `harvest_code_copy_docs`
 - `pult_commit_failed_paths`
 - `task_dir_zone`
 

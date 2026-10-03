@@ -940,6 +940,56 @@ def _take_code_copy_docs(conn, task_id: str, code_root: Path, stray: Path,
     return collected[0] if collected is not None else {}
 
 
+CODE_COPY_DOCS_AT_START_MESSAGE = "документы из рабочей копии кода на старте шага"
+
+
+def harvest_code_copy_docs(conn, task_id: str, target: str
+                           ) -> dict[str, bytes]:
+    """`tasks/<id>/` рабочей копии кода на СТАРТЕ шага — в ссылку документов
+    тем же узлом, что и автокоммит в конце шага (фильтр посторонних файлов,
+    конфликт-гвард против выкладки прошлого шага, коммит только при
+    изменении), и прочь с диска (ADR-0021, этап 1, AC-2). Без этого
+    выкладка на старте (`runner.role_cwd`) убирала бы каталог раньше, чем
+    сбор в конце шага его увидит: файл, оставленный там между шагами
+    (прежнее правило путей HOME роли, прерванный шаг на старом коде),
+    терялся бы молча.
+
+    Возвращает файлы, прошедшие фильтры (`{tasks/<id>/…: bytes}`):
+    `runner.role_cwd` кладёт их в каталог документов, если выкладка из
+    ссылки не состоялась (git не ответил, ссылки нет, ссылка сдвинута мимо
+    пульта) — иначе они снова пропали бы до запуска роли."""
+    from . import artifact_branch
+    if target == config.DEFAULT_TARGET:
+        code_root = workspace.path(task_id)
+    else:
+        code_root = config.PROJECTS / target / "workspace"
+    if code_root.resolve() == config.ROOT.resolve():
+        return {}
+    stray = code_root / "tasks" / task_id
+    if not stray.is_dir():
+        return {}
+    branch = artifact_branch.branch_name(task_id)
+    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    files = _take_code_copy_docs(conn, task_id, code_root, stray, existing)
+    files = _journal_stray_step_artifacts(conn, task_id, files)
+    if not files:
+        return {}
+    moved = _docs_ref_moved_past_pult(conn, task_id)
+    if moved is not None:
+        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
+                      f"документы рабочей копии кода не перенесены в ссылку "
+                      f"на старте шага: {moved}")
+        return files
+    baseline_sha = store.get_task(conn, task_id)["materialized_artifact_sha"] or ""
+    files = _apply_artifact_conflict_guard(conn, task_id, files, existing,
+                                           baseline_sha, branch)
+    _commit_step_artifacts_to_branch(
+        conn, task_id, files, [],
+        f"{task_id}: {CODE_COPY_DOCS_AT_START_MESSAGE} (автокоммит оркестратора)",
+        stray)
+    return files
+
+
 def _merge_code_copy_docs(conn, task_id: str, files: dict[str, bytes],
                           stray_files: dict[str, bytes],
                           baseline_sha: str) -> dict[str, bytes]:
