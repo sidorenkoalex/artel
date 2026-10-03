@@ -346,6 +346,10 @@ class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
         sha = artifact_branch.commit_files(
             self.TASK, files, f"{self.TASK}: {message}")
         self.assertTrue(sha, f"коммит {message!r} не удался")
+        # Документы шага в ссылку переносит автокоммит пульта, и он же их
+        # перефиксирует: без этого запись пульта ниже видит сдвиг мимо
+        # пульта (SPEC 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
 
     def test_empty_paths_argument_refuses(self):
         """Ловит мутацию: пустой/пробельный аргумент путей коммитит

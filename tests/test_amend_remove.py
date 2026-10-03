@@ -88,6 +88,10 @@ class _RemovalMixin:
             f"{self.TASK}: README планки")
         self.assertTrue(sha, "README в артефактную ветку не закоммичен")
         store.update_task(store.db(), self.TASK, tests_locked_sha=sha)
+        # Запись в ссылку — как у записи пульта, с перефиксацией: иначе
+        # `amend-tests` видит сдвиг мимо пульта (SPEC
+        # 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
 
     def plank_to_disk(self) -> None:
         for rel, text in artifact_branch.read_tree(self.TASK).items():
@@ -150,6 +154,9 @@ class _PlainSandbox(_RemovalMixin, RealGitSandbox):
     def docs_commit(self, files: dict, message: str) -> None:
         self.assertTrue(artifact_branch.commit_files(
             self.TASK, files, f"{self.TASK}: {message}"))
+        # Перефиксация — как у автокоммита пульта (SPEC
+        # 01M41AB597B330P2RCXCMVRZPE): иначе переход видит сдвиг.
+        store.record_fixation(store.db(), self.TASK)
 
 
 class _LongLivedSandbox(_RemovalMixin, _LockedSandbox):

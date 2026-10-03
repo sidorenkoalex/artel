@@ -522,6 +522,7 @@ def _recovery_exit(conn, task_id: str, detail: str) -> None:
 
 
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
     # AC-5: «флага нет» и «флаг пуст» — один и тот же отказ, не только
@@ -822,7 +823,11 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     кодовой ветки с перечнем лока (путь восстановления после сбоя между
     записями worktree-режима). Перечень нового лока — всегда пересчёт по
     голове кодовой ветки: не совпадающий с ним перечень головы ветки
-    документов заменяется коммитом пересчитанного."""
+    документов заменяется коммитом пересчитанного.
+
+    Голова, сдвинутая мимо пульта, лок не получает: правку планки ролью
+    узаконивает не эта команда, а `approve <id> <sha>`."""
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
     if not (reason or "").strip():

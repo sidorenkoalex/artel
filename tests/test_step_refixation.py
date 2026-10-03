@@ -292,9 +292,23 @@ class SuccessfulTransitionUnaffectedTest(_RefixationTest):
     отдельно от обычной `record_fixation` — обёртка не вмешивается."""
 
     def test_no_extra_refixation_journal_on_success(self):
+        """Успешный переход после записи документов шага — без записи
+        «sha перефиксирован после отклонённого перехода», фиксация равна
+        голове ссылки.
+
+        С SPEC 01M41AB597B330P2RCXCMVRZPE переход не узаконивает голову,
+        сдвинутую мимо пульта: документы шага в ссылку переносит автокоммит
+        пульта, и он же их перефиксирует — здесь это `record_fixation`
+        после коммита роли.
+
+        Ловит мутацию: переход `store.set_state` объявляет инцидентом
+        голову, перефиксированную записью пульта (сверка не с
+        `tasks.fixed_sha`), — задача уходит в `escalated` вместо `in_dev`;
+        либо переход перестал фиксировать голову — `fixed_sha` отстаёт."""
         self.enter_tests_writing()
         self.write_ac_test(AC_TEST_WITH_MARKER)
         self.commit_as_role("test_author закончил")
+        store.record_fixation(store.db(), self.TASK)
 
         self.capture(fsm.cmd_advance, self.TASK)  # tests_writing -> in_dev
 

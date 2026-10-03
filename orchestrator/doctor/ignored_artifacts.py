@@ -44,6 +44,16 @@ def _fix_ignored_artifact_files(conn) -> None:
         if not ignored:
             continue
         to_remove = sorted(ignored)
+        # Голова, разошедшаяся с фиксацией, уборки не получает: коммит
+        # поверх подмены с перефиксацией узаконил бы её.
+        drift = doctor.fixation.ref_drift(conn, task_id)
+        if drift is not None:
+            doctor.fixation.journal_drift(
+                conn, task_id, drift, "doctor",
+                "уборка игнорируемых файлов артефактной ветки не выполнена")
+            print(f"  [!!] {task_id}: уборка игнорируемых файлов пропущена — "
+                  f"{drift.text()}")
+            continue
         message = (f"{task_id}: уборка игнорируемых файлов артефактной "
                   f"ветки (doctor --fix)")
         commit_sha = doctor.artifact_branch.commit_files(task_id, {}, message,

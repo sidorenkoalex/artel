@@ -229,6 +229,8 @@ class WorktreeModeTest(_LockedSandbox):
         artifact_branch.commit_files(
             self.TASK, {acceptance_gates.long_lived_manifest_rel(self.TASK):
                         "мусор\n"}, "испорченный перечень")
+        # Коммит пульта перефиксирует ссылку (SPEC 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
         self.set_row(tests_locked_sha=gitcmd.branch_head_sha(self.docs_branch))
         before = self.heads()
         self.write_wt(self.own, long_lived_source(tag="правка Оператора"))
@@ -410,6 +412,9 @@ class FromBranchModeTest(_LockedSandbox):
             self.TASK, {acceptance_gates.long_lived_manifest_rel(self.TASK):
                         guard.render_long_lived_manifest({self.own: "0" * 64})},
             "перечень в обход команды")
+        # «В обход команды», но записью пульта (автокоммит шага), которая
+        # перефиксирует ссылку (SPEC 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
         before = self.heads()
 
         out = self.amend(from_branch=True)
@@ -468,6 +473,9 @@ class FromBranchModeTest(_LockedSandbox):
         artifact_branch.commit_files(
             self.TASK, {acceptance_gates.long_lived_manifest_rel(self.TASK):
                         bypass}, "перечень в обход команды")
+        # «В обход команды», но записью пульта (автокоммит шага), которая
+        # перефиксирует ссылку (SPEC 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
 
         out = self.amend(from_branch=True)
 

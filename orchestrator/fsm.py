@@ -1073,6 +1073,11 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     state = t["state"]
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
         return
+    # Явный sha, совпавший с живой головой, — решение Оператора: голову,
+    # ушедшую мимо пульта, переход ниже фиксирует, а не объявляет
+    # инцидентом (SPEC 01M41AB597B330P2RCXCMVRZPE, требование 6).
+    if state in APPROVE_NEEDS_SHA and sha is not None:
+        fixation.legitimize(conn, task_id)
     # Таблица «состояние -> обработчик» (SPEC требование 3): каждый
     # обработчик — прежнее тело своей ветки `if state == ...` (переход
     # без изменения поведения); ветка «иначе» ниже несёт прежний текст

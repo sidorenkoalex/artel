@@ -4,7 +4,7 @@
 from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
-                cycle_hint, github_adapter, gitcmd, store, workspace)
+                cycle_hint, fixation, github_adapter, gitcmd, store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
 
@@ -330,6 +330,20 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
                          f"посчитана — git не ответил, перечень не записан")
         digests[path] = digest
     rel = long_lived_manifest_rel(task_id)
+    drift = fixation.ref_drift(conn, task_id)
+    if drift is not None and drift.moved:
+        # Перечень поверх подмены не пишется; переход ниже сам уведёт
+        # задачу в эскалацию инцидентом (`store.set_state`).
+        return None
+    if drift is not None:
+        # Голова не прочитана (git не ответил или ссылки нет): запись в
+        # отсутствующую ссылку дала бы корневой коммит, а его перефиксация
+        # узаконила бы удаление ссылки ролью.
+        return GateRefusal(
+            f"переход отклонён: {fixation.DOCS_REF_UNREAD_ACTION}",
+            f"{rel} не записан в ветку документов: {drift.text()}",
+            f"восстанови {artifact_branch.branch_name(task_id)} или разбери "
+            f"инцидент, затем artel.py advance {task_id}")
     sha = artifact_branch.commit_files(
         task_id, {rel: guard.render_long_lived_manifest(digests)},
         f"{task_id}: перечень долгоживущих тестов (выход из tests_writing)")
@@ -338,6 +352,9 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
             task_id, f"{rel} не записан в ветку документов — git не ответил")
     store.journal(conn, task_id, "fsm", "перечень долгоживущих тестов записан",
                   f"{rel}: {len(digests)} файл(ов), sha {sha}")
+    # Запись пульта перефиксирует свой коммит сама: переход ниже сверяет
+    # голову с фиксацией (SPEC 01M41AB597B330P2RCXCMVRZPE, требование 4).
+    store.record_fixation(conn, task_id)
     return None
 
 

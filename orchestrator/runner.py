@@ -397,10 +397,11 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
                         expected_state=t["state"],
                         detail=f"инцидент целостности: {incident}")
         print(f"[{task_id}] СТОП: инцидент целостности — {incident}")
-        # Sha, перефиксированный только что этим же set_state (SPEC
-        # «approve: полный sha в подсказках», требование 1) — готовое к
-        # копированию значение вместо литерального плейсхолдера `<sha>`,
-        # который Оператору иначе пришлось бы искать самому.
+        # Живой sha головы (SPEC «approve: полный sha в подсказках»,
+        # требование 1) — готовое к копированию значение вместо
+        # литерального плейсхолдера `<sha>`. Переход в эскалацию выше его
+        # не перефиксирует (SPEC 01M41AB597B330P2RCXCMVRZPE): узаконить
+        # голову может только `approve` с этим явным sha.
         sha_hint = fixation.approve_sha_hint(task_id, target)
         print(f"  разберись и: artel.py approve {task_id}{sha_hint}")
         return "return", None

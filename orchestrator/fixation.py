@@ -30,7 +30,9 @@ approve, REVIEW.md T021 замечание 1 итераций 1-2). Обе чи�
 ссылки и ничего не коммитят: у ссылки нет рабочей копии, которую можно
 было бы закоммитить или найти грязной.
 """
+import sys
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from . import config, gitcmd, store
 
@@ -149,6 +151,118 @@ def check_integrity(conn, task_id: str) -> str | None:
     if not clean:
         return f"грязная копия артефактов при sha {fixed}"
     return None
+
+
+# Именованная причина инцидента: голова ссылки документов ушла от
+# `tasks.fixed_sha` мимо записей пульта (каждая запись пульта перефиксирует
+# свой коммит сама — расхождение перед следующей записью оставила роль).
+DOCS_REF_INCIDENT_ACTION = ("инцидент целостности: ссылка документов "
+                            "сдвинута мимо пульта")
+DOCS_REF_UNREAD_ACTION = ("фиксация не обновлена: голова ссылки документов "
+                          "не прочитана")
+LEGITIMIZED_ACTION = "голова ссылки документов узаконена Оператором"
+
+
+class RefDrift(NamedTuple):
+    """Расхождение головы ссылки документов с `tasks.fixed_sha`: `head`
+    пуст — git не ответил (голова не прочитана), иначе голова ушла мимо
+    пульта."""
+    fixed: str
+    head: str
+
+    @property
+    def moved(self) -> bool:
+        return bool(self.head)
+
+    def text(self) -> str:
+        head = self.head or "не прочитана (git не ответил)"
+        return f"зафиксировано {self.fixed}, голова ссылки {head}"
+
+
+def ref_drift(conn, task_id: str) -> RefDrift | None:
+    """Единственный узел сверки перед записью пульта, которая перефиксирует
+    документы задачи (переход FSM, `answer`/`zones-extend`, `amend-tests`,
+    коммит закрытия, `doctor --fix`, чекпоинты шага, `kill`): `None` —
+    голова ссылки там, где её оставил пульт, или фиксации ещё нет (сверять
+    не с чем, как у `check_integrity`). Иначе запись не коммитит поверх
+    головы и не перефиксирует её: подмену узаконивает только `approve <id>
+    <sha>` (`legitimize`), а при неответившем git фиксация остаётся
+    прежней, и сверка на старте шага отказывает fail-closed.
+
+    Голова читается в репозитории задачи (`read` -> `artifact_branch.
+    ref_head`): для внешнего проекта — его git, не git главной копии.
+    Голова читается и без фиксации — тот же порядок git-вызовов, что у
+    прежней сверки чекпоинтов (`checkpoint._docs_ref_moved_past_pult`)."""
+    head, _clean = read(task_id, store.task_target(conn, task_id))
+    fixed = store.get_task(conn, task_id)["fixed_sha"]
+    if not fixed or head == fixed:
+        return None
+    return RefDrift(fixed, head)
+
+
+def journal_drift(conn, task_id: str, drift: RefDrift, actor: str,
+                  what: str) -> None:
+    """Запись журнала о невыполненной записи пульта: инцидент целостности
+    при сдвиге мимо пульта, иначе — именованное «голова не прочитана»."""
+    action = DOCS_REF_INCIDENT_ACTION if drift.moved else DOCS_REF_UNREAD_ACTION
+    store.journal(conn, task_id, actor, action, f"{what}: {drift.text()}")
+
+
+def incident_refusal(task_id: str, drift: RefDrift, what: str) -> str:
+    """Текст именованного отказа команды при сдвиге мимо пульта."""
+    return (f"[{task_id}] {what} отклонён: {DOCS_REF_INCIDENT_ACTION} — "
+            f"{drift.text()}\n  разберись и: artel.py approve {task_id} "
+            f"{drift.head}")
+
+
+def unread_refusal(task_id: str, drift: RefDrift, what: str) -> str:
+    """Текст именованного отказа записи, когда фиксация есть, а голова
+    ссылки не прочитана."""
+    return f"[{task_id}] {what} отклонён: {DOCS_REF_UNREAD_ACTION} — {drift.text()}"
+
+
+def stop_on_ref_drift(conn, task_id: str, actor: str, what: str) -> None:
+    """Команда Оператора, коммитящая в ссылку документов (`answer`,
+    `zones-extend`, `amend-tests`), при любом расхождении головы с живой
+    фиксацией не пишет ничего и кончается именованным отказом.
+
+    Сдвиг мимо пульта — инцидент: рабочая задача уходит в эскалацию (сам
+    переход не коммитит паспорт и не перефиксирует — `store.set_state`),
+    уже эскалированная остаётся в эскалации. Голова не прочитана (git не
+    ответил или ссылки нет — роль могла её удалить) — отказ без смены
+    состояния: запись в отсутствующую ссылку создала бы корневой коммит, и
+    его перефиксация узаконила бы потерю документов, а сверка на старте
+    шага перестала бы отказывать."""
+    drift = ref_drift(conn, task_id)
+    if drift is None:
+        return
+    if not drift.moved:
+        journal_drift(conn, task_id, drift, actor, f"{what} не выполнен")
+        sys.exit(unread_refusal(task_id, drift, what))
+    state = store.get_task(conn, task_id)["state"]
+    if state in ("escalated", "done", "killed"):
+        journal_drift(conn, task_id, drift, actor, f"{what} не выполнен")
+    else:
+        store.update_task(conn, task_id, escalated_from=state)
+        store.set_state(conn, task_id, "escalated", actor,
+                        expected_state=state,
+                        detail=f"{DOCS_REF_INCIDENT_ACTION}: {what} не "
+                               f"выполнен")
+    sys.exit(incident_refusal(task_id, drift, what))
+
+
+def legitimize(conn, task_id: str) -> None:
+    """`approve <id> <sha>` с явным sha, уже сверенным с живой головой
+    (`fsm.confirm_fixation`), — решение Оператора: голова, ушедшая мимо
+    пульта, становится фиксацией, и переход approve её больше не считает
+    инцидентом."""
+    drift = ref_drift(conn, task_id)
+    if drift is None or not drift.moved:
+        return
+    store.update_task(conn, task_id, fixed_sha=drift.head)
+    store.journal(conn, task_id, "operator", LEGITIMIZED_ACTION,
+                  f"approve с явным sha: было {drift.fixed}, "
+                  f"теперь {drift.head}")
 
 
 def _parse_step_ts(ts: str) -> float:

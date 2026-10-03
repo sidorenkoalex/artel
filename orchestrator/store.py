@@ -624,7 +624,45 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
     (`liveness._age_seconds` и приёмочный тест tasks/T044); `tasks.updated_at`
     обратно не парсится нигде в кодовой базе, так что более точный формат
     именно здесь ничего не ломает.
+
+    Перед переходом голова ссылки документов сверяется с `fixed_sha`
+    (`fixation.ref_drift`, SPEC 01M41AB597B330P2RCXCMVRZPE): переход не
+    перефиксирует голову, сдвинутую мимо пульта. Сдвиг мимо пульта —
+    инцидент целостности: переход в `escalated`/`killed` идёт без паспорта
+    и фиксации, любой другой переход вместо себя уводит задачу в
+    `escalated` (уже эскалированная остаётся на месте) и бросает
+    `DocsRefIncident`. Голова не прочитана — переход идёт, но фиксация
+    остаётся прежней: сверка на старте шага откажет fail-closed.
     """
+    from . import fixation
+    drift = fixation.ref_drift(conn, task_id)
+    if drift is not None and drift.moved and state not in ("escalated", "killed"):
+        _escalate_on_moved_ref(conn, task_id, state, actor, expected_state,
+                               drift)
+    _cas_state(conn, task_id, state, actor, expected_state, detail)
+    if drift is None:
+        # Паспорт — ДО фиксации: его коммит сдвигает голову ссылки
+        # документов, а фиксация перехода обязана указывать на итоговую
+        # голову (ADR-0021 п.3, инвариант 25), иначе следующая сверка
+        # увидела бы собственную строку паспорта расхождением.
+        _append_passport_line(conn, task_id, state, actor)
+        record_fixation(conn, task_id)
+    else:
+        fixation.journal_drift(conn, task_id, drift, actor,
+                               f"переход в {state} без паспорта и фиксации")
+    _close_attention_alert(conn, task_id)
+    _record_review_verdict(conn, task_id, expected_state, state)
+
+
+class DocsRefIncident(SystemExit):
+    """Переход отменён инцидентом целостности: голова ссылки документов
+    сдвинута мимо пульта (`set_state`). `SystemExit` — как именованный
+    отказ команды: вызыватель, не ждущий его, кончается текстом отказа, а
+    не продолжает так, будто переход состоялся."""
+
+
+def _cas_state(conn, task_id: str, state: str, actor: str,
+               expected_state: str, detail: str) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%fZ")
     cur = conn.execute(
         "UPDATE tasks SET state=?, updated_at=? WHERE id=? AND state=?",
@@ -635,14 +673,26 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
         raise CasConflict(task_id, expected_state, actual)
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
-    # Паспорт — ДО фиксации: его коммит сдвигает голову ссылки документов,
-    # а фиксация перехода обязана указывать на итоговую голову (ADR-0021
-    # п.3, инвариант 25), иначе следующая сверка увидела бы собственную
-    # строку паспорта расхождением.
-    _append_passport_line(conn, task_id, state, actor)
-    record_fixation(conn, task_id)
-    _close_attention_alert(conn, task_id)
-    _record_review_verdict(conn, task_id, expected_state, state)
+
+
+def _escalate_on_moved_ref(conn, task_id: str, state: str, actor: str,
+                           expected_state: str, drift) -> None:
+    """Инцидент вместо перехода в `state`: эскалация без паспорта и
+    фиксации (из `escalated` — без смены состояния), запись журнала с
+    обоими sha и `DocsRefIncident`."""
+    from . import fixation
+    what = f"переход {expected_state} -> {state}"
+    if expected_state == "escalated":
+        fixation.journal_drift(conn, task_id, drift, actor, f"{what} не выполнен")
+    else:
+        update_task(conn, task_id, escalated_from=expected_state)
+        _cas_state(conn, task_id, "escalated", actor, expected_state,
+                   f"{fixation.DOCS_REF_INCIDENT_ACTION}: {what} не выполнен")
+        fixation.journal_drift(conn, task_id, drift, actor,
+                               f"{what} не выполнен, задача в escalated без "
+                               f"паспорта и фиксации")
+        _close_attention_alert(conn, task_id)
+    raise DocsRefIncident(fixation.incident_refusal(task_id, drift, what))
 
 
 #: Переходы из `review`, которые и есть вердикт ревьювера: возврат

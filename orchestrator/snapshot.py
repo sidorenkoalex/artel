@@ -7,7 +7,7 @@
 """
 import os
 
-from . import artifact_branch, gitcmd, retro, store
+from . import artifact_branch, fixation, gitcmd, retro, store
 
 SNAPSHOT_REF_TMPL = "refs/artifacts/{task_id}"
 RETRO_REL_TMPL = "tasks/{task_id}/RETRO.md"
@@ -76,13 +76,22 @@ def commit_closing(conn, task_id: str, outcome: str) -> str:
     устройство не переносилась, п.13) — коммит не пишется: первый коммит
     без родителя с одним RETRO.md выдал бы себя за историю документов.
     Записанный коммит фиксируется (`store.record_fixation`) — фиксация
-    закрытой задачи указывает на коммит закрытия."""
+    закрытой задачи указывает на коммит закрытия.
+
+    Голова, разошедшаяся с фиксацией (`fixation.ref_drift`), коммита
+    закрытия не получает: RETRO поверх подмены узаконил бы её; голова
+    остаётся как есть для разбора."""
     ref = artifact_branch.branch_name(task_id)
     if not artifact_branch.ref_head(task_id):
         note = f"коммит закрытия {task_id} не записан: {ref} нет локально"
         store.journal(conn, task_id, "orchestrator",
                       "коммит закрытия не записан", note)
         return note
+    drift = fixation.ref_drift(conn, task_id)
+    if drift is not None:
+        what = f"коммит закрытия {task_id} ({outcome}) не записан"
+        fixation.journal_drift(conn, task_id, drift, "orchestrator", what)
+        return f"{what}: {drift.text()}"
     text = _retro_with_frontmatter(conn, task_id, outcome)
     sha = artifact_branch.commit_files(
         task_id, {RETRO_REL_TMPL.format(task_id=task_id): text},
