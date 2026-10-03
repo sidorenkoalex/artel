@@ -1070,13 +1070,17 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     workspace_root = artifact_branch.docs_root(target)
     task_dir = workspace_root / "tasks" / task_id
     branch = artifact_branch.branch_name(task_id)
-    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
     # Документы задачи в рабочей копии кода вне прогона не лежат (ADR-0021,
     # этап 1): `tasks/<id>/`, оставленный там ролью (прежнее правило путей
     # HOME роли, песочница теста), читается в память и убирается; в ссылку
-    # он идёт вместе с каталогом документов ниже.
-    stray_files = _take_code_copy_docs(conn, task_id, code_root, stray,
-                                       existing)
+    # он идёт вместе с каталогом документов ниже. Дерево ссылки без такого
+    # каталога читается позже — после ранних возвратов, как и прежде.
+    existing = None
+    stray_files: dict[str, bytes] = {}
+    if stray.is_dir():
+        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        stray_files = _take_code_copy_docs(conn, task_id, code_root, stray,
+                                           existing)
     if not task_dir.is_dir() and not stray_files:
         return ""
     moved = _docs_ref_moved_past_pult(conn, task_id)
@@ -1091,6 +1095,8 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"
     message = (f"{own_commit_marker}, WIP после таймаута)" if timeout
               else f"{own_commit_marker})")
+    if existing is None:
+        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
 
     collected = _collect_step_artifact_files(workspace_root, task_dir, existing)
     if collected is None:

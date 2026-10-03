@@ -84,8 +84,8 @@ class StepAutocommitFromDocsDirTest(DocsDirSandbox):
         ссылке нет, `tasks/<id>/` в рабочей копии кода нет.
 
         Ловит мутацию: автокоммит читает рабочую копию кода, а не каталог
-        документов — PLAN.md в ссылку не попадает, `stray.md` попадает;
-        уборка рабочей копии кода на пути шага забыта — каталог остаётся."""
+        документов — PLAN.md в ссылку не попадает; уборка рабочей копии
+        кода на пути шага забыта — каталог остаётся."""
         runner.role_cwd(self.conn, TASK, config.DEFAULT_TARGET)
         (self.docs / "PLAN.md").write_text("план роли\n", encoding="utf-8")
         stray = self.wt / "tasks" / TASK / "stray.md"
@@ -98,6 +98,36 @@ class StepAutocommitFromDocsDirTest(DocsDirSandbox):
         self.assertIsNone(self.ref_text("stray.md"))
         self.assertFalse((self.wt / "tasks" / TASK).exists())
         self.assertIsNone(fixation.check_integrity(self.conn, TASK))
+
+    def test_code_copy_artifact_reaches_ref_and_docs_dir_edit_wins(self):
+        """Документ роли, записанный в `tasks/<id>/` кода, не теряется.
+
+        Сценарий: роль на прежнем правиле путей HOME пишет PLAN.md в
+        рабочую копию кода, а REVIEW.md — и туда, и в каталог документов
+        разными текстами. После автокоммита PLAN.md в ссылке с текстом
+        роли, REVIEW.md — с текстом каталога документов, `tasks/<id>/` в
+        рабочей копии кода нет, журнал называет уборку.
+
+        Ловит мутацию: `_take_code_copy_docs` только убирает каталог и
+        возвращает пустой словарь — PLAN.md в ссылку не попадает;
+        `_merge_code_copy_docs` берёт рабочую копию кода поверх правки
+        каталога документов — в ссылке REVIEW.md из кода."""
+        runner.role_cwd(self.conn, TASK, config.DEFAULT_TARGET)
+        code_docs = self.wt / "tasks" / TASK
+        code_docs.mkdir(parents=True)
+        (code_docs / "PLAN.md").write_text("план из кода\n", encoding="utf-8")
+        (code_docs / "REVIEW.md").write_text("ревью из кода\n",
+                                             encoding="utf-8")
+        (self.docs / "REVIEW.md").write_text("ревью каталога\n",
+                                             encoding="utf-8")
+
+        checkpoint.commit_step_artifacts(self.conn, TASK, "developer")
+
+        self.assertEqual(self.ref_text("PLAN.md"), "план из кода\n")
+        self.assertEqual(self.ref_text("REVIEW.md"), "ревью каталога\n")
+        self.assertFalse(code_docs.exists())
+        actions = [r["action"] for r in store.task_steps(self.conn, TASK)]
+        self.assertIn(checkpoint.CODE_COPY_DOCS_DROPPED_ACTION, actions)
 
     def test_untouched_docs_dir_makes_no_commit(self):
         """Выкладка, не тронутая ролью, не двигает ссылку.
