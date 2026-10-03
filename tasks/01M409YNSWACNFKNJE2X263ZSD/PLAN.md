@@ -12,133 +12,205 @@ budget_usd: 80
 ## Подход
 Один ответ на вопрос «в каком git живёт ссылка документов задачи» —
 `artifact_branch.repo_for_target(target)` / `task_repo(task_id)`:
-`config.ROOT` для артели, клон проекта (`repo_context.resolve(target).path`)
-для внешнего target. Клона нет (каталога `.git` в нём нет) — маркер
-`_NO_REPO`: git не спрашивается вовсе, потому что `git -C` в каталоге под
-`config.ROOT` без своего `.git` молча ушёл бы вверх и записал ссылку в git
-пульта (тот же класс, что прежний `_fix_external` чинил ленивым `git init`).
-Все узлы `artifact_branch` (запись `_write`, `ref_head`, `push`/`_send`/
-`send_pending`, `origin_sync_refusal`, `read_tree`, `materialize_task_dir`,
-`append_passport_line`) работают с репозиторием задачи; для артели вызовы
-`gitcmd` идут прежним путём байт-в-байт (без `-C`). Гейт мержа и `kill`
-зовут `origin_sync_refusal` — сверка у них переключилась без правки их кода.
-`doctor`-сверка ссылок группирует задачи по репозиторию и спрашивает
-`ls-remote` у `origin` каждого (для пульта — прежний вызов
-`doctor._origin_artifact_refs()`).
+`config.ROOT` для артели, клон проекта (`repo_context.resolve(target).path`,
+`.artel/projects/<проект>/workspace`) для внешнего target. Клона нет
+(каталога `.git` в нём нет) — маркер `_NO_REPO`: git не спрашивается
+вовсе, потому что `git -C` в каталоге под `config.ROOT` без своего `.git`
+молча ушёл бы вверх и записал/прочитал ссылку в git пульта. Файла БД нет —
+задачи нет, репозиторий тот же, что дал бы `store.task_target` (артель),
+БД ради чтения не заводится.
+
+Запись, отправка, досылка, сверка с `origin` (гейт мержа, `kill`),
+`doctor` — на репозитории задачи (шаги 1–4, сделаны на прошлом шаге).
+
+**Читатели (ANSWER-1 п.1, вариант (а)).** Узел чтения в `artifact_branch`:
+`show(task_id, rev, rel)`, `ls_tree(task_id, rev, rel_dir)`,
+`rev_sha(task_id, rev)`, `diff_names(task_id, a, b, *paths)`,
+`on_foreign_rev(task_id, rev)`, `git(task_id, *args)` (для `git log` по
+пути ссылки). Читатель называет задачу и ревизию (имя ссылки или sha её
+коммита — `tests_locked_sha`, `materialized_artifact_sha`), репозиторий
+выбирает узел. Для артели узел зовёт прежний примитив `gitcmd` байт-в-байт,
+без `repo=` (`_repo_kw` отдаёт `{}`): подмены `gitcmd.show`/`git`/
+`branch_head_sha` в существующих тестах артели работают как раньше —
+это и проверено прогоном (ниже). Переведены все места чтения документов
+задачи: бриф (`brief`), ревью-пакет (`review.artifact_text(..., task_id=)`,
+`_answer_rels`), гейты `advance`/`approve` (`fsm`, `fsm_advance`,
+`fsm_autogate`, `fsm_merge_gate`, `advance_gates/acceptance` — лок планки,
+`advance_gates/zones` и `test_integrity` — мандат ANSWER и признак
+автокоммита роли), выкладка планки (`acceptance.materialize_from_branch`,
+через неё — `pull`), автокоммит шага (`checkpoint`: конфликт-гвард,
+кандидаты на удаление, `_same_as_ref`/`_same_as_commit`, перенос
+документов рабочей копии кода), `amend-tests --from-branch`, `answer`/
+`zones-extend`, `catalog show`, `cleanup` (ТЗ в журнал `kill`), `runner`
+(ТЗ для выбора роли), `doctor --fix` (игнорируемые файлы), `canary`
+(диагностика). `artifact_source.resolve` по-прежнему отдаёт только имя
+ссылки; ретро читает `artifact_branch.read_tree`, фиксация —
+`artifact_branch.ref_head` (уже на репозитории задачи). Чтения кодовой
+ветки (`t["branch"]`, долгоживущие файлы, `dry_run`) не тронуты — это код
+артели в git пульта.
 
 Репозиторий фиксации упразднён: удалены `fixation._fix_external`,
 `_read_external`, `projects.init_artifact_repo` (+ `ARTIFACT_GITIGNORE`,
-вызов из `cmd_target_init`), родственная `projects.artifact_repo_has_no_remote`
-с потребителем `doctor.check_remote_empty`; `recovery_check` больше не
-пропускается при отсутствии `.artel/projects/<target>/.git` и сверяет только
-голову ссылки (подпроверки `recovery-clean`/`recovery-fsck` смотрели в
-упразднённый репозиторий — убраны); `check_target_layout` смотрит на
-репозиторий ссылок документов. `fixation.external_artifact_sha` читает
-голову ссылки в репозитории задачи.
+вызов из `cmd_target_init`), `projects.artifact_repo_has_no_remote` с
+проверкой `doctor` `remote-empty`; `recovery_check` сверяет только голову
+ссылки (подпроверки `recovery-clean`/`recovery-fsck` сняты — ANSWER-1
+п.3); `check_target_layout` смотрит на репозиторий ссылок документов.
 
-**Переоценка бюджета ($40 → $80).** SPEC оценивал 7–9 модулей; по ходу
-реализации выяснилось, что документы внешней задачи после переезда ссылки
-нужно и ЧИТАТЬ из репозитория проекта: читатели (`artifact_source.resolve`
-— 34 вызова, прямые `gitcmd.show(artifact_branch.branch_name(…))` в
-`brief`, `review`, `fsm`, `fsm_advance`, `amend`, `answer`, `catalog`,
-`cleanup`, `checkpoint`, `acceptance`, `canary` и др.) живут в пульте, а
-существующие тесты внешнего target (≥ 22 метода в 4 модулях, см.
-«Эскалация») ведут задачу через эти читатели. Это вопрос 1 эскалации;
-поднятый потолок нужен при ответе (а).
+**Переоценка бюджета ($40 → $80)** — значение во frontmatter с прошлой
+сдачи: SPEC оценивал 7–9 модулей, перевод читателей (ANSWER-1 п.1) задел
+20 модулей `orchestrator/` и 11 существующих тестовых файлов.
 
 ## Шаги
 1. `gitcmd`: необязательный `repo=` у `show`, `ls_tree_files`,
-   `remote_ref_state`, `commit_exists` (по образцу `branch_head_sha`). —
-   сделано.
-2. `artifact_branch`: `repo_for_target`/`task_repo`/`_NO_REPO`, все узлы
-   записи, отправки, досылки, сверки и чтения — на репозитории задачи. —
-   сделано.
+   `remote_ref_state`, `commit_exists`, `diff_names`. — сделано.
+2. `artifact_branch`: `repo_for_target`/`task_repo`/`_NO_REPO`, запись,
+   отправка, досылка, сверка — на репозитории задачи. — сделано.
 3. Упразднение репозитория фиксации: `fixation.py`, `projects.py`,
-   `doctor/misc_checks.py` (`check_remote_empty`), `doctor/cli.py`,
-   `doctor/__init__.py`, `doctor/recovery.py`, `doctor/preflight.py`
-   (`check_target_layout`). — сделано.
+   `doctor/{__init__,cli,misc_checks,recovery,preflight}.py`. — сделано.
 4. `doctor/artifact_branches.py`: сверка и `--fix` по репозиторию задачи,
    группами. — сделано.
-5. Читатели документов внешней задачи — по ответу на вопрос 1. — НЕ
-   сделано, ждёт ответа.
-6. Правка существующих тестов — по мандату (вопрос 2); сделаны две правки,
-   не требующие решения по вопросу 1 (см. перечень). — частично.
-7. Приложение к `docs/invariants.md` (инвариант 25) — ниже, `git apply
-   --check` пройден. — сделано.
-8. Карта кодовой базы регенерирована (`python3 scripts/codebase_map.py`). —
+5. Узел чтения `artifact_branch.{show,ls_tree,rev_sha,diff_names,
+   on_foreign_rev,git}` и перевод на него всех читателей (список —
+   «Подход»). — сделано.
+6. Песочница: `tests/sandbox.make_project_repo(target)` — клон проекта с
+   первым коммитом и своим bare-`origin` (запись target'а дописывается в
+   `targets.yaml`); `disk_backed_show`/`disk_backed_ls_tree_files`
+   принимают и игнорируют `repo=`. Подготовка данных существующих тестов
+   внешнего потока — клон проекта (перечень ниже). — сделано.
+7. Сторож узла чтения — новый `tests/test_artifact_branch_read_node.py`
+   (5 методов, у каждого «Ловит мутацию»; каждая заявка проверена
+   временной мутацией — все 4 мутации красят свой тест). — сделано.
+8. Приложение к `docs/invariants.md` (инвариант 25) — ниже. — сделано.
+9. Карта кодовой базы регенерирована (`python3 scripts/codebase_map.py`). —
    сделано.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 3 (+ AC-1/AC-2/AC-3 — долгоживущий файл и планка зелёные) |
-| 2 | 1, 2 (AC-4, AC-5 зелёные) |
+| 1 | 3 (AC-1/AC-2/AC-3 — долгоживущий файл задачи и планка AC-3 зелёные) |
+| 2 | 1, 2, 5 (AC-4, AC-5 зелёные; читатели — тот же репозиторий, что запись) |
 | 3 | 2, 4 (AC-6, AC-7, AC-8 зелёные) |
-| 4 | 2 — гейт мержа и `kill` не ослаблены: сверка та же, меняется только репозиторий; AC-9 зелёный |
-| 5 | 7 |
-| 6 | долгоживущий `tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py` (test_author) покрывает AC-1, AC-2, AC-4–AC-8; перечень изменённых существующих тестов — «Эскалация», вопрос 2 |
+| 4 | 2, 5 — гейт мержа, `kill`, лок планки, мандат ANSWER не ослаблены: та же сверка, меняется только репозиторий; AC-9 зелёный |
+| 5 | 8 |
+| 6 | долгоживущий `tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py` (test_author) — AC-1, AC-2, AC-4–AC-8; узел чтения — шаг 7; изменённые существующие тесты — перечень ниже |
 
-Прогоны (передний план, `-p timeout -o timeout=120`):
-- `tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py` +
-  `acceptance_tests/test_ac3_fixation_repo_code_removed.py` — 15 passed.
-- `test_git_fixation`, `test_doctor`, `test_artifact_ref_sync`,
-  `test_doctor_artifact_branch_sync`, `test_multitarget_invariants` —
-  11 failed / 169 passed (все 11 — в перечне вопроса 2).
-- `test_kill_cleanup`, `test_step_autocommit`,
-  `test_checkpoint_external_step_artifacts`, `test_artifact_materialization`,
-  `test_preflight_step_provider`, `test_retro_artifact_branch_reads`,
-  `test_docs_dir_layout`, `test_01m409ykm3qe5kvrgv0g94f5zc_step_docs_dir`,
-  `test_fsm_merge_gate_done_snapshot`, `test_doctor_fix_ignored_artifacts`,
-  `test_invariants`, `test_gitcmd_branch_reads`, `test_repo_context`,
-  `test_multitarget` — 18 failed / 231 passed (все 18 — внешний target,
-  вопрос 1).
-- `test_artifact_branch_push`, `test_artifact_branch_new_parent`,
-  `test_snapshot_closing_outcome` — зелёные.
+### Изменённые существующие тесты (ADR-0021 п.2–3)
+Мандат ANSWER-1 п.2 (группа А):
+- `tests/test_git_fixation.py` — удалены классы `ArtifactRepoInitTest`
+  (`test_init_creates_a_git_repo_without_a_remote`,
+  `test_gitignore_excludes_workspace_and_logs`,
+  `test_second_init_does_not_change_state_or_fail`), `NoRemoteCheckTest`
+  (`test_freshly_initialized_repo_has_no_remote`,
+  `test_repo_with_a_remote_is_detected`), `ExternalTransitionCommitsTest`
+  (`test_second_transition_without_changes_reuses_the_head`): репозиторий
+  фиксации упразднён (ADR-0021 п.3, требование 1); замена — долгоживущие
+  `test_ac1_…`/`test_ac2_…`.
+- `tests/test_doctor.py::RecoveryCheckTest::test_dirty_working_copy_raises_an_incident_alert`
+  — удалён (подпроверка `recovery-clean` снята, ANSWER-1 п.3);
+  `test_healthy_repo_recovery_is_ok`,
+  `test_artel_gets_the_same_recovery_sverka_as_any_target` — убрано
+  утверждение `recovery-clean`, фикстура — коммит ссылки
+  (`artifact_branch.commit_files`, настоящий git, клон проекта для `sled`),
+  добавлено `assertTrue(sha)`; докстринги несут «Ловит мутацию».
+- `tests/test_doctor_artifact_branch_sync.py::SyncExcludesTerminalAndForeignTargetTest::test_excludes_done_and_external_target`
+  — внешняя задача с клоном проекта и его `origin` (утверждения прежние).
+
+Только подготовка данных (ANSWER-1 п.1, утверждения и имена не менялись):
+- `tests/test_git_fixation.py` — `setUp` классов
+  `ExternalTargetAdvanceIgnoresDirtyCheckTest`,
+  `ExternalIntegrityIncidentBlocksRunTest`,
+  `ExternalApproveDoesNotCommitOthersWorkInProgressTest` —
+  `make_project_repo("sled")`; докстринги модуля и класса без
+  `_fix_external`.
+- `tests/test_checkpoint_external_step_artifacts.py` — `setUp` обоих
+  классов (`make_project_repo`), помощники `artifact_branch_files`/
+  `artifact_branch_text` читают клон (`repo=self.project`); в теле
+  `CommitExternalStepArtifactsTest::test_second_step_accumulates_onto_the_first_not_replaces_it`
+  — `gitcmd.show(..., repo=self.project)`, в
+  `CommitExternalStepArtifactsTest::test_binary_file_is_not_lost` —
+  `cwd=self.project` у `git show`; утверждения те же.
+- `tests/test_artifact_materialization.py::ConflictGuardStateGuardTest` —
+  `setUp` и помощник `artifact_branch_files` (клон проекта).
+- `tests/test_guard_task_root_subdirectory.py::CheckpointDropsSubdirectoryFileTest`
+  — `setUp` и помощник `artifact_branch_files`.
+- `tests/test_multitarget_invariants.py::ExternalWorkspaceIsolationTest` —
+  помощник `new_task` заводит клон проекта для внешнего target.
+- `tests/test_branch_freshness_gate.py::TargetSourcedRemoteTest` — `setUp`:
+  клон проекта до `cmd_new`.
+- `tests/test_split_assessment_merge_gate.py::SnapshotSplitAssessmentTest::test_external_target_skips_diff_but_still_reads_split_assessment`
+  — строка `make_project_repo("sled")` в теле; помощник `_fake_git`
+  пропускает ведущее `-C <клон>`.
+- `tests/test_artifact_ref_sync.py::RecoveryRewrittenRefTest.setUp` —
+  `git init` старого репозитория фиксации самой фикстурой.
+- `tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest.setUp`
+  — коммит PLAN.md после заведения клона проекта.
+
+Замена утверждений — вопрос 1 «Эскалации»:
+`tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does`,
+`::test_done_snapshot_retro_names_the_done_outcome_and_the_ref`,
+`::test_done_snapshot_removes_the_pult_artifact_branch`.
+
+### Прогоны (передний план, `-p timeout -o timeout=120`)
+- Планка AC-3 + долгоживущий файл задачи + `test_artifact_branch_read_node`
+  + все изменённые тестовые модули + `test_codebase_map` — 280 passed.
+- По модулям, все затронутые (ANSWER-1 п.4), включая `amend*`, `answer*`,
+  `canary*`, `brief`, `review*`, `fsm*`, `checkpoint*`, `doctor*`,
+  `multitarget*`, `pull*`, `long_lived*`: пакеты 259 / 414 / 388 / 395 /
+  366 / 174 и остаток набора тремя пакетами 492 / 699 / 710 тестов — все
+  зелёные, кроме не связанных с задачей отказов окружения роли:
+  `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` (16) и
+  `tests/test_main_ci_line.py::FixesMainArgTest` (2) — «artel.py
+  approve/pin: команда недоступна процессу роли developer» (рубеж роли,
+  в CI его нет); `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
+  — убийство группы процессов в песочнице шага (модуль задачей не тронут).
+- Объём diff против `main` без карты — 206 537 байт (потолок гейта
+  ёмкости 262 144, ANSWER-1 п.1).
 
 ## Влияние на систему
-- Артель: путь записи/отправки/сверки ссылки — прежние вызовы `gitcmd` без
-  `-C` (`_git_repo` возвращает `None` для `config.ROOT`); AC-9 и сторожа
-  `test_artifact_ref_sync`/`test_doctor_artifact_branch_sync` (кроме
-  метода, переписанного под внешний проект) зелёные без правки.
-- Гейты мержа и `kill` не ослаблены: та же сверка «локальная ссылка ==
-  `origin`» в репозитории задачи. Клона внешнего проекта нет — ссылки
-  локально нет, сверять нечего (`None`, как и прежде при отсутствии
-  ссылки); причину называет `doctor` (`target-layout` warn).
-- `doctor`: сняты `remote-empty`, `recovery-clean`, `recovery-fsck` — они
-  проверяли упразднённый репозиторий фиксации (у ссылки нет рабочей копии
-  и нет отдельного репозитория). `recovery-sha` теперь не пропускается из-за
-  отсутствия того репозитория — сверка стала шире. Решение по снятым
-  проверкам — вопрос 3.
-- Инвариант 25 — приложением (ниже); правка тестов инвариантов не нужна
-  (таблица ссылается на `test_git_fixation.FsmDecidesOnlyOnFixedHashesTest`,
-  `IntegrityIncidentBlocksRunTest`, `ApproveByShaTest` — они зелёные).
+- Артель: запись, отправка, сверка и чтение — прежние вызовы `gitcmd` без
+  `-C` и без `repo=`; сторожа `test_artifact_ref_sync`,
+  `test_doctor_artifact_branch_sync` и весь набор артели зелёные без
+  правки (AC-9).
+- Гейты мержа, `kill`, лок планки, мандаты ANSWER, гейт заявки мутации не
+  ослаблены: та же сверка в репозитории задачи. Клона внешнего проекта нет
+  — ссылки нет, чтение отдаёт «git не ответил» (`NO_REPO_REASON`) и
+  читатели отказывают так же, как при отсутствии ссылки; причину называет
+  `doctor` (`target-layout`).
+- `doctor`: сняты `remote-empty`, `recovery-clean`, `recovery-fsck`
+  (ANSWER-1 п.3); `recovery-sha` теперь не пропускается из-за отсутствия
+  репозитория фиксации — сверка шире.
+- Инвариант 25 — приложением (ниже); `tests/test_invariants.py` правка не
+  нужна (таблица ссылается на `FsmDecidesOnlyOnFixedHashesTest`,
+  `IntegrityIncidentBlocksRunTest`, `ApproveByShaTest` — зелёные).
 - Откат — revert одного merge-коммита.
 
 ## Риски
-- Внешний target end-to-end до решения вопроса 1 не работает: ссылка
-  пишется в клон проекта, а читатели документов ищут её в пульте. Внешних
-  задач в базе 0; `new` внешнего target без клона проекта теперь отказывает
-  «ссылка документов не создана — git не ответил» (запись в пульт была бы
-  нарушением AC-4).
 - Пульт не заводит клон проекта (`runner.role_cwd` делает `mkdir`
-  `workspace/`, не `clone`) — без клона ссылке внешней задачи негде жить;
-  это этап 2 ADR-0021 (`repo/` области проекта).
+  `workspace/`, не `clone`) — без клона ссылке внешней задачи негде жить,
+  `new` внешнего target отказывает «ссылка документов не создана». Это
+  этап 2 ADR-0021 (`repo/` области проекта); внешних задач в базе 0.
+- `checkpoint`/лок планки фильтруют пути внешней задачи `.gitignore`
+  пульта (`gitcmd.check_ignore` в `config.ROOT`), не проекта — прежнее
+  поведение, задачей не менялось.
 
 ## Предложения системе
-- `orchestrator/artifact_source.py` возвращает только имя ссылки, без
-  репозитория: каждый читатель документов неявно читает `config.ROOT`.
-  Любой перенос ссылки (этот этап, этап 2) упирается в ~35 мест —
-  читателю нужен один узел «прочитать файл документов задачи» в
-  `artifact_branch`, а не пара `resolve` + `gitcmd.show`.
-- Комментарии в `checkpoint.py:176/203`, `fsm_advance.py:430`,
-  `fsm.py:319`, `store.py:736-760` ещё описывают `_fix_external` как
-  живой механизм — устаревшие пояснения; AST-планка их не видит.
+- `orchestrator/artifact_source.py::resolve` отдаёт только имя ссылки — без
+  узла чтения каждый читатель неявно читал `config.ROOT`; новым читателям
+  — только `artifact_branch.show/ls_tree/rev_sha`, `gitcmd.show(<ссылка>,
+  …)` напрямую стоит ловить guard'ом (класс «чтение ссылки мимо узла»).
+- `store.record_fixation` (комментарии `store.py:733-750`) и докстринги
+  тестов (`test_capacity_gate.py:201`, `test_step_autocommit.py:20`,
+  `test_multitarget_invariants.py:438`, `test_git_fixation.py:585/770`) ещё
+  описывают `_fix_external` как живой механизм — устаревшие пояснения.
+- Шаг роли: скилы требуют «полный набор не запускать», а ANSWER просит
+  «все затронутые модули» — при перекрёстной правке это ~200 файлов
+  пакетами; команды пульта «прогнать набор по пакетам» нет.
 
 ## Приложение 1: docs/invariants.md — инвариант 25
 
 Применимость проверена `git apply --check` на чистом дереве рабочей копии
-ветки задачи (HEAD d203d46a + правки кода этой задачи; `docs/invariants.md`
+ветки задачи (HEAD a58738bf + правки кода этой задачи; `docs/invariants.md`
 веткой не менялся) — проходит.
 
 ```diff
@@ -160,90 +232,53 @@ diff --git a/docs/invariants.md b/docs/invariants.md
 
 **Вопросы** (по блокирующести):
 
-1. **Читатели документов внешней задачи** (блокирует шаг 5 и судьбу 22+
-   существующих тестов). SPEC требует, чтобы ссылка внешней задачи жила в
-   git проекта (AC-4), но не говорит, откуда её ЧИТАЮТ бриф, ревью-пакет,
-   гейты `advance`/`approve`, автокоммит шага, `amend-tests`, `answer`,
-   ретро. Сейчас все они читают `config.ROOT`.
-   - (а) перевести всех читателей на репозиторий задачи в этой задаче
-     (узел чтения в `artifact_branch`, ~35 мест, ~15 модулей; потолок $80
-     из frontmatter); существующие тесты внешнего target меняются только
-     фикстурой — у песочницы появляется клон проекта со своим `origin`;
-   - (б) читатели остаются на пульте до этапов 2–3 (ADR-0021 п.8, этап 3 —
-     «проверки смотрят на репозиторий проекта»); внешний target
-     end-to-end не работает до них, тесты внешнего потока из вопроса 2
-     (группа Б) удаляются/переписываются под мандат;
-   - (в) зеркало: после каждой записи пульт подтягивает ссылку проекта в
-     свой git под служебным именем, `artifact_source.resolve` отдаёт его —
-     второй источник истины, против духа ADR-0021 п.1.
-   Дефолт при молчании: (а).
+1. **Замена утверждений в `tests/test_fsm_merge_gate_done_snapshot.py`**
+   (блокирует сдачу `ready`: правило skills/coding-standards.md «замена
+   утверждения существующего метода — эскалация до сдачи шага»; ANSWER-1
+   п.1 разрешил внешнему потоку только подготовку данных, а эти три метода
+   утверждают прямо противоположное AC-5 — ссылку внешней задачи в
+   `origin` ПУЛЬТА). Требование SPEC — 2 и AC-5 (отправка ссылки внешней
+   задачи — в `origin` проекта, не пульта). Сделано в worktree:
+   - `DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does`:
+     было `_snapshot_ref_exists(self.pult_origin, TASK)`,
+     `_snapshot_files(self.pult_origin, …)`, `_snapshot_file_text(self.pult_origin, …)`
+     — стало то же с `self.target_origin` (bare-`origin` клона проекта);
+     текст сообщения «origin пульта» → «origin проекта».
+   - `DonePathSnapshotTest::test_done_snapshot_retro_names_the_done_outcome_and_the_ref`:
+     `_snapshot_file_text(self.pult_origin, …)` и
+     `_snapshot_commit_subject(self.pult_origin, …)` → `self.target_origin`;
+     проверяемые строки RETRO и сообщения коммита те же.
+   - `DonePathSnapshotTest::test_done_snapshot_removes_the_pult_artifact_branch`:
+     было `assertTrue(gitcmd.is_ancestor(before, head))` (git пульта) —
+     стало `assertEqual(git merge-base --is-ancestor before head в клоне
+     проекта .returncode, 0)`; `assertNotEqual(head, before)` и
+     `assertFalse(branch_exists(artifact/<id>))` прежние.
+   Варианты: (а) мандат на эти три метода как сделано; (б) оставить
+   методы на артели (задача `artel` вместо `extproj`) — путь внешнего
+   `done` тогда без сторожа, кроме долгоживущего AC-5; (в) удалить методы
+   — против принципа целостности. Дефолт при молчании: (а).
+   Строка мандата для гейта неослабления (если он требует её и для
+   изменённых без удаления методов внешнего потока — включены и они):
+   `Ослабление тестов разрешено: tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does, tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_snapshot_retro_names_the_done_outcome_and_the_ref, tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_snapshot_removes_the_pult_artifact_branch, tests/test_checkpoint_external_step_artifacts.py::CommitExternalStepArtifactsTest::test_second_step_accumulates_onto_the_first_not_replaces_it, tests/test_checkpoint_external_step_artifacts.py::CommitExternalStepArtifactsTest::test_binary_file_is_not_lost, tests/test_split_assessment_merge_gate.py::SnapshotSplitAssessmentTest::test_external_target_skips_diff_but_still_reads_split_assessment`
 
-2. **Мандат на правку существующих тестов** (ADR-0021 п.2–3).
-   Группа А — от вопроса 1 не зависит:
-   - `tests/test_git_fixation.py::ArtifactRepoInitTest::test_init_creates_a_git_repo_without_a_remote`,
-     `::test_gitignore_excludes_workspace_and_logs`,
-     `::test_second_init_does_not_change_state_or_fail` — удалить: проверяют
-     заведение репозитория фиксации `target-init`ом; замена — долгоживущий
-     `test_ac1_no_path_creates_fixation_repo_of_project`.
-   - `tests/test_git_fixation.py::NoRemoteCheckTest::test_freshly_initialized_repo_has_no_remote`,
-     `::test_repo_with_a_remote_is_detected` — удалить: функция
-     `projects.artifact_repo_has_no_remote` и проверка `doctor`
-     `remote-empty` упразднены вместе с репозиторием.
-   - `tests/test_git_fixation.py::ExternalTransitionCommitsTest::test_second_transition_without_changes_reuses_the_head`
-     — удалить: зелёный, но пустой (сравнивает HEAD несуществующего
-     репозитория фиксации, `"" == ""`); замена —
-     `test_ac2_fixed_sha_is_ref_head_not_fixation_repo`.
-   - `tests/test_doctor.py::RecoveryCheckTest::test_dirty_working_copy_raises_an_incident_alert`
-     — удалить: подпроверка `recovery-clean` снята (вопрос 3).
-   - `tests/test_doctor.py::RecoveryCheckTest::test_healthy_repo_recovery_is_ok`,
-     `::test_artel_gets_the_same_recovery_sverka_as_any_target` — убрать
-     утверждение `statuses["recovery-clean"] == "ok"`, фикстуру
-     перевести с коммита репозитория фиксации на коммит ссылки
-     (`artifact_branch.commit_files`); утверждения `recovery-sha == "ok"` и
-     «нет инцидентов» остаются.
-   - `tests/test_doctor_artifact_branch_sync.py::SyncExcludesTerminalAndForeignTargetTest::test_excludes_done_and_external_target`
-     — ПЕРЕПИСАН в worktree: внешняя задача теперь получает клон проекта со
-     своим `origin` (метод `external_project`), «коммит мимо пульта» уходит в
-     `origin` проекта; утверждения прежние (закрытая без коммита закрытия не
-     сверяется, расхождение внешней — одна строка `warn`). Старое тело
-     утверждало ссылку внешней задачи в git пульта — прямо против AC-8.
-   - `tests/test_artifact_ref_sync.py::RecoveryRewrittenRefTest.setUp` —
-     ИЗМЕНЁН в worktree (методы не тронуты): вместо удалённого
-     `projects.init_artifact_repo` фикстура сама делает `git init` старого
-     репозитория фиксации.
-   Группа Б — внешний поток, читающий документы из пульта (зависит от
-   вопроса 1; при (а) меняется только фикстура — клон проекта, при (б)
-   методы удаляются):
-   - `tests/test_git_fixation.py::ExternalTargetAdvanceIgnoresDirtyCheckTest::test_uncommitted_plan_still_advances_for_external_target`,
-     `::ExternalIntegrityIncidentBlocksRunTest::test_clean_state_runs_normally`,
-     `::ExternalApproveDoesNotCommitOthersWorkInProgressTest::test_approve_with_matching_sha_still_transitions`;
-   - `tests/test_checkpoint_external_step_artifacts.py` — все 14 методов
-     `CommitExternalStepArtifactsTest` и
-     `CommitExternalStepArtifactsGitignoreFilterTest`;
-   - `tests/test_artifact_materialization.py::ConflictGuardStateGuardTest::test_deletion_after_state_left_tests_writing_is_not_carried_over`;
-   - `tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_snapshot_removes_the_pult_artifact_branch`,
-     `::test_done_snapshot_retro_names_the_done_outcome_and_the_ref`,
-     `::test_done_transition_publishes_a_snapshot_like_killed_does`;
-   - модули, не прогнанные в шаге (`amend`, `answer`, `canary`, `brief`,
-     `review` и др. с внешним target), — перечень дополню после ответа
-     прогоном по модулям.
-   Дефолт при молчании: мандат на группу А как описано; группа Б — по
-   дефолту вопроса 1.
+2. **`tests/test_multitarget_invariants.py::ExternalWorkspaceIsolationTest::test_external_target_cwd_is_its_workspace`**
+   (не блокирует; метод не менялся, менялся помощник `new_task`).
+   Утверждение `expected.is_dir()` («каталог workspace заводит пульт, а не
+   CLI на ходу») после подготовки данных выполняется всегда: каталог
+   `workspace` теперь — клон проекта, где живёт ссылка документов, и
+   фикстура заводит его до шага (без клона бриф внешней задачи не
+   собирается). Варианты: (а) принять — заведение клона пультом — этап 2
+   ADR-0021, до него утверждение сторожит только `mkdir` в
+   `runner.role_cwd`; (б) отдельной задачей переписать метод под этап 2.
+   Дефолт: (а).
 
-3. **Снятые проверки `doctor`** (`remote-empty`, `recovery-clean`,
-   `recovery-fsck`): (а) снять — они проверяли упразднённый репозиторий
-   (сделано в worktree); (б) оставить их для репозитория фиксации,
-   оставшегося на диске от прежнего устройства, пока его не уберут. Дефолт:
-   (а).
+**Контекст.** Ответ ANSWER-1 выполнен целиком: читатели переведены на узел
+чтения (п.1, вариант (а)), группа А по мандату (п.2), проверки `doctor`
+сняты (п.3), прогон по модулям — «Покрытие требований» (п.4). Код —
+20 модулей `orchestrator/`, `tests/sandbox.py`, новый
+`tests/test_artifact_branch_read_node.py`, 11 существующих тестовых
+файлов, карта; всё в worktree, зелёное. Гейт ёмкости: 206 537 байт из
+262 144.
 
-**Контекст.** Код шагов 1–4, 7, 8 в worktree (незакоммичен):
-`orchestrator/gitcmd.py`, `artifact_branch.py`, `fixation.py`,
-`projects.py`, `doctor/{__init__,cli,misc_checks,recovery,preflight,artifact_branches}.py`,
-карта. Долгоживущий файл задачи (11 методов) и планка AC-3 — зелёные;
-AC-10 — приложение выше; AC-11 зелёный до правки существующих тестов, после
-неё перечень — вопрос 2. Ссылки на код: `artifact_source.py:24`
-(читатель без репозитория), `runner.py:1039` (`workspace/` — `mkdir`, не
-клон).
-
-**Блокирует.** Шаг 5 (читатели) и правку тестов группы Б; без мандата на
-группу А гейт неослабления тестов не пропустит выход из `in_dev`.
+**Блокирует.** Только сдачу `ready` до мандата по вопросу 1; правки кода
+не требуется ни при одном варианте, кроме (б)/(в) вопроса 1.
