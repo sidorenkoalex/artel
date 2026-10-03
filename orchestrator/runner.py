@@ -1093,20 +1093,29 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str,
 
     `docs_dir` — каталог документов задачи шага (ADR-0021, этап 1): там
     роль пишет свои документы; `None` — прежний адрес `cwd/tasks/<id>`.
+    `tasks/<id>/` рабочей копии кода засчитывается и при `docs_dir`: его
+    оставляет роль на прежнем правиле путей, и автокоммит шага забирает
+    его в ссылку документов (`checkpoint._commit_external_step_artifacts`).
     Долгоживущий файл test_author по-прежнему ищется в `cwd`."""
-    task_dir = docs_dir if docs_dir is not None else cwd / "tasks" / task_id
+    code_copy_dir = cwd / "tasks" / task_id
+    task_dirs = [code_copy_dir] if docs_dir is None else [docs_dir, code_copy_dir]
+
+    def has_file(name: str) -> bool:
+        return any((d / name).is_file() for d in task_dirs)
+
     if role == "reviewer":
-        return None if (task_dir / "REVIEW.md").is_file() else "REVIEW.md"
+        return None if has_file("REVIEW.md") else "REVIEW.md"
     if role == "developer":
-        return None if (task_dir / "PLAN.md").is_file() else "PLAN.md"
+        return None if has_file("PLAN.md") else "PLAN.md"
     if role == "analyst":
-        if (task_dir / "SPEC.md").is_file() or (task_dir / "QUESTIONS.md").is_file():
+        if has_file("SPEC.md") or has_file("QUESTIONS.md"):
             return None
         return "SPEC.md/QUESTIONS.md"
     if role == "test_author":
-        acc = task_dir / "acceptance_tests"
-        if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
-            return None
+        for task_dir in task_dirs:
+            acc = task_dir / "acceptance_tests"
+            if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
+                return None
         if _has_own_long_lived_test(cwd, task_id):
             return None
         return (f"acceptance_tests/ (файл в tasks/{task_id}/acceptance_tests/ "
