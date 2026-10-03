@@ -83,6 +83,9 @@ class CommitStepArtifactsTest(RealPultGitTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_to_artifact_branch_and_journals(self):
+        """Ловит мутацию: автокоммит не переносит правку каталога документов
+        в ссылку либо оставляет каталог документов (или `tasks/<id>/`
+        рабочей копии кода) на диске после переноса."""
         self.enter_in_dev()
         (self.workspace_task_dir() / "PLAN.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
@@ -106,8 +109,12 @@ class CommitStepArtifactsTest(RealPultGitTest):
         # ветка/рабочий каталог целевого свободны от артефактов задачи).
         # `workspace_task_dir()` сама создаёт каталог (`mkdir`) — здесь
         # путь вычислен напрямую, чтобы не воссоздать убранное.
-        raw_dir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+        raw_dir = workspace.path(self.TASK) / "tasks" / self.TASK
         self.assertFalse(raw_dir.exists())
+        # С ADR-0021 (этап 1) роль пишет в каталог документов задачи — он
+        # тоже убран после переноса.
+        docs_dir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+        self.assertFalse(docs_dir.exists())
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         """`store.record_fixation`, вызванная автокоммитом, фиксирует РЕПО
