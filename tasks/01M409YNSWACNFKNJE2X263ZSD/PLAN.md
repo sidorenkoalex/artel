@@ -129,7 +129,10 @@ budget_usd: 80
   `CommitExternalStepArtifactsTest::test_second_step_accumulates_onto_the_first_not_replaces_it`
   — `gitcmd.show(..., repo=self.project)`, в
   `CommitExternalStepArtifactsTest::test_binary_file_is_not_lost` —
-  `cwd=self.project` у `git show`; утверждения те же.
+  `cwd=self.project` у `git show`; утверждения те же. Оба метода получили
+  докстринг с «Ловит мутацию» (отказ гейта заявки мутации прошлой сдачи);
+  заявленная мутация `repo_for_target → config.ROOT` проверена временно —
+  оба красные, после возврата модуль 16 passed.
 - `tests/test_artifact_materialization.py::ConflictGuardStateGuardTest` —
   `setUp` и помощник `artifact_branch_files` (клон проекта).
 - `tests/test_guard_task_root_subdirectory.py::CheckpointDropsSubdirectoryFileTest`
