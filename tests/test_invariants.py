@@ -166,7 +166,12 @@ class FsmTest(unittest.TestCase):
                             ("WORKTREES", root / ".artel" / "worktrees"),
                             # Каталог документов задачи (ADR-0021, этап 1)
                             # выкладывает шаг роли — тоже в песочницу.
-                            ("PROJECTS", root / ".artel" / "projects")):
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            # Каталог задач — тоже в песочницу (SPEC
+                            # 01M41M6KGWA9PJ6G1KPDC6XY70, требование 6):
+                            # прерванный прогон не оставляет `tasks/<id>/`
+                            # в рабочей копии, `addCleanup` до него не доходит.
+                            ("TASKS", root / "tasks")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -182,19 +187,12 @@ class FsmTest(unittest.TestCase):
         stack_patcher.start()
         self.addCleanup(stack_patcher.stop)
 
-        # `TASKS` НЕ патчится отдельно (в отличие от прежней версии этого
-        # файла): `brief._developer_spec_text` на «чужая ветка не найдена»
-        # (`on_foreign_branch` здесь всегда False — SpyRun ниже отвечает
-        # отказом на ЛЮБОЙ `rev-parse --verify refs/heads/*`) читает
-        # SPEC.md с диска через `config.ROOT / "tasks/<id>/..."`, НЕ через
-        # `config.TASKS` — до SPEC T094 (id — предсказуемый "T001") это
-        # расхождение маскировалось совпадением: `config.ROOT` этого
-        # класса намеренно настоящий (см. ниже), и в реальном дереве
-        # пульта существует настоящий `tasks/T001/` (давно закрытая
-        # задача) — сверка читала ЕГО, не то, что писал `write_spec` этого
-        # файла. С ULID id каждый прогон уникален, совпадения больше нет.
-        # `config.TASKS` остаётся дефолтным `ROOT/tasks` (как и в проде) —
-        # `self.tdir` ниже пишет туда же, откуда бриф реально читает.
+        # `TASKS` подменён выше, хотя `brief._developer_spec_text` при
+        # `foreign=False` читает SPEC.md через `config.ROOT / "tasks/<id>/..."`,
+        # а не через `config.TASKS`: эта ветка здесь недостижима —
+        # `artifact_source.resolve` всегда отдаёт `foreign=True` (A7), и
+        # бриф читает SPEC через `gitcmd.show`, подменённый ниже чтением
+        # диска `config.TASKS` (`tests/sandbox.py::_tasks_relative_path`).
 
         self.git_spy = SpyRun()
         spy_patcher = mock.patch.object(gitcmd.subprocess, "run", self.git_spy)
@@ -296,11 +294,6 @@ class FsmTest(unittest.TestCase):
         # диск (симуляция ветко-корректного fallback), каталог заводит
         # сам файл.
         self.tdir.mkdir(parents=True, exist_ok=True)
-        # `config.TASKS` теперь = реальный `ROOT/tasks` (см. комментарий
-        # выше) — `self.tdir` физически лежит в РЕАЛЬНОМ дереве пульта;
-        # ULID гарантирует уникальное неколлизирующее имя, но каталог
-        # обязан быть убран, а не оставлен в рабочей копии после теста.
-        self.addCleanup(shutil.rmtree, self.tdir, ignore_errors=True)
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
@@ -411,6 +404,33 @@ class FsmStatesCoverTheCodeTest(unittest.TestCase):
 
     def test_every_working_state_is_swept(self):
         self.assertLessEqual(set(config.STATE_ROLE), set(FSM_STATES))
+
+
+class FsmSandboxKeepsRunRootTasksCleanTest(FsmTest):
+    """Песочница `FsmTest` не заводит каталог задачи в настоящем `tasks/`
+    корня запуска (SPEC 01M41M6KGWA9PJ6G1KPDC6XY70, требования 6-7).
+
+    Случай 03.10: таймаут шага прервал прогон до `addCleanup`, каталог
+    задачи песочницы остался в рабочей копии кода, и гейт зон отказал
+    переходу задачи-владельца рабочей копии.
+    """
+
+    def test_sandbox_task_dir_is_outside_run_root_tasks(self):
+        """`self.tdir` лежит под подменённым `config.TASKS`, а в настоящем
+        `<корень>/tasks/` каталога задачи песочницы нет — проверка внутри
+        теста, до `doCleanups`.
+
+        Ловит мутацию: подмена `config.TASKS` убрана из `FsmTest.setUp`
+        (`self.tdir` снова строится в настоящем `<корень>/tasks/`) — тест
+        красный, хотя `addCleanup` убрал бы каталог после него.
+        """
+        real_tasks = (REPO_ROOT / "tasks").resolve()
+        tdir = self.tdir.resolve()
+        self.assertTrue(tdir.is_dir())
+        self.assertTrue(tdir.is_relative_to(Path(config.TASKS).resolve()))
+        self.assertFalse(tdir.is_relative_to(real_tasks),
+                         f"каталог задачи песочницы {tdir} — в {real_tasks}")
+        self.assertFalse((real_tasks / self.TASK).exists())
 
 
 class MergeOnlyFromMergeGateTest(FsmTest):
@@ -2022,9 +2042,11 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
     потолка ожидания. Три проверяемых свойства файла:
 
     1. под `on:` нет ключей `paths` / `paths-ignore`;
-    2. job `python` не несёт условия, исключающего `refs/heads/task/`,
-       и не построен как `== 'true'` по output соседнего job (упавший
-       `changes` дал бы пустой output и молча снял тесты — fail-open);
+    2. job `python` и вынесенный из него `python-min` (SPEC
+       01M41M6KGWA9PJ6G1KPDC6XY70) не несут условия, исключающего
+       `refs/heads/task/`, и не построены как `== 'true'` по output
+       соседнего job (упавший `changes` дал бы пустой output и молча снял
+       тесты — fail-open);
     3. job `guard` не несёт условия, исключающего `refs/heads/artifact/`
        (ради этой ветки триггер и заводился, SPEC T094, требование 7).
 
@@ -2068,7 +2090,8 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
         for ln in on:
             if re.match(r"\s+paths(-ignore)?:", ln):
                 found.append(f"фильтр путей под on: — {ln.strip()}")
-        for job, forbidden in (("python", "task/"), ("guard", "artifact/")):
+        for job, forbidden in (("python", "task/"), ("python-min", "task/"),
+                               ("guard", "artifact/")):
             block = cls._job_block(text, job)
             if not block:
                 found.append(f"job {job} не найден")
@@ -2077,8 +2100,8 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
             for ln in own_if:
                 if forbidden in ln:
                     found.append(f"job {job}: условие исключает {forbidden!r} — {ln.strip()}")
-                if job == "python" and "== 'true'" in ln:
-                    found.append(f"job python: условие fail-open (== 'true') — {ln.strip()}")
+                if job != "guard" and "== 'true'" in ln:
+                    found.append(f"job {job}: условие fail-open (== 'true') — {ln.strip()}")
         return found
 
     def test_repo_ci_workflow_keeps_a_run_for_every_push(self):

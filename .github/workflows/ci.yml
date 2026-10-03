@@ -229,6 +229,19 @@ jobs:
             echo "::error::прогон tests/ изменил набор ссылок репозитория — см. diff выше"
             exit 1
           fi
+
+  python-min:
+    name: Инварианты на минимальной версии Python
+    # Отдельно от `python` и параллельно ему (SPEC 01M41M6KGWA9PJ6G1KPDC6XY70):
+    # прежде этот прогон шёл в `python` после полного tests/ и удлинял его
+    # на ~110 с. Условие запуска — то же, что у `python` (ADR-0016,
+    # fail-closed на пустом output `changes`).
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
       - name: минимальная версия Python из манифеста (01M1RDCCKBQMJ5G2K9ANJP059H, требование 2)
         id: stack-python-min
         run: echo "version=$(python3 scripts/stack_ci.py --min)" >> "$GITHUB_OUTPUT"
@@ -241,8 +254,8 @@ jobs:
         run: |
           # Литерал timeout=120 дублирует stack.PER_TEST_TIMEOUT_SEC —
           # известное ограничение (YAML не читает Python-константу), тот
-          # же класс, что и в шаге unit-тестов выше.
-          python3 -m pytest tests/test_invariants.py -p no:cacheprovider -p timeout -o timeout=120
+          # же класс, что и в шаге unit-тестов задания `python`.
+          python3 -m pytest tests/test_invariants.py -n auto -p no:cacheprovider -p timeout -p xdist -o timeout=120
 
   protected-paths:
     name: Enforcement, конфиги системы меняет только Оператор
