@@ -2,7 +2,7 @@
 task: 01M409YNSWACNFKNJE2X263ZSD
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 budget_usd: 80
 ---
@@ -146,7 +146,8 @@ budget_usd: 80
 - `tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest.setUp`
   — коммит PLAN.md после заведения клона проекта.
 
-Замена утверждений — вопрос 1 «Эскалации»:
+Замена утверждений — мандат ANSWER-2 п.1 (вариант (а), как сделано;
+AC-5: ссылка внешней задачи — в `origin` проекта, ADR-0021 п.3):
 `tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does`,
 `::test_done_snapshot_retro_names_the_done_outcome_and_the_ref`,
 `::test_done_snapshot_removes_the_pult_artifact_branch`.
@@ -193,6 +194,11 @@ budget_usd: 80
 - `checkpoint`/лок планки фильтруют пути внешней задачи `.gitignore`
   пульта (`gitcmd.check_ignore` в `config.ROOT`), не проекта — прежнее
   поведение, задачей не менялось.
+- `tests/test_multitarget_invariants.py::ExternalWorkspaceIsolationTest::test_external_target_cwd_is_its_workspace`:
+  утверждение `expected.is_dir()` после подготовки данных (клон проекта
+  заводит фикстура до шага) выполняется всегда и сторожит лишь `mkdir` в
+  `runner.role_cwd`. Принято ANSWER-2 п.2: метод переписывается на этапе 2
+  ADR-0021 вместе с заведением клона проекта пультом.
 
 ## Предложения системе
 - `orchestrator/artifact_source.py::resolve` отдаёт только имя ссылки — без
@@ -228,57 +234,3 @@ diff --git a/docs/invariants.md b/docs/invariants.md
  | 28 | Чтение артефактов задачи оркестратором (маршрутизация `spec_gate`, бриф роли developer, трассируемость AC, лок `acceptance_tests/`, sha догфуд-фиксации, статус SPEC.md и батч QUESTIONS.md на переходе `spec_writing → spec_gate`, вердикт REVIEW.md — status и iteration — на переходе `review → acceptance/in_dev`) не зависит от того, какая ветка сейчас выписана в рабочем дереве пульта: источник истины — ссылка документов задачи `refs/artifacts/<id>` (ADR-0021 п.3; до неё — ветка задачи), читаемая `git show`/`git ls-tree`, чужой чекаут её не подменяет; ветка ещё не создана ролью — прежнее поведение (рабочая копия), не именованный отказ | `test_gitcmd_branch_reads.OnForeignBranchTest`; end-to-end по каждому месту чтения — `tasks/T031/acceptance_tests/test_branch_correct_reads.py` (`SpecGateBranchRoutingTest`, `BriefBuildBranchTest`, `TraceabilityBranchTest`, `LockBranchTest`, `FixationBranchTest`, `NoUnhandledExceptionOnMissingBranchTest`); `tasks/T047/acceptance_tests/test_branch_correct_status_reads.py` (`SpecWritingBranchRoutingTest`, `ReviewBranchRoutingTest`, `NoTaskBranchDegradationTest`, `NoGitDegradationTest`) | tasks/T031/SPEC.md, требования 1–2; tasks/T030 (класс-дефект «артефакто-чтения ветко-зависимы», журнал ~17:35 25.08.2026); tasks/T047/SPEC.md, требования 1–4 (инциденты T046 27.08.2026, T045 27.08.2026) |
 ```
 
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. **Замена утверждений в `tests/test_fsm_merge_gate_done_snapshot.py`**
-   (блокирует сдачу `ready`: правило skills/coding-standards.md «замена
-   утверждения существующего метода — эскалация до сдачи шага»; ANSWER-1
-   п.1 разрешил внешнему потоку только подготовку данных, а эти три метода
-   утверждают прямо противоположное AC-5 — ссылку внешней задачи в
-   `origin` ПУЛЬТА). Требование SPEC — 2 и AC-5 (отправка ссылки внешней
-   задачи — в `origin` проекта, не пульта). Сделано в worktree:
-   - `DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does`:
-     было `_snapshot_ref_exists(self.pult_origin, TASK)`,
-     `_snapshot_files(self.pult_origin, …)`, `_snapshot_file_text(self.pult_origin, …)`
-     — стало то же с `self.target_origin` (bare-`origin` клона проекта);
-     текст сообщения «origin пульта» → «origin проекта».
-   - `DonePathSnapshotTest::test_done_snapshot_retro_names_the_done_outcome_and_the_ref`:
-     `_snapshot_file_text(self.pult_origin, …)` и
-     `_snapshot_commit_subject(self.pult_origin, …)` → `self.target_origin`;
-     проверяемые строки RETRO и сообщения коммита те же.
-   - `DonePathSnapshotTest::test_done_snapshot_removes_the_pult_artifact_branch`:
-     было `assertTrue(gitcmd.is_ancestor(before, head))` (git пульта) —
-     стало `assertEqual(git merge-base --is-ancestor before head в клоне
-     проекта .returncode, 0)`; `assertNotEqual(head, before)` и
-     `assertFalse(branch_exists(artifact/<id>))` прежние.
-   Варианты: (а) мандат на эти три метода как сделано; (б) оставить
-   методы на артели (задача `artel` вместо `extproj`) — путь внешнего
-   `done` тогда без сторожа, кроме долгоживущего AC-5; (в) удалить методы
-   — против принципа целостности. Дефолт при молчании: (а).
-   Строка мандата для гейта неослабления (если он требует её и для
-   изменённых без удаления методов внешнего потока — включены и они):
-   `Ослабление тестов разрешено: tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does, tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_snapshot_retro_names_the_done_outcome_and_the_ref, tests/test_fsm_merge_gate_done_snapshot.py::DonePathSnapshotTest::test_done_snapshot_removes_the_pult_artifact_branch, tests/test_checkpoint_external_step_artifacts.py::CommitExternalStepArtifactsTest::test_second_step_accumulates_onto_the_first_not_replaces_it, tests/test_checkpoint_external_step_artifacts.py::CommitExternalStepArtifactsTest::test_binary_file_is_not_lost, tests/test_split_assessment_merge_gate.py::SnapshotSplitAssessmentTest::test_external_target_skips_diff_but_still_reads_split_assessment`
-
-2. **`tests/test_multitarget_invariants.py::ExternalWorkspaceIsolationTest::test_external_target_cwd_is_its_workspace`**
-   (не блокирует; метод не менялся, менялся помощник `new_task`).
-   Утверждение `expected.is_dir()` («каталог workspace заводит пульт, а не
-   CLI на ходу») после подготовки данных выполняется всегда: каталог
-   `workspace` теперь — клон проекта, где живёт ссылка документов, и
-   фикстура заводит его до шага (без клона бриф внешней задачи не
-   собирается). Варианты: (а) принять — заведение клона пультом — этап 2
-   ADR-0021, до него утверждение сторожит только `mkdir` в
-   `runner.role_cwd`; (б) отдельной задачей переписать метод под этап 2.
-   Дефолт: (а).
-
-**Контекст.** Ответ ANSWER-1 выполнен целиком: читатели переведены на узел
-чтения (п.1, вариант (а)), группа А по мандату (п.2), проверки `doctor`
-сняты (п.3), прогон по модулям — «Покрытие требований» (п.4). Код —
-20 модулей `orchestrator/`, `tests/sandbox.py`, новый
-`tests/test_artifact_branch_read_node.py`, 11 существующих тестовых
-файлов, карта; всё в worktree, зелёное. Гейт ёмкости: 206 537 байт из
-262 144.
-
-**Блокирует.** Только сдачу `ready` до мандата по вопросу 1; правки кода
-не требуется ни при одном варианте, кроме (б)/(в) вопроса 1.
