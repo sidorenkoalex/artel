@@ -2,7 +2,7 @@
 task: 01M41VTQJ9DSX64NFMFAF9W53B
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -118,7 +118,20 @@ schema_version: 5
    (`CheckContentDefaultIsUnaffectedTest::*`, `test_ci_push_class.py::*`),
    гейт принял. Кодом это не закрыть: методы проверяли функции, которые
    требование 3 SPEC удаляет, а гейт — вне зон задачи. Код не менялся,
-   нужен поимённый мандат — см. «Эскалация».
+   эскалирован мандат.
+
+6. После ANSWER-2 (04.10.2026): мандат уточнён — элемент-путь
+   `tests/test_guard_artifact_branch_mode.py` целиком и три метода
+   `tests/test_ci_push_class.py` поимённо; гейт сопоставляет путь файла
+   со всеми его находками, так что 12 непокрытых методов закрыты. Код
+   задачи не менялся; после подтяжки main (83ae989d) карта
+   `docs/codebase-map.md` регенерирована (`python3 scripts/codebase_map.py`,
+   изменился только `built_at_sha`). Прогон `python3 -m pytest
+   tests/test_ci_push_class.py tests/test_guard_artifact_branch_mode.py
+   tests/test_guard_extraneous_acceptance_files.py
+   tests/test_01m41vtqj9dsx64nfmfaf9w53b_artifact_mode_removed.py
+   tests/test_guard_schema.py -p no:cacheprovider -p timeout -o
+   timeout=120` — 86 passed, 22 subtests passed.
 
 ## Покрытие требований
 
@@ -129,7 +142,7 @@ schema_version: 5
 | 3 (режим `--artifact-branch` в guard) | 1 |
 | 4 (без новых гейтов и ослаблений) | 1, 2 — гейты не тронуты; см. «Влияние» |
 | 5 (invariants.md + test_invariants.py приложением) | 2 (приложения 2, 3), 3 |
-| 6 (перечень изменённых/удалённых тестов) | 1; перечень — «Изменённые и удалённые тесты», мандат — ANSWER-1 |
+| 6 (перечень изменённых/удалённых тестов) | 1; перечень — «Изменённые и удалённые тесты», мандат — ANSWER-1, уточнён ANSWER-2 |
 
 ## Влияние на систему
 - Гейты переходов, гейт мержа (`fsm_merge_gate` гоняет `guard --all` по
@@ -152,7 +165,7 @@ schema_version: 5
 ## Риски
 - Удаление/переименование/смена утверждений в `tests/` — гейт
   неослабления тестов (инвариант 38) отказывает без мандата Оператора;
-  мандат выдан в ANSWER-1, перечень — «Изменённые и удалённые тесты».
+  мандат выдан в ANSWER-1 и уточнён в ANSWER-2, перечень — «Изменённые и удалённые тесты».
 - Ручной `guard.py --all --artifact-branch` (старые сценарии, заметки)
   теперь падает «файл не найден» вместо мягкого прогона — это и есть
   AC-2.
@@ -490,8 +503,11 @@ index 3864347d..9bc8eb46 100644
 
 Мандат гейта неослабления тестов (инвариант 38) выдан Оператором в
 `ANSWER-1.md` (04.10.2026) строкой «Ослабление тестов разрешено: …» —
-ровно на перечень ниже. Код после ответа не менялся (ветка — коммит
-пульта 1de356f1).
+ровно на перечень ниже; `ANSWER-2.md` (04.10.2026) уточнил форму:
+`tests/test_guard_artifact_branch_mode.py` целиком путём файла (гейт не
+сопоставляет элемент `путь::Класс` с методами) и три метода
+`tests/test_ci_push_class.py` поимённо. Код после ответов не менялся
+(ветка — коммит пульта 1de356f1).
 
 Перечень по каждому методу (причина → замена):
 
@@ -511,36 +527,3 @@ index 3864347d..9bc8eb46 100644
 (черновик без секций отказывает — верно и без режима; правлен только
 докстринг). `tests/test_invariants.py` — ни один метод не удалён и не
 изменён по утверждениям, только добавлены.
-
-## Эскалация
-
-**Вопросы** (один, блокирующий):
-
-1. Мандат ANSWER-1 записал классы `IsDraftLenientTest` и
-   `BasicFrontmatterErrorsTest` элементом `путь::Класс`. Гейт
-   неослабления тестов такой элемент методам класса не засчитывает (шаг
-   5 «Шагов»), и переход `in_dev → verifying` отказал по всем 12 их
-   методам. По существу перечень тот же, что одобрен в ANSWER-1, меняется
-   только форма записи.
-   Варианты:
-   (а) новый ANSWER с поимённой строкой (готова ниже, только 12
-   непокрытых методов; остальные элементы ANSWER-1 гейт уже засчитал);
-   (б) элемент-путь `tests/test_guard_artifact_branch_mode.py` целиком.
-   Так короче, но мандат шире нужного: он покрыл бы и сохранённый
-   `CheckContentDefaultIsUnaffectedTest::test_default_call_reports_full_content_errors_for_a_draft`.
-   Дефолт при молчании — (а).
-
-   Готовая строка для (а):
-
-   `Ослабление тестов разрешено: tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_spec_draft_is_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_plan_review_test_report_draft_are_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_tz_questions_answer_draft_are_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_non_draft_status_is_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_missing_status_is_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_missing_type_is_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_unknown_type_with_draft_status_is_not_lenient, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_clean_meta_has_no_errors, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_missing_task_is_an_error, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_missing_schema_version_is_an_error, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_schema_version_present_but_zero_is_not_reported_as_missing, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_too_new_schema_version_is_an_error_with_the_version_named`
-
-**Контекст** — реализация завершена и закоммичена пультом (1de356f1,
-затем подтяжка main 83ae989d). Причина/замена по каждому из 12 методов —
-таблица «Изменённые и удалённые тесты» (строки `IsDraftLenientTest`,
-`BasicFrontmatterErrorsTest`). Механизм несовпадения:
-`orchestrator/advance_gates/test_integrity.py:116-131` (точное
-сравнение элементов), `scripts/guard.py:605` (имя находки
-`Класс::метод`).
-
-**Блокирует** — выход `in_dev → verifying`. После нового ANSWER сниму
-`status: escalate` и сдам `ready` без правок кода.
