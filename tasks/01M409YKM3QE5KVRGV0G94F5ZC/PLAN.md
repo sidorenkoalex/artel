@@ -2,7 +2,7 @@
 task: 01M409YKM3QE5KVRGV0G94F5ZC
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -169,6 +169,22 @@ schema_version: 5
 - Сторож роли (`conftest.py`) отказывает `pytest -n` по списку модулей
   как «полному прогону» — ускорение по модулям в шаге недоступно.
 
+## Ответ Оператора (ANSWER-2) и его исполнение
+1. Мандат на замену утверждений четырёх методов (перечень — «Влияние на
+   систему») дан строкой «Ослабление тестов разрешено: …» в ANSWER-2.md.
+2. `codex exec --add-dir`: проверка Оператора на codex-cli 0.157.1
+   принята (других версий на машине нет); подъём `min_cli_version` —
+   вне задачи.
+3. Зоны расширены на `docs/reference/role-home/claude/CLAUDE.md`
+   («Расширение зон разрешено» в ANSWER-2.md). Раздел «Пути и запись
+   файлов» переписан: код — в рабочей копии, документы задачи — по пути
+   каталога документов из миссии шага (открыт `--add-dir`); `tasks/<id>/`,
+   записанный в рабочую копию кода, пульт убирает. Прочие файлы
+   `docs/reference/role-home/` не тронуты; копию в `.artel/home/.claude/`
+   Оператор обновит после мержа. Риск про HOME роли из «Рисков» этим
+   снят. Прогон после правки: `test_stack_parity_table`, `test_doctor`,
+   `test_providers` — 150 passed.
+
 ## Приложение 1: инвариант 21 (docs/invariants.md)
 
 ```diff
@@ -286,32 +302,3 @@ index 07d4a5fa..69f91375 100644
  `open(`, `.read_text(`, `os.path.join`, `os.path.exists` по пути,
 ```
 
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. Мандат на замену утверждений в четырёх существующих методах
-   (перечень и основание — «Влияние на систему»). Варианты: (а) дать
-   мандат строкой ANSWER
-   `Ослабление тестов разрешено: tests/test_timeout_checkpoint.py::CommitAbnormalCheckpointTest::test_materialized_spec_is_absent_from_the_code_branch_after_abnormal_end, tests/test_timeout_checkpoint.py::CommitPauseNowCheckpointTest::test_materialized_spec_is_absent_from_the_code_branch_after_pause_now, tests/test_timeout_checkpoint.py::RoleCwdMaterializationSurvivesTimeoutCheckpointTest::test_materialized_spec_is_absent_from_the_code_branch_after_timeout, tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`;
-   (б) отказать — тогда эти методы останутся красными, задача не
-   сдаётся. Дефолт: (а).
-2. `codex exec --add-dir` в 0.155.1 (SPEC требование 2): в шаге не
-   проверить. Варианты: (а) Оператор проверяет `codex exec --help` на
-   0.155.1 (или принимает проверку 0.157.1) и подтверждает; (б) флаг
-   отсутствует — тогда нужен подъём `min_cli_version` (в «Не входит»
-   SPEC) отдельным решением. Дефолт: (а), считать флаг доступным.
-3. Правило HOME роли «пиши `tasks/<id>/…` относительным путём»
-   (`docs/reference/role-home/claude/CLAUDE.md`, вне зон задачи)
-   противоречит выносу документов. Варианты: (а) Оператор правит
-   референс и `.artel/home` в момент мержа (замена на «пиши по пути
-   каталога документов из миссии шага»); (б) расширить зоны задачи на
-   `docs/reference/role-home/` — разработчик правит сам. Дефолт: (а).
-
-**Контекст**: код, документ стека, сторожа и приложения готовы; планка
-(кроме AC-12, читающей PLAN из ссылки после автокоммита этого шага) и
-долгоживущий файл зелёные, затронутые модули зелёные (перечень выше).
-
-**Блокирует**: сдачу `ready` — переход `in_dev -> verifying` (п.1 —
-правило неослабления скила; п.2 — сверка из SPEC требования 2; п.3 —
-работоспособность шагов ролей после мержа).
