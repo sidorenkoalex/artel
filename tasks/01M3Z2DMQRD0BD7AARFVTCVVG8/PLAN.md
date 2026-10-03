@@ -78,6 +78,8 @@ schema_version: 5
    AC-2/AC-3/AC-6 (`tests/test_artifact_ref_sync.py`), досылка коммита
    закрытия в `doctor --fix`, recovery-сверка по наличию объекта;
    регенерация карты.
+8. Отказ гейта ёмкости diff (262 678 > 262 144 байт): докстринги нового
+   кода сокращены без смены поведения — раздел «Отказ гейта ёмкости».
 
 ## Покрытие требований
 | Требование | Шаг |
@@ -341,3 +343,23 @@ pytest, файл не правился) — `test_ac1_guard_violation_after_snap
 `test_gitcmd_branch_reads`, `test_codebase_map`, `test_invariants`,
 `test_artifact_branch_push`, `test_snapshot_closing_outcome` — 290 passed,
 218 subtests passed. Планка задачи — 46 passed. Карта регенерирована.
+
+## Отказ гейта ёмкости diff (после итерации 2)
+Переход `in_dev → verifying` отказал: diff кода 262 678 байт при потолке
+262 144 байт. Задачу не делим: монолит принят Оператором (SPEC, «Оценка
+объёма и деление»). Превышение составило 534 байта, поэтому сокращены
+только докстринги нового кода, которые повторяли докстринг модуля или
+описывали снятую механику. Код, тесты и утверждения не менялись.
+- `orchestrator/doctor/artifact_branches.py` — абзац модуля о снятых
+  проверках ветки; докстринги `_fix_unsent_closed_refs` и
+  `check_artifact_ref_sync`. Там же поправлен пробел в `ok = doctor…`.
+- `orchestrator/artifact_branch.py` — в `commit_files`, `_send` и
+  `origin_sync_refusal` убраны повторы докстринга модуля.
+- `orchestrator/snapshot.py` — сокращён абзац модуля о прежнем снимке.
+
+Итог: diff кода 259 453 байт (`git diff 65a128b8 -- . ':!docs/codebase-map.md'
+':!tasks'`), запас 2,7 КБ. Прогоны без `ARTEL_ROLE`: `test_artifact_ref_sync`,
+`test_doctor_artifact_branch_sync`, `test_snapshot_closing_outcome`,
+`test_artifact_branch_push`, `test_doctor`, `test_codebase_map`,
+`test_fsm_merge_gate_done_snapshot` — 189 passed, 3 subtests passed;
+планка задачи — 46 passed. Карта регенерирована.
