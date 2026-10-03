@@ -215,17 +215,30 @@ def incident_refusal(task_id: str, drift: RefDrift, what: str) -> str:
             f"{drift.head}")
 
 
-def stop_on_moved_ref(conn, task_id: str, actor: str, what: str) -> None:
+def unread_refusal(task_id: str, drift: RefDrift, what: str) -> str:
+    """Текст именованного отказа записи, когда фиксация есть, а голова
+    ссылки не прочитана."""
+    return f"[{task_id}] {what} отклонён: {DOCS_REF_UNREAD_ACTION} — {drift.text()}"
+
+
+def stop_on_ref_drift(conn, task_id: str, actor: str, what: str) -> None:
     """Команда Оператора, коммитящая в ссылку документов (`answer`,
-    `zones-extend`, `amend-tests`), при сдвиге мимо пульта не пишет ничего:
-    рабочая задача уходит в эскалацию инцидентом (сам переход не коммитит
-    паспорт и не перефиксирует — `store.set_state`), уже эскалированная
-    остаётся в эскалации; команда кончается именованным отказом. Голова не
-    прочитана — команда идёт дальше: её собственная запись в ссылку
-    отказывает сама, а прежняя фиксация не трогается."""
+    `zones-extend`, `amend-tests`), при любом расхождении головы с живой
+    фиксацией не пишет ничего и кончается именованным отказом.
+
+    Сдвиг мимо пульта — инцидент: рабочая задача уходит в эскалацию (сам
+    переход не коммитит паспорт и не перефиксирует — `store.set_state`),
+    уже эскалированная остаётся в эскалации. Голова не прочитана (git не
+    ответил или ссылки нет — роль могла её удалить) — отказ без смены
+    состояния: запись в отсутствующую ссылку создала бы корневой коммит, и
+    его перефиксация узаконила бы потерю документов, а сверка на старте
+    шага перестала бы отказывать."""
     drift = ref_drift(conn, task_id)
-    if drift is None or not drift.moved:
+    if drift is None:
         return
+    if not drift.moved:
+        journal_drift(conn, task_id, drift, actor, f"{what} не выполнен")
+        sys.exit(unread_refusal(task_id, drift, what))
     state = store.get_task(conn, task_id)["state"]
     if state in ("escalated", "done", "killed"):
         journal_drift(conn, task_id, drift, actor, f"{what} не выполнен")

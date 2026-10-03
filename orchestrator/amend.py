@@ -522,7 +522,7 @@ def _recovery_exit(conn, task_id: str, detail: str) -> None:
 
 
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
-    fixation.stop_on_moved_ref(conn, task_id, "operator", "amend-tests")
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
     # AC-5: «флага нет» и «флаг пуст» — один и тот же отказ, не только
@@ -827,7 +827,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
 
     Голова, сдвинутая мимо пульта, лок не получает: правку планки ролью
     узаконивает не эта команда, а `approve <id> <sha>`."""
-    fixation.stop_on_moved_ref(conn, task_id, "operator", "amend-tests")
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
     if not (reason or "").strip():

@@ -173,7 +173,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
         sys.exit(f"[{task_id}] answer доступна только для задачи в "
                  f"состоянии escalated (сейчас: {state})")
 
-    fixation.stop_on_moved_ref(conn, task_id, "operator", "answer")
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "answer")
     branch, _foreign = artifact_source.resolve(conn, task_id)
     existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     n = _next_answer_number(existing)
@@ -230,7 +230,7 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
     if not paths:
         sys.exit(f"[{task_id}] zones-extend: отказ — пустой список путей")
 
-    fixation.stop_on_moved_ref(conn, task_id, "operator", "zones-extend")
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "zones-extend")
     branch, _foreign = artifact_source.resolve(conn, task_id)
     existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     n = _next_answer_number(existing)

@@ -335,6 +335,15 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
         # Перечень поверх подмены не пишется; переход ниже сам уведёт
         # задачу в эскалацию инцидентом (`store.set_state`).
         return None
+    if drift is not None:
+        # Голова не прочитана (git не ответил или ссылки нет): запись в
+        # отсутствующую ссылку дала бы корневой коммит, а его перефиксация
+        # узаконила бы удаление ссылки ролью.
+        return GateRefusal(
+            f"переход отклонён: {fixation.DOCS_REF_UNREAD_ACTION}",
+            f"{rel} не записан в ветку документов: {drift.text()}",
+            f"восстанови {artifact_branch.branch_name(task_id)} или разбери "
+            f"инцидент, затем artel.py advance {task_id}")
     sha = artifact_branch.commit_files(
         task_id, {rel: guard.render_long_lived_manifest(digests)},
         f"{task_id}: перечень долгоживущих тестов (выход из tests_writing)")
