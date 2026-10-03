@@ -98,6 +98,13 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.assertEqual(self.artifact_branch_files(), [])
 
     def test_second_step_accumulates_onto_the_first_not_replaces_it(self):
+        """Автокоммит второго шага ложится поверх дерева ссылки, не заменяет
+        его; ссылка внешней задачи — в git проекта (ADR-0021 п.3).
+
+        Ловит мутацию: коммит шага строит дерево только из файлов этого шага
+        (без дерева предыдущего коммита ссылки) — PLAN.md пропадает; либо
+        `artifact_branch.repo_for_target` отдаёт `config.ROOT` для внешнего
+        target — ссылки в клоне проекта нет, `show` не находит файлов."""
         self.write("PLAN.md", "план разработчика")
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
 
@@ -186,6 +193,13 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
                       "роли в ТОМ ЖЕ состоянии, не должен молча исчезать")
 
     def test_binary_file_is_not_lost(self):
+        """Бинарный файл каталога документов попадает в ссылку внешней
+        задачи в git проекта байт-в-байт.
+
+        Ловит мутацию: чтение файлов через `read_text(encoding="utf-8")` с
+        пропуском недекодируемых — screenshot.png теряется; либо ссылка
+        внешней задачи пишется в `config.ROOT` — `git show` в клоне проекта
+        возвращает ненулевой код."""
         # REVIEW.md T094 итерация 2, замечание 1 (major): раньше
         # `read_text(encoding="utf-8")` молча пропускал файл, не проходящий
         # UTF-8-декодирование, а `shutil.rmtree` затем удалял его с диска
