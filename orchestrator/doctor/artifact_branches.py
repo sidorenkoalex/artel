@@ -55,6 +55,47 @@ def _closed_ref_problem(task_id: str, ref: str, closing: str, local: str,
     return None
 
 
+def _closed_with_closing_sha(conn, tasks) -> list:
+    """[(id, коммит закрытия)] закрытых задач с записью о коммите закрытия."""
+    closed = []
+    for t in tasks:
+        if t["state"] in ("done", "killed"):
+            closing = doctor.snapshot.closing_sha(conn, t["id"])
+            if closing:
+                closed.append((t["id"], closing))
+    return closed
+
+
+def _fix_unsent_closed_refs(conn) -> None:
+    """`doctor --fix`: досылает в `origin` закрытую ссылку, чья локальная
+    голова — коммит закрытия из журнала, а `origin` её не получил. Коммит
+    закрытия пишется после терминального перехода, и повтора отправки на
+    следующем переходе (`artifact_branch.send_pending`) у закрытой задачи
+    уже не будет — без этой досылки RETRO остался бы только локально.
+
+    Локальная голова ≠ коммиту закрытия — это изменение закрытой ссылки,
+    его не досылают, о нём говорит `check_artifact_ref_sync`. Отправка —
+    обычный `artifact_branch.push` (без force, исход в журнале задачи):
+    `origin`, ушедший мимо пульта в сторону, она не перезапишет."""
+    closed = _closed_with_closing_sha(conn, doctor.store.all_tasks(conn))
+    if not closed or doctor.gitcmd.has_no_remote(doctor.config.ROOT):
+        return
+    remote, reason = doctor._origin_artifact_refs()
+    if remote is None:
+        print(f"  [FIX] закрытые ссылки документов не досланы: origin не "
+              f"ответил — {reason}")
+        return
+    for task_id, closing in closed:
+        ref = doctor.artifact_branch.branch_name(task_id)
+        if doctor.artifact_branch.ref_head(task_id) != closing:
+            continue
+        if remote.get(ref, "") == closing:
+            continue
+        ok =doctor.artifact_branch.push(task_id)
+        print(f"  [FIX] {task_id}: коммит закрытия {closing} "
+              f"{'дослан в origin' if ok else 'в origin не дослан — см. журнал задачи'}")
+
+
 def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     """Два условия ADR-0021 п.3 для ссылок документов:
 
@@ -71,14 +112,10 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     `origin` не настроен или не ответил — `skip` с причиной, не `ok`:
     недоступность не имеет права читаться как «совпадает»."""
     tasks = doctor.store.all_tasks(conn)
-    live, closed = [], []
-    for t in tasks:
-        if t["state"] in ("done", "killed"):
-            closing = doctor.snapshot.closing_sha(conn, t["id"])
-            if closing:
-                closed.append((t["id"], closing))
-        elif doctor.artifact_branch.ref_head(t["id"]):
-            live.append(t["id"])
+    closed = _closed_with_closing_sha(conn, tasks)
+    live = [t["id"] for t in tasks
+            if t["state"] not in ("done", "killed")
+            and doctor.artifact_branch.ref_head(t["id"])]
     if not live and not closed:
         return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "ok",
                              "ссылок документов для сверки нет")]

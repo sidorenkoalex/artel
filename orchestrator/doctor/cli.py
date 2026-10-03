@@ -127,7 +127,7 @@ LABELS = {"ok": "ok", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
 def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     """`doctor [--restore] [--fix]`: все проверки (`all_checks`); под
     `--fix` — сначала починки (игнорируемые файлы ссылок документов живых
-    задач, мёртвые группы lease, зависшие тесты, локальный слой моделей,
+    задач, досылка в origin коммита закрытия, мёртвые группы lease, зависшие тесты, локальный слой моделей,
     хуки защиты main), затем проверки — те же строки уже видят результат
     починок. Уборки сирот-веток `artifact/*` больше нет: ветка документов
     упразднена (ADR-0021 п.3), их разовую уборку в origin делает Оператор
@@ -155,6 +155,10 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     if fix:
         print("Уборка игнорируемых файлов ссылок документов живых задач:")
         doctor._fix_ignored_artifact_files(conn)
+        # Коммит закрытия, не дошедший до origin (ADR-0021 п.3): у закрытой
+        # задачи переходов больше нет, досылает его только `--fix` — до
+        # `all_checks`, чтобы строка сверки ссылок видела результат.
+        doctor._fix_unsent_closed_refs(conn)
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
         # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,

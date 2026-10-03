@@ -151,6 +151,7 @@ from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
 from .canary_sets import CANARY_SETS_CHECK, check_canary_sets
 from .branch_freshness import check_branch_freshness
 from .artifact_branches import (ARTIFACT_REF_SYNC_CHECK, _origin_artifact_refs,
+                                _fix_unsent_closed_refs,
                                 check_artifact_ref_sync)
 from .lease_alerts import (_LEASE_ALERT_RE, _MERGE_LOCK_ALERT_RE,
                            _lease_alert_live, _merge_lock_alert_live)

@@ -34,14 +34,15 @@ def recovery_check(conn, target: str) -> list[doctor.Check]:
     current = (doctor.artifact_branch.ref_head(latest["id"])
                if latest is not None else "")
     # Фиксация документов — коммит ссылки `refs/artifacts/<id>` (ADR-0021
-    # п.3, инвариант 25): голова ссылки сверяется с зафиксированным sha,
-    # если тот — коммит её истории. Зафиксированный sha вне истории ссылки
-    # — фиксация прежнего устройства (репозиторий фиксации), сверять его
-    # с ссылкой не с чем.
+    # п.3, инвариант 25): голова ссылки сверяется с зафиксированным sha.
+    # Фиксация прежнего устройства — коммит отдельного репозитория
+    # фиксации `.artel/projects/<target>/`, в объектной базе пульта его нет:
+    # сверять его со ссылкой не с чем. Признак — именно отсутствие объекта,
+    # а не «не предок головы»: ссылку, переписанную мимо пульта на коммит
+    # вне её истории, сверка обязана видеть расхождением.
     sha_mismatch = bool(latest is not None and current
                         and current != latest["fixed_sha"]
-                        and doctor.gitcmd.is_ancestor(latest["fixed_sha"],
-                                                      current))
+                        and doctor.gitcmd.commit_exists(latest["fixed_sha"]))
     if sha_mismatch:
         message = (f"sha головы {current} разошёлся с зафиксированным "
                   f"{latest['fixed_sha']} ({latest['id']})")

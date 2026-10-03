@@ -575,7 +575,7 @@ class RecoveryCheckTest(TmpRootTest):
         # дальше записью мимо пульта.
         with mock.patch.object(artifact_branch, "ref_head",
                                return_value="1" * 40), \
-                mock.patch.object(gitcmd, "is_ancestor", return_value=True):
+                mock.patch.object(gitcmd, "commit_exists", return_value=True):
             checks = doctor.recovery_check(store.db(), "sled")
 
         by_name = {c.name: c for c in checks}

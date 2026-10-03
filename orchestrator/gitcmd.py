@@ -120,6 +120,13 @@ def is_ancestor(ancestor: str, descendant: str) -> bool:
     return res is not None and res.returncode == 0
 
 
+def commit_exists(sha: str) -> bool:
+    """`sha` — коммит в объектной базе репозитория пульта. `False` — объекта
+    нет (или он не коммит), либо git не ответил."""
+    res = git("cat-file", "-e", f"{sha}^{{commit}}")
+    return res is not None and res.returncode == 0
+
+
 def merges_between(sha_from: str, sha_to: str) -> int | None:
     """Число merge-коммитов на отрезке `sha_from..sha_to` (ANSWER-1
     01M1NGFK3N6MRMYGCC09H975V3 п.3: «возраст» зелёного прогона канарейки
