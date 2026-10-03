@@ -185,6 +185,28 @@ schema_version: 5
    снят. Прогон после правки: `test_stack_parity_table`, `test_doctor`,
    `test_providers` — 150 passed.
 
+## Отказ гейтов прошлой сдачи и его исполнение
+- Гейт зон: раздел «## Расширение зон» ниже есть (добавлен прошлым
+  шагом после отказа).
+- Гейт заявки мутации: строка «Ловит мутацию: …» добавлена в докстринги
+  пяти изменённых методов (у
+  `test_materialized_spec_is_absent_from_the_code_branch_after_timeout`
+  докстринга не было — заведён). Каждая заявка проверена временной
+  мутацией, тест красный, код возвращён (`git diff orchestrator/` пуст):
+  - `tests/test_timeout_checkpoint.py` — три метода `…_absent_from_the_code_branch_after_*`:
+    `runner.role_cwd` выкладывает в рабочую копию
+    (`materialize_task_dir(task_id, path)`) + `_wip_checkpoint` коммитит
+    её для любой роли без `exclude` — 3 failed;
+  - `tests/test_multitarget.py::RoleEnvTest::test_absent_identity_is_journalled_before_the_step`:
+    `if absent:` -> `if False:` в сверке идентичности `runner` — failed;
+  - `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`:
+    `_commit_external_step_artifacts` не читает каталог документов
+    (ранний `return ""`) — failed.
+  Сверка `guard.test_functions_without_mutation_claim` по всем
+  изменённым `tests/*.py` против базы 8b233806 — пусто. Прогон
+  `test_timeout_checkpoint`, `test_review_package`, `test_multitarget`,
+  `test_mutation_claim_gate` — 247 passed.
+
 ## Расширение зон
 Пути: docs/reference/role-home/claude/CLAUDE.md
 
