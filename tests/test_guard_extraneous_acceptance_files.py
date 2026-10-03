@@ -2,8 +2,8 @@
 scan_extraneous_acceptance_files` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-1,
 AC-3, AC-6).
 
-Поведение `guard.main()` целиком (обе именованные ошибки, оба режима
-`--all`/`--all --artifact-branch`) уже покрыто залоченной планкой
+Поведение `guard.main()` целиком (обе именованные ошибки в режиме
+`--all`) уже покрыто залоченной планкой
 приёмки (tasks/01M1SAA01YRRTWAVADT2F81RRQ/acceptance_tests/
 test_guard_extraneous_acceptance_test_file.py, AC-3/AC-6) — дублировать
 её тут смысла нет. Здесь — юниты на сам предикат и на обход нескольких

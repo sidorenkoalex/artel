@@ -28,22 +28,19 @@ class AdrClassificationTest(unittest.TestCase):
     """AC-2/AC-8: логика классификации ADR-0016 сохранена дословно —
     те же ответы, что давала bash-версия job `changes`."""
 
-    def test_artifact_branch_is_code_false_without_touching_git_or_gh(self):
-        """Ловит мутацию: код на artifact/** ошибочно идёт диффом/API —
-        правило AC-2 не должно трогать git/gh вовсе."""
+    def test_artifact_branch_is_code_true_without_touching_git_or_gh(self):
+        """Ветка `artifact/<x>` — обычная не-`main` ветка (ADR-0021 п.4,
+        SPEC 01M41VTQJ9DSX64NFMFAF9W53B): тесты идут, git/gh не трогаются,
+        как у любой не-`main` ветки.
+
+        Ловит мутацию: правило «не-`main` ветка — code=true сразу»
+        перенесено после диффа/API (classify зовёт git/gh для
+        `artifact/<x>`), либо класс `artifact/` возвращён с code=false."""
         with mock.patch("subprocess.run") as run:
             code, reason = ci_push_class.classify(
                 "push", "refs/heads/artifact/01m1abc", PARENT_SHA, HEAD_SHA)
         run.assert_not_called()
-        self.assertFalse(code)
-
-    def test_artifact_branch_code_is_false(self):
-        """Ловит мутацию: правило artifact/** перестаёт выставлять
-        code=false, или причина теряет слово "артефактная"."""
-        code, reason = ci_push_class.classify(
-            "push", "refs/heads/artifact/01m1abc", PARENT_SHA, HEAD_SHA)
-        self.assertFalse(code)
-        self.assertIn("артефактная", reason)
+        self.assertTrue(code)
 
     def test_task_branch_is_always_code_true(self):
         """Ловит мутацию: ветка task/** с исключительно документным диффом
@@ -220,21 +217,21 @@ class OutputFormatTest(unittest.TestCase):
 
     def test_script_prints_code_and_reason_lines(self):
         """Ловит мутацию: точка входа `main()` печатает не ровно две
-        строки, строка `code=` не идёт первой, либо причина не содержит
-        слово "артефактная" — контракт вызова из ci.yml/приёмочных тестов
-        расходится."""
+        строки, строка `code=` не идёт первой, либо вторая строка — не
+        причина классификации — контракт вызова из ci.yml/приёмочных
+        тестов расходится."""
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],
-            env=self._env(GITHUB_EVENT_NAME="push",
-                          GITHUB_REF="refs/heads/artifact/01m1abc",
+            env=self._env(GITHUB_EVENT_NAME="pull_request",
+                          GITHUB_REF="refs/pull/7/merge",
                           BEFORE=PARENT_SHA, GITHUB_SHA=HEAD_SHA),
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(0, result.returncode)
         lines = result.stdout.splitlines()
         self.assertEqual(2, len(lines))
-        self.assertEqual("code=false", lines[0])
-        self.assertIn("артефактная", lines[1])
+        self.assertEqual("code=true", lines[0])
+        self.assertIn("событие pull_request", lines[1])
 
     def test_script_reads_before_and_head_from_env_on_task_branch(self):
         """Ловит мутацию: `main()` не читает BEFORE/GITHUB_SHA из

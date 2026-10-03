@@ -113,9 +113,9 @@ def classify(event_name: str, ref: str, before: str, head: str,
     if event_name != "push":
         return True, f"событие {event_name} — тесты идут"
 
-    if branch.startswith("artifact/"):
-        return False, "артефактная ветка — код равен родителю, тесты пропущены"
-
+    # Отдельного класса для `artifact/<x>` нет (ADR-0021 п.4): пульт в
+    # такие ветки не пушит, CI на них не заводится, а случайный пуш —
+    # обычная не-`main` ветка.
     if branch != "main":
         return True, f"ветка {branch} — тесты идут"
 
