@@ -264,32 +264,6 @@ class ExternalTransitionCommitsTest(TmpRootTest):
     def repo(self) -> Path:
         return config.PROJECTS / "sled"
 
-    def test_transition_commits_the_artifact_repo(self):
-        self.assertEqual(gitcmd.head_sha(self.repo()), "",
-                         "до перехода в репо ещё нет коммитов")
-
-        capture(lambda: store.set_state(
-            store.db(), self.TASK, "in_dev", "operator",
-            expected_state="spec_writing", detail="тест"))
-
-        sha = gitcmd.head_sha(self.repo())
-        self.assertNotEqual(sha, "")
-        shown = gitcmd.in_repo(self.repo(), "show", "--stat", sha).stdout
-        self.assertIn("SPEC.md", shown)
-
-    def test_sha_lands_in_the_journal(self):
-        capture(lambda: store.set_state(
-            store.db(), self.TASK, "in_dev", "operator",
-            expected_state="spec_writing", detail="тест"))
-
-        sha = gitcmd.head_sha(self.repo())
-        entries = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
-                   if r["action"] == "sha зафиксирован"]
-        self.assertEqual(len(entries), 1)
-        self.assertIn(sha, entries[0])
-        self.assertIn("target=sled", entries[0])
-        self.assertEqual(store.get_task(store.db(), self.TASK)["fixed_sha"], sha)
-
     def test_second_transition_without_changes_reuses_the_head(self):
         capture(lambda: store.set_state(
             store.db(), self.TASK, "in_dev", "operator",
@@ -492,22 +466,6 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         return [c for c in popen.call_args_list
                if c.args and is_claude_call(c.args[0])]
 
-    def test_tampering_after_fixation_blocks_the_run(self):
-        self.make_task(self.TASK)
-        (self.repo() / "tasks" / self.TASK / "SPEC.md").write_text(
-            "подмена мимо гейта\n", encoding="utf-8")
-
-        out, popen = self.run_faked(self.TASK)
-
-        self.assertEqual(self.claude_launches(popen), [])
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "escalated")
-        self.assertIn("инцидент целостности", out)
-        # «грязная копия», не «sha разошёлся»: если бы check_integrity
-        # (как до фикса замечания 1) сама закоммитила подмену, sha уже
-        # успел бы уйти вперёд, и причина отказа звучала бы иначе.
-        self.assertIn("грязная копия", out)
-
     def test_clean_state_runs_normally(self):
         self.make_task(self.TASK)
 
@@ -516,67 +474,6 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         self.assertEqual(len(self.claude_launches(popen)), 1)
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "in_dev")
-
-    def test_check_integrity_does_not_commit_when_tampered(self):
-        """Прямая проверка замечания 1: `check_integrity` — не `fix()`,
-        коммитить не имеет права даже когда есть что коммитить."""
-        fixed = self.make_task(self.TASK)
-        (self.repo() / "tasks" / self.TASK / "SPEC.md").write_text(
-            "подмена мимо гейта\n", encoding="utf-8")
-
-        reason = fixation.check_integrity(store.db(), self.TASK)
-
-        self.assertIsNotNone(reason)
-        self.assertIn("грязная копия", reason)
-        self.assertEqual(gitcmd.head_sha(self.repo()), fixed,
-                         "check_integrity — проверка, не точка фиксации")
-        status = gitcmd.in_repo(self.repo(), "status", "--porcelain").stdout
-        self.assertIn(f"tasks/{self.TASK}/SPEC.md", status,
-                      "подмена осталась незакоммиченной")
-
-    def test_check_integrity_does_not_commit_another_tasks_work_in_progress(self):
-        """Сценарий поломки из замечания 1 REVIEW.md: задача A ещё пишет
-        файл (не закоммичен), Оператор запускает `run` для задачи B того
-        же target — `check_integrity(B)` не смеет утащить WIP A в коммит
-        фиксации B и сдвинуть HEAD, который ни A, ни B не просили сдвигать.
-        """
-        head_before = self.make_task(self.TASK)
-        # Задача A (OTHER) существует, но её СОБСТВЕННЫЙ переход ещё не
-        # случился — роль просто пишет файл в общем репо target'а, не
-        # коммитя (в отличие от `make_task`, здесь нет `store.set_state`,
-        # то есть нет и легитимной фиксации, которая бы сама сдвинула
-        # HEAD — единственная причина «грязно» ниже это WIP A).
-        store.insert_task(store.db(), self.OTHER, f"Задача {self.OTHER}",
-                          "in_dev", f"task/{self.OTHER.lower()}",
-                          "sled", 25.0)
-        (self.repo() / "tasks" / self.OTHER).mkdir(parents=True)
-        (self.repo() / "tasks" / self.OTHER / "PLAN.md").write_text(
-            "A ещё работает\n", encoding="utf-8")
-
-        reason = fixation.check_integrity(store.db(), self.TASK)
-
-        self.assertIsNotNone(reason)
-        self.assertIn("грязная копия", reason)
-        # HEAD артефактного репо не сдвинулся — WIP задачи A остался
-        # незакоммиченным, а не был подхвачен коммитом фиксации B.
-        self.assertEqual(gitcmd.head_sha(self.repo()), head_before,
-                         "check_integrity(B) не смеет коммитить WIP задачи A")
-        status = gitcmd.in_repo(self.repo(), "status", "--porcelain").stdout
-        self.assertIn(f"tasks/{self.OTHER}", status,
-                      "правка A осталась незакоммиченной, не подмешана в коммит B")
-
-        # Через runner.cmd_run — тот же путь, каким Оператор реально
-        # столкнётся со сценарием: репо-широкая «чистота» (требование 2 —
-        # коммит целиком, не по задачам) блокирует и B тоже — известное
-        # ограничение гранулярности A2b при нескольких активных задачах
-        # одного target (tasks/T021/PLAN.md «Риски»), но это отказ, а не
-        # порча истории: HEAD и здесь не двигается заранее самой проверкой.
-        out, popen = self.run_faked(self.TASK)
-
-        self.assertEqual(self.claude_launches(popen), [])
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "escalated")
-        self.assertIn("грязная копия", out)
 
 
 class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
@@ -648,37 +545,6 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
 
     def status(self) -> str:
         return gitcmd.in_repo(self.repo(), "status", "--porcelain").stdout
-
-    def test_approve_without_sha_does_not_commit_another_tasks_wip(self):
-        sha = self.enter_spec_gate(self.TASK)
-        self.write_uncommitted_wip(self.OTHER)
-        head_before = gitcmd.head_sha(self.repo())
-
-        out = capture(fsm.cmd_approve, self.TASK)
-
-        self.assertIn(sha, out)
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "spec_gate", "approve без sha — мягкий возврат, не переход")
-        self.assertEqual(gitcmd.head_sha(self.repo()), head_before,
-                         "approve без sha не имеет права коммитить")
-        self.assertIn(f"tasks/{self.OTHER}", self.status(),
-                      "WIP другой задачи остался незакоммиченным")
-
-    def test_rejected_approve_does_not_commit_another_tasks_wip(self):
-        self.enter_spec_gate(self.TASK)
-        self.write_uncommitted_wip(self.OTHER)
-        head_before = gitcmd.head_sha(self.repo())
-        wrong = "0" * 40
-
-        with self.assertRaises(SystemExit):
-            capture(fsm.cmd_approve, self.TASK, wrong)
-
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "spec_gate")
-        self.assertEqual(gitcmd.head_sha(self.repo()), head_before,
-                         "отказанный approve не имеет права коммитить")
-        self.assertIn(f"tasks/{self.OTHER}", self.status(),
-                      "WIP другой задачи остался незакоммиченным")
 
     def test_approve_with_matching_sha_still_transitions(self):
         """Контроль: сам фикс не ломает штатный успешный approve."""
@@ -820,22 +686,24 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         return res.stdout
 
     def head(self) -> str:
-        """Головной sha репо фиксации self/артели (`fixation._fix_external`,
-        A7 требование 2) — то же самое значение, что `tasks.fixed_sha`."""
-        return gitcmd.head_sha(self.repo())
+        """Голова ссылки документов задачи `refs/artifacts/<id>` — с
+        ADR-0021 (п.3, инвариант 25) то же самое значение, что
+        `tasks.fixed_sha` (`fixation.fix`)."""
+        from orchestrator import artifact_branch
+        return artifact_branch.ref_head(self.TASK)
 
     def commit_task_dir(self, message: str = "артефакт") -> None:
         """Коммит МИМО обычной фиксации (`fixation.fix()` внутри `store.
-        set_state`) — симулирует постороннюю правку репо фиксации (сама
-        фиксация коммитит сама на каждом переходе и в этом явном коммите
-        не нуждается, `ExternalTransitionCommitsTest` выше). Идентичность
-        коммитера — явными `-c`, репо фиксации (`self.repo()`,
-        `projects.init_artifact_repo`) не несёт собственного git-конфига."""
-        self.git_in_worktree("add", "-A")
-        self.git_in_worktree(
-            "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-            "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-            "commit", "-q", "-m", message)
+        set_state`) — симулирует постороннюю правку документов задачи:
+        файлы `task_dir()` уходят коммитом в ссылку документов
+        `refs/artifacts/<id>` (ADR-0021 п.3) узлом записи напрямую, без
+        перефиксации, которую делают команды пульта."""
+        from orchestrator import artifact_branch
+        files = {f"tasks/{self.TASK}/{p.relative_to(self.task_dir()).as_posix()}":
+                 p.read_bytes()
+                 for p in sorted(self.task_dir().rglob("*")) if p.is_file()}
+        self.assertTrue(artifact_branch.commit_files(self.TASK, files, message),
+                        "посторонний коммит документов не записан")
 
     def _seed_artifact_branch(self, rel: str, text: str, message: str) -> None:
         """Содержимое, которое читает FSM (`artifact_source.resolve`,
@@ -887,6 +755,12 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         self._seed_artifact_branch(f"tasks/{self.TASK}/REVIEW.md",
                                    REVIEW_DRAFT.format(task=self.TASK),
                                    f"{self.TASK}: REVIEW заглушка")
+        # С ADR-0021 (п.3) заглушки выше легли в ссылку документов, которую
+        # и фиксирует переход: это запись пульта (как автокоммит шага), не
+        # посторонняя правка — фиксация подтягивается на неё тем же
+        # `store.record_fixation`, иначе первый же старт шага увидел бы
+        # собственные заглушки инцидентом целостности.
+        store.record_fixation(store.db(), self.TASK)
         # Гейт ёмкости diff (05.09, fsm_advance._capacity_gate_refuses)
         # сверяет `MAIN_BRANCH...t["branch"]` в `config.ROOT` (`gitcmd.git`
         # всегда работает там, не в `self.repo()` — тот отдельный
@@ -914,7 +788,9 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         if branch and not gitcmd.branch_exists(branch):
             subprocess.run(["git", "branch", branch, config.MAIN_BRANCH],
                            cwd=config.ROOT, check=True, capture_output=True)
-        return sha
+        # Зафиксированный sha после заглушек выше — голова ссылки
+        # документов (ADR-0021 п.3), не sha перехода в `in_dev`.
+        return self.head()
 
     def run_faked(self):
         """Прогон `cmd_run` с подложным агентом, но НАСТОЯЩИМ git.
@@ -956,42 +832,6 @@ class DogfoodTransitionJournalsShaTest(RealPultGitTest):
         self.assertIn(sha, entries[0])
         self.assertIn("чисто=True", entries[0])
         self.assertEqual(store.get_task(store.db(), self.TASK)["fixed_sha"], sha)
-
-    def test_uncommitted_artifact_is_journaled_as_dirty(self):
-        """T033: грязная копия теперь ОТКАЗЫВАЕТ переходу (симметрия с
-        `approve`, инцидент T032), а не журналит фиксацию с чисто=False
-        поверх состоявшегося перехода — старое поведение и было тем самым
-        дефектом асимметрии, который T033 закрывает.
-
-        Статус SPEC.md (SPEC T048) читается с ВЕТКИ задачи, не с диска —
-        «ready» обязан быть сперва закоммичен, иначе advance его просто не
-        увидит («ещё не ready»), а не дойдёт до сверки чистоты. Грязная
-        копия здесь — правка ПОВЕРХ уже закоммиченного ready-SPEC.md.
-        """
-        spec_text = SPEC_READY.format(task=self.TASK)
-        self.task_dir().mkdir(parents=True, exist_ok=True)
-        (self.task_dir() / "SPEC.md").write_text(spec_text, encoding="utf-8")
-        self.commit_task_dir()
-        # Статус SPEC.md читается с артефактной ветки пульта (SPEC T094,
-        # требование 10; `enter_spec_gate` выше) — без неё advance
-        # отказывает раньше сверки чистоты («ещё не ready»), не дойдя до
-        # предмета этого теста.
-        self._seed_artifact_branch(f"tasks/{self.TASK}/SPEC.md", spec_text,
-                                   f"{self.TASK}: SPEC готов")
-        (self.task_dir() / "SPEC.md").write_text(
-            spec_text + "\nправка мимо коммита\n", encoding="utf-8")
-        # SPEC.md правлен, но правка НЕ закоммичена — грязная копия tasks/<id>.
-
-        self.capture(fsm.cmd_advance, self.TASK)
-
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "spec_writing", "переход по грязной копии не случился")
-        fixed = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
-                 if r["action"] == "sha зафиксирован"]
-        self.assertEqual(fixed, [], "грязный переход фиксацию не журналит")
-        refused = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
-                   if "не закоммичен" in r["detail"]]
-        self.assertTrue(refused, "отказ по грязной копии журналится отдельно")
 
 
 class DogfoodTransitionJournalsCodeBranchShaTest(RealPultGitTest):
@@ -1094,28 +934,6 @@ class ApproveByShaTest(RealPultGitTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "spec_gate", "отклонённый approve не двигает состояние")
 
-    def test_approve_without_sha_on_dirty_copy_is_refused_and_state_unchanged(self):
-        """SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, AC-3 (постоянное покрытие,
-        R1-F3) — живой sha совпадает с зафиксированным, но рабочая копия
-        репо фиксации грязная (правка без коммита): approve без sha
-        обязан отказать по грязноте, а не пройти только по совпадению
-        sha.
-
-        Ловит мутацию: пропуск проверки `clean` при совпадающем sha
-        (переход считался бы подтверждённым по одному лишь совпадению
-        sha) — ассерт на неизменённое состояние задачи не пройдёт."""
-        fixed_sha = self.enter_spec_gate()
-        (self.task_dir() / "SPEC.md").write_text(
-            "правка без коммита\n", encoding="utf-8")
-        self.assertEqual(self.head(), fixed_sha,
-                         "sha не должен был сдвинуться без коммита")
-
-        out = self.capture(fsm.cmd_approve, self.TASK)
-
-        self.assertIn("грязн", out, "отказ обязан называть грязную копию")
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "spec_gate", "отклонённый approve не двигает состояние")
-
     def test_approve_with_a_mismatched_sha_is_refused(self):
         self.enter_spec_gate()
         wrong = "0" * 40
@@ -1141,6 +959,9 @@ class ApproveByShaTest(RealPultGitTest):
         self.enter_in_dev()
         (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
+        # С ADR-0021 (п.3) у документов нет рабочей копии — подмена мимо
+        # гейта видна сверке только коммитом в ссылку документов.
+        self.commit_task_dir("подмена мимо гейта")
         self.run_faked()  # инцидент целостности -> escalated, escalated_from=in_dev
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "escalated")
@@ -1159,18 +980,6 @@ class ApproveByShaTest(RealPultGitTest):
 
 class IntegrityIncidentBlocksRunTest(RealPultGitTest):
     """Требование 5: сверка при старте шага — изменение после approve отказывает."""
-
-    def test_uncommitted_change_after_approve_blocks_the_run(self):
-        self.enter_in_dev()
-        (self.task_dir() / "SPEC.md").write_text(
-            "подмена мимо гейта\n", encoding="utf-8")
-
-        out, popen = self.run_faked()
-
-        self.assertEqual(self.claude_launches(popen), [])
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "escalated")
-        self.assertIn("инцидент целостности", out)
 
     def test_committed_change_after_approve_also_blocks_the_run(self):
         """Разошедшийся sha — не только грязная копия, но и посторонний коммит."""
@@ -1404,6 +1213,9 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
         self.enter_in_dev()
         (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
+        # С ADR-0021 (п.3) у документов нет рабочей копии — подмена мимо
+        # гейта видна сверке только коммитом в ссылку документов.
+        self.commit_task_dir("подмена мимо гейта")
 
         out, popen = self.run_faked()
 

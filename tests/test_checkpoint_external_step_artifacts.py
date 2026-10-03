@@ -56,7 +56,7 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         path.write_text(text, encoding="utf-8")
 
     def artifact_branch_files(self) -> list[str]:
-        branch = f"artifact/{self.TASK.lower()}"
+        branch = artifact_branch.branch_name(self.TASK)
         return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
 
     def test_role_written_artifacts_land_in_the_pult_artifact_branch(self):
@@ -99,7 +99,7 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.write("REVIEW.md", "ревью")
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "reviewer")
 
-        branch = f"artifact/{self.TASK.lower()}"
+        branch = artifact_branch.branch_name(self.TASK)
         plan_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/PLAN.md")
         review_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/REVIEW.md")
         self.assertEqual(plan_text, "план разработчика")
@@ -197,7 +197,7 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.assertIn(f"tasks/{self.TASK}/screenshot.png", committed)
         self.assertFalse(self.task_dir.exists())
         cat = subprocess.run(
-            ["git", "show", f"artifact/{self.TASK.lower()}:"
+            ["git", "show", f"{artifact_branch.branch_name(self.TASK)}:"
              f"tasks/{self.TASK}/screenshot.png"],
             cwd=config.ROOT, capture_output=True)
         self.assertEqual(cat.returncode, 0)
@@ -304,11 +304,11 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
             path.write_text(content, encoding="utf-8")
 
     def artifact_branch_files(self) -> list[str]:
-        branch = f"artifact/{self.TASK.lower()}"
+        branch = artifact_branch.branch_name(self.TASK)
         return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
 
     def artifact_branch_text(self, rel: str):
-        branch = f"artifact/{self.TASK.lower()}"
+        branch = artifact_branch.branch_name(self.TASK)
         text, _ = gitcmd.show(branch, rel)
         return text
 

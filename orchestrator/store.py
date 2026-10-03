@@ -520,17 +520,6 @@ def all_tasks(conn: sqlite3.Connection) -> list:
     return conn.execute("SELECT * FROM tasks ORDER BY id").fetchall()
 
 
-def closed_external_tasks(conn: sqlite3.Connection) -> list:
-    """Задачи внешнего target'а в `done`/`killed`, не канарейка (SPEC
-    T094, требование 13, AC-15) — кандидаты на дожим недоставленного
-    снапшота закрытия. Читатель — `doctor.check_pending_snapshots`
-    (SQL живёт только здесь, ADR-0003 3ж)."""
-    return conn.execute(
-        "SELECT id, target FROM tasks WHERE state IN ('done','killed') "
-        "AND is_canary=0 AND target IS NOT NULL AND target != ?",
-        (config.DEFAULT_TARGET,)).fetchall()
-
-
 def task_target(conn: sqlite3.Connection, task_id: str) -> str:
     """Target задачи; для строки без него — target догфуда."""
     row = conn.execute("SELECT target FROM tasks WHERE id=?",
@@ -646,8 +635,12 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
         raise CasConflict(task_id, expected_state, actual)
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
-    record_fixation(conn, task_id)
+    # Паспорт — ДО фиксации: его коммит сдвигает голову ссылки документов,
+    # а фиксация перехода обязана указывать на итоговую голову (ADR-0021
+    # п.3, инвариант 25), иначе следующая сверка увидела бы собственную
+    # строку паспорта расхождением.
     _append_passport_line(conn, task_id, state, actor)
+    record_fixation(conn, task_id)
     _close_attention_alert(conn, task_id)
     _record_review_verdict(conn, task_id, expected_state, state)
 
@@ -674,18 +667,23 @@ def _record_review_verdict(conn, task_id: str, expected_state: str,
 
 def _append_passport_line(conn, task_id: str, state: str, actor: str) -> None:
     """Паспорт живой задачи (SPEC T094, требование 11, AC-12): на каждом
-    переходе FSM — строка в артефактную ветку пульта, «только для глаз»
-    (не входит в автоматические решения). Только внешний target —
-    self/догфуд не заводит артефактную ветку вовсе (требование 16/AC-18).
+    переходе FSM — строка в ссылку документов `refs/artifacts/<id>`,
+    «только для глаз» (не входит в автоматические решения). Только
+    внешний target — у артели паспорта нет (требование 16/AC-18).
+
+    Тот же хук — повтор отправки ссылки в `origin` (ADR-0021 п.3: отказ
+    push досылается на следующем переходе): коммит паспорта отправляет
+    ссылку сам, у артели без паспорта её досылает `send_pending`.
 
     Отложенный импорт: `artifact_branch` не читает `store` на уровне
     модуля, но `store.py` остаётся листом графа импортов при загрузке
     (тот же приём, что `record_fixation` уже применяет к `fixation`).
     """
     target = task_target(conn, task_id)
-    if target == config.DEFAULT_TARGET:
-        return
     from . import artifact_branch
+    if target == config.DEFAULT_TARGET:
+        artifact_branch.send_pending(task_id)
+        return
     artifact_branch.append_passport_line(task_id, state, actor)
 
 

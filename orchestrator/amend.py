@@ -271,27 +271,26 @@ def _removed_note(task_id: str, removed: list[str]) -> str:
 
 def _commit_plank(task_id: str, files: dict, message: str,
                   removed: list[str]) -> tuple[str, str]:
-    """Коммит правки планки в артефактную ветку с удалениями `removed`:
+    """Коммит правки планки в ссылку документов с удалениями `removed`:
     (sha, "") — коммит есть и меняет дерево; ("", "") — git не записал
-    коммит; ("", причина) — дерево коммита равно дереву родителя или не
+    коммит; ("", причина) — дерево коммита равно дереву головы или не
     сверено с ним (SPEC 01M3XWR7140Q8C1XAFPZ9E854M, требование 3,
-    fail-closed): такой коммит лок не принимает, а ветка возвращается на
-    родителя, чтобы пустой коммит не оставался её головой."""
-    sha = artifact_branch.commit_files(task_id, files, message, remove=removed)
-    if not sha:
-        return "", ""
-    res = gitcmd.git("rev-parse", f"{sha}^{{tree}}", f"{sha}^1^{{tree}}")
-    trees = res.stdout.split() if res is not None and res.returncode == 0 else []
-    if len(trees) == 2 and trees[0] != trees[1]:
+    fail-closed): такой коммит лок не принимает, и ссылка его не
+    получает — сверка идёт до записи (`artifact_branch.commit_change`):
+    коммит ссылки сразу уезжает в origin (ADR-0021 п.3), откатить его
+    назад, как прежде откатывали ветку, уже нельзя."""
+    sha, outcome = artifact_branch.commit_change(task_id, files, message,
+                                                 remove=removed)
+    if sha:
         return sha, ""
-    gitcmd.git("update-ref", f"refs/heads/{artifact_branch.branch_name(task_id)}",
-               f"{sha}^1", sha)
-    if len(trees) != 2:
-        return "", (f"дерево коммита правки {sha} не сверено с деревом "
-                    f"родителя — git не ответил")
-    return "", (f"коммит правки {sha} не меняет ни одного файла артефактной "
-                f"ветки (дерево равно дереву родителя); tests_locked_sha не "
-                f"сдвинут")
+    if outcome == artifact_branch.TREE_UNKNOWN:
+        return "", ("дерево коммита правки не сверено с деревом головы "
+                    "ссылки документов — git не ответил")
+    if outcome == artifact_branch.UNCHANGED:
+        return "", ("коммит правки не меняет ни одного файла ссылки "
+                    "документов (дерево равно дереву головы); "
+                    "tests_locked_sha не сдвинут")
+    return "", ""
 
 
 def _run_summary(tail: str) -> str:
@@ -730,8 +729,14 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
 def _record_amend(conn, task_id: str, detail: str, line: str) -> None:
     """Ровно одно событие `AMEND_ACTION` на успешный вызов любого режима,
     сколько бы веток он ни изменил (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV,
-    требование 3), и алерт окна ADR-0012."""
+    требование 3), и алерт окна ADR-0012.
+
+    Правка планки — запись пульта в ссылку документов по команде
+    Оператора: документы перефиксируются (`store.record_fixation`,
+    ADR-0021 п.3), иначе следующая сверка фиксации увидела бы её
+    расхождением."""
     store.journal(conn, task_id, "operator", AMEND_ACTION, detail)
+    store.record_fixation(conn, task_id)
     print(line)
 
     window_ids = _locked_window_task_ids(conn)

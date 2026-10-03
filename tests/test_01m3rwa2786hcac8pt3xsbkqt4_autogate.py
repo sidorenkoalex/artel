@@ -36,6 +36,11 @@ class LongLivedAutogateTest(RealGitSandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "кодовая планка")
         self.git("checkout", "-q", "-b", self.docs_branch)
+        # Документы задачи пульт читает из `refs/artifacts/<id>` (ADR-0021
+        # п.3); сценарий ведёт их обычной веткой с чекаутом — ссылка
+        # документов указывает на неё символически и видит каждый её коммит.
+        self.git("symbolic-ref", f"refs/artifacts/{self.task_id}",
+                 f"refs/heads/{self.docs_branch}")
         review = config.TASKS / self.task_id / "REVIEW.md"
         review.write_text(
             "---\n" + f"task: {self.task_id}\n" +

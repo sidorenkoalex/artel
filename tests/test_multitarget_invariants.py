@@ -34,8 +34,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, budget, catalog, cleanup,  # noqa: E402
-                          config, fsm, gitcmd, runner, spend, store, workspace)
-from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
+                          config, fsm, gitcmd, runner, snapshot, spend, store,
+                          workspace)
+from tests.sandbox import (FakeProc, TmpRootTest,  # noqa: E402
+                           alias_docs_ref_to_branch, capture,
                            capture_new_task_id, fake_git, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -252,7 +254,7 @@ class PultArtifactIsolationTest(unittest.TestCase):
         # убран) — правка идёт туда же, тем же приёмом, что уже несёт
         # `KillKeepsMainIntactTest.commit_artifacts_in_branch` (checkout
         # реальной веткой, коммит, возврат на main).
-        branch = artifact_branch.branch_name(self.TASK)
+        branch = alias_docs_ref_to_branch(self.root, self.TASK)
         self.git("checkout", "-q", branch)
         (self.root / "tasks" / self.TASK / "SPEC.md").write_text(
             SPEC_READY.format(task=self.TASK), encoding="utf-8")
@@ -264,16 +266,16 @@ class PultArtifactIsolationTest(unittest.TestCase):
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты всплыли после advance")
 
-        # kill пультовой задачи трогает git (публикация снапшота, уборка
-        # артефактной ветки) — .artel/ обязан остаться невидим и после
+        # kill пультовой задачи трогает git (коммит закрытия в ссылку
+        # документов, уборка) — .artel/ обязан остаться невидим и после
         # этого.
         self.capture(cleanup.cmd_kill, self.TASK)
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты всплыли после kill")
-        # Контроль: сама уборка отработала (иначе тест ничего не доказывал
-        # бы) — A7: артефактная ветка пульта убирается уборкой закрытия
-        # (снапшот/kill), не worktree (её эта задача больше не заводит).
-        self.assertFalse(gitcmd.branch_exists(branch))
+        # Контроль: закрытие отработало (иначе тест ничего не доказывал бы)
+        # — ADR-0021 п.3: коммит закрытия лёг в ссылку документов и записан
+        # в журнал.
+        self.assertTrue(snapshot.closing_sha(store.db(), self.TASK))
 
 
 class ExternalWorkspaceIsolationTest(TmpRootTest):

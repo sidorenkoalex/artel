@@ -6,6 +6,15 @@
 задачи в колонку `tasks.fixed_sha` — FSM и `approve` сверяются с ней
 одинаково, не зная, откуда взялся sha.
 
+С ADR-0021 (п.3, этап 1, часть а) зафиксированное состояние документов —
+коммит ссылки `refs/artifacts/<id>` задачи (`fix`/`read`): документы
+живут там от `new` до закрытия, а репозиторий фиксации, описанный ниже,
+фиксация больше не коммитит (его упраздняет часть б). Пишущие места
+пульта, двигающие ссылку вне перехода (автокоммит шага, `answer`,
+`zones-extend`, `amend-tests`, `doctor --fix`, коммит закрытия),
+перефиксируют её сами (`store.record_fixation`); запись мимо них сверка
+видит расхождением.
+
 Единая логика для ЛЮБОГО target (A7, требование 2 — снятие особого
 случая догфуда): артефактный git-репозиторий `.artel/projects/<target>/`
 (`projects.init_artifact_repo`) коммитит оркестратор целиком на каждом
@@ -52,12 +61,33 @@ FIXATION_AUTHOR_EMAIL = "orchestrator@artel.invalid"
 
 
 def fix(task_id: str, target: str) -> tuple[str, bool]:
-    """(sha, чисто) — фиксация текущего состояния артефактов задачи."""
-    return _fix_external(target)
+    """(sha, чисто) — фиксация текущего состояния документов задачи:
+    голова её ссылки `refs/artifacts/<id>` (ADR-0021 п.3, инвариант 25 —
+    «для документов — коммит ссылки»). Коммитить здесь нечего: в ссылку
+    пишет только `artifact_branch.commit_files`, у неё нет рабочей копии,
+    которая могла бы быть грязной. `target` в сигнатуре — ради
+    вызывающего кода; репозиторий фиксации `.artel/projects/<target>/`
+    (`_fix_external`) фиксация больше не коммитит."""
+    return _read_ref(task_id)
+
+
+def _read_ref(task_id: str) -> tuple[str, bool]:
+    """(голова `refs/artifacts/<id>`, True); ("", False) — ссылки нет или
+    git не ответил (тот же вырожденный случай, что раньше давал
+    неинициализированный репозиторий фиксации). Отложенный импорт:
+    `artifact_branch` берёт отсюда идентичность коммитов фиксации."""
+    from . import artifact_branch
+    sha = artifact_branch.ref_head(task_id)
+    return (sha, True) if sha else ("", False)
 
 
 def _fix_external(target: str) -> tuple[str, bool]:
     """Коммит артефактного репо target'а целиком (SPEC, требование 2).
+
+    С ADR-0021 (этап 1, часть а) фиксация документов — коммит ссылки
+    `refs/artifacts/<id>` (`fix`/`read` выше), эта функция и
+    `_read_external` не вызываются; сам репозиторий фиксации упраздняет
+    часть (б) этапа 1.
 
     Нечего коммитить (второй переход подряд без правки файлов) — не
     отказ: фиксируется уже существующий HEAD той же операцией.
@@ -159,7 +189,7 @@ def read(task_id: str, target: str) -> tuple[str, bool]:
     `check_integrity`; замечание 1 итерации 2 — тот же класс дефекта в
     `confirm_fixation`, закрыт тем же приёмом).
     """
-    return _read_external(target)
+    return _read_ref(task_id)
 
 
 def approve_sha_hint(task_id: str, target: str) -> str:
@@ -272,8 +302,7 @@ def refixate_after_rejected_transition(conn, task_id: str, target: str,
     служащую якорем `_own_step_run_windows`; путает эту запись с
     результатом отклонённого перехода нельзя (см. докстринг выше).
     """
-    dates = gitcmd.commit_committer_dates(entry_sha, current_sha,
-                                          repo=config.PROJECTS / target)
+    dates = gitcmd.commit_committer_dates(entry_sha, current_sha)
     if not dates:
         return False
     windows = _own_step_run_windows(conn, task_id)

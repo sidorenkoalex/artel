@@ -574,8 +574,11 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # гейт не трогает (AC-7).
     if _plan_appendix_gate_refuses(conn, task_id, t, plan_text):
         return False
+    # Кодовая ветка, не ветка документов: заявка мутации — о тестах `tests/`
+    # кода задачи. Ссылка документов (ADR-0021 п.3) начинается коммитом без
+    # родителя и общей с main базы сравнения не имеет вовсе.
     if _run_gates(conn, task_id,
-                  [lambda: _mutation_claim_gate(conn, task_id, t, branch)]):
+                  [lambda: _mutation_claim_gate(conn, task_id, t, t["branch"])]):
         return False
     # Гейт неослабления тестов (SPEC 01M3FQ2V77QNK95Z599DM124QN, требование
     # 6) — сразу за гейтом заявки мутации: оба читают одну базу сравнения

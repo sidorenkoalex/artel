@@ -133,7 +133,7 @@ class _PlainSandbox(_RemovalMixin, RealGitSandbox):
                           SPEC_V2.format(task=self.TASK, extra="")}, "SPEC")
         capture(fsm.cmd_advance, self.TASK)
         capture(fsm.cmd_approve, self.TASK,
-                gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET))
+                artifact_branch.ref_head(self.TASK))
         self.docs_commit({self.prefix() + name: text
                           for name, text in self.PLANK.items()}, "планка")
         capture(fsm.cmd_advance, self.TASK)

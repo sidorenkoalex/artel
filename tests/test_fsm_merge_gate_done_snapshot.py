@@ -1,5 +1,8 @@
-"""Юнит-тест снапшота закрытия на пути `done` (SPEC T094, требования
-12-13, AC-13) — REVIEW.md T094 итерация 1, замечание 3 (major).
+"""Юнит-тест закрытия на пути `done` (SPEC T094, требования 12-13,
+AC-13) — REVIEW.md T094 итерация 1, замечание 3 (major). С ADR-0021 п.3
+(SPEC 01M3Z2DMQRD0BD7AARFVTCVVG8, требование 3, AC-5) закрытие — не
+снимок в origin целевого, а коммит RETRO в ссылку документов
+`refs/artifacts/<id>` пульта поверх её прежней головы.
 
 Путь `killed` уже покрыт `tasks/T094/acceptance_tests/
 test_ac13_ac14_snapshot_on_close.py`; путь `done`
@@ -85,6 +88,7 @@ class DonePathSnapshotTest(RealGitSandbox):
         self.git("init", "-q", "--bare", str(pult_origin))
         self.git("remote", "add", "origin", str(pult_origin))
         self.git("push", "-q", "-u", "origin", config.MAIN_BRANCH)
+        self.pult_origin = pult_origin
 
         self.branch = f"task/{TASK.lower()}-x"
 
@@ -157,15 +161,14 @@ class DonePathSnapshotTest(RealGitSandbox):
         return res.stdout
 
     def test_done_transition_publishes_a_snapshot_like_killed_does(self):
-        """Успешный `done` публикует снапшот задачи в `refs/artifacts/<id>`
-        origin целевого — тем же путём, что и `killed` (AC-13), и с
-        frontmatter (`operator`/`model`/`artel_sha`) хотя бы в одном файле.
+        """Успешный `done` пишет коммит закрытия в `refs/artifacts/<id>`
+        и отправляет ссылку в origin пульта — тем же путём, что и `killed`
+        (AC-13), с frontmatter (`operator`/`model`/`artel_sha`) хотя бы в
+        одном файле.
 
-        Ловит мутацию: путь `done` перестаёт звать публикацию снапшота
-        (или зовёт её ПОСЛЕ удаления артефактной ветки, когда содержимое
-        уже недоступно) — `refs/artifacts/{TASK}` не появится в
-        `self.target_origin`, и `_snapshot_ref_exists`/`assertTrue` здесь
-        это поймают.
+        Ловит мутацию: путь `done` перестаёт звать коммит закрытия —
+        RETRO с frontmatter не появится в `refs/artifacts/{TASK}` origin
+        пульта, и `assertIsNotNone` здесь это поймает.
         """
         t = store.get_task(store.db(), TASK)
 
@@ -187,18 +190,18 @@ class DonePathSnapshotTest(RealGitSandbox):
         self.assertEqual(row["state"], "done")
 
         self.assertTrue(
-            _snapshot_ref_exists(self.target_origin, TASK),
-            f"refs/artifacts/{TASK} не появился в origin целевого после "
+            _snapshot_ref_exists(self.pult_origin, TASK),
+            f"refs/artifacts/{TASK} не появился в origin пульта после "
             f"done (AC-13, путь done)")
 
-        files = _snapshot_files(self.target_origin, TASK)
+        files = _snapshot_files(self.pult_origin, TASK)
         self.assertTrue(
             any(f.startswith(f"tasks/{TASK}/") for f in files),
             f"снапшот {TASK} не несёт tasks/{TASK}/: {files}")
 
         retro_meta = None
         for rel in files:
-            text = _snapshot_file_text(self.target_origin, TASK, rel)
+            text = _snapshot_file_text(self.pult_origin, TASK, rel)
             meta = yamlmini.frontmatter(text)
             if meta and {"operator", "model", "artel_sha"} <= meta.keys():
                 retro_meta = meta
@@ -212,7 +215,7 @@ class DonePathSnapshotTest(RealGitSandbox):
         """SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 1-3 (AC-1, AC-2,
         AC-4) СКВОЗНЫМ путём мержа: ретроспектива опубликованного снимка
         несёт «Итог: done, sha …» и адрес `refs/artifacts/<id>`, сообщение
-        коммита снимка — «снапшот закрытия (done)».
+        коммита закрытия — «закрытие (done) — RETRO» (ADR-0021 п.3).
 
         Ловит мутацию: путь закрытия снова передаёт в публикацию литерал
         «killed» (или берёт исход раньше `_finalize_done_state`, когда
@@ -226,25 +229,24 @@ class DonePathSnapshotTest(RealGitSandbox):
             store.db(), TASK, "merge_gate", t,
             confirmed_ci_note="зелёный (тест)")
 
-        retro_text = _snapshot_file_text(self.target_origin, TASK,
+        retro_text = _snapshot_file_text(self.pult_origin, TASK,
                                          f"tasks/{TASK}/RETRO.md")
         self.assertRegex(retro_text, r"Итог: done, sha [0-9a-f]{40}\n")
         self.assertIn(f"Адрес артефактов: refs/artifacts/{TASK}\n", retro_text)
         self.assertNotIn("Итог: killed", retro_text)
-        self.assertEqual(_snapshot_commit_subject(self.target_origin, TASK),
-                         f"{TASK}: снапшот закрытия (done)")
+        self.assertEqual(_snapshot_commit_subject(self.pult_origin, TASK),
+                         f"{TASK}: закрытие (done) — RETRO")
 
     def test_done_snapshot_removes_the_pult_artifact_branch(self):
-        """AC-13: снапшот публикуется ДО удаления кодовой и артефактной
-        веток — после успешного `done` артефактная ветка пульта убрана
-        (тот же приём, что уже проверяет `snapshot_pending` для killed).
+        """ADR-0021 п.3 (вместо AC-13 SPEC T094 «ветка убрана»): после
+        `done` ссылка документов не удаляется, коммит закрытия — потомок
+        её прежней головы, ветки `artifact/<id>` нет.
 
-        Ловит мутацию: удаление артефактной ветки пульта (`artifact/<id>`)
-        после `done` пропущено или переставлено раньше публикации снапшота
-        — `gitcmd.branch_exists(artifact_branch.branch_name(TASK))`
-        останется `True`, и `assertFalse` здесь это поймает.
+        Ловит мутацию: закрытие снова пишет снимок без родителя или
+        удаляет ссылку — `is_ancestor` прежней головы ниже покраснеет.
         """
         t = store.get_task(store.db(), TASK)
+        before = artifact_branch.ref_head(TASK)
 
         # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: см. пояснение в
         # test_done_transition_publishes_a_snapshot_like_killed_does выше.
@@ -252,10 +254,11 @@ class DonePathSnapshotTest(RealGitSandbox):
             store.db(), TASK, "merge_gate", t,
             confirmed_ci_note="зелёный (тест)")
 
-        self.assertFalse(
-            gitcmd.branch_exists(artifact_branch.branch_name(TASK)),
-            "артефактная ветка пульта обязана быть убрана после "
-            "подтверждённого снапшота (AC-13/AC-15)")
+        head = artifact_branch.ref_head(TASK)
+        self.assertNotEqual(head, before)
+        self.assertTrue(gitcmd.is_ancestor(before, head),
+                        "коммит закрытия обязан быть потомком прежней головы")
+        self.assertFalse(gitcmd.branch_exists(f"artifact/{TASK.lower()}"))
 
 
 if __name__ == "__main__":

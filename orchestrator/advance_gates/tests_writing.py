@@ -336,7 +336,6 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
     if not sha:
         return _long_lived_refusal(
             task_id, f"{rel} не записан в ветку документов — git не ответил")
-    artifact_branch.push(task_id)
     store.journal(conn, task_id, "fsm", "перечень долгоживущих тестов записан",
                   f"{rel}: {len(digests)} файл(ов), sha {sha}")
     return None

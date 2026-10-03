@@ -610,22 +610,21 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
 
 def _new_external_artifact_branch(task_id: str, title: str, spec: str,
                                   tz_doc: str | None) -> None:
-    """Внешний target (требования 7-9, AC-8/AC-9): `tasks/<id>/` коммитится
-    в артефактную ветку пульта плотницки (`artifact_branch.commit_files`),
-    рабочая копия/worktree пульта не трогаются вовсе. Push в origin —
-    best-effort (требование 7): отказ не прерывает заведение задачи и не
-    превращает его в ошибку команды (AC-8), но журналируется
-    классифицированной причиной (SPEC 01M1TQ0X14Y5B3C87WC0Q31PK2,
-    требования 1-2, AC-1/AC-2)."""
+    """Любой target (требования 7-9, AC-8/AC-9): `tasks/<id>/` — первым
+    коммитом без родителя в ссылку документов `refs/artifacts/<id>`
+    (ADR-0021 п.3) плотницки (`artifact_branch.commit_files`), рабочая
+    копия/worktree пульта не трогаются вовсе. Отправку в origin делает сам
+    узел записи — best-effort (требование 7): отказ не прерывает заведение
+    задачи (AC-8), но журналируется классифицированной причиной и
+    досылается на следующем переходе."""
     files = {f"tasks/{task_id}/SPEC.md": spec}
     if tz_doc is not None:
         files[f"tasks/{task_id}/TZ.md"] = tz_doc
     commit_sha = artifact_branch.commit_files(
         task_id, files, f"{task_id}: ТЗ Оператора ({title})")
     if not commit_sha:
-        sys.exit(f"[{task_id}] артефактная ветка пульта не создана — git "
-                 f"не ответил")
-    artifact_branch.push(task_id)
+        sys.exit(f"[{task_id}] ссылка документов {artifact_branch.branch_name(task_id)} "
+                 f"не создана — git не ответил")
 
 
 def _lease_holder_suffix(conn, task_id: str) -> str:

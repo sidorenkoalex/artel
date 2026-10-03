@@ -130,7 +130,7 @@ class CheckpointDropsSubdirectoryFileTest(RealGitSandbox):
         path.write_text(text, encoding="utf-8")
 
     def artifact_branch_files(self) -> list:
-        branch = f"artifact/{self.TASK.lower()}"
+        branch = f"refs/artifacts/{self.TASK}"
         return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
 
     def journal_rows(self) -> list:

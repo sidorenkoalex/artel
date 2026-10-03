@@ -114,12 +114,11 @@ class _RefixationTest(RealPultGitTest):
         (self.task_dir() / "acceptance_tests").mkdir(parents=True, exist_ok=True)
         (self.task_dir() / "acceptance_tests" / "test_ac.py").write_text(
             text, encoding="utf-8")
-        # `fsm_advance.tests_writing` читает acceptance_tests/ с артефактной
-        # ветки пульта (`artifact_source.resolve`), не с диска репо
-        # фиксации — тот же приём, что и SPEC.md выше.
-        self._seed_artifact_branch(
-            f"tasks/{self.TASK}/acceptance_tests/test_ac.py", text,
-            f"{self.TASK}: acceptance_tests")
+        # В ссылку документов файл уносит следующий за этим коммит
+        # (`commit_as_role`/`commit_task_dir`) — отдельный коммит здесь лёг
+        # бы в ту же ссылку `refs/artifacts/<id>` (ADR-0021 п.3) ВНЕ окна
+        # шага роли, и перефиксация зависела бы от того, уложились ли оба
+        # коммита в одну секунду.
 
     def commit_as_role(self, message: str, role: str = "test_author") -> None:
         """Легитимный коммит роли ВНУТРИ шага — обрамлён теми же
@@ -308,15 +307,19 @@ class SuccessfulTransitionUnaffectedTest(_RefixationTest):
 
 
 class CommitCommitterDatesTest(RealPultGitTest):
-    """`repo=self.repo()` явно на каждом вызове: без `repo=` `gitcmd.
-    commit_committer_dates` смотрит в `config.ROOT` (`gitcmd.git`), а
-    `self.head()` этой песочницы — sha репо ФИКСАЦИИ self/артели
-    (`config.PROJECTS/artel`, A7 generic-путь) — другой репозиторий.
+    """`repo=self.repo()` явно на каждом вызове: `self.head()` этой
+    песочницы — голова ссылки документов `refs/artifacts/<id>` (ADR-0021
+    п.3), которая живёт в репозитории пульта `config.ROOT`, — поэтому
+    `repo()` здесь и называет его, а не прежний репозиторий фиксации.
 
-    Репо фиксации пусто (ни одного коммита) до первого перехода FSM
-    (`ExternalTransitionCommitsTest` — то же самое для 'sled', симметрия
-    A7 требование 2) — `self.enter_spec_gate()` в начале каждого теста
-    даёт `self.head()` реальный, непустой sha, а не пустую строку."""
+    `self.enter_spec_gate()` в начале каждого теста даёт `self.head()`
+    реальный, непустой sha, а не пустую строку."""
+
+    def repo(self):
+        return config.ROOT
+
+    def task_dir(self):
+        return config.PROJECTS / config.DEFAULT_TARGET / "tasks" / self.TASK
 
     def test_returns_one_iso_date_per_commit_in_range(self):
         self.enter_spec_gate()

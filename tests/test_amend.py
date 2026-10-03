@@ -633,7 +633,7 @@ class AmendThenReviewGateTest(RealGitSandbox):
             {f"tasks/{self.TASK}/SPEC.md": SPEC_V2.format(task=self.TASK, extra="")},
             "SPEC")
         capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
-        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        sha = artifact_branch.ref_head(self.TASK)
         capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
         self.assertEqual(self.state(), "tests_writing")
 
@@ -736,7 +736,7 @@ class AmendFromBranchDivergenceDetailTest(RealGitSandbox):
             {f"tasks/{self.TASK}/SPEC.md": SPEC_V2.format(task=self.TASK, extra="")},
             "SPEC")
         capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
-        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        sha = artifact_branch.ref_head(self.TASK)
         capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
 
         self.artifact_commit(
@@ -793,7 +793,7 @@ class AmendGroupLineRefusalTest(RealGitSandbox):
             {f"tasks/{self.TASK}/SPEC.md": SPEC_V2.format(task=self.TASK, extra="")},
             "SPEC")
         capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
-        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        sha = artifact_branch.ref_head(self.TASK)
         capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
         self.artifact_commit(
             {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": AC_TEST_BOTH_COVERED},

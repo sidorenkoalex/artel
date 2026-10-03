@@ -25,11 +25,12 @@ identity вызывающей сессии здесь уже нечего.
 являющийся путём репозитория, отказывает ЗДЕСЬ, до коммита ANSWER, а не
 молча не засчитывается гейтом через шаг роли (прецедент 26.09).
 
-Push артефактной ветки после коммита ANSWER (SPEC
-01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1, AC-1) — тем же
-`artifact_branch.push`, что уже зовут автокоммит шага и `cmd_new`:
-классификация причины отказа и журналирование — внутри самой `push`,
-здесь только вызов.
+Отправку ссылки документов `refs/artifacts/<id>` в origin после коммита
+ANSWER делает сам узел записи (`artifact_branch.commit_files`, ADR-0021
+п.3). Коммит ANSWER перефиксирует документы задачи (`store.
+record_fixation`): это запись пульта по команде Оператора, а не правка
+мимо гейтов, и следующая сверка фиксации не должна видеть её
+расхождением.
 """
 import sys
 from pathlib import Path
@@ -183,7 +184,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     if not commit_sha:
         sys.exit(f"[{task_id}] {rel_answer} не закоммичен в артефактную "
                  f"ветку {branch}")
-    artifact_branch.push(task_id)
+    store.record_fixation(conn, task_id)
 
     if mandate_paths:
         action = ("ANSWER создан (мандат на расширение зон: "
@@ -242,7 +243,7 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
     if not commit_sha:
         sys.exit(f"[{task_id}] {rel_answer} не закоммичен в артефактную "
                  f"ветку {branch}")
-    artifact_branch.push(task_id)
+    store.record_fixation(conn, task_id)
     store.journal(conn, task_id, "operator",
                   f"ANSWER создан (мандат на расширение зон: {paths_str})",
                   rel_answer)

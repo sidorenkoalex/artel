@@ -63,8 +63,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (artel, catalog, config, doctor, fixation,
-                          fsm_merge_gate, store)
+from orchestrator import (artel, artifact_branch, catalog, config, doctor,
+                          fixation, fsm_merge_gate, store)
 from scripts import guard
 from tests.sandbox import RealGitSandbox, capture
 
@@ -331,7 +331,7 @@ class MainCiSandbox(RealGitSandbox):
 
 
 class MergeSandbox(MainCiSandbox):
-    """Задачи на `merge_gate` с кодовой и артефактной ветками."""
+    """Задачи на `merge_gate` с кодовой веткой и ссылкой документов."""
 
     COPY_CODE = True
 
@@ -348,8 +348,9 @@ class MergeSandbox(MainCiSandbox):
 
     def make_task(self, snapshot: dict | None = None) -> dict:
         """Задача на `merge_gate`: кодовая ветка от origin/main (свежая,
-        опубликована, её CI зелёный) и артефактная ветка со снимком
-        `snapshot` ({путь внутри каталога задачи: текст})."""
+        опубликована, её CI зелёный) и ссылка документов
+        `refs/artifacts/<id>` (отправлена в origin) со снимком `snapshot`
+        ({путь внутри каталога задачи: текст})."""
         task = f"01T{self.rng.randrange(1 << 100):022X}"[:26]
         branch = f"task/{task.lower()}-x"
         self.git("fetch", "-q", "origin")
@@ -361,25 +362,24 @@ class MergeSandbox(MainCiSandbox):
         self.git("commit", "-q", "-m", f"{task}: код")
         head = self.head()
         self.git("push", "-q", "-u", "origin", branch)
-        self.git("checkout", "-q", "-b", f"artifact/{task.lower()}",
-                 f"origin/{config.MAIN_BRANCH}")
+        self.git("checkout", "-q", config.MAIN_BRANCH)
         task_dir = Path(config.TASKS.name) / task
         files = snapshot if snapshot is not None else {
             "acceptance_tests/test_ac1_fixture.py":
                 "import unittest\n\n\nclass Fixture(unittest.TestCase):\n"
                 "    def test_ac1_fixture(self):\n"
                 "        self.assertTrue(True)\n"}
-        for rel, text in files.items():
-            path = self.root / task_dir / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        self.git("add", "-f", str(task_dir))
-        self.git("commit", "-q", "-m", f"{task}: артефакты")
-        self.git("checkout", "-q", config.MAIN_BRANCH)
         self.set_checks(head, self.green())
         store.insert_task(self.conn, task, f"Задача {task}", "merge_gate",
                           branch, config.DEFAULT_TARGET,
                           config.DEFAULT_BUDGET_USD)
+        # Документы задачи — в `refs/artifacts/<id>` узлом записи пульта
+        # (ADR-0021 п.3): он же отправляет ссылку в origin, с которым
+        # гейт мержа сверяет её перед мержем.
+        docs_sha = artifact_branch.commit_files(
+            task, {(task_dir / rel).as_posix(): text
+                   for rel, text in files.items()}, f"{task}: артефакты")
+        self.assertTrue(docs_sha, self.msg("документы задачи не записаны"))
         return {"id": task, "branch": branch, "head": head,
                 "dir": task_dir.as_posix()}
 

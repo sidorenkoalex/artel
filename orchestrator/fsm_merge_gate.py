@@ -919,7 +919,8 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     требование 4, AC-13 —
     «в пульте — только кухня пульта», для внешнего target ни карта, ни
     RETRO в её main НЕ коммитятся вовсе (RETRO внешнего target остаётся
-    только в снапшоте закрытия, `orchestrator/snapshot.py`). Для self —
+    только в коммите закрытия `refs/artifacts/<id>`, `orchestrator/
+    snapshot.py`). Для self —
     оба провала некритичны, push ниже выполняется независимо от их
     исхода; оба шага работают В SCRATCH (AC-9) — не в `config.ROOT`.
 
@@ -1018,26 +1019,25 @@ def _finalize_done_state(conn, task_id: str, state: str, branch: str) -> None:
     lease.release_any(conn, task_id, "orchestrator", "lease снят: задача done")
 
 
-def _publish_closing_snapshot_or_wait(conn, task_id: str, t) -> str:
-    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13, AC-15) — ДО
-    уборки веток ниже, тем же узлом, что и `cleanup._cmd_kill` для пути
-    `killed`: внешний target, не канарейка (self/канарейка снапшот не
-    заводят вовсе — `_publish_snapshot_if_pending` сама решает). Push
-    снапшота не удался — `snapshot.pending` остаётся истинным, и уборка
-    worktree/ветки задачи пропускается (AC-15: переход в `done` уже
-    совершён, ветки ждут следующего доверенного прогона).
+# Литерал действия журнала отказа гейта мержа при документах задачи, не
+# совпадающих с `origin` (ADR-0021 п.3).
+MERGE_UNSYNCED_JOURNAL_ACTION = "merge отклонён: документы не совпадают с origin"
 
-    `"done"` — уборку нужно отложить; `"ok"` — можно убирать worktree/
-    ветку сейчас.
-    """
-    target = t["target"] or config.DEFAULT_TARGET
-    is_canary = bool(t["is_canary"])
-    cleanup._publish_snapshot_if_pending(conn, task_id, target, is_canary)
-    if target != config.DEFAULT_TARGET and not is_canary:
-        from . import snapshot
-        if snapshot.pending(task_id):
-            return "done"
-    return "ok"
+
+def _docs_ref_unsynced(conn, task_id: str) -> bool:
+    """Гейт мержа отказывает, пока `refs/artifacts/<id>` не совпадает с
+    `origin` (ADR-0021 п.3): мерж закрывает задачу, а закрытие поверх
+    истории документов, которой нет в `origin` или которая там другая,
+    оставило бы её в одном месте. `True` — отказано (журнал и вывод
+    называют `origin` и оба sha), задача остаётся на гейте мержа."""
+    refusal = artifact_branch.origin_sync_refusal(task_id)
+    if refusal is None:
+        return False
+    store.journal(conn, task_id, "fsm", MERGE_UNSYNCED_JOURNAL_ACTION, refusal)
+    print(f"[{task_id}] merge {refusal}\n  задача осталась на гейте merge; "
+          f"сведи {artifact_branch.branch_name(task_id)} с origin и повтори: "
+          f"artel.py approve {task_id}")
+    return True
 
 
 def _cleanup_merged_task(conn, task_id: str, branch: str) -> None:
@@ -1083,8 +1083,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     свежесть main -> зелёный CI -> плотницкий merge в scratch-worktree
     (Stage0, AC-8) -> приложения PLAN к защищённым путям (SPEC
     01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6) -> снимок артефактов/
-    карта/RETRO -> push явным sha -> done -> снапшот закрытия -> уборка
-    worktree/ветки.
+    карта/RETRO -> push явным sha -> done -> коммит закрытия в
+    `refs/artifacts/<id>` -> уборка worktree/ветки. Первым шагом —
+    сверка ссылки документов с `origin` (ADR-0021 п.3).
 
     Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
     `("stopped",)` — окно завершилось без merge (отказ, эскалация,
@@ -1126,6 +1127,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                  f"  задача осталась на гейте merge; почини targets.yaml "
                  f"и повтори: artel.py approve {task_id}")
     branch = t["branch"]
+    if _docs_ref_unsynced(conn, task_id):
+        return ("stopped",)
     if _protected_path_diff_gate(conn, task_id, state, branch, ctx):
         return ("stopped",)
     if _test_integrity_diff_gate(conn, task_id, state, branch, ctx):
@@ -1154,8 +1157,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     if _push_merged_main(conn, task_id, final_sha, ctx) == "moved":
         return ("moved", branch)
     _finalize_done_state(conn, task_id, state, branch)
-    if _publish_closing_snapshot_or_wait(conn, task_id, t) != "done":
-        _cleanup_merged_task(conn, task_id, branch)
+    cleanup._commit_closing(conn, task_id)
+    _cleanup_merged_task(conn, task_id, branch)
     _await_main_ci(conn, task_id, final_sha, ctx)
     return ("done",)
 
