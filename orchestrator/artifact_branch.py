@@ -461,6 +461,125 @@ def origin_sync_refusal(task_id: str) -> str | None:
             f"{local or '(нет)'}, в origin {remote}")
 
 
+# Подтягивание ссылок документов из `origin` (команда `docs`, ADR-0021
+# пп. 3, 13): fetch идёт в приватное пространство, не в `refs/artifacts/*`
+# напрямую — локальная ссылка сдвигается только вперёд, сверкой прежнего
+# значения, а расхождение с `origin` называется, не перезаписывается
+# (локальная ссылка — источник истины живой задачи).
+_FETCH_NS = "refs/artel/docs-fetch"
+
+FETCH_BROUGHT = "brought"      # локально не было — заведена
+FETCH_UPDATED = "updated"      # локальная отставала — сдвинута вперёд
+FETCH_SAME = "same"            # совпадает с origin
+FETCH_DIVERGED = "diverged"    # локальная несёт коммиты не из origin
+FETCH_ABSENT = "absent"        # в origin ссылки нет
+FETCH_FAILED = "failed"        # origin не ответил / git отказал
+
+
+def _sync_local_ref(repo: Path, task_id: str, local: str,
+                    fetched: str) -> tuple[str, str]:
+    """(исход, пояснение) сдвига локальной ссылки на `fetched` из `origin`:
+    только вперёд (локальная — предок `fetched`) и со сверкой прежнего
+    значения `local` ("" — ссылки нет)."""
+    ref = branch_name(task_id)
+    if local == fetched:
+        return FETCH_SAME, ""
+    if local:
+        res = _git(repo, "merge-base", "--is-ancestor", local, fetched)
+        if res is None or res.returncode != 0:
+            return FETCH_DIVERGED, (f"локальная {ref} {local[:12]} расходится "
+                                    f"с origin {fetched[:12]} — не "
+                                    f"перезаписана")
+    upd = _git(repo, "update-ref", ref, fetched, local or _ABSENT_OID)
+    if upd is None or upd.returncode != 0:
+        reason = (upd.stderr or "").strip()[:200] if upd is not None else ""
+        return FETCH_FAILED, (f"{ref}: update-ref на голову origin "
+                              f"{fetched[:12]} не удался"
+                              + (f" — {reason}" if reason else ""))
+    return (FETCH_UPDATED if local else FETCH_BROUGHT), ""
+
+
+def _drop_fetch_refs(repo: Path, refs: list[str]) -> None:
+    """Убирает приватные ссылки подтягивания одним `update-ref --stdin`."""
+    if not refs or repo == _NO_REPO:
+        return
+    data = "".join(f"delete {ref}\n" for ref in refs).encode("utf-8")
+    gitcmd.carpentry(repo, ["update-ref", "--stdin"], dict(os.environ),
+                     input=data, text=False)
+
+
+def fetch_from_origin(task_id: str) -> tuple[str, str]:
+    """Подтягивает `refs/artifacts/<id>` из `origin` репозитория задачи
+    (`task_repo`): (исход `FETCH_*`, пояснение). Локальная ссылка
+    сдвигается только вперёд; локальная с коммитами не из `origin` —
+    `FETCH_DIVERGED`, не тронута. Ссылки в `origin` нет — `FETCH_ABSENT`
+    (отличается от «origin не ответил» второй сверкой `ls-remote`, только
+    когда fetch отказал)."""
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return FETCH_FAILED, NO_REPO_REASON
+    if not _origin_configured(repo):
+        return FETCH_FAILED, "origin репозитория задачи не настроен"
+    ref = branch_name(task_id)
+    tmp = f"{_FETCH_NS}/{os.getpid()}/{task_id}"
+    try:
+        res = _git(repo, "fetch", "-q", "--no-tags", "origin", f"+{ref}:{tmp}")
+        if res is None or res.returncode != 0:
+            remote, reason = gitcmd.remote_ref_state(ref, **_repo_kw(repo))
+            if reason:
+                return FETCH_FAILED, f"origin не ответил — {reason}"
+            if not remote:
+                return FETCH_ABSENT, f"{ref} нет в origin"
+            stderr = (res.stderr or "").strip()[:200] if res is not None else ""
+            return FETCH_FAILED, f"fetch {ref} из origin не удался — {stderr}"
+        fetched = gitcmd.branch_head_sha(tmp, **_repo_kw(repo))
+        if not fetched:
+            return FETCH_FAILED, f"голова {ref} из origin не прочитана"
+        return _sync_local_ref(repo, task_id, _head(task_id, repo), fetched)
+    finally:
+        _drop_fetch_refs(repo, [tmp])
+
+
+def _refs_with_prefix(repo: Path, prefix: str) -> dict | None:
+    """{полное имя ссылки: sha} под `prefix`; `None` — git не ответил."""
+    res = _git(repo, "for-each-ref", "--format=%(refname) %(objectname)",
+               prefix)
+    if res is None or res.returncode != 0:
+        return None
+    refs = {}
+    for line in res.stdout.splitlines():
+        name, _, sha = line.partition(" ")
+        if name and sha:
+            refs[name] = sha.strip()
+    return refs
+
+
+def fetch_all_from_origin(repo: Path) -> tuple[dict | None, str]:
+    """Подтягивает все `refs/artifacts/*` из `origin` репозитория `repo`
+    ОДНИМ `git fetch`: ({id: (исход `FETCH_*`, пояснение)}, "") либо
+    (None, причина) — fetch или чтение ссылок не удались. Правило сдвига —
+    то же, что у `fetch_from_origin`."""
+    ns = f"{_FETCH_NS}/{os.getpid()}"
+    res = _git(repo, "fetch", "-q", "--no-tags", "origin",
+               f"+refs/artifacts/*:{ns}/*")
+    fetched = _refs_with_prefix(repo, f"{ns}/") or {}
+    try:
+        if res is None or res.returncode != 0:
+            stderr = (res.stderr or "").strip()[:200] if res is not None else ""
+            return None, f"fetch из origin не удался — {stderr or 'git не ответил'}"
+        local = _refs_with_prefix(repo, "refs/artifacts/")
+        if local is None:
+            return None, "локальные refs/artifacts/* не прочитаны"
+        outcomes = {}
+        for tmp, sha in sorted(fetched.items()):
+            task_id = tmp[len(ns) + 1:]
+            outcomes[task_id] = _sync_local_ref(
+                repo, task_id, local.get(branch_name(task_id), ""), sha)
+        return outcomes, ""
+    finally:
+        _drop_fetch_refs(repo, list(fetched))
+
+
 def docs_root(target: str | None) -> Path:
     """Корень выкладки документов проекта `.artel/projects/<проект>/` —
     каталог документов задачи лежит под ним по пути ссылки `tasks/<id>/`
