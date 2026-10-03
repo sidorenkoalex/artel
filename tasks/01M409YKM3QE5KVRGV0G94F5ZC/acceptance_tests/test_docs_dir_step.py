@@ -31,9 +31,6 @@ from orchestrator import artifact_branch, config  # noqa: E402
 
 from _sandbox import DocsStepSandbox, disk_tree, docs_dir, ref_tree  # noqa: E402
 
-# AC-10: escalate — какой сценарий значит «отказ от сверки фиксации» для правки роли в каталоге документов? Правку, сделанную ролью во время шага, автокоммит переносит в ссылку и сразу перефиксирует (`store.record_fixation`), поэтому ни `fixation.check_integrity`, ни `fsm.confirm_fixation` её не отклоняют — ни сегодня (правка в рабочей копии кода), ни после выноса; лок `acceptance_tests/` и перечень сумм проверяемы однозначно. Варианты: (а) роль сама двигает `refs/artifacts/<id>` мимо автокоммита (`git update-ref`/`commit-tree` из шага) — следующий старт шага отказывает инцидентом целостности; (б) после шага каталог документов расходится с зафиксированным коммитом ссылки (файл, который автокоммит не перенёс) — переход отклоняется как «рабочая копия артефактов грязная»; (в) убрать «сверку фиксации» из AC-10, оставить лок `acceptance_tests/` и перечень сумм долгоживущих тестов. Дефолт при молчании — (в).
-
-
 class DocsDirMirrorsRefBeforeStepTest(DocsStepSandbox):
 
     def test_ac1_docs_dir_equals_ref_head_tree_at_step_start(self):

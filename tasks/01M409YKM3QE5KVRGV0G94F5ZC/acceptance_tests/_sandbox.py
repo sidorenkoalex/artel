@@ -205,6 +205,53 @@ class DocsStepSandbox(TmpRootTest):
         return hits
 
 
+class LockedDocsSandbox(DocsStepSandbox):
+    """`DocsStepSandbox` после выхода из `tests_writing` штатным
+    `fsm.cmd_advance`: в ссылке — SPEC, планка `acceptance_tests/
+    test_ac1_plank.py` и готовый PLAN, в кодовой ветке — свой долгоживущий
+    файл `self.own`; задача в `in_dev`, лок (`tests_locked_sha`) и перечень
+    сумм записаны пультом. Шаг `run_step` здесь — шаг developer."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.test_long_lived_transitions import (long_lived_source,
+                                                       plank_source)
+        self.plank_rel = "acceptance_tests/test_ac1_plank.py"
+        self.commit_docs({self.plank_rel: plank_source()}, "планка песочницы")
+        self.branch = store.get_task(store.db(), self.TASK)["branch"]
+        wt, error = workspace.ensure(self.TASK, self.branch)
+        self.assertIsNone(error, f"рабочая копия кода не заведена: {error}")
+        self.own = f"tests/test_{self.TASK.lower()}_{self.word()}.py"
+        (wt / self.own).parent.mkdir(parents=True, exist_ok=True)
+        (wt / self.own).write_text(long_lived_source(), encoding="utf-8")
+        self.sh("git", "add", "--", self.own, cwd=wt)
+        self.sh("git", "commit", "-q", "-m", "свой долгоживущий файл", cwd=wt)
+        out = self.advance()
+        row = store.get_task(store.db(), self.TASK)
+        self.assertEqual(row["state"], "in_dev",
+                         f"фикстура: выход из tests_writing не прошёл\n{out}")
+        self.assertTrue(row["tests_locked_sha"], "фикстура: лок не записан")
+        from tests.test_git_fixation import PLAN_READY
+        self.commit_docs({"PLAN.md": PLAN_READY.format(task=self.TASK)},
+                         "PLAN готов")
+
+    def advance(self) -> str:
+        from orchestrator import fsm
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                fsm.cmd_advance(self.TASK)
+            except SystemExit as exc:
+                buf.write(f"\nSystemExit: {exc}")
+        return buf.getvalue()
+
+    def journal_text(self) -> str:
+        rows = store.db().execute(
+            "SELECT action, detail FROM steps WHERE task_id=? ORDER BY id",
+            (self.TASK,)).fetchall()
+        return "\n".join(f"{r['action']} {r['detail'] or ''}" for r in rows)
+
+
 # ----------------------------------------------------------------------------
 
 
