@@ -1,5 +1,5 @@
 ---
-built_at_sha: 4590aa4b8c35a5261111eda5ff1010efd0b61b7e
+built_at_sha: 13a1819274a18e6c17bc23c6949fbdd3b6d5b164
 ---
 
 # Codebase-map пульта
@@ -240,7 +240,7 @@ built_at_sha: 4590aa4b8c35a5261111eda5ff1010efd0b61b7e
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/artifact_source.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/cleanup.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fixation.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `tests/test_amend.py`, `tests/test_amend_long_lived.py`, `tests/test_amend_remove.py`, `tests/test_answer.py`, `tests/test_answer_branch_reads.py`, `tests/test_artifact_branch_new_parent.py`, `tests/test_artifact_branch_push.py`, `tests/test_artifact_materialization.py`, `tests/test_canary.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_spawn_subtask.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_division_parent_cleanup.py`, `tests/test_doctor.py`, `tests/test_doctor_artifact_branch_sync.py`, `tests/test_doctor_fix_ignored_artifacts.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_git_fixation.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_step_end_to_end.py`, `tests/test_long_lived_transitions.py`, `tests/test_multitarget_invariants.py`, `tests/test_plan_appendix.py`, `tests/test_pull.py`, `tests/test_retro.py`, `tests/test_retro_artifact_branch_reads.py`, `tests/test_review_long_lived_exclude.py`, `tests/test_review_package.py`, `tests/test_snapshot_closing_outcome.py`, `tests/test_split_assessment_merge_gate.py`, `tests/test_step_autocommit.py`, `tests/test_zones_approve.py`
+**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/artifact_source.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/cleanup.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fixation.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_amend.py`, `tests/test_amend_long_lived.py`, `tests/test_amend_remove.py`, `tests/test_answer.py`, `tests/test_answer_branch_reads.py`, `tests/test_artifact_branch_new_parent.py`, `tests/test_artifact_branch_push.py`, `tests/test_artifact_materialization.py`, `tests/test_canary.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_spawn_subtask.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_division_parent_cleanup.py`, `tests/test_doctor.py`, `tests/test_doctor_artifact_branch_sync.py`, `tests/test_doctor_fix_ignored_artifacts.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_git_fixation.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_step_end_to_end.py`, `tests/test_long_lived_transitions.py`, `tests/test_multitarget_invariants.py`, `tests/test_plan_appendix.py`, `tests/test_pull.py`, `tests/test_retro.py`, `tests/test_retro_artifact_branch_reads.py`, `tests/test_review_long_lived_exclude.py`, `tests/test_review_package.py`, `tests/test_snapshot_closing_outcome.py`, `tests/test_split_assessment_merge_gate.py`, `tests/test_step_autocommit.py`, `tests/test_zones_approve.py`
 
 ## orchestrator/artifact_source.py
 
@@ -1939,7 +1939,7 @@ built_at_sha: 4590aa4b8c35a5261111eda5ff1010efd0b61b7e
 - `names_commit`
 - `running`
 
-**Импортирует:** `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/artel.py`, `orchestrator/artifact_branch.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
