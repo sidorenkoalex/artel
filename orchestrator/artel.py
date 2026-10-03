@@ -527,7 +527,11 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
   prune     retention-политика: .artel/logs/, архивация alerts (T073)
   dry_run   сухой прогон приёмки: read-only предпросмотр без исполнения
             (SPEC 01M1GJ3ZP1YGG5QRB6FQ44NN8D)
-  amend     штатная правка зафиксированной планки приёмки: коммит,
+  plank_run команда `plank-run <id> [файл]`: локальный прогон планки в шаге
+            роли — выкладка узлом пульта, раннер и таймаут пульта, уборка
+            только `tasks/<id>/` рабочей копии (SPEC
+            01M41R4YAM4NGEQXW1FWH7T22M)
+  amend    штатная правка зафиксированной планки приёмки: коммит,
             лок, журнал, порог «планка девальвируется» (ADR-0012,
             SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
   zone_lock занятость зоны на старте кода: предусловие первого шага
@@ -644,9 +648,10 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           ci_rerun, cleanup, doctor, dry_run, fsm, lease,
-                          liveness, models, notes, pause, pin, pool_seal,
-                          projects, prune, release, report, runner, session, store,
-                          venv, version, watch, workspace, zone_lock)
+                          liveness, models, notes, pause, pin, plank_run,
+                          pool_seal, projects, prune, release, report, runner,
+                          session, store, venv, version, watch, workspace,
+                          zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -1408,10 +1413,13 @@ def _cmd_pause(rest: list) -> None:
 
 #: Команды, которые процесс роли исполняет в любой форме: только чтение
 #: (SPEC 01M3XTF5506GF43HD51ECE230T, требование 5). Формы остальных
-#: читающих команд разбирает `_role_allowed_command`.
+#: читающих команд разбирает `_role_allowed_command`. `plank-run` пишет
+#: только временную выкладку `tasks/<id>/` рабочей копии кода и сам её
+#: убирает — состояния пульта не меняет (SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
+#: требование 2).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
-     "acceptance-dry-run"))
+     "acceptance-dry-run", "plank-run"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -1522,6 +1530,8 @@ def main() -> None:
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
+        "plank-run": lambda: plank_run.cmd_plank_run(
+            rest[0], rest[1] if len(rest) > 1 else None),
         "amend-tests": lambda: amend.cmd_amend_tests(
             rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
         "ci-rerun": lambda: ci_rerun.cmd_ci_rerun(rest[0], _reason_arg(rest)),

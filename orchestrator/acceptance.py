@@ -359,6 +359,15 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
         text, _ = artifact_branch.show(task_id, branch, rel)
         if text is not None:
             wanted[rel[len(prefix):]] = text
+    _write_plank(tests_dir, wanted)
+    return tdir
+
+
+def _write_plank(tests_dir: Path, wanted: dict[str, str | bytes]) -> None:
+    """Каталог планки `tests_dir` ровно с файлами `wanted` (путь от
+    каталога планки -> содержимое): лишний файл на диске убирается, не
+    просто дополняется — общий узел выкладки из ссылки документов и из
+    черновика (`materialize_files`)."""
     if tests_dir.is_dir():
         for path in sorted(tests_dir.rglob("*")):
             if not path.is_file():
@@ -366,10 +375,23 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
             rel = path.relative_to(tests_dir).as_posix()
             if rel not in wanted:
                 path.unlink()
-    for rel, text in wanted.items():
+    for rel, content in wanted.items():
         dest = tests_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
+        if isinstance(content, bytes):
+            dest.write_bytes(content)
+        else:
+            dest.write_text(content, encoding="utf-8")
+
+
+def materialize_files(task_id: str, files: dict[str, str | bytes],
+                      code_dir: Path) -> Path:
+    """`tasks/<id>/acceptance_tests/` каталога `code_dir` из явного набора
+    файлов — черновика планки, ещё не зафиксированного в ссылке документов
+    (`plank-run` в `tests_writing`, SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
+    требование 1). Возврат — тот же, что у `materialize_from_branch`."""
+    tdir = code_dir / "tasks" / task_id
+    _write_plank(tdir / "acceptance_tests", files)
     return tdir
 
 
@@ -385,16 +407,44 @@ def drop_from_code_copy(task_id: str, code_dir: Path) -> None:
 
 
 @contextlib.contextmanager
-def plank_in_code_copy(task_id: str, branch: str,
-                       code_dir: Path) -> Iterator[Path]:
+def plank_in_code_copy(task_id: str, branch: str, code_dir: Path,
+                       files: dict[str, str | bytes] | None = None
+                       ) -> Iterator[Path]:
     """`materialize_from_branch` на время блока `with` и уборка выкладки в
     `finally` — на зелёном, красном исходе и на исключении внутри прогона
     (ADR-0021 п.13, этап 1): прогону планка нужна в рабочей копии кода
-    (её `__file__` находит код ветки задачи), после него — нет."""
+    (её `__file__` находит код ветки задачи), после него — нет.
+
+    `files` — выложить этот набор (`materialize_files`) вместо головы
+    `branch`: черновик планки `plank-run` в `tests_writing` (SPEC
+    01M41R4YAM4NGEQXW1FWH7T22M, требование 1) — уборка та же."""
     try:
-        yield materialize_from_branch(task_id, branch, code_dir)
+        if files is None:
+            yield materialize_from_branch(task_id, branch, code_dir)
+        else:
+            yield materialize_files(task_id, files, code_dir)
     finally:
         drop_from_code_copy(task_id, code_dir)
+
+
+def run_plank(targets: list[str], cwd: Path) -> tuple[int | None, str]:
+    """(код выхода pytest, весь вывод) — прогон `targets` тем же раннером
+    (`_pytest_command`, `_pytest_env`) и тем же таймаутом
+    (`config.ACCEPTANCE_TIMEOUT_SEC`), что `run()` пульта, но для человека
+    или роли, а не гейта: вывод не обрезается, код выхода не сворачивается
+    в «зелёно/красно» (`plank-run`, SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
+    требование 1). `None` — прогон превысил таймаут."""
+    try:
+        with _pytest_env() as env:
+            res = subprocess.run(
+                _pytest_command(*targets),
+                cwd=cwd, env=env, capture_output=True, text=True,
+                timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired as exc:
+        return None, (_timeout_text(exc.stdout) + _timeout_text(exc.stderr)
+                      + f"\nпрогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с "
+                        f"— завис или ждёт сетевой ответ")
+    return res.returncode, res.stdout + res.stderr
 
 
 # ----------------------------------------------- полный набор tests/
