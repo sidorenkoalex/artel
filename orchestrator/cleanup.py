@@ -5,7 +5,7 @@ import signal
 import socket
 import sys
 
-from . import config, gitcmd, lease, liveness, store, workspace
+from . import config, fixation, gitcmd, lease, liveness, store, workspace
 
 
 def artifacts_in_main(task_id: str) -> bool | None:
@@ -354,7 +354,11 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     target = t["target"] or config.DEFAULT_TARGET
     state = t["state"]
     if state not in TERMINAL_STATES:
-        _refuse_unsynced_docs(conn, task_id)
+        drift = fixation.ref_drift(conn, task_id)
+        if drift is not None and drift.moved:
+            _warn_moved_ref(conn, task_id, drift)
+        else:
+            _refuse_unsynced_docs(conn, task_id)
     _journal_tz_before_cleanup(conn, task_id, t["branch"], target)
     won = False
     while not won and state not in TERMINAL_STATES:
@@ -395,6 +399,25 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     if won:
         _commit_closing(conn, task_id)
     cleanup_killed_task(conn, task_id, t["branch"])
+
+
+def _warn_moved_ref(conn, task_id: str, drift) -> None:
+    """`kill` при голове ссылки документов, сдвинутой мимо пульта (SPEC
+    01M41AB597B330P2RCXCMVRZPE, требование 10): экстренная остановка не
+    ждёт `approve <sha>` и закрывает задачу, но переход и коммит закрытия
+    поверх подмены не пишут ничего (`store.set_state`, `snapshot.
+    commit_closing`), а подменённая голова остаётся в ссылке для разбора.
+    Сверка с `origin` (`_refuse_unsynced_docs`) не делается: она досылает
+    локальную ссылку в `origin`, то есть опубликовала бы подмену, а коммита
+    закрытия, ради которого она стоит, здесь не будет."""
+    store.journal(conn, task_id, "operator", fixation.DOCS_REF_INCIDENT_ACTION,
+                  f"kill без коммита закрытия: {drift.text()}; подменённая "
+                  f"голова {drift.head} сохранена в "
+                  f"refs/artifacts/{task_id} для разбора")
+    print(f"[{task_id}] ВНИМАНИЕ: {fixation.DOCS_REF_INCIDENT_ACTION} — "
+          f"{drift.text()}\n  задача закрывается без паспорта и коммита "
+          f"закрытия, фиксация не меняется; подменённая голова {drift.head} "
+          f"сохранена в refs/artifacts/{task_id} для разбора")
 
 
 # Литерал действия журнала отказа закрытия при документах, не совпадающих с

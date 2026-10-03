@@ -1242,6 +1242,10 @@ class LockTest(unittest.TestCase):
         self.git("add", "-A", f"tasks/{self.TASK}")
         self.git("commit", "-q", "-m", message)
         self.git("checkout", "-q", config.MAIN_BRANCH)
+        # Документы шага в ссылку переносит автокоммит пульта, и он же их
+        # перефиксирует: иначе переход видит сдвиг мимо пульта (SPEC
+        # 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
 
     def head(self) -> str:
         """sha головы артефактной ветки — независимо от текущего чекаута."""
@@ -1369,6 +1373,9 @@ class LockTest(unittest.TestCase):
         self.git("add", "-A", "-f", f"tasks/{self.TASK}")
         self.git("commit", "-q", "-m", "прогон тестов оставил .pyc")
         self.git("checkout", "-q", config.MAIN_BRANCH)
+        # Коммит в ссылку — как запись пульта, с перефиксацией: предмет
+        # теста — лок, не сдвиг мимо пульта (SPEC 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
 
         with mock.patch.object(github_adapter, "ensure_head_in_origin",
                               return_value=(True, "")):

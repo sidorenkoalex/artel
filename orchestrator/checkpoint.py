@@ -895,27 +895,26 @@ def _same_as_ref(task_id: str, files: dict[str, bytes]) -> bool:
     return True
 
 
-def _docs_ref_moved_past_pult(conn, task_id: str) -> str | None:
-    """Текст расхождения, если голова ссылки документов разошлась с
-    зафиксированным sha (`tasks.fixed_sha`) к концу шага; `None` — ссылка
-    там, где её оставил пульт, или сверять не с чем (фиксации нет, git не
-    ответил — та же деградация, что у `fixation.check_integrity`).
+def _docs_ref_drift(conn, task_id: str, what: str) -> bool:
+    """`True` — голова ссылки документов разошлась с `tasks.fixed_sha`
+    (`fixation.ref_drift`, общий узел сверки записей пульта) и запись
+    чекпоинта `what` не выполняется; запись журнала уже сделана.
 
     Каждая запись пульта в ссылку перефиксирует её сама; расхождение к
     концу шага — запись мимо пульта, то есть ролью (ADR-0021 п.7,
     ANSWER-1 задачи 01M409YKM3QE5KVRGV0G94F5ZC). Автокоммит и чекпоинты
     шага такую голову не перефиксируют: иначе подмена стала бы
     зафиксированным состоянием, а сверка на старте следующего шага её бы
-    не увидела."""
-    from . import artifact_branch
-    fixed = store.get_task(conn, task_id)["fixed_sha"]
-    head = artifact_branch.ref_head(task_id)
-    if not fixed or not head or head == fixed:
-        return None
-    return f"зафиксировано {fixed}, голова ссылки {head}"
+    не увидела. Голова не прочитана — тоже без перефиксации: прежняя
+    фиксация остаётся, сверка на старте шага откажет fail-closed."""
+    drift = fixation.ref_drift(conn, task_id)
+    if drift is None:
+        return False
+    fixation.journal_drift(conn, task_id, drift, "orchestrator", what)
+    return True
 
 
-DOCS_REF_MOVED_ACTION = "ссылка документов сдвинута мимо пульта"
+DOCS_REF_MOVED_ACTION = fixation.DOCS_REF_INCIDENT_ACTION
 CODE_COPY_DOCS_DROPPED_ACTION = "документы задачи убраны из рабочей копии кода"
 
 
@@ -978,11 +977,8 @@ def harvest_code_copy_docs(conn, task_id: str, target: str
     files = _journal_stray_step_artifacts(conn, task_id, files)
     if not files:
         return {}
-    moved = _docs_ref_moved_past_pult(conn, task_id)
-    if moved is not None:
-        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
-                      f"документы рабочей копии кода не перенесены в ссылку "
-                      f"на старте шага: {moved}")
+    if _docs_ref_drift(conn, task_id, "документы рабочей копии кода не "
+                                      "перенесены в ссылку на старте шага"):
         return files
     baseline_sha = store.get_task(conn, task_id)["materialized_artifact_sha"] or ""
     files = _apply_artifact_conflict_guard(conn, task_id, files, existing,
@@ -1050,14 +1046,11 @@ def _same_as_commit(task_id: str, sha: str, rel: str, content: bytes) -> bool:
 
 
 def _record_step_fixation(conn, task_id: str) -> None:
-    """`store.record_fixation` чекпоинта шага — кроме случая, когда роль
-    сдвинула ссылку документов мимо пульта (`_docs_ref_moved_past_pult`):
-    тогда фиксация остаётся прежней, расхождение увидит сверка на старте
+    """`store.record_fixation` чекпоинта шага — кроме случая, когда голова
+    ссылки документов разошлась с фиксацией (`_docs_ref_drift`): тогда
+    фиксация остаётся прежней, расхождение увидит сверка на старте
     следующего шага."""
-    moved = _docs_ref_moved_past_pult(conn, task_id)
-    if moved is not None:
-        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
-                      f"фиксация не обновлена: {moved}")
+    if _docs_ref_drift(conn, task_id, "фиксация чекпоинта шага не обновлена"):
         return
     store.record_fixation(conn, task_id)
 
@@ -1157,13 +1150,10 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
                                            existing)
     if not task_dir.is_dir() and not stray_files:
         return ""
-    moved = _docs_ref_moved_past_pult(conn, task_id)
-    if moved is not None:
-        # Каталог документов не переносится и остаётся на диске: сверка на
-        # старте следующего шага остановит задачу инцидентом целостности.
-        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
-                      f"автокоммит каталога документов {task_dir} не "
-                      f"выполнен: {moved}")
+    # Каталог документов не переносится и остаётся на диске: сверка на
+    # старте следующего шага остановит задачу инцидентом целостности.
+    if _docs_ref_drift(conn, task_id, f"автокоммит каталога документов "
+                                      f"{task_dir} не выполнен"):
         return ""
 
     own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"
@@ -1245,7 +1235,7 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator",
                   "WIP-чекпоинт перед подтяжкой main", detail)
-    store.record_fixation(conn, task_id)
+    _record_step_fixation(conn, task_id)
     return detail
 
 

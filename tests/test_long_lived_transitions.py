@@ -218,6 +218,10 @@ class _TransitionSandbox(RealPultGitTest):
         artifact_branch.commit_files(
             self.TASK, {f"tasks/{self.TASK}/{rel}": text
                         for rel, text in files.items()}, f"{self.TASK}: {message}")
+        # Документы шага в ссылку переносит автокоммит пульта, и он же их
+        # перефиксирует: иначе переход видит сдвиг мимо пульта (SPEC
+        # 01M41AB597B330P2RCXCMVRZPE).
+        store.record_fixation(store.db(), self.TASK)
 
     def advance(self) -> str:
         before = self.last_step_id()
