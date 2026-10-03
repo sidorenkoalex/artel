@@ -1,4 +1,4 @@
-"""Пакет orchestrator/doctor -- разрозненные проверки: бэкап, счётчики, remote, base-branch.
+"""Пакет orchestrator/doctor -- разрозненные проверки: бэкап, счётчики, base-branch.
 
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
@@ -74,22 +74,6 @@ def check_task_counters(conn) -> doctor.Check:
     return doctor.Check("task-counters", "ok",
                  "счётчик номеров задач заморожен как legacy (ULID — "
                  "основной генератор, SPEC T094) — счётчик не движется")
-
-
-def check_remote_empty(target: str) -> doctor.Check:
-    """Единая логика для ЛЮБОГО объявленного target, включая артель (A7,
-    требование 2, AC-2): артефактный репозиторий `.artel/projects/
-    <target>/` — не клон целевого форджа, у него нет причин нести
-    remote, независимо от того, что сам target объявляет своим
-    настоящим GitHub-репозиторием."""
-    if not (doctor.config.PROJECTS / target / ".git").is_dir():
-        return doctor.Check("remote-empty", "skip",
-                     f"артефактный репо {target} не инициализирован")
-    if doctor.projects.artifact_repo_has_no_remote(target):
-        return doctor.Check("remote-empty", "ok", "remote пуст")
-    return doctor.Check("remote-empty", "fail",
-                 f"у артефактного репо {target} есть remote — "
-                 f"нарушение периметра (ADR-0003 3д)")
 
 
 def check_base_branch(name: str, entry: dict) -> doctor.Check:

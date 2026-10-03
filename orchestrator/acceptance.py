@@ -20,7 +20,7 @@ from typing import Iterator, NamedTuple
 
 from scripts import guard
 
-from . import agent_log, ci, config, gitcmd, stack
+from . import agent_log, artifact_branch, ci, config, gitcmd, stack
 
 
 def _pytest_command(*args: str) -> list[str]:
@@ -348,14 +348,15 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     tdir = code_dir / "tasks" / task_id
     tests_dir = tdir / "acceptance_tests"
     prefix = f"tasks/{task_id}/acceptance_tests/"
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}/acceptance_tests")
+    paths = artifact_branch.ls_tree(task_id, branch,
+                                    f"tasks/{task_id}/acceptance_tests")
     if paths is None:
         return tdir
     wanted: dict[str, str] = {}
     for rel in paths:
         if not rel.startswith(prefix):
             continue
-        text, _ = gitcmd.show(branch, rel)
+        text, _ = artifact_branch.show(task_id, branch, rel)
         if text is not None:
             wanted[rel[len(prefix):]] = text
     if tests_dir.is_dir():

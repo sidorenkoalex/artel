@@ -18,7 +18,7 @@ import contextlib
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, budget, ci, config,
+from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
               fsm, fsm_autogate, gitcmd, store, workspace, yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
@@ -101,7 +101,7 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # `_tests_writing_ac_state` уже применяет к необязательному
         # каталогу `acceptance_tests/` (T031).
         q_rel = f"tasks/{task_id}/QUESTIONS.md"
-        q_paths = gitcmd.ls_tree_files(branch, q_rel)
+        q_paths = artifact_branch.ls_tree(task_id, branch, q_rel)
         if q_paths is None:
             detail = (f"дерево не на ветке задачи {branch} — не "
                       f"удалось проверить наличие QUESTIONS.md")
@@ -424,19 +424,12 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Лок (требование 5): планка acceptance_tests/ для in_dev -> review.
     #
     # Foreign (A7, требование 2 — единая логика для ЛЮБОГО target,
-    # включая артель, теперь всегда True): sha АРТЕФАКТНОЙ ВЕТКИ пульта
-    # (`config.ROOT`, настоящий git, `branch` уже resolved выше) — не
-    # `fixed_sha`, который `set_state` только что посчитал через
-    # `fixation._fix_external`. Тот коммитит `config.PROJECTS/<target>/`
-    # — репозиторий, в который M1-механика (артефактная ветка,
-    # `checkpoint._commit_external_step_artifacts`) ничего не пишет
-    # (найдено на AC-7/AC-8: сверка против него никогда не видит диффа
-    # — «замок» пропускал бы ЛЮБУЮ правку `acceptance_tests/` молча,
-    # `LockTest.test_edit_after_lock_blocks_in_dev_to_review`). Не-foreign
-    # (сегодня недостижимо после генерализации self — оставлено на
-    # случай песочницы без git, где `on_foreign_branch` всегда False) —
-    # прежнее поведение, `fixed_sha`.
-    locked_sha = (gitcmd.branch_head_sha(branch) if foreign
+    # включая артель, теперь всегда True): sha ссылки документов в
+    # репозитории задачи (`artifact_branch.task_repo`, `branch` уже
+    # resolved выше). Не-foreign (сегодня недостижимо после генерализации
+    # self — оставлено на случай песочницы без git, где
+    # `on_foreign_branch` всегда False) — прежнее поведение, `fixed_sha`.
+    locked_sha = (artifact_branch.rev_sha(task_id, branch) if foreign
                  else store.get_task(conn, task_id)["fixed_sha"])
     store.update_task(conn, task_id, tests_locked_sha=locked_sha)
     fsm._maybe_ensure_draft_mr(conn, task_id)

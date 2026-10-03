@@ -20,7 +20,7 @@ from pathlib import Path
 
 from scripts import codebase_map
 
-from . import alerts, config, context_package, gitcmd, store
+from . import alerts, artifact_branch, config, context_package, gitcmd, store
 
 MAP_REL = "docs/codebase-map.md"
 # Заголовок компонента карты в тексте брифа (SPEC 01M1RFQ52S0VD22J628TXX96XS,
@@ -473,7 +473,7 @@ def _developer_spec_text(conn, task_id: str, branch: str, foreign: bool) -> str:
     """
     spec_rel = f"tasks/{task_id}/SPEC.md"
     if foreign:
-        text, reason = gitcmd.show(branch, spec_rel)
+        text, reason = artifact_branch.show(task_id, branch, spec_rel)
         if text is None:
             sys.exit(f"[{task_id}] бриф не собран: {spec_rel} ветки "
                      f"{branch} не прочитан ({reason}) — дерево не на "
@@ -495,7 +495,7 @@ def _branch_or_disk_text(task_id: str, branch: str, rel: str,
     QUESTIONS — легитимное «эскалации не было», не отказ сборки брифа
     (в отличие от SPEC.md, чтение которого обязательно)."""
     if foreign:
-        text, _ = gitcmd.show(branch, f"tasks/{task_id}/{rel}")
+        text, _ = artifact_branch.show(task_id, branch, f"tasks/{task_id}/{rel}")
         return text
     path = config.TASKS / task_id / rel
     if not path.exists():
@@ -510,7 +510,7 @@ def _latest_answer_rel(task_id: str, branch: str, foreign: bool) -> str | None:
     """Имя `ANSWER-n.md` с наибольшим `n` — с ветки или с диска; `None` —
     ANSWER-файлов у задачи ещё нет."""
     if foreign:
-        paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
         names = [Path(p).name for p in paths]
     else:
         names = [p.name for p in (config.TASKS / task_id).glob("ANSWER-*.md")]

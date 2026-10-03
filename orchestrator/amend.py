@@ -751,18 +751,25 @@ def _record_amend(conn, task_id: str, detail: str, line: str) -> None:
         print(f"[{task_id}] ВНИМАНИЕ: {message}")
 
 
-def _branch_tests_snapshot(rev: str, rel_tests_dir: str) -> dict[str, str] | None:
+def _branch_tests_snapshot(rev: str, rel_tests_dir: str,
+                           task_id: str | None = None) -> dict[str, str] | None:
     """{путь: текст} `rel_tests_dir` на git-ревизии `rev` — `rev` может
     быть именем ветки ИЛИ голым sha, `gitcmd.ls_tree_files`/`gitcmd.show`
     принимают любую git-ревизию одинаково (тот же приём, каким
     `fsm_advance._zones_gate` уже сравнивает дерево на разных точках
-    истории). `None` — git не ответил на любой из двух вызовов."""
-    paths = gitcmd.ls_tree_files(rev, rel_tests_dir)
+    истории). `None` — git не ответил на любой из двух вызовов.
+    `task_id` задан — чтение в репозитории задачи (`artifact_branch`,
+    ADR-0021 п.3), иначе — в git пульта."""
+    if task_id:
+        paths = artifact_branch.ls_tree(task_id, rev, rel_tests_dir)
+    else:
+        paths = gitcmd.ls_tree_files(rev, rel_tests_dir)
     if paths is None:
         return None
     files = {}
     for rel in paths:
-        text, _reason = gitcmd.show(rev, rel)
+        text, _reason = (artifact_branch.show(task_id, rev, rel) if task_id
+                         else gitcmd.show(rev, rel))
         if text is None:
             return None
         files[rel] = text
@@ -788,7 +795,8 @@ def _branch_traceability_errors(task_id: str, rev: str,
     `extra_sources` — тексты долгоживущих файлов задачи с головы кодовой
     ветки: их методы `test_ac<n>_…` покрывают критерии наравне с планкой
     (тот же контракт, что у `guard.acceptance_traceability_errors`)."""
-    spec_text, _reason = gitcmd.show(rev, f"tasks/{task_id}/SPEC.md")
+    spec_text, _reason = artifact_branch.show(task_id, rev,
+                                              f"tasks/{task_id}/SPEC.md")
     if spec_text is None:
         return None
     meta = yamlmini.frontmatter(spec_text) or {}
@@ -830,13 +838,13 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     branch = artifact_branch.branch_name(task_id)
     rel_tests_dir = f"tasks/{task_id}/acceptance_tests"
 
-    new_sha = gitcmd.branch_head_sha(branch)
+    new_sha = artifact_branch.ref_head(task_id)
     if not new_sha:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"голову артефактной ветки {branch}")
 
-    old_snapshot = _branch_tests_snapshot(old_locked, rel_tests_dir)
-    new_snapshot = _branch_tests_snapshot(new_sha, rel_tests_dir)
+    old_snapshot = _branch_tests_snapshot(old_locked, rel_tests_dir, task_id)
+    new_snapshot = _branch_tests_snapshot(new_sha, rel_tests_dir, task_id)
     if old_snapshot is None or new_snapshot is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"содержимое {rel_tests_dir}/")

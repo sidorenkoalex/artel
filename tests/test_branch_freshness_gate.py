@@ -24,7 +24,8 @@ from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E40
                           store, workspace)
 from tests.sandbox import (LightTransitionSandbox, SpyRun,  # noqa: E402
                            capture, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git)
+                           disk_backed_show, fake_git,
+                           make_project_repo)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -590,6 +591,9 @@ class TargetSourcedRemoteTest(unittest.TestCase):
 
         self.capture = capture
         self.capture(catalog.cmd_init)
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        make_project_repo("acme")
         self.TASK = catalog.cmd_new("Внешний target", target="acme")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.db().execute(

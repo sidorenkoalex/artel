@@ -489,23 +489,24 @@ def check_role_home_reference() -> doctor.Check:
 
 
 def check_target_layout(target: str) -> doctor.Check:
-    """workspace и артефактный репо target'а — единая логика для ЛЮБОГО
-    объявленного target, включая артель (A7, требование 2, AC-2).
+    """Репозиторий ссылок документов задач target'а на месте — единая
+    логика для ЛЮБОГО объявленного target, включая артель (A7, требование
+    2, AC-2). С упразднением репозитория фиксации области проекта
+    (ADR-0021 п.2, этап 1, часть б2) это репозиторий задачи
+    (`artifact_branch.repo_for_target`): git пульта для артели, клон
+    проекта (`workspace`) для внешнего target.
 
-    Не блокирует: `runner.role_cwd` создаёт workspace лениво по требованию
-    (существующее поведение, `tests/test_multitarget_invariants.py`
-    полагается на него напрямую — задача заведена в БД без предварительного
-    `target-init`), а отсутствие артефактного репо `fixation.fix`
-    вырождает в «нечего фиксировать», не в отказ (fixation.py, модульный
-    докстринг). Предупреждение — не потому что неважно, а потому что
-    существующая архитектура уже деградирует по этому пути мягко.
+    Не блокирует: без клона ссылка документов внешней задачи не пишется, и
+    узлы записи/сверки сами отказывают «git не ответил»/«репозиторий
+    проекта не найден» — предупреждение говорит о причине заранее.
     """
-    repo = doctor.config.PROJECTS / target / ".git"
-    if not repo.is_dir():
+    repo = doctor.artifact_branch.repo_for_target(target)
+    if repo == doctor.artifact_branch._NO_REPO:
         return doctor.Check("target-layout", "warn",
-                     f"артефактный репо {target} не инициализирован — "
-                     f"`artel.py target-init {target}`")
-    return doctor.Check("target-layout", "ok", "артефактный репо на месте")
+                     f"репозиторий проекта {target} (клон workspace) не "
+                     f"найден — ссылкам документов задач негде жить")
+    return doctor.Check("target-layout", "ok",
+                        f"репозиторий ссылок документов на месте: {repo}")
 
 
 # Маркеры агентской обвязки target'а (SPEC T069, требование 3; ADR-0003

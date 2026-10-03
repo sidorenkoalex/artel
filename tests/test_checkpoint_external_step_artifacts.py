@@ -23,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artifact_branch, checkpoint, config, gitcmd, store  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import RealGitSandbox, make_project_repo  # noqa: E402
 
 TARGET = "extproj"
 
@@ -46,6 +46,9 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         store.insert_task(conn, self.TASK, "Задача внешнего target",
                           "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
                           config.DEFAULT_BUDGET_USD)
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        self.project = make_project_repo(TARGET)
         # Роль пишет документы в каталог документов задачи (ADR-0021,
         # этап 1) — источник автокоммита шага.
         self.workspace_root = artifact_branch.docs_root(TARGET)
@@ -59,7 +62,8 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
 
     def artifact_branch_files(self) -> list[str]:
         branch = artifact_branch.branch_name(self.TASK)
-        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
+        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}",
+                                    repo=self.project) or []
 
     def test_role_written_artifacts_land_in_the_pult_artifact_branch(self):
         self.write("PLAN.md", "---\ntask: x\n---\n# PLAN\n")
@@ -94,6 +98,13 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.assertEqual(self.artifact_branch_files(), [])
 
     def test_second_step_accumulates_onto_the_first_not_replaces_it(self):
+        """Автокоммит второго шага ложится поверх дерева ссылки, не заменяет
+        его; ссылка внешней задачи — в git проекта (ADR-0021 п.3).
+
+        Ловит мутацию: коммит шага строит дерево только из файлов этого шага
+        (без дерева предыдущего коммита ссылки) — PLAN.md пропадает; либо
+        `artifact_branch.repo_for_target` отдаёт `config.ROOT` для внешнего
+        target — ссылки в клоне проекта нет, `show` не находит файлов."""
         self.write("PLAN.md", "план разработчика")
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
 
@@ -102,8 +113,10 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "reviewer")
 
         branch = artifact_branch.branch_name(self.TASK)
-        plan_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/PLAN.md")
-        review_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/REVIEW.md")
+        plan_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/PLAN.md",
+                                   repo=self.project)
+        review_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/REVIEW.md",
+                                     repo=self.project)
         self.assertEqual(plan_text, "план разработчика")
         self.assertEqual(review_text, "ревью")
 
@@ -180,6 +193,13 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
                       "роли в ТОМ ЖЕ состоянии, не должен молча исчезать")
 
     def test_binary_file_is_not_lost(self):
+        """Бинарный файл каталога документов попадает в ссылку внешней
+        задачи в git проекта байт-в-байт.
+
+        Ловит мутацию: чтение файлов через `read_text(encoding="utf-8")` с
+        пропуском недекодируемых — screenshot.png теряется; либо ссылка
+        внешней задачи пишется в `config.ROOT` — `git show` в клоне проекта
+        возвращает ненулевой код."""
         # REVIEW.md T094 итерация 2, замечание 1 (major): раньше
         # `read_text(encoding="utf-8")` молча пропускал файл, не проходящий
         # UTF-8-декодирование, а `shutil.rmtree` затем удалял его с диска
@@ -201,7 +221,7 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         cat = subprocess.run(
             ["git", "show", f"{artifact_branch.branch_name(self.TASK)}:"
              f"tasks/{self.TASK}/screenshot.png"],
-            cwd=config.ROOT, capture_output=True)
+            cwd=self.project, capture_output=True)
         self.assertEqual(cat.returncode, 0)
         self.assertEqual(cat.stdout, binary)
 
@@ -293,6 +313,7 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
         store.insert_task(conn, self.TASK, "Задача внешнего target",
                           "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
                           config.DEFAULT_BUDGET_USD)
+        self.project = make_project_repo(TARGET)
         self.workspace_root = artifact_branch.docs_root(TARGET)
         self.task_dir = artifact_branch.docs_dir(self.TASK, TARGET)
         self.task_dir.mkdir(parents=True)
@@ -307,11 +328,12 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
 
     def artifact_branch_files(self) -> list[str]:
         branch = artifact_branch.branch_name(self.TASK)
-        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
+        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}",
+                                    repo=self.project) or []
 
     def artifact_branch_text(self, rel: str):
         branch = artifact_branch.branch_name(self.TASK)
-        text, _ = gitcmd.show(branch, rel)
+        text, _ = gitcmd.show(branch, rel, repo=self.project)
         return text
 
     def test_pyc_from_workdir_is_not_committed_normal_file_is(self):

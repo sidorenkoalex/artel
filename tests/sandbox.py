@@ -565,7 +565,7 @@ def _tasks_relative_path(rel: str):
     return config.TASKS.joinpath(*parts[1:])
 
 
-def disk_backed_show(branch: str, rel: str) -> tuple:
+def disk_backed_show(branch: str, rel: str, *, repo=None) -> tuple:
     """Замена `gitcmd.show` (A7 + tasks/01M1K7KP0D8ZKRM9KTE75DCCYR): `rel`
     либо `tasks/<id>/<файл>` (артефакт задачи — соглашение `fsm.py`/
     `brief.py`/`fsm_advance.py`, `artifact_source.resolve` теперь всегда
@@ -578,7 +578,8 @@ def disk_backed_show(branch: str, rel: str) -> tuple:
     `config.TASKS` для артефактов задачи (`_tasks_relative_path`), диск
     `config.ROOT` для правил системы (тот же корень, где песочница уже
     сеет `skills/`/`CLAUDE.md`, см. `seed_developer_brief_fixtures`) —
-    git branch не заводят."""
+    git branch не заводят. `repo` (клон внешнего проекта, где живёт ссылка
+    документов его задач, ADR-0021 п.3) не участвует по той же причине."""
     path = _tasks_relative_path(rel) if rel.startswith("tasks/") \
         else config.ROOT / rel
     try:
@@ -593,9 +594,11 @@ def disk_backed_show(branch: str, rel: str) -> tuple:
         return None, str(exc)
 
 
-def disk_backed_ls_tree_files(branch: str, rel_dir: str) -> list | None:
+def disk_backed_ls_tree_files(branch: str, rel_dir: str, *,
+                              repo=None) -> list | None:
     """Замена `gitcmd.ls_tree_files` — тот же приём, что `disk_backed_show`
-    выше: список файлов `config.TASKS/...` с диска, ветка не участвует.
+    выше: список файлов `config.TASKS/...` с диска, ветка и `repo` не
+    участвуют.
 
     `rel_dir` — не обязательно каталог: настоящий `git ls-tree -- <path>`
     принимает и файловый pathspec (существующие вызывающие места, напр.
@@ -823,6 +826,53 @@ def alias_docs_ref_to_branch(root: Path, task_id: str) -> str:
     if res.returncode != 0:
         raise RuntimeError(f"symbolic-ref {ref}: {res.stderr}")
     return branch
+
+
+_PROJECT_TARGET_ENTRY = """  {name}:
+    forge: github
+    url: file:///nonexistent/{name}
+    base: {base}
+    token_slot: {name}-token
+    no_paths: []
+    project_skills: []
+    merge_gate: operator
+"""
+
+
+def make_project_repo(target: str, origin: bool = True) -> Path:
+    """Клон внешнего проекта `target` по адресу `repo_context`
+    (`config.PROJECTS/<target>/workspace`) — настоящий git с первым
+    коммитом на базовой ветке и, если `origin`, своим bare-`origin` рядом
+    (`config.PROJECTS/<target>/origin.git`): ссылка документов задачи
+    внешнего проекта живёт в git самого проекта (ADR-0021 п.3). Запись
+    target'а дописывается в `config.TARGETS`, если её там нет. Git — мимо
+    подмен `subprocess.run` песочницы. Возвращает путь клона."""
+    try:
+        text = config.TARGETS.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    if f"\n  {target}:" not in "\n" + text:
+        if "targets:" not in text:
+            text = "targets:\n" + text
+        config.TARGETS.write_text(
+            text.rstrip("\n") + "\n" + _PROJECT_TARGET_ENTRY.format(
+                name=target, base=config.MAIN_BRANCH), encoding="utf-8")
+    project = config.PROJECTS / target / "workspace"
+    project.mkdir(parents=True, exist_ok=True)
+
+    def git(*args: str) -> None:
+        _REAL_RUN(["git", *args], cwd=project, check=True,
+                  capture_output=True)
+
+    git("init", "-q", "-b", config.MAIN_BRANCH)
+    git("config", "user.email", "artel@example.invalid")
+    git("config", "user.name", "artel tests")
+    git("commit", "-q", "--allow-empty", "-m", "init")
+    if origin:
+        bare = config.PROJECTS / target / "origin.git"
+        git("init", "-q", "--bare", str(bare))
+        git("remote", "add", "origin", str(bare))
+    return project
 
 
 # Ссылки, которых в лёгких песочницах нет: ветки (`gitcmd.branch_exists`) и

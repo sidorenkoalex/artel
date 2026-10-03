@@ -23,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artifact_branch, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, make_project_repo  # noqa: E402
 
 SPEC_WITH_SECTION = (
     "---\ntask: T900\ntype: spec\nauthor_role: analyst\nstatus: ready\n---\n\n"
@@ -50,10 +50,14 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
 
     def _fake_git(self, diff_result, spec_text):
         """`diff_result` — `(returncode, stdout, stderr)` для `git diff`;
-        `spec_text` — `None` симулирует «файла на ветке нет» для `git show`."""
+        `spec_text` — `None` симулирует «файла на ветке нет» для `git show`.
+        Ведущее `-C <клон>` (чтение в репозитории проекта внешней задачи,
+        ADR-0021 п.3) пропускается."""
         code, out, err = diff_result
 
         def git(*args):
+            if args[:1] == ("-C",):
+                args = args[2:]
             if args and args[0] == "diff":
                 return subprocess.CompletedProcess(list(args), code, out, err)
             if args and args[0] == "show":
@@ -126,6 +130,7 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
         внешней задачи заполнился бы по коду `config.ROOT`, который её не
         видит, и нёс бы неверное (нулевое или чужое) число."""
         store.update_task(self.conn, self.task_id, target="sled")
+        make_project_repo("sled")
         with mock.patch.object(
                 gitcmd, "git",
                 self._fake_git((0, "diff --git a b", ""), SPEC_WITH_SECTION)):

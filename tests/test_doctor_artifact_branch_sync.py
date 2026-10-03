@@ -3,9 +3,13 @@
 `doctor.check_artifact_ref_sync` по `refs/artifacts/<id>` вместо ветки
 `artifact/<id>`, SPEC 01M3Z2DMQRD0BD7AARFVTCVVG8, требование 5, AC-7).
 """
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
-from orchestrator import artifact_branch, config, doctor, gitcmd, snapshot, store
+from orchestrator import (artifact_branch, config, doctor, gitcmd,
+                          repo_context, snapshot, store)
 from tests.sandbox import AutoOriginSandbox
 
 EXTERNAL_TARGET = "extproj"
@@ -147,11 +151,34 @@ class SyncSkipWithoutOriginTest(ArtifactBranchSyncSandbox):
 
 class SyncExcludesTerminalAndForeignTargetTest(ArtifactBranchSyncSandbox):
 
+    def external_project(self) -> Path:
+        """Клон внешнего проекта со своим bare-`origin` по адресу
+        `repo_context` — ссылка документов его задач живёт там (ADR-0021
+        п.3)."""
+        entry = ("    forge: github\n    url: file:///nonexistent/{name}\n"
+                 "    base: {base}\n    token_slot: {name}-token\n"
+                 "    no_paths: []\n    project_skills: []\n"
+                 "    merge_gate: operator\n")
+        config.TARGETS.write_text(
+            "targets:\n"
+            + "".join(f"  {name}:\n" + entry.format(name=name,
+                                                    base=config.MAIN_BRANCH)
+                      for name in (config.DEFAULT_TARGET, EXTERNAL_TARGET)),
+            encoding="utf-8")
+        project = repo_context.resolve(EXTERNAL_TARGET).path
+        project.mkdir(parents=True, exist_ok=True)
+        self.git("-C", str(project), "init", "-q", "-b", config.MAIN_BRANCH)
+        bare = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, bare, ignore_errors=True)
+        self.git("init", "-q", "--bare", bare)
+        self.git("-C", str(project), "remote", "add", "origin", bare)
+        return project
+
     def test_excludes_done_and_external_target(self):
         """Закрытая задача без записи о коммите закрытия (исторический
         снимок, AC-10) не сверяется; живая задача внешнего target —
-        сверяется наравне с артелью (ADR-0021 п.3: ссылка одна для любого
-        target).
+        сверяется наравне с артелью, в репозитории своего проекта и с его
+        `origin` (ADR-0021 п.3).
 
         Ловит мутацию: прежнее исключение внешнего target оставлено —
         расхождение его ссылки с origin прошло бы без строки."""
@@ -160,10 +187,16 @@ class SyncExcludesTerminalAndForeignTargetTest(ArtifactBranchSyncSandbox):
         self.commit(done_id, "спека\n")
         self.push_external_commit(done_id)
 
+        project = self.external_project()
         external_id = "01SYNCEXCLUDEEXTERN1"
-        self.new_task(external_id, target=EXTERNAL_TARGET)
+        ref = self.new_task(external_id, target=EXTERNAL_TARGET)
         self.commit(external_id, "спека\n")
-        self.push_external_commit(external_id)
+        sha = artifact_branch.write_commit(
+            project, {f"tasks/{external_id}/SIDE.md": "внешний коммит\n"},
+            "мимо пульта", "operator", "operator@example.invalid",
+            parent=artifact_branch.ref_head(external_id))
+        self.assertTrue(sha)
+        self.git("-C", str(project), "push", "-q", "origin", f"{sha}:{ref}")
 
         checks = self.checks()
         self.assertEqual([c for c in checks if done_id in c.detail], [])

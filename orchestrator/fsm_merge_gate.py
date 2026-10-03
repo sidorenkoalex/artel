@@ -757,7 +757,8 @@ def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
     применяет к провалу материализации снимка. Ничего некорректного в
     main это не пропускает — не применяется ничего."""
     branch, _foreign = artifact_source.resolve(conn, task_id)
-    text, reason = gitcmd.show(branch, f"tasks/{task_id}/PLAN.md")
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/PLAN.md")
     if text is None:
         store.journal(conn, task_id, "orchestrator",
                       "приложения PLAN не прочитаны",

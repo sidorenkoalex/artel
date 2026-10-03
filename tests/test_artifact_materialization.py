@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artifact_branch, checkpoint, config, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import RealGitSandbox, make_project_repo  # noqa: E402
 
 
 class MaterializeTaskDirTest(RealGitSandbox):
@@ -91,6 +91,9 @@ class ConflictGuardStateGuardTest(RealGitSandbox):
         store.insert_task(store.db(), self.TASK, "State-гвард лока тестов",
                           "tests_writing", f"task/{self.TASK.lower()}-x",
                           self.TARGET, config.DEFAULT_BUDGET_USD)
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        self.project = make_project_repo(self.TARGET)
         # Роль пишет документы в каталог документов задачи (ADR-0021,
         # этап 1) — источник автокоммита шага.
         self.workspace_root = artifact_branch.docs_root(self.TARGET)
@@ -99,7 +102,8 @@ class ConflictGuardStateGuardTest(RealGitSandbox):
     def artifact_branch_files(self) -> list:
         from orchestrator import gitcmd
         branch = artifact_branch.branch_name(self.TASK)
-        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
+        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}",
+                                    repo=self.project) or []
 
     def test_deletion_after_state_left_tests_writing_is_not_carried_over(self):
         """Файл появился в ветке автокоммитом test_author (state:

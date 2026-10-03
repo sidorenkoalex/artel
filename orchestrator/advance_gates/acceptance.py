@@ -10,7 +10,8 @@ import hashlib
 
 from scripts import guard
 
-from .. import acceptance, agent_log, config, fsm, gitcmd, store, workspace, yamlmini
+from .. import (acceptance, agent_log, artifact_branch, config, fsm, gitcmd,
+               store, workspace, yamlmini)
 
 LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень долгоживущих тестов"
 # Подсказка отказа сверки перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
@@ -131,7 +132,8 @@ def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
     if not locked:
         return False
     lock_ref = branch if foreign else "HEAD"
-    names = gitcmd.diff_names(locked, lock_ref, f"tasks/{task_id}/acceptance_tests")
+    names = artifact_branch.diff_names(task_id, locked, lock_ref,
+                                       f"tasks/{task_id}/acceptance_tests")
     if names is None:
         # git не ответил (недостижимый sha после rebase/squash, сбой
         # команды) — fail-closed тем же принципом, что и

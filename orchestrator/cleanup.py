@@ -291,7 +291,7 @@ def _journal_tz_before_cleanup(conn, task_id: str, branch: str,
     """
     from . import artifact_branch
     source_branch = artifact_branch.branch_name(task_id)
-    text, _ = gitcmd.show(source_branch, f"tasks/{task_id}/TZ.md")
+    text, _ = artifact_branch.show(task_id, source_branch, f"tasks/{task_id}/TZ.md")
     if text is not None:
         store.journal(conn, task_id, "orchestrator",
                       KILL_TZ_JOURNAL_ACTION, text)

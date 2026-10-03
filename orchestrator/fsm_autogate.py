@@ -11,7 +11,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, budget, ci, config, fixation,
+from . import (acceptance, artifact_branch, artifact_source, budget, ci, config, fixation,
               gates, gitcmd, models, store, workspace)
 from .advance_gates import acceptance as acceptance_gates
 
@@ -73,11 +73,12 @@ def _plank_sources(task_id: str, branch: str, *, conn=None, t=None
     а не из незакоммиченного рабочего дерева.
     """
     tests_rel = f"tasks/{task_id}/acceptance_tests"
-    py_paths = [p for p in (gitcmd.ls_tree_files(branch, tests_rel) or [])
+    listed = artifact_branch.ls_tree(task_id, branch, tests_rel) or []
+    py_paths = [p for p in listed
                 if p.endswith(".py")]
     sources = []
     for path in py_paths:
-        text, _ = gitcmd.show(branch, path)
+        text, _ = artifact_branch.show(task_id, branch, path)
         if text is not None:
             sources.append(text)
 
@@ -154,7 +155,7 @@ def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
     артефактной, тем же разделением, что и остальной модуль.
     """
     artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-    artifact_sha = gitcmd.branch_head_sha(artifact_branch_name)
+    artifact_sha = artifact_branch.rev_sha(task_id, artifact_branch_name)
     group_a = (
         "полный набор tests/ в worktree ветки задачи; "
         f"свежесть кодовой ветки против origin/{config.MAIN_BRANCH}"
@@ -233,7 +234,7 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
         return ok, f"автогейт: {trial}"
 
     branch, _ = artifact_source.resolve(conn, task_id)
-    branch_sha = gitcmd.branch_head_sha(branch)
+    branch_sha = artifact_branch.rev_sha(task_id, branch)
     source_note = f"источник планки: ветка {branch}, sha {branch_sha}"
 
     sources, has_files, error = _plank_sources(task_id, branch, conn=conn, t=t)
