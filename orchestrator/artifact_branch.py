@@ -81,7 +81,11 @@ def repo_for_target(target: str | None) -> Path:
 
 
 def task_repo(task_id: str) -> Path:
-    """Репозиторий ссылки документов задачи — по её target из БД."""
+    """Репозиторий ссылки документов задачи — по её target из БД. Файла БД
+    нет — нет и строки задачи, target тот же, что дал бы `task_target`
+    (артель); БД не заводится ради чтения."""
+    if not config.DB.exists():
+        return config.ROOT
     return repo_for_target(store.task_target(store.db(), task_id))
 
 
@@ -102,7 +106,7 @@ def _git(repo: Path, *args: str):
 def _head(task_id: str, repo: Path) -> str:
     if repo == _NO_REPO:
         return ""
-    return gitcmd.branch_head_sha(branch_name(task_id), repo=_git_repo(repo))
+    return gitcmd.branch_head_sha(branch_name(task_id), **_repo_kw(repo))
 
 
 def ref_head(task_id: str) -> str:
@@ -112,9 +116,64 @@ def ref_head(task_id: str) -> str:
 
 
 def _repo_kw(repo: Path) -> dict:
-    """Ключевые аргументы `gitcmd.show`/`ls_tree_files` для `repo`: для
-    пульта — никаких (прежний вызов)."""
+    """Ключевой аргумент `repo=` примитивов `gitcmd` для `repo`: для
+    пульта — никакого (прежний вызов байт-в-байт)."""
     return {"repo": repo} if _git_repo(repo) else {}
+
+
+# Узел чтения документов задачи (ADR-0021 п.3): читатель называет задачу и
+# ревизию (имя ссылки или sha её коммита), узел сам выбирает репозиторий
+# задачи. Для артели — прежний вызов `gitcmd` байт-в-байт, без `repo=`.
+NO_REPO_REASON = "репозиторий проекта задачи не найден (клона нет)"
+
+
+def git(task_id: str, *args: str):
+    """Произвольная git-команда в репозитории задачи (`git log` по пути
+    ссылки и т.п.); `None` — клона нет, как у заглушек `gitcmd.git`."""
+    return _git(task_repo(task_id), *args)
+
+
+def show(task_id: str, rev: str, rel: str) -> tuple[str | None, str]:
+    """`gitcmd.show(rev, rel)` в репозитории задачи."""
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return None, NO_REPO_REASON
+    return gitcmd.show(rev, rel, **_repo_kw(repo))
+
+
+def ls_tree(task_id: str, rev: str, rel_dir: str) -> list[str] | None:
+    """`gitcmd.ls_tree_files(rev, rel_dir)` в репозитории задачи; `None` —
+    git не ответил или клона нет."""
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return None
+    return gitcmd.ls_tree_files(rev, rel_dir, **_repo_kw(repo))
+
+
+def rev_sha(task_id: str, rev: str) -> str:
+    """`gitcmd.branch_head_sha(rev)` в репозитории задачи."""
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return ""
+    return gitcmd.branch_head_sha(rev, **_repo_kw(repo))
+
+
+def on_foreign_rev(task_id: str, rev: str) -> bool:
+    """`gitcmd.on_foreign_branch(rev)` для репозитория задачи: в клоне
+    проекта рабочее дерево пульта не стоит ни на какой его ревизии —
+    вопрос сводится к «ревизия есть»."""
+    repo = task_repo(task_id)
+    if _git_repo(repo) is None:
+        return gitcmd.on_foreign_branch(rev)
+    return bool(rev_sha(task_id, rev))
+
+
+def diff_names(task_id: str, a: str, b: str, *paths: str) -> list[str] | None:
+    """`gitcmd.diff_names(a, b, *paths)` в репозитории задачи."""
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return None
+    return gitcmd.diff_names(a, b, *paths, **_repo_kw(repo))
 
 
 def _now() -> str:
@@ -313,8 +372,8 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
         return
     detail = reason + (f": {stderr[:300]}" if stderr else "")
     if reason == PUSH_REASON_NON_FAST_FORWARD:
-        local_sha = gitcmd.branch_head_sha(branch, repo=_git_repo(repo))
-        origin_sha = gitcmd.remote_branch_sha(branch, repo=_git_repo(repo))
+        local_sha = gitcmd.branch_head_sha(branch, **_repo_kw(repo))
+        origin_sha = gitcmd.remote_branch_sha(branch, **_repo_kw(repo))
         detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
                   f"— свести merge-коммитом")
     store.journal(conn, task_id, "orchestrator",
@@ -389,7 +448,7 @@ def origin_sync_refusal(task_id: str) -> str | None:
     if local:
         _send(task_id, repo, journal_success=False)
     remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
-                                             _git_repo(repo))
+                                             **_repo_kw(repo))
     if reason:
         return (f"отказ: origin не ответил на сверку {branch_name(task_id)} "
                 f"— {reason}")

@@ -857,8 +857,9 @@ def _artifact_frontmatter(target: str, task_id: str, name: str) -> dict:
     if target == config.DEFAULT_TARGET:
         return artifacts.frontmatter(config.TASKS / task_id / name)
     from . import yamlmini
-    text, _ = gitcmd.show(artifact_branch.branch_name(task_id),
-                          f"tasks/{task_id}/{name}")
+    text, _ = artifact_branch.show(task_id,
+                                   artifact_branch.branch_name(task_id),
+                                   f"tasks/{task_id}/{name}")
     return (yamlmini.frontmatter(text) or {}) if text is not None else {}
 
 

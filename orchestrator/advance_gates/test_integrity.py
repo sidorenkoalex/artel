@@ -40,6 +40,7 @@ from typing import NamedTuple
 
 from scripts import guard
 
+from .. import artifact_branch as docs_ref
 from .. import config, gitcmd, store
 from ._base import GateRefusal, _run_gates
 # Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
@@ -549,7 +550,7 @@ def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
     узел `mandate.elements` (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
     1) — тот же, что и у мандата зон, на том же правиле `startswith` и том
     же делении по запятым."""
-    paths = gitcmd.ls_tree_files(artifact_branch, f"tasks/{task_id}") or []
+    paths = docs_ref.ls_tree(task_id, artifact_branch, f"tasks/{task_id}") or []
     mandate: dict = {}
     for p in sorted(paths):
         name = p.rsplit("/", 1)[-1]
@@ -557,7 +558,7 @@ def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
             continue
         if _answer_commit_is_role_step_autocommit(artifact_branch, task_id, p):
             continue
-        text, _reason = gitcmd.show(artifact_branch, p)
+        text, _reason = docs_ref.show(task_id, artifact_branch, p)
         if text is None:
             continue
         for line in text.splitlines():

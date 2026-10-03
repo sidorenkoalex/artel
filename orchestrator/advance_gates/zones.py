@@ -3,7 +3,7 @@
 `orchestrator/fsm_advance.py`."""
 from scripts import guard
 
-from .. import checkpoint, config, gitcmd, store, workspace
+from .. import artifact_branch, checkpoint, config, gitcmd, store, workspace
 from ._base import GateRefusal, _run_gates
 # Маркер мандата и разбор строк через запятую живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -104,7 +104,8 @@ def _answer_commit_is_role_step_autocommit(branch: str, task_id: str,
     `checkpoint._commit_external_step_artifacts` использует ТОТ ЖЕ
     признак (положительное совпадение с `own_commit_marker`) как
     единственное основание для удаления, а не наоборот."""
-    res = gitcmd.git("log", "-1", "--format=%s", branch, "--", path)
+    res = artifact_branch.git(task_id, "log", "-1", "--format=%s", branch,
+                              "--", path)
     if res is None or res.returncode != 0:
         return False
     subject = res.stdout.strip()
@@ -123,7 +124,7 @@ def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
     (`_answer_commit_is_role_step_autocommit`), пропускается: это не
     `cmd_answer`, значит не мандат Оператора, независимо от текста
     внутри (R2-F1)."""
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     mandate: set[str] = set()
     for p in paths:
         name = p.rsplit("/", 1)[-1]
@@ -131,7 +132,7 @@ def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
             continue
         if _answer_commit_is_role_step_autocommit(branch, task_id, p):
             continue
-        text, _reason = gitcmd.show(branch, p)
+        text, _reason = artifact_branch.show(task_id, branch, p)
         if text is None:
             continue
         for line in text.splitlines():

@@ -174,7 +174,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
                  f"состоянии escalated (сейчас: {state})")
 
     branch, _foreign = artifact_source.resolve(conn, task_id)
-    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     n = _next_answer_number(existing)
     rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
     text = _answer_document(task_id, n, raw)
@@ -230,7 +230,7 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
         sys.exit(f"[{task_id}] zones-extend: отказ — пустой список путей")
 
     branch, _foreign = artifact_source.resolve(conn, task_id)
-    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     n = _next_answer_number(existing)
     rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
     paths_str = ", ".join(paths)
@@ -253,7 +253,8 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
     # множеством путей, что переданы команде; иначе БД не трогается вовсе
     # (`_plan_zones_extension_paths` даёт `None`, когда раздела/строки
     # «Пути:» нет — тот же разбор, что уже применяет гейт зон).
-    plan_text, _reason = gitcmd.show(branch, f"tasks/{task_id}/PLAN.md")
+    plan_text, _reason = artifact_branch.show(task_id, branch,
+                                              f"tasks/{task_id}/PLAN.md")
     plan_paths = (fsm_advance._plan_zones_extension_paths(plan_text)
                  if plan_text is not None else None)
     if plan_paths is not None and set(plan_paths) == set(paths):

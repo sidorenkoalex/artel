@@ -38,7 +38,8 @@ from orchestrator import (artifact_branch, budget, catalog, cleanup,  # noqa: E4
                           workspace)
 from tests.sandbox import (FakeProc, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture,
-                           capture_new_task_id, fake_git, resilient_tmp_cleanup)
+                           capture_new_task_id, fake_git,
+                           make_project_repo, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -299,6 +300,10 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         tdir = config.TASKS / task_id
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        if target != config.DEFAULT_TARGET:
+            make_project_repo(target)
 
     def test_dogfood_cwd_is_its_worktree(self):
         """Пересмотр планки решением Оператора 03.09 (вариант A по

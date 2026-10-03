@@ -284,13 +284,15 @@ def check_ignore(paths) -> set[str] | None:
     return ignored
 
 
-def diff_names(a: str, b: str, *paths: str) -> list[str] | None:
+def diff_names(a: str, b: str, *paths: str,
+               repo: Path | None = None) -> list[str] | None:
     """Пути, различающиеся между `a` и `b` под `paths`; `None` — git не
     ответил. В отличие от `diff_paths` (голое да/нет), отдаёт сами пути —
     нужно, чтобы отличить настоящую правку от разницы только в
     игнорируемых `.gitignore` файлах (SPEC 01M1KVG3KSCY47HWXWF5HM0E76,
-    требование 3)."""
-    res = git("diff", "--name-only", a, b, "--", *paths)
+    требование 3). `repo` — как у `show`."""
+    args = ("diff", "--name-only", a, b, "--", *paths)
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     return [p for p in res.stdout.splitlines() if p]

@@ -40,6 +40,7 @@ from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
                            capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, is_claude_call,
+                           make_project_repo, network_guarded_real_run,
                            sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -532,38 +533,43 @@ class TargetWrapperCheckTest(unittest.TestCase):
 
 
 class RecoveryCheckTest(TmpRootTest):
-    """Критерий 4: recovery-сверка ловит расхождение sha и грязный репо."""
+    """Критерий 4: recovery-сверка ловит расхождение sha головы ссылки
+    документов с журналом (ADR-0021 п.3; репозиторий фиксации и его
+    «грязная копия» упразднены, SPEC 01M409YNSWACNFKNJE2X263ZSD)."""
 
     TASK = "SLED-T001"
 
     def setUp(self):
         super().setUp()
+        # Фиксация — коммит ссылки документов в настоящем git (клон
+        # проекта для `sled`), не плотницкие заглушки `SpyRun`.
+        patcher = mock.patch.object(gitcmd.subprocess, "run",
+                                    network_guarded_real_run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         config.TARGETS.write_text(TARGETS_YAML_WITH_SLED, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
+        make_project_repo("sled")
         store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
                           f"task/{self.TASK.lower()}", "sled", 25.0)
 
-    def repo(self) -> Path:
-        return config.PROJECTS / "sled"
-
-    def commit_artifact(self, name: str = "SPEC.md") -> str:
-        tdir = self.repo() / "tasks" / self.TASK
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / name).write_text("артефакт\n", encoding="utf-8")
-        gitcmd.in_repo(self.repo(), "add", "-A")
-        gitcmd.in_repo(self.repo(), "-c", "user.name=t", "-c",
-                       "user.email=t@t.invalid", "commit", "-q", "-m", "фиксация")
-        return gitcmd.head_sha(self.repo())
+    def commit_artifact(self, task_id: str = TASK,
+                        name: str = "SPEC.md") -> str:
+        return artifact_branch.commit_files(
+            task_id, {f"tasks/{task_id}/{name}": "артефакт\n"}, "фиксация")
 
     def test_healthy_repo_recovery_is_ok(self):
+        """Ловит мутацию: условие расхождения перевёрнуто или голова ссылки
+        документов сравнивается не с `fixed_sha` — на совпадающей фиксации
+        `recovery-sha` станет `fail` и откроется инцидент."""
         sha = self.commit_artifact()
+        self.assertTrue(sha)
         store.update_task(store.db(), self.TASK, fixed_sha=sha)
 
         checks = doctor.recovery_check(store.db(), "sled")
 
         statuses = {c.name: c.status for c in checks}
         self.assertEqual(statuses["recovery-sha"], "ok")
-        self.assertEqual(statuses["recovery-clean"], "ok")
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
     def test_sha_mismatch_raises_an_incident_alert(self):
@@ -585,45 +591,30 @@ class RecoveryCheckTest(TmpRootTest):
         self.assertEqual(incidents[0]["target"], "sled")
         self.assertIn("sha", incidents[0]["message"])
 
-    def test_dirty_working_copy_raises_an_incident_alert(self):
-        sha = self.commit_artifact()
-        store.update_task(store.db(), self.TASK, fixed_sha=sha)
-        (self.repo() / "tasks" / self.TASK / "SPEC.md").write_text(
-            "незакоммиченная правка\n", encoding="utf-8")
-
-        checks = doctor.recovery_check(store.db(), "sled")
-
-        by_name = {c.name: c for c in checks}
-        self.assertEqual(by_name["recovery-clean"].status, "fail")
-        incidents = alerts.open_alerts(store.db(), "incident")
-        self.assertTrue(any("грязный" in a["message"] for a in incidents))
-
     def test_artel_gets_the_same_recovery_sverka_as_any_target(self):
         """A7, требование 2 (AC-3): артель (`config.DEFAULT_TARGET`) —
         та же логика recovery-сверки, что и `sled` выше (`test_healthy_
         repo_recovery_is_ok`), не skip «вне объёма» по имени target'а.
         Сверка HEAD `config.ROOT` (пин) в этот тест не входит — она
-        отдельная забота `check_root_pin` (AC-13)."""
+        отдельная забота `check_root_pin` (AC-13).
+
+        Ловит мутацию: recovery-сверка артели снова пропускается по имени
+        target'а или читает голову ссылки не в git пульта — инцидент либо
+        `fail` на совпадающей фиксации, либо строки `recovery-sha` нет."""
         capture(projects.cmd_target_init, config.DEFAULT_TARGET)
+        gitcmd.git("init", "-q", "-b", config.MAIN_BRANCH)
         artel_task = "T900"
         store.insert_task(store.db(), artel_task, "Задача артели", "in_dev",
                           f"task/{artel_task.lower()}", config.DEFAULT_TARGET,
                           25.0)
-        tdir = config.PROJECTS / config.DEFAULT_TARGET / "tasks" / artel_task
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / "SPEC.md").write_text("артефакт\n", encoding="utf-8")
-        repo = config.PROJECTS / config.DEFAULT_TARGET
-        gitcmd.in_repo(repo, "add", "-A")
-        gitcmd.in_repo(repo, "-c", "user.name=t", "-c", "user.email=t@t.invalid",
-                       "commit", "-q", "-m", "фиксация")
-        sha = gitcmd.head_sha(repo)
+        sha = self.commit_artifact(artel_task)
+        self.assertTrue(sha)
         store.update_task(store.db(), artel_task, fixed_sha=sha)
 
         checks = doctor.recovery_check(store.db(), config.DEFAULT_TARGET)
 
         statuses = {c.name: c.status for c in checks}
         self.assertEqual(statuses["recovery-sha"], "ok")
-        self.assertEqual(statuses["recovery-clean"], "ok")
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
 

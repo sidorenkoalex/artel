@@ -1,10 +1,11 @@
 """Git-первичка артефактов и approve-по-sha (tasks/T021/SPEC.md, критерии 1–7).
 
-Классы названы по требованиям SPEC: git-репо каталога проекта без remote
-(1), коммит артефактного репо внешнего target на переходе FSM (2),
-sha+чистота ветки пульта в журнале догфуда (3), approve с привязкой
-к sha (4), сверка при старте шага (5), инвариант реестра (6, docs/
-invariants.md #25), функция «нет remote» (7).
+Классы названы по требованиям SPEC: sha+чистота ветки пульта в журнале
+догфуда (3), approve с привязкой к sha (4), сверка при старте шага (5),
+инвариант реестра (6, docs/invariants.md #25). Требования 1, 2 и 7
+(репозиторий фиксации каталога проекта) сняты вместе с ним (ADR-0021
+п.3; SPEC 01M409YNSWACNFKNJE2X263ZSD) — их место заняли сторожа
+`tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py`.
 
 НЕОСЛАБЛЯЕМЫЕ ТЕСТЫ (ADR-0002): `FsmDecidesOnlyOnFixedHashesTest`,
 `IntegrityIncidentBlocksRunTest`, `ApproveByShaTest` и
@@ -39,8 +40,8 @@ from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
-                           is_claude_call, network_guarded_real_run,
-                           resilient_tmp_cleanup)
+                           is_claude_call, make_project_repo,
+                           network_guarded_real_run, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -189,102 +190,13 @@ class _GitFixationTmpRootTest(TmpRootTest):
 TmpRootTest = _GitFixationTmpRootTest
 
 
-class ArtifactRepoInitTest(TmpRootTest):
-    """Требование 1: git-репо каталога проекта — без remote, с .gitignore."""
-
-    def setUp(self):
-        super().setUp()
-        config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
-
-    def repo(self) -> Path:
-        return config.PROJECTS / "sled"
-
-    def test_init_creates_a_git_repo_without_a_remote(self):
-        capture(projects.cmd_target_init, "sled")
-
-        self.assertTrue((self.repo() / ".git").is_dir())
-        self.assertTrue(gitcmd.has_no_remote(self.repo()))
-
-    def test_gitignore_excludes_workspace_and_logs(self):
-        capture(projects.cmd_target_init, "sled")
-
-        lines = (self.repo() / ".gitignore").read_text(
-            encoding="utf-8").splitlines()
-        self.assertIn("workspace/", lines)
-        self.assertIn("logs/", lines)
-
-    def test_second_init_does_not_change_state_or_fail(self):
-        capture(projects.cmd_target_init, "sled")
-        (self.repo() / "tasks" / "T001").mkdir(parents=True)
-
-        out = capture(projects.cmd_target_init, "sled")
-
-        self.assertIn("уже было", out)
-        self.assertTrue((self.repo() / ".git").is_dir())
-        self.assertTrue((self.repo() / "tasks" / "T001").is_dir(),
-                        "повторная инициализация не трогает содержимое")
-
-
-class NoRemoteCheckTest(TmpRootTest):
-    """Требование 7: функция проверки «у артефактного репо нет remote»."""
-
-    def setUp(self):
-        super().setUp()
-        config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
-        capture(projects.cmd_target_init, "sled")
-
-    def test_freshly_initialized_repo_has_no_remote(self):
-        self.assertTrue(projects.artifact_repo_has_no_remote("sled"))
-
-    def test_repo_with_a_remote_is_detected(self):
-        repo = config.PROJECTS / "sled"
-        gitcmd.in_repo(repo, "remote", "add", "origin",
-                       "file:///nonexistent/x")
-
-        self.assertFalse(projects.artifact_repo_has_no_remote("sled"))
-
-
-class ExternalTransitionCommitsTest(TmpRootTest):
-    """Требование 2: переход FSM задачи внешнего target коммитит его репо."""
-
-    TASK = "SLED-T001"
-
-    def setUp(self):
-        super().setUp()
-        config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
-        capture(projects.cmd_target_init, "sled")
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача sled",
-                          "spec_writing", f"task/{self.TASK.lower()}",
-                          "sled", 25.0)
-        tdir = config.PROJECTS / "sled" / "tasks" / self.TASK
-        tdir.mkdir(parents=True)
-        (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
-
-    def repo(self) -> Path:
-        return config.PROJECTS / "sled"
-
-    def test_second_transition_without_changes_reuses_the_head(self):
-        capture(lambda: store.set_state(
-            store.db(), self.TASK, "in_dev", "operator",
-            expected_state="spec_writing", detail="тест"))
-        first = gitcmd.head_sha(self.repo())
-
-        capture(lambda: store.set_state(
-            store.db(), self.TASK, "review", "operator",
-            expected_state="in_dev", detail="тест"))
-
-        self.assertEqual(gitcmd.head_sha(self.repo()), first,
-                         "нечего коммитить — HEAD не двигается")
-
-
 class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
     """T033, требование 4 (PLAN «Риски»): сверка чистоты `advance` —
-    только догфуд. Для внешнего target артефактный репозиторий коммитит
-    сам оркестратор целиком уже ПОСЛЕ решения перейти (`fixation.
-    _fix_external`, `ExternalTransitionCommitsTest` выше) — до перехода
-    PLAN.md там закономерно не закоммичен, это не забытый коммит роли.
-    Наивная сверка блокировала бы `advance` для внешнего target навсегда.
+    только догфуд. Документы внешней задачи живут в ссылке
+    `refs/artifacts/<id>` репозитория проекта (ADR-0021 п.3), рабочей
+    копии у неё нет — незакоммиченный PLAN.md на диске не забытый коммит
+    роли. Наивная сверка блокировала бы `advance` для внешнего target
+    навсегда.
     """
 
     TASK = "SLED-T001"
@@ -293,6 +205,9 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        make_project_repo("sled")
         capture(catalog.cmd_init)
         store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
                           f"task/{self.TASK.lower()}", "sled", 25.0)
@@ -370,6 +285,9 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        make_project_repo("sled")
         capture(catalog.cmd_init)
         # SPEC T094, требование 10: бриф developer для ЛЮБОГО не-self
         # target читает tasks/<id>/ из артефактной ветки ПУЛЬТА
@@ -493,6 +411,9 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        make_project_repo("sled")
         capture(catalog.cmd_init)
         # SPEC T094, требование 10: approve на spec_gate для НЕ-self
         # target читает tasks/<id>/SPEC.md из артефактной ветки ПУЛЬТА

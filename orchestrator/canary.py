@@ -1965,7 +1965,7 @@ def _save_diagnostics(outer_root: Path, run_stamp: str, task_id: str,
 
     branch = artifact_branch.branch_name(task_id)
     for name in ("PLAN.md", "REVIEW.md"):
-        text, _reason = gitcmd.show(branch, f"tasks/{task_id}/{name}")
+        text, _reason = artifact_branch.show(task_id, branch, f"tasks/{task_id}/{name}")
         if text is not None:
             (diag_dir / name).write_text(text, encoding="utf-8")
 

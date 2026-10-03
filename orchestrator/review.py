@@ -2,7 +2,7 @@
 import re
 import sqlite3
 
-from . import (artifact_source, brief, config, context_package, gitcmd,
+from . import (artifact_branch, artifact_source, brief, config, context_package, gitcmd,
               repo_context, store)
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
@@ -79,7 +79,8 @@ LONG_LIVED_NOTE = (" (долгоживущий тест задачи из пер
 
 def artifact_text(branch: str, rel: str, *, disk_root=None,
                   disk_note: str = WORKTREE_NOTE,
-                  disk_hint: str = "") -> tuple[str | None, str]:
+                  disk_hint: str = "",
+                  task_id: str | None = None) -> tuple[str | None, str]:
     """Текст файла из ветки `branch` и пометка об источнике.
 
     Читаем из ветки (`git show <ветка>:<путь>`), а не из рабочего дерева.
@@ -108,13 +109,23 @@ def artifact_text(branch: str, rel: str, *, disk_root=None,
     говорил «в дереве» про рабочий каталог шага. Оговорка приписывается
     ко всем трём исходам «файла нет/файл нечитаем» — класс один, чинится
     целиком, а не на `FileNotFoundError`.
+
+    `task_id` — `branch` есть ссылка документов этой задачи: читается в
+    репозитории задачи (`artifact_branch.git`, ADR-0021 п.3), не в git
+    пульта.
     """
     in_branch = ""
     try:
-        res = gitcmd.git("show", f"{branch}:{rel}")
-        if res.returncode == 0:
+        args = ("show", f"{branch}:{rel}")
+        res = (artifact_branch.git(task_id, *args) if task_id
+               else gitcmd.git(*args))
+        if res is None:
+            in_branch = artifact_branch.NO_REPO_REASON
+        elif res.returncode == 0:
             return res.stdout, ""
-        in_branch = res.stderr.strip()[:200] or f"git show вернул {res.returncode}"
+        else:
+            in_branch = (res.stderr.strip()[:200]
+                         or f"git show вернул {res.returncode}")
     except UnicodeDecodeError as exc:
         # git отдаёт байты файла как есть; strict-декодирование внутри
         # subprocess роняло бы всю команду `run` трейсбеком.
@@ -336,7 +347,7 @@ def _answer_rels(task_id: str, branch: str) -> list[str]:
     developer/analyst/test_author (SPEC T075): каждый батч ответа
     Оператора — граница отдельного решения, обязательная к учёту при
     вердикте, не только самый свежий."""
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     numbered = []
     for p in paths:
         name = p.rsplit("/", 1)[-1]
@@ -704,7 +715,8 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     task_rels = (spec_rel, plan_rel, review_rel)
     found = {rel: artifact_text(artifact_branch_name, rel, disk_root=step_dir,
                                 disk_note=STEP_WORKDIR_NOTE,
-                                disk_hint=STEP_WORKDIR_MISSING_HINT)
+                                disk_hint=STEP_WORKDIR_MISSING_HINT,
+                                task_id=task_id)
              for rel in task_rels}
     # Форма вердикта — единственная часть, чей источник эта задача не
     # трогает (AC-4): кодовая ветка задачи, откат — главная копия пульта.
@@ -717,7 +729,8 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # этих компонентов недостижим, и менять его адрес значило бы трогать
     # состав пакета сверх требований задачи.
     answer_rels = _answer_rels(task_id, artifact_branch_name)
-    found.update({rel: artifact_text(artifact_branch_name, rel)
+    found.update({rel: artifact_text(artifact_branch_name, rel,
+                                     task_id=task_id)
                   for rel in answer_rels})
     for rel in answer_rels:
         answer_text, _note = found[rel]

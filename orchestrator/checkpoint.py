@@ -173,9 +173,9 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     копию, что и до этой задачи, без нового способа сломаться.
 
     Идентичность коммита — служебная (`fixation.FIXATION_AUTHOR_*`), тем
-    же приёмом, что уже применяет `fixation._fix_external` для коммита
-    фиксации внешнего target: это действие оркестратора, а не роли и не
-    Оператора, поэтому не берёт ни git-конфиг Оператора, ни авторство
+    же приёмом, что у коммитов ссылки документов (`artifact_branch.
+    commit_files`): это действие оркестратора, а не роли и не Оператора,
+    поэтому не берёт ни git-конфиг Оператора, ни авторство
     роли. Все git-операции — через `gitcmd`, не через прямой
     `subprocess`/`git` (SPEC требование 7).
 
@@ -199,8 +199,8 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     WIP worktree'а нетронутым (класс-дефект T041×T045, докстринг
     исправлен в T048 — до этой правки функция ошибочно била по ROOT).
     Для внешнего target `check_integrity` смотрит не в workspace, а в
-    артефактный репозиторий `.artel/projects/<target>/` (`fixation.read`/
-    `_read_external`) — свой workspace ADR-0003 §4 вообще не коммитит
+    голову ссылки документов `refs/artifacts/<id>` (`fixation.read`,
+    ADR-0021 п.3) — свой workspace ADR-0003 §4 вообще не коммитит
     (тот же довод, что `fsm._dirty_refuses`), поэтому чекпоинт workspace'а
     не решал бы исходную проблему AC-1/AC-2 для внешнего target. Пока
     `targets.yaml` объявляет только догфуд (ADR-0003 3д, «особый случай
@@ -790,12 +790,12 @@ def _apply_artifact_conflict_guard(conn, task_id: str, files: dict[str, bytes],
     Пустой `baseline_sha` (материализации не было) — гвард не применяется
     вовсе, `files` возвращается как есть.
     """
-    from . import alerts
+    from . import alerts, artifact_branch
     if not baseline_sha:
         return files
     conflicted = []
     for rel in sorted(set(files) & set(existing)):
-        baseline_text, _ = gitcmd.show(baseline_sha, rel)
+        baseline_text, _ = artifact_branch.show(task_id, baseline_sha, rel)
         if baseline_text is None:
             continue  # файл появился на этом шаге — конфликтовать не с чем
         content = files[rel]
@@ -806,7 +806,7 @@ def _apply_artifact_conflict_guard(conn, task_id: str, files: dict[str, bytes],
             continue  # бинарное содержимое — сравнение текстом бессмысленно
         if disk_text != baseline_text:
             continue  # роль сама поменяла файл — не конфликт, её правка идёт дальше
-        current_text, _ = gitcmd.show(branch, rel)
+        current_text, _ = artifact_branch.show(task_id, branch, rel)
         if current_text is not None and current_text != baseline_text:
             conflicted.append(rel)
     for rel in conflicted:
@@ -862,13 +862,15 @@ def _step_artifact_deletion_candidates(conn, task_id: str, role: str, t,
     `tests_locked_sha` уже не пуст — эта ветка не срабатывает, прежнее
     правило (только `type: questions`) остаётся в силе.
     """
+    from . import artifact_branch
     removed = []
     for rel in sorted(set(existing) - set(files)):
-        subject = gitcmd.git("log", "-1", "--format=%s", branch, "--", rel)
+        subject = artifact_branch.git(task_id, "log", "-1", "--format=%s",
+                                      branch, "--", rel)
         if not (subject is not None and subject.returncode == 0
                 and subject.stdout.strip().startswith(own_commit_marker)):
             continue
-        content, _ = gitcmd.show(branch, rel)
+        content, _ = artifact_branch.show(task_id, branch, rel)
         meta = yamlmini.frontmatter(content) if content is not None else None
         deletable = meta is not None and meta.get("type") in _DELETABLE_ARTIFACT_TYPES
         if not deletable and role == "test_author" and t["state"] == "tests_writing" \
@@ -880,12 +882,14 @@ def _step_artifact_deletion_candidates(conn, task_id: str, role: str, t,
     return removed
 
 
-def _same_as_ref(branch: str, files: dict[str, bytes]) -> bool:
+def _same_as_ref(task_id: str, files: dict[str, bytes]) -> bool:
     """Каждый файл `files` совпадает байтами с тем же путём головы ссылки
-    `branch`. Нечитаемый путь (нет в ссылке, git не ответил) или
+    документов задачи. Нечитаемый путь (нет в ссылке, git не ответил) или
     нетекстовое содержимое — расхождение: коммит решает узел записи."""
+    from . import artifact_branch
+    branch = artifact_branch.branch_name(task_id)
     for rel, content in files.items():
-        text, _ = gitcmd.show(branch, rel)
+        text, _ = artifact_branch.show(task_id, branch, rel)
         if text is None or text.encode("utf-8") != content:
             return False
     return True
@@ -969,7 +973,7 @@ def harvest_code_copy_docs(conn, task_id: str, target: str
     if not stray.is_dir():
         return {}
     branch = artifact_branch.branch_name(task_id)
-    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     files = _take_code_copy_docs(conn, task_id, code_root, stray, existing)
     files = _journal_stray_step_artifacts(conn, task_id, files)
     if not files:
@@ -1016,7 +1020,7 @@ def _merge_code_copy_docs(conn, task_id: str, files: dict[str, bytes],
             deleted.append(rel)
             continue
         if own is not None and own != content \
-                and not _same_as_commit(baseline_sha, rel, own):
+                and not _same_as_commit(task_id, baseline_sha, rel, own):
             kept.append(rel)
             continue
         merged[rel] = content
@@ -1035,12 +1039,13 @@ def _merge_code_copy_docs(conn, task_id: str, files: dict[str, bytes],
     return merged
 
 
-def _same_as_commit(sha: str, rel: str, content: bytes) -> bool:
-    """`content` совпадает байтами с путём `rel` коммита `sha`; нет `sha`,
-    нет пути или git не ответил — `False`."""
+def _same_as_commit(task_id: str, sha: str, rel: str, content: bytes) -> bool:
+    """`content` совпадает байтами с путём `rel` коммита `sha` ссылки
+    документов задачи; нет `sha`, нет пути или git не ответил — `False`."""
+    from . import artifact_branch
     if not sha:
         return False
-    text, _ = gitcmd.show(sha, rel)
+    text, _ = artifact_branch.show(task_id, sha, rel)
     return text is not None and text.encode("utf-8") == content
 
 
@@ -1085,7 +1090,7 @@ def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes]
     # Коммит только при изменении (ADR-0021, этап 1): выкладка каталога
     # документов, не тронутая ролью, не заводит пустой коммит и не
     # перефиксирует ссылку.
-    if not removed and _same_as_ref(artifact_branch.branch_name(task_id), files):
+    if not removed and _same_as_ref(task_id, files):
         shutil.rmtree(task_dir, ignore_errors=True)
         return ""
     commit_sha = artifact_branch.commit_files(task_id, files, message,
@@ -1147,7 +1152,7 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     existing = None
     stray_files: dict[str, bytes] = {}
     if stray.is_dir():
-        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
         stray_files = _take_code_copy_docs(conn, task_id, code_root, stray,
                                            existing)
     if not task_dir.is_dir() and not stray_files:
@@ -1165,7 +1170,7 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     message = (f"{own_commit_marker}, WIP после таймаута)" if timeout
               else f"{own_commit_marker})")
     if existing is None:
-        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
 
     collected = _collect_step_artifact_files(workspace_root, task_dir, existing)
     if collected is None:

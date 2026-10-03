@@ -26,7 +26,8 @@ from orchestrator import (artifact_branch, checkpoint, config,  # noqa: E402
                           fsm_merge_gate, gitcmd,
                           repo_context, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import RealGitSandbox, TmpRootTest  # noqa: E402
+from tests.sandbox import (RealGitSandbox, TmpRootTest,  # noqa: E402
+                           make_project_repo)
 
 TARGET = "extproj"
 NESTED_STRAY = "wip/_head_map.md"
@@ -121,6 +122,9 @@ class CheckpointDropsSubdirectoryFileTest(RealGitSandbox):
         store.insert_task(conn, self.TASK, "Задача внешнего target",
                           "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
                           config.DEFAULT_BUDGET_USD)
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — клон проекта со своим `origin`.
+        self.project = make_project_repo(TARGET)
         # Роль пишет документы в каталог документов задачи (ADR-0021,
         # этап 1) — источник автокоммита шага.
         self.workspace_root = artifact_branch.docs_root(TARGET)
@@ -134,7 +138,8 @@ class CheckpointDropsSubdirectoryFileTest(RealGitSandbox):
 
     def artifact_branch_files(self) -> list:
         branch = f"refs/artifacts/{self.TASK}"
-        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
+        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}",
+                                    repo=self.project) or []
 
     def journal_rows(self) -> list:
         return store.db().execute(

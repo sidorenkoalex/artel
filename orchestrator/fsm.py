@@ -20,7 +20,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, budget, checkpoint, ci,
+from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
               config, cycle_hint, fixation, github_adapter, gitcmd, lease, pull,
               repo_context,
               review, store, targets, workspace, yamlmini)
@@ -315,11 +315,10 @@ def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
     старые (не-git) песочницы `advance` продолжают работать без изменений.
 
     Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»):
-    для внешнего target артефактный репозиторий коммитит сам оркестратор
-    целиком уже ПОСЛЕ решения перейти (`fixation._fix_external`, вызов
-    из `store.set_state`) — до перехода он закономерно не закоммичен,
-    это не забытый коммит роли (та ADR-0003 §4 workspace вообще не
-    коммитит сама), и наивная сверка отказывала бы там всегда.
+    документы внешней задачи живут в ссылке `refs/artifacts/<id>`
+    репозитория проекта (ADR-0021 п.3), рабочей копии у неё нет — это не
+    забытый коммит роли (та ADR-0003 §4 workspace вообще не коммитит
+    сама), и наивная сверка отказывала бы там всегда.
 
     Код результата шага коммитит пульт (`checkpoint.commit_success_
     checkpoint`), не роль (SPEC 01M3VFYP4RXBY0BG8D3A0B18HD, требование 3):
@@ -354,7 +353,8 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
     Звать только когда `gitcmd.on_foreign_branch(branch)` истинно — сама
     функция это не проверяет, только читает и оформляет отказ.
     """
-    text, reason = gitcmd.show(branch, f"tasks/{task_id}/{rel_name}")
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/{rel_name}")
     if text is None:
         detail = (f"дерево не на ветке задачи {branch} — {rel_name} "
                   f"ветки не прочитан ({reason})")
@@ -384,7 +384,8 @@ def _snapshot_split_assessment(conn, task_id: str, t) -> None:
             store.update_task(conn, task_id, diff_bytes=len(diff.encode("utf-8")))
 
     branch, _ = artifact_source.resolve(conn, task_id)
-    spec_text, _ = gitcmd.show(branch, f"tasks/{task_id}/SPEC.md")
+    spec_text, _ = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/SPEC.md")
     if spec_text is not None:
         body = guard.section_body(spec_text, "Оценка объёма и деление").strip()
         store.update_task(conn, task_id,
@@ -427,7 +428,7 @@ def _answer_file_count(conn, task_id: str, tdir: Path) -> int | None:
     """
     branch, foreign = artifact_source.resolve(conn, task_id)
     if foreign:
-        paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}")
+        paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}")
         if paths is None:
             return None
         return sum(1 for p in paths
@@ -498,7 +499,7 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
             and _uncommitted_step_result_refuses(conn, task_id)):
         return None
     extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources))
-    if not gitcmd.on_foreign_branch(branch):
+    if not artifact_branch.on_foreign_rev(task_id, branch):
         tested, markers = guard.scan_acceptance_tests(tdir)
         tested = tested | extra_tested
         markers = {**extra_markers, **markers}
@@ -509,8 +510,8 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
 
     spec_rel = f"tasks/{task_id}/SPEC.md"
     tests_rel = f"tasks/{task_id}/acceptance_tests"
-    spec_text, spec_reason = gitcmd.show(branch, spec_rel)
-    paths = gitcmd.ls_tree_files(branch, tests_rel)
+    spec_text, spec_reason = artifact_branch.show(task_id, branch, spec_rel)
+    paths = artifact_branch.ls_tree(task_id, branch, tests_rel)
     if spec_text is None or paths is None:
         reason = spec_reason if spec_text is None else "acceptance_tests/ ветки не прочитан"
         detail = (f"дерево не на ветке задачи {branch} — {reason}, "
@@ -526,7 +527,7 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     for p in paths:
         if not p.endswith(".py"):
             continue
-        text, _ = gitcmd.show(branch, p)
+        text, _ = artifact_branch.show(task_id, branch, p)
         if text is None:
             continue
         sources.append(text)

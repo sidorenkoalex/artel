@@ -1,8 +1,9 @@
 """Юнит-тест закрытия на пути `done` (SPEC T094, требования 12-13,
 AC-13) — REVIEW.md T094 итерация 1, замечание 3 (major). С ADR-0021 п.3
 (SPEC 01M3Z2DMQRD0BD7AARFVTCVVG8, требование 3, AC-5) закрытие — не
-снимок в origin целевого, а коммит RETRO в ссылку документов
-`refs/artifacts/<id>` пульта поверх её прежней головы.
+снимок, а коммит RETRO в ссылку документов `refs/artifacts/<id>` поверх
+её прежней головы; ссылка внешней задачи живёт в git проекта и уходит в
+его `origin` (SPEC 01M409YNSWACNFKNJE2X263ZSD, требование 2).
 
 Путь `killed` уже покрыт `tasks/T094/acceptance_tests/
 test_ac13_ac14_snapshot_on_close.py`; путь `done`
@@ -21,10 +22,8 @@ test_ac13_ac14_snapshot_on_close.py`; путь `done`
 origin (`config.PROJECTS/<target>/workspace`, её bare `origin`), не в
 main ПУЛЬТА — репозиторный контекст target'а (SPEC
 01M1R5B33CC7E6BZK085XV3ZCX, orchestrator/repo_context.py) переведён на
-это этой задачей; артефактная ветка (`tasks/<id>/`) остаётся в пульте
-(`self.root`) — то же самое, что уже использует `tasks/T094/
-acceptance_tests/_sandbox.py::ExternalTargetGitSandbox` для AC-13/AC-14
-на пути `killed`.
+это этой задачей; ссылка документов (`tasks/<id>/`) — там же, в клоне
+проекта, с отправкой в его `origin` (ADR-0021 п.3).
 """
 import shutil
 import subprocess
@@ -111,8 +110,6 @@ class DonePathSnapshotTest(RealGitSandbox):
         store.insert_task(store.db(), TASK, "Задача внешнего target",
                           "merge_gate", self.branch, TARGET,
                           config.DEFAULT_BUDGET_USD)
-        artifact_branch.commit_files(
-            TASK, {f"tasks/{TASK}/PLAN.md": "план\n"}, f"{TASK}: план")
 
         # bare-репозиторий целевого — то же, что `_sandbox.
         # ExternalTargetGitSandbox` (снапшот пушится в его `refs/artifacts/*`,
@@ -138,6 +135,10 @@ class DonePathSnapshotTest(RealGitSandbox):
         self.wgit(self.target_workspace, "commit", "-q", "-m", "init")
         self.wgit(self.target_workspace, "push", "-q", "origin",
                   config.MAIN_BRANCH)
+        # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
+        # п.3) — коммит после заведения клона.
+        artifact_branch.commit_files(
+            TASK, {f"tasks/{TASK}/PLAN.md": "план\n"}, f"{TASK}: план")
 
         # Ветка задачи — В КЛОНЕ ЦЕЛЕВОГО (не в `self.root`, SPEC
         # 01M1R5B33CC7E6BZK085XV3ZCX): merge_gate внешнего target теперь
@@ -162,13 +163,13 @@ class DonePathSnapshotTest(RealGitSandbox):
 
     def test_done_transition_publishes_a_snapshot_like_killed_does(self):
         """Успешный `done` пишет коммит закрытия в `refs/artifacts/<id>`
-        и отправляет ссылку в origin пульта — тем же путём, что и `killed`
-        (AC-13), с frontmatter (`operator`/`model`/`artel_sha`) хотя бы в
-        одном файле.
+        и отправляет ссылку в origin проекта — тем же путём, что и
+        `killed` (AC-13), с frontmatter (`operator`/`model`/`artel_sha`)
+        хотя бы в одном файле.
 
         Ловит мутацию: путь `done` перестаёт звать коммит закрытия —
         RETRO с frontmatter не появится в `refs/artifacts/{TASK}` origin
-        пульта, и `assertIsNotNone` здесь это поймает.
+        проекта, и `assertIsNotNone` здесь это поймает.
         """
         t = store.get_task(store.db(), TASK)
 
@@ -190,18 +191,18 @@ class DonePathSnapshotTest(RealGitSandbox):
         self.assertEqual(row["state"], "done")
 
         self.assertTrue(
-            _snapshot_ref_exists(self.pult_origin, TASK),
-            f"refs/artifacts/{TASK} не появился в origin пульта после "
+            _snapshot_ref_exists(self.target_origin, TASK),
+            f"refs/artifacts/{TASK} не появился в origin проекта после "
             f"done (AC-13, путь done)")
 
-        files = _snapshot_files(self.pult_origin, TASK)
+        files = _snapshot_files(self.target_origin, TASK)
         self.assertTrue(
             any(f.startswith(f"tasks/{TASK}/") for f in files),
             f"снапшот {TASK} не несёт tasks/{TASK}/: {files}")
 
         retro_meta = None
         for rel in files:
-            text = _snapshot_file_text(self.pult_origin, TASK, rel)
+            text = _snapshot_file_text(self.target_origin, TASK, rel)
             meta = yamlmini.frontmatter(text)
             if meta and {"operator", "model", "artel_sha"} <= meta.keys():
                 retro_meta = meta
@@ -229,12 +230,12 @@ class DonePathSnapshotTest(RealGitSandbox):
             store.db(), TASK, "merge_gate", t,
             confirmed_ci_note="зелёный (тест)")
 
-        retro_text = _snapshot_file_text(self.pult_origin, TASK,
+        retro_text = _snapshot_file_text(self.target_origin, TASK,
                                          f"tasks/{TASK}/RETRO.md")
         self.assertRegex(retro_text, r"Итог: done, sha [0-9a-f]{40}\n")
         self.assertIn(f"Адрес артефактов: refs/artifacts/{TASK}\n", retro_text)
         self.assertNotIn("Итог: killed", retro_text)
-        self.assertEqual(_snapshot_commit_subject(self.pult_origin, TASK),
+        self.assertEqual(_snapshot_commit_subject(self.target_origin, TASK),
                          f"{TASK}: закрытие (done) — RETRO")
 
     def test_done_snapshot_removes_the_pult_artifact_branch(self):
@@ -256,8 +257,11 @@ class DonePathSnapshotTest(RealGitSandbox):
 
         head = artifact_branch.ref_head(TASK)
         self.assertNotEqual(head, before)
-        self.assertTrue(gitcmd.is_ancestor(before, head),
-                        "коммит закрытия обязан быть потомком прежней головы")
+        is_ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", before, head],
+            cwd=self.target_workspace, capture_output=True)
+        self.assertEqual(is_ancestor.returncode, 0,
+                         "коммит закрытия обязан быть потомком прежней головы")
         self.assertFalse(gitcmd.branch_exists(f"artifact/{TASK.lower()}"))
 
 

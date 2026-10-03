@@ -36,7 +36,8 @@ def _fix_ignored_artifact_files(conn) -> None:
             continue
         task_id = row["id"]
         branch = doctor.artifact_branch.branch_name(task_id)
-        existing = doctor.gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        existing = doctor.artifact_branch.ls_tree(
+            task_id, branch, f"tasks/{task_id}") or []
         if not existing:
             continue
         ignored = doctor.gitcmd.check_ignore(existing)
