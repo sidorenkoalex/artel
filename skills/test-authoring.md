@@ -129,8 +129,10 @@ guard разбирает её текстом, без импорта файлов
 Источник артефактов задачи в планке: только артефактная ветка через
 `gitcmd.show(artifact_branch.branch_name(TASK_ID), "tasks/<id>/PLAN.md")`;
 диск рабочей копии — не источник, пульт материализует только
-`acceptance_tests/`. В worktree `tasks/<id>/` лежит целиком, а в среде
-прогона гейта (`orchestrator/pull.py`, `orchestrator/acceptance.py::
+`acceptance_tests/`. В каталоге документов задачи
+(`.artel/projects/<проект>/tasks/<id>/`, ADR-0021 этап 1) `tasks/<id>/`
+лежит целиком, в рабочей копии кода его нет, а в среде прогона гейта
+(`orchestrator/pull.py`, `orchestrator/acceptance.py::
 materialize_from_branch`) — один `acceptance_tests/`: тест, читающий
 `PLAN.md`/`SPEC.md`/`REVIEW.md` через `Path(__file__)…/"PLAN.md"`,
 `open(`, `.read_text(`, `os.path.join`, `os.path.exists` по пути,

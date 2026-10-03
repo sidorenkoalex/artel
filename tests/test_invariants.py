@@ -34,9 +34,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
-                          config, fsm, fsm_advance, gitcmd, runner, stack,
-                          store)
+from orchestrator import (artel, artifact_branch, budget, catalog,  # noqa: E402
+                          ci, cleanup, config, fsm, fsm_advance, gitcmd,
+                          runner, stack, store)
 from orchestrator.advance_gates import test_integrity  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
@@ -163,7 +163,10 @@ class FsmTest(unittest.TestCase):
                             # worktree — та же логика, что и у ROLE_HOME
                             # выше: в песочницу, не в `.artel/worktrees/`
                             # репозитория (ROOT ниже намеренно реальный).
-                            ("WORKTREES", root / ".artel" / "worktrees")):
+                            ("WORKTREES", root / ".artel" / "worktrees"),
+                            # Каталог документов задачи (ADR-0021, этап 1)
+                            # выкладывает шаг роли — тоже в песочницу.
+                            ("PROJECTS", root / ".artel" / "projects")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -349,8 +352,11 @@ class FsmTest(unittest.TestCase):
         (`config.TASKS/<id>/`, откуда читает FSM/бриф через `disk_backed_
         show`): без файла именно здесь успешный (rc=0) прогон `run` честно
         ретраится вместо одного запуска, которого ждут тесты этого класса
-        (они проверяют лимитеры run, не факт отказа без артефакта)."""
-        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        (они проверяют лимитеры run, не факт отказа без артефакта).
+
+        С ADR-0021 (этап 1) роль пишет документы в каталог документов
+        задачи (`artifact_branch.docs_dir`), не в рабочую копию кода."""
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
