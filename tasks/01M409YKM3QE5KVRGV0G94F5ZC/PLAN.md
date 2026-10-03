@@ -158,10 +158,24 @@ schema_version: 5
   противоречит. Путь вне зон задачи — вопрос 3.
 - `--add-dir` codex 0.155.1 не проверен исполнением — вопрос 2.
 - Роли на старой выкладке после мержа: шаг, начавшийся на старом коде,
-  оставит `tasks/<id>/` в рабочей копии — следующий старт его уберёт.
-  `tasks/<id>/` в коде, оставленный шагом на новом коде (прежнее правило
-  HOME), автокоммит переносит в ссылку и убирает (раздел «Возврат после
-  сбоя входа агента»). Переход — при пустом конвейере, ADR-0021 п.13.
+  оставит `tasks/<id>/` в рабочей копии — следующий старт шага забирает
+  его в ссылку (`checkpoint.harvest_code_copy_docs`) и только потом
+  убирает. `tasks/<id>/` в коде, оставленный шагом на новом коде (прежнее
+  правило HOME), автокоммит конца шага переносит в ссылку и убирает
+  (раздел «Возврат после сбоя входа агента»). Переход — при пустом
+  конвейере, ADR-0021 п.13.
+- `FsmTest` (`tests/test_invariants.py`) не подменяет `config.PROJECTS`:
+  каталог документов шага его тестов ложится в `.artel/projects/` дерева
+  запуска. Устранить без правки защищённого файла нельзя: планка задачи
+  (`acceptance_tests/_sandbox.py`) и долгоживущий файл задачи требуют, чтобы
+  каталог документов был `config.PROJECTS/<проект>/tasks/<id>/`, — вывод его
+  из другого пути пульта (например, соседом `config.WORKTREES`) их
+  нарушил бы. След ограничен: на штатном пути шага автокоммит конца шага
+  убирает каталог документов (`_commit_step_artifacts_to_branch`), после
+  исправления этого шага прогон `tests/test_invariants.py` новых каталогов
+  в `.artel/projects/artel/tasks/` не оставил (проверено листингом); след
+  прошлого прогона (`01M40Q9E…`) из рабочей копии удалён. Полное
+  устранение — приложение 2 (подмена `PROJECTS` в `FsmTest.setUp`).
 
 ## Предложения системе
 - Шаг developer этой задачи упал по таймауту, не написав PLAN.md: при
@@ -245,6 +259,64 @@ allowed», 0 токенов на 3-й попытке), не дефект код�
 - `tasks/<id>/inv_test.diff` — черновик прошлого шага (диф приложения 2),
   попал в ссылку. Удалить его из шага нечем (`rm` роли недоступен). Он не
   артефакт, guard на PLAN.md зелёный. Оператору: файл можно удалить.
+
+## Возврат из verifying (CI красный на test_invariants) и его исполнение
+Причина: `FsmTest.seed_worktree_plan` кладёт PLAN.md в `tasks/<id>/`
+рабочей копии кода до шага; выкладка на старте шага (`runner.role_cwd`)
+убирала каталог раньше, чем его увидит сбор в конце шага, — артефакта нет,
+ретрай, `spawn_agent` 3 раза. Воспроизведено до правки: `python3 -m pytest
+-q tests/test_invariants.py::ExhaustedBudgetIsNotBypassableTest
+tests/test_invariants.py::ParallelTaskLimitIsNotBypassableTest` — 2 failed
+(«Called 3 times»).
+
+Исправление (защищённые файлы не тронуты, приложение 2 оставлено):
+- `checkpoint.harvest_code_copy_docs(conn, task_id, target)` — на старте
+  шага `tasks/<id>/` рабочей копии кода забирается в ссылку тем же узлом,
+  что и в конце шага: `_take_code_copy_docs` (сбор с фильтром
+  `.gitignore` и уборка каталога, AC-2), `_journal_stray_step_artifacts`,
+  `_apply_artifact_conflict_guard` против выкладки прошлого шага,
+  `_commit_step_artifacts_to_branch` (коммит только при изменении,
+  перефиксация). Ссылка, сдвинутая мимо пульта, — без коммита, с записью
+  журнала, как в конце шага.
+- `runner.role_cwd` зовёт его ДО `drop_from_code_copy` и выкладки; если
+  выкладка из ссылки не состоялась (git не ответил, ссылки нет), забранные
+  файлы кладутся в каталог документов (`_place_harvested_docs`) — иначе
+  они пропали бы до запуска роли. В `FsmTest` (git подменён, выкладка
+  пустая) именно эта ветка возвращает PLAN.md роли — тест зелёный без
+  правки защищённого файла.
+- Сторожа (`tests/test_docs_dir_layout.py::RoleCwdLaysDocsOutsideCodeCopyTest`):
+  `test_code_copy_doc_left_before_step_reaches_ref_and_docs_dir`,
+  `test_code_copy_doc_lands_in_docs_dir_when_layout_fails`. Мутации
+  проверены, код возвращён: вызов `harvest_code_copy_docs` заменён на `{}`
+  — оба красные; `_place_harvested_docs` заменён на `pass` — второй
+  красный.
+
+Прогоны (`-p no:cacheprovider -p timeout -o timeout=120`, передний план):
+- `tests/test_invariants.py` целиком, БЕЗ приложения 2 — 66 passed;
+- `test_docs_dir_layout`, долгоживущий `test_01m409ykm3qe5kvrgv0g94f5zc_step_docs_dir`,
+  планка `acceptance_tests/` целиком, `test_checkpoint_external_step_artifacts`,
+  `test_step_autocommit`, `test_timeout_checkpoint`, `test_review_package`,
+  `test_artifact_materialization`, `test_01m3y857…_required_artifact`,
+  `test_01m3vfyp…_pult_commit`, `test_guard_task_root_subdirectory`,
+  `test_step_refixation` — 265 passed;
+- `test_agent_failure`, `test_agent_log`, `test_agent_prompt`,
+  `test_step_cost`, `test_runner_model_preflight`, `test_runner_role_model`,
+  `test_01m3ychs…_task_model_set`, `test_long_lived_step_end_to_end`,
+  `test_multitarget`, `test_multitarget_invariants`, `test_auto_cycle` —
+  317 passed;
+- `test_doctor`, `test_pause_now`, `test_pause`, `test_long_lived_transitions`,
+  `test_acceptance_tests_flow`, `test_codebase_map` — 265 passed.
+
+Полный `tests/` в шаге выполнить НЕ удалось — это отклонение от
+требования причины возврата, фиксирую его явно: `python3 -m pytest tests/`
+останавливает сторож роли `conftest.py` («полный прогон набора тестов
+внутри шага запрещён — его гоняет CI»), а `env -u ARTEL_ROLE …` и
+`ARTEL_ROLE= …` требуют подтверждения разрешения, которого в шаге никто не
+даёт. Итоговой строки полного прогона поэтому нет; полный набор проверит
+CI ветки. Выше — все модули, задевающие `runner.role_cwd`/`checkpoint`.
+Карта регенерирована (`python3 scripts/codebase_map.py`). Приложения 1–4
+в этом шаге снова проверены `git apply --check` на дереве ветки — все
+четыре применяются (rc=0); `scripts/guard.py` на PLAN.md — «ок».
 
 ## Расширение зон
 Пути: docs/reference/role-home/claude/CLAUDE.md
