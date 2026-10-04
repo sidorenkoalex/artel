@@ -1,4 +1,4 @@
-"""PLAN и ветка задачи: сторож шага CI с приложениями (AC-8); AC-7 — эскалация.
+"""PLAN и ветка задачи: сторож шага CI с приложениями (AC-8).
 
 Группа: разовый
 
@@ -21,25 +21,11 @@ from _plank import (CODE_ROOT, SCRIPT_NAME, added_lines, appendices_or_fail,
                     clean_tree, git)
 from orchestrator import gitcmd
 
-# AC-7: escalate — AC-7 требует в PLAN приложение к docs/operator-session.md, но этот путь не входит в config.PROTECTED_PATHS: guard.plan_appendices отвергает такой блок ошибкой «путь docs/operator-session.md не защищённый — правь в ветке задачи», гейт выхода из in_dev и ворота мержа не пропускают PLAN с ошибкой разбора, а «Не входит» SPEC запрещает и приложения к путям вне защищённого списка, и правку docs/operator-session.md в ветке (её нет в зонах). Как быть с описанием в docs/operator-session.md? Варианты: (а) правка docs/operator-session.md в ветке задачи — путь добавляется в зоны, AC-7 проверяет приложение к ci.yml и правку документа в диффе ветки; (б) Оператор вносит docs/operator-session.md в config.PROTECTED_PATHS до задачи, AC-7 остаётся как есть; (в) описание в docs/operator-session.md из задачи убирается, AC-7 — только приложение к ci.yml. Дефолт при молчании — (а).
-#
-# Контекст эскалации AC-7 (для Оператора):
-# - разбор: scripts/guard.py::plan_appendices -> appendix_unprotected_path_error
-#   (только чтение по ТЗ); перечень: orchestrator/config.py::PROTECTED_PATHS —
-#   из docs/ там только docs/invariants.md и docs/adr/;
-# - проверено прогоном: PLAN с блоком ```diff к docs/operator-session.md даёт
-#   ровно эту ошибку разбора, тест AC-7 на нём краснеет на `errors == []`
-#   независимо от качества приложений;
-# - часть AC-7 про ci.yml исполнима как написана: приложение к
-#   .github/workflows/ci.yml проходит `git apply --check`/`git apply` на
-#   чистом дереве ветки, в `python` и `python-min` шаг plan_appendix_ci раньше
-#   шага pytest и с условием `task/` — такой тест написан и провалидирован
-#   стабом; вернётся в планку по ответу Оператора вместе с выбранной
-#   проверкой документа.
-# - AC-1..AC-6 и AC-8 покрыты: AC-1..AC-4 —
-#   tests/test_01m443hv9sjyvyqthjsq87qv68_plan_appendix_ci.py, AC-5/AC-6 —
-#   tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py
-#   (долгоживущие), AC-8 — этот файл.
+# Покрытие: AC-1..AC-4 —
+# tests/test_01m443hv9sjyvyqthjsq87qv68_plan_appendix_ci.py, AC-5/AC-6 —
+# tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py
+# (долгоживущие), AC-7 — test_ac7_ci_appendix_and_doc.py (по ANSWER-1,
+# вариант (а)), AC-8 — этот файл.
 
 
 class CiStepGuardTest(unittest.TestCase):
