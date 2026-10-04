@@ -89,6 +89,19 @@ tracking_refs=False)` — это и есть fetch свежести клона �
   Проверено прогоном долгоживущего `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`
   без `GIT_AUTHOR_*`/`GIT_COMMITTER_*` в окружении (как в CI): 30 passed.
 
+Возврат «агент не отработал за 3 попытки» (403 аутентификации агента — сбой
+окружения, не кода): работа предыдущих шагов дошла до ветки WIP-чекпоинтами
+3c63984b (таймаут) и 965f0175 (rc=1, заявка мутации
+`test_review_package.py::…test_failed_diff_is_visible_in_the_journal`).
+Недоделанным осталась только карта кодовой базы: она была собрана на
+4ebd6a82 и не видела нового импорта `artifact_branch` в
+`tests/test_zones_gate.py`. В этом шаге карта регенерирована
+(`python3 scripts/codebase_map.py`). Сверено: `test_review_package`,
+`test_review_package_map`, `test_workspace`, `test_zones_gate`,
+`test_step_cost`, `test_verifying_ceiling`, `test_pull_long_lived_plank` —
+280 passed; долгоживущие файлы задачи и `test_codebase_map` — 66 passed;
+`plank-run` — 9 passed, код 0.
+
 Расхождение с оценкой SPEC ($50): детектор долгоживущего теста нашёл 124
 вызова `gitcmd` без репозитория в ~40 модулях, плюс правка существующих
 тестов под новое место рабочей копии и явный `-C`. Потолок поднят до $100
