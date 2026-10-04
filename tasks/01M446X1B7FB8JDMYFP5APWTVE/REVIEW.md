@@ -2,100 +2,77 @@
 task: 01M446X1B7FB8JDMYFP5APWTVE
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Дозор показывает ход шага роли
 
 ## Фаза A — план
-- Таблица покрытия полна (треб. 1–9 → шаги 1–3); шаги размера MR.
-- Подход (одно распознавание в `OutputPump.catch_event` по общему
-  `StreamEvent.tool_results`, запись своим соединением из потока насоса,
-  дозор — `_emit_progress` после `_emit_steps`) не конфликтует с
-  архитектурой; «Влияние на систему» совпадает с диффом (7 файлов + карта,
-  существующие тесты не тронуты — `git diff 598dcf52 -- tests/test_watch.py
-  tests/test_agent_log.py` пуст). Откат — revert.
+- Таблица покрытия полна (треб. 1–9 → шаги 1–3), шаги размера MR.
+- Итерация 2 в PLAN описана адресно (R1-F1, R1-F2, мутации и прогоны);
+  «Влияние на систему» совпадает с инкрементальным диффом
+  (`orchestrator/agent_log.py`, `orchestrator/watch.py`,
+  `tests/test_pytest_summary_pump.py` + карта). Откат — revert.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | реализовано не так | Запись «прогон pytest» есть для Claude и Codex, но итоговая строка с подтестами (`… passed, N subtests passed in …`) не распознаётся — см. R1-F1 |
-| 2 | OK | `pytest` в `_EVENT_CLASSES`/`_DEFAULT_EVENTS`, `_matches_class` по `PYTEST_RUN_ACTION`, печать `_print_line` |
-| 3 | OK | Отметка k = ⌊прошло/N⌋, `last_mark`, «M/45 мин», 3 вызова ≤ 40, `git status --porcelain`, обрезка до 240 |
-| 4 | OK | `_live_step_row`: последняя started vs последняя из finished/TIMEOUT/FAILED по id |
-| 5 | OK по букве | «нет коммитов» — `git log --since=@…` по ветке; «стоимость шага» — по названным функциям SPEC, но в живом логе usage нет — см. R1-F2 |
-| 6 | OK | actor `watch`, «ход шага»/«предупреждение», не классы `--events`/`--exit-on` |
-| 7 | OK | `_LineBudget` — общий deque на задачу, окно 3600 с; невыданное считается выданным |
-| 8 | OK | Раздел «Ход шага роли в дозоре» в `docs/operator-session.md` |
-| 9 | OK | Долгоживущие файлы задачи + `tests/test_pytest_summary_pump.py` с заявками «Ловит мутацию» |
+| 1 | OK | `_PYTEST_COUNT` = «<число> [subtests ]<исход>» + «no tests ran»; формы с подтестами распознаются (проверено вызовом), Claude и Codex — долгоживущий `..._pytest_journal.py` зелёный |
+| 2 | OK | без изменений с итерации 1 |
+| 3 | OK | без изменений с итерации 1 |
+| 4 | OK | без изменений с итерации 1 |
+| 5 | OK | «стоимость шага» теперь разбирает лог провайдером шага (`watch._step_provider` → `runner._step_provider`, сбой → `None`, разбор по умолчанию); ограничение посылки SPEC (в живом логе рендер, не usage) зафиксировано в PLAN «Риски»/«Предложения системе» |
+| 6 | OK | без изменений |
+| 7 | OK | без изменений |
+| 8 | OK | без изменений |
+| 9 | OK | новые кейсы `test_subtests_and_empty_run_forms_are_recognised`, `StepCostProviderTest::test_step_cost_parses_log_with_step_provider` с заявками «Ловит мутацию», заявки подтверждены временной мутацией |
 
 ## Замечания
 
-- major — orchestrator/agent_log.py:227-231 (`_PYTEST_OUTCOMES`/
-  `_PYTEST_SUMMARY_RE`) — шаблон итоговой строки не знает счётчиков
-  подтестов: `182 passed, 99 subtests passed in 62.97s (0:01:02)` и
-  `2 failed, 180 passed, 3 subtests failed, 96 subtests passed in 60.1s`
-  дают `[]` (проверено вызовом `agent_log.pytest_summaries`). Именно такую
-  строку печатает pytest этого репозитория на прогоне `tests/` с
-  `subTest` — мой прогон затронутых модулей закончился ровно ею. Сценарий:
-  developer гоняет набор `tests/` (прецедент 04.10 из Контекста SPEC) —
-  записи «прогон pytest» нет, дозор молчит, треб. 1 («итоговую строку
-  каждого прогона pytest») не выполнено в главном случае. Предложение:
-  допустить перед исходом необязательный квалификатор `subtests ` (общее
-  правило «<число> [<слово> ]<исход>»), заодно `no tests ran in X.XXs`;
-  юнит-кейс с формой подтестов в `tests/test_pytest_summary_pump.py`
-  с заявкой «Ловит мутацию: шаблон без `subtests` — строка не
-  распознается».
-- minor — orchestrator/watch.py:399-407 (`_step_cost_usd`) — живой лог шага
-  несёт только рендер (`agent_log.tee_lines` пишет `event.log_text`),
-  usage-событий в нём нет, поэтому `partial_tokens_from_log` на настоящем
-  шаге даёт `saw=False` и предупреждение «стоимость шага» в работе не
-  сработает никогда (тест AC-7 зелен, потому что кладёт в лог сырую строку
-  usage). Реализовано буквально по треб. 5, разработчик это честно отметил
-  в PLAN «Риски»; дефект — в посылке SPEC, а не в коде. Кроме того, вызов
-  без `provider=` разбирает лог Codex-шага парсером Claude. Предложение:
-  код не трогать в этой задаче сверх передачи провайдера роли (по
-  желанию); отдельное ТЗ на запись usage по ходу шага (см. «Предложения
-  системе» PLAN).
+Новых замечаний blocker/major/minor нет. Наблюдение без статуса
+замечания: `StepCostProviderTest` подменяет `runner._step_provider`,
+поэтому стережёт передачу провайдера в `partial_tokens_from_log`, а не
+выбор провайдера по набору задачи — последний держат тесты раннера; для
+заявленной мутации этого достаточно.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/agent_log.py:227-231 | Итоговая строка pytest с подтестами («N passed, M subtests passed in …») не распознаётся | Прогон набора `tests/` с `subTest` не даёт записи «прогон pytest» — треб. 1 не выполнено в основном сценарии | Расширить шаблон квалификатором `subtests` (общим правилом), добавить юнит-кейс с заявкой «Ловит мутацию». Разработчик: счётчик теперь `_PYTEST_COUNT` = «<число> [subtests ]<исход>», плюс форма «no tests ran in X.XXs»; кейс `tests/test_pytest_summary_pump.py::PytestSummariesTest::test_subtests_and_empty_run_forms_are_recognised` (обе формы из ревью + «no tests ran»), на мутации «без `subtests`» красный |
-| R1-F2 | fixed | orchestrator/watch.py:399-407 | Предупреждение «стоимость шага» читает usage из лога, где его нет (лог — рендер); провайдер для разбора не передан | Предупреждение мертво на настоящих шагах; на Codex разбор чужим парсером | Принять как ограничение SPEC (rejected с обоснованием допустимо) либо передать провайдер роли; отдельное ТЗ на usage по ходу шага. Разработчик: провайдер передан — `watch._step_provider` берёт провайдер шага так же, как раннер (`runner._step_provider`: набор задачи, иначе роль), сбой разрешения — разбор по умолчанию; тест `tests/test_pytest_summary_pump.py::StepCostProviderTest::test_step_cost_parses_log_with_step_provider` (красный без провайдера). Часть «usage в живом логе нет» — ограничение посылки SPEC (треб. 5 называет `partial_tokens_from_log`), в этой задаче не меняется; предложение отдельного ТЗ — в PLAN «Предложения системе» |
+| R1-F1 | accepted | orchestrator/agent_log.py:227-235 | Итоговая строка pytest с подтестами не распознавалась | Прогон `tests/` с `subTest` не давал записи «прогон pytest» | Исправлено: квалификатор `subtests` и форма «no tests ran»; `pytest_summaries` на «182 passed, 99 subtests passed in 62.97s (0:01:02)», «== 2 failed, 180 passed, 3 subtests failed, 96 subtests passed in 60.1s ==», «no tests ran in 0.01s» даёт строки без рамки; кейс красный на мутации «без `subtests`» |
+| R1-F2 | accepted | orchestrator/watch.py:400-421 | Разбор лога стоимости без провайдера шага; usage в живом логе нет | Codex-лог разбирался парсером Claude; предупреждение мёртвое на настоящих шагах | Провайдер шага передан (с деградацией к умолчанию); часть «usage в живом логе нет» — ограничение посылки SPEC, вынесено в «Предложения системе» PLAN — обоснование принимаю; кейс красный на мутации «вызов без провайдера» |
 
 ## Вердикт
-changes_requested — исправить R1-F1 (распознавание итоговой строки с
-подтестами + юнит-тест). R1-F2 — minor, достаточно разметки
-`fixed`/`rejected` с обоснованием.
+approved — R1-F1 и R1-F2 закрыты, новых blocker/major нет.
 
 ## Проверено исполнением
-- `python3 -m pytest -q -p timeout -o timeout=120
+- `python3 -c "from orchestrator import agent_log as a; ..."` — формы с
+  подтестами, «no tests ran», ANSI, «1 subtests skipped, 2 deselected»
+  распознаются; «10 subtests passed» (без «in X.XXs») и
+  `print("no tests ran in 1s")` → `[]`.
+- `python3 -m pytest -q -p timeout -o timeout=300
+  tests/test_pytest_summary_pump.py
   tests/test_01m446x1b7fb8jdmyfp5apwtve_pytest_journal.py
   tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py
-  tests/test_pytest_summary_pump.py tests/test_watch.py
-  tests/test_agent_log.py tests/test_store_journal.py tests/test_providers.py
-  tests/test_providers_codex.py` — `182 passed, 99 subtests passed in
-  62.97s (0:01:02)`.
-- `artel.py plank-run 01M446X1B7FB8JDMYFP5APWTVE` — 2 passed, код 0.
-- `python3 -c "from orchestrator import agent_log as a; a.pytest_summaries(...)"`
-  на формах: «182 passed, 99 subtests passed in 62.97s (0:01:02)» → `[]`;
-  «== 2 failed, 180 passed, 3 subtests failed, 96 subtests passed in 60.1s
-  ==» → `[]`; «1 failed, 2 passed in 3.00s», «5 passed, 1 warning in
-  2.0s», «1 passed, 2 errors in 1.0s» → распознаны; «no tests ran in
-  0.01s» → `[]`.
-- `git diff 598dcf52 -- tests/test_watch.py tests/test_agent_log.py` —
-  пусто (существующие тесты не тронуты).
-- Чтение `orchestrator/agent_log.py::tee_lines` и
-  `spend.partial_tokens_from_log` — для R1-F2 (в лог пишется только
-  `log_text`).
+  tests/test_watch.py tests/test_agent_log.py` — `89 passed, 7 subtests
+  passed in 55.53s`.
+- Временная мутация: `_PYTEST_COUNT` без `(?:subtests )?` и
+  `partial_tokens_from_log(step.log_path)` без провайдера —
+  `tests/test_pytest_summary_pump.py`: `2 failed, 3 passed` (оба новых
+  кейса красные); код возвращён `git checkout`, повтор — `5 passed`,
+  `git status` чистый.
+- `artel.py plank-run 01M446X1B7FB8JDMYFP5APWTVE` — `2 passed`, код 0.
+- `python3 scripts/codebase_map.py` — расхождение карты только в строке
+  `built_at_sha` (карта свежа), регенерация отменена.
+- `git diff 598dcf52 --stat -- tests/test_watch.py tests/test_agent_log.py`
+  — пусто (существующие тесты не тронуты).
+- CI коммита ffc645da — зелёный (из пакета).
 
 ## Предложения системе
-- Планка/приёмочные тесты на распознавание вывода внешнего инструмента
-  (здесь pytest) стоит строить на выводе, снятом с настоящего прогона
-  этого же репозитория, а не на синтетике: синтетические формы AC-1/AC-2
-  пропустили строку с подтестами, которую печатает каждый прогон `tests/`.
+- Рабочий процесс «временная мутация» в шаге ревью упирается в запрет
+  составных bash-команд с `cp`/`sed` (требуют подтверждения, которого в
+  шаге никто не даст); рабочий путь — Edit + `git checkout -- <файл>`.
+  Стоит упомянуть его в `skills/review-checklist.md` рядом с приёмом.
