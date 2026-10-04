@@ -244,7 +244,17 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     # кодовой ветки, поэтому исполнимы только из её рабочей копии.
     long_lived = None
     if target != config.DEFAULT_TARGET:
-        run_cwd, _error = workspace.ensure(task_id, t["branch"])
+        run_cwd, error = workspace.ensure(task_id, t["branch"])
+        if error is not None:
+            # Без рабочей копии планка легла бы в пустой каталог и упала бы
+            # на импорте кода — причина `ensure` понятнее этого исхода.
+            detail = f"рабочая копия задачи не заведена: {error}"
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: приёмочные тесты", detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            print(f"  дальше: artel.py workspace {task_id} и повтори "
+                  f"artel.py advance {task_id}")
+            return True
         acc_tdir = cleanup.enter_context(
             acceptance.plank_in_code_copy(task_id, branch, run_cwd))
         if _missing_plank_refuses():

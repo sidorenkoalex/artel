@@ -149,12 +149,35 @@ def _tests_writing_acceptance_dir(task_id: str, tdir, target: str,
     T023-семьи, а совпадение здесь — три строки на ветку, не повод
     рисковать их поведением ради переиспользования."""
     if target != config.DEFAULT_TARGET:
+        # Отказ `ensure` уже отклонил переход гейтом
+        # `_tests_writing_code_copy_gate`; здесь — идемпотентный повтор.
         run_cwd, _err = workspace.ensure(task_id, code_branch)
         return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
     if workspace.on_task_branch(task_id, code_branch, target) is True:
         run_cwd = workspace.path(task_id, target)
         return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
     return tdir, config.ROOT
+
+
+CODE_COPY_REFUSAL_ACTION = "переход отклонён: рабочая копия задачи не заведена"
+
+
+def _tests_writing_code_copy_gate(task_id: str, target: str,
+                                  code_branch: str) -> GateRefusal | None:
+    """Рабочая копия задачи внешнего проекта заведена до сухого сбора
+    планки (ревью 01M42PENCS26D0656X8FR7DFA7, R1-F3): иначе планка легла бы
+    в каталог без кода и сухой сбор упал бы на импорте с непонятной
+    причиной. Артель здесь не проверяется — её планка собирается в рабочей
+    копии, только если та уже на ветке задачи (`_tests_writing_acceptance_
+    dir`)."""
+    if target == config.DEFAULT_TARGET:
+        return None
+    _path, error = workspace.ensure(task_id, code_branch)
+    if error is None:
+        return None
+    return GateRefusal(CODE_COPY_REFUSAL_ACTION, error,
+                       f"artel.py workspace {task_id} и повтори "
+                       f"artel.py advance {task_id}")
 
 
 ARTIFACT_DISK_READ_ACTION = "переход отклонён: планка читает артефакты с диска"

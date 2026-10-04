@@ -27,7 +27,11 @@ def check_main_ci() -> doctor.Check:
         if fetch_reason:
             detail += f": {fetch_reason}"
         return doctor.Check(MAIN_CI_CHECK, "warn", detail)
-    status = doctor.ci.main_line_status(origin_sha)
+    # Линия — в главной копии, куда `fetch_origin_main_sha` принёс голову:
+    # клон артели может отставать от origin или отсутствовать (ревью
+    # 01M42PENCS26D0656X8FR7DFA7, R1-F1).
+    status = doctor.ci.main_line_status(origin_sha,
+                                        repo=doctor.config.ROOT)
     if status.kind == doctor.ci.MAIN_GREEN:
         return doctor.Check(MAIN_CI_CHECK, "ok", status.note)
     if status.kind == doctor.ci.MAIN_RED:

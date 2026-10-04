@@ -61,7 +61,11 @@ def _repo_kwargs(repo: Path | None) -> dict:
     """`repo=` для внутренних вызовов модуля: клон артели — умолчание этих
     функций, поэтому для него (и для `None`) вызов идёт прежней формой без
     `repo` — подмены `head_sha`/`first_parent_line` в тестах пульта
-    написаны под неё; внешний клон передаётся явно."""
+    написаны под неё, в том числе `lambda branch:` защищённого
+    `tests/test_invariants.py::MergeNeedsGreenCiTest` (инвариант 19);
+    внешний клон и любой другой репозиторий (главная копия у `pin-update`
+    и `doctor main-ci`) передаются явно. Исход тот же: умолчание этих
+    функций — тот же клон артели."""
     if repo is None or repo == workspace.repo(config.DEFAULT_TARGET):
         return {}
     return {"repo": repo}

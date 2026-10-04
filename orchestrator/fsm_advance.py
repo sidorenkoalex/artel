@@ -43,6 +43,7 @@ from .advance_gates.test_integrity import (TEST_INTEGRITY_REFUSAL_ACTION,
 from .advance_gates.tests_writing import (_freshness_refuses,
                                           _origin_push_gate, _registry_gate,
                                           _tests_writing_acceptance_dir,
+                                          _tests_writing_code_copy_gate,
                                           _tests_writing_code_diff,
                                           _tests_writing_dry_collect_gate,
                                           _tests_writing_long_lived_gate,
@@ -192,7 +193,16 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
     acc_tdir = tdir
     with contextlib.ExitStack() as cleanup:
         if target != config.DEFAULT_TARGET:
-            code_dir, _err = workspace.ensure(task_id, t["branch"], target)
+            code_dir, error = workspace.ensure(task_id, t["branch"], target)
+            if error is not None:
+                # Задача уже в `acceptance`: без рабочей копии автогейт
+                # прогнал бы планку без кода; решение остаётся Оператору.
+                store.journal(conn, task_id, "fsm",
+                              "автогейт приёмки пропущен",
+                              f"рабочая копия задачи не заведена: {error}")
+                print(f"[{task_id}] автогейт приёмки пропущен: рабочая "
+                      f"копия задачи не заведена: {error}")
+                return False
             acc_tdir = cleanup.enter_context(
                 acceptance.plank_in_code_copy(task_id, branch, code_dir))
         elif workspace.on_task_branch(task_id, t["branch"], target) is True:
@@ -398,7 +408,9 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
               f"artel.py advance {task_id}")
         return False
     if _run_gates(conn, task_id,
-                  [lambda: _tests_writing_stray_plank_files_gate(conn, task_id)]):
+                  [lambda: _tests_writing_stray_plank_files_gate(conn, task_id),
+                   lambda: _tests_writing_code_copy_gate(
+                       task_id, target, t["branch"])]):
         return False
     acc_tdir, run_cwd = _tests_writing_acceptance_dir(
         task_id, tdir, target, branch, t["branch"])

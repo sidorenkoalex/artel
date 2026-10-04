@@ -437,7 +437,12 @@ class GatesDropPlankAfterRunTest(DocsDirSandbox):
                               ("исключение", RuntimeError("сбой автогейта"))):
             with self.subTest(outcome=name):
                 self.seen = []
+                # Клона `ext-proj` в песочнице нет: рабочая копия задачи
+                # подставлена заведённой — отказ `ensure` автогейт теперь
+                # не глотает (ревью 01M42PENCS26D0656X8FR7DFA7, R1-F3).
                 with mock.patch.object(store, "set_state"), \
+                        mock.patch.object(workspace, "ensure",
+                                          return_value=(code_dir, None)), \
                         mock.patch.object(
                             fsm_autogate, "_maybe_autogate_acceptance",
                             side_effect=self.observer(code_dir, outcome)):

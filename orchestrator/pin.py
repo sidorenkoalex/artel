@@ -77,8 +77,13 @@ def _refuse_unless_main_ci_green(sha: str) -> None:
     задаче и не видит красного `tests/` main — пин уезжал на коммит, чей
     CI упал. Вызывается после `fetch` (обход линии читает объекты, которые
     он принёс). `pin --to` этой сверки не получает: откат нужен именно
-    тогда, когда CI красный или `gh` молчит."""
-    status = ci.main_line_status(sha)
+    тогда, когда CI красный или `gh` молчит.
+
+    Линия читается в git главной копии — там же, куда был `fetch` (`pin`
+    — в перечне требования 4 SPEC 01M42PENCS26D0656X8FR7DFA7): клон артели
+    может отставать от `origin` (push мимо клона) или отсутствовать, и
+    линия от `sha` оборвалась бы на нём самом."""
+    status = ci.main_line_status(sha, repo=config.ROOT)
     if status.kind == ci.MAIN_GREEN:
         return
     if status.kind == ci.MAIN_RED:
