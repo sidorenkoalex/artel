@@ -71,8 +71,11 @@ def ensure(task_id: str, branch: str) -> tuple[Path, str | None]:
     if gitcmd.branch_exists(branch):
         res = gitcmd.git("worktree", "add", str(wt_path), branch)
     else:
-        origin_sha, fetch_reason = gitcmd.fetch_head_sha(
-            "origin", config.MAIN_BRANCH)
+        # Без обновления ссылок отслеживания (SPEC
+        # 01M42NBCADGSGTCBZB8NKBVDVH, требование 2): их блокировка чужим
+        # процессом не должна пропускать шаг роли.
+        origin_sha, fetch_reason = gitcmd.fetch_ref_sha(
+            "origin", config.MAIN_BRANCH, tracking_refs=False)
         if not origin_sha:
             reason = "база ветки недоступна: fetch origin не удался"
             if fetch_reason:

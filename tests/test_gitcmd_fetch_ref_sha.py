@@ -237,5 +237,50 @@ class OriginMainShaRealGitWiringTest(_PrivateRefRealGitSandbox):
         self.assertEqual(self.private_refs(), [])
 
 
+class TrackingRefsDefaultTest(_PrivateRefRealGitSandbox):
+    """Флаг `tracking_refs` (SPEC 01M42NBCADGSGTCBZB8NKBVDVH, требование 2)
+    — опция одного вызова (`workspace.ensure`), прочие вызовы примитива
+    сохраняют прежнее поведение («Не входит» SPEC)."""
+
+    def tracking(self) -> str:
+        return _run("rev-parse", f"refs/remotes/origin/{config.MAIN_BRANCH}",
+                    cwd=self.root).stdout.strip()
+
+    def test_default_call_still_updates_the_tracking_ref(self):
+        """Вызов без флага, как у `fsm`/`fsm_merge_gate`/`canary`, попутно
+        двигает `refs/remotes/origin/<MAIN_BRANCH>` на новую голову.
+
+        Ловит мутацию: `--refmap=` добавлен в примитив безусловно (или
+        дефолт флага перевёрнут) — ссылка отслеживания перестаёт
+        обновляться у всех вызовов, а не только у заведения рабочего
+        каталога."""
+        origin = self.add_synced_origin()
+        real_sha = self.advance_origin(origin, "default.txt", "1\n")
+
+        sha, reason = gitcmd.fetch_ref_sha("origin", config.MAIN_BRANCH)
+
+        self.assertEqual((sha, reason), (real_sha, ""))
+        self.assertEqual(self.tracking(), real_sha)
+
+    def test_without_tracking_refs_objects_arrive_and_private_ref_is_removed(self):
+        """`tracking_refs=False`: голова и объекты — как у обычного вызова,
+        приватная ссылка убрана, ссылка отслеживания на прежнем коммите.
+
+        Ловит мутацию: флаг подменяет refspec так, что fetch идёт мимо
+        приватной ссылки (sha не тот или объекта нет локально), либо
+        приватная ссылка остаётся висеть."""
+        origin = self.add_synced_origin()
+        before = self.tracking()
+        real_sha = self.advance_origin(origin, "no-tracking.txt", "1\n")
+
+        sha, reason = gitcmd.fetch_ref_sha("origin", config.MAIN_BRANCH,
+                                           tracking_refs=False)
+
+        self.assertEqual((sha, reason), (real_sha, ""))
+        self.assertTrue(self.object_present(real_sha))
+        self.assertEqual(self.private_refs(), [])
+        self.assertEqual(self.tracking(), before)
+
+
 if __name__ == "__main__":
     unittest.main()
