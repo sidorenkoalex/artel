@@ -69,6 +69,26 @@ tracking_refs=False)` — это и есть fetch свежести клона �
 `tests/test_test_integrity_gate.py` был красен на ветке и до подтяжки
 (заглушка `_show` без `repo=`) — исправлена механика заглушек, 51 passed.
 
+Возврат из `verifying` (CI 3379af99 красный; Оператор внёс прежнее приложение
+совместимости `tests/test_invariants.py` в `main` коммитом 1dc7c20f, подтяжка
+4ebd6a82): приложение совместимости из PLAN убрано, приложения к
+`docs/invariants.md` и тест инварианта 40 остались (теперь «Приложение 1» и
+«Приложение 2»). Класс падений CI закрыт так:
+- «заглушка git не видит вызовов» (`test_review_package*`, `test_zones_gate`,
+  `test_pull_long_lived_plank`, `test_verifying_ceiling`, `test_step_cost`):
+  заглушки разбирают подкоманду сквозь `-C <клон>` и принимают `repo=`;
+  песочницы, подменяющие `ROOT`, подменяют и `PROJECTS` (иначе
+  `repo_context.projects_root` отдаёт `NO_AREA`, и `new` отказывает
+  «клон … не заведён: корень пульта config.ROOT подменён»);
+- `review.own_commit_paths` и `pull.evaluate` без названного репозитория
+  берут клон проекта (не `-C None`);
+- «Committer identity unknown» в песочницах CI (нет `user.email` в
+  глобальном конфиге): `workspace.ensure_clone` переносит идентичность
+  главной копии (`runner.git_identity`) в локальный конфиг клона
+  (`inherit_identity`), сторож — `tests/test_workspace.py::CloneIdentityTest`.
+  Проверено прогоном долгоживущего `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`
+  без `GIT_AUTHOR_*`/`GIT_COMMITTER_*` в окружении (как в CI): 30 passed.
+
 Расхождение с оценкой SPEC ($50): детектор долгоживущего теста нашёл 124
 вызова `gitcmd` без репозитория в ~40 модулях, плюс правка существующих
 тестов под новое место рабочей копии и явный `-C`. Потолок поднят до $100
@@ -265,6 +285,13 @@ docs/ пульта), а не включение шага.
 - `tests/test_spec_budget.py` — ADR-0021 п. 6: клон-заглушка.
 - `tests/test_task_id_prefix_regression.py` — ADR-0021 п. 6: патч `PROJECTS`/`TARGETS`, клон = корень либо клон-заглушка.
 - `tests/test_test_integrity_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у заглушек `_show`/`_ls_tree` (`_GateSandbox`) и `show` (`MergeGateTest._escalates`) — гейт неослабления читает файлы ветки в клоне проекта задачи; тела и утверждения тестовых методов прежние.
+- `tests/test_pull_long_lived_plank.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у заглушки `ls_tree` (`gitcmd.ls_tree_files` читает ветку в клоне проекта задачи); утверждения прежние.
+- `tests/test_review_package.py` — ADR-0021 п. 1, п. 6 (SPEC треб. 4): `FakeGit` разбирает подкоманду сквозь `-C` и помнит вызовы как есть (`raw_calls`), песочницы патчат `PROJECTS` и заводят клон-заглушку, рабочий каталог шага — `workspace.path` (было `config.WORKTREES/<id>`), заглушки сбоев `diff`/`log` — сквозь `-C`; `AnswerRelsTest` — песочная область проектов и БД; заявка мутации `test_failed_diff_is_visible_in_the_journal`; изменённые утверждения — ниже.
+- `tests/test_review_package_map.py` — ADR-0021 п. 6 (SPEC треб. 4): `PathspecAwareGit` разбирает подкоманду сквозь `-C`; утверждения прежние.
+- `tests/test_step_cost.py` — ADR-0021 п. 7: маркер PLAN.md в каталог документов перед каждым шагом (`seed_plan_marker`) — автокоммит шага уносит каталог в ссылку клона, заглушка git ссылку не видит; утверждения прежние.
+- `tests/test_verifying_ceiling.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у заглушки `verifying_status`; утверждения прежние.
+- `tests/test_zones_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): заглушка `log` сквозь `-C`, подмена `artifact_branch.task_repo` адресом клона в юнитах мандата ANSWER; утверждения прежние.
+- `tests/test_workspace.py` (дополнительно) — ADR-0021 п. 1: новый `CloneIdentityTest` — клон, заведённый пультом, несёт идентичность коммитера главной копии (CI без `user.email` в глобальном конфиге: «Committer identity unknown» на мерже в клоне).
 
 #### Изменённые утверждения существующих методов
 Каждое называло прежнее место git задачи; новое утверждение проверяет то же
@@ -280,6 +307,8 @@ docs/ пульта), а не включение шага.
 | `tests/test_doc_commit_suite_gate.py` (каталог прогона) | `assertEqual(root, ROOT/".artel"/"notes-work")` | `assertEqual(root, PROJECTS/artel/repo)` | SPEC треб. 5 |
 | `tests/test_draft_mr_remote_base_args.py` | `fetches == [("origin", "develop", None)]`, `counts == [(…, "task/t001-x", None)]` | тот же кортеж с клоном артели вместо `None` | SPEC треб. 4 |
 | `tests/test_fsm_autogate.py::PullMergeCommitsTest` (оба метода) | `_acceptance_pull_merge_commits(CODE_BRANCH)`; `assert_called_once_with("log", "--merges", "--format=%H", CODE_BRANCH)` | вызов с `REPO`; `assert_called_once_with("-C", str(REPO), "log", …)` | SPEC треб. 4 |
+| `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package` | `assertEqual(self.git.calls, [["worktree", …], ["show", …], …])` | `assertEqual(self.git.raw_calls, [["-C", clone, "worktree", …], ["-C", root, "show", …], …])` — тот же перечень вызовов с репозиторием каждого | SPEC треб. 2, 4 |
+| `tests/test_review_package.py::ReviewPackageTest::test_unreadable_artifact_reason_carries_no_absolute_path` | `assertNotIn(str(config.WORKTREES), text)` | `assertNotIn(str(self.step_workdir()), text)` — путь рабочей копии задачи в области проекта | SPEC треб. 1 |
 
 Проверка перечня — `python3` по диффу `tests/` от базы ветки: изменённых
 файлов без строки с пунктом ADR-0021 — 0; новых и изменённых тестовых методов
@@ -292,7 +321,7 @@ docs/ пульта), а не включение шага.
 ## Приложение 1: docs/invariants.md — инварианты 20, 21, новый 40
 Инварианты 20 и 21 — в редакции таблицы п.12 ADR-0021 (любой проект, включая артель; каталог роли — `worktrees/<id>/`), новая строка 40 — «git главной копии пульта не меняется в ходе задачи».
 
-Применимость подтверждена: `git apply --check` каждого приложения по порядку (1 → 2 → 3) на чистой копии дерева ветки задачи — код 0 у всех трёх; после наложения `tests/test_invariants.py` целиком зелёный (72 passed), новый тест красен под обеими мутациями планки (ветка задачи и временная рабочая копия мержа в git главной копии).
+Применимость подтверждена: `git apply --check` каждого приложения по порядку (1 → 2) на чистом дереве ветки задачи после подтяжки `main` с коммитом Оператора 1dc7c20f (прежнее приложение совместимости `tests/test_invariants.py` уже в `main` и из PLAN убрано) — код 0 у обоих.
 
 ```diff
 diff --git a/docs/invariants.md b/docs/invariants.md
@@ -320,53 +349,10 @@ index 830412af..99c1b836 100644
  
 ```
 
-## Приложение 2: tests/test_invariants.py — совместимость существующих тестов
-ADR-0021 п. 1: `KillKeepsMainIntactTest` патчит `PROJECTS`/`TARGETS` и связывает клон артели с корнем песочницы; заглушка `_show` `TestWeakeningNeedsTheOperatorTest` принимает `repo=`. Утверждения не меняются.
-
-Применимость подтверждена: `git apply --check` каждого приложения по порядку (1 → 2 → 3) на чистой копии дерева ветки задачи — код 0 у всех трёх; после наложения `tests/test_invariants.py` целиком зелёный (72 passed), новый тест красен под обеими мутациями планки (ветка задачи и временная рабочая копия мержа в git главной копии).
-
-```diff
-diff --git a/tests/test_invariants.py b/tests/test_invariants.py
-index 109f1734..ed2ff696 100644
---- a/tests/test_invariants.py
-+++ b/tests/test_invariants.py
-@@ -1593,8 +1593,18 @@ class KillKeepsMainIntactTest(unittest.TestCase):
-                             # Worktree задачи (SPEC T045): kill убирает его —
-                             # без патча ушёл бы в .artel/worktrees/ РЕАЛЬНОГО
-                             # репозитория пульта, не песочницы.
--                            ("WORKTREES", self.root / ".artel" / "worktrees")):
-+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
-+                            # Область проектов (ADR-0021 п.1, этап 2): клон
-+                            # артели и рабочие копии задач — в песочнице.
-+                            ("PROJECTS", self.root / ".artel" / "projects"),
-+                            ("TARGETS", self.root / "targets.yaml")):
-             self.repo.enter_context(mock.patch.object(config, attr, value))
-+        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветка
-+        # задачи живёт в клоне, сценарии сверяют её и main git'ом
-+        # `self.root`. До этапа 2 ссылка безвредна: клон не читается.
-+        clone = self.root / ".artel" / "projects" / config.DEFAULT_TARGET / "repo"
-+        clone.parent.mkdir(parents=True, exist_ok=True)
-+        clone.symlink_to(self.root, target_is_directory=True)
- 
-         self.capture(catalog.cmd_init)
-         # SPEC T094: id — ULID, не предсказуемый "T001" — берём то, что
-@@ -2374,7 +2384,9 @@ class TestWeakeningNeedsTheOperatorTest(TmpRootTest):
-         self.answer_text = None
-         self.answer_subject = f"{self.TASK}: ANSWER-1 — ответ Оператора"
- 
--    def _show(self, ref, rel):
-+    def _show(self, ref, rel, repo=None):
-+        # `repo` — клон проекта задачи (ADR-0021 п.1, этап 2): git задачи
-+        # получает репозиторий явно; ответ от него здесь не зависит.
-         if (ref, rel) == (self.BASE, self.DELETED):
-             return self.SOURCE, ""
-         if (ref, rel) == (self.ARTIFACT, self.ANSWER) and self.answer_text:
-```
-
-## Приложение 3: tests/test_invariants.py — тест инварианта 40
+## Приложение 2: tests/test_invariants.py — тест инварианта 40
 Сквозной прогон FSM задачи артели в песочнице долгоживущего файла задачи; снимок git главной копии сверяется после `new`, после шага, внутри мержа и после `done`.
 
-Применимость подтверждена: `git apply --check` каждого приложения по порядку (1 → 2 → 3) на чистой копии дерева ветки задачи — код 0 у всех трёх; после наложения `tests/test_invariants.py` целиком зелёный (72 passed), новый тест красен под обеими мутациями планки (ветка задачи и временная рабочая копия мержа в git главной копии).
+Применимость подтверждена: `git apply --check` каждого приложения по порядку (1 → 2) на чистом дереве ветки задачи после подтяжки `main` с коммитом Оператора 1dc7c20f (прежнее приложение совместимости `tests/test_invariants.py` уже в `main` и из PLAN убрано) — код 0 у обоих.
 
 ```diff
 diff --git a/tests/test_invariants.py b/tests/test_invariants.py
@@ -456,15 +442,10 @@ diff --git a/tests/test_invariants.py b/tests/test_invariants.py
   и `worktrees/` при откате остаются на диске и безвредны (`.artel/` вне git).
 
 ## Риски
-- **CI ветки без приложения.** Шесть существующих тестов
-  `tests/test_invariants.py` (`KillKeepsMainIntactTest` ×3 — нет клона артели
-  в песочнице; `TestWeakeningNeedsTheOperatorTest` ×3 — заглушка `_show(ref,
-  rel)` не принимает `repo=`) на ветке красны до наложения приложения 1:
-  файл защищён, а вызов `gitcmd.show` без репозитория запрещён требованием 4.
-  В дереве с приложениями весь `tests/test_invariants.py` зелёный (72 passed,
-  проверено копией дерева). Приложение 1 безвредно и до этапа 2 — Оператор
-  может провести его в `main` заранее отдельным MR, тогда CI ветки после
-  подтяжки `main` зелёный.
+- **CI ветки и приложение.** Совместимость существующих тестов
+  `tests/test_invariants.py` уже в `main` (1dc7c20f) и в ветке после
+  подтяжки; приложения PLAN его больше не несут — `git apply` на воротах
+  мержа не встретит уже наложенной правки.
 - Внешний проект теперь получает чекпоинт кода пультом (раньше общий
   `workspace/` ветки задачи не нёс) — по требованию 2 и долгоживущему
   `test_ac5_external_project_skips_the_artel_steps`.

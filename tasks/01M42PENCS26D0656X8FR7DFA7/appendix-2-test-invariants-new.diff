@@ -1,4 +1,5 @@
 diff --git a/tests/test_invariants.py b/tests/test_invariants.py
+index ed2ff696..db7195a7 100644
 --- a/tests/test_invariants.py
 +++ b/tests/test_invariants.py
 @@ -2467,3 +2467,68 @@ class TestWeakeningNeedsTheOperatorTest(TmpRootTest):
