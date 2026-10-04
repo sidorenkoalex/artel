@@ -21,8 +21,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
-              config, cycle_hint, fixation, github_adapter, gitcmd, lease, pull,
-              repo_context,
+              config, cycle_hint, fixation, github_adapter, gitcmd, lease,
+              merge_after, pull, repo_context,
               review, store, targets, workspace, yamlmini)
 from .advance_gates import refusal_classes
 from .pull import _merge_conflict_note
@@ -899,11 +899,20 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
         return
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 2) —
+    # проверка по БД тем же мягким отказом, что сверка путей выше: задача
+    # остаётся на spec_gate, ни zones, ни merge_after не пишутся.
+    merge_deps, reason = merge_after.spec_gate_value(conn, task_id, meta)
+    if reason:
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
     # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
     # же моментом входа approve на spec_gate, что и budget/split_
     # assessment рядом — meta уже прочитана выше, поле отсутствует у
     # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
-    store.update_task(conn, task_id, zones=meta.get("zones"))
+    store.update_task(conn, task_id, zones=meta.get("zones"),
+                      merge_after=merge_deps)
     # Перечитывание budget_usd на гейте SPEC (SPEC
     # 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5): Оператор мог поправить
     # SPEC прямо на гейте (сузить рамку и т.п.) уже ПОСЛЕ того, как
@@ -1058,6 +1067,12 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
     # его внешний цикл — orchestrator/fsm_merge_gate.py (SPEC T091):
     # берёт/отпускает мьютекс сама вокруг каждого захода в тело гейта,
     # а не единым `merge_lock.run_window` на весь вызов.
+    #
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 4) —
+    # до мьютекса и до очереди: задача, которой рано в main, не занимает
+    # окно и не встаёт в FIFO.
+    if merge_after.merge_gate_refuses(conn, task_id, t):
+        return
     from . import fsm_merge_gate
     fsm_merge_gate._cmd_approve_merge_gate_cycle(
         conn, task_id, sid, t, state, fixes_main=fixes_main)

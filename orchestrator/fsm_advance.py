@@ -19,7 +19,8 @@ import contextlib
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
-              fsm, fsm_autogate, gitcmd, store, workspace, yamlmini)
+              fsm, fsm_autogate, gitcmd, merge_after, store, workspace,
+              yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
@@ -623,6 +624,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # `spec_gate` выше: потолок обязан устояться до того, как задача
     # продолжит тратить деньги (ADR-0014 п.3).
     _apply_plan_budget(conn, task_id, t, plan_meta)
+    # Канал PLAN зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
+    # требование 3) — тем же местом и тем же правилом, что бюджет из PLAN:
+    # отказ значения пишется в журнал и переход не останавливает.
+    merge_after.apply_plan(conn, task_id, t, plan_meta, plan_text)
     store.update_task(conn, task_id, verifying_attempts=0)
     store.set_state(conn, task_id, "verifying", "fsm",
                     expected_state=state, detail="MR готов — жду зелёного CI ветки")
