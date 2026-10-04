@@ -2,7 +2,7 @@
 task: 01M42PENCS26D0656X8FR7DFA7
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 budget_usd: 100
 ---
@@ -184,6 +184,88 @@ docs/ пульта), а не включение шага.
   `CompareAndSwapRaceTest` распознаёт `update-ref` сквозь `strip_dash_c`
   (ссылка документов пишется в клоне с `-C`); утверждения прежние.
 
+Остальные файлы — механика песочниц под новое место git задачи; утверждения
+прежние, кроме перечисленных ниже в «Изменённых утверждениях». Обозначения:
+«клон-заглушка» — `seed_artel_clone_stub()` (пустой настоящий клон артели в
+лёгкой песочнице: `new` без клона отказывает), «клон = корень» —
+`link_artel_clone_to_root` (легаси-песочница на настоящем git держит ветки и
+ссылки задач в своём корне), «клон из origin» — `clone_artel_from_origin`
+(команда Оператора коммитит через клон), «сквозь `-C`» — заглушка `gitcmd.git`
+разбирает подкоманду через `strip_dash_c`, «`repo=`» — подменная функция
+принимает новый ключевой аргумент `repo`.
+
+- `tests/test_01m3y75x6k2zmd85971tcwv41e_held_base.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): клон из origin.
+- `tests/test_01m3ychp14179r32sfjvkqb32g_model_sets.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): клон из origin, `fetch` клона после чужого push.
+- `tests/test_01m3ydhty1y67kb98fvshrec4n_draft_mr_remote_base.py` — ADR-0021 п. 2: клон внешнего проекта — `PROJECTS/outer/repo` (было `…/workspace`).
+- `tests/test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py` — ADR-0021 п. 2: клон проекта — `repo/` (было `workspace/`).
+- `tests/test_acceptance_tests_flow.py` — ADR-0021 п. 6: клон = корень, патч `TARGETS`.
+- `tests/test_advance_guard.py` — ADR-0021 п. 6: клон-заглушка.
+- `tests/test_agent_failure.py` — ADR-0021 п. 7: маркер артефакта роли пишется в каталог документов при каждом запуске агента (автокоммит шага уносит каталог в ссылку клона).
+- `tests/test_agent_prompt.py` — ADR-0021 п. 6: клон-заглушка.
+- `tests/test_amend.py` — ADR-0021 п. 6 (SPEC треб. 4): сквозь `-C`, подмена `artifact_branch.task_repo`, `_branch_tests_snapshot` получает id задачи.
+- `tests/test_answer_gate.py` — ADR-0021 п. 6: клон-заглушка.
+- `tests/test_answer_mandate.py` — ADR-0021 п. 6: подмена `artifact_branch.task_repo`.
+- `tests/test_artifact_branch_push.py` — ADR-0021 п. 3: push ссылки документов распознаётся сквозь `-C`.
+- `tests/test_auto_cycle.py` — ADR-0021 п. 6 (SPEC треб. 4): клон-заглушка, `repo=` у `verifying_status`/`diff_names`; заявки мутаций двум методам с правкой лямбды.
+- `tests/test_branch_freshness_gate.py` — ADR-0021 п. 2, п. 6: клон-заглушка, `repo=`, вызовы клона артели идут в настоящий git; изменённое утверждение — ниже.
+- `tests/test_budget_live_lease_and_escalation.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у `branch_head_sha`; заявки мутаций трём методам.
+- `tests/test_capacity_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): сквозь `-C` в помощниках `_refuses`/`_refuses_with` и заглушках класса; тела методов прежние.
+- `tests/test_capacity_gate_map.py` — ADR-0021 п. 6: сквозь `-C`.
+- `tests/test_catalog_spawn_subtask.py` — ADR-0021 п. 2: клон внешнего проекта заводится `make_project_repo`.
+- `tests/test_ci_rerun_command.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у `verifying_status`.
+- `tests/test_coldstart.py` — ADR-0021 п. 6: клон = корень, `.artel/` в `.gitignore` песочницы.
+- `tests/test_division_parent_cleanup.py` — ADR-0021 п. 6: удаление ветки распознаётся сквозь `-C`.
+- `tests/test_doc_commit.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): клон из origin.
+- `tests/test_doc_commit_held_base.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): bare origin песочницы и клон из него, затем недоступный адрес origin клона (сценарий «origin не отвечает» сохранён).
+- `tests/test_doc_commit_suite_gate.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): каталог прогона — клон артели; изменённое утверждение — ниже.
+- `tests/test_docs_dir_layout.py` — ADR-0021 п. 2, п. 7: каталог кода внешнего проекта — `worktrees/<id>` (было `workspace`).
+- `tests/test_doctor.py` — ADR-0021 п. 2: клон внешнего проекта — `repo/` (было `workspace/`), `repo=` у `branch_merged`/`commits_behind`, сквозь `-C`; заявки мутаций изменённым методам.
+- `tests/test_doctor_canary_pool.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): `pool-seal` коммитит через клон, сценарий подменяет `_commit_through_clone` записью в корень песочницы.
+- `tests/test_draft_mr_remote_base_args.py` — ADR-0021 п. 6 (SPEC треб. 4): изменённое утверждение — ниже.
+- `tests/test_fsm_advance_gate_smoke.py` — ADR-0021 п. 6 (SPEC треб. 4): сквозь `-C`, `repo=` у `gitcmd.show`; эталонные строки прежние; заявки мутаций трём методам.
+- `tests/test_fsm_autogate.py` — ADR-0021 п. 6 (SPEC треб. 4): подмена `artifact_branch.task_repo`/`workspace.task_repo` (юнит на боевых путях `config`, клона там нет), `repo=` у заглушек; изменённое утверждение — ниже.
+- `tests/test_fsm_autogate_long_lived.py` — ADR-0021 п. 6: `repo=` у заглушки `show`.
+- `tests/test_fsm_branch_correct_status_reads.py` — ADR-0021 п. 6: клон = корень (через него же `tests/test_id_format_guard.py`, файл не менялся).
+- `tests/test_fsm_map_conflict_autoresolve.py` — ADR-0021 п. 6: вызовы `in_repo` в клоне артели (ссылка документов) идут в настоящий git, заглушка разбирает только рабочую копию задачи.
+- `tests/test_fsm_map_regen.py` — ADR-0021 п. 6 (SPEC треб. 3): сквозь `-C` (карта коммитится в рабочей копии мержа клона); заявки мутаций.
+- `tests/test_fsm_merge_gate_done_snapshot.py` — ADR-0021 п. 2: клон внешнего проекта — `repo/`.
+- `tests/test_fsm_retro.py` — ADR-0021 п. 6 (SPEC треб. 3): сквозь `-C` (RETRO коммитится в рабочей копии мержа клона); заявки мутаций.
+- `tests/test_fsm_review_rework_gate.py` — ADR-0021 п. 6: сквозь `-C`, `repo=` у `show`.
+- `tests/test_fsm_review_rework_sha_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у `branch_head_sha`; заявки мутаций пяти методам.
+- `tests/test_github_adapter.py` — ADR-0021 п. 6 (SPEC треб. 4): push сквозь `-C`; заявка мутации.
+- `tests/test_main_ci_line.py` — ADR-0021 п. 6 (SPEC треб. 3): сквозь `-C`, контекст артели несёт `target` (шаги мержа — по признаку проекта).
+- `tests/test_merge_gate_ci_wait.py` — ADR-0021 п. 6: `repo=` в помощнике `patch_branch_status`.
+- `tests/test_mutation_claim_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у заглушки `show`.
+- `tests/test_notes_apply.py` — ADR-0021 п. 6, решение 10 (SPEC треб. 5): клон из origin.
+- `tests/test_protected_paths_gate.py` — ADR-0021 п. 6 (SPEC треб. 3): контекст артели несёт `target`.
+- `tests/test_review_freshness.py` — ADR-0021 п. 6: клон-заглушка.
+- `tests/test_runner_model_preflight.py` — ADR-0021 п. 7: маркер PLAN.md в каталог документов перед каждым шагом (`seed_plan_marker`) — автокоммит шага уносит каталог в ссылку клона, заглушка git ссылку не видит.
+- `tests/test_spec_budget.py` — ADR-0021 п. 6: клон-заглушка.
+- `tests/test_task_id_prefix_regression.py` — ADR-0021 п. 6: патч `PROJECTS`/`TARGETS`, клон = корень либо клон-заглушка.
+
+#### Изменённые утверждения существующих методов
+Каждое называло прежнее место git задачи; новое утверждение проверяет то же
+свойство на новом месте, не слабее (там, где добавлен репозиторий, — строже).
+
+| Метод | Было | Стало | Требование |
+|---|---|---|---|
+| `tests/test_brief.py::CheckoutAfterReadTest` | `assertIn(("checkout", "--", MAP_REL), calls)` | `assertIn(…, [strip_dash_c(c) for c in calls])` | SPEC треб. 4 |
+| `tests/test_repo_context.py` (см. выше) | `ctx.path == config.ROOT`; `path_or_none` — `None` | путь клона `PROJECTS/artel/repo` | SPEC треб. 3, AC-6 |
+| `tests/test_workspace.py::PathTest::test_path_is_the_standard_location` | `config.WORKTREES/<id>` | `PROJECTS/artel/worktrees/<id>` | SPEC треб. 1 |
+| `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py` (см. выше) | `workspace/`, `config.WORKTREES/T001` | `worktrees/<id>` проекта | SPEC треб. 1, 9 |
+| `tests/test_branch_freshness_gate.py` (сверка адреса клона) | `assertIn(str(PROJECTS/"acme"/"workspace"), …)` | `assertIn(str(PROJECTS/"acme"/"repo"), …)` | SPEC треб. 1 |
+| `tests/test_doc_commit_suite_gate.py` (каталог прогона) | `assertEqual(root, ROOT/".artel"/"notes-work")` | `assertEqual(root, PROJECTS/artel/repo)` | SPEC треб. 5 |
+| `tests/test_draft_mr_remote_base_args.py` | `fetches == [("origin", "develop", None)]`, `counts == [(…, "task/t001-x", None)]` | тот же кортеж с клоном артели вместо `None` | SPEC треб. 4 |
+| `tests/test_fsm_autogate.py::PullMergeCommitsTest` (оба метода) | `_acceptance_pull_merge_commits(CODE_BRANCH)`; `assert_called_once_with("log", "--merges", "--format=%H", CODE_BRANCH)` | вызов с `REPO`; `assert_called_once_with("-C", str(REPO), "log", …)` | SPEC треб. 4 |
+
+Проверка перечня — `python3` по диффу `tests/` от базы ветки: изменённых
+файлов без строки с пунктом ADR-0021 — 0; новых и изменённых тестовых методов
+без «Ловит мутацию» — 0; удалённых и переименованных тестовых методов — 0.
+Заявки, добавленные в этом шаге (14 методов: `test_fsm_review_rework_sha_gate`
+×5, `test_budget_live_lease_and_escalation` ×3, `test_fsm_advance_gate_smoke`
+×3, `test_auto_cycle` ×2, `test_github_adapter` ×1), проверены временной
+мутацией кода: каждый метод красен на своей мутации, код возвращён.
+
 ## Приложение 1: docs/invariants.md — инварианты 20, 21, новый 40
 Инварианты 20 и 21 — в редакции таблицы п.12 ADR-0021 (любой проект, включая артель; каталог роли — `worktrees/<id>/`), новая строка 40 — «git главной копии пульта не меняется в ходе задачи».
 
@@ -363,6 +445,22 @@ diff --git a/tests/test_invariants.py b/tests/test_invariants.py
 - Внешний проект теперь получает чекпоинт кода пультом (раньше общий
   `workspace/` ветки задачи не нёс) — по требованию 2 и долгоживущему
   `test_ac5_external_project_skips_the_artel_steps`.
+- **Не проверено в шаге из-за окружения роли.** В процессе роли
+  (`ARTEL_ROLE=developer`) команды `approve`/`pin-update`/`pin --to`
+  отказывают сторожем роли, поэтому красны
+  `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` (16 методов),
+  `tests/test_main_ci_line.py::FixesMainArgTest` (2) и
+  `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`.
+  На снимке `main` в том же окружении красны те же методы с той же причиной.
+  Их итог на коде ветки покажет CI. Сторож роли не обходился.
+- **Прогон в шаге.** Полный набор не запускался: параллельный прогон
+  отклонён сторожем роли. Последовательно, по модулям, прогнаны 38 модулей
+  из прежних списков падений, модули, затронутые правками этого шага, и
+  долгоживущие файлы задачи (`tests/test_01m42pencs26d0656x8fr7dfa7_*.py`:
+  32 passed). Все зелёные, кроме перечисленных выше. Планка —
+  `artel.py plank-run`. `tests/test_invariants.py` с наложенными
+  приложениями 1–3 — 72 passed (наложено в рабочую копию на время прогона,
+  затем возвращено `git checkout`).
 
 ## Предложения системе
 - Оболочка шага роли не знает `ls`/`cat`/`rm`, heredoc с `{"…"}` отклоняется
@@ -371,3 +469,9 @@ diff --git a/tests/test_invariants.py b/tests/test_invariants.py
 - Защищённый тестовый файл, чьи СУЩЕСТВУЮЩИЕ тесты ломаются от правки кода,
   красит CI ветки до мержа: нет механики «приложение к защищённому пути
   накладывается и в CI ветки» — стоит решить на уровне `ci.yml`.
+- Тесты, которые зовут `approve`/`pin-update` через `artel.main` в
+  песочнице, красны в любом шаге роли: сторож роли
+  (`artel._refuse_if_role_restricted`) читает `ARTEL_ROLE` процесса pytest.
+  Разработчик не может проверить их до CI. Стоит снимать признак роли в
+  песочнице `tests/sandbox.py` (класс «сторож видит окружение теста как
+  окружение роли»).
