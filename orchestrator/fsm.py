@@ -21,9 +21,10 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
-              config, cycle_hint, fixation, github_adapter, gitcmd, lease, pull,
-              repo_context,
+              config, cycle_hint, fixation, github_adapter, gitcmd, lease,
+              merge_after, pull, repo_context,
               review, store, targets, workspace, yamlmini)
+from .advance_gates import refusal_classes
 from .pull import _merge_conflict_note
 
 # Алиас прежнего публичного имени команды `ci-rerun`, переехавшей в
@@ -192,7 +193,8 @@ def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | Non
     return sha or None
 
 
-def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
+def _pull_main_or_escalate(conn, task_id: str, t, state: str,
+                           run_plank: bool = True) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
     01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1..AC-4/AC-8) и, начиная с T053
@@ -211,8 +213,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
 
     `_origin_main_source`/`_origin_main_sha` (сверка свежести против
     origin target'а задачи, не локального `config.MAIN_BRANCH` — см. их
-    докстринги) и `_read_branch_text_or_refuse` (чтение SPEC.md с чужой
-    ветки, общее с другими функциями этого модуля) передаются в
+    докстринги) и `_read_foreign_branch_text_or_refuse` (чтение SPEC.md —
+    документа другой роли — с ветки) передаются в
     `pull.evaluate` ПАРАМЕТРАМИ, не импортом `fsm` тем модулем: так
     `mock.patch.object(fsm, "_origin_main_sha", ...)` (существующие
     тесты, AC-5) продолжает долетать до реального `git merge` — патч
@@ -231,6 +233,10 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     передаётся замыканием,
     связанным с ТЕМ ЖЕ `repo_path` — весь git-трафик `gitcmd.fetch_ref_sha`
     внутри него идёт в тот же клон, не в `config.ROOT`.
+
+    `run_plank=False` — четвёртая точка, перед шагом разработчика (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требование 6): тот же узел без прогона
+    планки после слияния (см. `pull.evaluate`).
     """
     ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
     repo_path = repo_context.path_or_none(ctx)
@@ -238,8 +244,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
         conn, task_id, t, state,
         origin_main_source=_origin_main_source,
         origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
-        read_branch_text_or_refuse=_read_branch_text_or_refuse,
-        repo_path=repo_path)
+        read_branch_text_or_refuse=_read_foreign_branch_text_or_refuse,
+        repo_path=repo_path, run_plank=run_plank)
     if isinstance(outcome, pull.Fresh):
         return "fresh"
     if isinstance(outcome, pull.Pulled):
@@ -350,6 +356,11 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
 
     Звать только когда `gitcmd.on_foreign_branch(branch)` истинно — сама
     функция это не проверяет, только читает и оформляет отказ.
+
+    Только для артефакта роли ТЕКУЩЕГО состояния (SPEC
+    01M446WEVJXARR5CDED8RE9CCR, требование 5.4): его отсутствие на ветке
+    чинит сама роль. Документ другой роли — `_read_foreign_branch_text_or_
+    refuse`.
     """
     text, reason = artifact_branch.show(task_id, branch,
                                         f"tasks/{task_id}/{rel_name}")
@@ -357,8 +368,32 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
         detail = (f"дерево не на ветке задачи {branch} — {rel_name} "
                   f"ветки не прочитан ({reason})")
         store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
+                      refusal_classes.TREE_NOT_ON_BRANCH_REFUSAL_ACTION, detail)
         print(f"[{task_id}] переход отклонён: {detail}")
+    return text
+
+
+def _branch_unread_refusal(conn, task_id: str, detail: str) -> None:
+    """Отказ «git не ответил на ветку документов / чужой документ не
+    прочитан» — класс «чинит Оператор» (SPEC 01M446WEVJXARR5CDED8RE9CCR,
+    требование 5.4): роль текущего состояния его не починит."""
+    store.journal(conn, task_id, "fsm",
+                  refusal_classes.BRANCH_UNREAD_REFUSAL_ACTION, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+
+
+def _read_foreign_branch_text_or_refuse(conn, task_id: str, branch: str,
+                                        rel_name: str) -> str | None:
+    """Текст `tasks/<id>/<rel_name>` — документа ДРУГОЙ роли (SPEC.md в
+    `tests_writing`, в подтяжке main и при поиске планки на выходе
+    `in_dev`) — с ветки; `None` — не прочитан, отказ уже журналирован и
+    напечатан действием класса «чинит Оператор» (требование 5.4)."""
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/{rel_name}")
+    if text is None:
+        _branch_unread_refusal(
+            conn, task_id, f"{rel_name} не прочитан с ветки документов "
+                           f"{branch} ({reason})")
     return text
 
 
@@ -448,11 +483,10 @@ def _answer_baseline_or_refuse(conn, task_id: str, tdir: Path) -> int | None:
     count = _answer_file_count(conn, task_id, tdir)
     if count is None:
         branch, _ = artifact_source.resolve(conn, task_id)
-        detail = (f"дерево не на ветке задачи {branch} — число "
-                  f"ANSWER-*.md не посчитано, эскалация отложена")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
+        _branch_unread_refusal(
+            conn, task_id, f"git не ответил на перечисление ветки документов "
+                           f"{branch} — число ANSWER-*.md не посчитано, "
+                           f"эскалация отложена")
     return count
 
 
@@ -511,12 +545,14 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     spec_text, spec_reason = artifact_branch.show(task_id, branch, spec_rel)
     paths = artifact_branch.ls_tree(task_id, branch, tests_rel)
     if spec_text is None or paths is None:
-        reason = spec_reason if spec_text is None else "acceptance_tests/ ветки не прочитан"
-        detail = (f"дерево не на ветке задачи {branch} — {reason}, "
-                  f"трассируемость AC не проверена")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
+        # SPEC.md — документ analyst, перечисление `acceptance_tests/` —
+        # ответ git: ни то, ни другое test_author не чинит (SPEC
+        # 01M446WEVJXARR5CDED8RE9CCR, требование 5.4).
+        reason = (f"SPEC.md не прочитан ({spec_reason})" if spec_text is None
+                  else "git не ответил на перечисление acceptance_tests/")
+        _branch_unread_refusal(
+            conn, task_id, f"ветка документов {branch}: {reason}, "
+                           f"трассируемость AC не проверена")
         return None
 
     sources: list[str] = []
@@ -863,11 +899,20 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
         return
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 2) —
+    # проверка по БД тем же мягким отказом, что сверка путей выше: задача
+    # остаётся на spec_gate, ни zones, ни merge_after не пишутся.
+    merge_deps, reason = merge_after.spec_gate_value(conn, task_id, meta)
+    if reason:
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
     # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
     # же моментом входа approve на spec_gate, что и budget/split_
     # assessment рядом — meta уже прочитана выше, поле отсутствует у
     # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
-    store.update_task(conn, task_id, zones=meta.get("zones"))
+    store.update_task(conn, task_id, zones=meta.get("zones"),
+                      merge_after=merge_deps)
     # Перечитывание budget_usd на гейте SPEC (SPEC
     # 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5): Оператор мог поправить
     # SPEC прямо на гейте (сузить рамку и т.п.) уже ПОСЛЕ того, как
@@ -1022,6 +1067,12 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
     # его внешний цикл — orchestrator/fsm_merge_gate.py (SPEC T091):
     # берёт/отпускает мьютекс сама вокруг каждого захода в тело гейта,
     # а не единым `merge_lock.run_window` на весь вызов.
+    #
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 4) —
+    # до мьютекса и до очереди: задача, которой рано в main, не занимает
+    # окно и не встаёт в FIFO.
+    if merge_after.merge_gate_refuses(conn, task_id, t):
+        return
     from . import fsm_merge_gate
     fsm_merge_gate._cmd_approve_merge_gate_cycle(
         conn, task_id, sid, t, state, fixes_main=fixes_main)

@@ -802,6 +802,29 @@ def _return_inapplicable_appendix(conn, task_id: str, state: str,
     fsm._maybe_ensure_draft_mr(conn, task_id)
 
 
+def _appendix_already_in_main(conn, task_id: str, number: int, appendix,
+                              scratch: Path) -> bool:
+    """Приложение, которое не легло прямым `git apply`, уже наложено в
+    подтянутом main (SPEC 01M443HV9SJYVYQTHJSQ87QV68, требование 5):
+    `git apply --reverse --check` проходит. Прецедент 04.10
+    (01M42PENCS26D0656X8FR7DFA7): Оператор внёс правку защищённого теста
+    коммитом в main, и прежние ворота отказывали задаче на уже сделанной
+    работе. Такое приложение принимается с записью журнала и не
+    накладывается повторно.
+
+    Частично наложенное (ни прямой, ни обратный `--check` не проходят) —
+    False, и вызывающий возвращает задачу прежним исходом (требование 6)."""
+    if git_apply(scratch, appendix, "--reverse", "--check"):
+        return False
+    paths = ", ".join(appendix.paths)
+    store.journal(conn, task_id, "orchestrator",
+                  f"приложение PLAN уже в main: {paths}",
+                  f"приложение {number} ({paths}) уже наложено в подтянутом "
+                  f"main (`git apply --reverse --check` проходит) — не "
+                  f"накладывается повторно")
+    return True
+
+
 def _commit_applied_appendices(conn, task_id: str, paths: list[str],
                                scratch: Path,
                                ctx: repo_context.RepoContext) -> str:
@@ -889,13 +912,20 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     # унести в коммит все его файлы, иначе правка Оператора уезжает в
     # никуда вместе со scratch-деревом.
     paths: list[str] = []
-    for appendix in appendices:
+    for number, appendix in enumerate(appendices, 1):
         answer = git_apply(scratch, appendix)
+        if answer and _appendix_already_in_main(conn, task_id, number,
+                                                appendix, scratch):
+            continue
         if answer:
             _return_inapplicable_appendix(conn, task_id, state, appendix,
                                           answer, scratch, ctx)
             return ("stopped", [])
         paths.extend(p for p in appendix.paths if p not in paths)
+    if not paths:
+        # Все приложения уже в main: коммитить нечего, `git commit` на
+        # пустом индексе отказал бы и сорвал мерж.
+        return ("ok", [])
 
     sha = _commit_applied_appendices(conn, task_id, paths, scratch, ctx)
     # Прогон — после коммита и ДО записи «применены»/push: красный исход

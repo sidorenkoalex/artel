@@ -19,9 +19,9 @@ AC-5) патчит имя в ПРОСТРАНСТВЕ ИМЁН `fsm`, а не з
 значение, что подставил патч, без обратной зависимости этого модуля
 от `fsm.py` (которая завела бы цикл импорта — `fsm.py` и так уже
 импортирует этот модуль). `read_branch_text_or_refuse` — та же
-инъекция ради того же узла `fsm._read_branch_text_or_refuse`,
-общего с другими функциями fsm.py (чтение SPEC.md/PLAN.md с чужой
-ветки, именованный отказ уже внутри него).
+инъекция ради узла `fsm._read_foreign_branch_text_or_refuse` (чтение
+SPEC.md — документа другой роли — с ветки, именованный отказ класса
+«чинит Оператор» уже внутри него).
 
 `_merge_conflict_note` — единственное имя, которое существующие
 тесты вызывают НАПРЯМУЮ через `fsm._merge_conflict_note(...)`
@@ -133,7 +133,7 @@ class Refused:
     """Именованный отказ (не эскалация): планка не найдена в источнике либо
     перечень её долгоживущей группы не прочитан.
     `reason` — `None`, если чтение SPEC.md уже журналировано/напечатано
-    общим узлом `fsm._read_branch_text_or_refuse` (нечего добавлять),
+    узлом `fsm._read_foreign_branch_text_or_refuse` (нечего добавлять),
     иначе — готовый текст `detail`/сообщения отказа."""
 
     def __init__(self, reason: str | None):
@@ -633,7 +633,7 @@ def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
 
 def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
             origin_main_sha, read_branch_text_or_refuse,
-            repo_path=None):
+            repo_path=None, run_plank=True):
     """Исход подтяжки главной ветки target'а задачи в её ветку — вызывается
     из `fsm._pull_main_or_escalate`. `origin_main_source`/`origin_main_sha`/
     `read_branch_text_or_refuse` — узлы `fsm.py`, инъекция параметрами (не
@@ -651,6 +651,13 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     `Fresh()`, ДО заведения worktree: чисто документные коммиты main
     (копилка/бэклог/ADR) не обязаны вызывать подтяжку, когда они не
     затрагивают файлы самой ветки.
+
+    `run_plank=False` — подтяжка перед шагом разработчика (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требование 6): планка там заведомо
+    красна — её зеленит как раз предстоящий шаг, — и её прогон после
+    слияния превратил бы каждую подтяжку в эскалацию. Исход слияния —
+    `Pulled(base)` без прогона; на выходе из `in_dev` планку гоняет
+    прежняя точка подтяжки.
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
@@ -705,6 +712,8 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
         if outcome is not None:
             return outcome
 
+    if not run_plank:
+        return Pulled(base)
     return _materialize_and_run_plank(conn, task_id, t, branch, source_branch,
                                      wt_path, state, base,
                                      read_branch_text_or_refuse)

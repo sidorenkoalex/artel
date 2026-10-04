@@ -149,8 +149,9 @@ def step_role(t) -> str | None:
     return "analyst" if has_tz else None
 
 
-def cmd_run(task_id: str, session_id: str | None = None) -> None:
-    """Запуск агента текущего шага (claude CLI, headless).
+def cmd_run(task_id: str, session_id: str | None = None) -> bool | None:
+    """Запуск агента текущего шага (claude CLI, headless). `True` — шаг
+    роли завершён успешно (запись `agent run finished` этого вызова).
 
     Берёт lease задачи перед работой (SPEC T044, требование 2) — обёртка
     вокруг `_cmd_run`, см. `orchestrator/lease.py`.
@@ -160,11 +161,50 @@ def cmd_run(task_id: str, session_id: str | None = None) -> None:
     """
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_run(conn, task_id))
+    return lease.run_locked(conn, task_id, session_id,
+                            lambda sid: _cmd_run(conn, task_id))
 
 
-def _cmd_run(conn, task_id: str) -> None:
+def cmd_run_and_advance(task_id: str) -> None:
+    """Команда `artel.py run <id>`: шаг роли и, если он успешен, один
+    `advance` (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 6) — тот же
+    следующий шаг, который `run` раньше велел сделать руками.
+
+    Успех шага — `True` от `cmd_run` (rc=0, обязательный артефакт на
+    месте); отказ стартовать выходит из `cmd_run` через `SystemExit` и
+    сюда не доходит. Задача, ушедшая из агентского состояния внутри шага
+    (эскалация), не продвигается. Отказ этого `advance` нового шага роли
+    не запускает.
+
+    Шаг роли внутри `auto` и канарейки зовёт `cmd_run` напрямую —
+    продвижение там остаётся за циклом.
+    """
+    if cmd_run(task_id) is not True:
+        return
+    from . import fsm
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    t = store.get_task(conn, task_id)
+    if step_role(t) is None:
+        return
+    before = t["state"]
+    journaled_before = len(store.task_steps(conn, task_id))
+    print(f"[{task_id}] run: advance после шага")
+    fsm.cmd_advance(task_id)
+    after = store.get_task(conn, task_id)["state"]
+    refusals = [row["action"] for row in store.task_steps(conn, task_id)[journaled_before:]
+                if row["actor"] == "fsm"
+                and row["action"].startswith(store.REFUSAL_ACTION_PREFIX)]
+    if after != before:
+        print(f"[{task_id}] run: advance продвинул задачу {before} -> {after}")
+    elif refusals:
+        print(f"[{task_id}] run: advance отклонил переход ({refusals[0]}) — "
+              f"задача в {before}, новый шаг роли не запускается")
+    else:
+        print(f"[{task_id}] run: advance — нечего продвигать, задача в {before}")
+
+
+def _cmd_run(conn, task_id: str) -> bool | None:
     t = store.get_task(conn, task_id)
     # Бюджет проверяем до всего остального: потраченные деньги не зависят от
     # состояния задачи, а из escalated Оператор её вернуть уже мог.
@@ -216,7 +256,7 @@ def _cmd_run(conn, task_id: str) -> None:
             sys.exit(zone_refusal)
 
     try:
-        _run_developer_step(conn, task_id, t, role)
+        return _run_developer_step(conn, task_id, t, role)
     finally:
         # Захват снимается, только если он записан ЭТИМ вызовом и шаг не
         # довёл дело до фактического старта агента (требование 2, AC-2/
@@ -231,7 +271,7 @@ def _cmd_run(conn, task_id: str) -> None:
             zone_lock.release_claim(conn, task_id)
 
 
-def _run_developer_step(conn, task_id: str, t, role: str) -> None:
+def _run_developer_step(conn, task_id: str, t, role: str) -> bool | None:
     """Тело шага ПОСЛЕ прохождения занятости зоны — пауза, стоп-кран
     волны, workspace, pre-flight, фиксация, сборка промпта, попытки
     агента. Вынесено из `_cmd_run` отдельной функцией (SPEC
@@ -252,12 +292,24 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         return
     target, skills, model_id = payload
 
+    if role == "developer":
+        action, payload = _pull_before_developer_step(conn, task_id, t)
+        if action == "exit":
+            sys.exit(payload)
+        if action == "return":
+            return
+
     prompt = _build_prompt(conn, task_id, t, role, target, skills)
 
+    journaled_before = len(store.task_steps(conn, task_id))
     attempt, reason, failure_class = _run_attempts(conn, task_id, t, role,
                                                     prompt)
     if attempt is None:
-        return
+        # Успех шага для `cmd_run_and_advance` — завершение роли этим
+        # вызовом, не таймаут и не остановка потолком бюджета (оба тоже
+        # дают `attempt is None`).
+        return any(row["actor"] == role and row["action"] == "agent run finished"
+                   for row in store.task_steps(conn, task_id)[journaled_before:])
 
     if failure_class == failure_classification.MODEL_UNSUPPORTED_CLASS:
         # Тот же именованный отказ, что у предполётной сверки (SPEC
@@ -474,6 +526,62 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
                       f"{model_id}: {verdict.detail}")
 
     return "continue", (target, skills, model_id)
+
+
+PRE_STEP_PULL_ACTION = "подтяжка main перед шагом разработчика"
+PRE_STEP_PULL_SKIPPED_ACTION = ("подтяжка main перед шагом пропущена: "
+                                "конфликт подтяжки ждёт шага роли")
+
+
+def _pull_conflict_awaits_role_step(conn, task_id: str) -> bool:
+    """Метка «конфликт подтяжки: нужен шаг роли» записана после старта
+    последнего шага разработчика — конфликт ещё не отдан роли."""
+    from . import pull
+    awaiting = False
+    for row in store.task_steps(conn, task_id):
+        if row["actor"] == "developer" and row["action"] == "agent run started":
+            awaiting = False
+        elif row["action"] == pull.PULL_CONFLICT_ROLE_STEP_MARKER:
+            awaiting = True
+    return awaiting
+
+
+def _pull_before_developer_step(conn, task_id: str, t):
+    """Подтяжка `main` в ветку задачи перед шагом разработчика (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требования 6-7) — после захвата замка зоны
+    и отказов до старта, до сборки промпта: роль начинает с актуального
+    main, а не узнаёт о расхождении эскалацией на выходе из `in_dev`.
+
+    Тот же узел `fsm._pull_main_or_escalate`, что на остальных точках
+    подтяжки: сверка отставания (ветка не отстаёт — ни слияния, ни
+    записи), WIP-чекпоинт перед слиянием, авторазрешение карты,
+    эскалация неразрешимого конфликта с меткой «нужен шаг роли». Без
+    прогона планки — её зеленит как раз этот шаг.
+
+    Метка уже стоит и шага роли после неё не было — подтяжка
+    пропускается: конфликт разрешает сама роль, а повторная подтяжка
+    эскалировала бы тот же конфликт снова, не дав роли ни одного шага.
+
+    Возврат — как у `_refuse_before_start`: `("continue", None)`,
+    `("return", None)` (задача эскалирована) или `("exit", текст)`."""
+    from . import fsm
+    if _pull_conflict_awaits_role_step(conn, task_id):
+        store.journal(conn, task_id, "fsm", PRE_STEP_PULL_SKIPPED_ACTION,
+                      t["branch"] or "")
+        return "continue", None
+    outcome = fsm._pull_main_or_escalate(conn, task_id, t, t["state"],
+                                         run_plank=False)
+    if outcome == "escalated":
+        print(f"[{task_id}] шаг не начат: подтяжка main перед шагом "
+              f"эскалирована")
+        return "return", None
+    if outcome == "refused":
+        return "exit", (f"[{task_id}] run отклонён: подтяжка main перед "
+                        f"шагом не выполнена — причина в журнале")
+    if outcome == "pulled":
+        store.journal(conn, task_id, "fsm", PRE_STEP_PULL_ACTION,
+                      t["branch"] or "")
+    return "continue", None
 
 
 # Действие записи журнала отказа «модель не поддерживается CLI» (SPEC
@@ -1473,7 +1581,13 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3): лог, трение, токены и
     # стоимость — всё из одного разбора, а формат знает тот, чей CLI
     # его написал.
-    pump = agent_log.OutputPump(proc.stdout, log_path, provider)
+    # Итоговая строка pytest пишется в журнал из потока насоса — своим
+    # соединением: соединение `conn` принадлежит этому потоку, а sqlite
+    # не отдаёт его другому (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требование 1).
+    pump = agent_log.OutputPump(
+        proc.stdout, log_path, provider,
+        on_pytest_summary=lambda summary: store.journal(
+            store.db(), task_id, role, agent_log.PYTEST_RUN_ACTION, summary))
     pump.start()
     timed_out = False
     killed_group = None

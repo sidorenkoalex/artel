@@ -79,6 +79,17 @@ AGENT_SETTING_SOURCES = "user"
 ARTEL_ROLE_ENV = "ARTEL_ROLE"
 OBSERVATION_HEARTBEAT_PERIOD = 30
 OBSERVATION_STALE_SECONDS = 3 * OBSERVATION_HEARTBEAT_PERIOD
+# Ход живого шага в дозоре `watch` (SPEC 01M446X1B7FB8JDMYFP5APWTVE,
+# требования 3, 5, 7): сводка — на каждой отметке k·N минут от начала
+# шага; «нет коммитов» — после 35 из 45 минут шага без коммита ветки;
+# «стоимость шага» — usage, уже лёгший в лог шага, дороже порога (типовой
+# шаг developer ~3.5 $). Граница — строки класса `pytest`, сводки и
+# предупреждения вместе на задачу за скользящие 60 минут: 6 сводок + до
+# 10 прочих.
+WATCH_PROGRESS_PERIOD_MIN = 10
+WATCH_NO_COMMIT_WARN_SEC = 2100
+WATCH_STEP_COST_WARN_USD = 5.0
+WATCH_PROGRESS_LINES_PER_HOUR = 16
 ARTEL_TASK_ENV = "ARTEL_TASK"
 # Слота keychain с ключом API для ролей на провайдере `codex` здесь больше
 # нет (решение Оператора 22.09.2026, `docs/research/providers-codex-plan.md`,

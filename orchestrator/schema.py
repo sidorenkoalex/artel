@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
+  merge_after TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -277,6 +278,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # молча не меняет. NULL в обеих — задача без набора, как до этой задачи.
     add_column(conn, "tasks", "model_set", "TEXT")
     add_column(conn, "tasks", "model_set_members", "TEXT")
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 2):
+    # полные id через запятую в порядке SPEC, записанные `approve` гейта
+    # SPEC и каналами переписывания (`orchestrator/merge_after.py`). NULL —
+    # зависимостей нет.
+    add_column(conn, "tasks", "merge_after", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

@@ -608,15 +608,20 @@ class AutoStopsOnRepeatedAdvanceRefusalTest(AutoCycleTest):
         self.patch_object(fsm, "cmd_advance", self.advance)
 
     def test_ac1_identical_refusal_twice_in_a_row_stops_the_cycle(self):
-        """AC-1: остановка на ВТОРОМ из двух отказов, задача — там же, где
-        была перед первым; причина и подсказка — в выводе."""
+        """AC-1: остановка на отказе, задача — там же, где была перед
+        ним; причина и подсказка — в выводе. «Рабочая копия артефактов
+        грязная» — класс «чинит Оператор» (SPEC 01M446WEVJXARR5CDED8RE9CCR,
+        AC-3): остановка на первом же отказе.
+
+        Ловит мутацию: класс «чинит Оператор» получает холостой шаг до
+        второго такого же отказа — `advance` вызвался бы дважды."""
         text = "переход отклонён: рабочая копия артефактов грязная"
         self.advance.script = [text, text]
 
         out = self.auto()
 
-        self.assertEqual(self.advance.calls, 2,
-                         "цикл не остановился на втором подряд отказе")
+        self.assertEqual(self.advance.calls, 1,
+                         "цикл не остановился на первом отказе «чинит Оператор»")
         self.assertEqual(self.state(), "in_dev")
         self.assertIn("auto остановлен", out)
         self.assertIn(text, out)
@@ -649,9 +654,13 @@ class AutoStopsOnRepeatedAdvanceRefusalTest(AutoCycleTest):
             f"почини причину и повтори artel.py advance {self.TASK}", out)
 
     def test_ac3_two_different_refusal_texts_do_not_stop_the_cycle(self):
-        """AC-3: разный текст на двух подряд шагах — не серия."""
+        """AC-3: разный текст на двух подряд шагах — не серия.
+
+        Ловит мутацию: повтор-остановка класса «чинит роль» сравнивает не
+        действие отказа, а сам факт отказа после шага роли — цикл
+        остановился бы на втором отказе, не дойдя до лимита."""
         self.advance.script = [
-            "переход отклонён: рабочая копия артефактов грязная",
+            "переход отклонён: приёмочные тесты",
             "переход отклонён: трассируемость AC",
         ]
 
@@ -742,7 +751,7 @@ class PreAdvanceStillTriesOnLegitFirstEntryTest(AutoCycleTest):
             self.agent.calls, [],
             "developer запущен напрямую — рубеж перехватил легитимный "
             "первый вход в in_dev, для которого advance не был вызван вовсе")
-        self.assertEqual(self.advance.calls, 2,
+        self.assertEqual(self.advance.calls, 1,
                          "advance не был вызван — рубеж держал пред-advance")
         self.assertIn(text, out)
 
@@ -1675,8 +1684,8 @@ class AutoRunsDeveloperOnMandateWithoutPlanSectionTest(AutoCycleTest):
         self.assertEqual(self.task_row()["zones_extension"], self.OUT_OF_ZONE)
 
     def test_without_a_mandate_stops_without_running_the_role(self):
-        """Мандата нет — прежний отказ «переход отклонён: гейт зон» дважды
-        подряд, `Stop` решением Оператора без единого шага роли.
+        """Мандата нет — прежний отказ «переход отклонён: гейт зон» (класс
+        «чинит Оператор»), `Stop` на первом же отказе без единого шага роли.
 
         Ловит мутацию: мягкий класс распространён на любой отказ гейта
         зон — developer гонялся бы по пути, который никто не разрешал."""
@@ -1684,7 +1693,7 @@ class AutoRunsDeveloperOnMandateWithoutPlanSectionTest(AutoCycleTest):
 
         self.assertEqual(self.agent.calls, [])
         self.assertEqual(self.refusal_actions(),
-                         ["переход отклонён: гейт зон"] * 2)
+                         ["переход отклонён: гейт зон"] * 1)
         self.assertEqual(self.state(), "in_dev")
         self.assertIn(f"почини причину и повтори artel.py advance {self.TASK}",
                       out)
@@ -1767,17 +1776,16 @@ class PreAdvanceMandateRefusalRepeatTest(AutoCycleTest):
 
     def test_other_in_dev_refusal_still_stops_on_the_second_repeat(self):
         """Контроль AC-6: прежний отказ гейта зон в `in_dev` остаётся
-        классом Оператора — второй подряд даёт `Stop` без шага роли.
+        классом Оператора — первый же отказ даёт `Stop` без шага роли
+        (SPEC 01M446WEVJXARR5CDED8RE9CCR, AC-3).
 
         Ловит мутацию: исключение из `other_class_refusal` написано
         префиксом «гейт зон» и накрыло прежнее действие."""
         self.advance.script = ["переход отклонён: гейт зон"] * 2
 
         first = self.pre_advance()
-        second = self.pre_advance()
 
-        self.assertIsInstance(first, auto.Refused)
-        self.assertIsInstance(second, auto.Stop)
+        self.assertIsInstance(first, auto.Stop)
 
 
 if __name__ == "__main__":

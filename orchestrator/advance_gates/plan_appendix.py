@@ -70,10 +70,15 @@ def _drop_base_worktree(repo: Path, task_repo: Path) -> None:
     shutil.rmtree(repo, ignore_errors=True)
 
 
-def git_apply(repo: Path, appendix: guard.PlanAppendix) -> str:
+def git_apply(repo: Path, appendix: guard.PlanAppendix, *flags: str) -> str:
     """`git apply` приложения в дереве `repo`. Пустая строка — git
     согласился; иначе его ответ, и он едет в журнал: без него и роль, и
     Оператор читают «неприменимо» без единой подсказки, ЧТО не сошлось.
+
+    `flags` — дополнительные ключи `git apply`: ворота мержа спрашивают
+    `--reverse --check`, не наложено ли приложение в main уже (SPEC
+    01M443HV9SJYVYQTHJSQ87QV68, требование 5) — тем же патчем, байт в
+    байт.
 
     Одна функция на гейт и на мерж НАРОЧНО: оба обязаны отдавать git'у
     байт-в-байт один и тот же патч одним и тем же способом — иначе
@@ -91,7 +96,7 @@ def git_apply(repo: Path, appendix: guard.PlanAppendix) -> str:
     patch_file = patch / "appendix.diff"
     try:
         patch_file.write_text(appendix.diff, encoding="utf-8")
-        res = gitcmd.in_repo(repo, "apply", str(patch_file))
+        res = gitcmd.in_repo(repo, "apply", *flags, str(patch_file))
     finally:
         shutil.rmtree(patch, ignore_errors=True)
     if res is not None and res.returncode == 0:
