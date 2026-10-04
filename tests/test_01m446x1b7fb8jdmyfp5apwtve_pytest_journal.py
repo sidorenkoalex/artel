@@ -258,6 +258,17 @@ class Ac2CodexCommandResultTest(PytestJournalStepSandbox):
         self.use_role_map(roles={ROLE: {"provider": "codex"}},
                           tiers={FIXTURE_TIER: FIXTURE_CODEX_MODEL},
                           allow_experimental=(FIXTURE_CODEX_MODEL,))
+        # Исполняемый файл codex на машине не нужен: окружение роли ищет
+        # его через `shutil.which` (тот же приём, что
+        # tests/test_codex_login_shell_path.py). Без подмены шаг на
+        # раннере CI без codex не начинается (amend-tests Оператора 05.10).
+        real_which = runner.shutil.which
+        patcher = mock.patch.object(
+            runner.shutil, "which",
+            lambda name, *a, **kw: ("/usr/local/bin/codex" if name == "codex"
+                                    else real_which(name, *a, **kw)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_ac2_codex_pytest_summary_journalled_once_per_run(self):
         """Шаг Codex: результаты команд с прогоном pytest и без него.
