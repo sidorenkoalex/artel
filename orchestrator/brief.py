@@ -552,6 +552,57 @@ def _answer_component(conn, task_id: str, role: str, branch: str,
     return render(conn, task_id, role, f"tasks/{task_id}/{rel}", text, run_id)
 
 
+_ANSWER_REL_RE = re.compile(r"^tasks/(?P<task>[^/]+)/(?P<name>ANSWER-\d+\.md)$")
+
+
+def _developer_answer_boundary(rows) -> int | None:
+    """Id записи журнала `rows`, после которой ANSWER ещё не видел ни один
+    шаг разработчика: старт его последнего шага, а до первого шага — вход
+    задачи в `in_dev`; `None` — ни того ни другого в журнале нет."""
+    started = entered = None
+    for row in rows:
+        if row["actor"] == "developer" and row["action"] == "agent run started":
+            started = row["id"]
+        elif row["action"] == "state -> in_dev":
+            entered = row["id"]
+    return started if started is not None else entered
+
+
+def _developer_answer_names(conn, task_id: str, branch: str,
+                            foreign: bool) -> list[str]:
+    """Имена `ANSWER-n.md` для брифа разработчика по возрастанию `n`
+    (SPEC 01M443BPQEA9ZMJ3R50THNB1MF, требование 4): последний — как до
+    задачи — и КАЖДЫЙ, чья запись приёма в журнале новее старта
+    предыдущего шага разработчика. Иначе указание Оператора, данное
+    вслед за ответом на эскалацию, вытеснило бы из брифа ещё не
+    отработанный ответ."""
+    names = set()
+    latest = _latest_answer_rel(task_id, branch, foreign)
+    if latest is not None:
+        names.add(latest)
+    rows = store.task_steps(conn, task_id)
+    boundary = _developer_answer_boundary(rows)
+    if boundary is not None:
+        for row in rows:
+            found = _ANSWER_REL_RE.match(row["detail"] or "")
+            if (row["id"] > boundary and row["actor"] == "operator"
+                    and found and found["task"] == task_id):
+                names.add(found["name"])
+    return sorted(names, key=lambda name: int(name[len("ANSWER-"):-len(".md")]))
+
+
+def _developer_answer_components(conn, task_id: str, branch: str,
+                                 foreign: bool, run_id: str) -> list[str]:
+    parts = []
+    for name in _developer_answer_names(conn, task_id, branch, foreign):
+        text = _branch_or_disk_text(task_id, branch, name, foreign)
+        if text is not None:
+            parts.append(_manifest_component(conn, task_id, "developer",
+                                             f"tasks/{task_id}/{name}", text,
+                                             run_id))
+    return parts
+
+
 def _questions_component(conn, task_id: str, role: str, branch: str,
                          foreign: bool, run_id: str) -> str:
     """Добавка брифа с текстом QUESTIONS.md задачи (SPEC T075, AC-6) —
@@ -672,10 +723,8 @@ def developer_brief(conn, task_id: str) -> str:
     ]
     parts.extend(_plan_review_components(conn, task_id, branch, foreign,
                                          run_id))
-    answer_part = _answer_component(conn, task_id, "developer", branch,
-                                    foreign, run_id, render=_manifest_component)
-    if answer_part:
-        parts.append(answer_part)
+    parts.extend(_developer_answer_components(conn, task_id, branch, foreign,
+                                              run_id))
     text, num_parts = context_package.discipline(
         [HEADER, BOUNDARY_INSTRUCTION, *parts])
     return mark_unclosed_parts(text, run_id, num_parts)

@@ -132,18 +132,96 @@ def _answer_document(task_id: str, n: int, raw: str) -> str:
     )
 
 
+INSTRUCTION_ACTION = "ANSWER создан: указание Оператора"
+INSTRUCTION_STATES = ("in_dev", "review")
+_ROLE_ENV_REFUSAL = ("answer отказана — вызов из окружения роли (role_env), "
+                     "REVIEW 01M287TPG0HAVXS8CHBCY679WN итерация 1, "
+                     "замечание R1-F1")
+
+
+def _has_mandate_lines(raw: str) -> bool:
+    """Есть ли в тексте хоть одна строка маркера мандата зон или тестов —
+    даже с пустым или негодным списком элементов: такой файл идёт
+    прежним путём мандата (SPEC 01M443BPQEA9ZMJ3R50THNB1MF, требование 1),
+    где его элементы проверяет и отказывает `mandate.refusals`."""
+    return any(mandate.elements(line, marker) is not None
+               for line in raw.splitlines()
+               for marker in (fsm_advance._ZONES_MANDATE_MARKER,
+                              mandate.TEST_WEAKENING_MANDATE_MARKER))
+
+
+def _instruction_text(conn, task_id: str, file_path: str) -> str | None:
+    """Текст указания Оператора (SPEC 01M443BPQEA9ZMJ3R50THNB1MF,
+    требования 1-3) — файл без строк мандатов в `in_dev`/`review`;
+    `None` — не указание, команда идёт прежним путём под lease.
+
+    Рубеж окружения роли — до чтения файла, как у мандатов: роль не
+    выдаёт указание сама себе. Пустой файл — именованный отказ до
+    коммита ANSWER."""
+    state = store.get_task(conn, task_id)["state"]
+    if state not in INSTRUCTION_STATES:
+        return None
+    if runner.in_role_environment():
+        sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
+    raw = _read_answer_file(task_id, file_path)
+    if _has_mandate_lines(raw):
+        return None
+    if not raw.strip():
+        sys.exit(f"[{task_id}] answer отказана — пустой файл указания "
+                 f"{file_path}: ANSWER не создан")
+    return raw
+
+
 def cmd_answer(task_id: str, file_path: str,
               session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2) — тем же
     приёмом, что и остальные мутирующие команды задачи (approve/reject/
     run/kill/workspace).
 
+    Исключение — указание Оператора в `in_dev`/`review` (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требование 5): lease не берётся, потому
+    что его держит идущий шаг роли, а указание адресовано её СЛЕДУЮЩЕМУ
+    шагу — ни состояние, ни шаг, ни lease оно не трогает, только
+    добавляет ANSWER в ссылку документов.
+
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     до lease (REVIEW T094 итерация 1, замечание 1)."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    raw = _instruction_text(conn, task_id, file_path)
+    if raw is not None:
+        _commit_instruction(conn, task_id, raw)
+        return
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_answer(conn, task_id, file_path))
+
+
+def _commit_answer(conn, task_id: str, raw: str) -> tuple[str, str]:
+    """Коммит следующего `ANSWER-n.md` с текстом `raw` в ссылку документов
+    и перефиксация; (путь ANSWER, ветка-источник)."""
+    fixation.stop_on_ref_drift(conn, task_id, "operator", "answer")
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
+    n = _next_answer_number(existing)
+    rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
+    text = _answer_document(task_id, n, raw)
+    commit_message = f"{task_id}: ANSWER-{n} — ответ Оператора"
+    commit_sha = artifact_branch.commit_files(task_id, {rel_answer: text},
+                                              commit_message)
+    if not commit_sha:
+        sys.exit(f"[{task_id}] {rel_answer} не закоммичен в артефактную "
+                 f"ветку {branch}")
+    store.record_fixation(conn, task_id)
+    return rel_answer, branch
+
+
+def _commit_instruction(conn, task_id: str, raw: str) -> None:
+    rel_answer, branch = _commit_answer(conn, task_id, raw)
+    store.journal(conn, task_id, "operator", INSTRUCTION_ACTION, rel_answer)
+    print(f"[{task_id}] {rel_answer} создан и закоммичен в артефактную "
+          f"ветку {branch}")
+    print("  указание дойдёт до роли на её следующем шаге; идущий шаг не "
+          "прерывается")
 
 
 def _cmd_answer(conn, task_id: str, file_path: str) -> None:
@@ -155,9 +233,11 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     запись с путями мандата (AC-1) — либо строку мандата тестов
     («Ослабление тестов разрешено: ...», SPEC 01M42NB9GKXNP74HAYEJ7C7CA8,
     требование 3), тогда запись называет его элементы. Файл без маркеров
-    в этих состояниях, как и любое другое состояние вне `escalated`, —
-    прежний отказ,
-    прежнее сообщение (AC-2).
+    в этих состояниях сюда не доходит — это указание Оператора, его
+    принимает `cmd_answer` без lease (SPEC 01M443BPQEA9ZMJ3R50THNB1MF);
+    отказ ниже остаётся только гонке «состояние сменилось между
+    чтением и lease». Любое другое состояние вне `escalated` — прежний
+    отказ, прежнее сообщение (AC-2).
 
     Ветка `in_dev`/`review` отказывает ещё до чтения файла, если ТЕКУЩИЙ
     процесс сам исполняется в окружении роли (`runner.in_role_environment`)
@@ -182,11 +262,9 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     test_elements: list[str] = []
     if state == "escalated":
         raw = _read_checked_answer_file(task_id, file_path, t["branch"])
-    elif state in ("in_dev", "review"):
+    elif state in INSTRUCTION_STATES:
         if runner.in_role_environment():
-            sys.exit(f"[{task_id}] answer отказана — вызов из окружения "
-                     f"роли (role_env), REVIEW 01M287TPG0HAVXS8CHBCY679WN "
-                     f"итерация 1, замечание R1-F1")
+            sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
         raw = _read_checked_answer_file(task_id, file_path, t["branch"])
         mandate_paths = _zones_mandate_marker_paths(raw)
         # Мандат тестов принимается здесь тем же рубежом и той же
@@ -201,19 +279,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
         sys.exit(f"[{task_id}] answer доступна только для задачи в "
                  f"состоянии escalated (сейчас: {state})")
 
-    fixation.stop_on_ref_drift(conn, task_id, "operator", "answer")
-    branch, _foreign = artifact_source.resolve(conn, task_id)
-    existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
-    n = _next_answer_number(existing)
-    rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
-    text = _answer_document(task_id, n, raw)
-    commit_message = f"{task_id}: ANSWER-{n} — ответ Оператора"
-    commit_sha = artifact_branch.commit_files(task_id, {rel_answer: text},
-                                              commit_message)
-    if not commit_sha:
-        sys.exit(f"[{task_id}] {rel_answer} не закоммичен в артефактную "
-                 f"ветку {branch}")
-    store.record_fixation(conn, task_id)
+    rel_answer, branch = _commit_answer(conn, task_id, raw)
 
     if mandate_paths or test_elements:
         kinds = []
