@@ -11,7 +11,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from orchestrator import github_adapter
+from orchestrator import config, github_adapter, workspace
 
 
 class RemoteBaseAddressTest(unittest.TestCase):
@@ -52,8 +52,11 @@ class RemoteBaseAddressTest(unittest.TestCase):
                 {"target": "artel", "branch": "task/t001-x", "title": "x",
                  "draft_mr_created": 0, "is_canary": 0})
 
-        self.assertEqual(fetches, [("origin", "develop", None)])
-        self.assertEqual(counts, [("c0ffee" * 6 + "abcd", "task/t001-x", None)])
+        # Репозиторий — клон артели (ADR-0021 п.1, этап 2; SPEC
+        # 01M42PENCS26D0656X8FR7DFA7, AC-6), не `None` (главная копия).
+        clone = workspace.repo(config.DEFAULT_TARGET)
+        self.assertEqual(fetches, [("origin", "develop", clone)])
+        self.assertEqual(counts, [("c0ffee" * 6 + "abcd", "task/t001-x", clone)])
         git.assert_not_called()
         gh.assert_not_called()
         self.assertEqual(journal.call_args.args[3],

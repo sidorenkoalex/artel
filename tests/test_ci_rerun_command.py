@@ -146,7 +146,7 @@ class OutcomeTableTest(unittest.TestCase):
 
     def status(self, outcome: str, note: str):
         return mock.patch.object(ci, "verifying_status",
-                                 lambda branch: (outcome, note))
+                                 lambda branch, repo=None: (outcome, note))
 
     def test_not_started_rerun_never_reads_the_status(self):
         """Повтор не запущен — статус не перечитывается вовсе.
@@ -243,7 +243,7 @@ class CommandRefusalTest(sandbox.TaskSeededTmpRootTest):
             return self.branch_failed if sha == HEAD else self.main_failed
 
         for target, value in (
-                ("verifying_status", lambda branch: (ci.VERIFYING_RED,
+                ("verifying_status", lambda branch, repo=None: (ci.VERIFYING_RED,
                                                      red_note(HEAD))),
                 ("head_sha", lambda branch, repo=None: (HEAD, "")),
                 ("failed_check_names", failed_names),

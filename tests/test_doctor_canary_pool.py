@@ -268,6 +268,23 @@ class CanaryPoolDriftCheckTest(unittest.TestCase):
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
 
+        # `pool-seal` коммитит и пушит через клон артели (ADR-0021 п.1,
+        # этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7, требование 5), а сверка
+        # дрейфа читает запечатанный файл пина — здесь запечатанное сразу
+        # ложится в корень, как после `pin-update`.
+        def seal_into_root(files, message):
+            for rel, data in files.items():
+                target = config.ROOT / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            return "0" * 40
+
+        seal_patcher = mock.patch.object(doctor.pool_seal,
+                                         "_commit_through_clone",
+                                         seal_into_root)
+        seal_patcher.start()
+        self.addCleanup(seal_patcher.stop)
+
     def test_no_sealed_file_is_ok(self):
         """Ловит мутацию: `check_canary_pool_drift` не проверяет
         существование `canary/pool.sealed` до сравнения и падает/

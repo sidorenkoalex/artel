@@ -48,9 +48,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import artel, config, models, notes, store, yamlmini
+from orchestrator import (artel, config, models, notes, store, workspace,
+                          yamlmini)
 from tests.sandbox import (FIXTURE_OTHER_MODEL, FIXTURE_TIER_MODEL,
-                           RealGitSandbox)
+                           RealGitSandbox, clone_artel_from_origin)
 
 MODEL_SETS_REL = "model_sets.yaml"
 
@@ -191,6 +192,9 @@ class AdmitSandbox(RealGitSandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "наборы моделей")
         self.origin = str(self.add_synced_origin())
+        # Клон артели из origin, как его заводит `init` (ADR-0021 п.1,
+        # этап 2): команды Оператора коммитят и пушат через него.
+        clone_artel_from_origin(self.origin)
         self.conn = store.db()
         self.run_no = 0
 
@@ -218,6 +222,11 @@ class AdmitSandbox(RealGitSandbox):
         self.git("commit", "-q", "-m", "правка наборов")
         self.git("push", "-q", "origin",
                  f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+        # База сверки записи Оператора — `origin/main` клона артели
+        # (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7, AC-10):
+        # клон уже видел эту правку, как видит её пин после `pin-update`.
+        self.git("-C", str(workspace.repo(config.DEFAULT_TARGET)),
+                 "fetch", "-q", "origin")
 
     def add_run(self, title: str, overrides: dict = None, *,
                 verdict: str = "green", review_iterations: int = 0,

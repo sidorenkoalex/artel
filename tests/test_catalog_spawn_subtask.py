@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artifact_branch, catalog, config, store  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import RealGitSandbox, make_project_repo  # noqa: E402
 
 PARENT_ID = "01SPAWNUNITPARENTTASK001"
 PARENT_TITLE = "Родитель юнит-теста spawn_subtask"
@@ -238,6 +238,9 @@ class SubtaskZoneOverlapTest(SpawnSubtaskZoneSandbox):
         очереди замка зон, которой для её target'а не бывает; асимметрия с
         парной механикой `cmd_new` осталась бы незамеченной."""
         store.update_task(self.conn, PARENT_ID, zones=SHARED_ZONE)
+        # Клон внешнего проекта (ADR-0021 п.1, этап 2): ссылка документов
+        # подзадачи заводится в нём.
+        make_project_repo(FOREIGN_TARGET)
 
         out, foreign = self.spawn(tz_body(SHARED_ZONE),
                                   target=FOREIGN_TARGET)

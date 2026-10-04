@@ -19,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
+from tests.sandbox import seed_artel_clone_stub  # noqa: E402
 from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
                            disk_backed_ls_tree_files, disk_backed_show,
                            fake_git)
@@ -80,6 +81,10 @@ class SecondEscalationRoundNeedsANewAnswerTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели (ADR-0021 п.1, этап 2): ветка и рабочая копия задачи
+        # живут в нём, `new` без клона отказывает — пустой настоящий
+        # репозиторий песочницы.
+        seed_artel_clone_stub()
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)

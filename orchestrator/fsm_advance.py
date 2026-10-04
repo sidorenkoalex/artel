@@ -192,7 +192,7 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
     acc_tdir = tdir
     with contextlib.ExitStack() as cleanup:
         if target != config.DEFAULT_TARGET:
-            code_dir, _err = workspace.ensure(task_id, t["branch"])
+            code_dir, _err = workspace.ensure(task_id, t["branch"], target)
             acc_tdir = cleanup.enter_context(
                 acceptance.plank_in_code_copy(task_id, branch, code_dir))
         elif workspace.on_task_branch(task_id, t["branch"], target) is True:

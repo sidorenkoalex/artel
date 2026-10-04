@@ -194,7 +194,7 @@ class EnforceBudgetReviewEscalationShaTest(TmpRootTest):
 
     def test_escalation_from_review_journals_the_code_sha(self):
         with mock.patch.object(gitcmd, "branch_head_sha",
-                               lambda b: "a" * 40):
+                               lambda b, repo=None: "a" * 40):
             escalated = budget.enforce_budget(store.db(), self.TASK, "review")
 
         self.assertTrue(escalated)
@@ -205,7 +205,7 @@ class EnforceBudgetReviewEscalationShaTest(TmpRootTest):
     def test_escalation_from_in_dev_does_not_journal_a_code_sha(self):
         store.update_task(store.db(), self.TASK, state="in_dev")
         with mock.patch.object(gitcmd, "branch_head_sha",
-                               lambda b: "a" * 40):
+                               lambda b, repo=None: "a" * 40):
             budget.enforce_budget(store.db(), self.TASK, "in_dev")
 
         details = [d for _, a, d in self.journal()
@@ -213,7 +213,7 @@ class EnforceBudgetReviewEscalationShaTest(TmpRootTest):
         self.assertEqual(details, [])
 
     def test_git_not_answering_does_not_journal_an_empty_sha(self):
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b: ""):
+        with mock.patch.object(gitcmd, "branch_head_sha", lambda b, repo=None: ""):
             budget.enforce_budget(store.db(), self.TASK, "review")
 
         details = [d for _, a, d in self.journal()

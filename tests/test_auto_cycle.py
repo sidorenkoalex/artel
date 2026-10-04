@@ -28,6 +28,7 @@ from orchestrator import (agent_log, alerts, auto, brief, budget,  # noqa: E402
                           catalog, ci, config, fsm, gitcmd, github_adapter,
                           pause, runner, store, zone_lock)
 from orchestrator.advance_gates import zones  # noqa: E402
+from tests.sandbox import seed_artel_clone_stub  # noqa: E402
 from tests.sandbox import (SpyRun, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
@@ -47,7 +48,7 @@ from tests.sandbox import (SpyRun, capture,  # noqa: E402
 _DEFAULT_VERIFYING_NOTE = "CI коммита aaaaaaaa не зелёный: guard=failure"
 
 
-def _default_verifying_status(branch: str) -> tuple[str, str]:
+def _default_verifying_status(branch: str, repo=None) -> tuple[str, str]:
     return ci.VERIFYING_RED, _DEFAULT_VERIFYING_NOTE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -200,6 +201,10 @@ class AutoCycleTest(unittest.TestCase):
                             # `.artel/worktrees/` репозитория.
                             ("WORKTREES", root / ".artel" / "worktrees")):
             self.patch_object(config, attr, value)
+        # Клон артели (ADR-0021 п.1, этап 2): ветка и рабочая копия задачи
+        # живут в нём, `new` без клона отказывает — пустой настоящий
+        # репозиторий песочницы.
+        seed_artel_clone_stub()
 
         # git настоящему репозиторию в этих тестах не нужен: цикл его не
         # зовёт, а команды внутри него (ревью-пакет, merge) либо подменены,
@@ -398,7 +403,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         состоянием, но не когда до него дошли через review.
         """
         self.patch_object(ci, "verifying_status",
-                          lambda branch: (ci.VERIFYING_GREEN,
+                          lambda branch, repo=None: (ci.VERIFYING_GREEN,
                                           "CI коммита aaaaaaaa зелёный (2 проверок)"))
         self.write_plan("ready")
         self.set_state("in_dev")
@@ -425,7 +430,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         spy = mock.MagicMock(wraps=github_adapter.ensure_head_in_origin)
         self.patch_object(github_adapter, "ensure_head_in_origin", spy)
         self.patch_object(ci, "verifying_status",
-                          lambda branch: (ci.VERIFYING_GREEN,
+                          lambda branch, repo=None: (ci.VERIFYING_GREEN,
                                           "CI коммита aaaaaaaa зелёный (2 проверок)"))
         self.write_plan("ready")
         self.set_state("in_dev")
@@ -446,7 +451,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         до реценьювера, а предмет теста — именно повтор итерации ревью,
         не опрос CI."""
         self.patch_object(ci, "verifying_status",
-                          lambda branch: (ci.VERIFYING_GREEN,
+                          lambda branch, repo=None: (ci.VERIFYING_GREEN,
                                           "CI коммита aaaaaaaa зелёный (2 проверок)"))
         self.write_plan("ready")
         self.set_state("in_dev")
@@ -1583,7 +1588,8 @@ class AutoRunsDeveloperOnMandateWithoutPlanSectionTest(AutoCycleTest):
         # трёхаргументная (лок `acceptance_tests/`) — пустой дифф.
         self.patch_object(
             gitcmd, "diff_names",
-            lambda base, branch, *rest: [] if rest else [self.OUT_OF_ZONE])
+            lambda base, branch, *rest, repo=None:
+            [] if rest else [self.OUT_OF_ZONE])
 
     def write_mandate(self) -> None:
         (self.tdir / "ANSWER-1.md").write_text(

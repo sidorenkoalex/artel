@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import artifact_branch, gitcmd, store
-from tests.sandbox import AutoOriginSandbox, OriginRealGitSandbox
+from tests.sandbox import (AutoOriginSandbox, OriginRealGitSandbox,
+                           strip_dash_c)
 
 
 class ClassifyPushFailureTest(unittest.TestCase):
@@ -85,7 +86,10 @@ class PushWithoutOriginTest(PushJournalSandbox):
         with mock.patch.object(gitcmd, "git", side_effect=spy):
             artifact_branch.push(self.TASK)
 
-        push_calls = [c for c in recorded if c and c[0] == "push"]
+        # Сквозь `-C <клон>`: ссылка документов отправляется из клона
+        # проекта (ADR-0021 п.1, этап 2).
+        push_calls = [c for c in map(strip_dash_c, recorded)
+                      if c and c[0] == "push"]
         self.assertEqual(push_calls, [])
 
 
@@ -186,7 +190,10 @@ class PushNonFastForwardTest(PushJournalSandbox):
         with mock.patch.object(gitcmd, "git", side_effect=spy):
             artifact_branch.push(self.TASK)
 
-        push_calls = [c for c in recorded if c and c[0] == "push"]
+        # Сквозь `-C <клон>`: ссылка документов отправляется из клона
+        # проекта (ADR-0021 п.1, этап 2).
+        push_calls = [c for c in map(strip_dash_c, recorded)
+                      if c and c[0] == "push"]
         self.assertTrue(push_calls)
         for call in push_calls:
             self.assertNotIn("--force", call)

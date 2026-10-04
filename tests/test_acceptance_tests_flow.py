@@ -32,7 +32,8 @@ from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpDirTest, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git, resilient_tmp_cleanup)
+                           disk_backed_show, fake_git,
+                           link_artel_clone_to_root, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1191,11 +1192,16 @@ class LockTest(unittest.TestCase):
             config, ROOT=self.root, DB=self.root / ".artel" / "state.db",
             TASKS=self.root / "tasks", LOGS=self.root / ".artel" / "logs",
             PROJECTS=self.root / ".artel" / "projects",
+            TARGETS=self.root / "targets.yaml",
             ROLE_HOME=self.root / ".artel" / "home",
             ROLE_CONFIG_DIR=self.root / ".artel" / "home" / ".claude",
             WORKTREES=self.root / ".artel" / "worktrees")
         self.patches.start()
         self.addCleanup(self.patches.stop)
+        # Клон артели — сам репозиторий песочницы (ADR-0021 п.1, этап 2):
+        # ветки задачи и ссылка документов живут в клоне, сценарий правит
+        # их git'ом `self.root`.
+        link_artel_clone_to_root(self.root)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new,

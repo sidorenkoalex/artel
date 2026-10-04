@@ -56,6 +56,9 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         return alerts.open_alerts(self.conn, "incident")
 
     def test_content_changed_is_added_and_committed(self):
+        """Ловит мутацию: изменённая по содержанию карта не добавляется или
+        не коммитится в репозитории мержа (`add`/`commit` нет в вызовах
+        git, видимых сквозь `-C`)."""
         regenerated = COMMITTED_MAP.replace(
             "aaaa000011112222333344445555666677778888",
             "cccc111122223333444455556666777788889999",
@@ -86,6 +89,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         self.assertEqual(self.incidents(), [])
 
     def test_only_built_at_sha_changed_restores_and_does_not_commit(self):
+        """Ловит мутацию: карта, отличающаяся только `built_at_sha`, всё
+        равно коммитится либо не восстанавливается `checkout`."""
         regenerated = COMMITTED_MAP.replace(
             "aaaa000011112222333344445555666677778888",
             "dddd444455556666777788889999000011112222")
@@ -130,6 +135,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
                          COMMITTED_MAP, "провал регенерации — карта не тронута")
 
     def test_add_failure_raises_incident_and_does_not_call_commit(self):
+        """Ловит мутацию: провал `add` карты не поднимает incident или не
+        отменяет `commit`."""
         regenerated = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
         git_calls = []
 
@@ -157,6 +164,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         self.assertTrue(incidents[0]["source"].startswith("fsm.map_regen"))
 
     def test_commit_failure_raises_incident(self):
+        """Ловит мутацию: провал `commit` карты проходит молча, без incident."""
         regenerated = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
 
         def fake_git(*args) -> subprocess.CompletedProcess:
@@ -181,6 +189,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         self.assertIn("стенд: commit упал", incidents[0]["message"])
 
     def test_checkout_failure_after_no_content_diff_raises_incident(self):
+        """Ловит мутацию: провал `checkout` восстановления карты проходит
+        молча, без incident."""
         regenerated = COMMITTED_MAP.replace(
             "aaaa000011112222333344445555666677778888",
             "dddd444455556666777788889999000011112222")

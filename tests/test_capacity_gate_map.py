@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import config, gitcmd, review  # noqa: E402
 from orchestrator.advance_gates import capacity  # noqa: E402
 from orchestrator import fsm_advance, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, strip_dash_c  # noqa: E402
 
 TASK_ID = "T001"
 BRANCH = "task/t001-x"
@@ -44,6 +44,8 @@ class CapacityGateMapPathspecTest(TmpRootTest):
         self.calls = []
 
     def _recording_git(self, *args) -> subprocess.CompletedProcess:
+        # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+        args = strip_dash_c(args)
         argv = list(args)
         if argv[:1] == ["diff"]:
             self.calls.append(argv)

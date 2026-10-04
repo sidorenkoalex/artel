@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
+from tests.sandbox import seed_artel_clone_stub  # noqa: E402
 from tests.sandbox import (LightTransitionSandbox, SpyRun,  # noqa: E402
                            capture, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git,
@@ -74,6 +75,11 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
         если `args` не про фиксацию (вызывающий код решает дальше сам).
         Эти вызовы НЕ считаются `merge_calls`/`abort_calls` — те про
         предмет теста, не про фиксацию."""
+        if Path(repo) == workspace.repo(config.DEFAULT_TARGET):
+            # Клон артели (ADR-0021 п.1, этап 2): ссылка документов задачи
+            # читается и пишется в нём через `in_repo` — не предмет этого
+            # файла, подтяжка идёт в рабочей копии задачи.
+            return gitcmd.git("-C", str(repo), *args)
         if args == ("rev-parse", "HEAD"):
             # Пустой sha (не фейковый непустой) — `confirm_fixation`
             # деградирует «сверять не с чем» (тот же вырожденный случай,
@@ -476,7 +482,7 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
         """
         self.setup_recording()
 
-        def fake_show(branch, rel):
+        def fake_show(branch, rel, repo=None):
             if rel.endswith("SPEC.md"):
                 return None, "git не ответил"
             return disk_backed_show(branch, rel)
@@ -561,6 +567,10 @@ class TargetSourcedRemoteTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели (ADR-0021 п.1, этап 2): ветка и рабочая копия задачи
+        # живут в нём, `new` без клона отказывает — пустой настоящий
+        # репозиторий песочницы.
+        seed_artel_clone_stub()
         config.TARGETS.write_text(self.TARGETS_YAML, encoding="utf-8")
 
         self.calls: list = []
@@ -639,10 +649,10 @@ class TargetSourcedRemoteTest(unittest.TestCase):
         self.assertTrue(fetch_calls, "SPEC 01M1R5B33CC7E6BZK085XV3ZCX AC-4: "
                         "сверка обязана фетчить в клоне контекста target'а")
         remote_args = fetch_calls[0]
-        self.assertIn(str(config.PROJECTS / "acme" / "workspace"),
+        self.assertIn(str(config.PROJECTS / "acme" / "repo"),
                      remote_args,
                      "AC-4: fetch идёт в клон контекста target'а "
-                     "(config.PROJECTS/<target>/workspace), не в "
+                     "(config.PROJECTS/<target>/repo, ADR-0021 п.1), не в "
                      "config.ROOT пульта")
         self.assertIn("origin", remote_args,
                      "AC-4: remote — локальное имя origin клона target'а "
