@@ -42,17 +42,21 @@ class RepoContext:
 # быть не может, `git -C` туда отказывает сразу, не поднимаясь вверх.
 NO_AREA = Path("/dev/null/artel-no-project-area")
 
+# Пути пульта на момент загрузки пакета — боевые для этого процесса.
+_LOADED_ROOT = config.ROOT
+_LOADED_PROJECTS = config.PROJECTS
+
 
 def projects_root() -> Path:
-    """Корень областей проектов `config.PROJECTS` — если он лежит под
-    `config.ROOT`; иначе `NO_AREA`. Рассогласование — песочница, подменившая
-    корень пульта, но не область проектов: клон и рабочие копии ушли бы в
-    боевую `.artel/projects`, а ссылки документов — в её `origin` (инцидент
-    04.10.2026, задача 01M42PENCS26D0656X8FR7DFA7: 80 тестовых ссылок
-    `refs/artifacts/*` в боевом origin)."""
-    try:
-        config.PROJECTS.resolve().relative_to(config.ROOT.resolve())
-    except ValueError:
+    """Корень областей проектов `config.PROJECTS`; `NO_AREA` — если корень
+    пульта подменён, а область проектов осталась боевой. Это песочница,
+    подменившая корень пульта, но не область проектов: клон и рабочие копии
+    ушли бы в боевую `.artel/projects`, а ссылки документов — в её `origin`
+    (инцидент 04.10.2026, задача 01M42PENCS26D0656X8FR7DFA7: 80 тестовых
+    ссылок `refs/artifacts/*` в боевом origin). Обратная подмена (своя
+    область проектов при настоящем корне) боевого клона не задевает."""
+    if (config.PROJECTS == _LOADED_PROJECTS
+            and config.ROOT != _LOADED_ROOT):
         return NO_AREA
     return config.PROJECTS
 

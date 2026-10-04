@@ -57,6 +57,16 @@ def gh(*args: str, timeout: int | None = None,
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
 
+def _repo_kwargs(repo: Path | None) -> dict:
+    """`repo=` для внутренних вызовов модуля: клон артели — умолчание этих
+    функций, поэтому для него (и для `None`) вызов идёт прежней формой без
+    `repo` — подмены `head_sha`/`first_parent_line` в тестах пульта
+    написаны под неё; внешний клон передаётся явно."""
+    if repo is None or repo == workspace.repo(config.DEFAULT_TARGET):
+        return {}
+    return {"repo": repo}
+
+
 def head_sha(branch: str, repo: Path | None = None) -> tuple[str, str]:
     """Sha головного коммита ветки задачи и причина, если его нет.
 
@@ -321,7 +331,7 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
     AC-12) — читает только. `repo` — клон проекта задачи, как у
     `head_sha`.
     """
-    sha, why = head_sha(branch, repo=repo)
+    sha, why = head_sha(branch, **_repo_kwargs(repo))
     if not sha:
         return VERIFYING_NONE, f"статус CI неизвестен: {why}"
     short = sha[:8]
@@ -448,7 +458,7 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     `None` (по умолчанию) — клон артели, тем же приёмом, что у
     `head_sha`.
     """
-    sha, why = head_sha(branch, repo=repo)
+    sha, why = head_sha(branch, **_repo_kwargs(repo))
     if not sha:
         return False, f"статус CI неизвестен: {why}"
 
@@ -637,7 +647,8 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
     родительская линия и дифф пропущенных проверок; `None` (по умолчанию)
     — клон артели, тем же приёмом, что у `head_sha`.
     """
-    line = first_parent_line(sha, MAIN_LINE_MAX_COMMITS, repo=repo) or [sha]
+    line = (first_parent_line(sha, MAIN_LINE_MAX_COMMITS, **_repo_kwargs(repo))
+            or [sha])
     ref = line[0]
     pending: set[str] | None = None
     failed: list = []
@@ -673,7 +684,7 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
         if skipped_at is not None:
             push_head, names = skipped_at
             skipped_at = None
-            if _push_touches_code(commit, push_head, repo=repo):
+            if _push_touches_code(commit, push_head, **_repo_kwargs(repo)):
                 pending.difference_update(names)
                 if not pending:
                     break

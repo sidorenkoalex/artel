@@ -40,8 +40,9 @@ from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
-                           is_claude_call, make_project_repo,
-                           network_guarded_real_run, resilient_tmp_cleanup)
+                           is_claude_call, link_artel_clone_to_root,
+                           make_project_repo, network_guarded_real_run,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -227,6 +228,7 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "init"],
                        cwd=config.ROOT, check=True)
+        link_artel_clone_to_root(config.ROOT)  # клон артели (ADR-0021 п.1)
         from orchestrator import artifact_branch
         artifact_branch.commit_files(
             self.TASK,
@@ -324,6 +326,7 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "init"],
                        cwd=config.ROOT, check=True)
+        link_artel_clone_to_root(config.ROOT)  # клон артели (ADR-0021 п.1)
         patcher = mock.patch.object(runner.keychain, "token",
                                     lambda slot: "tok-test")
         patcher.start()
@@ -431,6 +434,7 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "init"],
                        cwd=config.ROOT, check=True)
+        link_artel_clone_to_root(config.ROOT)  # клон артели (ADR-0021 п.1)
 
     def repo(self) -> Path:
         return config.PROJECTS / "sled"
@@ -566,6 +570,10 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "init"],
                        cwd=config.ROOT, check=True)
+        # Клон артели — сам `config.ROOT` (ADR-0021 п.1, этап 2): ветки и
+        # ссылки документов задач артели живут в клоне, сценарии сверяют
+        # их git'ом корня песочницы.
+        link_artel_clone_to_root(config.ROOT)
 
         self.patches = contextlib.ExitStack()
         self.addCleanup(self.patches.close)

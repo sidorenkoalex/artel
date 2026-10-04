@@ -26,12 +26,14 @@ def long_lived_manifest_rel(task_id: str) -> str:
     return f"tasks/{task_id}/acceptance_tests/{guard.LONG_LIVED_MANIFEST_NAME}"
 
 
-def blob_sha256(rev: str, rel: str, repo: Path) -> str | None:
+def blob_sha256(rev: str, rel: str, repo: Path | None = None) -> str | None:
     """SHA-256 БАЙТОВ файла `rel` в дереве `rev` (Р2: сумма — от дерева
     коммита, не от текста рабочего каталога и не от текста, прочитанного с
     перекодировкой концов строк); `None` — git не ответил или пути нет.
     `gitcmd.carpentry` — единственный вход git пульта, отдающий байты;
-    `repo` — клон проекта задачи (ADR-0021 п.1)."""
+    `repo` — клон проекта задачи (ADR-0021 п.1); не назван — клон артели."""
+    if repo is None:
+        repo = workspace.repo(config.DEFAULT_TARGET)
     res = gitcmd.carpentry(repo, ["show", f"{rev}:{rel}"], None,
                            text=False)
     if res is None or res.returncode != 0:

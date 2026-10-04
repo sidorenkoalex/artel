@@ -842,7 +842,8 @@ _PROJECT_TARGET_ENTRY = """  {name}:
 
 def make_project_repo(target: str, origin: bool = True) -> Path:
     """Клон внешнего проекта `target` по адресу `repo_context`
-    (`config.PROJECTS/<target>/workspace`) — настоящий git с первым
+    (`config.PROJECTS/<target>/repo`, ADR-0021 п.1, этап 2; до него —
+    общий `workspace/`) — настоящий git с первым
     коммитом на базовой ветке и, если `origin`, своим bare-`origin` рядом
     (`config.PROJECTS/<target>/origin.git`): ссылка документов задачи
     внешнего проекта живёт в git самого проекта (ADR-0021 п.3). Запись
@@ -858,7 +859,7 @@ def make_project_repo(target: str, origin: bool = True) -> Path:
         config.TARGETS.write_text(
             text.rstrip("\n") + "\n" + _PROJECT_TARGET_ENTRY.format(
                 name=target, base=config.MAIN_BRANCH), encoding="utf-8")
-    project = config.PROJECTS / target / "workspace"
+    project = config.PROJECTS / target / "repo"
     project.mkdir(parents=True, exist_ok=True)
 
     def git(*args: str) -> None:
@@ -873,6 +874,9 @@ def make_project_repo(target: str, origin: bool = True) -> Path:
         bare = config.PROJECTS / target / "origin.git"
         git("init", "-q", "--bare", str(bare))
         git("remote", "add", "origin", str(bare))
+        # База ветки задачи — `origin/<база>` клона (ADR-0021 п.1, этап 2:
+        # рабочая копия задачи заводится от свежего origin).
+        git("push", "-q", "origin", config.MAIN_BRANCH)
     return project
 
 
@@ -993,7 +997,22 @@ class SpyRun:
             return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
         if self.passthrough_unknown:
             return network_guarded_real_run(real_cmd, *args, **kwargs)
+        if len(cmd) >= 2 and cmd[1] == "clone":
+            self._fake_clone_dir(real_cmd)
         return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
+
+    @staticmethod
+    def _fake_clone_dir(cmd: list) -> None:
+        """Фейковый `git [-C <каталог>] clone … <url> <имя>` оставляет на
+        диске каталог клона с `.git` (ADR-0021 п.1, этап 2; SPEC
+        01M42PENCS26D0656X8FR7DFA7): пульт считает клон проекта заведённым
+        по `.git` в его каталоге (`artifact_branch.repo_for_target`), а git
+        здесь не исполняется — без каталога ссылка документов задачи не
+        заводилась бы ни в одном `cmd_new` под этим спаем."""
+        if len(cmd) < 4 or cmd[1] != "-C":
+            return  # без явного каталога — не угадывать, куда писать
+        name = [a for a in cmd[3:] if not a.startswith("-")][-1]
+        (Path(cmd[2]) / name / ".git").mkdir(parents=True, exist_ok=True)
 
     def git_subcommands(self) -> list:
         """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...] —
@@ -1091,6 +1110,10 @@ def link_artel_clone_to_root(root: Path) -> Path:
     ARTEL_CLONE_IS_ROOT`)."""
     clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
     clone.parent.mkdir(parents=True, exist_ok=True)
+    if clone.is_dir() and not clone.is_symlink():
+        # Пустой клон-заглушка `TmpRootTest.setUp` (`seed_artel_clone_stub`)
+        # — песочница, заведшая git в корне позже, заменяет его ссылкой.
+        shutil.rmtree(clone)
     if not clone.exists():
         clone.symlink_to(root, target_is_directory=True)
     return clone

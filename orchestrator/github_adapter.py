@@ -89,6 +89,15 @@ def _touched_protected_paths(branch: str, base: str,
     return [p for p in paths if config.is_protected_path(p)]
 
 
+def _gh_repo_kwargs(target_name: str, ctx) -> dict:
+    """`--repo` для `gh`: форндж внешнего target'а — его `remote`; артель —
+    без `--repo` (её `ctx.remote` — имя `origin`, не адрес форнджа). Признак
+    — проект, не путь клона: путь у артели с этапа 2 ADR-0021 тоже клон."""
+    if target_name == config.DEFAULT_TARGET or ctx is None:
+        return {}
+    return {"repo": ctx.remote}
+
+
 def ensure_draft_mr(conn, task_id: str, t) -> None:
     """Draft MR ветки задачи — ровно один раз за жизненный цикл (SPEC
     T079, требование 1, AC-1): идемпотентность несёт колонка
@@ -118,7 +127,7 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     # (прежнее поведение байт-в-байт).
     ctx = repo_context.resolve(target_name)
     repo = repo_context.path_or_none(ctx)
-    gh_repo_kwargs = {"repo": ctx.remote} if repo is not None else {}
+    gh_repo_kwargs = _gh_repo_kwargs(target_name, ctx)
 
     branch = t["branch"]
     # Пустая кодовая ветка — ДО push и ДО `gh pr create` (требование 8):
@@ -275,8 +284,7 @@ def undraft_mr(conn, task_id: str, t) -> None:
         return
     branch = t["branch"]
     ctx = repo_context.resolve(target_name)
-    gh_repo_kwargs = ({"repo": ctx.remote}
-                      if repo_context.path_or_none(ctx) is not None else {})
+    gh_repo_kwargs = _gh_repo_kwargs(target_name, ctx)
     ready = ci.gh("pr", "ready", branch, **gh_repo_kwargs)
     if ready is None or ready.returncode != 0:
         detail = ((ready.stderr or ready.stdout).strip()[:300]

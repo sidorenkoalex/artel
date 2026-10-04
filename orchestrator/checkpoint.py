@@ -110,9 +110,11 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
     - `timeout` — флаг, передаваемый в `_commit_external_step_artifacts`
       (`True` только для `commit_timeout_checkpoint`).
     """
-    # Любой проект, включая артель (SPEC 01M42PENCS26D0656X8FR7DFA7,
-    # требование 2): у каждой задачи своя рабочая копия в клоне её
-    # проекта, автокоммит и чекпоинт идут туда.
+    # Только артель, как до этапа 2 ADR-0021: её рабочая копия теперь в
+    # клоне проекта (`workspace.path`), для внешнего проекта поведение
+    # прежнее (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 3).
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
     wt = workspace.path(task_id)
     detail = ""
     if role == "developer":
@@ -705,8 +707,8 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     снятый со стейджа `_commit_worktree_change`, попал бы в `detail` как
     закоммиченный (SPEC 01M290PVYG2VJK6442H5BAX9MA, R1-F1).
 
-    Любой проект (ADR-0021 п.1, этап 2; до него — только догфуд), коммитит,
-    только если реально есть что коммитить
+    Только догфуд (его рабочая копия с этапа 2 ADR-0021 — в клоне
+    проекта), коммитит, только если реально есть что коммитить
     (`_commit_worktree_change` сам отказывает на пустом diff), тихая
     деградация без git — дословно `commit_timeout_checkpoint`.
 
@@ -722,9 +724,11 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     01M41R4YAM4NGEQXW1FWH7T22M, требование 4): 03.10.2026 роли уборкой
     удаляли весь отслеживаемый каталог задач рабочей копии.
     """
-    # Любой проект, включая артель (SPEC 01M42PENCS26D0656X8FR7DFA7,
-    # требование 2): у каждой задачи своя рабочая копия в клоне её
-    # проекта, автокоммит и чекпоинт идут туда.
+    # Только артель, как до этапа 2 ADR-0021: её рабочая копия теперь в
+    # клоне проекта (`workspace.path`), для внешнего проекта поведение
+    # прежнее (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 3).
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
     wt = workspace.path(task_id)
     if role != "developer":
         restore_out_of_bounds_deletions(conn, task_id, role, wt)

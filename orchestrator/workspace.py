@@ -25,9 +25,8 @@ from . import config, gitcmd, lease, repo_context, store, targets
 
 
 def area_consistent() -> bool:
-    """Область проектов лежит под корнем пульта (`config.PROJECTS` внутри
-    `config.ROOT`). Иначе пути пульта рассогласованы — так бывает у
-    песочницы, подменившей корень, но не область проектов: клон и рабочие
+    """Пути пульта согласованы (`repo_context.projects_root`). Иначе — так
+    бывает у песочницы, подменившей корень, но не область проектов: клон и рабочие
     копии ушли бы в боевую `.artel/projects`, а ссылки документов — в её
     `origin` (инцидент 04.10.2026, задача 01M42PENCS26D0656X8FR7DFA7: 80
     тестовых ссылок `refs/artifacts/*` в боевом origin). При рассогласовании
@@ -35,8 +34,9 @@ def area_consistent() -> bool:
     return repo_context.projects_root() != repo_context.NO_AREA
 
 
-AREA_MISMATCH_REASON = ("область проектов config.PROJECTS вне корня пульта "
-                        "config.ROOT — пути пульта рассогласованы")
+AREA_MISMATCH_REASON = ("корень пульта config.ROOT подменён, а область "
+                        "проектов config.PROJECTS — боевая: пути пульта "
+                        "рассогласованы")
 
 
 def repo(target: str) -> Path:
