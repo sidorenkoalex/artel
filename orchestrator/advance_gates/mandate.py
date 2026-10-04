@@ -37,9 +37,17 @@ _ZONES_MANDATE_MARKER = "Расширение зон разрешено:"
 # текст ANSWER (в том числе ссылка на основание) не анализируется.
 TEST_WEAKENING_MANDATE_MARKER = "Ослабление тестов разрешено:"
 
-# Оба вида мандата, и ровно два: новых видов задача не вводит («Не входит»
-# SPEC). Порядок — порядок появления в пульте, на результат не влияет.
-MANDATE_MARKERS = (_ZONES_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER)
+# Маркер мандата Оператора на зависимости мержа (SPEC
+# 01M44EP0D47F498TEE08MNGBYT, требование 3): элементы — id задач (полные или
+# префиксы) либо одно слово «нет»; строка задаёт новое значение
+# `merge_after` целиком. Элементы — не пути: их проверяет по БД
+# `orchestrator/merge_after.py`, а не правила путей ниже.
+MERGE_AFTER_MANDATE_MARKER = "Зависимости мержа:"
+
+# Все виды мандата. Порядок — порядок появления в пульте, на результат не
+# влияет.
+MANDATE_MARKERS = (_ZONES_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER,
+                   MERGE_AFTER_MANDATE_MARKER)
 
 # Путь репозитория в элементе мандата: буквы, цифры, `_`, `-`, `.` и `/`.
 # Абсолютный путь отсекается требованием к первому символу, сегмент `..` —
@@ -170,7 +178,8 @@ def _element_refusal(element: str, marker: str,
 
 
 def refusals(text: str, code_branch: str | None,
-            repo: Path | None = None) -> list[str]:
+            repo: Path | None = None, *, conn=None,
+            task_id: str | None = None) -> list[str]:
     """Причины отказа по ВСЕМ строкам мандатов текста файла ответа
     Оператора (требование 2); пустой список — файл проверку прошёл.
 
@@ -189,7 +198,15 @@ def refusals(text: str, code_branch: str | None,
     запрещало бы отвечать на эскалацию при молчащем git.
 
     `repo` — клон проекта, в котором живёт `code_branch` (ADR-0021 п.1).
+
+    `conn`/`task_id` — БД и задача ответа: строку «Зависимости мержа: …»
+    (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 3) проверяют правила
+    гейта SPEC по БД (`merge_after.value_refusals`); без них — только
+    форма элементов.
     """
+    # Ленивый импорт: `merge_after` сам импортирует этот модуль ради
+    # маркера.
+    from .. import merge_after
     files = _tree_files(code_branch, repo)
     found: list[str] = []
     for line in text.splitlines():
@@ -202,10 +219,17 @@ def refusals(text: str, code_branch: str | None,
                 found.append(f"строка «{shown}»: после маркера нет ни одного "
                              f"непустого элемента")
                 break
+            if marker == MERGE_AFTER_MANDATE_MARKER:
+                found.extend(f"строка «{shown}»: {reason}" for reason in
+                             merge_after.value_refusals(conn, task_id, parsed))
+                break
             for element in parsed:
                 reason = _element_refusal(element, marker, files)
                 if reason is not None:
                     found.append(f"строка «{shown}»: элемент «{element}» — "
                                  f"{reason}")
             break
+    repeated = merge_after.lines_refusal(text)
+    if repeated is not None:
+        found.append(repeated)
     return found

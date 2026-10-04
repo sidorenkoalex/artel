@@ -15,6 +15,7 @@
 `store.get_task`/резолвер префикса не проверяют ни длину, ни алфавит.
 """
 import os
+import re
 import time
 
 # Crockford base32: без I/L/O/U — визуально похожи на 1/1/0/V, стандартный
@@ -38,3 +39,22 @@ def new_task_id() -> str:
     timestamp_ms = int(time.time() * 1000)
     randomness = int.from_bytes(os.urandom(10), "big")
     return _encode(timestamp_ms, _TIME_CHARS) + _encode(randomness, _RANDOM_CHARS)
+
+
+_LEGACY_ID = re.compile(r"T\d+\Z")
+
+
+def is_task_id_form(text: str) -> bool:
+    """`text` по форме — id задачи пульта или его префикс: непустая строка
+    алфавита ULID не длиннее полного id, либо исторический `Tnnn`.
+
+    Нужна проверке формы поля `merge_after` (SPEC
+    01M44EP0D47F498TEE08MNGBYT, требование 1), у которой нет доступа к
+    БД: формат id знает только этот модуль, поэтому и правило формы
+    живёт здесь, рядом с генератором."""
+    if not text:
+        return False
+    if _LEGACY_ID.match(text):
+        return True
+    return (len(text) <= _TIME_CHARS + _RANDOM_CHARS
+            and all(ch in _ENCODING for ch in text))

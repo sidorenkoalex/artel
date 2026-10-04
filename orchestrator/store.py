@@ -262,6 +262,15 @@ def task_exists(conn: sqlite3.Connection, task_id: str) -> bool:
                         (task_id,)).fetchone() is not None
 
 
+def task_state(conn: sqlite3.Connection, task_id: str) -> str | None:
+    """Состояние задачи; `None` — строки нет. Без отказа `get_task`:
+    зависимости `merge_after` (SPEC 01M44EP0D47F498TEE08MNGBYT) читаются
+    по одной, и пропавшая из БД зависимость — данные, а не конец команды."""
+    row = conn.execute("SELECT state FROM tasks WHERE id=?",
+                       (task_id,)).fetchone()
+    return row["state"] if row is not None else None
+
+
 def peek_task_number(conn: sqlite3.Connection, target: str) -> int:
     """Номер следующей задачи БЕЗ расхода счётчика.
 
@@ -819,17 +828,29 @@ def resolve_task_id(conn, task_id: str) -> str:
     """
     if not task_id:
         return task_id
-    if conn.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
-        return task_id
-    escaped = task_id.replace("%", r"\%").replace("_", r"\_")
-    matches = [r["id"] for r in conn.execute(
-        "SELECT id FROM tasks WHERE id LIKE ? ESCAPE '\\'", (f"{escaped}%",))]
+    matches = task_id_matches(conn, task_id)
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         sys.exit(f"Префикс {task_id!r} неоднозначен — совпадает с "
                  f"{len(matches)} задачами: {', '.join(sorted(matches))}")
     return task_id
+
+
+def task_id_matches(conn, task_id: str) -> list[str]:
+    """Id задач, в которые разрешается `task_id`: точное совпадение —
+    ровно оно, иначе все id с этим префиксом. Узел разрешения
+    `resolve_task_id`, вынесенный для вызывающих, которым отказ процессом
+    не годится: проверка `merge_after` (SPEC 01M44EP0D47F498TEE08MNGBYT,
+    требование 2б) называет неоднозначный элемент причиной мягкого
+    отказа гейта, а не завершает `approve`."""
+    if not task_id:
+        return []
+    if conn.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+        return [task_id]
+    escaped = task_id.replace("%", r"\%").replace("_", r"\_")
+    return [r["id"] for r in conn.execute(
+        "SELECT id FROM tasks WHERE id LIKE ? ESCAPE '\\'", (f"{escaped}%",))]
 
 
 def get_task(conn, task_id: str) -> sqlite3.Row:
