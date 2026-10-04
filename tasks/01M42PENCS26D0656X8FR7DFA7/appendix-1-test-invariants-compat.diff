@@ -1,0 +1,35 @@
+diff --git a/tests/test_invariants.py b/tests/test_invariants.py
+index 109f1734..ed2ff696 100644
+--- a/tests/test_invariants.py
++++ b/tests/test_invariants.py
+@@ -1593,8 +1593,18 @@ class KillKeepsMainIntactTest(unittest.TestCase):
+                             # Worktree задачи (SPEC T045): kill убирает его —
+                             # без патча ушёл бы в .artel/worktrees/ РЕАЛЬНОГО
+                             # репозитория пульта, не песочницы.
+-                            ("WORKTREES", self.root / ".artel" / "worktrees")):
++                            ("WORKTREES", self.root / ".artel" / "worktrees"),
++                            # Область проектов (ADR-0021 п.1, этап 2): клон
++                            # артели и рабочие копии задач — в песочнице.
++                            ("PROJECTS", self.root / ".artel" / "projects"),
++                            ("TARGETS", self.root / "targets.yaml")):
+             self.repo.enter_context(mock.patch.object(config, attr, value))
++        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветка
++        # задачи живёт в клоне, сценарии сверяют её и main git'ом
++        # `self.root`. До этапа 2 ссылка безвредна: клон не читается.
++        clone = self.root / ".artel" / "projects" / config.DEFAULT_TARGET / "repo"
++        clone.parent.mkdir(parents=True, exist_ok=True)
++        clone.symlink_to(self.root, target_is_directory=True)
+ 
+         self.capture(catalog.cmd_init)
+         # SPEC T094: id — ULID, не предсказуемый "T001" — берём то, что
+@@ -2374,7 +2384,9 @@ class TestWeakeningNeedsTheOperatorTest(TmpRootTest):
+         self.answer_text = None
+         self.answer_subject = f"{self.TASK}: ANSWER-1 — ответ Оператора"
+ 
+-    def _show(self, ref, rel):
++    def _show(self, ref, rel, repo=None):
++        # `repo` — клон проекта задачи (ADR-0021 п.1, этап 2): git задачи
++        # получает репозиторий явно; ответ от него здесь не зависит.
+         if (ref, rel) == (self.BASE, self.DELETED):
+             return self.SOURCE, ""
+         if (ref, rel) == (self.ARTIFACT, self.ANSWER) and self.answer_text:
