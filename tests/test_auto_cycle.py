@@ -29,7 +29,7 @@ from orchestrator import (agent_log, alerts, auto, brief, budget,  # noqa: E402
                           pause, runner, store, zone_lock)
 from orchestrator.advance_gates import zones  # noqa: E402
 from tests.sandbox import seed_artel_clone_stub  # noqa: E402
-from tests.sandbox import (SpyRun, capture,  # noqa: E402
+from tests.sandbox import (SpyRun, TimeWithSleep, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
 
@@ -1240,7 +1240,7 @@ class WaitForZoneTest(AutoCycleTest):
             conn.execute("UPDATE tasks SET state='done' WHERE id=?", (released,))
             conn.commit()
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
 
@@ -1264,7 +1264,7 @@ class WaitForZoneTest(AutoCycleTest):
                 conn.execute("UPDATE tasks SET state='done' WHERE id=?", (occupier,))
                 conn.commit()
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
 
@@ -1301,7 +1301,7 @@ class WaitForZoneTest(AutoCycleTest):
                 (self.TASK, "sess-other", 999, "other-host", store.now()))
             conn.commit()
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-mine", "in_dev")
 
@@ -1361,7 +1361,7 @@ class ZoneWaitStopTest(AutoCycleTest):
             auto._on_sigterm(signal.SIGTERM, None)
             slept_through.append(seconds)
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
 
@@ -1387,7 +1387,7 @@ class ZoneWaitStopTest(AutoCycleTest):
         следующего опроса (здесь — непустой список `sleeps`).
         """
         sleeps = []
-        self.patch_object(auto.time, "sleep", sleeps.append)
+        self.patch_object(auto, "time", TimeWithSleep(sleeps.append))
         auto._stop_requested = True
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
@@ -1425,7 +1425,7 @@ class ZoneWaitStopTest(AutoCycleTest):
 
         self.write_plan("draft")
         self.patch_object(runner, "cmd_run", cmd_run_refusing_busy_zone)
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         out = self.auto()
 
@@ -1479,7 +1479,7 @@ class ZoneWaitDefaultTest(AutoCycleTest):
         store.update_task(store.db(), self.TASK, zones=self.ZONE)
         self._seed_occupier(self.OCCUPIER, self.ZONE)
         self.patch_object(runner, "cmd_run", self._cmd_run_refusing_busy_zone)
-        self.patch_object(auto.time, "sleep", self._release_on_poll)
+        self.patch_object(auto, "time", TimeWithSleep(self._release_on_poll))
 
     # ------------------------------------------------------------ фикстура
 

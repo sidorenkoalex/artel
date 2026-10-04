@@ -69,6 +69,7 @@ from orchestrator import (acceptance, artel, catalog, checkpoint, config,
                           retro_corpus, runner, stack, store)
 from tests.sandbox import (FakeProc, RealGitSandbox, _stub_check_stack,
                            capture, capture_new_task_id, is_claude_call,
+                           patch_pult_sleep,
                            resilient_tmp_cleanup)
 
 REPO = Path(__file__).resolve().parent.parent
@@ -1364,7 +1365,7 @@ class TaskFlowSandbox(ProjectAreaSandbox):
 
         with mock.patch("time.monotonic", side_effect=lambda: base_mono + state["clock"]), \
                 mock.patch("time.time", side_effect=lambda: base_wall + state["clock"]), \
-                mock.patch("time.sleep", side_effect=sleep):
+                patch_pult_sleep(mock.Mock(side_effect=sleep)):
             yield
 
     def approve_until_settled(self, task: str, attempts: int = 4) -> str:

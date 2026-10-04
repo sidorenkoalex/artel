@@ -61,16 +61,18 @@ _RoleHomeReferenceTmpRootTest` — единственный, где сужени
 """
 import atexit
 import errno
+import importlib
 import io
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -439,6 +441,57 @@ def event(**fields) -> str:
     `tests/test_agent_log.py` и `tests/test_step_cost.py` — оба теперь
     импортируют её отсюда вместо собственной копии."""
     return json.dumps(fields, ensure_ascii=False) + "\n"
+
+
+class TimeWithSleep:
+    """Заместитель ссылки модуля пульта на `time` (SPEC
+    01M443HPZBMJGCHVGV4JQN88RS): подменён только `sleep`, остальное
+    читается из настоящего `time` в момент обращения — глобальная подмена
+    `time.monotonic`/`time.time` теста видна и через заместитель.
+
+    Подмена `time.sleep` модуля `time` целиком ловит и паузы стандартной
+    библиотеки — `subprocess.Popen._wait` опрашивает живой дочерний процесс
+    паузами `time.sleep`, и счётчик пауз теста растёт случайно."""
+
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def patch_sleep(module, sleep):
+    """Пауза `sleep` только там, где её зовёт `module`: ссылка модуля на
+    `time` подменяется `TimeWithSleep` (патчер `mock.patch.object`)."""
+    return mock.patch.object(module, "time", TimeWithSleep(sleep))
+
+
+# Модули пульта с паузой `time.sleep` — импортируются до обхода
+# `sys.modules`, чтобы ленивый импорт внутри команды не оставил модуль с
+# настоящей паузой.
+_PULT_SLEEP_MODULES = (
+    "orchestrator.acceptance", "orchestrator.auto", "orchestrator.doctor.leases",
+    "orchestrator.fsm_merge_gate", "orchestrator.liveness",
+    "orchestrator.merge_queue", "orchestrator.pause", "orchestrator.runner",
+    "orchestrator.watch",
+)
+
+
+def patch_pult_sleep(sleep) -> ExitStack:
+    """`patch_sleep` у каждого модуля пульта, чья ссылка `time` — модуль
+    `time`: для сценариев, где паузу зовут несколько модулей пульта.
+
+    Подмены наложены уже при вызове; снимает их `close()` возвращённого
+    `ExitStack` — `with patch_pult_sleep(f):` или
+    `self.addCleanup(patch_pult_sleep(f).close)`."""
+    for name in _PULT_SLEEP_MODULES:
+        importlib.import_module(name)
+    stack = ExitStack()
+    for name, module in sorted(sys.modules.items()):
+        if ((name == "orchestrator" or name.startswith("orchestrator."))
+                and getattr(module, "time", None) is time):
+            stack.enter_context(patch_sleep(module, sleep))
+    return stack
 
 
 class TmpDirTest(unittest.TestCase):

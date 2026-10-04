@@ -20,7 +20,7 @@ import unittest
 from unittest import mock
 
 from orchestrator import artel, auto, config, store, watch, runner, fsm, budget, catalog, answer, lease
-from tests.sandbox import TaskSeededTmpRootTest, capture
+from tests.sandbox import TaskSeededTmpRootTest, capture, patch_sleep
 
 
 class ObservationCliTest(TaskSeededTmpRootTest):
@@ -60,7 +60,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         """
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
         for command, pid in (("run", 43210), ("auto", 43211)):
@@ -120,7 +120,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
                     observation_id = json.loads(capture(artel.main))["id"]
                 with mock.patch.object(sys, "argv", ["artel.py", "observe", "show", observation_id, "--json"]):
                     self.assertFalse(json.loads(capture(artel.main))["fresh"], self.seed)
-                with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")), mock.patch.object(threading, "Timer", side_effect=AssertionError("hidden heartbeat timer")), mock.patch.object(artel.subprocess, "Popen", side_effect=AssertionError("external heartbeat service")):
+                with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))), mock.patch.object(threading, "Timer", side_effect=AssertionError("hidden heartbeat timer")), mock.patch.object(artel.subprocess, "Popen", side_effect=AssertionError("external heartbeat service")):
                     with self.assertRaisesRegex(RuntimeError, "watch ended"):
                         capture(artel.main)
                 with mock.patch.object(sys, "argv", ["artel.py", "observe", "show", observation_id, "--json"]):
@@ -143,7 +143,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
                 self.assertIn("наблюд", str(ctx.exception).lower(), self.seed)
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
         settings = [(name, value) for name, value in vars(config).items()
@@ -188,7 +188,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         store.insert_task(store.db(), "T003", "Чужой проект", "in_dev", "task/t003", "foreign", config.DEFAULT_BUDGET_USD)
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
         for task in ("T002", "T003", "T999"):
@@ -210,7 +210,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         """
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
         contexts = (
@@ -239,7 +239,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         store.insert_task(store.db(), "T002", "Вторая", "in_dev", "task/t002", config.DEFAULT_TARGET, config.DEFAULT_BUDGET_USD)
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", f"{self.TASK},T002"]):
             observation_id = json.loads(capture(artel.main))["id"]
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
         refusal, _ = lease.acquire(store.db(), self.TASK, "active-role")
@@ -270,7 +270,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         """
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "stop", observation_id]):
@@ -295,7 +295,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
         before = dict(store.get_task(store.db(), self.TASK))
-        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")), mock.patch.object(fsm, "cmd_approve") as approve, mock.patch.object(budget, "cmd_budget") as change_budget, mock.patch.object(catalog, "cmd_new") as new_task, mock.patch.object(answer, "cmd_zones_extend") as expand_zones:
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))), mock.patch.object(fsm, "cmd_approve") as approve, mock.patch.object(budget, "cmd_budget") as change_budget, mock.patch.object(catalog, "cmd_new") as new_task, mock.patch.object(answer, "cmd_zones_extend") as expand_zones:
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
             for forbidden in (approve, change_budget, new_task, expand_zones):

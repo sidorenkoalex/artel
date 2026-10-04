@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, merge_lock, merge_queue, store  # noqa: E402
 from tests.sandbox import (TmpRootTest, _alive_foreign_pid, _dead_pid,  # noqa: E402
-                           _ts_ago, capture)
+                           _ts_ago, capture, patch_sleep)
 
 
 class _QueueTestBase(TmpRootTest):
@@ -176,7 +176,7 @@ class CurrentHolderLabelTest(_QueueTestBase):
             clock["value"] += seconds
 
         with mock.patch.object(time, "monotonic", lambda: clock["value"]), \
-             mock.patch.object(time, "sleep", fake_sleep):
+             patch_sleep(merge_queue, fake_sleep):
             with self.assertRaises(SystemExit):
                 merge_queue.wait_for_window(conn, self.TASK_A, "sess-a")
 
@@ -265,7 +265,7 @@ class ProcessScopedQueueRowsTest(_QueueTestBase):
             clock["value"] += seconds
 
         with mock.patch.object(time, "monotonic", lambda: clock["value"]), \
-             mock.patch.object(time, "sleep", fake_sleep):
+             patch_sleep(merge_queue, fake_sleep):
             with self.assertRaises(SystemExit):
                 merge_queue.wait_for_window(conn, self.TASK_A, "sess-a")
 
@@ -305,7 +305,7 @@ class WaitForWindowTest(_QueueTestBase):
             clock["value"] += seconds
 
         with mock.patch.object(time, "monotonic", fake_monotonic), \
-             mock.patch.object(time, "sleep", fake_sleep):
+             patch_sleep(merge_queue, fake_sleep):
             with self.assertRaises(SystemExit) as ctx:
                 merge_queue.wait_for_window(conn, self.TASK_A, "sess-a")
 

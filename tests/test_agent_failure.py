@@ -27,7 +27,7 @@ from orchestrator import (agent_log, artifact_branch, catalog, config,  # noqa: 
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id,
                            disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git, sync_spec_from_worktree)
+                           fake_git, patch_sleep, sync_spec_from_worktree)
 
 
 class LogTailTest(TmpRootTest):
@@ -105,7 +105,7 @@ class CmdRunFailureTest(TmpRootTest):
         conn.commit()
 
         self.pauses = []
-        patcher = mock.patch.object(runner.time, "sleep", self.pauses.append)
+        patcher = patch_sleep(runner, self.pauses.append)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -122,10 +122,12 @@ class CmdRunFailureTest(TmpRootTest):
         # и fingerprint окружения в журнале старта попытки иначе зовут
         # НАСТОЯЩИЕ `claude --version`/`git --version` машины прогона (SPEC
         # 01M3YS928033B1QF89VN2N5KC3). `subprocess.run(timeout=…)` ждёт
-        # выхода процесса циклом `time.sleep` — а `time.sleep` подменён
+        # выхода процесса циклом `time.sleep` — а `time.sleep` подменялся
         # выше глобально, на весь модуль `time`: CLI, закрывший вывод
         # раньше выхода (машина под нагрузкой), дописывал паузы
-        # в `self.pauses`. И исход сверки зависел от установленной версии.
+        # в `self.pauses` (теперь подменена только пауза `runner`, SPEC
+        # 01M443HPZBMJGCHVGV4JQN88RS). И исход сверки зависел от
+        # установленной версии.
         # Версия здесь — заведомо достаточная для любой модели каталога.
         cli_patcher = mock.patch.object(
             stack, "installed_cli_version",

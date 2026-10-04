@@ -1,5 +1,5 @@
 ---
-built_at_sha: cbb50377306fa1c439e6f756355cd0b93fcb5e35
+built_at_sha: bb9a0c99f3f07c9e85bcabc8bac96774aea88653
 ---
 
 # Codebase-map пульта
@@ -1924,6 +1924,8 @@ built_at_sha: cbb50377306fa1c439e6f756355cd0b93fcb5e35
 - `link_artel_clone_to_root`
 - `make_project_repo`
 - `network_guarded_real_run`
+- `patch_pult_sleep`
+- `patch_sleep`
 - `resilient_tmp_cleanup`
 - `role_map_fixture`
 - `seed_artel_clone_stub`
@@ -2483,6 +2485,18 @@ built_at_sha: cbb50377306fa1c439e6f756355cd0b93fcb5e35
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/keychain.py`, `orchestrator/notes.py`, `orchestrator/plank_run.py`, `orchestrator/repo_context.py`, `orchestrator/retro_corpus.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_invariants.py`
+
+## tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py
+
+**Назначение:** Сторож: тесты `tests/` не подменяют `time.sleep` на весь процесс.
+
+**Публичные функции:**
+- `global_sleep_patches`
+- `scan_tests_tree`
+
+**Импортирует:** —
+
+**Импортируется:** —
 
 ## tests/test_acceptance.py
 

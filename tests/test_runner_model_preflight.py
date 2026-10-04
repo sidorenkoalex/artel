@@ -36,6 +36,7 @@ from orchestrator import (artifact_branch, auto, catalog, config,  # noqa: E402
                           failure_classification,
                           gitcmd, runner, stack, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest, FakeProc,  # noqa: E402
+                           TimeWithSleep,
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, is_claude_call,
                            sync_spec_from_worktree)
@@ -107,8 +108,8 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
         self.seed_plan_marker()
 
         self.pauses = []
-        self.patch(runner.time, "sleep", self.pauses.append)
-        self.patch(auto.time, "sleep", self.pauses.append)
+        self.patch(runner, "time", TimeWithSleep(self.pauses.append))
+        self.patch(auto, "time", TimeWithSleep(self.pauses.append))
         self.patch(runner.keychain, "token", lambda slot: "tok-test")
         preflight = mock.patch("orchestrator.doctor.preflight_checks",
                                lambda role, target: [])
