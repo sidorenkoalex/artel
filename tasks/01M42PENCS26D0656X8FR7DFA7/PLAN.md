@@ -102,6 +102,51 @@ tracking_refs=False)` — это и есть fetch свежести клона �
 280 passed; долгоживущие файлы задачи и `test_codebase_map` — 66 passed;
 `plank-run` — 9 passed, код 0.
 
+Возврат из ревью, итерация 1 (REVIEW.md, реестр R1-F1..R1-F4):
+- R1-F1 (major): `pin._refuse_unless_main_ci_green` и `doctor.check_main_ci`
+  читают линию `main` в главной копии — там, куда сделан `fetch`
+  (`ci.main_line_status(sha, repo=config.ROOT)`; `pin` и `doctor/root_pin`
+  есть в перечне требования 4). Сторож — `tests/test_main_ci_fetched_repo.py`:
+  главная копия и клон артели — разные репозитории, клон отстал на два
+  коммита, голова документная (`tests` пропущена), под ней `tests` упала.
+  Без `repo=` мутация даёт не «неизвестно», как предполагало ревью, а ложный
+  ЗЕЛЁНЫЙ: линия `[голова]`, проверка «не исполнялась до начала истории».
+  Оба метода красны на этой мутации, код возвращён.
+- R1-F2 (minor): явные вызовы по главной копии перечислены и обоснованы
+  ниже, в «Вызовы с явным `repo=config.ROOT`». Перенос регенерации карты
+  брифа за пределы `config.ROOT` в этом шаге не сделан. Он меняет
+  утверждение `tests/test_brief.py::CheckoutAfterReadTest` (откат
+  `checkout -- docs/codebase-map.md`), а это эскалация. Поведение прежнее
+  (до задачи было то же самое), поэтому — в «Предложения системе».
+- R1-F3 (minor): отказ `workspace.ensure` для внешнего проекта больше не
+  глотается. `_acceptance_run_refuses` отказывает переходом «приёмочные
+  тесты» с причиной `ensure`. На выходе `tests_writing` новый гейт
+  `_tests_writing_code_copy_gate` отказывает до сухого сбора («переход
+  отклонён: рабочая копия задачи не заведена»). `_review_approved` пишет
+  «автогейт приёмки пропущен» с причиной и не запускает автогейт: задача
+  уже в `acceptance`, решение остаётся за Оператором. Сторож —
+  `tests/test_external_code_copy_refusal.py` (3 метода), каждый красен на
+  своей мутации.
+- R1-F4 (minor): отклонено, обоснование — в REVIEW.md, реестр. Если
+  передавать `repo` всегда, сломается заглушка `lambda branch:` защищённого
+  `tests/test_invariants.py::MergeNeedsGreenCiTest` (инвариант 19): гейт
+  мержа зовёт `ci.branch_status(..., repo=<клон артели>)`. Правка
+  защищённого пути — только приложением. После R1-F1 развилка ничего не
+  прячет: другой репозиторий (главная копия) передаётся явно. Докстринг
+  `_repo_kwargs` называет этот тест.
+- Сверено: `test_main_ci_fetched_repo`, `test_external_code_copy_refusal`,
+  `test_pin`, `test_main_ci_line`, `test_docs_dir_layout`,
+  `test_fsm_advance_tests_writing_*`, `test_long_lived_transitions`,
+  `test_codebase_map`, долгоживущие файлы задачи, `test_multitarget*`,
+  `test_fsm_autogate*`, `test_acceptance_tests_flow`,
+  `test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation`,
+  `test_01m3rwa2786hcac8pt3xsbkqt4_autogate`, `test_fsm_advance_gate_smoke`,
+  `test_01m409ykm3qe5kvrgv0g94f5zc_step_docs_dir`, `test_doctor`,
+  `test_git_fixation` — зелёные. Исключение — известные красные из-за
+  сторожа роли (`FixesMainArgTest` ×2, `test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`
+  ×16: «команда недоступна процессу роли developer»). `plank-run` — 9 passed,
+  код 0. Карта регенерирована.
+
 Расхождение с оценкой SPEC ($50): детектор долгоживущего теста нашёл 124
 вызова `gitcmd` без репозитория в ~40 модулях, плюс правка существующих
 тестов под новое место рабочей копии и явный `-C`. Потолок поднят до $100
@@ -176,14 +221,14 @@ orchestrator/doctor/root_pin.py:53:return doctor.gitcmd.fetch_head_sha("origin",
 orchestrator/doctor/root_pin.py:63:if not root_sha or doctor.gitcmd.is_ancestor(root_sha, origin_sha):
 orchestrator/doctor/root_pin.py:65:res = doctor.gitcmd.git("log", f"{origin_sha}..{root_sha}",
 orchestrator/doctor/root_pin.py:86:root_sha = doctor.gitcmd.head_sha()
-orchestrator/pin.py:93:old_sha = gitcmd.head_sha()
-orchestrator/pin.py:95:fetch = gitcmd.git("fetch", "-q", "origin", config.MAIN_BRANCH)
-orchestrator/pin.py:110:merge = gitcmd.git("merge", "--ff-only", sha)
-orchestrator/pin.py:116:new_sha = gitcmd.head_sha()
-orchestrator/pin.py:152:old_sha = gitcmd.head_sha()
-orchestrator/pin.py:155:if not gitcmd.is_ancestor(sha, old_sha):
-orchestrator/pin.py:174:reset = gitcmd.git("reset", "--hard", target)
-orchestrator/pin.py:180:new_sha = gitcmd.head_sha()
+orchestrator/pin.py:98:old_sha = gitcmd.head_sha()
+orchestrator/pin.py:100:fetch = gitcmd.git("fetch", "-q", "origin", config.MAIN_BRANCH)
+orchestrator/pin.py:115:merge = gitcmd.git("merge", "--ff-only", sha)
+orchestrator/pin.py:121:new_sha = gitcmd.head_sha()
+orchestrator/pin.py:157:old_sha = gitcmd.head_sha()
+orchestrator/pin.py:160:if not gitcmd.is_ancestor(sha, old_sha):
+orchestrator/pin.py:179:reset = gitcmd.git("reset", "--hard", target)
+orchestrator/pin.py:185:new_sha = gitcmd.head_sha()
 orchestrator/runner.py:724:res = gitcmd.git("config", "--get", option)
 orchestrator/snapshot.py:21:res = gitcmd.git("config", "--get", "user.name")
 orchestrator/snapshot.py:52:conn, task_id, gitcmd.head_sha(),
@@ -194,6 +239,27 @@ orchestrator/snapshot.py:58:f"artel_sha: {gitcmd.head_sha()}\n"
 таблицы требования 3 не найдено: оставшиеся упоминания `config.ROOT` в
 `orchestrator/` — пути файлов пульта (templates/, skills/, scripts/,
 docs/ пульта), а не включение шага.
+
+### Вызовы с явным `repo=config.ROOT` (ревью итерации 1, R1-F2)
+Детектор AC-8 считает их вызовами «с явным репозиторием». По сути это
+тоже обращения к главной копии, поэтому они перечислены отдельно (поиск —
+`gitcmd.*(config.ROOT …)`, `repo=config.ROOT`, `in_repo(config.ROOT …)`
+по `orchestrator/`). Все — чтение пульта или того, что принёс fetch
+пульта. Задачу ни один из них не меняет.
+
+| Вызов | Что | Почему главная копия |
+|---|---|---|
+| `pin.py:86` `ci.main_line_status(sha, repo=config.ROOT)` | первая родительская линия `main`, дифф пропущенных проверок; только чтение | `fetch` `pin-update` идёт в главную копию (`pin` — в перечне треб. 4); клон может отставать (R1-F1) |
+| `doctor/main_ci.py:33` `ci.main_line_status(origin_sha, repo=doctor.config.ROOT)` | то же; только чтение | голову приносит `root_pin.fetch_origin_main_sha` в главную копию (`doctor/root_pin` — в перечне) |
+| `brief.py:412` `_main_branch_text`, `:443` `skills_text` — `gitcmd.show(main, …, repo=config.ROOT)` | `CLAUDE.md` и `skills/*.md` с `main` пульта; только чтение | правила, действующие в версии пульта (её `main` двигает `pin-update`); локальный `main` клона мерж не двигает (push `<sha>:refs/heads/main`), правила оттуда были бы старыми |
+| `brief.py:260` `_stale_paths` — `diff --name-only built_at_sha HEAD`; только чтение | свежесть карты пульта | карта брифа — карта кода пульта на пине |
+| `brief.py:295` `_regenerate_map` — `checkout -- docs/codebase-map.md` | откат файла, который генератор записал в рабочее дерево главной копии | поведение до задачи (T028). Ветки, ссылки, HEAD и `git worktree list` не меняются, инвариант 40 держится. Рабочее дерево главной копии на время сборки брифа меняется — и только когда карта на пине устарела. Перенос генерации во временный каталог меняет утверждение `tests/test_brief.py::CheckoutAfterReadTest` — это эскалация, вынесено в «Предложения системе» |
+| `cleanup.py:21` `artifacts_in_main`, `:34` `artifacts_tracked_here`, `:58` `current_branch(config.ROOT)` | `ls-tree main -- tasks/<id>`, `ls-files -- tasks/<id>`, имя ветки; только чтение | легаси-каталог `config.TASKS/<id>` (задачи до T094) лежит в рабочем дереве главной копии. Вопрос «отслеживается ли он» задаётся её git перед `rmtree` неотслеживаемого каталога |
+| `docs_fetch.py:46-51` `_main_copy_reader` — `branch_head_sha`/`show`/`ls_tree_files(repo=config.ROOT)` | историческая ссылка `refs/artifacts/<id>`, которой нет ни в клоне, ни в `origin`; только чтение | требование 8 SPEC (AC-13), способ выбран в «Подходе» |
+
+Ещё одна ветка с главной копией — `fsm_postmerge._git(None, …)` → `config.ROOT`.
+Это умолчание для вызова без репозитория. Продакшен его не использует:
+`fsm_merge_gate` передаёт `repo=scratch`.
 
 ### Изменения существующих тестов (AC-15)
 Каждое — в объёме ADR-0021; утверждения меняются только там, где они
@@ -305,6 +371,16 @@ docs/ пульта), а не включение шага.
 - `tests/test_verifying_ceiling.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у заглушки `verifying_status`; утверждения прежние.
 - `tests/test_zones_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): заглушка `log` сквозь `-C`, подмена `artifact_branch.task_repo` адресом клона в юнитах мандата ANSWER; утверждения прежние.
 - `tests/test_workspace.py` (дополнительно) — ADR-0021 п. 1: новый `CloneIdentityTest` — клон, заведённый пультом, несёт идентичность коммитера главной копии (CI без `user.email` в глобальном конфиге: «Committer identity unknown» на мерже в клоне).
+- `tests/test_docs_dir_layout.py` (дополнительно, ревью итерации 1, R1-F3) —
+  ADR-0021 п. 1 (SPEC треб. 1, отката нет):
+  `GatesDropPlankAfterRunTest::test_review_autogate_of_external_target_drops_plank`
+  подменяет `workspace.ensure` заведённой рабочей копией `code_dir`.
+  Клона `ext-proj` в песочнице нет; прежде тест проходил только потому, что
+  `_review_approved` глотал отказ `ensure`. Утверждения прежние.
+- Новые файлы (ревью итерации 1): `tests/test_main_ci_fetched_repo.py`
+  (R1-F1, 2 метода), `tests/test_external_code_copy_refusal.py` (R1-F3,
+  3 метода). Заявки мутаций проверены временной мутацией кода: каждый
+  метод красен на своей мутации, код возвращён.
 
 #### Изменённые утверждения существующих методов
 Каждое называло прежнее место git задачи; новое утверждение проверяет то же
@@ -451,6 +527,14 @@ diff --git a/tests/test_invariants.py b/tests/test_invariants.py
   `MainCopyGitUnchangedDuringTaskTest` (приложение).
 - Хуки защиты `main` в клоне — из пина (абсолютный путь), т.е. код
   проверяемой ветки не может их подменить.
+- `pin-update` и `doctor main-ci` читают линию `main` в главной копии — там,
+  куда делают `fetch` (R1-F1). Умолчание `ci.*` (`repo=None` → клон артели)
+  осталось только у гейта мержа и CI ветки задачи. Их линия и голова — в
+  клоне, туда же гейт делает fetch.
+- Отказ заведения рабочей копии внешнего проекта на гейтах приёмки и
+  `tests_writing` — теперь именованный отказ с причиной. Раньше планка
+  прогонялась в каталоге без кода (R1-F3). Автогейт приёмки в этом случае
+  пропускается, решение остаётся за Оператором.
 - Откат — revert одного merge-коммита; каталоги `.artel/projects/<имя>/repo`
   и `worktrees/` при откате остаются на диске и безвредны (`.artel/` вне git).
 
@@ -476,8 +560,14 @@ diff --git a/tests/test_invariants.py b/tests/test_invariants.py
   долгоживущие файлы задачи (`tests/test_01m42pencs26d0656x8fr7dfa7_*.py`:
   32 passed). Все зелёные, кроме перечисленных выше. Планка —
   `artel.py plank-run`. `tests/test_invariants.py` с наложенными
-  приложениями 1–3 — 72 passed (наложено в рабочую копию на время прогона,
-  затем возвращено `git checkout`).
+  приложениями — 72 passed. Прогон был в прошлом шаге, когда приложений было
+  три; теперь их два, а третье (совместимость) уже в `main`. Приложения
+  накладывались в рабочую копию на время прогона и откатывались `git
+  checkout`. В итерации 1 ревью `docs/invariants.md` и
+  `tests/test_invariants.py` не менялись. Применимость обоих приложений
+  ревьювер подтвердил `git apply --check` на этом дереве.
+- Перенос регенерации карты брифа за пределы рабочего дерева главной копии
+  не сделан (R1-F2, см. «Вызовы с явным `repo=config.ROOT`»).
 
 ## Предложения системе
 - Оболочка шага роли не знает `ls`/`cat`/`rm`, heredoc с `{"…"}` отклоняется
@@ -492,3 +582,19 @@ diff --git a/tests/test_invariants.py b/tests/test_invariants.py
   Разработчик не может проверить их до CI. Стоит снимать признак роли в
   песочнице `tests/sandbox.py` (класс «сторож видит окружение теста как
   окружение роли»).
+- `brief._regenerate_map` пишет `docs/codebase-map.md` в рабочее дерево
+  главной копии и откатывает его `checkout --` (T028). Это противоречит
+  духу ADR-0021 этап 2: «рабочее дерево главной копии не меняется». Чистая
+  замена — собрать текст карты в памяти (`scripts/codebase_map.py`:
+  `build_modules`/`render` по `config.ROOT`) без записи и отката. Цена —
+  правка утверждения `tests/test_brief.py::CheckoutAfterReadTest`; отдельная
+  задача по решению Оператора (ревью 01M42PENCS26D0656X8FR7DFA7, R1-F2).
+- `ci._repo_kwargs` держит форму вызова без `repo` под заглушку `lambda
+  branch:` защищённого `tests/test_invariants.py::MergeNeedsGreenCiTest`.
+  Если поправить заглушку приложением (`lambda branch, repo=None:`),
+  развилку можно снять (ревью R1-F4).
+- Песочницы «клон = корень» (`link_artel_clone_to_root`) маскируют класс
+  «операция идёт не в тот репозиторий» — R1-F1 прошёл зелёным CI именно
+  поэтому. Сторож с раздельными репозиториями
+  (`tests/test_main_ci_fetched_repo.py`) стоит взять за образец для
+  остальных команд Оператора, работающих с главной копией.
