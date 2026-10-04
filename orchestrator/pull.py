@@ -633,7 +633,7 @@ def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
 
 def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
             origin_main_sha, read_branch_text_or_refuse,
-            repo_path=None):
+            repo_path=None, run_plank=True):
     """Исход подтяжки главной ветки target'а задачи в её ветку — вызывается
     из `fsm._pull_main_or_escalate`. `origin_main_source`/`origin_main_sha`/
     `read_branch_text_or_refuse` — узлы `fsm.py`, инъекция параметрами (не
@@ -651,6 +651,13 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     `Fresh()`, ДО заведения worktree: чисто документные коммиты main
     (копилка/бэклог/ADR) не обязаны вызывать подтяжку, когда они не
     затрагивают файлы самой ветки.
+
+    `run_plank=False` — подтяжка перед шагом разработчика (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требование 6): планка там заведомо
+    красна — её зеленит как раз предстоящий шаг, — и её прогон после
+    слияния превратил бы каждую подтяжку в эскалацию. Исход слияния —
+    `Pulled(base)` без прогона; на выходе из `in_dev` планку гоняет
+    прежняя точка подтяжки.
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
@@ -705,6 +712,8 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
         if outcome is not None:
             return outcome
 
+    if not run_plank:
+        return Pulled(base)
     return _materialize_and_run_plank(conn, task_id, t, branch, source_branch,
                                      wt_path, state, base,
                                      read_branch_text_or_refuse)

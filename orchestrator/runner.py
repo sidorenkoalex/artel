@@ -252,6 +252,13 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         return
     target, skills, model_id = payload
 
+    if role == "developer":
+        action, payload = _pull_before_developer_step(conn, task_id, t)
+        if action == "exit":
+            sys.exit(payload)
+        if action == "return":
+            return
+
     prompt = _build_prompt(conn, task_id, t, role, target, skills)
 
     attempt, reason, failure_class = _run_attempts(conn, task_id, t, role,
@@ -474,6 +481,62 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
                       f"{model_id}: {verdict.detail}")
 
     return "continue", (target, skills, model_id)
+
+
+PRE_STEP_PULL_ACTION = "подтяжка main перед шагом разработчика"
+PRE_STEP_PULL_SKIPPED_ACTION = ("подтяжка main перед шагом пропущена: "
+                                "конфликт подтяжки ждёт шага роли")
+
+
+def _pull_conflict_awaits_role_step(conn, task_id: str) -> bool:
+    """Метка «конфликт подтяжки: нужен шаг роли» записана после старта
+    последнего шага разработчика — конфликт ещё не отдан роли."""
+    from . import pull
+    awaiting = False
+    for row in store.task_steps(conn, task_id):
+        if row["actor"] == "developer" and row["action"] == "agent run started":
+            awaiting = False
+        elif row["action"] == pull.PULL_CONFLICT_ROLE_STEP_MARKER:
+            awaiting = True
+    return awaiting
+
+
+def _pull_before_developer_step(conn, task_id: str, t):
+    """Подтяжка `main` в ветку задачи перед шагом разработчика (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требования 6-7) — после захвата замка зоны
+    и отказов до старта, до сборки промпта: роль начинает с актуального
+    main, а не узнаёт о расхождении эскалацией на выходе из `in_dev`.
+
+    Тот же узел `fsm._pull_main_or_escalate`, что на остальных точках
+    подтяжки: сверка отставания (ветка не отстаёт — ни слияния, ни
+    записи), WIP-чекпоинт перед слиянием, авторазрешение карты,
+    эскалация неразрешимого конфликта с меткой «нужен шаг роли». Без
+    прогона планки — её зеленит как раз этот шаг.
+
+    Метка уже стоит и шага роли после неё не было — подтяжка
+    пропускается: конфликт разрешает сама роль, а повторная подтяжка
+    эскалировала бы тот же конфликт снова, не дав роли ни одного шага.
+
+    Возврат — как у `_refuse_before_start`: `("continue", None)`,
+    `("return", None)` (задача эскалирована) или `("exit", текст)`."""
+    from . import fsm
+    if _pull_conflict_awaits_role_step(conn, task_id):
+        store.journal(conn, task_id, "fsm", PRE_STEP_PULL_SKIPPED_ACTION,
+                      t["branch"] or "")
+        return "continue", None
+    outcome = fsm._pull_main_or_escalate(conn, task_id, t, t["state"],
+                                         run_plank=False)
+    if outcome == "escalated":
+        print(f"[{task_id}] шаг не начат: подтяжка main перед шагом "
+              f"эскалирована")
+        return "return", None
+    if outcome == "refused":
+        return "exit", (f"[{task_id}] run отклонён: подтяжка main перед "
+                        f"шагом не выполнена — причина в журнале")
+    if outcome == "pulled":
+        store.journal(conn, task_id, "fsm", PRE_STEP_PULL_ACTION,
+                      t["branch"] or "")
+    return "continue", None
 
 
 # Действие записи журнала отказа «модель не поддерживается CLI» (SPEC
