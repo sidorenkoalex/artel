@@ -77,6 +77,20 @@ schema_version: 5
    `mock.patch.object(time, "sleep", …)` — 2 failed; обход `sys.modules`
    без вложенных пакетов — красный; `close()` без снятия — красный; после
    возврата кода — 2 passed.
+5. Отказ advance (гейт заявки мутации): четыре метода, изменённые шагом 2,
+   не несли строку «Ловит мутацию: …» в докстринге — дописана, утверждения
+   и тела не тронуты:
+   `test_auto_cycle.py::WaitForZoneTest::test_exit_record_names_the_actual_last_holder_on_handoff`
+   (была «Ловит мутацию R1-F1:» — не та форма), `::test_enter_and_exit_are_journaled_exactly_once`,
+   `::test_lease_lost_during_wait_stops_the_cycle_named`,
+   `test_merge_queue.py::WaitForWindowTest::test_ceiling_expiry_dequeues_and_exits_without_touching_state`.
+   Каждая заявка проверена временной мутацией `orchestrator/` (код возвращён):
+   не обновлять `occupier_id` в цикле `auto._wait_for_zone` — 1 failed;
+   запись входа на каждой паузе — 1 failed; `if lease_refusal is not None`
+   → `if False` — 1 failed; `finally` в `merge_queue.wait_for_window` без
+   `dequeue_merge_wait` — 1 failed. Класс закрыт целиком:
+   `guard.test_functions_without_mutation_claim(base, HEAD)` по всем 18
+   изменённым файлам `tests/` ветки — пусто.
 
 ## Покрытие требований
 
