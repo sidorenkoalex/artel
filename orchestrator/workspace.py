@@ -94,8 +94,9 @@ def inherit_identity(clone: Path) -> None:
 def ensure_clone(target: str) -> tuple[Path, str | None]:
     """Клон проекта `target` есть; (путь, причина отказа) — `None` при
     успехе. Существующий каталог клона не трогается вовсе (повторный вызов
-    ничего не меняет). Нет клона — `git clone <url записи>` с хуками пина;
-    неудача — каталог недоделанного клона убирается, причина называет
+    ничего не меняет). Нет клона — `git clone <url записи>` с хуками пина
+    и ссылками документов из `origin` (`_fetch_docs_refs`); неудача
+    `git clone` — каталог недоделанного клона убирается, причина называет
     клон и адрес. Отката на главную копию нет."""
     clone = repo(target)
     if not area_consistent():
@@ -117,7 +118,22 @@ def ensure_clone(target: str) -> tuple[Path, str | None]:
     if hooks_error is not None:
         return clone, f"клону {clone} не поставлены хуки: {hooks_error}"
     inherit_identity(clone)
+    _fetch_docs_refs(clone)
     return clone, None
+
+
+def _fetch_docs_refs(clone: Path) -> None:
+    """Ссылки документов `refs/artifacts/*` из `origin` — в только что
+    заведённый клон (SPEC 01M446WV7S94FTZGJCGMPJ667F, требование 1):
+    `git clone` их не приносит, и без них `doctor` видел бы каждую
+    закрытую задачу «без локальной ссылки». Узел тот же, что у
+    `docs --fetch-all` — сдвиг только вперёд. Неудача не отменяет
+    заведение клона: причина — одной строкой."""
+    from . import artifact_branch  # лениво: `artifact_branch` импортирует этот модуль
+    outcomes, reason = artifact_branch.fetch_all_from_origin(clone)
+    if outcomes is None:
+        print(f"клон {clone}: ссылки документов refs/artifacts/* из origin "
+              f"не подтянуты — {reason}; повтор: artel.py docs --fetch-all")
 
 
 def path(task_id: str, target: str | None = None) -> Path:
