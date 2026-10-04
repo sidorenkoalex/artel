@@ -14,7 +14,9 @@ schema_version: 5
   `_user_event`, Codex — `_tool_result_event`), поэтому распознавание стоит
   одно, в `OutputPump.catch_event` (`orchestrator/agent_log.py`), а не в
   каждом провайдере. `agent_log.pytest_summaries(text)` ищет строки вида
-  «<N> <исход>[, <N> <исход>…] in X.XXs», снимает рамку «=» и ANSI; одна
+  «<N> [subtests ]<исход>[, …] in X.XXs» (в том числе
+  «182 passed, 99 subtests passed in …» прогона с `subTest`) и
+  «no tests ran in X.XXs», снимает рамку «=» и ANSI; одна
   итоговая строка = один прогон. Получатель — колбэк
   `on_pytest_summary`, который `runner._spawn_and_wait` задаёт записью
   `store.journal(store.db(), task_id, role, "прогон pytest", строка)`:
@@ -38,7 +40,9 @@ schema_version: 5
   «· <Tool> …» из хвоста (64 КиБ) лога шага, каждая ≤ 40 символов,
   строка целиком ≤ 240. «Нет коммитов»: `git log -1 --since=@<начало>
   <ветка>` в клоне задачи; git не ответил — не предупреждаем. «Стоимость
-  шага»: `spend.partial_tokens_from_log` + `spend.partial_cost_usd(role,
+  шага»: `spend.partial_tokens_from_log` с провайдером шага
+  (`watch._step_provider` → `runner._step_provider`: набор задачи, иначе
+  роль; сбой — разбор по умолчанию) + `spend.partial_cost_usd(role,
   tokens, task_row)`, лог перечитывается только когда вырос; `None` —
   предупреждения нет. Граница (`_LineBudget`) — общий счётчик строк
   `pytest`/сводок/предупреждений на задачу, скользящее окно 3600 с по
@@ -81,6 +85,19 @@ schema_version: 5
   `test_real_pytest_forms_are_recognised_without_frame`; перехват сбоя
   колбэка сужен — красный `test_summary_callback_failure_keeps_pump_reading`;
   код возвращён.
+
+Итерация 2 (REVIEW итерации 1, R1-F1 и R1-F2):
+- R1-F1: шаблон `agent_log._PYTEST_COUNT` принимает квалификатор
+  `subtests`, добавлена форма «no tests ran»; кейс
+  `test_subtests_and_empty_run_forms_are_recognised`.
+- R1-F2: провайдер шага передан в `partial_tokens_from_log`; кейс
+  `StepCostProviderTest::test_step_cost_parses_log_with_step_provider`.
+- Мутации: шаблон без `subtests` и вызов без провайдера — оба новых кейса
+  красные (`2 failed, 3 passed`), код возвращён.
+- `tests/test_pytest_summary_pump.py` + оба долгоживущих файла задачи +
+  `tests/test_watch.py tests/test_agent_log.py` — 89 passed, 7 subtests
+  passed; после возврата мутаций свои + долгоживущие — 22 passed;
+  `plank-run` — 2 passed, код 0; карта регенерирована.
 
 ## Влияние на систему
 - Новое действие журнала «прогон pytest» не начинается с «agent run» и
