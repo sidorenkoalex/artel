@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artifact_branch, budget, catalog, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, snapshot, spend, store,
                           workspace)
-from tests.sandbox import (FakeProc, TmpRootTest,  # noqa: E402
+from tests.sandbox import (_REAL_RUN, FakeProc, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture,
                            capture_new_task_id, fake_git,
                            link_artel_clone_to_root, make_project_repo,
@@ -73,16 +73,16 @@ def fake_git_config(*args: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
 
 
-_REAL_GITCMD_GIT = gitcmd.git
-
-
 def git_config_else_real(*args: str) -> subprocess.CompletedProcess:
     """Как `fake_git_config`, но заведение рабочей копии задачи в области
     проектов (`-C <клон>`) исполняется по-настоящему: рабочую копию задачи в клоне проекта
-    (ADR-0021 п.1, этап 2) заводит настоящий `git worktree add`."""
+    (ADR-0021 п.1, этап 2) заводит настоящий `git worktree add`. Мимо
+    шпиона `subprocess.run` песочницы (`_REAL_RUN`): он отвечает на чтение
+    приватной ссылки fetch фейковым sha, и `worktree add` от него
+    отказывал бы."""
     if (args[:1] == ("-C",) and str(args[1]).startswith(str(config.PROJECTS))
             and args[2:3] and args[2] in _WORKTREE_SUBCOMMANDS):
-        return _REAL_GITCMD_GIT(*args)
+        return _REAL_RUN(["git", *args], capture_output=True, text=True)
     return fake_git_config(*args)
 
 

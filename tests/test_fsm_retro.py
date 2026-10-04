@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, fsm_postmerge, gitcmd, retro, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git, strip_dash_c  # noqa: E402
 
 
 class GenerateAndCommitRetroTest(TmpRootTest):
@@ -37,6 +37,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -57,6 +59,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -82,6 +86,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
 
     def test_add_failure_raises_incident_and_skips_commit(self):
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "add":
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "стенд: add упал")
@@ -97,6 +103,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
 
     def test_commit_failure_raises_incident(self):
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "commit":
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "стенд: commit упал")
@@ -116,6 +124,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -140,6 +150,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -177,6 +189,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
                      "kill switch")
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "commit" and killed_id in args[-1]:
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "стенд: commit долга упал")
@@ -234,6 +248,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 

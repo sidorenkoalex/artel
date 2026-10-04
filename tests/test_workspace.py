@@ -128,11 +128,15 @@ class PathTest(RealGitWorkspaceTest):
 class RegisteredPathsTest(RealGitWorkspaceTest):
 
     def test_lists_the_main_checkout(self):
+        """Ловит мутацию: `registered_paths` спрашивает не переданный клон
+        проекта (ADR-0021 п.1), а другой репозиторий — список не тот."""
         paths = workspace.registered_paths(self.clone)
 
         self.assertEqual(paths, [str(self.root)])
 
     def test_includes_a_worktree_added_directly_by_git(self):
+        """Ловит мутацию: рабочая копия, заведённая в клоне git'ом
+        напрямую, не попадает в `registered_paths(клон)`."""
         path = self.wt_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.git("worktree", "add", "-b", self.branch, str(path))
@@ -140,6 +144,8 @@ class RegisteredPathsTest(RealGitWorkspaceTest):
         self.assertIn(str(path), workspace.registered_paths(self.clone))
 
     def test_empty_when_git_does_not_answer(self):
+        """Ловит мутацию: молчание git (None) роняет `registered_paths`
+        вместо пустого списка."""
         with mock.patch.object(gitcmd, "git", lambda *a: None):
             self.assertEqual(workspace.registered_paths(self.clone), [])
 
@@ -199,6 +205,8 @@ class EnsureTest(RealGitWorkspaceTest):
                          "копии — там либо уже есть коммит, либо нечего")
 
     def test_failure_is_reported_without_raising(self):
+        """Ловит мутацию: отказ `git -C <клон> worktree add` поднимает
+        исключение вместо строки отчёта."""
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
@@ -316,7 +324,10 @@ class RemoveTest(RealGitWorkspaceTest):
     def test_failure_with_empty_stderr_still_reports_a_reason(self):
         """Review T045 итерация 1 замечание 2: `git worktree remove`
         отказал (returncode != 0), но ничего не написал в stderr — как
-        `ensure()` на тот же вырожденный случай, отчёт не пустая строка."""
+        `ensure()` на тот же вырожденный случай, отчёт не пустая строка.
+
+        Ловит мутацию: отказ `worktree remove` в клоне с пустым stderr
+        даёт пустой отчёт."""
         workspace.ensure(self.TASK, self.branch)
         real_git = gitcmd.git
 
@@ -352,6 +363,8 @@ class CmdWorkspaceTest(RealGitWorkspaceTest):
         self.assertEqual(self.worktree_list().count(str(expected)), 1)
 
     def test_exits_with_a_reason_when_worktree_add_fails(self):
+        """Ловит мутацию: `cmd_workspace` при отказе `git -C <клон>
+        worktree add` выходит без причины."""
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:

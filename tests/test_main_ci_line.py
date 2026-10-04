@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import artel, ci, config, fsm_merge_gate, gitcmd, merge_lock, store
-from tests.sandbox import TmpRootTest, capture
+from tests.sandbox import TmpRootTest, capture, strip_dash_c
 
 
 def done(name: str, conclusion: str) -> dict:
@@ -38,6 +38,9 @@ class FakeLine:
         self.polled: list[str] = []
 
     def git(self, *args):
+        # Сквозь `-C <клон>`: линия `main` читается в клоне артели явным
+        # репозиторием (ADR-0021 п.1, этап 2).
+        args = strip_dash_c(args)
         if args[:2] == ("rev-list", "--first-parent"):
             limit = int(args[2].split("=", 1)[1])
             start = self.commits.index(args[3])
@@ -313,7 +316,8 @@ class GuardAllLaunchTest(unittest.TestCase):
             return [] if retro.exists() else [
                 "tasks/T001/acceptance_tests/fixture.json: посторонний файл"]
 
-        ctx = mock.Mock(path=config.ROOT)
+        # Контекст артели — по признаку проекта (ADR-0021 п.1, этап 2).
+        ctx = mock.Mock(path=config.ROOT, target=config.DEFAULT_TARGET)
         with mock.patch.object(fsm_merge_gate, "_overlay_artifact_snapshot"), \
                 mock.patch.object(fsm_merge_gate, "_guard_task_root_or_refuse"), \
                 mock.patch.object(fsm_merge_gate, "_drop_scratch_worktree"), \
@@ -348,7 +352,8 @@ class AwaitMainCiUnknownTest(TmpRootTest):
                           "task/t001-x", config.DEFAULT_TARGET, 25.0)
         unknown = ci.MainLineStatus(ci.MAIN_UNKNOWN, sha(1), [], [], "",
                                     "CI main не подтверждён: gh не ответил")
-        ctx = mock.Mock(path=config.ROOT)
+        # Контекст артели — по признаку проекта (ADR-0021 п.1, этап 2).
+        ctx = mock.Mock(path=config.ROOT, target=config.DEFAULT_TARGET)
 
         with mock.patch.object(ci, "main_line_status", return_value=unknown), \
                 mock.patch.object(merge_lock, "touch_heartbeat"), \

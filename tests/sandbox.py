@@ -1119,6 +1119,43 @@ def link_artel_clone_to_root(root: Path) -> Path:
     return clone
 
 
+def clone_artel_from_origin(origin) -> Path:
+    """Настоящий клон артели песочницы из её bare `origin` — как его заводит
+    `init` (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7,
+    требование 1): запись артели в `config.TARGETS` с `url` = `origin`,
+    прежняя ссылка-клон на корень (`link_artel_clone_to_root`) или пустая
+    заглушка снимаются. Для сценариев, где клон и главная копия — разные
+    репозитории: коммит команды Оператора идёт в клон, HEAD главной копии
+    не двигается, а push «чужой правки» из главной копии не обновляет
+    `origin/main`, известный клону."""
+    from orchestrator import workspace
+    clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
+    if clone.is_symlink():
+        clone.unlink()
+    elif clone.is_dir():
+        shutil.rmtree(clone)
+    try:
+        text = config.TARGETS.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    if f"\n  {config.DEFAULT_TARGET}:" not in "\n" + text:
+        if "targets:" not in text:
+            text = "targets:\n" + text
+        entry = _PROJECT_TARGET_ENTRY.format(
+            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH).replace(
+            f"file:///nonexistent/{config.DEFAULT_TARGET}", str(origin))
+        config.TARGETS.write_text(text.rstrip("\n") + "\n" + entry,
+                                  encoding="utf-8")
+    path, error = workspace.ensure_clone(config.DEFAULT_TARGET)
+    if error is not None:
+        raise AssertionError(f"клон артели песочницы не заведён: {error}")
+    for key, value in (("user.email", "artel@example.invalid"),
+                       ("user.name", "artel tests")):
+        _REAL_RUN(["git", "-C", str(path), "config", key, value],
+                  capture_output=True, text=True)
+    return path
+
+
 class TmpRootTest(unittest.TestCase):
     """Общая песочница: пути `config` — во временном каталоге.
 

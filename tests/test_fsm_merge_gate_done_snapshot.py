@@ -121,7 +121,9 @@ class DonePathSnapshotTest(RealGitSandbox):
         subprocess.run(["git", "init", "-q", "--bare", "-b", config.MAIN_BRANCH,
                         str(self.target_origin)], check=True,
                        capture_output=True, text=True)
-        self.target_workspace = config.PROJECTS / TARGET / "workspace"
+        # Клон проекта — `repo/` области проекта (ADR-0021 п.1, этап 2; до
+        # него — общий `workspace/`).
+        self.target_workspace = config.PROJECTS / TARGET / "repo"
         self.target_workspace.mkdir(parents=True)
         self.wgit(self.target_workspace, "init", "-q", "-b", config.MAIN_BRANCH)
         self.wgit(self.target_workspace, "remote", "add", "origin",

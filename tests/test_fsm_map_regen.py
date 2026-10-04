@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, fsm_postmerge, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git, strip_dash_c  # noqa: E402
 
 COMMITTED_MAP = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
                  "---\n\n# Карта кодовой базы\n\nСодержимое A.\n")
@@ -63,6 +63,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -90,6 +92,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             if args and args[0] == "checkout":
                 self.map_path.write_text(COMMITTED_MAP, encoding="utf-8")
@@ -130,6 +134,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             if args and args[0] == "add":
                 return subprocess.CompletedProcess(
@@ -154,6 +160,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         regenerated = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "commit":
                 return subprocess.CompletedProcess(
                     list(args), 1, "", "стенд: commit упал")
@@ -178,6 +186,8 @@ class RegenerateAndCommitMapTest(TmpRootTest):
             "dddd444455556666777788889999000011112222")
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "checkout":
                 return subprocess.CompletedProcess(
                     list(args), 1, "", "стенд: checkout упал")
@@ -262,6 +272,8 @@ class MapSizeJournalUnitTest(TmpRootTest):
         regenerated = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
 
         def fake_git_commit(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args[:1] == ("commit",):
                 return subprocess.CompletedProcess(list(args), 0, "", "")
             if args[:2] == ("rev-parse", "HEAD"):
@@ -293,6 +305,8 @@ class MapSizeJournalUnitTest(TmpRootTest):
             "dddd444455556666777788889999000011112222")
 
         def fake_git_checkout(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "checkout":
                 self.map_path.write_text(COMMITTED_MAP, encoding="utf-8")
             if args[:2] == ("rev-parse", "HEAD"):

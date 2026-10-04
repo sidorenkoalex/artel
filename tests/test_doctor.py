@@ -499,7 +499,7 @@ class TargetWrapperCheckTest(unittest.TestCase):
 
     def test_no_wrapper_is_ok(self):
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "sled" / "workspace").mkdir(parents=True)
+            (Path(tmp) / "sled" / "repo").mkdir(parents=True)
             with mock.patch.object(config, "PROJECTS", Path(tmp)):
                 check = doctor.check_target_wrapper("sled")
 
@@ -507,7 +507,7 @@ class TargetWrapperCheckTest(unittest.TestCase):
 
     def test_wrapper_present_is_warn_and_names_the_markers(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp) / "sled" / "workspace"
+            ws = Path(tmp) / "sled" / "repo"
             ws.mkdir(parents=True)
             (ws / ".mcp.json").write_text("{}", encoding="utf-8")
             (ws / "CLAUDE.md").write_text("# обвязка\n", encoding="utf-8")
@@ -520,7 +520,7 @@ class TargetWrapperCheckTest(unittest.TestCase):
 
     def test_wrapper_never_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp) / "sled" / "workspace"
+            ws = Path(tmp) / "sled" / "repo"
             ws.mkdir(parents=True)
             (ws / ".claude").mkdir()
             (ws / ".mcp.json").write_text("{}", encoding="utf-8")
@@ -966,7 +966,7 @@ class OrphansTest(TmpRootTest):
         store.insert_task(store.db(), "T001", "Готова", "done",
                           "task/t001-gotova", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "branch_exists",
-                               lambda b: b == "task/t001-gotova"):
+                               lambda b, repo=None: b == "task/t001-gotova"):
             checks = doctor.check_orphans(store.db())
 
         by_name = {c.name: c for c in checks}
@@ -998,7 +998,7 @@ class OrphansTest(TmpRootTest):
         porcelain = "worktree /main\nHEAD abc\n\nworktree /extra\nHEAD def\n\n"
 
         with mock.patch.object(doctor.gitcmd, "branch_exists",
-                               lambda b: b == "task/t001-gotova"), \
+                               lambda b, repo=None: b == "task/t001-gotova"), \
                 mock.patch.object(doctor.gitcmd, "git",
                                   lambda *a: subprocess.CompletedProcess(
                                       list(a), 0, porcelain, "")
@@ -1536,7 +1536,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b: config.STALE_BRANCH_WARN_COMMITS + 1):
+                               lambda b, repo=None: config.STALE_BRANCH_WARN_COMMITS + 1):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(any(c.status == "warn" for c in checks))
@@ -1548,7 +1548,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b: config.STALE_BRANCH_WARN_COMMITS):
+                               lambda b, repo=None: config.STALE_BRANCH_WARN_COMMITS):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(all(c.status == "ok" for c in checks))
@@ -1559,7 +1559,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         checked_branches = []
         with mock.patch.object(
                 doctor.gitcmd, "commits_behind",
-                lambda b: checked_branches.append(b) or 999):
+                lambda b, repo=None: checked_branches.append(b) or 999):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertEqual(checked_branches, [])
@@ -1569,7 +1569,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b: None):
+                               lambda b, repo=None: None):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(all(c.status == "ok" for c in checks))

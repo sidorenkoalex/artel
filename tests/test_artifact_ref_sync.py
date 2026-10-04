@@ -17,7 +17,7 @@ from unittest import mock
 
 from orchestrator import (artifact_branch, cleanup, config, doctor,
                           fsm_merge_gate, gitcmd, projects, snapshot, store)
-from tests.sandbox import AutoOriginSandbox, capture
+from tests.sandbox import AutoOriginSandbox, capture, strip_dash_c
 
 PUSH_FAILED = "push артефактной ветки FAILED"
 
@@ -105,7 +105,9 @@ class CompareAndSwapRaceTest(RefOriginSandbox):
         fired = {}
 
         def racing_git(*args, **kwargs):
-            if args and args[0] == "update-ref" and not fired:
+            # Сквозь `-C <клон>`: ссылка документов пишется в клоне проекта
+            # явным репозиторием (ADR-0021 п.1, этап 2).
+            if strip_dash_c(args)[:1] == ("update-ref",) and not fired:
                 fired["b"] = ""
                 fired["b"] = self.commit("B.md", "правка B\n")
             return real_git(*args, **kwargs)
