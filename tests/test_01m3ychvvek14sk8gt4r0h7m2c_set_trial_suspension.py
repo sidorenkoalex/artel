@@ -62,7 +62,7 @@ from orchestrator import (acceptance, artel, config, fsm, gates, models,
 from tests.sandbox import (CATALOG_FIXTURE_TEXT, FIXTURE_OTHER_MODEL,
                            FIXTURE_ROLES, FIXTURE_TIER_MODEL, FakeProc,
                            LightTransitionSandbox, event,
-                           seed_developer_brief_fixtures,
+                           TimeWithSleep, seed_developer_brief_fixtures,
                            sync_spec_from_worktree)
 
 #: Корень репозитория — источник `templates/`/`skills/` для брифа шага.
@@ -199,7 +199,7 @@ class SetSandbox(LightTransitionSandbox):
                         dirs_exist_ok=True)
         seed_developer_brief_fixtures(self.root)
         for target, attr, value in (
-                (runner.time, "sleep", lambda _: None),
+                (runner, "time", TimeWithSleep(lambda _: None)),
                 (runner.keychain, "token", lambda slot: self.TOKEN),
                 (config, "LIMIT_REVIEW_ITERS",
                  max(config.LIMIT_REVIEW_ITERS, 4))):

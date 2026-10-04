@@ -42,6 +42,7 @@ from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
                            capture, capture_new_task_id,
                            disk_backed_ls_tree_files, disk_backed_show,
+                           patch_pult_sleep, patch_sleep,
                            resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -699,7 +700,7 @@ class MergeNeedsGreenCiTest(FsmTest):
                 self.set_ci(stdout, returncode)
                 clock["value"] = 0.0
 
-                with mock.patch.object(time, "sleep", fake_sleep), \
+                with patch_pult_sleep(fake_sleep), \
                      mock.patch.object(time, "monotonic", fake_monotonic), \
                      self.assertRaises(SystemExit) as exit_:
                     self.capture(fsm.cmd_approve, self.TASK)
@@ -1340,7 +1341,7 @@ class CountersNeverResetTest(FsmTest):
         self.write_spec("ready")
         self.write_plan("ready")
         self.set_state("review")
-        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
+        patcher = patch_sleep(runner, lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -1931,6 +1932,31 @@ class NoNetworkAddressesInTestsTest(unittest.TestCase):
         url = f"{scheme}{host}/repo.git"
         hits = self._dns_addresses(f'url: "{url}"\n')
         self.assertEqual([url], hits)
+
+
+class NoGlobalSleepPatchInInvariantsTest(unittest.TestCase):
+    """SPEC 01M443HPZBMJGCHVGV4JQN88RS, требование 5: этот файл не
+    подменяет `time.sleep` на весь процесс.
+
+    Остальное дерево `tests/` держит сторож
+    `tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py`, но этот файл —
+    защищённый путь, и сторож дерева его не читает: то же свойство здесь
+    проверяет тот же поиск по исходнику самого файла.
+    """
+
+    def test_this_file_has_no_global_time_sleep_patch(self):
+        """Поиск сторожа по исходнику `tests/test_invariants.py` находок не даёт.
+
+        Ловит мутацию: в файл возвращена `mock.patch.object(time, "sleep",
+        fake_sleep)` (FSM-сценарий ожидания CI) или
+        `mock.patch.object(runner.time, "sleep", …)` — поиск вернёт файл и
+        строку подмены, тест покраснеет.
+        """
+        from tests.test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard import (
+            global_sleep_patches)
+        source = Path(__file__).read_text(encoding="utf-8")
+        findings = global_sleep_patches(source, "tests/test_invariants.py")
+        self.assertEqual(findings, [], "\n".join(findings))
 
 
 class StdlibOnlyImportsInvariantTest(unittest.TestCase):

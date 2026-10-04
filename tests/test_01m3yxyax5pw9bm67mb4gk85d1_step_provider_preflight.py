@@ -53,7 +53,8 @@ from unittest import mock
 from orchestrator import artel, config, doctor, keychain, models, runner, store
 from tests.sandbox import (FIXTURE_CODEX_MODEL, FIXTURE_OTHER_MODEL,
                            FIXTURE_ROLES, FIXTURE_TIER, FIXTURE_TIER_MODEL,
-                           FakeProc, LightTransitionSandbox, event,
+                           FakeProc, LightTransitionSandbox, TimeWithSleep,
+                           event,
                            seed_developer_brief_fixtures,
                            sync_spec_from_worktree)
 
@@ -126,7 +127,7 @@ class SetPreflightSandbox(LightTransitionSandbox):
         # прогона сильнее слота и подменил бы предмет проверки.
         for name in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
             os.environ.pop(name, None)
-        self.patch(runner.time, "sleep", lambda _: None)
+        self.patch(runner, "time", TimeWithSleep(lambda _: None))
         self.patch(keychain, "token", lambda slot: self.TOKEN)
 
         self.missing = set()

@@ -27,7 +27,8 @@ from orchestrator import (artifact_branch, catalog, config, gitcmd,  # noqa: E40
                           models, providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, capture_new_task_id, event, fake_git,
-                           role_map_fixture, sync_spec_from_worktree)
+                           patch_sleep, role_map_fixture,
+                           sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -107,7 +108,7 @@ class ModelFlagJournalTest(TmpRootTest):
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
-        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
+        patcher = patch_sleep(runner, lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",

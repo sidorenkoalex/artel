@@ -66,7 +66,7 @@ from unittest import mock
 from orchestrator import (artel, artifact_branch, catalog, config, doctor,
                           fixation, fsm_merge_gate, store)
 from scripts import guard
-from tests.sandbox import RealGitSandbox, capture
+from tests.sandbox import RealGitSandbox, capture, patch_pult_sleep
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -197,11 +197,14 @@ class MainCiSandbox(RealGitSandbox):
         base_mono, base_wall = time.monotonic(), time.time()
         for target, fake in (
                 ("time.monotonic", lambda: base_mono + self.clock),
-                ("time.time", lambda: base_wall + self.clock),
-                ("time.sleep", self.fake_sleep)):
+                ("time.time", lambda: base_wall + self.clock)):
             patcher = mock.patch(target, side_effect=fake)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Пауза — только у модулей пульта: подмена `time.sleep` модуля
+        # `time` ловила бы и паузы `subprocess` (SPEC
+        # 01M443HPZBMJGCHVGV4JQN88RS).
+        self.addCleanup(patch_pult_sleep(self.fake_sleep).close)
 
     # ---------------------------------------------------------- фикстуры CI
 

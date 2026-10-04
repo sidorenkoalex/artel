@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import artel, ci, config, fsm_merge_gate, gitcmd, merge_lock, store
-from tests.sandbox import TmpRootTest, capture, strip_dash_c
+from tests.sandbox import TmpRootTest, capture, patch_sleep, strip_dash_c
 
 
 def done(name: str, conclusion: str) -> dict:
@@ -355,9 +355,10 @@ class AwaitMainCiUnknownTest(TmpRootTest):
         # Контекст артели — по признаку проекта (ADR-0021 п.1, этап 2).
         ctx = mock.Mock(path=config.ROOT, target=config.DEFAULT_TARGET)
 
+        sleep = mock.Mock()
         with mock.patch.object(ci, "main_line_status", return_value=unknown), \
                 mock.patch.object(merge_lock, "touch_heartbeat"), \
-                mock.patch("time.sleep") as sleep:
+                patch_sleep(fsm_merge_gate, sleep):
             out = capture(fsm_merge_gate._await_main_ci, store.db(), "T001",
                           sha(1), ctx)
 
