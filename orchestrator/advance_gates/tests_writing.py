@@ -7,6 +7,7 @@ from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
                 cycle_hint, fixation, github_adapter, gitcmd, store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
+from .refusal_classes import LONG_LIVED_GIT_REFUSAL_ACTION
 
 
 def _freshness_refuses(conn, task_id: str, t, meta, status: str) -> bool:
@@ -251,6 +252,16 @@ def _long_lived_refusal(task_id: str, detail: str) -> GateRefusal:
     return GateRefusal(LONG_LIVED_ACTION, f"{detail}\nдальше: {hint}", hint)
 
 
+def _long_lived_git_refusal(task_id: str, detail: str) -> GateRefusal:
+    """Сбой git проверки долгоживущих файлов — своё действие класса «чинит
+    Оператор» (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 5.3): test_author
+    его не починит, `LONG_LIVED_ACTION` остаётся за нарушением правила
+    «только добавляет файлы»."""
+    hint = f"разберись, почему git не отвечает, и повтори artel.py advance {task_id}"
+    return GateRefusal(LONG_LIVED_GIT_REFUSAL_ACTION,
+                       f"{detail}\nдальше: {hint}", hint)
+
+
 def _tests_writing_code_diff(task_id: str, code_branch: str):
     """(записи диффа, {путь: текст}, отказ) — дифф кодовой ветки против её
     базы (`gitcmd.diff_base`, `gitcmd.diff_name_status`) и тексты
@@ -262,7 +273,7 @@ def _tests_writing_code_diff(task_id: str, code_branch: str):
     entries = (gitcmd.diff_name_status(base, code_branch, repo=repo)
               if base else None)
     if entries is None:
-        return None, None, _long_lived_refusal(
+        return None, None, _long_lived_git_refusal(
             task_id, f"дифф кодовой ветки {code_branch} против базы не "
                      f"прочитан — git не ответил, проверка невозможна")
     files: dict[str, str] = {}
@@ -270,7 +281,7 @@ def _tests_writing_code_diff(task_id: str, code_branch: str):
         if status == "A" and guard.is_long_lived_test_path(task_id, path):
             text, reason = gitcmd.show(code_branch, path, repo=repo)
             if text is None:
-                return None, None, _long_lived_refusal(
+                return None, None, _long_lived_git_refusal(
                     task_id, f"{path} не прочитан на голове {code_branch}: "
                              f"{reason}")
             files[path] = text
@@ -315,7 +326,7 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
         main_ref = gitcmd.diff_base_source(code_branch, repo=repo)
         on_main = gitcmd.ls_tree_files(main_ref, "tests", repo=repo)
         if on_main is None:
-            return _long_lived_refusal(
+            return _long_lived_git_refusal(
                 task_id, f"дерево {main_ref} не прочитано — git не ответил, "
                          f"проверка путей невозможна")
         for path in sorted(files):
@@ -352,7 +363,7 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
     for path in paths:
         digest = blob_sha256(head, path, repo) if head else None
         if digest is None:
-            return _long_lived_refusal(
+            return _long_lived_git_refusal(
                 task_id, f"{path}: сумма на голове {code_branch} не "
                          f"посчитана — git не ответил, перечень не записан")
         digests[path] = digest
@@ -375,7 +386,7 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
         task_id, {rel: guard.render_long_lived_manifest(digests)},
         f"{task_id}: перечень долгоживущих тестов (выход из tests_writing)")
     if not sha:
-        return _long_lived_refusal(
+        return _long_lived_git_refusal(
             task_id, f"{rel} не записан в ветку документов — git не ответил")
     store.journal(conn, task_id, "fsm", "перечень долгоживущих тестов записан",
                   f"{rel}: {len(digests)} файл(ов), sha {sha}")

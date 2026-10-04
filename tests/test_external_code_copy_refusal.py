@@ -45,7 +45,8 @@ class ExternalCodeCopyRefusalTest(DocsDirSandbox):
                 self.conn, TASK, self.t, self.docs, EXTERNAL, self.branch)
         self.assertTrue(refused)
         run.assert_not_called()
-        details = self.journal_details("переход отклонён: приёмочные тесты")
+        details = self.journal_details(
+            "переход отклонён: рабочая копия задачи не готова к приёмке")
         self.assertTrue(any(REASON in d for d in details), details)
 
     def test_tests_writing_refuses_before_the_dry_collect(self):

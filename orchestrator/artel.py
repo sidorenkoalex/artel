@@ -798,7 +798,7 @@ def _cmd_run_or_detach(rest: list) -> None:
         rest, "run <id> [--attach | --client codex|claude --chat <id>]",
         _CYCLE_FLAGS_RUN)
     if attach:
-        runner.cmd_run(task_id)
+        runner.cmd_run_and_advance(task_id)
         return
     _launch_detached("run", task_id, client, chat)
 
