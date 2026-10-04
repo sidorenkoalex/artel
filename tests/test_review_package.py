@@ -1210,16 +1210,36 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # ветка, рабочая копия и ссылка документов задачи — в клоне артели,
         # чекпоинт — в рабочей копии задачи `worktrees/<id>`, скилы,
         # CLAUDE.md и свежесть карты — голова `main` самого пульта.
+        # С задачи 01M443BPQEA9ZMJ3R50THNB1MF (требование 6) перед шагом
+        # разработчика пульт подтягивает `main` в отставшую ветку: после
+        # скилов — три вызова `gitcmd.fetch_ref_sha` в клоне (fetch
+        # `origin/main` в приватную ссылку, её чтение, удаление). Голова
+        # `origin/main` от FakeGit не даёт отставания — слияния нет, дальше
+        # прежний путь шага.
         clone = str(workspace.repo(config.DEFAULT_TARGET))
         wt = str(workspace.path(self.TASK))
         root = str(config.ROOT)
         ref = f"refs/artifacts/{self.TASK}"
         code_branch = store.get_task(store.db(), self.TASK)["branch"]
-        self.assertEqual(self.git.raw_calls,
+        # Приватная ссылка fetch'а подтяжки названа случайно
+        # (`gitcmd.fetch_ref_sha`): сверяем её по префиксу и требуем, чтобы
+        # все три вызова подтяжки адресовали одну и ту же ссылку.
+        private = "refs/artel/fetch/"
+        fetched = {arg[arg.index(private):] for call in self.git.raw_calls
+                   for arg in call if private in arg}
+        self.assertEqual(len(fetched), 1, f"приватные ссылки: {fetched}")
+        calls = [[arg.replace(next(iter(fetched)), private + "<x>")
+                  if private in arg else arg for arg in call]
+                 for call in self.git.raw_calls]
+        self.assertEqual(calls,
                          [["-C", clone, "worktree", "list", "--porcelain"],
                           ["-C", root, "show", "main:skills/conventions-core.md"],
                           ["-C", root, "show", "main:skills/escalation-rules.md"],
                           ["-C", root, "show", "main:skills/coding-standards.md"],
+                          ["-C", clone, "fetch", "origin",
+                           f"+refs/heads/main:{private}<x>"],
+                          ["-C", clone, "rev-parse", "--verify", f"{private}<x>"],
+                          ["-C", clone, "update-ref", "-d", f"{private}<x>"],
                           ["-C", clone, "show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/SPEC.md"],
                           ["-C", root, "diff", "--name-only",
