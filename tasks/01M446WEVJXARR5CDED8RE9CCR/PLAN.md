@@ -2,7 +2,7 @@
 task: 01M446WEVJXARR5CDED8RE9CCR
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -23,8 +23,8 @@ schema_version: 5
   действие вне перечня) — `Stop` с первого отказа; «чинит роль» — `None`
   (шаг роли), тот же отказ после завершённого шага той же роли в визите —
   `Stop` (`_role_step_between_repeated_refusals`, теперь для всего класса и
-  всех четырёх состояний). Подкласс РНЗ из повтор-остановки исключён (см.
-  «Эскалация», вопрос 2): артефакта роли на ветке ещё нет, как у
+  всех четырёх состояний). Подкласс РНЗ из повтор-остановки исключён
+  (ANSWER-1, вопрос 2 — вариант A): артефакта роли на ветке ещё нет, как у
   нежурналируемого «PLAN.md не ready». Порог холостых шагов считает и шаги
   роли на отказах «чинит роль». Исход `Refused` (холостой шаг без роли)
   больше не возникает — удалён.
@@ -54,8 +54,14 @@ schema_version: 5
 1. Перечень классов, реакция `auto`, разделение действий гейтов, `run` →
    `advance`, описание в `docs/operator-session.md`, карта
    (`python3 scripts/codebase_map.py`) — сделано, код в worktree.
-2. После ответа Оператора — правка шести тестовых методов по мандату
-   (раздел «Эскалация», вопрос 1), повторный прогон модулей.
+2. По ANSWER-1 (вопрос 1 — вариант A, мандат на ослабление шести методов):
+   правка утверждений шести методов ровно как в эскалации; методы не
+   удалены и не переименованы. Докстринги двух изменённых методов
+   (`test_ac1_…`, `test_ac3_…`) дополнены заявкой «Ловит мутацию»
+   (проверено `guard.test_functions_without_mutation_claim` против main —
+   пусто). По вопросу 2 (вариант A) — причина исключения РНЗ описана в
+   докстринге `refusal_classes.py` и ниже в «Влиянии на систему». Карта
+   регенерирована.
 
 ## Покрытие требований
 
@@ -68,7 +74,7 @@ schema_version: 5
 | 5.1–5.4. Разделение действий | 1 (`review.py`, `acceptance.py`, `tests_writing.py`, `fsm.py`, `fsm_advance.py`, `pull.py`) |
 | 6. `run` → один `advance` | 1 (`runner.cmd_run_and_advance`, `artel.py`) |
 | 7. Ограничители | 1 (порог холостых шагов считает шаги роли; лимит шагов и стоп-кран конфликта подтяжки не тронуты) |
-| Неослабление существующих тестов | 2 (по мандату) |
+| Неослабление существующих тестов | 2 (правка шести методов по мандату ANSWER-1) |
 
 ## Влияние на систему
 - Прогоны (каждый — `python3 -m pytest <файлы> -p no:cacheprovider -p timeout -o timeout=120`, передний план):
@@ -89,9 +95,28 @@ schema_version: 5
     test_test_integrity_gate, test_zones_gate, test_capacity_gate,
     test_protected_paths_gate, test_doctor, test_multitarget*, долгоживущие
     файлы прочих задач (01m3…/01m4…), test_codebase_map и др. (≈1700 тестов);
-  - **красные — 6 методов** (противоречат SPEC, правка только по мандату,
-    «Эскалация», вопрос 1): 5 в `tests/test_auto_cycle.py`, 1 в
-    `tests/test_external_code_copy_refusal.py`.
+  - после правки по мандату ANSWER-1: `tests/test_auto_cycle.py` — 61
+    passed; `tests/test_external_code_copy_refusal.py`,
+    `tests/test_refusal_classes.py`, долгоживущие файлы задачи,
+    `test_advance_refusal_history`, `test_watch`, `test_brief` — вместе
+    125 passed; планка повторно — 10 passed, код 0.
+- Изменённые утверждения (мандат ANSWER-1): `advance.calls` 2 → 1 в
+  `test_ac1_identical_refusal_twice_in_a_row_stops_the_cycle` и
+  `test_legit_first_entry_does_not_skip_the_pre_advance`; `["…гейт зон"] * 2`
+  → `* 1` в `test_without_a_mandate_stops_without_running_the_role`;
+  `Refused`+`Stop` → `Stop` на первом вызове в
+  `test_other_in_dev_refusal_still_stops_on_the_second_repeat`; первый текст
+  сценария `test_ac3_two_different_refusal_texts_do_not_stop_the_cycle` —
+  «приёмочные тесты» (класс Р) вместо «рабочая копия артефактов грязная»;
+  действие журнала в `test_acceptance_run_refuses_with_the_ensure_reason` —
+  «переход отклонён: рабочая копия задачи не готова к приёмке».
+- Исключение подкласса РНЗ («дерево не на ветке задачи», «замечания ревью
+  не отработаны») из повтор-остановки (ANSWER-1, вопрос 2): эти отказы
+  значат «артефакта роли на ветке ещё нет», роль законно дописывает его за
+  два шага подряд, и остановка на втором таком отказе прерывала бы
+  штатные итерации ревью и разработки. От кружения их держит
+  `config.AUTO_STALL_STEPS_LIMIT`; четыре теста из вопроса 2 не тронуты и
+  зелёные.
 - Гейты и их условия не менялись; поменялись только тексты действий
   журнала у причин класса «чинит Оператор» в четырёх местах (требование 5).
   `watch` по-прежнему скрывает только два действия РНЗ — теперь из единого
@@ -117,67 +142,3 @@ schema_version: 5
   перечня классов пришлось повторять их литералами. Класс «действие
   журнала без единого имени» стоит закрыть отдельной задачей: все действия
   гейтов — константы `refusal_classes`, модули гейтов импортируют их.
-
-## Эскалация
-**Вопросы** (по блокирующести):
-1. **Мандат на правку шести тестовых методов, противоречащих SPEC.**
-   Реализация AC-3 (остановка на первом отказе «чинит Оператор») и
-   требования 5.2 (отдельное действие для рабочей копии на выходе `in_dev`)
-   делает их красными; утверждения меняются, методы не удаляются и не
-   переименовываются:
-   - `tests/test_auto_cycle.py::AutoStopsOnRepeatedAdvanceRefusalTest::test_ac1_identical_refusal_twice_in_a_row_stops_the_cycle` —
-     было `assertEqual(self.advance.calls, 2)`, станет `assertEqual(self.advance.calls, 1)`
-     («рабочая копия артефактов грязная» — класс О, AC-3); остальные
-     утверждения (состояние, текст, подсказка) остаются.
-   - `tests/test_auto_cycle.py::AutoStopsOnRepeatedAdvanceRefusalTest::test_ac3_two_different_refusal_texts_do_not_stop_the_cycle` —
-     сценарий: первый текст «рабочая копия артефактов грязная» (О —
-     теперь остановка с первого отказа) заменить на второй текст класса Р
-     («переход отклонён: приёмочные тесты»), утверждения (`calls ==
-     AUTO_MAX_STEPS`, «лимит … шагов», нет «почини причину») остаются —
-     свойство «два разных отказа не серия» сохраняется для класса Р (AC-1/AC-2).
-   - `tests/test_auto_cycle.py::PreAdvanceStillTriesOnLegitFirstEntryTest::test_legit_first_entry_does_not_skip_the_pre_advance` —
-     было `assertEqual(self.advance.calls, 2)`, станет `assertEqual(self.advance.calls, 1)`
-     («лок приёмочных тестов» — О, AC-3); проверка «developer не запущен,
-     advance вызван» остаётся.
-   - `tests/test_auto_cycle.py::AutoRunsDeveloperOnMandateWithoutPlanSectionTest::test_without_a_mandate_stops_without_running_the_role` —
-     было `["переход отклонён: гейт зон"] * 2`, станет `* 1` («гейт зон» —
-     О, AC-3); остальные утверждения остаются.
-   - `tests/test_auto_cycle.py::PreAdvanceMandateRefusalRepeatTest::test_other_in_dev_refusal_still_stops_on_the_second_repeat` —
-     было `assertIsInstance(first, auto.Refused)` + `assertIsInstance(second, auto.Stop)`,
-     станет `assertIsInstance(first, auto.Stop)` (исход `Refused` удалён —
-     холостого шага на отказе О больше нет, AC-3); контроль «гейт зон не
-     накрыт классом Р» сохраняется.
-   - `tests/test_external_code_copy_refusal.py::ExternalCodeCopyRefusalTest::test_acceptance_run_refuses_with_the_ensure_reason` —
-     было `journal_details("переход отклонён: приёмочные тесты")`, станет
-     `journal_details("переход отклонён: рабочая копия задачи не готова к приёмке")`
-     (требование 5.2, AC-6); проверки «планка не гонялась», причина
-     `ensure` в подробности — остаются.
-   Варианты: A) мандат на правки как выше; B) иные формулировки — указать.
-   **Дефолт при молчании: A.**
-2. **Повтор-остановка на подклассе «роль ещё не закончила».** Требование 2
-   распространяет её «на весь класс»; исключение РНЗ в тексте названо только
-   для брифа. Применённая к РНЗ буквально, она ломает законные сценарии
-   (ревьювер/developer дописывает артефакт за два шага: «дерево не на ветке
-   задачи» → шаг → то же → остановка) — красными становятся
-   `tests/test_auto_cycle.py::AutoStopsWhereTheOperatorIsNeededTest::test_review_iterations_are_passed_without_the_operator`,
-   `…::test_cycle_runs_the_task_from_dev_to_acceptance_when_ci_is_green`,
-   `…::test_origin_push_check_runs_once_not_twice_on_the_way_to_acceptance`,
-   `tests/test_auto_cycle.py::AutoStopsOnRepeatedAdvanceRefusalTest::test_a_step_without_a_refusal_breaks_the_streak`.
-   Сейчас реализовано: РНЗ запускает шаг роли без повтор-остановки, от
-   кружения держит `AUTO_STALL_STEPS_LIMIT` (как «PLAN.md не ready»); эти
-   четыре теста зелёные, планка и долгоживущие тесты задачи (AC-2 берёт
-   действия без РНЗ) — зелёные.
-   Варианты: A) оставить исключение РНЗ; B) применить повтор-остановку и к
-   РНЗ с мандатом на правку четырёх тестов выше. **Дефолт при молчании: A.**
-
-**Контекст**: код задачи целиком в worktree (незакоммичен —
-закоммитит пульт): `orchestrator/advance_gates/refusal_classes.py` (новый),
-`auto.py`, `brief.py`, `watch.py`, `fsm.py`, `fsm_advance.py`, `pull.py`,
-`runner.py`, `artel.py`, `advance_gates/{review,acceptance,tests_writing}.py`,
-`docs/operator-session.md`, `docs/codebase-map.md`,
-`tests/test_refusal_classes.py` (новый). Тестовые методы `tests/` не
-правились.
-
-**Блокирует**: сдачу `ready` — без мандата шесть существующих методов
-красные (гейт неослабления тестов и CI); правка — один шаг developer после
-ответа.
