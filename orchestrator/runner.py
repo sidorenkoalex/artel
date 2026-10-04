@@ -1536,7 +1536,13 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3): лог, трение, токены и
     # стоимость — всё из одного разбора, а формат знает тот, чей CLI
     # его написал.
-    pump = agent_log.OutputPump(proc.stdout, log_path, provider)
+    # Итоговая строка pytest пишется в журнал из потока насоса — своим
+    # соединением: соединение `conn` принадлежит этому потоку, а sqlite
+    # не отдаёт его другому (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требование 1).
+    pump = agent_log.OutputPump(
+        proc.stdout, log_path, provider,
+        on_pytest_summary=lambda summary: store.journal(
+            store.db(), task_id, role, agent_log.PYTEST_RUN_ACTION, summary))
     pump.start()
     timed_out = False
     killed_group = None

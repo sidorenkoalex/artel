@@ -924,6 +924,21 @@ def task_steps_since(conn: sqlite3.Connection, task_id: str,
         "ORDER BY id", (task_id, since_id)).fetchall()
 
 
+def last_task_step_of(conn: sqlite3.Connection, task_id: str,
+                      actions: tuple) -> sqlite3.Row | None:
+    """Последняя запись журнала задачи с действием из `actions`; `None` —
+    такой нет.
+
+    Читатель — `watch` (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требование 4):
+    живой шаг опрашивается каждые `--interval` секунд, и отбор в SQL
+    оставляет от журнала задачи одну запись, а не всю историю."""
+    marks = ", ".join("?" for _ in actions)
+    return conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE task_id=? "
+        f"AND action IN ({marks}) ORDER BY id DESC LIMIT 1",
+        (task_id, *actions)).fetchone()
+
+
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "",
            *, session_id: str | None = None) -> None:
     """Пишет запись журнала `steps` — каждая новая запись несёт identity
