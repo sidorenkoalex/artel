@@ -2,7 +2,7 @@
 task: 01M443BPQEA9ZMJ3R50THNB1MF
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -56,7 +56,7 @@ _run_developer_step` после `_refuse_before_start` (пауза, стоп-к�
 слиянием, авторазрешение карты, `git merge --no-ff` (WIP-коммиты остаются
 предками) — внутри узла, как на остальных точках.
 
-Два решения сверх буквы SPEC, оба — вопросы эскалации с дефолтом «оставить»:
+Два решения сверх буквы SPEC, оба оставлены решением Оператора (ANSWER-1, п.4):
 - `run_plank=False` (новый параметр `pull.evaluate`/`fsm.
   _pull_main_or_escalate`, по умолчанию `True` — прежние точки не
   меняются): планка перед шагом разработчика заведомо красна, её прогон
@@ -88,8 +88,19 @@ _cmd_approve_merge_gate_cycle`); новая точка ведёт себя та�
    `_pull_conflict_awaits_role_step`, вызов в `_run_developer_step`.
 5. `tests/test_runner_pre_step_pull.py` — углы вне долгоживущих файлов;
    `docs/codebase-map.md` регенерирована.
-6. После ответа Оператора — правка двух существующих тестов и строки
-   `docs/operator-session.md` (см. «Эскалация»).
+6. По ANSWER-1 (вариант (а) по всем вопросам; мандаты тестов и зон):
+   - `tests/test_01m42nb9gkxnp74hayej7c7ca8_class_mandate.py::AnswerInDevWithoutMarkersTest::test_ac5_answer_in_dev_without_markers_keeps_old_refusal`
+     переписан под тем же именем: файл с маркером мандата тестов НЕ в
+     начале строки принимается указанием (ANSWER-1.md с текстом, `in_dev`,
+     запись «указание Оператора», ни записи мандата, ни процитированного
+     элемента в журнале); строка про AC-5 в докстринге модуля поправлена.
+   - `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`:
+     в точный список после скилов дописаны три вызова `fetch_ref_sha`
+     (fetch, `rev-parse --verify`, `update-ref -d`) по одной приватной
+     ссылке, сверка по префиксу `refs/artel/fetch/`; комментарий дополнен
+     пунктом о подтяжке; ничего не подменено.
+   - `docs/operator-session.md`: принятый абзац — в конец пункта про
+     обходы (после «…БД руками для этого больше не нужна.»).
 
 ## Покрытие требований
 
@@ -102,9 +113,23 @@ _cmd_approve_merge_gate_cycle`); новая точка ведёт себя та�
 | 5 | 1 |
 | 6 | 3, 4 |
 | 7 | 3, 4 |
-| 8 | 5 (карта); строка operator-session — шаг 6, вопрос 3 |
+| 8 | 5 (карта), 6 (operator-session) |
 
-Прогоны (в шаге, передний план, `-p timeout -o timeout=120`):
+Прогоны после ANSWER-1 (передний план, `-p timeout -o timeout=120`):
+- долгоживущие файлы задачи, `test_runner_pre_step_pull`,
+  `test_review_package`, `test_01m42nb9…_class_mandate`, `test_answer`,
+  `test_answer_gate`, `test_answer_mandate`, `test_answer_branch_reads`,
+  `test_brief`, `test_invariants`, `test_codebase_map` — 348 passed,
+  242 subtests; `test_canary_template_flag`, `test_catalog_zone_overlap`
+  (читают `docs/operator-session.md`) — 42 passed.
+- Мутация переписанного ac5 (`_has_mandate_lines` считает мандатом маркер
+  где угодно в строке) — метод красный; код возвращён. Исходный
+  `test_developer_step_has_no_package` красный на коде задачи без
+  дописанных вызовов — список ловит подтяжку.
+- `plank-run` — отказ «планки нет» (группа только долгоживущая, прогнана
+  выше напрямую).
+
+Прогоны до эскалации:
 - `tests/test_01m443bpqea9zmj3r50thnb1mf_operator_instruction.py`,
   `tests/test_01m443bpqea9zmj3r50thnb1mf_developer_step.py` — 11 passed,
   8 subtests. `plank-run` отказывает «планки нет … нет файлов test_*.py»:
@@ -114,7 +139,7 @@ _cmd_approve_merge_gate_cycle`); новая точка ведёт себя та�
 - answer/brief/роль: `test_answer*`, `test_brief`, `test_01m3xtf5506…
   _role_refusal`, `test_01m3se87…_role_environment`, `test_canary_synthetic_
   answer`, `test_docs_ref_deleted_refusal`, `test_01m41ab5…_refixation`,
-  `test_01m42nb9…_class_mandate` — 129 passed, 1 failed (вопрос 1).
+  `test_01m42nb9…_class_mandate` — 129 passed, 1 failed (метод ac5 — закрыт шагом 6).
 - pull/runner: `test_pull*`, `test_branch_freshness_gate`,
   `test_fsm_map_conflict_autoresolve`, `test_zone_lock`, `test_agent_
   failure`, `test_agent_prompt`, `test_runner_*`, `test_step_cost`,
@@ -128,7 +153,7 @@ _cmd_approve_merge_gate_cycle`); новая точка ведёт себя та�
 - `test_invariants`, `test_multitarget_invariants`, `test_review_package`,
   `test_acceptance_tests_flow`, `test_artifact_materialization`,
   `test_01m3xtf1…_plan_escalation_marker`, `test_zones_gate` — 346 passed,
-  1 failed (вопрос 2).
+  1 failed (`test_developer_step_has_no_package` — закрыт шагом 6).
 - провайдеры/предполёт/наборы/kill/workspace/merge-gate git-списки — 255
   passed.
 
@@ -175,65 +200,3 @@ _cmd_approve_merge_gate_cycle`); новая точка ведёт себя та�
   («diff разработчику не собирается») не меняется. Проверка «нет `show`
   diff/stat» вместо полного списка держала бы то же свойство без
   хрупкости.
-
-## Эскалация
-
-- **Вопросы** (по блокирующести):
-  1. Мандат на тест, заменённый долгоживущим файлом задачи:
-     `tests/test_01m42nb9gkxnp74hayej7c7ca8_class_mandate.py::AnswerInDevWithoutMarkersTest::test_ac5_answer_in_dev_without_markers_keeps_old_refusal`.
-     Старое утверждение: файл без маркеров в `in_dev` отказывается текстом
-     «answer доступна только для задачи в состоянии escalated», ANSWER нет.
-     Требование 1 SPEC это поведение отменяет (такой файл — указание);
-     долгоживущий `tests/test_01m443bpqea9zmj3r50thnb1mf_operator_instruction.py`
-     называет его в «Заменяет:» (ADR-0020 п.8). Варианты: (а) переписать
-     метод с тем же именем — файл с маркером мандата тестов НЕ в начале
-     строки принимается как указание (запись «указание Оператора», ни
-     записи мандата, ни элемента в журнале) — свойство «цитата маркера —
-     не мандат» сохраняется; (б) удалить метод. Дефолт — (а). Нужна
-     строка ANSWER: `Ослабление тестов разрешено: tests/test_01m42nb9gkxnp74hayej7c7ca8_class_mandate.py::AnswerInDevWithoutMarkersTest::test_ac5_answer_in_dev_without_markers_keeps_old_refusal`.
-  2. Мандат на утверждение
-     `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`.
-     Старое утверждение: точный список git-вызовов шага developer.
-     Требование 6 (подтяжка перед каждым шагом developer) добавляет в него
-     три вызова `gitcmd.fetch_ref_sha` после чтения скилов: `-C <клон>
-     fetch origin +refs/heads/main:refs/artel/fetch/<pid>-<uuid>`,
-     `rev-parse --verify <та же ссылка>`, `update-ref -d <та же ссылка>`
-     (имя ссылки случайное). Новое утверждение: тот же список с этими
-     тремя элементами, приватная ссылка сверяется по префиксу
-     `refs/artel/fetch/`; комментарий метода дополняется пунктом о
-     подтяжке. Варианты: (а) так; (б) подменить в тесте
-     `runner._pull_before_developer_step` и оставить список прежним.
-     Дефолт — (а) (тест продолжает видеть реальный путь шага). Строка
-     ANSWER: `Ослабление тестов разрешено: tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`.
-  3. Строка `docs/operator-session.md` (требование 8). Приложение к PLAN
-     невозможно: путь не защищённый (`config.PROTECTED_PATHS`), guard
-     отклонит приложение; вне зон — гейт зон. Варианты: (а) мандат зон
-     `Расширение зон разрешено: docs/operator-session.md` в том же ANSWER —
-     я добавлю абзац сам; (б) Оператор вносит текст сам (`doc-commit`/
-     `note`). Дефолт — (а). Предлагаемый текст — в конец абзаца раздела
-     про обходы (после «…БД руками для этого больше не нужна.», строка 183):
-     «С задачи 01M443BPQEA9ZMJ3R50THNB1MF `answer <id> <файл>` в
-     `in_dev`/`review` принимает и файл без строк мандатов — это указание
-     Оператора: ANSWER-n.md коммитится в ссылку документов, состояние и
-     идущий шаг не меняются (lease не берётся), журнал пишет «ANSWER
-     создан: указание Оператора»; текст дойдёт до роли на её следующем
-     шаге (бриф разработчика — все ANSWER после старта его прошлого шага,
-     пакет ревью — все ANSWER). Пустой файл — отказ «пустой файл
-     указания». Перед каждым шагом разработчика пульт сам подтягивает
-     `main` в отставшую ветку; неразрешимый конфликт — эскалация с меткой
-     «нужен шаг роли», после `approve` подтяжка перед шагом пропускается,
-     пока роль не сделает шаг.»
-  4. Два решения сверх буквы SPEC (раздел «Подход»): подтяжка перед шагом
-     без прогона планки (`run_plank=False`) и её пропуск, пока метка
-     конфликта ждёт шага роли. Варианты: (а) оставить оба; (б) убрать
-     пропуск по метке (тогда конфликт перед шагом неразрешим без ручного
-     слияния Оператором); (в) гонять планку и перед шагом. Дефолт — (а).
-- **Контекст**: код требований 1–7 реализован и прогнан (см. «Покрытие
-  требований»): `orchestrator/answer.py`, `brief.py`, `pull.py`, `fsm.py`,
-  `runner.py`, новый `tests/test_runner_pre_step_pull.py`, карта
-  регенерирована. Долгоживущие файлы задачи зелёные. Красны два
-  существующих метода из вопросов 1–2 — ровно из-за требуемого SPEC
-  изменения поведения; я их не трогал.
-- **Блокирует**: сдачу `ready` — без мандатов 1–2 правка этих методов
-  запрещена (инвариант неослабления), а без неё `in_dev -> verifying`
-  красит набор `tests/`; без ответа 3 не закрывается требование 8.
