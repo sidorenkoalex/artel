@@ -2922,15 +2922,37 @@ def spec_unclassified_paths(text: str, meta: dict,
     `zones:` (`meta`, с вложенностью и общими зонами) и разделы
     `SPEC_PATH_DECLARING_SECTIONS`.
 
-    Зовётся гейтом `orchestrator/fsm.py::_approve_spec_gate` — и ТОЛЬКО
-    им: в `_content_errors`/`check()`/`main()` не входит (требование 7),
-    исторические SPEC с путями вне зон остаются валидными для CI."""
+    Зовётся гейтом `orchestrator/fsm.py::_approve_spec_gate` и вызовом
+    `main()` по файлам (`spec_path_errors`, SPEC
+    01M42NBCADGSGTCBZB8NKBVDVH, требование 4) — тот прогон, которым
+    analyst проверяет SPEC перед сдачей. В `_content_errors`/`check()` и
+    `main() --all` не входит (требование 7), исторические SPEC с путями вне
+    зон остаются валидными для CI."""
     checked = "\n".join(section_body(text, name)
                         for name in SPEC_PATH_CHECKED_SECTIONS)
     declared = "\n".join(section_body(text, name)
                          for name in SPEC_PATH_DECLARING_SECTIONS)
     return unclassified_paths(checked, zone_items(meta.get("zones")),
                               declared, root)
+
+
+def spec_path_errors(path: Path) -> list[str]:
+    """Находка о неклассифицированных путях SPEC-файла `path` тем же узлом
+    и текстом, что отказ `approve` на `spec_gate` (SPEC
+    01M42NBCADGSGTCBZB8NKBVDVH, требование 4): без неё guard говорил «ок»,
+    а approve отказывал — лишний круг reject + перезапуск analyst. Не SPEC
+    или нечитаемый файл — пусто: это уже нарушение `check()`."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    meta = yamlmini.frontmatter(text)
+    if meta is None or meta.get("type") != "spec":
+        return []
+    unclassified = spec_unclassified_paths(text, meta)
+    if not unclassified:
+        return []
+    return [f"{path}: {unclassified_paths_refusal(unclassified)}"]
 
 
 def _content_errors(label: str, text: str) -> list[str]:
@@ -3106,6 +3128,8 @@ def main() -> int:
             all_errors.append(f"{f}: файл не найден")
             continue
         all_errors.extend(check(f))
+        if args != ["--all"]:
+            all_errors.extend(spec_path_errors(f))
 
     if sandbox_reuse_warnings:
         print("GUARD: предупреждения (не блокируют переход гейта):")
