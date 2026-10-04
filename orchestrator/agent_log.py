@@ -223,11 +223,15 @@ PYTEST_RUN_ACTION = "прогон pytest"
 # Итоговая строка pytest: счётчики «<число> <исход>» через запятую и
 # длительность «in X.XXs» — так её печатает pytest и в обрамлении «=», и
 # голой строкой (`-q`). Одного слова «passed» мало: листинг или код со
-# словом «passed» итоговой строкой не являются.
+# словом «passed» итоговой строкой не являются. Счётчик может нести
+# квалификатор перед исходом («99 subtests passed» — так pytest печатает
+# прогон `tests/` с `subTest`), а прогон без собранных тестов — «no tests
+# ran in X.XXs».
 _PYTEST_OUTCOMES = (r"(?:failed|passed|skipped|deselected|xfailed|xpassed"
                     r"|warnings?|errors?|rerun)")
+_PYTEST_COUNT = rf"\d+ (?:subtests )?{_PYTEST_OUTCOMES}"
 _PYTEST_SUMMARY_RE = re.compile(
-    rf"^=*\s*((?:\d+ {_PYTEST_OUTCOMES}, )*\d+ {_PYTEST_OUTCOMES}"
+    rf"^=*\s*((?:(?:{_PYTEST_COUNT}, )*{_PYTEST_COUNT}|no tests ran)"
     rf" in \d+(?:\.\d+)?s\b[^=]*?)\s*=*$")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 

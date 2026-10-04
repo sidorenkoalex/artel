@@ -8,8 +8,10 @@ import io
 import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
+from unittest import mock
 
-from orchestrator import agent_log
+from orchestrator import agent_log, runner, spend, watch
 from tests.sandbox import TmpRootTest
 
 
@@ -38,6 +40,25 @@ class PytestSummariesTest(unittest.TestCase):
             "1 failed, 2 passed, 3 warnings in 12.30s (0:00:12)",
             "5 passed in 0.10s",
             "2 errors in 1.00s"])
+
+    def test_subtests_and_empty_run_forms_are_recognised(self):
+        """Итоговые строки прогона с `subTest` («N subtests passed») и
+        прогона без собранных тестов («no tests ran») — распознаются.
+
+        Ловит мутацию: шаблон без квалификатора `subtests` — итоговая строка
+        прогона `tests/` этого репозитория не распознается и записи
+        «прогон pytest» нет; шаблон без «no tests ran» — пустой прогон
+        записи не даёт.
+        """
+        text = ("182 passed, 99 subtests passed in 62.97s (0:01:02)\n"
+                "== 2 failed, 180 passed, 3 subtests failed, "
+                "96 subtests passed in 60.1s ==\n"
+                "============ no tests ran in 0.01s ============\n")
+        self.assertEqual(agent_log.pytest_summaries(text), [
+            "182 passed, 99 subtests passed in 62.97s (0:01:02)",
+            "2 failed, 180 passed, 3 subtests failed, 96 subtests passed "
+            "in 60.1s",
+            "no tests ran in 0.01s"])
 
     def test_words_without_counts_and_duration_are_not_a_summary(self):
         """Слова исходов без числа или без «in X.XXs» — не итоговая строка.
@@ -79,6 +100,37 @@ class PumpPytestSummaryTest(TmpRootTest):
         self.assertEqual(seen, ["4 passed in 1.00s"])
         self.assertIsNone(pump.error)
         self.assertEqual(log.read_text(encoding="utf-8"), "дальше\n")
+
+
+class StepCostProviderTest(TmpRootTest):
+
+    def test_step_cost_parses_log_with_step_provider(self):
+        """Стоимость шага в дозоре разбирает лог провайдером ШАГА (тем же,
+        что выбрал раннер), а не провайдером по умолчанию.
+
+        Ловит мутацию: `partial_tokens_from_log` зовётся без провайдера —
+        лог Codex-шага разбирается парсером Claude, строка usage провайдера
+        шага не находится, стоимость `None`.
+        """
+        log = agent_log.new_agent_log("T001", "developer")
+        log.write_text("USAGE 7\n", encoding="utf-8")
+
+        def parse(line):
+            count = int(line.split()[1]) if line.startswith("USAGE") else None
+            return SimpleNamespace(
+                tokens_by_type=None if count is None else {"input": count})
+
+        provider = SimpleNamespace(parse_output_line=parse)
+        step = SimpleNamespace(log_path=log, role="developer")
+        seen = []
+        with mock.patch.object(runner, "_step_provider",
+                               side_effect=lambda t, role: (
+                                   seen.append(role) or provider)), \
+                mock.patch.object(spend, "partial_cost_usd",
+                                  side_effect=lambda role, tokens, t: (
+                                      tokens["input"] / 7)):
+            self.assertEqual(watch._step_cost_usd(step, {"id": "T001"}), 1.0)
+        self.assertEqual(seen, ["developer"])
 
 
 if __name__ == "__main__":

@@ -397,12 +397,25 @@ def _has_commit_since(task_row, started: datetime) -> bool | None:
     return bool(res.stdout.strip())
 
 
+def _step_provider(task_row, role: str):
+    """Провайдер шага — тот же, что выбрал раннер (набор задачи, иначе
+    роль): лог шага Codex разбирается парсером Codex. Провайдер не
+    разрешился — `None`, провайдер по умолчанию: дозор не останавливается
+    из-за карты исполнителей, её отказ называет сам шаг."""
+    from . import runner  # runner тянет за собой FSM; нужен лишь здесь
+    try:
+        return runner._step_provider(task_row, role)
+    except Exception:  # noqa: BLE001 — деградация к разбору по умолчанию
+        return None
+
+
 def _step_cost_usd(step: _LiveStep, task_row) -> float | None:
     """Стоимость шага по usage, уже лёгшему в лог шага; `None` — usage не
     видели или тариф роли не разрешился."""
     if step.log_path is None:
         return None
-    tokens, saw = spend.partial_tokens_from_log(step.log_path)
+    tokens, saw = spend.partial_tokens_from_log(
+        step.log_path, _step_provider(task_row, step.role))
     if not saw:
         return None
     return spend.partial_cost_usd(step.role, tokens, task_row)
