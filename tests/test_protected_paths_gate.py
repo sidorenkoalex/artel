@@ -114,8 +114,11 @@ class MergeGateProtectedPathDiffGateTest(TmpRootTest):
         store.insert_task(self.conn, self.task_id, "Задача", "merge_gate",
                           "task/t001-x", config.DEFAULT_TARGET,
                           config.DEFAULT_BUDGET_USD)
+        # Контекст артели — по признаку проекта, не по пути (ADR-0021 п.1,
+        # этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7, требование 3).
         self.self_ctx = repo_context.RepoContext(
-            path=config.ROOT, remote="origin", base=config.MAIN_BRANCH)
+            path=config.ROOT, remote="origin", base=config.MAIN_BRANCH,
+            target=config.DEFAULT_TARGET)
 
     def test_external_target_never_calls_diff_base(self):
         """Ловит мутацию: проверка `ctx.path != config.ROOT` убрана —

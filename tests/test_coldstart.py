@@ -15,7 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, catalog, coldstart, config, doctor, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import (TmpRootTest, capture,  # noqa: E402
+                           link_artel_clone_to_root)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,6 +57,11 @@ class GitObservedWorldTest(TmpRootTest):
         self.git("config", "user.email", "artel-tests@example.invalid")
         self.git("config", "user.name", "artel tests")
         (self.root / "README.md").write_text("холодный старт\n", encoding="utf-8")
+        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветки
+        # задач и история `main` наблюдаются в клоне. `.artel/` вне git,
+        # как у настоящего пульта.
+        (self.root / ".gitignore").write_text(".artel/\n", encoding="utf-8")
+        link_artel_clone_to_root(self.root)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
 

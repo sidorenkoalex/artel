@@ -375,7 +375,7 @@ class ExternalTargetRemoteBaseTest(RemoteBaseSandbox):
         """Внешний target: fetch базы и подсчёт коммитов — в его клоне.
 
         Сценарий: клон target'а `outer` лежит там, куда указывает
-        `repo_context` (`config.PROJECTS/outer/workspace`), со своим bare
+        `repo_context` (`config.PROJECTS/outer/repo`), со своим bare
         `origin`; удалённая база ушла вперёд пина клона, его
         `refs/remotes/origin/main` отстал, ветка задачи без своих коммитов
         существует только в клоне. После `ensure_draft_mr` — пропуск как в
@@ -388,7 +388,8 @@ class ExternalTargetRemoteBaseTest(RemoteBaseSandbox):
         «не читается», адаптер уходит в push и `gh pr create` вместо
         пропуска, а fetch записан без `-C <клон>`.
         """
-        clone = config.PROJECTS / EXTERNAL / "workspace"
+        # Клон проекта — `repo/` области проекта (ADR-0021 п.1, этап 2).
+        clone = config.PROJECTS / EXTERNAL / "repo"
         clone.mkdir(parents=True)
         self.git_in(clone, "init", "-q", "-b", config.MAIN_BRANCH)
         self.git_in(clone, "config", "user.email", "artel@example.invalid")

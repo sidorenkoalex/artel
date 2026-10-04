@@ -54,9 +54,7 @@ def recovery_check(conn, target: str) -> list[doctor.Check]:
 
 def _commit_exists(task_id: str, sha: str) -> bool:
     """Коммит `sha` есть в репозитории ссылки документов задачи
-    (`artifact_branch.task_repo`): git пульта для артели, клон проекта для
-    внешнего target."""
+    (`artifact_branch.task_repo`): клон проекта задачи, включая артель
+    (ADR-0021 п.1-3)."""
     repo = doctor.artifact_branch.task_repo(task_id)
-    if repo == doctor.config.ROOT:
-        return doctor.gitcmd.commit_exists(sha)
     return doctor.gitcmd.commit_exists(sha, repo=repo)

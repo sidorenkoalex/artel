@@ -110,11 +110,19 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
     - `timeout` — флаг, передаваемый в `_commit_external_step_artifacts`
       (`True` только для `commit_timeout_checkpoint`).
     """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
+    # С этапа 2 ADR-0021 у задачи любого проекта своя рабочая копия на
+    # ветке задачи в клоне проекта (`workspace.path`): чекпоинт кода —
+    # там же, для внешнего проекта тоже (SPEC 01M42PENCS26D0656X8FR7DFA7,
+    # требование 2). До этапа общий `workspace/` внешнего проекта ветки
+    # задачи не нёс, и коммитить в нём пульт не мог. Рабочей копии нет
+    # (проект без клона, задача без заведённой копии) — пропуск без
+    # единого вызова git, как прежде для внешнего проекта.
+    target = store.task_target(conn, task_id)
+    wt = workspace.path(task_id, target)
     detail = ""
-    if role == "developer":
+    if not wt.is_dir():
+        pass
+    elif role == "developer":
         committed, sha, stray, _error = _commit_worktree_change(
             conn, task_id, wt, message, exclude=f"tasks/{task_id}")
         if stray:
@@ -136,7 +144,7 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
             store.journal(conn, task_id, "orchestrator", discard_action,
                           journal_detail)
 
-    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET,
+    _commit_external_step_artifacts(conn, task_id, role, target,
                                     timeout=timeout)
     return detail
 
@@ -265,10 +273,11 @@ def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
             candidates.update(paths)
     if not candidates:
         return set()
-    base = gitcmd.diff_base(t["branch"])
+    repo = workspace.task_repo(task_id)
+    base = gitcmd.diff_base(t["branch"], repo=repo)
     if base is None:
         return None
-    in_base = gitcmd.ls_tree_files(base, "tests")
+    in_base = gitcmd.ls_tree_files(base, "tests", repo=repo)
     if in_base is None:
         return None
     return candidates - set(in_base)
@@ -703,7 +712,8 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     снятый со стейджа `_commit_worktree_change`, попал бы в `detail` как
     закоммиченный (SPEC 01M290PVYG2VJK6442H5BAX9MA, R1-F1).
 
-    Только догфуд, коммитит, только если реально есть что коммитить
+    Любой проект (с этапа 2 ADR-0021 рабочая копия задачи — на её ветке
+    в клоне проекта), коммитит, только если реально есть что коммитить
     (`_commit_worktree_change` сам отказывает на пустом diff), тихая
     деградация без git — дословно `commit_timeout_checkpoint`.
 
@@ -719,9 +729,11 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     01M41R4YAM4NGEQXW1FWH7T22M, требование 4): 03.10.2026 роли уборкой
     удаляли весь отслеживаемый каталог задач рабочей копии.
     """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+    # Рабочая копия задачи любого проекта (этап 2 ADR-0021, требование 2):
+    # тот же довод и тот же пропуск без рабочей копии, что у `_wip_checkpoint`.
+    wt = workspace.path(task_id, store.task_target(conn, task_id))
+    if not wt.is_dir():
         return ""
-    wt = workspace.path(task_id)
     if role != "developer":
         restore_out_of_bounds_deletions(conn, task_id, role, wt)
     if role not in ("developer", "test_author"):
@@ -836,7 +848,10 @@ def _collect_step_artifact_files(workspace_root: Path, task_dir: Path,
             raw_files[rel] = path.read_bytes()
         except OSError:
             continue
-    ignored = gitcmd.check_ignore(set(raw_files) | set(existing))
+    # `.gitignore` клона проекта задачи (ADR-0021 п.1): каталог задачи
+    # назван её id.
+    ignored = gitcmd.check_ignore(set(raw_files) | set(existing),
+                                  repo=workspace.task_repo(task_dir.name))
     if ignored is None:
         return None
     files = {rel: content for rel, content in raw_files.items()
@@ -1088,12 +1103,7 @@ def harvest_code_copy_docs(conn, task_id: str, target: str
     ссылки не состоялась (git не ответил, ссылки нет, ссылка сдвинута мимо
     пульта) — иначе они снова пропали бы до запуска роли."""
     from . import artifact_branch
-    if target == config.DEFAULT_TARGET:
-        code_root = workspace.path(task_id)
-    else:
-        code_root = config.PROJECTS / target / "workspace"
-    if code_root.resolve() == config.ROOT.resolve():
-        return {}
+    code_root = workspace.path(task_id, target)
     stray = code_root / "tasks" / task_id
     if not stray.is_dir():
         return {}
@@ -1255,10 +1265,7 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     «роль успела сама» от «оркестратор подобрал WIP после обрыва».
     """
     from . import acceptance, artifact_branch
-    if target == config.DEFAULT_TARGET:
-        code_root = workspace.path(task_id)
-    else:
-        code_root = config.PROJECTS / target / "workspace"
+    code_root = workspace.path(task_id, target)
     stray = code_root / "tasks" / task_id
     workspace_root = artifact_branch.docs_root(target)
     task_dir = workspace_root / "tasks" / task_id

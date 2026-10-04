@@ -24,7 +24,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import config, notes, store
-from tests.sandbox import RealGitSandbox
+from tests.sandbox import RealGitSandbox, clone_artel_from_origin
 
 DOC_REL = "docs/roadmap.md"
 GUIDE_REL = "docs/guide.md"
@@ -80,6 +80,9 @@ class HeldBaseSandbox(RealGitSandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "документы")
         self.push_main()
+        # Клон артели из origin, как его заводит `init` (ADR-0021 п.1,
+        # этап 2): команды Оператора коммитят и пушат через него.
+        clone_artel_from_origin(self.origin)
         self.source_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.source_dir, ignore_errors=True)
 

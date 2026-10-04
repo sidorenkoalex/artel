@@ -264,18 +264,26 @@ class TargetInitTest(TmpRootTest):
     def dirs(self) -> list:
         # .git/.gitignore — артефактный git-репо каталога (tasks/T021,
         # ADR-0003 3д/п.15), не часть структуры PROJECT_DIRS этого теста.
+        # `repo` — клон проекта (ADR-0021 п.1, этап 2): его заводит
+        # `workspace.ensure_clone`, не `target-init`, и песочница кладёт его
+        # заранее (`tests/sandbox.py::seed_artel_clone_stub`).
         names = {p.name for p in (config.PROJECTS / "artel").iterdir()}
-        return sorted(names - {".git", ".gitignore"})
+        return sorted(names - {".git", ".gitignore", "repo"})
 
     def test_structure_is_created(self):
+        """Ловит мутацию: `target-init` не заводит один из каталогов
+        структуры либо структура снова несёт общий `workspace/` вместо
+        `worktrees/` рабочих копий задач (ADR-0021 п.1, этап 2)."""
         capture(projects.cmd_target_init, "artel")
 
         self.assertEqual(self.dirs(),
                          sorted(config.PROJECT_DIRS))
         self.assertEqual(sorted(config.PROJECT_DIRS),
-                         ["knowledge", "logs", "tasks", "workspace"])
+                         ["knowledge", "logs", "tasks", "worktrees"])
 
     def test_second_call_is_idempotent(self):
+        """Ловит мутацию: повторный `target-init` пересоздаёт каталог и
+        теряет его содержимое либо не сообщает «уже был»."""
         capture(projects.cmd_target_init, "artel")
         (config.PROJECTS / "artel" / "tasks" / "T001").mkdir()
 
@@ -287,6 +295,8 @@ class TargetInitTest(TmpRootTest):
                         "повторный вызов не трогает содержимое каталога")
 
     def test_missing_subdir_is_restored(self):
+        """Ловит мутацию: повторный `target-init` не доводит удалённый
+        вручную подкаталог структуры."""
         capture(projects.cmd_target_init, "artel")
         (config.PROJECTS / "artel" / "knowledge").rmdir()
 

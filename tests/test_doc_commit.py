@@ -20,7 +20,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, config, notes, store  # noqa: E402
-from tests.sandbox import RealGitSandbox, capture  # noqa: E402
+from tests.sandbox import (RealGitSandbox, capture,  # noqa: E402
+                           clone_artel_from_origin)
 
 BACKLOG_TEXT = """## Копилка
 
@@ -167,6 +168,9 @@ class DocCommitSandbox(RealGitSandbox):
         self.git("commit", "-q", "-m", "документы")
         self.git("push", "-q", "origin",
                  f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+        # Клон артели из origin, как его заводит `init` (ADR-0021 п.1,
+        # этап 2): команды Оператора коммитят и пушат через него.
+        clone_artel_from_origin(self.origin)
         self.source_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.source_dir, ignore_errors=True)
 

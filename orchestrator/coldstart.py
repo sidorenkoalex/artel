@@ -17,7 +17,7 @@
 import re
 from pathlib import Path
 
-from . import config, gitcmd, store
+from . import config, gitcmd, store, workspace
 
 _BRANCH_NUMBER_RE = re.compile(r"^task/t0*(\d+)-", re.IGNORECASE)
 _MAIN_SUBJECT_RE = re.compile(r"^T0*(\d+):", re.IGNORECASE)
@@ -28,10 +28,12 @@ def observed_max_task_number(target: str) -> int:
     """Максимум номера `Tnnn`, наблюдаемый в мире для `target`; 0 — ничего
     не найдено (пустой проект — счётчик сеется от 1, как и раньше)."""
     best = _max_from_task_dirs(_tasks_dir(target))
-    if target == config.DEFAULT_TARGET and _git_available():
-        best = max(best, _max_from_branches())
+    if target == config.DEFAULT_TARGET:
+        clone = workspace.repo(config.DEFAULT_TARGET)
+        if clone.exists():
+            best = max(best, _max_from_branches(clone))
+            best = max(best, _max_from_main_history(clone))
         best = max(best, _max_from_retro())
-        best = max(best, _max_from_main_history())
     return best
 
 
@@ -39,12 +41,6 @@ def _tasks_dir(target: str) -> Path:
     if target == config.DEFAULT_TARGET:
         return config.TASKS
     return config.PROJECTS / target / "tasks"
-
-
-def _git_available() -> bool:
-    """`.git` пульта — файл (worktree-gitlink, SPEC T045) либо каталог
-    (обычный чекаут); `.exists()`, не `.is_dir()`, ловит оба случая."""
-    return (config.ROOT / ".git").exists()
 
 
 def _max_from_task_dirs(tasks_dir: Path) -> int:
@@ -57,8 +53,8 @@ def _max_from_task_dirs(tasks_dir: Path) -> int:
     return best
 
 
-def _max_from_branches() -> int:
-    branches = gitcmd.list_branches("task/")
+def _max_from_branches(clone: Path) -> int:
+    branches = gitcmd.list_branches("task/", repo=clone)
     if not branches:
         return 0
     best = 0
@@ -79,10 +75,10 @@ def _max_from_retro() -> int:
     return best
 
 
-def _max_from_main_history() -> int:
+def _max_from_main_history(clone: Path) -> int:
     """Best-effort (требование 1: «при доступности»): нет ветки `main` ещё
     (совсем свежий репозиторий) — 0, не отказ."""
-    res = gitcmd.git("log", config.MAIN_BRANCH, "--format=%s")
+    res = gitcmd.in_repo(clone, "log", config.MAIN_BRANCH, "--format=%s")
     if res is None or res.returncode != 0:
         return 0
     best = 0

@@ -1,5 +1,6 @@
 """Юнит-тесты orchestrator/workspace.py: git worktree задачи в
-стандартном месте (SPEC T045).
+стандартном месте (SPEC T045; с этапа 2 ADR-0021 — `.artel/projects/<имя>/
+worktrees/<id>` клона проекта, SPEC 01M42PENCS26D0656X8FR7DFA7).
 
 Git тут настоящий (по образцу tests/test_git_fixation.py RealPultGitTest):
 сама суть модуля — операции `git worktree`, подменять их заглушками
@@ -18,7 +19,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import capture, resilient_tmp_cleanup  # noqa: E402
+from tests.sandbox import (_PROJECT_TARGET_ENTRY,  # noqa: E402
+                           RealGitSandbox, capture, link_artel_clone_to_root,
+                           resilient_tmp_cleanup, strip_dash_c)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,10 +66,16 @@ class RealGitWorkspaceTest(unittest.TestCase):
             ("TASKS", self.root / "tasks"),
             ("LOGS", self.root / ".artel" / "logs"),
             ("WORKTREES", self.root / ".artel" / "worktrees"),
+            ("PROJECTS", self.root / ".artel" / "projects"),
+            ("TARGETS", self.root / "targets.yaml"),
         ):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветки
+        # и рабочие копии задач живут в клоне, сценарии класса сверяют их
+        # git'ом `self.root`.
+        self.clone = link_artel_clone_to_root(self.root)
 
         self.capture(catalog.cmd_init)
         # НЕ через `catalog.cmd_new`: с SPEC T048 он сам заводит ветку и
@@ -99,7 +108,8 @@ class RealGitWorkspaceTest(unittest.TestCase):
             (task_id or self.TASK,)).fetchone()
 
     def wt_path(self, task_id=None) -> Path:
-        return config.WORKTREES / (task_id or self.TASK)
+        return (config.PROJECTS / config.DEFAULT_TARGET / "worktrees"
+                / (task_id or self.TASK))
 
     def worktree_list(self) -> str:
         return self.git("worktree", "list", "--porcelain").stdout
@@ -108,27 +118,37 @@ class RealGitWorkspaceTest(unittest.TestCase):
 class PathTest(RealGitWorkspaceTest):
 
     def test_path_is_the_standard_location(self):
+        """Ловит мутацию: рабочая копия задачи артели остаётся в
+        `config.WORKTREES` главной копии, а не в области проекта
+        `.artel/projects/artel/worktrees/<id>` (ADR-0021 п.1, этап 2)."""
         self.assertEqual(workspace.path(self.TASK),
-                         config.WORKTREES / self.TASK)
+                         config.PROJECTS / config.DEFAULT_TARGET / "worktrees"
+                         / self.TASK)
 
 
 class RegisteredPathsTest(RealGitWorkspaceTest):
 
     def test_lists_the_main_checkout(self):
-        paths = workspace.registered_paths()
+        """Ловит мутацию: `registered_paths` спрашивает не переданный клон
+        проекта (ADR-0021 п.1), а другой репозиторий — список не тот."""
+        paths = workspace.registered_paths(self.clone)
 
         self.assertEqual(paths, [str(self.root)])
 
     def test_includes_a_worktree_added_directly_by_git(self):
+        """Ловит мутацию: рабочая копия, заведённая в клоне git'ом
+        напрямую, не попадает в `registered_paths(клон)`."""
         path = self.wt_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.git("worktree", "add", "-b", self.branch, str(path))
 
-        self.assertIn(str(path), workspace.registered_paths())
+        self.assertIn(str(path), workspace.registered_paths(self.clone))
 
     def test_empty_when_git_does_not_answer(self):
+        """Ловит мутацию: молчание git (None) роняет `registered_paths`
+        вместо пустого списка."""
         with mock.patch.object(gitcmd, "git", lambda *a: None):
-            self.assertEqual(workspace.registered_paths(), [])
+            self.assertEqual(workspace.registered_paths(self.clone), [])
 
 
 class EnsureTest(RealGitWorkspaceTest):
@@ -186,10 +206,12 @@ class EnsureTest(RealGitWorkspaceTest):
                          "копии — там либо уже есть коммит, либо нечего")
 
     def test_failure_is_reported_without_raising(self):
+        """Ловит мутацию: отказ `git -C <клон> worktree add` поднимает
+        исключение вместо строки отчёта."""
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
-            if args[:2] == ("worktree", "add"):
+            if strip_dash_c(args)[:2] == ("worktree", "add"):
                 return subprocess.CompletedProcess(
                     list(args), 128, "", "fatal: не удалось")
             return real_git(*args)
@@ -303,12 +325,15 @@ class RemoveTest(RealGitWorkspaceTest):
     def test_failure_with_empty_stderr_still_reports_a_reason(self):
         """Review T045 итерация 1 замечание 2: `git worktree remove`
         отказал (returncode != 0), но ничего не написал в stderr — как
-        `ensure()` на тот же вырожденный случай, отчёт не пустая строка."""
+        `ensure()` на тот же вырожденный случай, отчёт не пустая строка.
+
+        Ловит мутацию: отказ `worktree remove` в клоне с пустым stderr
+        даёт пустой отчёт."""
         workspace.ensure(self.TASK, self.branch)
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
-            if args[:2] == ("worktree", "remove"):
+            if strip_dash_c(args)[:2] == ("worktree", "remove"):
                 return subprocess.CompletedProcess(list(args), 1, "", "")
             return real_git(*args)
 
@@ -339,10 +364,12 @@ class CmdWorkspaceTest(RealGitWorkspaceTest):
         self.assertEqual(self.worktree_list().count(str(expected)), 1)
 
     def test_exits_with_a_reason_when_worktree_add_fails(self):
+        """Ловит мутацию: `cmd_workspace` при отказе `git -C <клон>
+        worktree add` выходит без причины."""
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
-            if args[:2] == ("worktree", "add"):
+            if strip_dash_c(args)[:2] == ("worktree", "add"):
                 return subprocess.CompletedProcess(
                     list(args), 128, "", "fatal: не удалось")
             return real_git(*args)
@@ -380,6 +407,41 @@ class CmdWorkspaceLeaseTest(RealGitWorkspaceTest):
 
         self.assertIsNone(store.lease_row(store.db(), self.TASK),
                           "cmd_workspace не отпустила взятый ею с нуля lease")
+
+
+class CloneIdentityTest(RealGitSandbox):
+    """Клон, заведённый пультом (`workspace.ensure_clone`), несёт
+    идентичность коммитера главной копии: `git clone` локальный конфиг не
+    переносит, а коммиты задачи (подтяжка `main`, мерж, чекпоинты) с этапа 2
+    ADR-0021 (п.1) идут в клоне и его рабочих копиях."""
+
+    ARTEL_CLONE_IS_ROOT = False
+
+    def test_clone_inherits_the_main_copy_identity(self):
+        """Ловит мутацию: `ensure_clone` не переносит идентичность главной
+        копии в локальный конфиг клона (или пишет её не под тем ключом) —
+        там, где `user.name`/`user.email` заданы только в главной копии
+        (песочницы CI), подтяжка `main` и мерж в клоне отказывали бы
+        «Committer identity unknown»."""
+        origin = self.root.parent / f"{self.root.name}-origin.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(self.root),
+                        str(origin)], check=True, capture_output=True)
+        self.addCleanup(shutil.rmtree, origin, True)
+        config.TARGETS.write_text(
+            "targets:\n" + _PROJECT_TARGET_ENTRY.format(
+                name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH).replace(
+                f"file:///nonexistent/{config.DEFAULT_TARGET}", str(origin)),
+            encoding="utf-8")
+
+        clone, error = workspace.ensure_clone(config.DEFAULT_TARGET)
+
+        self.assertIsNone(error)
+        for key, value in (("user.name", "artel tests"),
+                           ("user.email", "artel@example.invalid")):
+            res = subprocess.run(["git", "-C", str(clone), "config",
+                                  "--local", "--get", key],
+                                 capture_output=True, text=True)
+            self.assertEqual(res.stdout.strip(), value, key)
 
 
 if __name__ == "__main__":

@@ -82,15 +82,27 @@ def _process_cwd(pid: int) -> str | None:
 
 
 def _hung_test_run_task_id(cwd: str) -> str | None:
-    """id задачи по cwd процесса — первый сегмент относительно
-    `config.WORKTREES` (тот же критерий легитимности, что и
-    `_is_legit_task_worktree`); `.resolve()` на обеих сторонах — cwd,
-    отданный `lsof`, разрешает симлинки ОС (`/var` -> `/private/var` на
-    macOS), путь `config.WORKTREES` из песочницы теста иначе не совпал
-    бы с ним побайтово."""
+    """id задачи по cwd процесса — сегмент `<id>` в `.artel/projects/
+    <имя>/worktrees/<id>/…` (ADR-0021 п.1, тот же критерий легитимности,
+    что и `_is_legit_task_worktree`) либо, для прогона, начатого до этапа
+    2, первый сегмент относительно `config.WORKTREES`; `.resolve()` на
+    обеих сторонах — cwd, отданный `lsof`, разрешает симлинки ОС (`/var` ->
+    `/private/var` на macOS), путь из песочницы теста иначе не совпал бы с
+    ним побайтово."""
     try:
-        rel = Path(cwd).resolve().relative_to(doctor.config.WORKTREES.resolve())
-    except (ValueError, OSError):
+        resolved = Path(cwd).resolve()
+    except OSError:
+        return None
+    try:
+        rel = resolved.relative_to(doctor.config.PROJECTS.resolve())
+    except ValueError:
+        rel = None
+    if rel is not None:
+        parts = rel.parts
+        return parts[2] if len(parts) >= 3 and parts[1] == "worktrees" else None
+    try:
+        rel = resolved.relative_to(doctor.config.WORKTREES.resolve())
+    except ValueError:
         return None
     return rel.parts[0] if rel.parts else None
 

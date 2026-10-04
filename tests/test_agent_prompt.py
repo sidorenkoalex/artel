@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, catalog, config, gitcmd,  # noqa: E402
                           models, runner, stack, store)
+from tests.sandbox import seed_artel_clone_stub  # noqa: E402
 from tests.sandbox import (FakeProc, SANDBOX_ROLES_TEXT, SpyRun,  # noqa: E402
                            _stub_check_stack, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -72,6 +73,10 @@ class PromptChannelTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели (ADR-0021 п.1, этап 2): ветка и рабочая копия задачи
+        # живут в нём, `new` без клона отказывает — пустой настоящий
+        # репозиторий песочницы.
+        seed_artel_clone_stub()
         config.ROLES.write_text(SANDBOX_ROLES_TEXT, encoding="utf-8")
         models.ensure_local_template()
         # git не спрашиваем: ревью-пакет собирается на заготовке. Не

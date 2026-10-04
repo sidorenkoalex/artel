@@ -35,7 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (amend, artel, artifact_branch, catalog, config,  # noqa: E402
                           fsm, github_adapter, gitcmd, store, workspace)
 from tests.sandbox import RealGitSandbox, TmpRootTest, capture  # noqa: E402
-from tests.sandbox import capture_new_task_id  # noqa: E402
+from tests.sandbox import capture_new_task_id, strip_dash_c  # noqa: E402
+
+# Клон проекта задачи в юнит-тестах без песочницы (ADR-0021 п.1, этап 2):
+# git задачи идёт с явным `-C <клон>`, а сам клон не ищется в боевой
+# области проектов.
+_UNIT_CLONE = Path("/nonexistent/artel-unit-clone")
 from tests.test_acceptance_tests_flow import (  # noqa: E402
     AC_TEST_BOTH_COVERED, PLAN_MD, SPEC_V2)
 
@@ -151,6 +156,7 @@ class BranchTestsSnapshotTest(unittest.TestCase):
     def _snapshot(self, ls_tree_output: str, ls_returncode: int,
                   show_text_by_rel: dict):
         def fake_git(*args):
+            args = strip_dash_c(args)
             if args[0] == "ls-tree":
                 return subprocess.CompletedProcess(
                     list(args), ls_returncode, ls_tree_output, "")
@@ -162,9 +168,11 @@ class BranchTestsSnapshotTest(unittest.TestCase):
                 return subprocess.CompletedProcess(list(args), 1, "", "not found")
             raise AssertionError(f"неожиданный вызов git: {args}")
 
-        with mock.patch.object(gitcmd, "git", fake_git):
+        with mock.patch.object(gitcmd, "git", fake_git), \
+                mock.patch.object(artifact_branch, "task_repo",
+                                  lambda task_id: _UNIT_CLONE):
             return amend._branch_tests_snapshot(
-                "deadbeef", "tasks/T001/acceptance_tests")
+                "deadbeef", "tasks/T001/acceptance_tests", "T001")
 
     def test_reads_all_files_at_the_given_revision(self):
         rel = "tasks/T001/acceptance_tests/test_ac.py"
@@ -194,6 +202,7 @@ class BranchTraceabilityErrorsTest(unittest.TestCase):
     def _errors(self, spec_text: str, tests_snapshot: dict,
                show_returncode: int = 0):
         def fake_git(*args):
+            args = strip_dash_c(args)
             if args[0] == "show":
                 if show_returncode != 0:
                     return subprocess.CompletedProcess(
@@ -201,7 +210,9 @@ class BranchTraceabilityErrorsTest(unittest.TestCase):
                 return subprocess.CompletedProcess(list(args), 0, spec_text, "")
             raise AssertionError(f"неожиданный вызов git: {args}")
 
-        with mock.patch.object(gitcmd, "git", fake_git):
+        with mock.patch.object(gitcmd, "git", fake_git), \
+                mock.patch.object(artifact_branch, "task_repo",
+                                  lambda task_id: _UNIT_CLONE):
             return amend._branch_traceability_errors(
                 "T001", "deadbeef", tests_snapshot)
 

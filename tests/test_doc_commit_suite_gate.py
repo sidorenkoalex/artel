@@ -180,7 +180,10 @@ class SuiteTreeTest(SuiteGateSandbox):
         self.assertEqual(len(seen), 1, seen)
         root, content = seen[0]
         self.assertEqual(content, NEW_CONFIG_TEXT)
-        self.assertEqual(root, config.ROOT / ".artel" / "notes-work")
+        # Рабочий репозиторий — клон артели: `.artel/notes-work` упразднён
+        # (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7,
+        # требование 5).
+        self.assertEqual(root, config.PROJECTS / config.DEFAULT_TARGET / "repo")
         self.assertEqual(self.origin_show(CONFIG_REL), NEW_CONFIG_TEXT)
 
     def test_docs_path_does_not_run_the_suite_at_all(self):

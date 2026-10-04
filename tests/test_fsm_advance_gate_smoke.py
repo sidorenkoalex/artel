@@ -35,7 +35,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm_advance, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, strip_dash_c  # noqa: E402
 
 
 def _capture(fn, *args):
@@ -48,6 +48,9 @@ def _capture(fn, *args):
 class CapacityGateSmokeTest(TmpRootTest):
 
     def test_matches_the_pre_refactor_fixture_byte_for_byte(self):
+        """Ловит мутацию: текст отказа гейта ёмкости в stdout или в журнале
+        расходится с эталоном хоть одним байтом (пропала «база сравнения … от
+        …», цифра исключённых артефактов или карты)."""
         task_id = "T001"
         conn = store.db()
         store.create_schema(conn)
@@ -58,6 +61,8 @@ class CapacityGateSmokeTest(TmpRootTest):
         code_body = "x" * (config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 100)
 
         def git_diff(*args):
+            # Сквозь `-C <клон>` (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "diff":
                 if f":!tasks/{task_id}/" in args:
                     return subprocess.CompletedProcess(list(args), 0, code_body, "")
@@ -103,6 +108,9 @@ class CapacityGateSmokeTest(TmpRootTest):
 class ZonesGateSmokeTest(TmpRootTest):
 
     def test_matches_the_pre_refactor_fixture_byte_for_byte(self):
+        """Ловит мутацию: текст отказа гейта зон в stdout или в журнале расходится
+        с эталоном хоть одним байтом (база сравнения, перечень файлов вне зон,
+        подсказка о мандате)."""
         task_id = "T002"
         conn = store.db()
         store.create_schema(conn)
@@ -112,6 +120,8 @@ class ZonesGateSmokeTest(TmpRootTest):
                           "task/t002-x", "artel", 25.0)
 
         def git_diff_names(*args):
+            # Сквозь `-C <клон>` (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "diff" and "--name-only" in args:
                 return subprocess.CompletedProcess(
                     list(args), 0, "orchestrator/bar.py\n", "")
@@ -151,6 +161,9 @@ class ZonesGateSmokeTest(TmpRootTest):
 class ReviewReworkGateSmokeTest(TmpRootTest):
 
     def test_matches_the_pre_refactor_fixture_byte_for_byte(self):
+        """Ловит мутацию: текст отказа рубежа «замечания ревью не отработаны»
+        расходится с эталоном (опорное время, его источник «последний коммит
+        REVIEW.md», дата последнего коммита developer)."""
         task_id = "T001"
         conn = store.db()
         store.create_schema(conn)
@@ -169,6 +182,8 @@ class ReviewReworkGateSmokeTest(TmpRootTest):
             return f"{when}\x1f{subject}\n"
 
         def fake_git(*args):
+            # Сквозь `-C <клон>` (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args[0] == "log" and "-1" in args:
                 return subprocess.CompletedProcess(
                     list(args), 0, "2026-08-01T10:00:00+00:00\n", "")
@@ -183,7 +198,7 @@ class ReviewReworkGateSmokeTest(TmpRootTest):
                     log_reply("код фикса", "2026-07-31T10:00:00+00:00"), "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with mock.patch.object(gitcmd, "show", lambda *a: (review_md, "")), \
+        with mock.patch.object(gitcmd, "show", lambda *a, **k: (review_md, "")), \
              mock.patch.object(gitcmd, "git", fake_git):
             refused, out = _capture(
                 fsm_advance._review_rework_gate_refuses, conn, task_id, t,

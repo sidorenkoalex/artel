@@ -145,7 +145,8 @@ from .recovery import recovery_check
 from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,
                        _auto_ack_gone, _branch_alert_live, _dir_alert_live,
                        _worktree_alert_live)
-from .orphans import _is_legit_task_worktree, _orphan_worktrees, check_orphans
+from .orphans import (_is_legit_task_worktree, _orphan_worktrees,
+                      _project_clones, check_orphans)
 from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
                           check_token_repo_scope, check_canary_trigger)
 from .canary_sets import CANARY_SETS_CHECK, check_canary_sets
@@ -178,7 +179,9 @@ from .stale_cycles import (STALE_CYCLES_CHECK, START_UNDETERMINED,
                            check_stale_cycles)
 from .ignored_artifacts import _fix_ignored_artifact_files
 from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
-                        check_git_hooks, _fix_git_hooks)
+                        CLONE_HOOKS_CHECK, PROJECT_CLONES_CHECK,
+                        check_git_hooks, check_clone_hooks, _fix_git_hooks,
+                        _fix_project_clones)
 from .model_catalog import (ROLE_MODELS_CHECK, check_models_catalog,
                             check_models_local, check_role_models,
                             fix_models_local)

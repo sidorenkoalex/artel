@@ -105,6 +105,7 @@ def all_checks(conn) -> list[doctor.Check]:
     # цикл на прежнем коде читаются вместе.
     checks.append(doctor.check_stale_cycles(conn))
     checks.append(doctor.check_git_hooks())
+    checks.extend(doctor.check_clone_hooks())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())
     # Наборы ролей канарейки (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование
@@ -169,6 +170,7 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         # — до `all_checks` ниже, чтобы проверка «git-hooks» в том же
         # прогоне уже видела включённую защиту (AC-11).
         doctor._fix_git_hooks()
+        doctor._fix_project_clones()
     checks = doctor.all_checks(conn)
     for c in checks:
         print(f"  [{doctor.LABELS[c.status]}] {c.name}: {c.detail}")

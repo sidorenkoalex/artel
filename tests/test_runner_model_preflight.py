@@ -104,9 +104,7 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()
-        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
+        self.seed_plan_marker()
 
         self.pauses = []
         self.patch(runner.time, "sleep", self.pauses.append)
@@ -164,12 +162,23 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
     def set_cli_version(self, text: str) -> None:
         self.patch(subprocess, "run", _claude_version_run(text, subprocess.run))
 
+    def seed_plan_marker(self) -> None:
+        """PLAN.md шага в каталоге документов задачи. Перед каждым шагом:
+        автокоммит шага уносит каталог в ссылку документов (с этапа 2
+        ADR-0021 клон артели песочницы — настоящий git, запись проходит), а
+        заглушка `gitcmd.git` ссылки не видит, и выкладка на старте
+        следующего шага её не вернёт."""
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
+
     def run_step(self, *attempts) -> str:
         """`attempts` — пары `(rc, строки вывода)` по одной на попытку;
         без аргументов — одна успешная. `sys.exit` отказа перехватывается
         в `self.exit_message` — как его увидел бы `auto`."""
         if not attempts:
             attempts = ((0, ["готово\n"]),)
+        self.seed_plan_marker()
         procs = [FakeProc(lines, rc) for rc, lines in attempts]
         buf = io.StringIO()
         with mock.patch.object(runner, "spawn_agent", side_effect=procs) as spawn:
@@ -184,6 +193,8 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
     def run_auto(self) -> str:
         def fresh_proc(*args, **kwargs):
             return FakeProc(["готово\n"], 0)
+
+        self.seed_plan_marker()
 
         buf = io.StringIO()
         with mock.patch.object(runner, "spawn_agent",

@@ -3,7 +3,7 @@ import re
 import sqlite3
 
 from . import (artifact_branch, artifact_source, brief, config, context_package, gitcmd,
-              repo_context, store)
+              repo_context, store, workspace)
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -116,16 +116,22 @@ def artifact_text(branch: str, rel: str, *, disk_root=None,
     """
     in_branch = ""
     try:
-        args = ("show", f"{branch}:{rel}")
-        res = (artifact_branch.git(task_id, *args) if task_id
-               else gitcmd.git(*args))
-        if res is None:
-            in_branch = artifact_branch.NO_REPO_REASON
-        elif res.returncode == 0:
-            return res.stdout, ""
+        if task_id:
+            args = ("show", f"{branch}:{rel}")
+            res = artifact_branch.git(task_id, *args)
+            if res is None:
+                in_branch = artifact_branch.NO_REPO_REASON
+            elif res.returncode == 0:
+                return res.stdout, ""
+            else:
+                in_branch = (res.stderr.strip()[:200]
+                             or f"git show вернул {res.returncode}")
         else:
-            in_branch = (res.stderr.strip()[:200]
-                         or f"git show вернул {res.returncode}")
+            # Без `task_id` нет репозитория, в котором искать `branch`
+            # (ADR-0021 п.1-3: ветки/ссылки живут в клоне конкретной
+            # задачи, не в каком-то одном общем месте) — сразу откат на
+            # диск, тем же текстом причины, что и у «клона нет».
+            in_branch = artifact_branch.NO_REPO_REASON
     except UnicodeDecodeError as exc:
         # git отдаёт байты файла как есть; strict-декодирование внутри
         # subprocess роняло бы всю команду `run` трейсбеком.
@@ -208,10 +214,13 @@ def git_diff_part(base: str, branch: str, *flags: str,
     Смысл содержимого (исключить каталог, ограничиться каталогом) решает
     вызывающий код — сама функция им не интересуется.
 
-    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-9) — клон, в котором
-    считается diff, не всегда `config.ROOT`: внешний target живёт в
-    своём клоне (`orchestrator/repo_context.py`), не в репозитории
-    пульта. `None` (по умолчанию) — прежнее поведение байт-в-байт.
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-9; ADR-0021 п.1-2) — клон,
+    в котором считается diff: внешний target живёт в своём клоне
+    (`orchestrator/repo_context.py`), self — в клоне артели. `None` (по
+    умолчанию) — клон артели (`workspace.repo(config.DEFAULT_TARGET)`),
+    не `config.ROOT`: прежние вызовы без `repo` всегда были self-target
+    (`fsm._snapshot_split_assessment` зовёт эту функцию только под
+    условием `target == config.DEFAULT_TARGET`).
 
     git не ответил — это часть пакета с причиной, а не пустой diff:
     молча показать ревьюверу «изменений нет» значит выпросить аппрув
@@ -219,11 +228,13 @@ def git_diff_part(base: str, branch: str, *flags: str,
     у не собранного и у пустого diff выглядит одинаково, а разбирать
     странный вердикт Оператор будет именно по журналу (T011, ревью 1).
     """
+    if repo is None:
+        repo = workspace.repo(config.DEFAULT_TARGET)
     args = ["diff", *flags, f"{base}...{branch}"]
     if pathspec:
         args += ["--", *pathspec]
     try:
-        res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+        res = gitcmd.in_repo(repo, *args)
     except UnicodeDecodeError as exc:
         # git считает файл бинарным по NUL-байту в первых 8 КБ, поэтому
         # текст в cp1251/latin-1 выкладывается в diff байтами как есть, а
@@ -480,10 +491,14 @@ def own_commit_paths(base: str, branch: str, repo=None) -> tuple[list[str], str]
     пути пары, а само переименование как переименование по-прежнему
     показывает `git diff` — pathspec несёт обе стороны.
     """
+    if repo is None:
+        # Тот же умолчательный репозиторий, что у `git_diff_part`: клон
+        # артели, не `config.ROOT` и не `-C None` (ADR-0021 п.1, этап 2).
+        repo = workspace.repo(config.DEFAULT_TARGET)
     args = ("log", "--first-parent", "--no-merges", "--no-renames",
             "--format=", "--name-only", "-z", f"{base}..{branch}")
     try:
-        res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+        res = gitcmd.in_repo(repo, *args)
     except UnicodeDecodeError as exc:
         # Тот же класс сбоя, что у `git_diff_part`: имя файла в cp1251/
         # latin-1 декодируется внутри subprocess и роняло бы сборку пакета
@@ -720,7 +735,7 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
              for rel in task_rels}
     # Форма вердикта — единственная часть, чей источник эта задача не
     # трогает (AC-4): кодовая ветка задачи, откат — главная копия пульта.
-    found[form_rel] = artifact_text(branch, form_rel)
+    found[form_rel] = artifact_text(branch, form_rel, task_id=task_id)
     artifact_sources = artifact_sources_note({rel: found[rel]
                                               for rel in task_rels})
 
@@ -742,6 +757,11 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
             store.journal(conn, task_id, "reviewer", "бриф: компонент",
                           f"{rel}: sha256={context_package.sha256_of(answer_text)}")
 
+    # Репозиторный контекст задачи (ADR-0021 п.1-2): клон, в котором живут
+    # кодовая ветка и diff — нужен уже для определения базы первой
+    # итерации ниже, не только для `_shown_diff` дальше.
+    repo = repo_context.path_or_none(repo_context.resolve(target))
+
     incremental = iteration > 1 and bool(prev_sha)
     if incremental:
         base = prev_sha
@@ -753,7 +773,7 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         # тащит в дифф чужие, уже слитые коммиты). git не ответил на само
         # определение базы — откат на прежний `config.MAIN_BRANCH`
         # (пакет — не гейт, отказать переходу вместо ревьювера некому).
-        base = gitcmd.diff_base(branch) or config.MAIN_BRANCH
+        base = gitcmd.diff_base(branch, repo=repo) or config.MAIN_BRANCH
     else:
         # Требование 2/AC-4: iteration > 1 без prev_sha (вырожденный
         # случай — sha предыдущего вердикта не найден) — прежний откат на
@@ -831,7 +851,7 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     for rel in long_lived_rels:
         # Текст с головы кодовой ветки — ревьювер проверяет границу групп
         # (ADR-0020) по тому, что уйдёт в мерж, а не по диску пульта.
-        text, reason = gitcmd.show(branch, rel)
+        text, reason = gitcmd.show(branch, rel, repo=repo)
         note = LONG_LIVED_NOTE if text is not None else f"(не показан: {reason})"
         parts.append(artifact_part(rel, text, note, run_id))
     parts.append(f"### Изменённые файлы (git diff --stat {base}...{branch})"

@@ -275,11 +275,52 @@ def pool_drift_warning() -> str | None:
            "нужен canary pool-seal")
 
 
+def _commit_through_clone(files: dict, message: str) -> str:
+    """Коммит `files` ({путь в репозитории: байты}) в `main` и push в
+    `origin` через клон артели (SPEC 01M42PENCS26D0656X8FR7DFA7,
+    требование 5, AC-9): тот же рабочий репозиторий и тот же цикл
+    fetch/commit/push с повтором non-fast-forward, что у `note`/
+    `doc-commit`; рабочее дерево и git главной копии не трогаются. sha
+    коммита; отказ — `sys.exit` с причиной."""
+    from . import gitcmd, notes
+    clone = notes._ensure_work_repo()
+    for _attempt_no in range(1, notes.MAX_PUSH_ATTEMPTS + 1):
+        fetch = gitcmd.in_repo(clone, "fetch", "-q", "origin",
+                               config.MAIN_BRANCH)
+        if fetch is None or fetch.returncode != 0:
+            break
+        checkout = gitcmd.in_repo(clone, "checkout", "-q", "-f", "-B",
+                                  config.MAIN_BRANCH, "FETCH_HEAD")
+        if checkout is None or checkout.returncode != 0:
+            break
+        for rel, data in files.items():
+            target = clone / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        gitcmd.in_repo(clone, "add", "--", *files)
+        commit = gitcmd.in_repo(
+            clone, "-c", f"user.name={notes.NOTE_AUTHOR_NAME}",
+            "-c", f"user.email={notes.NOTE_AUTHOR_EMAIL}",
+            "commit", "-q", "-m", message)
+        if commit is None or commit.returncode != 0:
+            break
+        push = gitcmd.in_repo(clone, "push", "-q", "origin",
+                              f"HEAD:{config.MAIN_BRANCH}")
+        if push is not None and push.returncode == 0:
+            return gitcmd.head_sha(clone)
+    sys.exit(f"canary pool-seal: коммит {', '.join(files)} в "
+             f"origin/{config.MAIN_BRANCH} через клон {clone} не удался — "
+             f"повтори canary pool-seal")
+
+
 def cmd_pool_seal() -> None:
     """`canary pool-seal` (требование 2, AC-3/AC-4): шифрует открытый пул
     `~/.artel-canary` в `canary/pool.sealed`, обновляет манифест GUID
-    `canary/guids.txt` (требование 4, AC-9..AC-11); ничего не коммитит —
-    коммит остаётся штатным путём Оператора (требование 2)."""
+    `canary/guids.txt` (требование 4, AC-9..AC-11). Оба файла коммитятся в
+    `main` и отправляются в `origin` через клон артели (SPEC
+    01M42PENCS26D0656X8FR7DFA7, требование 5, AC-9) — рабочее дерево и git
+    главной копии не меняются; главная копия получит их штатным
+    `pin-update`."""
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary pool-seal: каталог пула не найден: {pool_dir}")
@@ -298,16 +339,15 @@ def cmd_pool_seal() -> None:
     tag_hex = _hmac_tag_hex(ciphertext, _mac_key(key))
     sealed_bytes = tag_hex.encode("ascii") + ciphertext
 
-    sealed = sealed_path()
-    sealed.parent.mkdir(parents=True, exist_ok=True)
-    sealed.write_bytes(sealed_bytes)
-
     # AC-10: значения манифеста — случайные строки, не содержимое/имена
     # шаблонов; AC-11: манифест ПЕРЕЗАПИСЫВАЕТСЯ набором ТЕКУЩИХ
     # шаблонов на каждом seal, не дописывается.
     guids = [str(uuid.uuid4()) for _ in files]
-    guids_path().write_text("\n".join(guids) + "\n", encoding="utf-8")
+    guids_bytes = ("\n".join(guids) + "\n").encode("utf-8")
 
     fingerprint = hashlib.sha256(payload).hexdigest()
+    sha = _commit_through_clone(
+        {"/".join(SEALED_REL): sealed_bytes, "/".join(GUIDS_REL): guids_bytes},
+        f"оператор: canary pool-seal — {len(files)} шаблонов")
     print(f"[canary] pool-seal: {len(files)} шаблонов, отпечаток "
-         f"{fingerprint}")
+         f"{fingerprint}; коммит {sha} в origin/{config.MAIN_BRANCH}")

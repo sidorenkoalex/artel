@@ -5,22 +5,23 @@
 ci.py, github_adapter.py, review.py, acceptance.py, doctor.py) решала
 self/внешний-target развилку по-своему — большинство просто не решало
 её вовсе и молча работало с `config.ROOT`, репозиторием ПУЛЬТА, для
-ЛЮБОГО target. `resolve()` — единственный разумный шов: self — путь
-клона `config.ROOT`, remote (имя, используемое git-командами) —
-`"origin"`, базовая ветка — `config.MAIN_BRANCH`, без обращения к
-`targets.yaml` (self всегда так, `orchestrator/fsm.py::
-_origin_main_source` уже несёт тот же принцип); любой другой target —
-путь клона `.artel/projects/<target>/workspace` (тот же адрес, что уже
-использует `orchestrator/snapshot.py`), `remote` — адрес форджа
-(`targets.yaml[target]["url"]`, нужен вызовам `gh --repo <url>`, НЕ
-имя локального git remote — клон внешнего target несёт свой git remote
-`origin` по тому же соглашению, что и пульт, поэтому git-уровневые
-команды (fetch/push) идут на литеральное имя `"origin"`, а не на это
-поле), базовая ветка — `targets.yaml[target]["base"]`.
+ЛЮБОГО target. `resolve()` — единственный разумный шов.
+
+С этапа 2 ADR-0021 (п.1, SPEC 01M42PENCS26D0656X8FR7DFA7, требования 1-3)
+у ЛЮБОГО проекта, включая артель, путь контекста — клон области проекта
+`.artel/projects/<имя>/repo` (`clone_path`): git главной копии пульта в
+ходе задачи не меняется. Для артели `remote` — `"origin"`, базовая ветка —
+`config.MAIN_BRANCH` без обращения к `targets.yaml`; для внешнего проекта
+`remote` — адрес форджа (`targets.yaml[target]["url"]`, нужен вызовам
+`gh --repo <url>`, НЕ имя локального git remote — клон несёт свой git
+remote `origin`, поэтому git-уровневые команды (fetch/push) идут на
+литеральное имя `"origin"`), базовая ветка — `targets.yaml[target]["base"]`.
+Шаги, нужные только артели (гейт мержа: защищённые пути, guard, карта,
+RETRO), включаются признаком проекта `is_artel(ctx)`, не сравнением пути
+с `config.ROOT`.
 
 `None` — target не читается (неизвестное имя, сломанный targets.yaml):
-молчаливый откат на self/`config.ROOT` был бы ОПАСНЕЕ обычной
-деградации (`orchestrator/fsm.py::_origin_main_source`, тот же довод) —
+молчаливый откат на главную копию был бы ОПАСНЕЕ обычной деградации —
 вызывающий код обязан получить сигнал «конфигурация не читается».
 """
 from dataclasses import dataclass
@@ -34,33 +35,67 @@ class RepoContext:
     path: Path
     remote: str
     base: str
+    target: str = ""
+
+
+# Адрес области проектов при рассогласованных путях пульта: каталога нет и
+# быть не может, `git -C` туда отказывает сразу, не поднимаясь вверх.
+NO_AREA = Path("/dev/null/artel-no-project-area")
+
+# Пути пульта на момент загрузки пакета — боевые для этого процесса.
+_LOADED_ROOT = config.ROOT
+_LOADED_PROJECTS = config.PROJECTS
+
+
+def projects_root() -> Path:
+    """Корень областей проектов `config.PROJECTS`; `NO_AREA` — если корень
+    пульта подменён, а область проектов осталась боевой. Это песочница,
+    подменившая корень пульта, но не область проектов: клон и рабочие копии
+    ушли бы в боевую `.artel/projects`, а ссылки документов — в её `origin`
+    (инцидент 04.10.2026, задача 01M42PENCS26D0656X8FR7DFA7: 80 тестовых
+    ссылок `refs/artifacts/*` в боевом origin). Обратная подмена (своя
+    область проектов при настоящем корне) боевого клона не задевает."""
+    if (config.PROJECTS == _LOADED_PROJECTS
+            and config.ROOT != _LOADED_ROOT):
+        return NO_AREA
+    return config.PROJECTS
+
+
+def clone_path(target_name: str) -> Path:
+    """Клон проекта в его области: `.artel/projects/<имя>/repo` (ADR-0021
+    п.1). Читается от `config.PROJECTS` в момент вызова — песочница,
+    подменившая путь, видит свой клон."""
+    return projects_root() / target_name / "repo"
 
 
 def resolve(target_name: str) -> "RepoContext | None":
     if target_name == config.DEFAULT_TARGET:
-        return RepoContext(path=config.ROOT, remote="origin",
-                           base=config.MAIN_BRANCH)
+        return RepoContext(path=clone_path(target_name), remote="origin",
+                           base=config.MAIN_BRANCH, target=target_name)
     try:
         entry = targets.target(target_name)
     except targets.TargetsError:
         return None
-    return RepoContext(path=config.PROJECTS / target_name / "workspace",
-                       remote=entry["url"], base=entry["base"])
+    return RepoContext(path=clone_path(target_name), remote=entry["url"],
+                       base=entry["base"], target=target_name)
+
+
+def is_artel(ctx: "RepoContext | None") -> bool:
+    """Проект контекста — артель (`config.DEFAULT_TARGET`): признак шагов
+    гейта мержа, нужных только пульту (SPEC 01M42PENCS26D0656X8FR7DFA7,
+    требование 3). Не путь: путь артели — клон, как у любого проекта."""
+    return ctx is not None and ctx.target == config.DEFAULT_TARGET
 
 
 def path_or_none(ctx: "RepoContext | None") -> Path | None:
-    """`None` — self (или контекст не резолвился): сигнал вызывающему коду
-    «параметр `repo=` можно не подставлять, поведение прежнее» — тот же
-    вырожденный случай, которым уже пользуются `gitcmd.is_clean`/
-    `commit_committer_dates`. Иначе — путь клона `ctx`."""
-    if ctx is None or ctx.path == config.ROOT:
+    """Путь клона `ctx` — для любого разрешённого контекста, включая
+    артель; `None` — только когда контекст не разрешён."""
+    if ctx is None:
         return None
     return ctx.path
 
 
 def git(ctx: "RepoContext", *args: str):
-    """git-команда в клоне `ctx` — для self байт-в-байт `gitcmd.git`
-    (без `-C`), иначе `gitcmd.in_repo(ctx.path, ...)`."""
-    if ctx.path == config.ROOT:
-        return gitcmd.git(*args)
+    """git-команда в клоне `ctx` (`gitcmd.in_repo`) — для любого проекта,
+    включая артель."""
     return gitcmd.in_repo(ctx.path, *args)

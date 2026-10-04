@@ -1,9 +1,10 @@
 """Ссылка документов задачи `refs/artifacts/<id>` в репозитории задачи —
 `tasks/<id>/` от `new` до конца жизни задачи (ADR-0021 п.3; до него —
 ветка `artifact/<id>`, SPEC T094, требования 7-11). Репозиторий задачи
-(`task_repo`): для артели — git главной копии пульта, для внешнего
-проекта — git самого проекта (его клон `.artel/projects/<проект>/
-workspace`); отправка — в `origin` этого же репозитория.
+(`task_repo`) — клон проекта задачи `.artel/projects/<проект>/repo` для
+любого проекта, включая артель (ADR-0021 п.1, этап 2); отправка — в
+`origin` этого же репозитория. git главной копии пульта ссылки задач не
+несёт.
 
 Дерево ссылки — только `tasks/<id>/…`, первый коммит — без родителя;
 закрытие задачи — последний коммит RETRO в ту же ссылку
@@ -60,21 +61,23 @@ def branch_name(task_id: str) -> str:
     return f"refs/artifacts/{task_id}"
 
 
-# Репозиторий задачи внешнего проекта не найден (клона нет): git не
-# спрашивается вовсе. `git -C` в каталоге под `config.ROOT` без своего
-# `.git` молча ушёл бы вверх и записал ссылку в git пульта.
+# Репозиторий задачи не найден (клона нет): git не спрашивается вовсе.
+# `git -C` в каталоге под `config.ROOT` без своего `.git` молча ушёл бы
+# вверх и записал ссылку в git пульта.
 _NO_REPO = Path("/dev/null/artel-no-project-repo")
 
 
 def repo_for_target(target: str | None) -> Path:
-    """Репозиторий ссылок документов задач target'а (ADR-0021 п.3):
-    `config.ROOT` для артели, клон проекта (`repo_context.resolve`) для
-    внешнего. Клона нет (или target не читается) — `_NO_REPO`: операции
-    ниже отказывают как «git не ответил», ни одна не уходит в git
+    """Репозиторий ссылок документов задач target'а (ADR-0021 п.3): клон
+    проекта (`repo_context.resolve`) для любого проекта, включая артель —
+    особого случая `config.ROOT` нет (SPEC 01M42PENCS26D0656X8FR7DFA7,
+    требование 3). Клона нет (или target не читается) — `_NO_REPO`:
+    операции ниже отказывают как «git не ответил», ни одна не уходит в git
     пульта."""
-    if not target or target == config.DEFAULT_TARGET:
-        return config.ROOT
-    ctx = repo_context.resolve(target)
+    from . import workspace
+    if not workspace.area_consistent():
+        return _NO_REPO
+    ctx = repo_context.resolve(target or config.DEFAULT_TARGET)
     if ctx is None or not (ctx.path / ".git").exists():
         return _NO_REPO
     return ctx.path
@@ -85,28 +88,20 @@ def task_repo(task_id: str) -> Path:
     нет — нет и строки задачи, target тот же, что дал бы `task_target`
     (артель); БД не заводится ради чтения."""
     if not config.DB.exists():
-        return config.ROOT
+        return repo_for_target(config.DEFAULT_TARGET)
     return repo_for_target(store.task_target(store.db(), task_id))
-
-
-def _git_repo(repo: Path) -> Path | None:
-    """Аргумент `repo=` примитивов `gitcmd`: `None` для пульта — прежний
-    вызов байт-в-байт (без `-C`), иначе путь клона проекта."""
-    return None if repo == config.ROOT else repo
 
 
 def _git(repo: Path, *args: str):
     if repo == _NO_REPO:
         return None
-    if repo == config.ROOT:
-        return gitcmd.git(*args)
     return gitcmd.in_repo(repo, *args)
 
 
 def _head(task_id: str, repo: Path) -> str:
     if repo == _NO_REPO:
         return ""
-    return gitcmd.branch_head_sha(branch_name(task_id), **_repo_kw(repo))
+    return gitcmd.branch_head_sha(branch_name(task_id), repo=repo)
 
 
 def ref_head(task_id: str) -> str:
@@ -115,15 +110,9 @@ def ref_head(task_id: str) -> str:
     return _head(task_id, task_repo(task_id))
 
 
-def _repo_kw(repo: Path) -> dict:
-    """Ключевой аргумент `repo=` примитивов `gitcmd` для `repo`: для
-    пульта — никакого (прежний вызов байт-в-байт)."""
-    return {"repo": repo} if _git_repo(repo) else {}
-
-
 # Узел чтения документов задачи (ADR-0021 п.3): читатель называет задачу и
 # ревизию (имя ссылки или sha её коммита), узел сам выбирает репозиторий
-# задачи. Для артели — прежний вызов `gitcmd` байт-в-байт, без `repo=`.
+# задачи — клон её проекта.
 NO_REPO_REASON = "репозиторий проекта задачи не найден (клона нет)"
 
 
@@ -138,7 +127,7 @@ def show(task_id: str, rev: str, rel: str) -> tuple[str | None, str]:
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return None, NO_REPO_REASON
-    return gitcmd.show(rev, rel, **_repo_kw(repo))
+    return gitcmd.show(rev, rel, repo=repo)
 
 
 def ls_tree(task_id: str, rev: str, rel_dir: str) -> list[str] | None:
@@ -147,7 +136,7 @@ def ls_tree(task_id: str, rev: str, rel_dir: str) -> list[str] | None:
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return None
-    return gitcmd.ls_tree_files(rev, rel_dir, **_repo_kw(repo))
+    return gitcmd.ls_tree_files(rev, rel_dir, repo=repo)
 
 
 def rev_sha(task_id: str, rev: str) -> str:
@@ -155,16 +144,13 @@ def rev_sha(task_id: str, rev: str) -> str:
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return ""
-    return gitcmd.branch_head_sha(rev, **_repo_kw(repo))
+    return gitcmd.branch_head_sha(rev, repo=repo)
 
 
 def on_foreign_rev(task_id: str, rev: str) -> bool:
     """`gitcmd.on_foreign_branch(rev)` для репозитория задачи: в клоне
     проекта рабочее дерево пульта не стоит ни на какой его ревизии —
     вопрос сводится к «ревизия есть»."""
-    repo = task_repo(task_id)
-    if _git_repo(repo) is None:
-        return gitcmd.on_foreign_branch(rev)
     return bool(rev_sha(task_id, rev))
 
 
@@ -173,7 +159,7 @@ def diff_names(task_id: str, a: str, b: str, *paths: str) -> list[str] | None:
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return None
-    return gitcmd.diff_names(a, b, *paths, **_repo_kw(repo))
+    return gitcmd.diff_names(a, b, *paths, repo=repo)
 
 
 def _now() -> str:
@@ -254,16 +240,18 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
 def commit_files(task_id: str, files: dict, message: str,
                  author_name: str = fixation.FIXATION_AUTHOR_NAME,
                  author_email: str = fixation.FIXATION_AUTHOR_EMAIL,
-                 remove: list | None = None) -> str:
+                 remove: list | None = None, target: str | None = None) -> str:
     """Единый узел записи документов задачи (ADR-0021 п.3): коммит `files`
     поверх головы `refs/artifacts/<id>` (ссылки нет — первый коммит без
     родителя), `update-ref` со сверкой прежнего значения, затем отправка
     в `origin` (`_send`). Ссылка физически живёт в репозитории задачи
     (`task_repo`). Возвращает sha нового коммита; пустая строка — git не
     ответил. `remove` — см. `write_commit`. Проигрыш сверки и отказ
-    отправки — см. докстринг модуля."""
+    отправки — см. докстринг модуля. `target` — проект задачи, когда её
+    строки в БД ещё нет (`new` пишет первый коммит до строки): иначе
+    репозиторий взялся бы по проекту по умолчанию."""
     sha, _outcome = _write(task_id, files, message, author_name, author_email,
-                           remove, require_change=False)
+                           remove, require_change=False, target=target)
     return sha
 
 
@@ -294,9 +282,9 @@ def _same_tree(repo: Path, commit_sha: str, parent: str) -> bool | None:
 
 def _write(task_id: str, files: dict, message: str, author_name: str,
            author_email: str, remove: list | None,
-           require_change: bool) -> tuple[str, str]:
+           require_change: bool, target: str | None = None) -> tuple[str, str]:
     ref = branch_name(task_id)
-    repo = task_repo(task_id)
+    repo = repo_for_target(target) if target else task_repo(task_id)
     if repo == _NO_REPO:
         return "", ""
     for _ in range(_CAS_ATTEMPTS):
@@ -372,8 +360,8 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
         return
     detail = reason + (f": {stderr[:300]}" if stderr else "")
     if reason == PUSH_REASON_NON_FAST_FORWARD:
-        local_sha = gitcmd.branch_head_sha(branch, **_repo_kw(repo))
-        origin_sha = gitcmd.remote_branch_sha(branch, **_repo_kw(repo))
+        local_sha = gitcmd.branch_head_sha(branch, repo=repo)
+        origin_sha = gitcmd.remote_branch_sha(branch, repo=repo)
         detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
                   f"— свести merge-коммитом")
     store.journal(conn, task_id, "orchestrator",
@@ -448,7 +436,7 @@ def origin_sync_refusal(task_id: str) -> str | None:
     if local:
         _send(task_id, repo, journal_success=False)
     remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
-                                             **_repo_kw(repo))
+                                             repo=repo)
     if reason:
         return (f"отказ: origin не ответил на сверку {branch_name(task_id)} "
                 f"— {reason}")
@@ -525,14 +513,14 @@ def fetch_from_origin(task_id: str) -> tuple[str, str]:
     try:
         res = _git(repo, "fetch", "-q", "--no-tags", "origin", f"+{ref}:{tmp}")
         if res is None or res.returncode != 0:
-            remote, reason = gitcmd.remote_ref_state(ref, **_repo_kw(repo))
+            remote, reason = gitcmd.remote_ref_state(ref, repo=repo)
             if reason:
                 return FETCH_FAILED, f"origin не ответил — {reason}"
             if not remote:
                 return FETCH_ABSENT, f"{ref} нет в origin"
             stderr = (res.stderr or "").strip()[:200] if res is not None else ""
             return FETCH_FAILED, f"fetch {ref} из origin не удался — {stderr}"
-        fetched = gitcmd.branch_head_sha(tmp, **_repo_kw(repo))
+        fetched = gitcmd.branch_head_sha(tmp, repo=repo)
         if not fetched:
             return FETCH_FAILED, f"голова {ref} из origin не прочитана"
         return _sync_local_ref(repo, task_id, _head(task_id, repo), fetched)
@@ -601,11 +589,10 @@ def read_tree(task_id: str) -> dict:
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return {}
-    kw = _repo_kw(repo)
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}", **kw) or []
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}", repo=repo) or []
     files = {}
     for rel in paths:
-        text, _ = gitcmd.show(branch, rel, **kw)
+        text, _ = gitcmd.show(branch, rel, repo=repo)
         if text is not None:
             files[rel] = text
     return files
@@ -638,16 +625,15 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
     head = _head(task_id, repo)
     if not head:
         return ""
-    kw = _repo_kw(repo)
     prefix = f"tasks/{task_id}/"
-    paths = gitcmd.ls_tree_files(head, prefix.rstrip("/"), **kw)
+    paths = gitcmd.ls_tree_files(head, prefix.rstrip("/"), repo=repo)
     if paths is None:
         return ""
     wanted = {}
     for rel in paths:
         if not rel.startswith(prefix):
             continue
-        text, _ = gitcmd.show(head, rel, **kw)
+        text, _ = gitcmd.show(head, rel, repo=repo)
         if text is not None:
             wanted[rel] = text
     task_dir = dest_root / "tasks" / task_id
@@ -676,7 +662,7 @@ def append_passport_line(task_id: str, state: str, actor: str) -> None:
     repo = task_repo(task_id)
     existing = None
     if repo != _NO_REPO:
-        existing, _ = gitcmd.show(branch_name(task_id), rel, **_repo_kw(repo))
+        existing, _ = gitcmd.show(branch_name(task_id), rel, repo=repo)
     prior = existing if existing is not None else "# Паспорт живой задачи\n\n"
     line = f"{_now()}  {state}  actor={actor}\n"
     commit_files(task_id, {rel: prior + line},

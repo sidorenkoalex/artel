@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, fsm_postmerge, gitcmd, retro, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git, strip_dash_c  # noqa: E402
 
 
 class GenerateAndCommitRetroTest(TmpRootTest):
@@ -34,9 +34,14 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         return alerts.open_alerts(self.conn, "incident")
 
     def test_happy_path_writes_and_commits_done_retro(self):
+        """Ловит мутацию: RETRO закрытой задачи не пишется или не
+        добавляется/коммитится в репозитории мержа (`add`/`commit` нет в
+        вызовах git, видимых сквозь `-C`)."""
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -57,6 +62,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -81,7 +88,11 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         self.assertTrue(incidents[0]["source"].startswith("fsm.retro"))
 
     def test_add_failure_raises_incident_and_skips_commit(self):
+        """Ловит мутацию: провал `add` RETRO не поднимает incident или не
+        отменяет `commit`."""
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "add":
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "стенд: add упал")
@@ -96,7 +107,10 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         self.assertIn("add", incidents[0]["message"])
 
     def test_commit_failure_raises_incident(self):
+        """Ловит мутацию: провал `commit` RETRO проходит молча, без incident."""
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "commit":
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "стенд: commit упал")
@@ -110,12 +124,16 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         self.assertIn("стенд: commit упал", incidents[0]["message"])
 
     def test_generation_exception_raises_incident_and_still_tries_debts(self):
+        """Ловит мутацию: исключение генерации RETRO задачи не поднимает
+        incident или обрывает обработку долгов убитых задач."""
         killed_id = "T901"
         store.insert_task(self.conn, killed_id, "Убитая", "killed",
                           "task/t901-x", config.DEFAULT_TARGET, 50.0)
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -132,6 +150,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         self.assertTrue(retro.retro_path(killed_id).exists())
 
     def test_killed_debt_is_picked_up_and_committed_separately(self):
+        """Ловит мутацию: долг RETRO убитой задачи не подхватывается или
+        коммитится вместе с RETRO закрытой задачи, а не отдельно."""
         killed_id = "T901"
         store.insert_task(self.conn, killed_id, "Убитая", "killed",
                           "task/t901-x", config.DEFAULT_TARGET, 50.0)
@@ -140,6 +160,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
@@ -169,6 +191,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             "уже есть\n")
 
     def test_killed_debt_commit_failure_attributes_incident_to_debt_not_task(self):
+        """Ловит мутацию: incident провала коммита долга приписан закрытой
+        задаче, а не убитой."""
         killed_id = "T901"
         debt_target = "sled"
         store.insert_task(self.conn, killed_id, "Убитая", "killed",
@@ -177,6 +201,8 @@ class GenerateAndCommitRetroTest(TmpRootTest):
                      "kill switch")
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args and args[0] == "commit" and killed_id in args[-1]:
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "стенд: commit долга упал")
@@ -231,9 +257,12 @@ class GenerateAndCommitRetroTest(TmpRootTest):
                          "запись о провале генерации RETRO killed-долга")
 
     def test_no_killed_debts_means_only_done_commit(self):
+        """Ловит мутацию: без долгов убитых задач делается лишний коммит."""
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
+            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             git_calls.append(args)
             return subprocess.CompletedProcess(list(args), 0, "", "")
 

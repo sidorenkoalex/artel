@@ -150,12 +150,20 @@ class CmdRunFailureTest(TmpRootTest):
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
         state = self.task_row()["state"]
         marker = self._STEP_ARTIFACT.get(state)
-        if marker is not None:
-            tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
-            tdir.mkdir(parents=True, exist_ok=True)
-            (tdir / marker).write_text("маркер\n", encoding="utf-8")
-        procs = [FakeProc(lines, rc) for rc, lines in attempts]
-        with mock.patch.object(runner, "spawn_agent", side_effect=procs) as popen:
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+        procs = iter([FakeProc(lines, rc) for rc, lines in attempts])
+
+        def spawn(*args, **kwargs):
+            # Артефакт пишет сам агент своей попытки: после неудачной
+            # попытки автокоммит шага забирает каталог документов в ссылку
+            # и очищает его (с клоном артели, ADR-0021 п.1, этап 2, — и для
+            # артели), так что маркер кладётся к каждой попытке.
+            if marker is not None:
+                tdir.mkdir(parents=True, exist_ok=True)
+                (tdir / marker).write_text("маркер\n", encoding="utf-8")
+            return next(procs)
+
+        with mock.patch.object(runner, "spawn_agent", side_effect=spawn) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
         self.popen = popen
         return out

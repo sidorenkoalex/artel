@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
-from tests.sandbox import RealGitSandbox, capture  # noqa: E402
+from tests.sandbox import RealGitSandbox, capture, strip_dash_c  # noqa: E402
 
 PARENT = "T953DIVIDEDPARENT"
 PARENT_TITLE = "Родитель, поделённый на гейте SPEC"
@@ -82,7 +82,10 @@ def failing_branch_delete(real_git):
     import subprocess
 
     def flaky(*args: str):
-        if args and args[0] == "branch" and ("-d" in args or "-D" in args):
+        # Сквозь `-C <клон>`: ветка задачи живёт в клоне проекта (ADR-0021
+        # п.1, этап 2).
+        sub = strip_dash_c(args)
+        if sub and sub[0] == "branch" and ("-d" in sub or "-D" in sub):
             return subprocess.CompletedProcess(args, 128, "", GIT_REFUSAL)
         return real_git(*args)
 

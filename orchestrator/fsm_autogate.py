@@ -38,7 +38,7 @@ _ACCEPTANCE_AUTOPASS_NOTE = "автогейт пройдёт сам"
 _ZONES_ALREADY_CHECKED_FACT = "дифф сверен с зонами — уже сделано гейтом"
 
 
-def _acceptance_pull_merge_commits(branch: str) -> list[str]:
+def _acceptance_pull_merge_commits(branch: str, repo: Path) -> list[str]:
     """Требование 3/AC-3: «родители подтяжек» — merge-коммиты main в
     кодовую ветку задачи за её жизнь. В этой системе единственный вид
     merge-коммита на кодовой ветке задачи — автослияние подтяжки main
@@ -57,8 +57,11 @@ def _acceptance_pull_merge_commits(branch: str) -> list[str]:
 
     Пустой список — merge-коммитов не было (легитимно, требование 3:
     «если такие были») либо git не ответил: оба случая означают одно и
-    то же для печати — эту строку факта просто не включать."""
-    res = gitcmd.git("log", "--merges", "--format=%H", branch)
+    то же для печати — эту строку факта просто не включать.
+
+    `repo` (ADR-0021 п.1-2) — клон проекта задачи, в котором живёт
+    `branch`."""
+    res = gitcmd.in_repo(repo, "log", "--merges", "--format=%H", branch)
     if res is None or res.returncode != 0:
         return []
     return [line for line in res.stdout.splitlines() if line.strip()]
@@ -91,8 +94,9 @@ def _plank_sources(task_id: str, branch: str, *, conn=None, t=None
         return sources, bool(py_paths), ("перечень долгоживущих файлов не "
                                          f"прочитан: {reason}")
     error = None
+    repo = workspace.task_repo(task_id)
     for path in sorted(digests):
-        text, reason = gitcmd.show(t["branch"], path)
+        text, reason = gitcmd.show(t["branch"], path, repo=repo)
         if text is None:
             if error is None:
                 error = f"долгоживущий файл планки не прочитан: {path} ({reason})"
@@ -175,7 +179,8 @@ def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
         return f"{header} | {_ACCEPTANCE_AUTOPASS_NOTE}"
     group_b_items = list(manual_items)
     group_b_items.append(_ZONES_ALREADY_CHECKED_FACT)
-    merges = _acceptance_pull_merge_commits(t["branch"])
+    merges = _acceptance_pull_merge_commits(
+        t["branch"], workspace.task_repo(task_id))
     if merges:
         group_b_items.append(f"родители подтяжек: {'; '.join(merges)}")
     group_b_items.append(f"вердикт ревью: tasks/{task_id}/REVIEW.md, "
@@ -264,7 +269,8 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     # отдельная проверка здесь.
     ci_ns = sorted(n for n, (kind, _) in markers.items() if kind == "ci")
     if ci_ns:
-        ci_kind, ci_note = ci.verifying_status(t["branch"])
+        ci_kind, ci_note = ci.verifying_status(
+            t["branch"], repo=workspace.task_repo(task_id))
         if ci_kind != ci.VERIFYING_GREEN:
             return ok, (f"автогейт: критерий ci не пройден — "
                         f"{', '.join(f'AC-{n}' for n in ci_ns)} "

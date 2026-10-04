@@ -41,7 +41,7 @@ from typing import NamedTuple
 from scripts import guard
 
 from .. import artifact_branch as docs_ref
-from .. import config, gitcmd, store
+from .. import config, gitcmd, store, workspace
 from ._base import GateRefusal, _run_gates
 # Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -434,18 +434,21 @@ def _assertion_observation(base_path, head_path, renamed_to, base_source,
     return found, ""
 
 
-def _compare(code_branch: str) -> tuple:
+def _compare(code_branch: str, repo=None) -> tuple:
     """Один проход по диффу `tests/` для обоих наблюдателей узла: (находки,
     прошедшие послабление пропуски, находки об утверждениях, причины
     невыполненного наблюдения утверждений, текст сбоя git). Сбой git —
-    `(None, [], None, [], detail)`: не собрано ни то, ни другое."""
-    base = gitcmd.diff_base(code_branch)
+    `(None, [], None, [], detail)`: не собрано ни то, ни другое.
+
+    `repo` — клон проекта задачи, в котором живёт `code_branch` (ADR-0021
+    п.1)."""
+    base = gitcmd.diff_base(code_branch, repo=repo)
     if base is None:
         return None, [], None, [], _git_silence(
             f"определение базы сравнения (merge-base с origin/"
             f"{config.MAIN_BRANCH} либо локальным {config.MAIN_BRANCH}) "
             f"для ветки {code_branch}")
-    entries = gitcmd.diff_name_status(base, code_branch)
+    entries = gitcmd.diff_name_status(base, code_branch, repo=repo)
     if entries is None:
         return None, [], None, [], _git_silence(
             f"список файлов диффа (база {base}...{code_branch})")
@@ -464,7 +467,7 @@ def _compare(code_branch: str) -> tuple:
             if path is None:
                 sources[side] = None
                 continue
-            text, reason = gitcmd.show(ref, path)
+            text, reason = gitcmd.show(ref, path, repo=repo)
             if text is None:
                 # Путь существует в СВОЁМ дереве по построению: его назвал
                 # сам `git diff --name-status` этой стороной записи —
@@ -486,7 +489,7 @@ def _compare(code_branch: str) -> tuple:
     return found, passed, observed, unobserved, ""
 
 
-def findings(code_branch: str) -> tuple:
+def findings(code_branch: str, repo=None) -> tuple:
     """(находки ветки против базы сравнения, прошедшие послабление
     пропуски, текст сбоя git).
 
@@ -506,7 +509,8 @@ def findings(code_branch: str) -> tuple:
     сюда НЕ входят: режим — наблюдение, и узел отказа их не видит
     (требование 5); их отдаёт `assertion_observation`.
     """
-    found, passed, _observed, _unobserved, git_detail = _compare(code_branch)
+    found, passed, _observed, _unobserved, git_detail = _compare(code_branch,
+                                                                 repo=repo)
     return found, passed, git_detail
 
 
@@ -532,7 +536,9 @@ def assertion_observation(task_id: str, code_branch: str,
     причины невыполненного наблюдения по файлам, текст сбоя git) — вход
     ревью-пакета (требование 5, AC-10). Ничего не журналирует: запись
     пишут рубежи через `uncovered`."""
-    _found, _passed, observed, unobserved, git_detail = _compare(code_branch)
+    repo = workspace.task_repo(task_id)
+    _found, _passed, observed, unobserved, git_detail = _compare(code_branch,
+                                                                 repo=repo)
     if observed is None:
         return [], [], git_detail
     mandate = _answer_mandate(artifact_branch, task_id) if observed else {}
@@ -603,7 +609,9 @@ def uncovered(conn, task_id: str, code_branch: str,
     зависят. Молчание git — запись «наблюдение не выполнено» рядом с
     обычной реакцией рубежа на сбой.
     """
-    found, passed, observed, unobserved, git_detail = _compare(code_branch)
+    repo = workspace.task_repo(task_id)
+    found, passed, observed, unobserved, git_detail = _compare(code_branch,
+                                                                repo=repo)
     if found is None:
         _journal_observation(conn, task_id, [], [git_detail])
         return None, git_detail

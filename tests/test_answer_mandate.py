@@ -16,7 +16,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import answer, gitcmd  # noqa: E402
+from orchestrator import answer, artifact_branch, gitcmd  # noqa: E402
 from orchestrator.advance_gates import mandate  # noqa: E402
 from orchestrator.advance_gates import test_integrity, zones  # noqa: E402
 
@@ -114,6 +114,7 @@ class ThreeConsumersOnOneLineTest(unittest.TestCase):
     TASK = "T777"
     BRANCH = "artifacts/T777"
     EXPECTED = {"tests/test_alpha.py", "tests/test_beta.py"}
+    CLONE = Path("/nonexistent/artel-unit-clone")
 
     def text(self, marker: str) -> str:
         """Строка мандата с отступом и пустым элементом внутри перечня —
@@ -127,7 +128,11 @@ class ThreeConsumersOnOneLineTest(unittest.TestCase):
                 return_value=[f"tasks/{self.TASK}/ANSWER-1.md"]), \
              mock.patch.object(gitcmd, "show", return_value=(text, "")), \
              mock.patch.object(module, "_answer_commit_is_role_step_autocommit",
-                               return_value=False):
+                               return_value=False), \
+             mock.patch.object(artifact_branch, "task_repo",
+                               lambda task_id: self.CLONE):
+            # Ссылка документов читается в клоне проекта задачи (ADR-0021
+            # п.1, этап 2); git подменён выше — клон только адрес.
             return set(call(self.BRANCH, self.TASK))
 
     def test_all_three_consumers_get_the_same_elements(self):

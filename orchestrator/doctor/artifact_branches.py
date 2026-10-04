@@ -14,14 +14,13 @@ ARTIFACT_REF_SYNC_CHECK = "artifact-ref-sync"
 _ARTIFACT_REFS_GLOB = "refs/artifacts/*"
 
 
-def _origin_artifact_refs(repo=None) -> tuple[dict | None, str]:
+def _origin_artifact_refs(repo) -> tuple[dict | None, str]:
     """({ссылка: sha} всех `refs/artifacts/*` в `origin`, "") — одним
     `ls-remote` на все задачи репозитория, а не по запросу на каждую:
     закрытых задач сотни. (None, причина) — `origin` не ответил. `repo` —
-    клон проекта; `None` — репозиторий пульта."""
+    клон проекта (ADR-0021 п.1-3), включая артель."""
     args = ("ls-remote", "origin", _ARTIFACT_REFS_GLOB)
-    res = (doctor.gitcmd.in_repo(repo, *args) if repo is not None
-           else doctor.gitcmd.git(*args))
+    res = doctor.gitcmd.in_repo(repo, *args)
     if res is None:
         return None, "git не ответил"
     if res.returncode != 0:
@@ -52,10 +51,8 @@ def _local_head(task_id: str, target: str | None) -> str:
 
 
 def _remote_refs(repo) -> tuple[dict | None, str]:
-    """`_origin_artifact_refs` для репозитория задачи: пульт — прежний
-    вызов без аргументов (его подменяют тесты фасада)."""
-    if repo == doctor.config.ROOT:
-        return doctor._origin_artifact_refs()
+    """`_origin_artifact_refs` для репозитория задачи — клон артели или
+    клон внешнего проекта, явно (ADR-0021 п.1-3)."""
     return doctor._origin_artifact_refs(repo)
 
 
@@ -147,7 +144,8 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     for repo, ids in _by_repo(live + list(closed), target_of).items():
         if (repo == doctor.artifact_branch._NO_REPO
                 or doctor.gitcmd.has_no_remote(repo)):
-            where = ("origin пульта" if repo == doctor.config.ROOT
+            where = ("origin пульта" if repo == doctor.workspace.repo(
+                        doctor.config.DEFAULT_TARGET)
                      else f"origin репозитория проекта ({', '.join(ids)})")
             skips.append(doctor.Check(ARTIFACT_REF_SYNC_CHECK, "skip",
                                       f"{where} не настроен — ссылки "

@@ -46,7 +46,7 @@ def git(*args: str) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
 
-def current_branch() -> str:
+def current_branch(repo: Path | None = None) -> str:
     """Ветка под HEAD; пустая строка — git не ответил.
 
     `res is None` — заглушки `gitcmd.git` в тестах, не связанных с git,
@@ -54,7 +54,8 @@ def current_branch() -> str:
     впервые попадает на горячий путь `set_state` через `on_foreign_branch`,
     где такие заглушки уже встречаются).
     """
-    res = git("rev-parse", "--abbrev-ref", "HEAD")
+    args = ("rev-parse", "--abbrev-ref", "HEAD")
+    res = in_repo(repo, *args) if repo else git(*args)
     return res.stdout.strip() if res is not None and res.returncode == 0 else ""
 
 
@@ -66,16 +67,22 @@ def qualified_ref(branch: str) -> str:
     return branch if branch.startswith("refs/") else f"refs/heads/{branch}"
 
 
-def branch_exists(branch: str) -> bool:
+def branch_exists(branch: str, repo: Path | None = None) -> bool:
     """`res is None` — тот же вырожденный случай, что у `head_sha`: заглушки
-    `gitcmd.git` в тестах, не связанных с git, отвечают `None`."""
-    res = git("rev-parse", "--verify", "--quiet", qualified_ref(branch))
+    `gitcmd.git` в тестах, не связанных с git, отвечают `None`. `repo` —
+    клон проекта, в котором живёт ветка (ADR-0021 п.1)."""
+    args = ("rev-parse", "--verify", "--quiet", qualified_ref(branch))
+    res = in_repo(repo, *args) if repo else git(*args)
     return res is not None and res.returncode == 0
 
 
-def branch_merged(branch: str) -> bool:
-    """Смержена ли ветка в main — тем же критерием, каким git защищает `-d`."""
-    res = git("branch", "--merged", config.MAIN_BRANCH, "--list", branch)
+def branch_merged(branch: str, repo: Path | None = None,
+                  base: str | None = None) -> bool:
+    """Смержена ли ветка в main — тем же критерием, каким git защищает `-d`.
+    `repo` — клон проекта; `base` — ревизия main (в клоне — `origin/main`:
+    локальный `main` клона push мержа не двигает)."""
+    args = ("branch", "--merged", base or config.MAIN_BRANCH, "--list", branch)
+    res = in_repo(repo, *args) if repo else git(*args)
     return res.returncode == 0 and bool(res.stdout.strip())
 
 
@@ -108,7 +115,8 @@ def commits_behind(branch: str, base: str | None = None,
     return int(text) if text.isdigit() else None
 
 
-def is_ancestor(ancestor: str, descendant: str) -> bool:
+def is_ancestor(ancestor: str, descendant: str,
+                repo: Path | None = None) -> bool:
     """`ancestor` — предок `descendant` (или тот же коммит) тем же
     критерием, каким это понимает сам git (`merge-base --is-ancestor`).
 
@@ -116,7 +124,8 @@ def is_ancestor(ancestor: str, descendant: str) -> bool:
     `False`, что и «не предок» (ANSWER-1
     01M1NGFK3N6MRMYGCC09H975V3 п.3: прогон с чужой историей не считается
     вовсе, не «бесконечно старый»)."""
-    res = git("merge-base", "--is-ancestor", ancestor, descendant)
+    args = ("merge-base", "--is-ancestor", ancestor, descendant)
+    res = in_repo(repo, *args) if repo else git(*args)
     return res is not None and res.returncode == 0
 
 
@@ -129,7 +138,8 @@ def commit_exists(sha: str, repo: Path | None = None) -> bool:
     return res is not None and res.returncode == 0
 
 
-def merges_between(sha_from: str, sha_to: str) -> int | None:
+def merges_between(sha_from: str, sha_to: str,
+                   repo: Path | None = None) -> int | None:
     """Число merge-коммитов на отрезке `sha_from..sha_to` (ANSWER-1
     01M1NGFK3N6MRMYGCC09H975V3 п.3: «возраст» зелёного прогона канарейки
     относительно целевого sha) — тот же вырожденный случай `None`, что и
@@ -139,8 +149,9 @@ def merges_between(sha_from: str, sha_to: str) -> int | None:
     # задачи (подтяжка main, слияние разработчика, снимок артефактов):
     # один мерж задачи давал 4 «мержа», гейт pin-update (порог 10)
     # срабатывал через 2–3 задачи.
-    res = git("rev-list", "--count", "--first-parent", "--merges",
-              f"{sha_from}..{sha_to}")
+    args = ("rev-list", "--count", "--first-parent", "--merges",
+            f"{sha_from}..{sha_to}")
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     text = res.stdout.strip()
@@ -167,7 +178,7 @@ def commit_committer_dates(since: str, until: str,
     return [ln for ln in res.stdout.splitlines() if ln.strip()]
 
 
-def list_branches(prefix: str = "") -> list[str] | None:
+def list_branches(prefix: str = "", repo: Path | None = None) -> list[str] | None:
     """Локальные ветки под `refs/heads/<prefix>`; `None` — git не ответил.
 
     Наблюдаемый мир для холодного старта (SPEC T049, требование 1):
@@ -176,7 +187,8 @@ def list_branches(prefix: str = "") -> list[str] | None:
     ответ (веток с таким префиксом нет), тот же приём, что у
     `ls_tree_files` не путать с `None`.
     """
-    res = git("for-each-ref", "--format=%(refname:short)", f"refs/heads/{prefix}")
+    args = ("for-each-ref", "--format=%(refname:short)", f"refs/heads/{prefix}")
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     return [b for b in res.stdout.splitlines() if b]
@@ -248,7 +260,7 @@ def is_clean(*paths: str, repo: Path | None = None) -> bool | None:
     return not res.stdout.strip()
 
 
-def check_ignore(paths) -> set[str] | None:
+def check_ignore(paths, repo: Path | None = None) -> set[str] | None:
     """Пути из `paths`, которые `.gitignore` ПУЛЬТА (`config.ROOT`) считает
     игнорируемыми; `None` — git не ответил. Настоящий разбор `.gitignore`
     (`git check-ignore`), не самодельный список расширений (SPEC
@@ -268,7 +280,8 @@ def check_ignore(paths) -> set[str] | None:
     data = "".join(p + "\0" for p in paths).encode()
     try:
         res = subprocess.run(["git", "check-ignore", "-v", "-z", "--stdin"],
-                             cwd=config.ROOT, input=data, capture_output=True)
+                             cwd=repo or config.ROOT, input=data,
+                             capture_output=True)
     except OSError:
         return None
     if res.returncode not in (0, 1):
@@ -298,7 +311,8 @@ def diff_names(a: str, b: str, *paths: str,
     return [p for p in res.stdout.splitlines() if p]
 
 
-def diff_name_status(a: str, b: str, *paths: str) -> list[tuple] | None:
+def diff_name_status(a: str, b: str, *paths: str,
+                     repo: Path | None = None) -> list[tuple] | None:
     """Записи `git diff -M --name-status` между `a` и `b` под `paths`:
     `(статус, путь, новый путь | None)`; `None` — git не ответил (тот же
     вырожденный случай, что у `diff_names` рядом).
@@ -314,7 +328,8 @@ def diff_name_status(a: str, b: str, *paths: str) -> list[tuple] | None:
     кавычкой в обычном выводе экранируется кавычками, и табуляционный
     разбор отдал бы искажённое имя.
     """
-    res = git("diff", "-M", "--name-status", "-z", a, b, "--", *paths)
+    args = ("diff", "-M", "--name-status", "-z", a, b, "--", *paths)
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     fields = [f for f in res.stdout.split("\0") if f]
@@ -335,7 +350,8 @@ def diff_name_status(a: str, b: str, *paths: str) -> list[tuple] | None:
     return entries
 
 
-def diff_paths(a: str, b: str, *paths: str) -> bool | None:
+def diff_paths(a: str, b: str, *paths: str,
+               repo: Path | None = None) -> bool | None:
     """True — ревизии `a` и `b` расходятся по путям; None — git не ответил.
 
     `git diff --quiet` кодирует ответ кодом возврата (0 — совпадают,
@@ -345,7 +361,8 @@ def diff_paths(a: str, b: str, *paths: str) -> bool | None:
     что у `is_clean`/`head_sha`: заглушка `gitcmd.git = lambda *a: None`
     в тестах, не связанных с git, возвращает `None` тем же приёмом.
     """
-    res = git("diff", "--quiet", a, b, "--", *paths)
+    args = ("diff", "--quiet", a, b, "--", *paths)
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode not in (0, 1):
         return None
     return res.returncode == 1
@@ -437,7 +454,7 @@ def branch_head_sha(branch: str, repo: Path | None = None) -> str:
     return res.stdout.strip() if res is not None and res.returncode == 0 else ""
 
 
-def on_foreign_branch(branch: str) -> bool:
+def on_foreign_branch(branch: str, repo: Path | None = None) -> bool:
     """True — рабочее дерево ТОЧНО стоит не на `branch`, и `branch` реально
     существует в git: единственный случай, когда чтение с ВЕТКИ задачи
     безопасно и осмысленно предпочесть рабочей копии (SPEC T031).
@@ -448,9 +465,9 @@ def on_foreign_branch(branch: str) -> bool:
     рабочая копия: вырожденный случай, на котором стоял весь стенд
     заглушек `gitcmd.git` до этой задачи, остаётся вырожденным и после неё.
     """
-    current = current_branch()
+    current = current_branch(repo)
     return bool(branch and current and current != branch
-               and branch_exists(branch))
+               and branch_exists(branch, repo))
 
 
 def show(branch: str, rel: str, *,
@@ -581,7 +598,8 @@ def fetch_ref_sha(remote: str, ref: str, *,
         in_repo(repo, *delete_args) if repo else git(*delete_args)
 
 
-def fetch_head_sha(remote: str, ref: str) -> tuple[str, str]:
+def fetch_head_sha(remote: str, ref: str,
+                   repo: Path | None = None) -> tuple[str, str]:
     """(sha, "") — голова `ref` в `remote`, через `fetch_ref_sha` (SPEC
     01M2ARQGY51B99YNP9PY806AN1): приватная ссылка `refs/artel/fetch/
     <pid>-<uuid>`, БЕЗ обращения к `FETCH_HEAD` (до этой задачи здесь
@@ -599,7 +617,7 @@ def fetch_head_sha(remote: str, ref: str) -> tuple[str, str]:
     parent`) обязан существовать в объектной базе, не только числиться sha
     на удалённой стороне.
     """
-    return fetch_ref_sha(remote, ref)
+    return fetch_ref_sha(remote, ref, repo=repo)
 
 
 def ls_tree_files(branch: str, rel_dir: str, *,

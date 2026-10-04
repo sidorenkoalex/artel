@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from contextlib import redirect_stderr, redirect_stdout
@@ -14,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import config, notes, store
-from tests.sandbox import RealGitSandbox
+from tests.sandbox import RealGitSandbox, clone_artel_from_origin
 
 
 def run_command(fn, argv) -> str:
@@ -68,8 +69,18 @@ class NetworkHoldBaseTest(HeldBaseUnitSandbox):
         `_run`, а не в `_hold_pending` — запись сетевого удержания уходит
         без базы и на флаше идёт по пиновой сверке (сценарий 02.10).
         """
-        self.git("remote", "add", "origin",
-                 str(Path(self.source_dir) / "нет-такого"))
+        # С этапа 2 ADR-0021 (п.1) `doc-commit` идёт через клон артели,
+        # заведённый `init` из живого origin; недоступным origin становится
+        # потом — у клона (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 5).
+        origin = Path(self.source_dir) / "origin.git"
+        self.git("init", "-q", "--bare", str(origin))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "-q", "origin",
+                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+        clone = clone_artel_from_origin(origin)
+        subprocess.run(["git", "-C", str(clone), "remote", "set-url", "origin",
+                        str(Path(self.source_dir) / "нет-такого")],
+                       check=True, capture_output=True)
         source = Path(self.source_dir) / "new.md"
         source.write_text("# Роадмап\n\nновое\n", encoding="utf-8")
         base = self.git("rev-parse", "HEAD:docs/roadmap.md").strip()

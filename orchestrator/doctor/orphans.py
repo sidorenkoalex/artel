@@ -11,17 +11,31 @@ from orchestrator import doctor
 # --- сироты (требование 8) ----------------------------------------------
 
 def _is_legit_task_worktree(wt_path: str, known_ids: set) -> bool:
-    """Легитимный per-task worktree (SPEC T045, AC-9): лежит ровно в
-    `config.WORKTREES/<id>`, и `<id>` — известная задача. Иначе (чужое
-    место, неизвестная задача) — сирота по построению."""
-    p = Path(wt_path)
-    return p.parent == doctor.config.WORKTREES and p.name in known_ids
+    """Легитимная рабочая копия задачи (SPEC T045, AC-9; ADR-0021 п.1):
+    лежит ровно в `.artel/projects/<имя>/worktrees/<id>`, и `<id>` —
+    известная задача. Иначе (чужое место, неизвестная задача) — сирота по
+    построению."""
+    p = Path(wt_path).resolve()
+    projects = doctor.config.PROJECTS.resolve()
+    return (p.parent.name == "worktrees" and p.parent.parent.parent == projects
+            and p.name in known_ids)
+
+
+def _project_clones() -> list:
+    """Существующие клоны проектов `targets.yaml` (ADR-0021 п.1)."""
+    try:
+        names = list(doctor.targets.load())
+    except doctor.targets.TargetsError:
+        return []
+    return [doctor.workspace.repo(n) for n in names
+            if doctor.workspace.repo(n).exists()]
 
 
 def _orphan_worktrees(known_ids: set) -> list[str]:
-    # Первая запись `workspace.registered_paths()` — основной checkout
-    # (ROOT), не worktree ни одной задачи.
-    paths = doctor.workspace.registered_paths()[1:]
+    # Первая запись `workspace.registered_paths(clone)` — сам клон, не
+    # рабочая копия ни одной задачи.
+    paths = [p for clone in _project_clones()
+             for p in doctor.workspace.registered_paths(clone)[1:]]
     return [p for p in paths if not doctor._is_legit_task_worktree(p, known_ids)]
 
 
@@ -61,7 +75,9 @@ def check_orphans(conn) -> list[doctor.Check]:
 
     stale = [r for r in doctor.store.all_tasks(conn)
             if r["state"] in ("done", "killed") and r["branch"]
-            and doctor.gitcmd.branch_exists(r["branch"])]
+            and doctor.gitcmd.branch_exists(
+                r["branch"], repo=doctor.workspace.repo(
+                    r["target"] or doctor.config.DEFAULT_TARGET))]
     if stale:
         for r in stale:
             doctor.alerts.raise_alert(conn, r["target"] or doctor.config.DEFAULT_TARGET,

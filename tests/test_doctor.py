@@ -35,7 +35,7 @@ from orchestrator import (alerts, artifact_branch, budget, canary,  # noqa: E402
                           store)
 from tests import sandbox as sandbox_module  # noqa: E402
 from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
-                           RealGitSandbox, SyncedOriginConnSandbox,
+                           RealGitSandbox, SyncedOriginConnSandbox, strip_dash_c,
                            TaskSeededTmpRootTest, TmpRootTest, _ts_ago,
                            capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
@@ -498,16 +498,21 @@ class TargetWrapperCheckTest(unittest.TestCase):
         self.assertNotEqual(check.status, "skip")
 
     def test_no_wrapper_is_ok(self):
+        """Ловит мутацию: проверка обвязки внешнего проекта даёт warn/fail
+        на клоне `repo/` без файлов обвязки."""
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "sled" / "workspace").mkdir(parents=True)
+            (Path(tmp) / "sled" / "repo").mkdir(parents=True)
             with mock.patch.object(config, "PROJECTS", Path(tmp)):
                 check = doctor.check_target_wrapper("sled")
 
         self.assertEqual(check.status, "ok")
 
     def test_wrapper_present_is_warn_and_names_the_markers(self):
+        """Ловит мутацию: проверка обвязки смотрит не в клон проекта `repo/`
+        (например, в упразднённый `workspace/`) или не называет найденные
+        маркеры — статус ok либо detail без `.mcp.json`/`CLAUDE.md`."""
         with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp) / "sled" / "workspace"
+            ws = Path(tmp) / "sled" / "repo"
             ws.mkdir(parents=True)
             (ws / ".mcp.json").write_text("{}", encoding="utf-8")
             (ws / "CLAUDE.md").write_text("# обвязка\n", encoding="utf-8")
@@ -519,8 +524,10 @@ class TargetWrapperCheckTest(unittest.TestCase):
         self.assertIn("CLAUDE.md", check.detail)
 
     def test_wrapper_never_fails(self):
+        """Ловит мутацию: найденная в клоне обвязка поднимает статус до fail
+        вместо предупреждения."""
         with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp) / "sled" / "workspace"
+            ws = Path(tmp) / "sled" / "repo"
             ws.mkdir(parents=True)
             (ws / ".claude").mkdir()
             (ws / ".mcp.json").write_text("{}", encoding="utf-8")
@@ -962,11 +969,14 @@ class OrphansTest(TmpRootTest):
         self.assertIn("T777", incidents[0]["message"])
 
     def test_done_task_branch_not_cleaned_up(self):
+        """Ловит мутацию: ветка закрытой задачи, оставшаяся в репозитории
+        проекта, не считается сиротой — orphans-branches не fail, incident
+        не поднят."""
         capture(catalog.cmd_init)
         store.insert_task(store.db(), "T001", "Готова", "done",
                           "task/t001-gotova", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "branch_exists",
-                               lambda b: b == "task/t001-gotova"):
+                               lambda b, repo=None: b == "task/t001-gotova"):
             checks = doctor.check_orphans(store.db())
 
         by_name = {c.name: c for c in checks}
@@ -992,17 +1002,19 @@ class OrphansTest(TmpRootTest):
         self.assertIn("/some/other/worktree", incidents[0]["message"])
 
     def test_all_three_orphan_kinds_at_once(self):
+        """Ловит мутацию: одна из трёх проверок сирот (каталоги, ветки в
+        клоне, рабочие копии) молчит при одновременном наличии всех трёх."""
         (config.TASKS / "T777").mkdir(parents=True)
         store.insert_task(store.db(), "T001", "Готова", "done",
                           "task/t001-gotova", config.DEFAULT_TARGET, 25.0)
         porcelain = "worktree /main\nHEAD abc\n\nworktree /extra\nHEAD def\n\n"
 
         with mock.patch.object(doctor.gitcmd, "branch_exists",
-                               lambda b: b == "task/t001-gotova"), \
+                               lambda b, repo=None: b == "task/t001-gotova"), \
                 mock.patch.object(doctor.gitcmd, "git",
                                   lambda *a: subprocess.CompletedProcess(
                                       list(a), 0, porcelain, "")
-                                  if a[:2] == ("worktree", "list")
+                                  if strip_dash_c(a)[:2] == ("worktree", "list")
                                   else subprocess.CompletedProcess(list(a), 1, "", "")):
             checks = doctor.check_orphans(store.db())
 
@@ -1533,10 +1545,12 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
     """
 
     def test_stale_active_task_warns(self):
+        """Ловит мутацию: отставание ветки задачи сверх порога не даёт warn
+        либо поднимает incident."""
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b: config.STALE_BRANCH_WARN_COMMITS + 1):
+                               lambda b, repo=None: config.STALE_BRANCH_WARN_COMMITS + 1):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(any(c.status == "warn" for c in checks))
@@ -1545,31 +1559,37 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
                          "отставание ветки — не incident (не ack-целевой)")
 
     def test_exactly_at_the_threshold_is_ok(self):
+        """Ловит мутацию: сравнение с порогом строгое в другую сторону —
+        отставание ровно на порог даёт warn."""
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b: config.STALE_BRANCH_WARN_COMMITS):
+                               lambda b, repo=None: config.STALE_BRANCH_WARN_COMMITS):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(all(c.status == "ok" for c in checks))
 
     def test_terminal_tasks_are_not_checked(self):
+        """Ловит мутацию: свежесть ветки сверяется и у закрытых задач —
+        `commits_behind` вызван для done."""
         store.insert_task(store.db(), "T001", "Готова", "done",
                           "task/t001-gotova", config.DEFAULT_TARGET, 25.0)
         checked_branches = []
         with mock.patch.object(
                 doctor.gitcmd, "commits_behind",
-                lambda b: checked_branches.append(b) or 999):
+                lambda b, repo=None: checked_branches.append(b) or 999):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertEqual(checked_branches, [])
         self.assertTrue(all(c.status == "ok" for c in checks))
 
     def test_unresponsive_git_is_silently_skipped(self):
+        """Ловит мутацию: неответ git (`commits_behind` -> None) превращается
+        в warn/fail вместо молчаливого пропуска."""
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b: None):
+                               lambda b, repo=None: None):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(all(c.status == "ok" for c in checks))

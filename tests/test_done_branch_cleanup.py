@@ -6,7 +6,8 @@ CI/свежести, реальный `--no-ff` merge, worktree первым) у
 приёмочные тесты (tasks/T073/acceptance_tests/test_ac1..test_ac3), тем
 же приёмом, что и `tests/test_fsm_retro.py` для соседнего RETRO-вызова
 в том же окне. Здесь — сама функция уборки в изоляции, по образцу
-`tests/test_kill_cleanup.py`/`tests/test_workspace.py`.
+`tests/test_kill_cleanup.py`/`tests/test_workspace.py`. Репозиторий ветки
+называется явно (`self.root` — клон проекта задачи, ADR-0021 п.1, этап 2).
 """
 import subprocess
 import sys
@@ -52,6 +53,8 @@ class DropMergedTaskBranchTest(unittest.TestCase):
             "branch", "--format=%(refname:short)").stdout.split()
 
     def test_merged_branch_is_deleted_with_safe_flag(self):
+        """Ловит мутацию: `drop_merged_task_branch` игнорирует переданный
+        репозиторий клона (ADR-0021 п.1) — слитая ветка остаётся."""
         self.git("checkout", "-q", "-b", "task/t900-x")
         (self.root / "f.txt").write_text("работа\n", encoding="utf-8")
         self.git("add", "-A")
@@ -59,30 +62,36 @@ class DropMergedTaskBranchTest(unittest.TestCase):
         self.git("checkout", "-q", config.MAIN_BRANCH)
         self.git("merge", "-q", "--no-ff", "task/t900-x", "-m", "merge")
 
-        out = cleanup.drop_merged_task_branch("task/t900-x")
+        out = cleanup.drop_merged_task_branch("task/t900-x", self.root)
 
         self.assertEqual(out, "удалена ветка task/t900-x")
         self.assertNotIn("task/t900-x", self.branches())
 
     def test_unmerged_branch_is_refused_and_left_alone(self):
+        """Ловит мутацию: уборка удаляет неслитую ветку в клоне проекта
+        (`-D` вместо `-d`) — работа задачи теряется."""
         self.git("checkout", "-q", "-b", "task/t901-x")
         (self.root / "g.txt").write_text("работа\n", encoding="utf-8")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "T901: работа")
         self.git("checkout", "-q", config.MAIN_BRANCH)
 
-        out = cleanup.drop_merged_task_branch("task/t901-x")
+        out = cleanup.drop_merged_task_branch("task/t901-x", self.root)
 
         self.assertIn("не удалена", out)
         self.assertIn("task/t901-x", self.branches())
 
     def test_missing_branch_is_reported_without_error(self):
-        out = cleanup.drop_merged_task_branch("task/t404-nope")
+        """Ловит мутацию: отсутствие ветки в переданном репозитории не
+        распознаётся — вместо строки «нет» отчёт об ошибке git."""
+        out = cleanup.drop_merged_task_branch("task/t404-nope", self.root)
 
         self.assertEqual(out, "локальной ветки task/t404-nope нет")
 
     def test_empty_branch_is_reported_without_calling_git(self):
-        out = cleanup.drop_merged_task_branch("")
+        """Ловит мутацию: пустое имя ветки уходит в git клона вместо
+        строки «нечего удалять»."""
+        out = cleanup.drop_merged_task_branch("", self.root)
 
         self.assertEqual(out, "ветка задачи не записана — нечего удалять")
 

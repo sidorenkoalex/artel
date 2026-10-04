@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, cleanup, config, fsm,  # noqa: E402
                           gitcmd, store, workspace)
+from tests.sandbox import seed_artel_clone_stub  # noqa: E402
+from tests.sandbox import link_artel_clone_to_root  # noqa: E402
 from tests.sandbox import (SpyRun, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, resilient_tmp_cleanup,
@@ -78,10 +80,15 @@ class PrefixKillTest(unittest.TestCase):
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
                             ("LOGS", self.root / ".artel" / "logs"),
-                            ("WORKTREES", self.root / ".artel" / "worktrees")):
+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
+                            ("PROJECTS", self.root / ".artel" / "projects"),
+                            ("TARGETS", self.root / "targets.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели — сам репозиторий песочницы (ADR-0021 п.1, этап 2):
+        # ветка и рабочая копия задачи живут в клоне.
+        link_artel_clone_to_root(self.root)
 
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Убить префиксом")
@@ -132,6 +139,10 @@ class PrefixAdvanceRejectTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели (ADR-0021 п.1, этап 2): ветка и рабочая копия задачи
+        # живут в нём, `new` без клона отказывает — пустой настоящий
+        # репозиторий песочницы.
+        seed_artel_clone_stub()
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -240,10 +251,15 @@ class PrefixWorkspaceTest(unittest.TestCase):
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
                             ("LOGS", self.root / ".artel" / "logs"),
-                            ("WORKTREES", self.root / ".artel" / "worktrees")):
+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
+                            ("PROJECTS", self.root / ".artel" / "projects"),
+                            ("TARGETS", self.root / "targets.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели — сам репозиторий песочницы (ADR-0021 п.1, этап 2):
+        # ветка и рабочая копия задачи живут в клоне.
+        link_artel_clone_to_root(self.root)
 
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Workspace префиксом")

@@ -595,13 +595,9 @@ def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
 
 
 def _git_in(repo_path, *args: str):
-    """`gitcmd.git`/`gitcmd.in_repo` по наличию `repo_path` — свой мини-приём
-    ровно тех двух примитивов, что уже несёт `gitcmd.py` (`git`/`in_repo`,
-    оба публичные), без правки самого `gitcmd.py`: зона задачи
-    (SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY) — `orchestrator/pull.py`,
-    `scripts/ci_push_class.py`, `tests/`, `gitcmd.py` в неё не входит и не
-    покрыт `config.COMMON_ZONES`."""
-    return gitcmd.in_repo(repo_path, *args) if repo_path else gitcmd.git(*args)
+    """git-команда в клоне проекта задачи `repo_path` (ADR-0021 п.1: для
+    любого проекта, включая артель, — не главная копия)."""
+    return gitcmd.in_repo(repo_path, *args)
 
 
 def _diff_names_in(repo_path, a: str, b: str) -> list | None:
@@ -643,14 +639,11 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     `read_branch_text_or_refuse` — узлы `fsm.py`, инъекция параметрами (не
     импорт `fsm` этим модулем — см. докстринг файла).
 
-    `repo_path` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4) —
-    клон контекста target'а задачи (`orchestrator/repo_context.py`),
-    когда target ≠ self: сравнение (`gitcmd.commits_behind`) и сам merge
-    идут ПРЯМО ТАМ — внешний target уже стоит на своей ветке задачи в
-    этом клоне (ТЗ-2), отдельный worktree (`workspace.ensure`,
-    self-специфичный механизм) не заводится и не нужен. `None` (по
-    умолчанию, self) — прежнее поведение байт-в-байт: worktree
-    `config.ROOT` через `workspace.ensure`.
+    `repo_path` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4;
+    SPEC 01M42PENCS26D0656X8FR7DFA7, требование 2) — клон проекта задачи
+    (`orchestrator/repo_context.py`) для любого проекта, включая артель:
+    сравнение (`gitcmd.commits_behind`) идёт в нём, сам merge — в рабочей
+    копии задачи `worktrees/<id>/` этого клона (`workspace.ensure`).
 
     `behind > 0`, но весь дифф main от точки расхождения — документные
     файлы (`ci_push_class.is_doc_path`), не пересекающиеся с диффом ветки
@@ -661,6 +654,10 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
+    if repo_path is None:
+        # Не назван — клон проекта задачи, тот же адрес для сравнения и
+        # для `_doc_only_main_advance` (не `-C None` и не главная копия).
+        repo_path = workspace.repo(target_name)
     source = origin_main_source(target_name)
     source_branch = source[1] if source is not None else config.MAIN_BRANCH
     base = origin_main_sha(target_name)
@@ -678,16 +675,13 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
             ", ".join(doc_files[:10]))
         return Fresh()
 
-    if repo_path is not None:
-        wt_path = repo_path
-    else:
-        wt_path, error = workspace.ensure(task_id, branch)
-        if error is not None:
-            detail = (f"подтяжка {source_branch} отменена: worktree "
-                      f"задачи не создан — {error}")
-            store.set_state(conn, task_id, "escalated", "fsm",
-                            expected_state=state, detail=detail)
-            return Conflict([], detail)
+    wt_path, error = workspace.ensure(task_id, branch)
+    if error is not None:
+        detail = (f"подтяжка {source_branch} отменена: worktree "
+                  f"задачи не создан — {error}")
+        store.set_state(conn, task_id, "escalated", "fsm",
+                        expected_state=state, detail=detail)
+        return Conflict([], detail)
 
     stray = _clean_worktree_before_merge(conn, task_id, wt_path)
     if stray is not None:

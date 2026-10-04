@@ -72,27 +72,37 @@ class ReviewEscalationShaGateTest(TmpRootTest):
         store.journal(self.conn, TASK_ID, actor, action, detail)
 
     def test_no_escalation_record_passes(self):
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b: "z" * 40):
+        """Ловит мутацию: пропуск при `escalation_sha is None` убран — обычный
+        approved без бюджетной эскалации отклоняется как «код сменился»."""
+        with mock.patch.object(gitcmd, "branch_head_sha",
+                               lambda b, repo=None: "z" * 40):
             refusal = fsm_advance._review_escalation_sha_gate(
                 self.conn, TASK_ID, self.t)
 
         self.assertIsNone(refusal)
 
     def test_unchanged_sha_passes(self):
+        """Ловит мутацию: сверка `current_sha == escalation_sha` убрана —
+        неизменённый код отклоняется как сменившийся."""
         self._journal("reviewer", "agent run finished", "rc=0")
         self._journal("fsm", budget.REVIEW_ESCALATION_CODE_SHA_ACTION, "a" * 40)
 
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b: "a" * 40):
+        with mock.patch.object(gitcmd, "branch_head_sha",
+                               lambda b, repo=None: "a" * 40):
             refusal = fsm_advance._review_escalation_sha_gate(
                 self.conn, TASK_ID, self.t)
 
         self.assertIsNone(refusal)
 
     def test_changed_sha_refuses(self):
+        """Ловит мутацию: гейт не сверяет голову кодовой ветки с отметкой
+        эскалации (всегда пропускает) — сменившийся код проходит по устаревшему
+        вердикту reviewer."""
         self._journal("reviewer", "agent run finished", "rc=0")
         self._journal("fsm", budget.REVIEW_ESCALATION_CODE_SHA_ACTION, "a" * 40)
 
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b: "b" * 40):
+        with mock.patch.object(gitcmd, "branch_head_sha",
+                               lambda b, repo=None: "b" * 40):
             refusal = fsm_advance._review_escalation_sha_gate(
                 self.conn, TASK_ID, self.t)
 
@@ -102,10 +112,13 @@ class ReviewEscalationShaGateTest(TmpRootTest):
         self.assertIn("b" * 40, refusal.detail)
 
     def test_git_not_answering_now_passes_fail_open(self):
+        """Ловит мутацию: пустой ответ git (`not current_sha`) считается сменой
+        кода — гейт отказывает fail-closed вместо fail-open."""
         self._journal("reviewer", "agent run finished", "rc=0")
         self._journal("fsm", budget.REVIEW_ESCALATION_CODE_SHA_ACTION, "a" * 40)
 
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b: ""):
+        with mock.patch.object(gitcmd, "branch_head_sha",
+                               lambda b, repo=None: ""):
             refusal = fsm_advance._review_escalation_sha_gate(
                 self.conn, TASK_ID, self.t)
 
@@ -113,11 +126,17 @@ class ReviewEscalationShaGateTest(TmpRootTest):
 
     def test_stale_escalation_record_passes(self):
         """Эскалация относится к предыдущему циклу (новый прогон reviewer
-        уже случился после неё) — гейт не держит текущий вердикт по ней."""
+        уже случился после неё) — гейт не держит текущий вердикт по ней.
+
+        Ловит мутацию: `_code_sha_at_review_escalation` не отсекает отметку,
+        после которой reviewer уже отработал заново, — устаревшая отметка
+        держит свежий вердикт.
+        """
         self._journal("fsm", budget.REVIEW_ESCALATION_CODE_SHA_ACTION, "a" * 40)
         self._journal("reviewer", "agent run finished", "rc=0")
 
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b: "b" * 40):
+        with mock.patch.object(gitcmd, "branch_head_sha",
+                               lambda b, repo=None: "b" * 40):
             refusal = fsm_advance._review_escalation_sha_gate(
                 self.conn, TASK_ID, self.t)
 

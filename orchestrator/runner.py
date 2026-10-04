@@ -140,8 +140,9 @@ def step_role(t) -> str | None:
         if tz_text is not None:
             return "analyst"
     branch = t["branch"]
-    if gitcmd.on_foreign_branch(branch):
-        tz_text, _ = gitcmd.show(branch, f"tasks/{t['id']}/TZ.md")
+    repo = workspace.task_repo(t["id"])
+    if gitcmd.on_foreign_branch(branch, repo):
+        tz_text, _ = gitcmd.show(branch, f"tasks/{t['id']}/TZ.md", repo=repo)
         has_tz = tz_text is not None
     else:
         has_tz = (config.TASKS / t["id"] / "TZ.md").exists()
@@ -334,10 +335,10 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     # самому починить рабочую поверхность или молча стартовать на чужой
     # ветке. Worktree ещё не заведён (`None`) — сверять не с чем: его
     # заведёт `role_cwd` через `workspace.ensure` на правильной ветке.
-    if target == config.DEFAULT_TARGET:
-        on_branch = workspace.on_task_branch(task_id, t["branch"])
+    if target:
+        on_branch = workspace.on_task_branch(task_id, t["branch"], target)
         if on_branch is False:
-            wt = workspace.path(task_id)
+            wt = workspace.path(task_id, target)
             detail = (f"{wt} стоит не на ветке задачи {t['branch']} — шаг "
                       f"не начат; перейди в worktree на свою ветку либо "
                       f"разберись, кто её переключил, и повтори run")
@@ -976,9 +977,7 @@ def role_cwd_path(task_id: str, target: str) -> Path:
     промпт обязан назвать рабочий каталог шага буквальной строкой ДО
     первой попытки агента, раньше первого реального вызова `role_cwd`
     внутри `run_agent_once`."""
-    if target == config.DEFAULT_TARGET:
-        return workspace.path(task_id)
-    return config.PROJECTS / target / "workspace"
+    return workspace.path(task_id, target)
 
 
 def role_cwd(conn, task_id: str, target: str) -> Path:
@@ -1030,15 +1029,14 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
     оставшийся от прежней механики или от прогона планки ролью, здесь же
     убирается: документы задачи в рабочей копии кода вне прогона не лежат.
     """
-    if target == config.DEFAULT_TARGET:
+    if task_id is None:
+        path = role_cwd_path("smoke", target)
+        path.mkdir(parents=True, exist_ok=True)
+    else:
         branch = store.task_branch(conn, task_id)
-        wt_path, error = workspace.ensure(task_id, branch)
+        path, error = workspace.ensure(task_id, branch)
         if error is not None:
             raise OSError(error)
-        path = wt_path
-    else:
-        path = role_cwd_path(task_id, target)
-        path.mkdir(parents=True, exist_ok=True)
     if task_id is not None:
         from . import acceptance, artifact_branch
         # Сначала забрать `tasks/<id>/` рабочей копии кода в ссылку, потом

@@ -21,7 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm_advance, gitcmd, review, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, strip_dash_c  # noqa: E402
 
 
 class CapacityGateGitFailureTest(TmpRootTest):
@@ -34,7 +34,10 @@ class CapacityGateGitFailureTest(TmpRootTest):
         self.t = {"title": "Тест гейта ёмкости", "branch": "task/t001-x"}
 
     def _refuses(self, git_diff) -> bool:
-        with mock.patch.object(gitcmd, "git", git_diff):
+        # Сквозь `-C <клон>`: гейт меряет diff в клоне проекта задачи явным
+        # репозиторием (ADR-0021 п.1, этап 2).
+        with mock.patch.object(gitcmd, "git",
+                               lambda *a: git_diff(*strip_dash_c(a))):
             return fsm_advance._capacity_gate_refuses(
                 self.conn, self.task_id, self.t, "in_dev")
 
@@ -45,6 +48,8 @@ class CapacityGateGitFailureTest(TmpRootTest):
 
     @staticmethod
     def _failing_diff(*args) -> subprocess.CompletedProcess:
+        # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+        args = strip_dash_c(args)
         if args and args[0] == "diff":
             return subprocess.CompletedProcess(
                 list(args), 128, "", "fatal: bad revision 'main...task/t001-x'")
@@ -109,7 +114,9 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
             (self.task_id,))]
 
     def _refuses_with(self, git_diff) -> bool:
-        with mock.patch.object(gitcmd, "git", git_diff):
+        # Сквозь `-C <клон>` (ADR-0021 п.1, этап 2).
+        with mock.patch.object(gitcmd, "git",
+                               lambda *a: git_diff(*strip_dash_c(a))):
             return fsm_advance._capacity_gate_refuses(
                 self.conn, self.task_id, self.t, "in_dev")
 
@@ -214,6 +221,8 @@ class CapacityGateExternalTargetTest(TmpRootTest):
 
     @staticmethod
     def _no_such_branch(*args) -> subprocess.CompletedProcess:
+        # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
+        args = strip_dash_c(args)
         if args and args[0] == "diff":
             return subprocess.CompletedProcess(
                 list(args), 128, "",

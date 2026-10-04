@@ -69,7 +69,9 @@ def _protected_path_diff_gate(conn, task_id: str, state: str, branch: str,
     защищённый путь ТОЛЬКО когда сам merge конфликтует, а бесконфликтный
     дифф (новый файл, не тронутый на main) доходил до `done` молча.
 
-    Self target ТОЛЬКО (`ctx.path == config.ROOT`, тот же довод, что
+    Только артель (`repo_context.is_artel(ctx)` — признак проекта, не
+    путь: путь артели — клон, SPEC 01M42PENCS26D0656X8FR7DFA7,
+    требование 3; тот же довод, что
     карта/RETRO в `_publish_merge_artifacts`): защищённые пути этого
     списка — файлы пульта, у внешнего target'а их либо нет вовсе, либо
     это не те же файлы её репозитория.
@@ -84,12 +86,12 @@ def _protected_path_diff_gate(conn, task_id: str, state: str, branch: str,
     `_perform_carpentry_merge` сами требуют рабочий git) — расширять
     список мест отказа тем же git-failure не добавляет защиты.
     """
-    if ctx.path != config.ROOT:
+    if not repo_context.is_artel(ctx):
         return False
-    base = gitcmd.diff_base(branch)
+    base = gitcmd.diff_base(branch, repo=ctx.path)
     if base is None:
         return False
-    files = gitcmd.diff_names(base, branch)
+    files = gitcmd.diff_names(base, branch, repo=ctx.path)
     if files is None:
         return False
     protected = [f for f in files if _touches_protected_path(f)]
@@ -111,14 +113,14 @@ def _test_integrity_diff_gate(conn, task_id: str, state: str, branch: str,
     `verifying`), а ручная сверка удалённых и ослабленных тестов с этой
     задачи с Оператора снята.
 
-    Self target ТОЛЬКО (`ctx.path == config.ROOT`) — тот же довод, что у
-    соседа выше: дифф в `config.ROOT` не видит код внешнего target.
+    Только артель (`repo_context.is_artel(ctx)`) — тот же довод, что у
+    соседа выше.
     Мандат Оператора читается с ветки-источника `tasks/<id>/`
     (`artifact_source.resolve`), дифф — с кодовой ветки.
 
     `True` — эскалировано, вызывающий код обязан остановиться.
     """
-    if ctx.path != config.ROOT:
+    if not repo_context.is_artel(ctx):
         return False
     artifact_branch_name, _foreign = artifact_source.resolve(conn, task_id)
     return merge_gate_escalates(conn, task_id, state, branch,
@@ -267,7 +269,8 @@ def _ci_confirm_red_or_flake(conn, task_id: str, branch: str,
     rerun_trigger_note = ci.trigger_rerun(branch)
     store.journal(conn, task_id, "orchestrator", "ре-ран CI запущен",
                   rerun_trigger_note)
-    rerun_green, rerun_note = ci.branch_status(branch)
+    rerun_green, rerun_note = ci.branch_status(
+        branch, repo=workspace.task_repo(task_id))
     store.journal(conn, task_id, "orchestrator",
                   "статус CI ветки (ре-ран)", rerun_note)
     if rerun_green:
@@ -314,7 +317,8 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
     повторно для того же самого head).
     """
     while True:
-        green, note = ci.branch_status(branch)
+        green, note = ci.branch_status(branch,
+                                       repo=workspace.task_repo(task_id))
         merge_lock.touch_heartbeat(conn)
         elapsed = int(time.monotonic() - start)
         detail = f"{note} (ожидание {elapsed} сек)"
@@ -480,7 +484,7 @@ def _guard_all_or_refuse(conn, task_id: str, scratch: Path,
     дереву неприменим. Нарушение — отказ тем же путём, что прочие отказы
     `merge_gate` («merge FAILED», scratch снят, `sys.exit`, задача на
     гейте, main не тронут)."""
-    if ctx.path != config.ROOT:
+    if not repo_context.is_artel(ctx):
         return
     violations = _guard_all_violations(scratch)
     if not violations:
@@ -512,7 +516,7 @@ def _refuse_if_main_red(conn, task_id: str, ctx: repo_context.RepoContext,
     журнал задачи, а сверка снимается только для этого вызова.
 
     Только self target: CI main — пульта; у внешнего target'а свой форж."""
-    if ctx.path != config.ROOT:
+    if not repo_context.is_artel(ctx):
         return
     origin_sha = _origin_main_sha(ctx)
     if origin_sha is None:
@@ -520,7 +524,7 @@ def _refuse_if_main_red(conn, task_id: str, ctx: repo_context.RepoContext,
                       f"origin/{ctx.base} не прочитан — цвет CI main не "
                       f"сверен")
         return
-    status = ci.main_line_status(origin_sha)
+    status = ci.main_line_status(origin_sha, repo=ctx.path)
     if fixes_main:
         store.journal(conn, task_id, "operator",
                       "сверка CI main снята: --fixes-main",
@@ -555,11 +559,11 @@ def _await_main_ci(conn, task_id: str, head: str,
 
     `gh` не ответил — «не дождался» сразу: опросить нечем, и ждать до
     предела значило бы держать мьютекс впустую. Только self target."""
-    if ctx.path != config.ROOT:
+    if not repo_context.is_artel(ctx):
         return
     start = time.monotonic()
     while True:
-        status = ci.main_line_status(head) if head else None
+        status = ci.main_line_status(head, repo=ctx.path) if head else None
         merge_lock.touch_heartbeat(conn)
         if status is None:
             outcome = "CI main не дождался: голова main после мержа не определена"
@@ -867,14 +871,14 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     `skills/test-authoring.md` применить стало некому — дыра, которую
     закрывает эта функция.
 
-    Только self-target (`ctx.path == config.ROOT`), тем же доводом, что
+    Только артель (`repo_context.is_artel(ctx)`), тем же доводом, что
     карта и RETRO ниже: `config.PROTECTED_PATHS` — файлы пульта, у
     внешнего target'а их либо нет вовсе, либо это не те же файлы.
 
     `("ok", пути)` — применять было нечего либо всё применено и
     закоммичено; `("stopped", [])` — приложение неприменимо к подтянутому
     main, задача возвращена в `in_dev` (требование 4)."""
-    if ctx.path != config.ROOT:
+    if not repo_context.is_artel(ctx):
         return ("ok", [])
     appendices = _plan_appendices_or_refuse(conn, task_id, scratch, ctx)
     if not appendices:
@@ -916,7 +920,7 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     Карта кодовой базы (SPEC T042) и RETRO (SPEC T043, требование 8,
     адресуется на `merge_sha` — сразу после merge/наложения снимка, ДО
     любых последующих служебных коммитов) — оба шага ТОЛЬКО для self
-    (`ctx.path == config.ROOT`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    (`repo_context.is_artel(ctx)`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
     требование 4, AC-13 —
     «в пульте — только кухня пульта», для внешнего target ни карта, ни
     RETRO в её main НЕ коммитятся вовсе (RETRO внешнего target остаётся
@@ -943,7 +947,7 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     _overlay_artifact_snapshot(conn, task_id, scratch)
     _guard_task_root_or_refuse(conn, task_id, scratch, ctx)
     merge_sha = gitcmd.head_sha(scratch)
-    if ctx.path == config.ROOT:
+    if repo_context.is_artel(ctx):
         fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
         _guard_all_or_refuse(conn, task_id, scratch, ctx)
         fsm_postmerge._generate_and_commit_retro(
@@ -1048,7 +1052,8 @@ def _cleanup_merged_task(conn, task_id: str, branch: str) -> None:
     пока ветку держит worktree, поэтому порядок обязателен."""
     note = workspace.remove(task_id)
     store.journal(conn, task_id, "orchestrator", "worktree убран", note)
-    branch_note = cleanup.drop_merged_task_branch(branch)
+    branch_note = cleanup.drop_merged_task_branch(
+        branch, workspace.task_repo(task_id))
     store.journal(conn, task_id, "orchestrator", "ветка убрана", branch_note)
 
 

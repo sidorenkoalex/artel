@@ -10,7 +10,7 @@ from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, cycle_hint,
               gitcmd, idgen, liveness, merge_queue, models, providers, retro, runner,
-              store, zone_lock)
+              store, targets, workspace, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -60,10 +60,30 @@ def cmd_init() -> None:
     restore_msg = pool_seal.restore_pool_if_missing(conn)
     if restore_msg:
         print(restore_msg)
+    _ensure_project_clones()
     print(f"OK: состояние в {config.DB}")
     print("Задачи в полёте (ветки task/* без строки в БД) холодный старт "
          "не восстанавливает автоматически — пересборка по веткам "
          "остаётся ручной сверкой Оператора (SPEC T049, требование 11).")
+
+
+def _ensure_project_clones() -> None:
+    """Клон каждого проекта `targets.yaml`, включая артель (ADR-0021 п.1,
+    SPEC 01M42PENCS26D0656X8FR7DFA7, требование 1): заводится идемпотентно,
+    существующий не трогается. Неудача — строка вывода, не отказ `init`:
+    клон досоздадут `doctor --fix` и `new`. `targets.yaml` не читается — о
+    нём говорит `doctor`."""
+    try:
+        names = list(targets.load())
+    except targets.TargetsError:
+        return
+    for name in names:
+        existed = workspace.repo(name).exists()
+        clone, error = workspace.ensure_clone(name)
+        if error is not None:
+            print(f"ВНИМАНИЕ: {error}")
+        elif not existed:
+            print(f"OK: клон проекта {name} — {clone}")
 
 
 def _deploy_role_home_reference() -> None:
@@ -487,12 +507,19 @@ def cmd_new(title: str, tz_path: str | None = None, *,
             sys.exit(refusal)
 
     target = target or config.DEFAULT_TARGET
+    # Клон проекта — до id, ссылки документов и строки БД (SPEC
+    # 01M42PENCS26D0656X8FR7DFA7, требование 1, AC-3): не завёлся — отказ
+    # без следов, отката на главную копию нет.
+    _clone, clone_error = workspace.ensure_clone(target)
+    if clone_error is not None:
+        sys.exit(f"new: {clone_error} — задача не заведена")
     task_id = idgen.new_task_id()
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
                  journal_detail=title, model_set=model_set,
                  set_members=set_members)
+    _ensure_task_worktree(conn, task_id, target)
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
@@ -527,7 +554,7 @@ def _new_task_row(conn, task_id: str, title: str, target: str,
     spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
 
-    _new_external_artifact_branch(task_id, title, spec, tz_doc)
+    _new_external_artifact_branch(task_id, title, spec, tz_doc, target)
 
     members_json = (json.dumps(set_members, ensure_ascii=False)
                     if model_set is not None else None)
@@ -538,6 +565,20 @@ def _new_task_row(conn, task_id: str, title: str, target: str,
     if model_set is not None:
         store.journal(conn, task_id, "operator", "набор моделей задачи",
                       f"{model_set}: {models.members_text(set_members)}")
+
+
+def _ensure_task_worktree(conn, task_id: str, target: str) -> None:
+    """Ветка и рабочая копия задачи в клоне проекта (AC-1/AC-2 SPEC
+    01M42PENCS26D0656X8FR7DFA7). Не завелась (нет `origin`, сеть) — не
+    отказ: задача уже заведена, рабочую копию доведёт первый шаг роли
+    (`runner.role_cwd`) тем же `workspace.ensure`; причина — в журнал и в
+    вывод."""
+    wt_path, error = workspace.ensure(task_id, store.task_branch(conn, task_id))
+    if error is not None:
+        store.journal(conn, task_id, "orchestrator",
+                      "рабочая копия задачи не заведена", error)
+        print(f"  ВНИМАНИЕ: рабочая копия {wt_path} не заведена: {error} — "
+              f"её заведёт первый шаг роли")
 
 
 def spawn_subtask(parent_id: str, parent_title: str, title: str,
@@ -609,7 +650,8 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
 
 
 def _new_external_artifact_branch(task_id: str, title: str, spec: str,
-                                  tz_doc: str | None) -> None:
+                                  tz_doc: str | None,
+                                  target: str | None = None) -> None:
     """Любой target (требования 7-9, AC-8/AC-9): `tasks/<id>/` — первым
     коммитом без родителя в ссылку документов `refs/artifacts/<id>`
     (ADR-0021 п.3) плотницки (`artifact_branch.commit_files`), рабочая
@@ -621,7 +663,7 @@ def _new_external_artifact_branch(task_id: str, title: str, spec: str,
     if tz_doc is not None:
         files[f"tasks/{task_id}/TZ.md"] = tz_doc
     commit_sha = artifact_branch.commit_files(
-        task_id, files, f"{task_id}: ТЗ Оператора ({title})")
+        task_id, files, f"{task_id}: ТЗ Оператора ({title})", target=target)
     if not commit_sha:
         sys.exit(f"[{task_id}] ссылка документов {artifact_branch.branch_name(task_id)} "
                  f"не создана — git не ответил")

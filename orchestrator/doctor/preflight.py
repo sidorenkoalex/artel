@@ -493,8 +493,8 @@ def check_target_layout(target: str) -> doctor.Check:
     логика для ЛЮБОГО объявленного target, включая артель (A7, требование
     2, AC-2). С упразднением репозитория фиксации области проекта
     (ADR-0021 п.2, этап 1, часть б2) это репозиторий задачи
-    (`artifact_branch.repo_for_target`): git пульта для артели, клон
-    проекта (`workspace`) для внешнего target.
+    (`artifact_branch.repo_for_target`): клон проекта `repo/` для любого
+    проекта, включая артель (ADR-0021 п.1, этап 2).
 
     Не блокирует: без клона ссылка документов внешней задачи не пишется, и
     узлы записи/сверки сами отказывают «git не ответил»/«репозиторий
@@ -503,8 +503,9 @@ def check_target_layout(target: str) -> doctor.Check:
     repo = doctor.artifact_branch.repo_for_target(target)
     if repo == doctor.artifact_branch._NO_REPO:
         return doctor.Check("target-layout", "warn",
-                     f"репозиторий проекта {target} (клон workspace) не "
-                     f"найден — ссылкам документов задач негде жить")
+                     f"репозиторий проекта {target} (клон repo) не "
+                     f"найден — ссылкам документов задач негде жить; "
+                     f"заведи: doctor --fix")
     return doctor.Check("target-layout", "ok",
                         f"репозиторий ссылок документов на месте: {repo}")
 
@@ -521,12 +522,11 @@ def check_target_wrapper(target: str) -> doctor.Check:
     включая артель): наличие `.claude/`, `.mcp.json`, `CLAUDE.md`/
     `AGENTS.md` в его workspace — информационно, никогда не блокирует.
 
-    Смотрит `workspace/` — то же дерево, что реально видит cwd шага роли
-    (`runner.role_cwd`), не артефактный репозиторий `config.PROJECTS/
-    <target>` целиком (туда git-первичка A2b коммитит SPEC/PLAN/REVIEW —
-    другое дерево, не задето этой проверкой).
+    Смотрит клон проекта `repo/` — то же дерево, из которого выписаны
+    рабочие копии задач `worktrees/<id>/`, cwd шага роли (`runner.role_cwd`;
+    ADR-0021 п.1, этап 2).
     """
-    ws = doctor.config.PROJECTS / target / "workspace"
+    ws = doctor.workspace.repo(target)
     found = [name for name in doctor.TARGET_WRAPPER_MARKERS if (ws / name).exists()]
     if found:
         return doctor.Check("target-wrapper", "warn",

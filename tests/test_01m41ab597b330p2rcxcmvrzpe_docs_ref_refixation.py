@@ -8,7 +8,7 @@
 Сценарий на настоящем git: пульт — `self.root` (git главной копии), задача
 артели заводится `catalog.cmd_new` (ссылка `refs/artifacts/<id>` в git
 пульта), задача внешнего проекта — тем же `cmd_new` с `target=` (ссылка в
-клоне проекта `config.PROJECTS/<проект>/workspace`, `make_project_repo`).
+клоне проекта `config.PROJECTS/<проект>/repo`, `make_project_repo`).
 Шаблон SPEC подменён фикстурой со `status: ready`, чтобы `advance` из
 `spec_writing` был настоящим переходом FSM.
 
@@ -172,7 +172,8 @@ class DocsRefSandbox(GitignoreCommittedRealGitSandbox):
         target = self.targets[task_id]
         if target == config.DEFAULT_TARGET:
             return self.root
-        return config.PROJECTS / target / "workspace"
+        # Клон проекта — `repo/` области проекта (ADR-0021 п.1, этап 2).
+        return config.PROJECTS / target / "repo"
 
     def rgit(self, task_id: str, *args: str) -> str:
         return self.git("-C", str(self.repo(task_id)), *args)

@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import brief, config, context_package, gitcmd, store  # noqa: E402
 from tests.sandbox import (TmpRootTest, disk_backed_ls_tree_files,  # noqa: E402
-                           disk_backed_show, fake_git, fake_git_for)
+                           disk_backed_show, fake_git, fake_git_for,
+                           strip_dash_c)
 
 MAP_FRESH = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
             "---\n\n# Карта\n")
@@ -160,7 +161,12 @@ class FreshMapTextTest(BriefUnitTest):
     def test_regeneration_restores_the_working_tree_after_reading(self):
         """Регенерация не должна оставлять незакоммиченную правку в ROOT
         (REVIEW T028 итерация 1, blocker) — checkout восстанавливает файл
-        сразу после чтения текста в память."""
+        сразу после чтения текста в память.
+
+        Ловит мутацию: `checkout -- docs/codebase-map.md` после чтения
+        регенерированной карты не вызывается. Вызов — с явным репозиторием
+        `-C <config.ROOT>` (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 4;
+        ADR-0021 п.1), поэтому сверка — сквозь `strip_dash_c`."""
         regenerated = MAP_FRESH.replace("aaaa", "bbbb")
         calls = []
 
@@ -177,7 +183,8 @@ class FreshMapTextTest(BriefUnitTest):
                 mock.patch("subprocess.run", side_effect=fake_run):
             brief.fresh_map_text(store.db(), "T001")
 
-        self.assertIn(("checkout", "--", brief.MAP_REL), calls)
+        self.assertIn(("checkout", "--", brief.MAP_REL),
+                      [strip_dash_c(c) for c in calls])
 
     def test_failed_restore_after_regeneration_raises_an_alert(self):
         regenerated = MAP_FRESH.replace("aaaa", "bbbb")

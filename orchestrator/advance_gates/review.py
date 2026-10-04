@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from scripts import guard
 
-from .. import auto, budget, config, gitcmd, store, yamlmini
+from .. import auto, budget, config, gitcmd, store, workspace, yamlmini
 from ._base import GateRefusal, _run_gates
 
 
@@ -51,7 +51,8 @@ def _review_escalation_sha_gate(conn, task_id: str, t) -> GateRefusal | None:
     escalation_sha = _code_sha_at_review_escalation(conn, task_id)
     if escalation_sha is None:
         return None
-    current_sha = gitcmd.branch_head_sha(t["branch"])
+    current_sha = gitcmd.branch_head_sha(t["branch"],
+                                         repo=workspace.task_repo(task_id))
     if not current_sha or current_sha == escalation_sha:
         return None
     detail = (f"код кодовой ветки сменился, пока задача стояла escalated "
@@ -79,16 +80,18 @@ _REWORK_REFUSAL_ACTION = "переход отклонён: замечания р
 _PULL_MAIN_COMMIT_INFIX = ": подтяжка "
 
 
-def _commit_iso_date(ref: str, *path: str):
+def _commit_iso_date(ref: str, *path: str, repo=None):
     """Дата последнего коммита `ref` (committer, `%cI`), затрагивающего
     `path` (без него — голова `ref`) — `datetime` с часовым поясом; `None`
     — git не ответил, коммитов нет, либо строка не разбирается как ISO8601
     (лёгкие песочницы без настоящего git — `fake_git`/заглушки, тот же
-    вырожденный случай деградации, что и у `fsm._pull_main_or_escalate`)."""
+    вырожденный случай деградации, что и у `fsm._pull_main_or_escalate`).
+
+    `repo` — клон проекта задачи, в котором живёт `ref` (ADR-0021 п.2)."""
     args = ["log", "-1", "--format=%cI", ref]
     if path:
         args += ["--", *path]
-    res = gitcmd.git(*args)
+    res = gitcmd.in_repo(repo, *args)
     if res is None or res.returncode != 0:
         return None
     line = res.stdout.strip()
@@ -106,7 +109,8 @@ def _latest_developer_commit_iso_date(branch: str, task_id: str):
     принял бы рутинную подтяжку main за настоящий шаг developer (см.
     докстринг `_PULL_MAIN_COMMIT_INFIX`). `None` — git не ответил, либо на
     ветке нет ни одного коммита, кроме подтяжек."""
-    res = gitcmd.git("log", "--format=%cI\x1f%s", branch)
+    repo = workspace.task_repo(task_id)
+    res = gitcmd.in_repo(repo, "log", "--format=%cI\x1f%s", branch)
     if res is None or res.returncode != 0:
         return None
     prefix = f"{task_id}{_PULL_MAIN_COMMIT_INFIX}"
@@ -151,7 +155,8 @@ def _reviewer_verdict_baseline(conn, task_id: str, branch: str):
     чем, та же деградация, что у `_commit_iso_date`."""
     path = f"tasks/{task_id}/REVIEW.md"
     prefix = _REVIEWER_STEP_AUTOCOMMIT_PREFIX.format(task_id=task_id)
-    res = gitcmd.git("log", "--format=%cI\x1f%s", branch, "--", path)
+    repo = workspace.task_repo(task_id)
+    res = gitcmd.in_repo(repo, "log", "--format=%cI\x1f%s", branch, "--", path)
     if res is not None and res.returncode == 0:
         for line in res.stdout.splitlines():
             ts, sep, subject = line.partition("\x1f")
@@ -190,7 +195,8 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
     """
     if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
         return None
-    base = gitcmd.diff_base(branch)
+    repo = workspace.task_repo(task_id)
+    base = gitcmd.diff_base(branch, repo=repo)
     if base is None:
         detail = (f"гейт заявки мутации: git не ответил на определение базы "
                  f"сравнения (merge-base с origin/{config.MAIN_BRANCH} либо "
@@ -199,7 +205,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
         hint = (f"разберись, почему git не отвечает на merge-base "
                f"для {branch}, и повтори artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
-    files = gitcmd.diff_names(base, branch)
+    files = gitcmd.diff_names(base, branch, repo=repo)
     if files is None:
         detail = (f"гейт заявки мутации: git не ответил на список файлов "
                  f"диффа (база {base}...{branch}) — сверка заявки мутации "
@@ -217,7 +223,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
 
     per_file: list[str] = []
     for path in test_files:
-        head_source, head_reason = gitcmd.show(branch, path)
+        head_source, head_reason = gitcmd.show(branch, path, repo=repo)
         if head_source is None:
             # `gitcmd.show` возвращает `None` и на легитимное отсутствие
             # пути в HEAD (файл удалён — требование 2), и на сбой самого
@@ -230,7 +236,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
             # `gitcmd.ls_tree_files(branch, "tests")`: путь есть в дереве
             # HEAD — это сбой чтения независимо от текста причины; путь
             # реально отсутствует — легитимное удаление (требование 2).
-            tree = gitcmd.ls_tree_files(branch, "tests")
+            tree = gitcmd.ls_tree_files(branch, "tests", repo=repo)
             if tree is not None:
                 is_failure = path in tree
             else:
@@ -253,7 +259,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
             # Файл легитимно удалён в HEAD — заявку мутации сравнивать не
             # с чем, пропускаем (требование 2).
             continue
-        base_source, _ = gitcmd.show(base, path)
+        base_source, _ = gitcmd.show(base, path, repo=repo)
         missing = guard.test_functions_without_mutation_claim(
             base_source, head_source)
         if missing:
@@ -330,7 +336,8 @@ def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | Non
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return None
-    review_text, _ = gitcmd.show(branch, f"tasks/{task_id}/REVIEW.md")
+    repo = workspace.task_repo(task_id)
+    review_text, _ = gitcmd.show(branch, f"tasks/{task_id}/REVIEW.md", repo=repo)
     if review_text is None:
         return None
     meta = yamlmini.frontmatter(review_text) or {}
@@ -338,7 +345,8 @@ def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | Non
         return None
     review_ts, baseline_source = _reviewer_verdict_baseline(conn, task_id, branch)
     if review_ts is None:
-        review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+        review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md",
+                                     repo=repo)
         baseline_source = "последний коммит REVIEW.md"
     if review_ts is None:
         return None

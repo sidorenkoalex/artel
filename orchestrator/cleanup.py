@@ -5,7 +5,8 @@ import signal
 import socket
 import sys
 
-from . import config, fixation, gitcmd, lease, liveness, store, workspace
+from . import (config, fixation, gitcmd, lease, liveness, repo_context, store,
+               workspace)
 
 
 def artifacts_in_main(task_id: str) -> bool | None:
@@ -13,8 +14,11 @@ def artifacts_in_main(task_id: str) -> bool | None:
 
     Достаточно самого факта наличия: артефакты задачи, убитой после
     мержа, — история (docs/design.md §6), её не трогаем целиком.
+
+    Легаси-каталог `config.TASKS/<id>` (задачи старше T094) лежит в рабочем
+    дереве главной копии — о нём и спрашивается её git, только чтением.
     """
-    res = gitcmd.git("ls-tree", "-r", "--name-only", config.MAIN_BRANCH, "--",
+    res = gitcmd.in_repo(config.ROOT, "ls-tree", "-r", "--name-only", config.MAIN_BRANCH, "--",
                      f"tasks/{task_id}")
     if res.returncode != 0:
         return None
@@ -27,7 +31,7 @@ def artifacts_tracked_here(task_id: str) -> bool | None:
     Смотрит индекс, а не дерево HEAD: закоммиченный в текущую ветку и
     просто добавленный `git add` каталоги одинаково опасны для rmtree.
     """
-    res = gitcmd.git("ls-files", "--", f"tasks/{task_id}")
+    res = gitcmd.in_repo(config.ROOT, "ls-files", "--", f"tasks/{task_id}")
     if res.returncode != 0:
         return None
     return bool(res.stdout.strip())
@@ -51,7 +55,7 @@ def drop_task_dir(task_id: str) -> str:
     if tracked is None:
         return f"каталог tasks/{task_id}/ оставлен: индекс не прочитан"
     if tracked:
-        here = gitcmd.current_branch()
+        here = gitcmd.current_branch(config.ROOT)
         fix = ("сними его из индекса и повтори kill"
                if here == config.MAIN_BRANCH
                else f"перейди на {config.MAIN_BRANCH} и повтори kill")
@@ -64,7 +68,26 @@ def drop_task_dir(task_id: str) -> str:
     return f"удалён каталог tasks/{task_id}/"
 
 
-def drop_task_branch(branch: str) -> str:
+def _merged_base(repo) -> str:
+    """Ревизия main клона для `--merged`: `origin/<база>` — push мержа
+    двигает её, локальную базу клона — нет."""
+    return f"origin/{_base_of(repo)}"
+
+
+def _merged(branch: str, repo) -> bool:
+    """Ветка влита в линию main клона: в `origin/<база>` (туда уходит мерж
+    пульта) либо в локальную базу клона."""
+    return (gitcmd.branch_merged(branch, repo, _merged_base(repo))
+            or gitcmd.branch_merged(branch, repo, _base_of(repo)))
+
+
+def _base_of(repo) -> str:
+    target = repo.parent.name if repo is not None else config.DEFAULT_TARGET
+    ctx = repo_context.resolve(target)
+    return ctx.base if ctx is not None else config.MAIN_BRANCH
+
+
+def drop_task_branch(branch: str, repo) -> str:
     """Убирает локальную ветку убитой задачи; строка — что вышло.
 
     Удаляется и ветка, целиком содержащаяся в main
@@ -90,21 +113,23 @@ def drop_task_branch(branch: str) -> str:
 
     Вызывается ПОСЛЕ уборки worktree (`workspace.remove`): ни `-d`, ни
     `-D` не удалят ветку, пока её держит worktree (SPEC T045,
-    требование 5).
+    требование 5). `repo` — клон проекта задачи (ADR-0021 п.1).
     """
     if not branch:
         # Строка задачи из БД прошлых версий: ветка не записана — искать нечего.
         return "ветка задачи не записана — нечего удалять"
-    if not gitcmd.branch_exists(branch):
+    if not gitcmd.branch_exists(branch, repo):
         return f"локальной ветки {branch} нет"
-    merged = gitcmd.branch_merged(branch)
-    res = gitcmd.git("branch", "-d" if merged else "-D", branch)
+    merged = _merged(branch, repo)
+    # `-D` и на влитой: `-d` сверяет с upstream/HEAD клона, а не с
+    # `origin/main`, куда ушёл мерж; влитость уже установлена выше.
+    res = gitcmd.in_repo(repo, "branch", "-D", branch)
     if res.returncode != 0:
         return f"ветка {branch} не удалена: {res.stderr.strip()[:200]}"
     return f"удалена {'влитая' if merged else 'неслитая'} ветка {branch}"
 
 
-def drop_merged_task_branch(branch: str) -> str:
+def drop_merged_task_branch(branch: str, repo) -> str:
     """Убирает ветку задачи, ТОЛЬКО ЧТО влитую в main (переход `merge_gate
     -> done`, tasks/T073/SPEC.md, требование 2): строка — что вышло.
 
@@ -117,12 +142,20 @@ def drop_merged_task_branch(branch: str) -> str:
     откажет, если ветка внезапно не влита — единственная защита, которая
     тут нужна. Вызывается ПОСЛЕ уборки worktree (`workspace.remove`) —
     `-d` не удалит ветку, пока её держит worktree.
+
+    В клоне проекта (ADR-0021 п.1) мерж уходит в `origin/<база>`, локальная
+    база клона его не несёт: влитость сверяется с `origin/<база>`
+    (`branch_merged`), и только влитая снимается — `-D` после этой сверки
+    играет роль прежнего `-d`.
     """
     if not branch:
         return "ветка задачи не записана — нечего удалять"
-    if not gitcmd.branch_exists(branch):
+    if not gitcmd.branch_exists(branch, repo):
         return f"локальной ветки {branch} нет"
-    res = gitcmd.git("branch", "-d", branch)
+    if not _merged(branch, repo):
+        return (f"ветка {branch} не удалена: не влита в "
+                f"{_merged_base(repo)}")
+    res = gitcmd.in_repo(repo, "branch", "-D", branch)
     if res.returncode != 0:
         return f"ветка {branch} не удалена: {res.stderr.strip()[:200]}"
     return f"удалена ветка {branch}"
@@ -139,12 +172,14 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
     """
     # Не `branch_exists`: кроме факта нужна причина — отсутствующий main и
     # неустановленный git разбираются Оператором по-разному.
-    main = gitcmd.git("rev-parse", "--verify", "--quiet",
-                      f"refs/heads/{config.MAIN_BRANCH}")
-    if main.returncode != 0:
-        reason = main.stderr.strip()[:200] or f"ветки {config.MAIN_BRANCH} нет"
+    repo = workspace.task_repo(task_id)
+    main = gitcmd.in_repo(repo, "rev-parse", "--verify", "--quiet",
+                          f"refs/heads/{_base_of(repo)}")
+    if main is None or main.returncode != 0:
+        reason = ((main.stderr.strip()[:200] if main is not None else "")
+                  or f"ветки {_base_of(repo)} нет")
         notes = [f"уборка пропущена: {reason} — сверять не с чем"]
-    elif gitcmd.current_branch() == branch:
+    elif gitcmd.current_branch(repo) == branch:
         # Агент шага работает в своём worktree (SPEC T045), а не в главной
         # копии, но Оператор мог руками зачекаутить ветку задачи в ROOT
         # (ADR-0003 3д — главная копия остаётся обычной рабочей копией
@@ -157,7 +192,7 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
         # Worktree — первым: ветку с `-D` не удалить, пока её держит
         # worktree (SPEC T045, требование 5, AC-5).
         notes = [workspace.remove(task_id), drop_task_dir(task_id),
-                 drop_task_branch(branch)]
+                 drop_task_branch(branch, repo)]
 
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
     for note in notes:

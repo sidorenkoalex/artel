@@ -420,21 +420,29 @@ class GatesDropPlankAfterRunTest(DocsDirSandbox):
                 self.assert_ran_and_dropped(self.wt)
 
     def test_review_autogate_of_external_target_drops_plank(self):
-        """Автогейт после ревью внешнего target — планки в его workspace нет.
+        """Автогейт после ревью внешнего target — планки в его рабочей копии
+        задачи нет.
 
         Сценарий: `_review_approved` внешнего target выкладывает планку в
-        workspace target'а на время автогейта; автогейт проходит штатно и
+        рабочую копию задачи target'а на время автогейта; автогейт проходит штатно и
         падает исключением — после обоих планки там нет.
 
         Ловит мутацию: `_review_approved` выкладывает планку
         `materialize_from_branch` без `plank_in_code_copy` — планка
         остаётся в рабочей копии кода внешнего target."""
-        code_dir = config.PROJECTS / "ext-proj" / "workspace"
+        # Рабочая копия задачи в области проекта (ADR-0021 п.1, этап 2),
+        # не общий `workspace/`.
+        code_dir = config.PROJECTS / "ext-proj" / "worktrees" / TASK
         for name, outcome in (("штатно", None),
                               ("исключение", RuntimeError("сбой автогейта"))):
             with self.subTest(outcome=name):
                 self.seen = []
+                # Клона `ext-proj` в песочнице нет: рабочая копия задачи
+                # подставлена заведённой — отказ `ensure` автогейт теперь
+                # не глотает (ревью 01M42PENCS26D0656X8FR7DFA7, R1-F3).
                 with mock.patch.object(store, "set_state"), \
+                        mock.patch.object(workspace, "ensure",
+                                          return_value=(code_dir, None)), \
                         mock.patch.object(
                             fsm_autogate, "_maybe_autogate_acceptance",
                             side_effect=self.observer(code_dir, outcome)):

@@ -36,10 +36,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artifact_branch, budget, catalog, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, snapshot, spend, store,
                           workspace)
-from tests.sandbox import (FakeProc, TmpRootTest,  # noqa: E402
+from tests.sandbox import (_REAL_RUN, FakeProc, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture,
                            capture_new_task_id, fake_git,
-                           make_project_repo, resilient_tmp_cleanup)
+                           link_artel_clone_to_root, make_project_repo,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,6 +71,24 @@ def fake_git_config(*args: str) -> subprocess.CompletedProcess:
     answers = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
     value = answers.get(args[-1], "") if args[:2] == ("config", "--get") else ""
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
+
+
+def git_config_else_real(*args: str) -> subprocess.CompletedProcess:
+    """Как `fake_git_config`, но заведение рабочей копии задачи в области
+    проектов (`-C <клон>`) исполняется по-настоящему: рабочую копию задачи в клоне проекта
+    (ADR-0021 п.1, этап 2) заводит настоящий `git worktree add`. Мимо
+    шпиона `subprocess.run` песочницы (`_REAL_RUN`): он отвечает на чтение
+    приватной ссылки fetch фейковым sha, и `worktree add` от него
+    отказывал бы."""
+    if (args[:1] == ("-C",) and str(args[1]).startswith(str(config.PROJECTS))
+            and args[2:3] and args[2] in _WORKTREE_SUBCOMMANDS):
+        return _REAL_RUN(["git", *args], capture_output=True, text=True)
+    return fake_git_config(*args)
+
+
+# Подкоманды заведения рабочей копии задачи (`workspace.ensure`): fetch базы
+# в приватную ссылку, её чтение и снятие, `worktree add`/`list`.
+_WORKTREE_SUBCOMMANDS = ("worktree", "fetch", "rev-parse", "update-ref")
 
 
 class _MultitargetInvariantsTmpRootTest(TmpRootTest):
@@ -136,9 +155,10 @@ class _MultitargetInvariantsTmpRootTest(TmpRootTest):
             _, task_id = capture_new_task_id(catalog.cmd_new, title)
             return task_id
 
-    def run_faked(self, task_id: str, lines=("готово\n",)) -> dict:
+    def run_faked(self, task_id: str, lines=("готово\n",),
+                  git=fake_git_config) -> dict:
         """Прогон `cmd_run` с подменённым git/Popen; возвращает kwargs Popen."""
-        with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
+        with mock.patch.object(runner.gitcmd, "git", git), \
                 mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(list(lines))
             capture(runner.cmd_run, task_id)
@@ -203,6 +223,10 @@ class PultArtifactIsolationTest(unittest.TestCase):
                             # реальный пульт (tests/sandbox.py, докстринг).
                             ("WORKTREES", self.root / ".artel" / "worktrees")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
+        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветка
+        # и ссылка документов задачи живут в клоне, сценарий сверяет их
+        # git'ом `self.root`.
+        link_artel_clone_to_root(self.root)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Изоляция артефактов")
@@ -223,12 +247,15 @@ class PultArtifactIsolationTest(unittest.TestCase):
         """Кладёт содержимое внешнего target: артефакты, знания, логи, клон."""
         base = config.PROJECTS / target
         for sub, name in (("tasks/T001", "SPEC.md"), ("knowledge", "map.md"),
-                          ("logs", "run.log"), ("workspace", "README.md")):
+                          ("logs", "run.log"), ("repo", "README.md"),
+                          ("worktrees/T001", "README.md")):
             path = base / sub
             path.mkdir(parents=True, exist_ok=True)
             (path / name).write_text("маркер внешнего target", encoding="utf-8")
 
     def test_gitignore_covers_dot_artel_wholesale(self):
+        """Ловит мутацию: `.artel/` выпал из `.gitignore` пульта — область
+        проектов (клоны, рабочие копии задач) всплыла бы в git пульта."""
         text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".artel/", text.splitlines())
 
@@ -242,7 +269,11 @@ class PultArtifactIsolationTest(unittest.TestCase):
         return [line for line in self.status().splitlines() if ".artel" in line]
 
     def test_external_artifacts_never_appear_in_git_status(self):
-        """Требование 1: артефакты внешнего target не всплывают ни на одном шаге."""
+        """Требование 1: артефакты внешнего target не всплывают ни на одном шаге.
+
+        Ловит мутацию: область проекта (клон `repo/`, рабочая копия задачи
+        `worktrees/<id>/`, ADR-0021 п.1, п.12) заводится вне `.artel/` и
+        всплывает в `git status` пульта."""
         self.assertEqual(self.artel_lines(), [], "чисто до записи внешних артефактов")
 
         self.drop_external_artifacts()
@@ -313,26 +344,35 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         (`config.DEFAULT_TARGET`) по-прежнему работает в собственном
         git worktree кодовой ветки задачи (`workspace.ensure`, SPEC
         T045), не во внешнем `.artel/projects/artel/workspace`
-        (тот остаётся каталогом артефактной механики M1, не кода)."""
+        (тот остаётся каталогом артефактной механики M1, не кода).
+
+        Ловит мутацию: рабочий каталог роли артели остаётся в
+        `.artel/worktrees/<id>` главной копии, а не в рабочей копии клона
+        `.artel/projects/artel/worktrees/<id>` (ADR-0021 п.1, п.12)."""
         self.new_task("T001", config.DEFAULT_TARGET, "Артель")
 
         kwargs = self.run_faked("T001")
 
-        expected = config.WORKTREES / "T001"
+        expected = config.PROJECTS / config.DEFAULT_TARGET / "worktrees" / "T001"
         self.assertEqual(kwargs["cwd"], expected)
         self.assertNotEqual(kwargs["cwd"], config.ROOT)
 
     def test_external_target_cwd_is_its_workspace(self):
-        """Требование 2: внешний target — рабочий каталог только его workspace."""
+        """Требование 2: внешний target — рабочий каталог только его
+        рабочая копия задачи.
+
+        Ловит мутацию: рабочий каталог роли внешнего проекта — общий
+        `workspace/`, а не рабочая копия задачи `.artel/projects/<имя>/
+        worktrees/<id>` (ADR-0021 п.1, п.12), либо её не заводит пульт."""
         task_id = self.second_target("sled", 1)
         self.new_task(task_id, "sled", "Внешний target")
 
-        kwargs = self.run_faked(task_id)
+        kwargs = self.run_faked(task_id, git=git_config_else_real)
 
-        expected = config.PROJECTS / "sled" / "workspace"
+        expected = config.PROJECTS / "sled" / "worktrees" / task_id
         self.assertEqual(kwargs["cwd"], expected)
         self.assertTrue(expected.is_dir(),
-                        "каталог workspace заводит пульт, а не CLI на ходу")
+                        "рабочую копию задачи заводит пульт, а не CLI на ходу")
 
     def test_pult_root_marker_is_unreachable_from_external_workspace_cwd(self):
         """Негативный тест (критерий 3 SPEC): маркер в конфигах пульта.
@@ -341,6 +381,9 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         (SPEC T020 «Не входит»), поэтому единственная линия защиты сейчас —
         cwd: CLAUDE.md пульта физически не лежит в каталоге, откуда стартует
         роль внешнего target.
+
+        Ловит мутацию: рабочий каталог роли внешнего проекта съезжает на
+        корень пульта (ADR-0021 п.12: каталог роли — `worktrees/<id>/`).
         """
         (config.ROOT / "CLAUDE.md").write_text(
             "НЕДОВЕРЕННЫЙ маркер пульта — если ты это читаешь, изоляция сломана",

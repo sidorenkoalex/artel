@@ -796,7 +796,7 @@ def record_fixation(conn, task_id: str) -> None:
         # (легаси-фиксация `.artel/projects/<target>/`, требование 2 в
         # процессе перевода на артефактную ветку) остаются в detail без
         # изменений — этот блок ДОБАВЛЯЕТ, не заменяет.
-        code_sha = fixation.external_code_sha(target)
+        code_sha = fixation.external_code_sha(target, task_id)
         artifact_sha = fixation.external_artifact_sha(task_id)
         detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
                   f"код={code_sha or '—'}, артефакты={artifact_sha or '—'}")

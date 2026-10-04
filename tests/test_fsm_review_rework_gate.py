@@ -15,7 +15,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import fsm_advance, gitcmd, store  # noqa: E402
-from tests.sandbox import SchemaConnTmpRootTest, TmpRootTest  # noqa: E402
+from tests.sandbox import (SchemaConnTmpRootTest, TmpRootTest,  # noqa: E402
+                           strip_dash_c)
 
 TASK_ID = "T001"
 BRANCH = "artifact/t001"
@@ -31,6 +32,9 @@ def _git_log(lines: str, returncode: int = 0):
     """`gitcmd.git("log", "--format=%cI\\x1f%s", ...)` отвечающий `lines`
     ровно на подкоманду `log`; всё остальное здесь не зовётся."""
     def fake(*args):
+        # Сквозь `-C <клон>`: git задачи идёт с явным репозиторием
+        # (ADR-0021 п.1, этап 2).
+        args = strip_dash_c(args)
         if args and args[0] == "log":
             return subprocess.CompletedProcess(list(args), returncode,
                                                lines, "")
@@ -156,6 +160,8 @@ class ReviewReworkGateFallbackTest(TmpRootTest):
         (фильтр по пути REVIEW.md) и по `-1` (последний коммит для
         fallback `_commit_iso_date`)."""
         def fake(*args):
+            # Сквозь `-C <клон>` (ADR-0021 п.1, этап 2).
+            args = strip_dash_c(args)
             if args[0] == "log" and "-1" in args:
                 return subprocess.CompletedProcess(
                     list(args), 0, "2026-08-01T10:00:00+00:00\n", "")
@@ -179,7 +185,7 @@ class ReviewReworkGateFallbackTest(TmpRootTest):
         developer_before_fallback = _log_reply("код фикса",
                                                "2026-07-31T10:00:00+00:00")
         with mock.patch.object(gitcmd, "show",
-                              lambda *a: (REVIEW_MD_CHANGES_REQUESTED, "")), \
+                              lambda *a, **k: (REVIEW_MD_CHANGES_REQUESTED, "")), \
              mock.patch.object(gitcmd, "git",
                               self._fake_git(developer_before_fallback)):
             refused = fsm_advance._review_rework_gate_refuses(
@@ -209,7 +215,7 @@ class ReviewReworkGateFallbackTest(TmpRootTest):
         developer_before_fallback = _log_reply("код фикса",
                                                "2026-07-31T10:00:00+00:00")
         with mock.patch.object(gitcmd, "show",
-                              lambda *a: (REVIEW_MD_CHANGES_REQUESTED, "")), \
+                              lambda *a, **k: (REVIEW_MD_CHANGES_REQUESTED, "")), \
              mock.patch.object(gitcmd, "git",
                               self._fake_git(developer_before_fallback)):
             refused = fsm_advance._review_rework_gate_refuses(

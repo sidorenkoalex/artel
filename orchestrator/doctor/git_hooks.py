@@ -117,3 +117,76 @@ def _fix_git_hooks() -> None:
     if missing:
         detail += f"; нет файлов: {', '.join(missing)}"
     print(f"  [FIX] {GIT_HOOKS_CHECK}: {detail}")
+
+
+# --- хуки клонов проектов (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 6,
+# AC-11) ----------------------------------------------------------------
+# Клон проекта (`.artel/projects/<имя>/repo`) и его рабочие копии задач
+# берут хуки защиты main из ПИНА пульта — абсолютный `<config.ROOT>/
+# scripts/git-hooks`, не `scripts/git-hooks` проверяемого кода клона:
+# относительный путь git считал бы от рабочего дерева клона, и хуки
+# приходили бы из кода задачи.
+
+CLONE_HOOKS_CHECK = "clone-hooks"
+PROJECT_CLONES_CHECK = "project-clones"
+
+
+def _project_names() -> list:
+    try:
+        return list(doctor.targets.load())
+    except doctor.targets.TargetsError:
+        return []
+
+
+def _clone_hooks_value(clone) -> str:
+    res = doctor.gitcmd.in_repo(clone, "config", "--get", "core.hooksPath")
+    if res is None or res.returncode != 0:
+        return ""
+    return res.stdout.strip()
+
+
+def check_clone_hooks() -> list:
+    """Строка на каждый проект `targets.yaml`: клона нет — `warn`
+    (`doctor --fix` заведёт); `core.hooksPath` клона не задан или не равен
+    абсолютному пути пина — `warn` с именем проекта и клона."""
+    expected = str(doctor.workspace.hooks_path())
+    missing, wrong = [], []
+    for name in _project_names():
+        clone = doctor.workspace.repo(name)
+        if not clone.exists():
+            missing.append(f"{name}: клона {clone} нет")
+            continue
+        value = _clone_hooks_value(clone)
+        if value != expected:
+            wrong.append(f"клон {name} ({clone}): core.hooksPath = "
+                         f"{value or '(не задан)'}, ожидается {expected}")
+    checks = [doctor.Check(PROJECT_CLONES_CHECK, "warn",
+                           "; ".join(missing) + " — заведи: doctor --fix")
+              if missing else
+              doctor.Check(PROJECT_CLONES_CHECK, "ok", "клоны проектов на месте")]
+    checks.append(doctor.Check(CLONE_HOOKS_CHECK, "warn",
+                               "; ".join(wrong) + " — почини: doctor --fix")
+                  if wrong else
+                  doctor.Check(CLONE_HOOKS_CHECK, "ok",
+                               f"core.hooksPath клонов = {expected}"))
+    return checks
+
+
+def _fix_project_clones() -> None:
+    """`doctor --fix`: недостающий клон каждого проекта заводится
+    (`workspace.ensure_clone`, хуки пина ставятся там же); существующему —
+    `core.hooksPath` = абсолютный путь пина, если стоит другое значение."""
+    expected = str(doctor.workspace.hooks_path())
+    for name in _project_names():
+        clone = doctor.workspace.repo(name)
+        if not clone.exists():
+            _path, error = doctor.workspace.ensure_clone(name)
+            print(f"  [FIX] {PROJECT_CLONES_CHECK}: "
+                  + (error if error else f"заведён клон {name} — {clone}"))
+            continue
+        if _clone_hooks_value(clone) == expected:
+            continue
+        error = doctor.workspace.set_clone_hooks(clone)
+        print(f"  [FIX] {CLONE_HOOKS_CHECK}: "
+              + (f"клон {name}: {error}" if error
+                 else f"клон {name}: core.hooksPath = {expected}"))
