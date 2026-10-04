@@ -74,6 +74,23 @@ def set_clone_hooks(clone: Path) -> str | None:
     return None
 
 
+def inherit_identity(clone: Path) -> None:
+    """Идентичность коммитера главной копии (`runner.git_identity`: её
+    `git config --get user.name/user.email`, локальный слой и глобальный) —
+    в локальный конфиг клона. `git clone` локальный конфиг не переносит, а
+    коммиты задачи (подтяжка `main`, мерж, чекпоинты), шедшие до этапа 2 в
+    главной копии с её идентичностью, теперь идут в клоне и его рабочих
+    копиях: без переноса там, где идентичность задана только в главной
+    копии, они отказывали бы «Committer identity unknown». Не задана и в
+    главной копии — клону нечего переносить, прежний исход git."""
+    from . import runner  # лениво: `runner` импортирует этот модуль
+    identity = runner.git_identity()
+    for option, names in runner.GIT_IDENTITY:
+        value = identity.get(names[-1])
+        if value:
+            gitcmd.in_repo(clone, "config", option, value)
+
+
 def ensure_clone(target: str) -> tuple[Path, str | None]:
     """Клон проекта `target` есть; (путь, причина отказа) — `None` при
     успехе. Существующий каталог клона не трогается вовсе (повторный вызов
@@ -99,6 +116,7 @@ def ensure_clone(target: str) -> tuple[Path, str | None]:
     hooks_error = set_clone_hooks(clone)
     if hooks_error is not None:
         return clone, f"клону {clone} не поставлены хуки: {hooks_error}"
+    inherit_identity(clone)
     return clone, None
 
 

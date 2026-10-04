@@ -40,7 +40,8 @@ class VerifyingCeilingTest(FsmTest):
         принципу «уже прошло»), не завершённо-красный (не тот стоп)."""
         patcher = mock.patch.object(
             ci, "verifying_status",
-            lambda branch: (ci.VERIFYING_RUNNING,
+            # `repo` — клон проекта задачи (ADR-0021 п.1, этап 2).
+            lambda branch, repo=None: (ci.VERIFYING_RUNNING,
                             "CI коммита aaaaaaaa ещё идёт: python"))
         patcher.start()
         self.addCleanup(patcher.stop)

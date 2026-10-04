@@ -23,10 +23,11 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (artifact_branch, catalog, config,  # noqa: E402
                           context_package, gitcmd, review, runner, stack,
-                          store)
+                          store, workspace)
 from tests.sandbox import (FakeProc, RealGitSandbox, SpyRun,  # noqa: E402
                            TmpRootTest, _stub_check_stack, capture,
-                           capture_new_task_id)
+                           capture_new_task_id, seed_artel_clone_stub,
+                           strip_dash_c)
 
 SPEC_MD = """---
 task: T001
@@ -114,8 +115,15 @@ class FakeGit:
         # `--stat`/полный diff ветки; по умолчанию «карта свежа» (пусто).
         self.map_diff = map_diff
         self.calls: list[list[str]] = []
+        # Те же вызовы как есть, с парой `-C <репозиторий>`: где именно
+        # исполнен git — клон, рабочая копия задачи (ADR-0021 п.1, этап 2).
+        self.raw_calls: list[list[str]] = []
 
     def __call__(self, *args: str) -> subprocess.CompletedProcess:
+        # git задачи адресован клону проекта явно (`-C <клон>`, ADR-0021
+        # п.1, этап 2): заглушка разбирает и помнит подкоманду сквозь пару.
+        self.raw_calls.append(list(args))
+        args = strip_dash_c(args)
         self.calls.append(list(args))
         if args and args[0] == self.raises_on:
             raise UnicodeDecodeError("utf-8", b"caf\xe9 na\xefve", 3, 4,
@@ -362,10 +370,15 @@ class ReviewPackageTest(unittest.TestCase):
         self.artifact_branch = artifact_branch.branch_name(self.TASK)
         for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks"),
                             ("WORKTREES", self.root / ".artel" / "worktrees"),
-                            ("DB", self.root / ".artel" / "state.db")):
+                            ("DB", self.root / ".artel" / "state.db"),
+                            # Область проектов (ADR-0021 п.1, этап 2): ссылка
+                            # документов задачи живёт в клоне артели — он в
+                            # песочнице, git по-прежнему заглушка.
+                            ("PROJECTS", self.root / ".artel" / "projects")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        seed_artel_clone_stub()
         # `review_package` журналирует ANSWER-компоненты через `conn`
         # (tasks/01M1NBWRTAHSX9FQGTQWENY80A) — своя песочная БД, чтобы не
         # задеть настоящую `state.db` пульта. `migrate()` внутри `store.db()`
@@ -402,11 +415,17 @@ class ReviewPackageTest(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
+    def step_workdir(self) -> Path:
+        """Рабочий каталог шага задачи — её рабочая копия в области
+        проекта (`workspace.path`, ADR-0021 п.1, этап 2; было
+        `config.WORKTREES/<id>`)."""
+        return workspace.path(self.TASK, config.DEFAULT_TARGET)
+
     def put_in_step_workdir(self, rel: str, text: str) -> Path:
         """Файл в каталог `tasks/<id>/` РАБОЧЕГО КАТАЛОГА ШАГА — откат трёх
         артефактов задачи (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 1):
         главная копия пульта их источником быть перестала."""
-        path = config.WORKTREES / self.TASK / rel
+        path = self.step_workdir() / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return path
@@ -634,14 +653,14 @@ class ReviewPackageTest(unittest.TestCase):
         `filename` целиком, и путь рабочего каталога шага утекает в пакет.
         """
         del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
-        (config.WORKTREES / self.TASK / "tasks" / self.TASK
+        (self.step_workdir() / "tasks" / self.TASK
          / "PLAN.md").mkdir(parents=True)
 
         text = self.build()["text"]
 
         self.assertIn("не показан", text)
         self.assertIn("IsADirectoryError", text, "класс сбоя назван")
-        self.assertNotIn(str(config.WORKTREES), text,
+        self.assertNotIn(str(self.step_workdir()), text,
                          "абсолютного пути в тексте части быть не должно")
 
     def test_review_form_is_part_of_the_package(self):
@@ -846,10 +865,15 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                             # непропатченный `WORKTREES` утёк бы на
                             # реальный worktree пульта (тот же довод, что у
                             # `PreviousVerdictShaTest` в этом же модуле).
-                            ("WORKTREES", root / ".artel" / "worktrees")):
+                            ("WORKTREES", root / ".artel" / "worktrees"),
+                            # Область проектов (ADR-0021 п.1, этап 2): `new`
+                            # без клона артели отказывает, ссылка документов
+                            # задачи живёт в клоне — он в песочнице.
+                            ("PROJECTS", root / ".artel" / "projects")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        seed_artel_clone_stub()
 
         # Артефакты живут в ветке задачи; рабочее дерево здесь на них не
         # похоже — так же, как у оркестратора после мержа соседней задачи.
@@ -925,6 +949,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # буквальным списком `self.git.calls` (например,
         # `test_developer_step_has_no_package`).
         self.git.calls.clear()
+        self.git.raw_calls.clear()
         self.tdir = config.TASKS / self.TASK
 
     capture = staticmethod(capture)
@@ -1072,6 +1097,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         трогаем — это не diff пакета.
         """
         def diff_broken(*args):
+            args = strip_dash_c(args)
             if args and args[0] == "diff" and "--name-only" not in args:
                 return subprocess.CompletedProcess(
                     list(args), 1, "", "fatal: bad revision")
@@ -1106,6 +1132,9 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         Ловит мутацию: собрать ревью-пакет (или прочитать diff ветки
         `show`) в шаге роли developer — либо перестать забирать
         автокоммитом PLAN.md из каталога документов — и тест покраснеет."""
+        # Рабочая копия задачи в области проекта (ADR-0021 п.1, этап 2):
+        # `workspace.ensure` подменена, каталог чекпоинту заводим сами.
+        workspace.path(self.TASK).mkdir(parents=True)
         _, argv = self.run_agent("in_dev")
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
@@ -1172,49 +1201,56 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # удаление), сверка PLAN.md с головой, запись ссылки и её отправка
         # в `origin`, затем чтение головы ссылки и кодовой ветки
         # перефиксацией.
-        wt = str(config.WORKTREES / self.TASK)
+        # С этапа 2 ADR-0021 (п.1) каждый git-вызов шага адресован явно:
+        # ветка, рабочая копия и ссылка документов задачи — в клоне артели,
+        # чекпоинт — в рабочей копии задачи `worktrees/<id>`, скилы,
+        # CLAUDE.md и свежесть карты — голова `main` самого пульта.
+        clone = str(workspace.repo(config.DEFAULT_TARGET))
+        wt = str(workspace.path(self.TASK))
+        root = str(config.ROOT)
         ref = f"refs/artifacts/{self.TASK}"
         code_branch = store.get_task(store.db(), self.TASK)["branch"]
-        self.assertEqual(self.git.calls,
-                         [["worktree", "list", "--porcelain"],
-                          ["show", "main:skills/conventions-core.md"],
-                          ["show", "main:skills/escalation-rules.md"],
-                          ["show", "main:skills/coding-standards.md"],
-                          ["show", f"refs/artifacts/{self.TASK}:"
+        self.assertEqual(self.git.raw_calls,
+                         [["-C", clone, "worktree", "list", "--porcelain"],
+                          ["-C", root, "show", "main:skills/conventions-core.md"],
+                          ["-C", root, "show", "main:skills/escalation-rules.md"],
+                          ["-C", root, "show", "main:skills/coding-standards.md"],
+                          ["-C", clone, "show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/SPEC.md"],
-                          ["diff", "--name-only",
+                          ["-C", root, "diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
-                          ["show", "main:CLAUDE.md"],
-                          ["show", f"refs/artifacts/{self.TASK}:"
+                          ["-C", root, "show", "main:CLAUDE.md"],
+                          ["-C", clone, "show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/PLAN.md"],
-                          ["show", f"refs/artifacts/{self.TASK}:"
+                          ["-C", clone, "show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/REVIEW.md"],
-                          ["ls-tree", "-r", "--name-only",
+                          ["-C", clone, "ls-tree", "-r", "--name-only",
                            f"refs/artifacts/{self.TASK}", "--",
                            f"tasks/{self.TASK}"],
                           ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"],
-                          ["rev-parse", "--verify", "--quiet",
+                          ["-C", clone, "rev-parse", "--verify", "--quiet",
                            f"refs/artifacts/{self.TASK}"],
                           ["-C", wt, "add", "-A"],
                           ["-C", wt, "reset", "-q", "--",
                            f"tasks/{self.TASK}"],
                           ["-C", wt, "diff", "--cached", "--quiet"],
-                          ["rev-parse", "--verify", "--quiet", ref],
-                          ["ls-tree", "-r", "--name-only", ref, "--",
-                           f"tasks/{self.TASK}"],
-                          ["log", "-1", "--format=%s", ref, "--",
+                          ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
+                          ["-C", clone, "ls-tree", "-r", "--name-only", ref,
+                           "--", f"tasks/{self.TASK}"],
+                          ["-C", clone, "log", "-1", "--format=%s", ref, "--",
                            f"tasks/{self.TASK}/SPEC.md"],
-                          ["show", f"{ref}:tasks/{self.TASK}/PLAN.md"],
-                          ["rev-parse", "--verify", "--quiet", ref],
-                          ["update-ref", ref, "f" * 40, "0" * 40],
-                          ["remote", "get-url", "origin"],
-                          ["-C", str(config.ROOT), "remote"],
-                          ["push", "-q", "origin", f"{ref}:{ref}"],
-                          ["rev-parse", "--verify", "--quiet", ref],
-                          ["rev-parse", "--verify", "--quiet",
+                          ["-C", clone, "show",
+                           f"{ref}:tasks/{self.TASK}/PLAN.md"],
+                          ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
+                          ["-C", clone, "update-ref", ref, "f" * 40, "0" * 40],
+                          ["-C", clone, "remote", "get-url", "origin"],
+                          ["-C", clone, "remote"],
+                          ["-C", clone, "push", "-q", "origin", f"{ref}:{ref}"],
+                          ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
+                          ["-C", clone, "rev-parse", "--verify", "--quiet",
                            f"refs/heads/{code_branch}"]],
                          "diff разработчику не собирается")
 
@@ -1308,6 +1344,7 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
         чужим, уже принятым правкам.
         """
         def broken_log(*args):
+            args = strip_dash_c(args)
             if args and args[0] == "log":
                 return subprocess.CompletedProcess(list(args), 1, "",
                                                    "fatal: bad revision")
@@ -1491,6 +1528,7 @@ class EmptyIncrementPackageTest(ReviewPackageTest):
         calls = []
 
         def broken_full_diff(*args):
+            args = strip_dash_c(args)
             if args and args[0] == "diff" and "." in args:
                 calls.append(list(args))
                 return subprocess.CompletedProcess(list(args), 1, "",
@@ -1689,6 +1727,20 @@ class AnswerRelsTest(unittest.TestCase):
     """`review._answer_rels` — все `ANSWER-n.md` артефактной ветки, по
     возрастанию `n` (tasks/01M1NBWRTAHSX9FQGTQWENY80A, AC-1)."""
 
+    def setUp(self):
+        # Ссылка документов задачи живёт в клоне артели (ADR-0021 п.1,
+        # этап 2): область проектов и БД — в песочнице, клон — пустая
+        # заготовка, git по-прежнему заглушка.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for attr, value in (("PROJECTS", root / ".artel" / "projects"),
+                            ("DB", root / ".artel" / "state.db")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        seed_artel_clone_stub()
+
     def test_sorted_by_number_not_by_ls_tree_order(self):
         """`ls_tree_files` вернул ANSWER-файлы в произвольном порядке
         (2, 10, 1) — результат обязан идти по возрастанию числового `n`.
@@ -1775,10 +1827,15 @@ class AnswerComponentsInReviewPackageTest(unittest.TestCase):
         # в `.artel/worktrees` настоящего репозитория пульта.
         for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks"),
                             ("WORKTREES", self.root / ".artel" / "worktrees"),
-                            ("DB", self.root / ".artel" / "state.db")):
+                            ("DB", self.root / ".artel" / "state.db"),
+                            # Область проектов (ADR-0021 п.1, этап 2): ссылка
+                            # документов задачи живёт в клоне артели — он в
+                            # песочнице, git по-прежнему заглушка.
+                            ("PROJECTS", self.root / ".artel" / "projects")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        seed_artel_clone_stub()
         self.conn = store.db()
         store.create_schema(self.conn)
         self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
@@ -1957,6 +2014,7 @@ class GitDiffPartPathspecTest(unittest.TestCase):
 
     def _capturing_git(self, calls: list) -> callable:
         def git(*args) -> subprocess.CompletedProcess:
+            args = strip_dash_c(args)
             calls.append(list(args))
             return subprocess.CompletedProcess(list(args), 0, "diff --git a b", "")
         return git

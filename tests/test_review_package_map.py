@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import config, gitcmd, review, store  # noqa: E402
 from orchestrator.advance_gates import capacity  # noqa: E402
+from tests.sandbox import strip_dash_c  # noqa: E402
 
 TASK = "T001"
 BRANCH = "task/t001-karta"
@@ -64,7 +65,9 @@ class PathspecAwareGit:
         self.diff_calls: list[list[str]] = []
 
     def __call__(self, *args) -> subprocess.CompletedProcess:
-        argv = list(args)
+        # git задачи адресован клону проекта явно (`-C <клон>`, ADR-0021
+        # п.1, этап 2): подкоманда разбирается сквозь пару.
+        argv = list(strip_dash_c(args))
         if argv[:1] == ["show"]:
             # Артефактов задачи в этой песочнице нет — пакет честно
             # отметит «не показан», состава diff это не касается.

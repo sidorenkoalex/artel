@@ -19,7 +19,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import (capture, link_artel_clone_to_root,  # noqa: E402
+from tests.sandbox import (_PROJECT_TARGET_ENTRY,  # noqa: E402
+                           RealGitSandbox, capture, link_artel_clone_to_root,
                            resilient_tmp_cleanup, strip_dash_c)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -406,6 +407,41 @@ class CmdWorkspaceLeaseTest(RealGitWorkspaceTest):
 
         self.assertIsNone(store.lease_row(store.db(), self.TASK),
                           "cmd_workspace не отпустила взятый ею с нуля lease")
+
+
+class CloneIdentityTest(RealGitSandbox):
+    """Клон, заведённый пультом (`workspace.ensure_clone`), несёт
+    идентичность коммитера главной копии: `git clone` локальный конфиг не
+    переносит, а коммиты задачи (подтяжка `main`, мерж, чекпоинты) с этапа 2
+    ADR-0021 (п.1) идут в клоне и его рабочих копиях."""
+
+    ARTEL_CLONE_IS_ROOT = False
+
+    def test_clone_inherits_the_main_copy_identity(self):
+        """Ловит мутацию: `ensure_clone` не переносит идентичность главной
+        копии в локальный конфиг клона (или пишет её не под тем ключом) —
+        там, где `user.name`/`user.email` заданы только в главной копии
+        (песочницы CI), подтяжка `main` и мерж в клоне отказывали бы
+        «Committer identity unknown»."""
+        origin = self.root.parent / f"{self.root.name}-origin.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(self.root),
+                        str(origin)], check=True, capture_output=True)
+        self.addCleanup(shutil.rmtree, origin, True)
+        config.TARGETS.write_text(
+            "targets:\n" + _PROJECT_TARGET_ENTRY.format(
+                name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH).replace(
+                f"file:///nonexistent/{config.DEFAULT_TARGET}", str(origin)),
+            encoding="utf-8")
+
+        clone, error = workspace.ensure_clone(config.DEFAULT_TARGET)
+
+        self.assertIsNone(error)
+        for key, value in (("user.name", "artel tests"),
+                           ("user.email", "artel@example.invalid")):
+            res = subprocess.run(["git", "-C", str(clone), "config",
+                                  "--local", "--get", key],
+                                 capture_output=True, text=True)
+            self.assertEqual(res.stdout.strip(), value, key)
 
 
 if __name__ == "__main__":

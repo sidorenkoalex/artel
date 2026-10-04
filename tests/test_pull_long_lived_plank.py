@@ -169,10 +169,11 @@ class PullLongLivedPlankTest(TmpRootTest):
                                                     encoding="utf-8")
         manifest_rel = self.manifest_rel
 
-        def ls_tree(branch, rel):
+        def ls_tree(branch, rel, repo=None):
+            # `repo` — клон проекта задачи (ADR-0021 п.1, этап 2).
             if rel == manifest_rel:
                 return None
-            return disk_backed_ls_tree_files(branch, rel)
+            return disk_backed_ls_tree_files(branch, rel, repo=repo)
 
         with mock.patch.object(gitcmd, "ls_tree_files", ls_tree):
             outcome = self.evaluate()

@@ -717,9 +717,7 @@ class CmdRunCostTest(TmpRootTest):
         # попытка (rc=0) честно ретраится вместо одного тихого прогона,
         # которого ждут тесты этого класса (они проверяют учёт денег, не
         # факт отказа без артефакта).
-        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
+        self.seed_plan_marker()
 
         patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
         patcher.start()
@@ -742,8 +740,17 @@ class CmdRunCostTest(TmpRootTest):
                      (*fields.values(), self.TASK))
         conn.commit()
 
+    def seed_plan_marker(self) -> None:
+        """Маркер PLAN.md в каталоге документов задачи. Перед КАЖДЫМ шагом:
+        автокоммит шага уносит каталог в ссылку документов клона (ADR-0021
+        п.7, этап 2), а заглушка git ссылку обратно не материализует."""
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
+
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
+        self.seed_plan_marker()
         procs = [FakeProc(lines, rc) for rc, lines in attempts]
         with mock.patch.object(runner, "spawn_agent", side_effect=procs) as popen:
             out = self.capture(runner.cmd_run, self.TASK)

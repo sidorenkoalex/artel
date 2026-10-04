@@ -14,9 +14,14 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, fsm_advance, gitcmd, store  # noqa: E402
+from orchestrator import (artifact_branch, config, fsm_advance,  # noqa: E402
+                          gitcmd, store)
 from orchestrator.advance_gates import zones  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, strip_dash_c  # noqa: E402
+
+
+# Адрес клона проекта задачи для юнитов с подменённым git (ADR-0021 п.1).
+CLONE = Path("/nonexistent/projects/artel/repo")
 
 
 def _git_log_subject(subject: str, returncode: int = 0):
@@ -24,6 +29,9 @@ def _git_log_subject(subject: str, returncode: int = 0):
     ровно на подкоманду `log`; всё остальное — заглушка успехом (в
     тестах этого файла ей не пользуются)."""
     def fake(*args):
+        # Ссылка документов — в клоне проекта задачи, git адресован ему
+        # явно (`-C <клон>`, ADR-0021 п.1, этап 2).
+        args = strip_dash_c(args)
         if args and args[0] == "log":
             return subprocess.CompletedProcess(list(args), returncode,
                                                f"{subject}\n", "")
@@ -326,6 +334,14 @@ class AnswerCommitIsRoleStepAutocommitTest(unittest.TestCase):
     отличающий настоящий `cmd_answer` от подделки роли через автокоммит
     шага."""
 
+    def setUp(self):
+        # Ссылка документов задачи читается в клоне её проекта (ADR-0021
+        # п.1, этап 2); git подменён в каждом тесте — клон только адрес.
+        patcher = mock.patch.object(artifact_branch, "task_repo",
+                                    lambda task_id: CLONE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_role_step_autocommit_subject_is_detected(self):
         """Ловит мутацию: префикс `own_commit_marker` (`checkpoint.py`)
         не распознан — поддельный `ANSWER-99.md`, занесённый автокоммитом
@@ -372,6 +388,14 @@ class AnswerCommitIsRoleStepAutocommitTest(unittest.TestCase):
 class AnswerZonesMandateOriginTest(unittest.TestCase):
     """R2-F1: `_answer_zones_mandate` не засчитывает маркер из ANSWER-файла,
     чей последний коммит — доказанный автокоммит шага роли."""
+
+    def setUp(self):
+        # Ссылка документов задачи читается в клоне её проекта (ADR-0021
+        # п.1, этап 2); git подменён в каждом тесте — клон только адрес.
+        patcher = mock.patch.object(artifact_branch, "task_repo",
+                                    lambda task_id: CLONE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_marker_from_role_step_autocommit_is_not_counted(self):
         """Ловит мутацию: проверка происхождения не подключена в цикле

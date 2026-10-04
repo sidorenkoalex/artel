@@ -491,6 +491,10 @@ def own_commit_paths(base: str, branch: str, repo=None) -> tuple[list[str], str]
     пути пары, а само переименование как переименование по-прежнему
     показывает `git diff` — pathspec несёт обе стороны.
     """
+    if repo is None:
+        # Тот же умолчательный репозиторий, что у `git_diff_part`: клон
+        # артели, не `config.ROOT` и не `-C None` (ADR-0021 п.1, этап 2).
+        repo = workspace.repo(config.DEFAULT_TARGET)
     args = ("log", "--first-parent", "--no-merges", "--no-renames",
             "--format=", "--name-only", "-z", f"{base}..{branch}")
     try:

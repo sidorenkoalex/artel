@@ -654,6 +654,10 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
+    if repo_path is None:
+        # Не назван — клон проекта задачи, тот же адрес для сравнения и
+        # для `_doc_only_main_advance` (не `-C None` и не главная копия).
+        repo_path = workspace.repo(target_name)
     source = origin_main_source(target_name)
     source_branch = source[1] if source is not None else config.MAIN_BRANCH
     base = origin_main_sha(target_name)
