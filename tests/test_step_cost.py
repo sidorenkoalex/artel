@@ -26,7 +26,7 @@ from orchestrator import (agent_log, artifact_branch, budget, catalog,  # noqa: 
                           fsm, gitcmd, providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id, event,
-                           fake_git, sync_spec_from_worktree)
+                           fake_git, patch_sleep, sync_spec_from_worktree)
 
 
 def result_event(usd=0.5, **fields) -> str:
@@ -719,7 +719,7 @@ class CmdRunCostTest(TmpRootTest):
         # факт отказа без артефакта).
         self.seed_plan_marker()
 
-        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
+        patcher = patch_sleep(runner, lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -947,7 +947,7 @@ class CmdRunPartialCostTest(TmpRootTest):
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()
 
-        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
+        patcher = patch_sleep(runner, lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",

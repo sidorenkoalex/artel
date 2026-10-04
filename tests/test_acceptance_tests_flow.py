@@ -33,7 +33,8 @@ from tests.sandbox import (FakeProc, TmpDirTest, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git,
-                           link_artel_clone_to_root, resilient_tmp_cleanup)
+                           link_artel_clone_to_root, patch_sleep,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1123,7 +1124,7 @@ class EscalationReturnsToTestsWritingTest(TmpRootTest):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
-        sleep_patcher = mock.patch.object(runner.time, "sleep", lambda s: None)
+        sleep_patcher = patch_sleep(runner, lambda s: None)
         sleep_patcher.start()
         self.addCleanup(sleep_patcher.stop)
 

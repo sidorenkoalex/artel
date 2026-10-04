@@ -29,7 +29,7 @@ from orchestrator import (agent_log, alerts, auto, brief, budget,  # noqa: E402
                           pause, runner, store, zone_lock)
 from orchestrator.advance_gates import zones  # noqa: E402
 from tests.sandbox import seed_artel_clone_stub  # noqa: E402
-from tests.sandbox import (SpyRun, capture,  # noqa: E402
+from tests.sandbox import (SpyRun, TimeWithSleep, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
 
@@ -1226,9 +1226,14 @@ class WaitForZoneTest(AutoCycleTest):
         store.update_task(store.db(), self.TASK, zones="a/b")
 
     def test_exit_record_names_the_actual_last_holder_on_handoff(self):
-        """Ловит мутацию R1-F1: `occupier_id` не обновляется на каждой
-        итерации опроса — запись выхода назвала бы ПЕРВОНАЧАЛЬНОГО
-        держателя (T9AAA), хотя зону последним держал и освободил T9BBB."""
+        """R1-F1: запись выхода из ожидания называет держателя, последним
+        освободившего зону, а не первоначального.
+
+        Ловит мутацию: `occupier_id` не обновляется на каждой итерации
+        опроса (R1-F1) — запись выхода назвала бы ПЕРВОНАЧАЛЬНОГО
+        держателя (T9AAA), хотя зону последним держал и освободил T9BBB,
+        и `assertIn(second, ...)` покраснеет.
+        """
         first = self._seed_occupier("T9AAA", "a/b")
         second = self._seed_occupier("T9BBB", "a/b")
         calls = {"n": 0}
@@ -1240,7 +1245,7 @@ class WaitForZoneTest(AutoCycleTest):
             conn.execute("UPDATE tasks SET state='done' WHERE id=?", (released,))
             conn.commit()
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
 
@@ -1253,7 +1258,12 @@ class WaitForZoneTest(AutoCycleTest):
 
     def test_enter_and_exit_are_journaled_exactly_once(self):
         """AC-2/AC-3: ровно одна запись входа и ровно одна запись выхода —
-        независимо от числа опросов внутри ожидания."""
+        независимо от числа опросов внутри ожидания.
+
+        Ловит мутацию: запись входа «ждёт зоны …» перенесена внутрь цикла
+        опроса (пишется на каждой паузе) — записей входа станет три, и
+        `assertEqual(len(enters), 1)` покраснеет.
+        """
         occupier = self._seed_occupier("T9AAA", "a/b")
         calls = {"n": 0}
 
@@ -1264,7 +1274,7 @@ class WaitForZoneTest(AutoCycleTest):
                 conn.execute("UPDATE tasks SET state='done' WHERE id=?", (occupier,))
                 conn.commit()
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
 
@@ -1290,7 +1300,12 @@ class WaitForZoneTest(AutoCycleTest):
     def test_lease_lost_during_wait_stops_the_cycle_named(self):
         """R1-F2: чужая живая сессия перехватывает lease этой задачи прямо
         во время ожидания — цикл обязан остановиться именованной причиной,
-        не продолжать опрос как ни в чём не бывало."""
+        не продолжать опрос как ни в чём не бывало.
+
+        Ловит мутацию: проверка `lease.acquire` после паузы убрана из цикла
+        ожидания — опрос не остановится именованной причиной с
+        `sess-other`, и тест покраснеет.
+        """
         self._seed_occupier("T9AAA", "a/b")
 
         def fake_sleep(_):
@@ -1301,7 +1316,7 @@ class WaitForZoneTest(AutoCycleTest):
                 (self.TASK, "sess-other", 999, "other-host", store.now()))
             conn.commit()
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-mine", "in_dev")
 
@@ -1361,7 +1376,7 @@ class ZoneWaitStopTest(AutoCycleTest):
             auto._on_sigterm(signal.SIGTERM, None)
             slept_through.append(seconds)
 
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
 
@@ -1387,7 +1402,7 @@ class ZoneWaitStopTest(AutoCycleTest):
         следующего опроса (здесь — непустой список `sleeps`).
         """
         sleeps = []
-        self.patch_object(auto.time, "sleep", sleeps.append)
+        self.patch_object(auto, "time", TimeWithSleep(sleeps.append))
         auto._stop_requested = True
 
         result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
@@ -1425,7 +1440,7 @@ class ZoneWaitStopTest(AutoCycleTest):
 
         self.write_plan("draft")
         self.patch_object(runner, "cmd_run", cmd_run_refusing_busy_zone)
-        self.patch_object(auto.time, "sleep", fake_sleep)
+        self.patch_object(auto, "time", TimeWithSleep(fake_sleep))
 
         out = self.auto()
 
@@ -1479,7 +1494,7 @@ class ZoneWaitDefaultTest(AutoCycleTest):
         store.update_task(store.db(), self.TASK, zones=self.ZONE)
         self._seed_occupier(self.OCCUPIER, self.ZONE)
         self.patch_object(runner, "cmd_run", self._cmd_run_refusing_busy_zone)
-        self.patch_object(auto.time, "sleep", self._release_on_poll)
+        self.patch_object(auto, "time", TimeWithSleep(self._release_on_poll))
 
     # ------------------------------------------------------------ фикстура
 
