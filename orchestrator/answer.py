@@ -73,6 +73,24 @@ def _zones_mandate_marker_paths(raw: str) -> list[str]:
     return []
 
 
+def _test_mandate_marker_elements(raw: str) -> list[str]:
+    """Элементы ВСЕХ строк маркера `mandate.TEST_WEAKENING_MANDATE_MARKER`
+    («Ослабление тестов разрешено: …») в тексте файла ответа, в порядке
+    появления, без повторов; пустой список — маркера нет (SPEC
+    01M42NB9GKXNP74HAYEJ7C7CA8, требование 3).
+
+    Все строки, а не первая, как у мандата зон выше: гейт неослабления
+    (`test_integrity._answer_mandate`) засчитывает элементы каждой строки
+    файла, и журнал приёма обязан назвать ровно то, что гейт засчитает."""
+    found: list[str] = []
+    for line in raw.splitlines():
+        for element in mandate.elements(
+                line, mandate.TEST_WEAKENING_MANDATE_MARKER) or ():
+            if element not in found:
+                found.append(element)
+    return found
+
+
 def _read_answer_file(task_id: str, file_path: str) -> str:
     try:
         return Path(file_path).read_text(encoding="utf-8")
@@ -133,8 +151,11 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     принимается ТОЛЬКО если текст файла несёт строку маркера
     `fsm_advance._ZONES_MANDATE_MARKER` («Расширение зон разрешено:
     ...») — состояние задачи не меняется, журнал получает отдельную
-    запись с путями мандата (AC-1). Файл без маркера в этих состояниях,
-    как и любое другое состояние вне `escalated`, — прежний отказ,
+    запись с путями мандата (AC-1) — либо строку мандата тестов
+    («Ослабление тестов разрешено: ...», SPEC 01M42NB9GKXNP74HAYEJ7C7CA8,
+    требование 3), тогда запись называет его элементы. Файл без маркеров
+    в этих состояниях, как и любое другое состояние вне `escalated`, —
+    прежний отказ,
     прежнее сообщение (AC-2).
 
     Ветка `in_dev`/`review` отказывает ещё до чтения файла, если ТЕКУЩИЙ
@@ -157,6 +178,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     mandate_paths: list[str] = []
+    test_elements: list[str] = []
     if state == "escalated":
         raw = _read_checked_answer_file(task_id, file_path, t["branch"])
     elif state in ("in_dev", "review"):
@@ -166,7 +188,12 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
                      f"итерация 1, замечание R1-F1")
         raw = _read_checked_answer_file(task_id, file_path, t["branch"])
         mandate_paths = _zones_mandate_marker_paths(raw)
-        if not mandate_paths:
+        # Мандат тестов принимается здесь тем же рубежом и той же
+        # проверкой строк, что мандат зон (SPEC 01M42NB9GKXNP74HAYEJ7C7CA8,
+        # требование 3): иначе уточнить его в `in_dev` можно было только
+        # новой эскалацией developer — полным шагом роли.
+        test_elements = _test_mandate_marker_elements(raw)
+        if not mandate_paths and not test_elements:
             sys.exit(f"[{task_id}] answer доступна только для задачи в "
                      f"состоянии escalated (сейчас: {state})")
     else:
@@ -187,9 +214,15 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
                  f"ветку {branch}")
     store.record_fixation(conn, task_id)
 
-    if mandate_paths:
-        action = ("ANSWER создан (мандат на расширение зон: "
-                 f"{', '.join(mandate_paths)})")
+    if mandate_paths or test_elements:
+        kinds = []
+        if mandate_paths:
+            kinds.append(f"мандат на расширение зон: "
+                         f"{', '.join(mandate_paths)}")
+        if test_elements:
+            kinds.append(f"мандат на ослабление тестов: "
+                         f"{', '.join(test_elements)}")
+        action = f"ANSWER создан ({'; '.join(kinds)})"
     elif state == "escalated":
         # Требование 3: ответ эскалацию НЕ снимает — её снимает `approve`,
         # и до 26.09 журнал об этом ожидании не говорил, а цикл `auto`
