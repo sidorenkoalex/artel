@@ -123,7 +123,7 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
     if not wt.is_dir():
         pass
     elif role == "developer":
-        committed, sha, stray, _error = _commit_worktree_change(
+        committed, sha, stray, _error, _mandated = _commit_worktree_change(
             conn, task_id, wt, message, exclude=f"tasks/{task_id}")
         if stray:
             restore_out_of_bounds_deletions(conn, task_id, role, wt)
@@ -317,7 +317,7 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
                       f"{discard_detail} откачен — {discarded}")
     if not own:
         return ""
-    committed, sha, _stray, error = _commit_worktree_change(
+    committed, sha, _stray, error, _mandated = _commit_worktree_change(
         conn, task_id, wt, message, exclude=f"tasks/{task_id}")
     if not committed:
         # Без операции и текста git запись не объяснима по журналу (SPEC
@@ -420,6 +420,12 @@ def restore_out_of_bounds_deletions(conn, task_id: str, role: str,
     zones = _zone_paths(conn, task_id) if role == "developer" else []
     doomed = [rel for rel in deleted
               if not _role_may_delete(task_id, role, rel, zones)]
+    if zones:
+        # Удаление developer по мандату Оператора — правка в пределах
+        # разрешённого ему, как удаление в зонах (SPEC
+        # 01M446WN0V7JW4NSYQFKTBJ05C, требование 1).
+        mandated = _mandate_covered(task_id, doomed)
+        doomed = [rel for rel in doomed if rel not in mandated]
     if not doomed:
         return []
     restored, errors = [], []
@@ -749,7 +755,7 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     exclude = f"tasks/{task_id}"
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
-    committed, sha, stray, _error = _commit_worktree_change(
+    committed, sha, stray, _error, mandated = _commit_worktree_change(
         conn, task_id, wt, message, exclude=exclude)
     if stray:
         restore_out_of_bounds_deletions(conn, task_id, role, wt)
@@ -757,6 +763,11 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
         return ""
     summary = _commit_summary(wt, sha)
     detail = f"{summary} (sha {sha})" if sha else summary
+    # Пути по мандату Оператора — отдельно от путей зон (SPEC
+    # 01M446WN0V7JW4NSYQFKTBJ05C, требование 5): по записи видно, какие
+    # файлы вошли в коммит именно по мандату.
+    if mandated:
+        detail += f"; по мандату Оператора вне зон: {', '.join(mandated)}"
     store.journal(conn, task_id, "orchestrator", "код закоммичен пультом за роль",
                   detail)
     _record_step_fixation(conn, task_id)
@@ -1360,7 +1371,7 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
     что `auto._run_paused_refusal`), не по возврату этой функции.
     """
     message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
-    committed, sha, _stray, _error = _commit_worktree_change(
+    committed, sha, _stray, _error, _mandated = _commit_worktree_change(
         conn, task_id, wt, message, exclude=f"tasks/{task_id}",
         refuse_on_stray=True)
     if not committed:
@@ -1397,7 +1408,8 @@ def _zone_paths(conn, task_id: str) -> list[str]:
     """Зоны, в пределах которых WIP-чекпоинт вправе коммитить путь
     worktree (SPEC 01M290PVYG2VJK6442H5BAX9MA, AC-1): объявленные `zones`
     + `zones_extension` задачи, `config.COMMON_ZONES` и собственный
-    каталог `tasks/<id>/` (`task_dir_zone`).
+    каталог `tasks/<id>/` (`task_dir_zone`). Мандат Оператора на пути вне
+    зон сюда не вливается — его поверх применяет `_mandate_covered`.
 
     Задача, ни разу не заявившая зону (`zones` и `zones_extension` оба
     пусты — SPEC старой версии до `guard.requires_zones`, либо тестовая
@@ -1432,6 +1444,36 @@ def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
         if rel and not any(zone_lock._paths_overlap(rel, z) for z in zones):
             stray.append(rel)
     return stray
+
+
+def _mandate_covered(task_id: str, paths: list[str]) -> list[str]:
+    """Подсписок `paths` вне зон задачи, покрытый мандатом Оператора
+    «Расширение зон разрешено: …» (SPEC 01M446WN0V7JW4NSYQFKTBJ05C,
+    требования 1-3): коммит пульта считает такой путь своим.
+
+    Источник мандата — тот же узел, что у гейта зон (`zones.
+    _answer_zones_mandate` на ссылке документов задачи, с его правилом
+    исключения ANSWER, закоммиченного автокоммитом шага роли), а покрытие —
+    его же формулой `_touches_zone`: своя копия разбора или своё правило
+    вложенности развели бы гейт и коммит пульта первой же правкой — ровно
+    расхождение, ради которого задача заведена. Отложенный импорт: `zones`
+    сам импортирует этот модуль.
+
+    Защищённый путь мандатом не покрывается: гейт зон отклоняет его
+    безусловно, мандат на расширение зон — не мандат на правку
+    защищённого пути. Пустой `paths` — без единого вызова git: шаг без
+    путей вне зон не платит чтением ссылки документов. Git не ответил на
+    чтение ссылки — мандата нет, прежнее поведение."""
+    if not paths:
+        return []
+    from . import artifact_branch
+    from .advance_gates import zones
+    mandate = sorted(zones._answer_zones_mandate(
+        artifact_branch.branch_name(task_id), task_id))
+    if not mandate:
+        return []
+    return [p for p in paths if not config.is_protected_path(p)
+            and zones._touches_zone(p, mandate)]
 
 
 # Действие журнала «git отказал коммиту пульта» (SPEC
@@ -1494,24 +1536,27 @@ def pult_commit_failed_paths(conn, task_id: str) -> list[str] | None:
         return None
     zones = _zone_paths(conn, task_id)
     own_dir = task_dir_zone(task_id)
-    paths = []
+    paths, outside = [], []
     for line in status.stdout.splitlines():
         rel = line[3:].split(" -> ")[-1].strip().strip('"')
         if not rel or zone_lock._paths_overlap(rel, own_dir):
             continue
         if zones and not any(zone_lock._paths_overlap(rel, z) for z in zones):
-            continue
+            outside.append(rel)
         paths.append(rel)
-    return paths
+    # Путь по мандату Оператора пульт коммитит наравне с путями зон —
+    # значит, и его незакоммиченность после отказа git — результат шага.
+    stray = set(outside) - set(_mandate_covered(task_id, outside))
+    return [p for p in paths if p not in stray]
 
 
 def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
                             exclude: str | None = None,
                             refuse_on_stray: bool = False
-                            ) -> tuple[bool, str, list[str], str]:
-    """(закоммичено, sha, посторонние, отказ git) — `add -A` + фильтр по
-    зонам задачи + `commit` служебной идентичностью В ЗАДАННОМ worktree;
-    `закоммичено=False` — нечего коммитить, git отказал на любом из
+                            ) -> tuple[bool, str, list[str], str, list[str]]:
+    """(закоммичено, sha, посторонние, отказ git, по мандату) — `add -A` +
+    фильтр по зонам задачи + `commit` служебной идентичностью В ЗАДАННОМ
+    worktree; `закоммичено=False` — нечего коммитить, git отказал на любом из
     шагов, либо (`refuse_on_stray=True`) найден посторонний путь.
 
     Отказ git (ненулевой код, кроме «нечего коммитить») не молчит (SPEC
@@ -1536,7 +1581,10 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
 
     После `exclude` застейдженный дифф сверяется с `_zone_paths` (AC-1):
     посторонний путь пишет ОДНУ запись журнала `STRAY_WORKTREE_FILES_ACTION`
-    на весь список (AC-2), общую для обоих режимов ниже.
+    на весь список (AC-2), общую для обоих режимов ниже. Путь вне зон,
+    покрытый мандатом Оператора из ANSWER (`_mandate_covered`, SPEC
+    01M446WN0V7JW4NSYQFKTBJ05C), посторонним не считается и коммитится —
+    пятым элементом возврата (пусто — таких не было).
 
     `refuse_on_stray=False` (по умолчанию, три обычных WIP-чекпоинта) —
     посторонние пути снимаются со стейджа (`git reset -- <path>...`) и НЕ
@@ -1549,34 +1597,37 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
-        return False, "", [], _journal_git_failure(conn, task_id, "add", added)
+        return False, "", [], _journal_git_failure(conn, task_id, "add",
+                                                   added), []
     if exclude is not None:
         reset = gitcmd.in_repo(wt, "reset", "-q", "--", exclude)
         if reset.returncode != 0:
             return False, "", [], _journal_git_failure(conn, task_id, "reset",
-                                                       reset)
+                                                       reset), []
     stray = _stray_staged_paths(wt, _zone_paths(conn, task_id))
     if stray is None:
-        return False, "", [], ""
+        return False, "", [], "", []
+    mandated = _mandate_covered(task_id, stray)
+    stray = [p for p in stray if p not in mandated]
     if stray:
         store.journal(conn, task_id, "orchestrator",
                       STRAY_WORKTREE_FILES_ACTION,
                       f"{STRAY_WORKTREE_FILES_ACTION}: {', '.join(stray)}")
         if refuse_on_stray:
             gitcmd.in_repo(wt, "reset", "-q")
-            return False, "", stray, ""
+            return False, "", stray, "", mandated
         unstage = gitcmd.in_repo(wt, "reset", "-q", "--", *stray)
         if unstage.returncode != 0:
-            return False, "", stray, _journal_git_failure(conn, task_id,
-                                                          "reset", unstage)
+            return False, "", stray, _journal_git_failure(
+                conn, task_id, "reset", unstage), mandated
     staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
-        return False, "", stray, ""
+        return False, "", stray, "", mandated
     commit = gitcmd.in_repo(
         wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
         "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
         "commit", "-q", "-m", message)
     if commit.returncode != 0:
-        return False, "", stray, _journal_git_failure(conn, task_id, "commit",
-                                                      commit)
-    return True, gitcmd.head_sha(wt), stray, ""
+        return False, "", stray, _journal_git_failure(
+            conn, task_id, "commit", commit), mandated
+    return True, gitcmd.head_sha(wt), stray, "", mandated

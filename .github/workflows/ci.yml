@@ -45,6 +45,8 @@ jobs:
           else
             echo "артефактов пока нет — ок"
           fi
+      - name: сторож шага приложений PLAN в jobs python и python-min (01M443HV9SJYVYQTHJSQ87QV68, требование 7)
+        run: python3 scripts/plan_appendix_ci.py --check-workflow .github/workflows/ci.yml
 
   id-format-greplint:
     name: Линт — новый парсинг формата id задачи вне генератора
@@ -194,6 +196,13 @@ jobs:
           python-version: ${{ steps.stack-python.outputs.version }}
       - name: зависимости из файла закреплённых версий (01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 3)
         run: python3 -m pip install -r requirements.lock
+      - name: приложения PLAN задачи на дереве ветки (01M443HV9SJYVYQTHJSQ87QV68, требование 1)
+        # Только пуш task/**: тесты идут на дереве «код ветки плюс
+        # приложения её PLAN» (PLAN — из ссылки документов задачи в
+        # origin). Ничего не коммитит и не пушит; шаг стоит до снимка
+        # ссылок ниже и сам ссылок не заводит.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')
+        run: python3 scripts/plan_appendix_ci.py
       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
       - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
@@ -238,6 +247,9 @@ jobs:
           python-version: ${{ steps.stack-python-min.outputs.version }}
       - name: зависимости из файла закреплённых версий для минимальной версии Python (01M29BANMM8X8JWJ5GDTJWKB0Z)
         run: python3 -m pip install -r requirements.lock
+      - name: приложения PLAN задачи на дереве ветки (01M443HV9SJYVYQTHJSQ87QV68, требование 1)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')
+        run: python3 scripts/plan_appendix_ci.py
       - name: tests.test_invariants на минимальной объявленной версии Python (AC-2)
         run: |
           # Литерал timeout=120 дублирует stack.PER_TEST_TIMEOUT_SEC —

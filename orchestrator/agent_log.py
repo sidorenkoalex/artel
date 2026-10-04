@@ -6,6 +6,7 @@
 консоль, метрика трения).
 """
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -212,6 +213,40 @@ LARGE_TOOL_RESULT_CHARS = 20_000
 # разъехалась по двум независимым копиям.
 FRICTION_JOURNAL_ACTION = "agent run friction"
 
+# Итоговая строка прогона pytest в результате инструмента шага (SPEC
+# 01M446X1B7FB8JDMYFP5APWTVE, требование 1) — действие журнала, которым
+# её пишет `OutputPump`, и которое читает дозор (`watch.py`, класс
+# `pytest`). Префикс не «agent run»: класс `steps` и потребители журнала,
+# сверяющие «agent run …», этой записи не видят.
+PYTEST_RUN_ACTION = "прогон pytest"
+
+# Итоговая строка pytest: счётчики «<число> <исход>» через запятую и
+# длительность «in X.XXs» — так её печатает pytest и в обрамлении «=», и
+# голой строкой (`-q`). Одного слова «passed» мало: листинг или код со
+# словом «passed» итоговой строкой не являются. Счётчик может нести
+# квалификатор перед исходом («99 subtests passed» — так pytest печатает
+# прогон `tests/` с `subTest`), а прогон без собранных тестов — «no tests
+# ran in X.XXs».
+_PYTEST_OUTCOMES = (r"(?:failed|passed|skipped|deselected|xfailed|xpassed"
+                    r"|warnings?|errors?|rerun)")
+_PYTEST_COUNT = rf"\d+ (?:subtests )?{_PYTEST_OUTCOMES}"
+_PYTEST_SUMMARY_RE = re.compile(
+    rf"^=*\s*((?:(?:{_PYTEST_COUNT}, )*{_PYTEST_COUNT}|no tests ran)"
+    rf" in \d+(?:\.\d+)?s\b[^=]*?)\s*=*$")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def pytest_summaries(text: str) -> list:
+    """Итоговые строки прогонов pytest в тексте результата инструмента,
+    без обрамляющих «=», в порядке появления: pytest печатает итоговую
+    строку одну на прогон, поэтому строка списка — это прогон."""
+    found = []
+    for line in _ANSI_ESCAPE_RE.sub("", text).splitlines():
+        match = _PYTEST_SUMMARY_RE.match(line.strip())
+        if match:
+            found.append(match.group(1).strip())
+    return found
+
 
 def _tool_use_calls(events: list) -> list:
     """Вызовы инструментов (`providers.ToolCall`) из событий общего вида,
@@ -324,8 +359,14 @@ class OutputPump(threading.Thread):
     интерпретатору выйти даже после возврата из `cmd_run`.
     """
 
-    def __init__(self, stream, log_path: Path, provider=None):
+    def __init__(self, stream, log_path: Path, provider=None,
+                 on_pytest_summary=None):
         super().__init__(daemon=True)
+        # Получатель итоговой строки pytest из результата инструмента
+        # (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требование 1): шаг пишет её в
+        # журнал задачи, пока шаг ещё идёт, — дозору это и нужно. `None`
+        # — строки никуда не идут (прямые вызовы и тесты насоса).
+        self.on_pytest_summary = on_pytest_summary
         self.stream = stream
         self.log_path = log_path
         # Провайдер роли шага: он и разбирает строки вывода (SPEC
@@ -369,6 +410,20 @@ class OutputPump(threading.Thread):
             for kind, count in event.tokens_by_type.items():
                 self.partial_tokens[kind] = self.partial_tokens.get(kind, 0) + count
         self._friction_events.append(event)
+        if self.on_pytest_summary is not None:
+            for result in event.tool_results:
+                for summary in pytest_summaries(result.text):
+                    self._report_pytest_summary(summary)
+
+    def _report_pytest_summary(self, summary: str) -> None:
+        """Сбой записи итоговой строки не роняет насос: перестать читать
+        пайп — значит подвесить агента на записи в переполненный пайп, а
+        строка pytest — наблюдение для дозора, не учёт шага."""
+        try:
+            self.on_pytest_summary(summary)
+        except Exception as exc:  # noqa: BLE001 — см. докстринг
+            print(f"строка pytest не записана в журнал: {exc}",
+                  file=sys.stderr)
 
     @property
     def friction(self) -> float:
