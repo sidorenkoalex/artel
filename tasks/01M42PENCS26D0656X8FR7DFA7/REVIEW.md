@@ -2,73 +2,59 @@
 task: 01M42PENCS26D0656X8FR7DFA7
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: ADR-0021, этап 2 — клон и рабочие копии задач в области проекта; главная копия пульта перестаёт меняться
 
 ## Фаза A: план
-- Таблица покрытия полна: требования 1–10 привязаны к шагам 1–10.
-- Шаги крупные, но по смыслу проверяемые. Монолит обоснован в SPEC, Оператор его принял.
-- Вывод детектора для AC-8 приведён. Изменения существующих тестов перечислены, у каждого — пункт ADR-0021.
-- Приложения 1 и 2 применяются: `git apply --check` на текущем дереве ветки — код 0 у обоих.
-- Секция «Влияние на систему» не упоминает, что умолчание `ci.*` (`repo=None` → клон артели) меняет поведение `pin-update` и `doctor main-ci`. Это суть R1-F1.
-- В «Рисках» осталась устаревшая фраза «приложениями 1–3 — 72 passed»: приложений теперь два (minor, отдельной записью не завожу).
+- Таблица покрытия полна: требования 1–10 привязаны к шагам. В PLAN добавлен раздел «Возврат из ревью, итерация 1» с ответом на каждую запись реестра.
+- Новый раздел «Вызовы с явным `repo=config.ROOT`» перечисляет все 7 явных обращений к главной копии и обосновывает каждое. Каждое — чтение версии пульта, легаси `tasks/`, линия после fetch пульта или историческая ссылка. Поиск `grep -rn 'repo=config.ROOT\|repo=doctor.config.ROOT' orchestrator` дал 7 строк, все есть в таблице.
+- «Влияние на систему» теперь называет перевод `pin-update`/`doctor main-ci` на главную копию и новые отказы гейтов приёмки и `tests_writing`. Это совпадает с инкрементальным diff: 6 модулей `orchestrator/` и 3 файла `tests/`.
+- Приложения 1 и 2 применяются: `git apply --check` на текущем дереве — код 0 у обоих. С ce5e28ea файлы `docs/invariants.md` и `tests/test_invariants.py` не менялись.
+- В «Рисках» осталась устаревшая фраза о прогоне «когда приложений было три». Её смысл раскрыт тут же, поэтому это не замечание.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `workspace.ensure_clone`/`ensure`/`path`; `init`, `doctor --fix` и `new` заводят клон; `new` отказывает, если клон не завёлся. AC-1/2/3 — долгоживущий `test_…_project_area.py` зелёный |
-| 2 | OK | Ветка, рабочая копия, ссылка документов, временная рабочая копия мержа и push — в клоне; AC-4 зелёный |
-| 3 | OK | `repo_context.is_artel(ctx)` во всех местах таблицы; `path_or_none` и `git` без особого случая; AC-5 и AC-6 зелёные |
-| 4 | OK с оговоркой | Детектор зелёный. Но вызовы с явным `repo=config.ROOT` обходят перечень без обоснования в PLAN (R1-F2) |
-| 5 | OK | `note`/`doc-commit`/`pool-seal` идут через клон; база — `origin/main` клона до fetch (`_known_origin_main`); AC-9 и AC-10 зелёные |
-| 6 | OK | `set_clone_hooks`, `check_clone_hooks`, `_fix_project_clones`; AC-11 зелёный |
+| 1 | OK | Без изменений с итерации 1. Отказ `ensure` для внешнего проекта больше не глотается, отката на каталог без кода нет (R1-F3) |
+| 2 | OK | AC-4 зелёный (долгоживущий `test_…_project_area.py`) |
+| 3 | OK | AC-5 зелёный |
+| 4 | OK | Детектор AC-8 зелёный. Явные обращения к главной копии перечислены и обоснованы в PLAN (R1-F2) |
+| 5 | OK | AC-9 и AC-10 зелёные |
+| 6 | OK | AC-11 зелёный |
 | 7 | OK | `canary._build_artel_project_area` |
-| 8 | OK | `docs_fetch._main_copy_reader` (только чтение), `--fetch-all` и `retro_corpus` идут через клон; AC-13 зелёный |
-| 9 | OK | Приложения 1 и 2 применяются; инварианты 20 и 21 переписаны на любой проект, новый 40 — со сквозным тестом |
-| 10 | OK | Заявки «Ловит мутацию» есть. Изменённые утверждения сверены с base: каждое называло прежнее место (`config.ROOT`/`workspace/`/`.artel/worktrees`/`notes-work`), его прямо требует AC-6 или треб. 1/5, новое не слабее |
-| Побочный эффект | НЕ ТАК | `pin-update` и `doctor main-ci` читают линию `main` в клоне, а fetch делают в главную копию (R1-F1) |
+| 8 | OK | AC-13 зелёный |
+| 9 | OK | Приложения применяются (`git apply --check` — код 0) |
+| 10 | OK | Новые тесты несут заявки. Каждая заявка проверена временной мутацией, все тесты красные на ней (см. ниже). Изменённый `test_docs_dir_layout.py` подменяет `ensure` под новое поведение, утверждения те же |
+| Побочный эффект R1-F1 | OK | `pin.py` и `doctor/main_ci.py` читают линию в `config.ROOT`, куда сделан fetch |
 
 ## Замечания
 
-- **major — `orchestrator/ci.py:650` (`main_line_status`), `:687` (`_push_touches_code`), `:558-561` (`first_parent_line`); вызывающие — `orchestrator/pin.py:81`, `orchestrator/doctor/main_ci.py:30`.**
-  - Суть: умолчание `repo=None` у `first_parent_line`/`_push_touches_code` теперь означает клон артели. При этом `pin-update` (`pin.py:95`) и `doctor main-ci` (`root_pin.fetch_origin_main_sha`) делают fetch `origin/main` в git главной копии, а линию передают без `repo`. Докстринг `_refuse_unless_main_ci_green` («обход линии читает объекты, которые принёс fetch») этим нарушен.
-  - Сценарий: Оператор пушит в `origin/main` не через клон (как 1dc7c20f), либо клона нет. Тогда `git -C <клон> rev-list --first-parent <sha>` отвечает 128, и `first_parent_line` → `None` → линия = `[sha]`. Если на голове проверки пропущены (документный push), обход не может уйти глубже. Итог — `MAIN_UNKNOWN`/«не разрешилась»: `pin-update` ложно отказывает, `doctor` ложно предупреждает.
-  - Воспроизведено: главная копия на 2 коммита впереди клона → `ci.first_parent_line(head, 10, repo=root)` даёт 3 коммита, без `repo` — `None`. Тесты `main_ci` этого не ловят: песочница связывает клон с корнем (`link_artel_clone_to_root`).
-  - Предложение: в `pin.py:81` и `doctor/main_ci.py:30` явно передавать `repo=config.ROOT` — fetch был туда, и `pin` есть в перечне треб. 4. Либо делать fetch в клон перед вызовом. Нужен тест в `tests/` на сценарий «клон отстал от главной копии» с заявкой мутации.
-- **minor — `orchestrator/brief.py:260, 295, 412, 443`; `orchestrator/cleanup.py:21, 34, 58`.**
-  - Суть: вызовы с явным `repo=config.ROOT`/`in_repo(config.ROOT, …)` обходят детектор AC-8. Перечень треб. 4 их не содержит, PLAN («вызовов вне перечня нет») их не называет. `brief._regenerate_map` к тому же пишет `docs/codebase-map.md` в рабочее дерево главной копии и откатывает `checkout` — это расходится с треб. 2 («рабочее дерево не меняется»). Поведение старое; при сбое отката остаётся грязная главная копия с алертом.
-  - Предложение: перечислить эти вызовы в PLAN с обоснованием (версия правил пульта; легаси-каталог `tasks/`), а генерацию карты для брифа вести во временном каталоге/рабочей копии, не в `config.ROOT`. Если это решение Оператора — в бэклог.
-- **minor — `orchestrator/advance_gates/acceptance.py:247`, `orchestrator/advance_gates/tests_writing.py:152`, `orchestrator/fsm_advance.py:194`.**
-  - Суть: `run_cwd, _error = workspace.ensure(...)` — причину отказа выбрасывают. Для внешнего проекта планку выложат в каталог без рабочей копии, и прогон упадёт с непонятной причиной (импорт кода), а не с отказом «рабочая копия не заведена». Класс «вызов внешней команды без обработки сбоя».
-  - Предложение: при `error` — отказ гейта с этой причиной.
-- **minor — `orchestrator/ci.py:60-67` (`_repo_kwargs`).**
-  - Суть: ветвление продакшен-кода подогнано под форму подмен в тестах («подмены … написаны под неё»): для клона артели `repo` не передаётся. Это лишняя развилка, и через неё же прячется R1-F1.
-  - Предложение: передавать `repo` всегда и поправить заглушки (`repo=None` в лямбдах), как сделано в других местах ветки.
+Новых замечаний нет. Блокеров и major нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/ci.py:650; orchestrator/pin.py:81; orchestrator/doctor/main_ci.py:30 | Линия `main` читается в клоне артели, а fetch был в главную копию | Клон отстал (push мимо клона) или клона нет → линия `[sha]` → `pin-update` ложно отказывает, `doctor main-ci` ложно предупреждает | `repo=config.ROOT` в `pin`/`doctor` (или fetch в клон) + тест «клон отстал»; разработчик: `pin.py` и `doctor/main_ci.py` передают `repo=config.ROOT` — линия читается там, куда был fetch; сторож `tests/test_main_ci_fetched_repo.py` (главная копия и клон раздельно, клон отстал на 2 коммита): без `repo=` исход — ложный ЗЕЛЁНЫЙ на красном main, оба метода красны на мутации |
-| R1-F2 | fixed | orchestrator/brief.py:260,295,412,443; orchestrator/cleanup.py:21,34,58 | Явные вызовы по главной копии вне перечня треб. 4; карта брифа пишется в рабочее дерево главной копии | AC-8 формально зелёный, по сути есть необъявленные обращения к главной копии; при сбое отката главная копия грязная | Перечислить и обосновать в PLAN; карту строить вне `config.ROOT` или вынести в бэклог; разработчик: все явные вызовы по главной копии перечислены и обоснованы в PLAN («Вызовы с явным `repo=config.ROOT`»): чтение версии пульта, легаси `tasks/`, линия после fetch пульта, исторические ссылки. Генерация карты брифа вне `config.ROOT` вынесена в «Предложения системе» PLAN: она меняет утверждение `tests/test_brief.py::CheckoutAfterReadTest` (эскалация), поведение прежнее (T028) |
-| R1-F3 | fixed | orchestrator/advance_gates/acceptance.py:247; orchestrator/advance_gates/tests_writing.py:152; orchestrator/fsm_advance.py:194 | Ошибка `workspace.ensure` игнорируется | Внешний проект: прогон планки без кода и непонятная причина отказа | Отказ гейта с причиной `ensure`; разработчик: `_acceptance_run_refuses` — отказ «приёмочные тесты» с причиной `ensure`; выход `tests_writing` — гейт `_tests_writing_code_copy_gate` до сухого сбора; `_review_approved` — журнал «автогейт приёмки пропущен» с причиной, автогейт не запускается; сторож `tests/test_external_code_copy_refusal.py` (3 метода, каждый красен на своей мутации) |
-| R1-F4 | rejected | orchestrator/ci.py:60-67 | `_repo_kwargs` подогнан под заглушки тестов | Лишняя развилка, прячет R1-F1 | Передавать `repo` всегда, поправить заглушки; разработчик: развилка не только под заглушки незащищённых тестов: передача `repo` всегда ломает `lambda branch:` защищённого `tests/test_invariants.py::MergeNeedsGreenCiTest` (инвариант 19; гейт мержа зовёт `branch_status(..., repo=<клон артели>)`), правка которого — только приложением. После R1-F1 развилка ничего не прячет: любой иной репозиторий (главная копия) передаётся явно, для клона артели исход тот же, что у умолчания. Докстринг `_repo_kwargs` называет защищённый тест; снятие развилки вместе с приложением к заглушке — в «Предложения системе» PLAN |
+| R1-F1 | accepted | orchestrator/ci.py:650; orchestrator/pin.py:81; orchestrator/doctor/main_ci.py:30 | Линия `main` читалась в клоне артели, а fetch был в главную копию | Ложный исход `pin-update`/`doctor main-ci` | Исправлено: `repo=config.ROOT` в `pin._refuse_unless_main_ci_green` и `doctor.check_main_ci`. Сторож `tests/test_main_ci_fetched_repo.py` держит главную копию и клон раздельно. Временная мутация (снят `repo=` в обоих местах) красит оба метода, код возвращён |
+| R1-F2 | accepted | orchestrator/brief.py:260,295,412,443; orchestrator/cleanup.py:21,34,58 | Явные вызовы по главной копии вне перечня треб. 4 | Необъявленные обращения к главной копии | Все вызовы перечислены и обоснованы в PLAN. Все, кроме отката карты брифа, только читают. Откат карты брифа — прежнее поведение (T028): ветки, ссылки, HEAD и worktree он не меняет, инвариант 40 держится. Перенос меняет утверждение защищённого поведения, поэтому вынесен в «Предложения системе». Обоснование принято |
+| R1-F3 | accepted | orchestrator/advance_gates/acceptance.py:247; orchestrator/advance_gates/tests_writing.py:152; orchestrator/fsm_advance.py:194 | Ошибка `workspace.ensure` игнорировалась | Прогон планки без кода | Исправлено во всех трёх местах: отказ «приёмочные тесты» с причиной; гейт `_tests_writing_code_copy_gate` до сухого сбора; журнал «автогейт приёмки пропущен». Сторож `tests/test_external_code_copy_refusal.py`. Временная мутация (условия → `False`, гейт снят из списка) красит все 3 метода |
+| R1-F4 | accepted | orchestrator/ci.py:60-67 | `_repo_kwargs` подогнан под заглушки тестов | Лишняя развилка | Отклонение принято. Защищённый `tests/test_invariants.py:309` подменяет `head_sha` формой `lambda branch:`, поэтому безусловный `repo=` сломал бы инвариант 19 без приложения. После R1-F1 главная копия передаётся явно, и умолчание совпадает с клоном артели, так что развилка ничего не прячет. Снятие развилки — в «Предложения системе» |
 
 ## Вердикт
-changes_requested. Обязательно исправить R1-F1 (major): `pin-update` и `doctor main-ci` должны читать линию `main` там же, куда делали fetch, и нужен сторож в `tests/`. R1-F2, R1-F3, R1-F4 — minor: исправить или отклонить с обоснованием.
+approved. Все записи реестра R1-F1..R1-F4 в статусе `accepted`. Новых замечаний blocker/major нет.
 
 ## Проверено исполнением
+- `python3 -m pytest -q tests/test_main_ci_fetched_repo.py tests/test_external_code_copy_refusal.py tests/test_docs_dir_layout.py tests/test_pin.py tests/test_main_ci_line.py` — 42 passed. Упали 3: `FixesMainArgTest` (1 failed и 2 subtests). Причина — сторож роли «artel.py approve: команда недоступна процессу роли reviewer», это известный класс, он описан в PLAN «Риски».
+- Временная мутация четырёх мест сразу: снят `repo=` в `pin.py` и `doctor/main_ci.py`; `if error is not None` → `if False` в `advance_gates/acceptance.py` и `fsm_advance._review_approved`; гейт `_tests_writing_code_copy_gate` убран из `tests_writing`. Затем прогон `tests/test_main_ci_fetched_repo.py tests/test_external_code_copy_refusal.py` — 5 failed из 5. Код возвращён `git checkout -- orchestrator`, `git status` чистый.
 - `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M42PENCS26D0656X8FR7DFA7` — 9 passed, код выхода pytest 0.
-- `python3 -m pytest -q tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py tests/test_repo_context.py tests/test_workspace.py tests/test_done_branch_cleanup.py tests/test_multitarget_invariants.py` — 82 passed, 13 subtests passed.
-- `git apply --check` обоих приложений PLAN (извлечены из PLAN.md) на дереве ветки — код 0 у обоих.
-- Воспроизведение R1-F1 (python, временные репозитории): главная копия на 2 коммита впереди клона артели → `ci.first_parent_line(head, 10, repo=root)` = 3 коммита, `ci.first_parent_line(head, 10)` = `None`.
-- Полный набор `tests/` не запускал — по правилу; CI коммита ce5e28ea зелёный (16 проверок).
+- `python3 -m pytest -q tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py tests/test_fsm_advance_tests_writing*.py tests/test_acceptance_tests_flow.py` — 130 passed, 15 subtests passed.
+- `git apply --check` обоих приложений PLAN (извлечены из PLAN.md) — код 0 у обоих.
+- Полный набор `tests/` не запускал — по правилу. CI коммита 4a44f54c зелёный (16 проверок).
 
 ## Предложения системе
-- Песочницы `link_artel_clone_to_root` («клон = главная копия») маскируют весь класс ошибок «операция идёт не в тот репозиторий»: R1-F1 прошёл зелёным CI именно поэтому. Стоит иметь хотя бы по одному сценарию на `pin-update`/`doctor`, где клон и главная копия — разные репозитории (tests/sandbox.py).
-- Детектор AC-8 считает `repo=config.ROOT` «явным репозиторием»: явная адресация главной копии обходит перечень треб. 4. Такой вызов стоит относить к нарушениям, если его нет в перечне (tests/test_<id>_gitcmd_explicit_repo.py — через `amend-tests`, либо новая задача).
+- Сторож роли (`artel._refuse_if_role_restricted`) красит в шаге ревьювера тесты, которые зовут `approve` через `artel.main` (`tests/test_main_ci_line.py::FixesMainArgTest`). Каждая роль заново доказывает, что эти падения — «известные красные». Стоит снимать `ARTEL_ROLE` в песочнице `tests/sandbox.py`: разработчик это тоже предлагал.
