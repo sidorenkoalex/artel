@@ -1226,9 +1226,14 @@ class WaitForZoneTest(AutoCycleTest):
         store.update_task(store.db(), self.TASK, zones="a/b")
 
     def test_exit_record_names_the_actual_last_holder_on_handoff(self):
-        """Ловит мутацию R1-F1: `occupier_id` не обновляется на каждой
-        итерации опроса — запись выхода назвала бы ПЕРВОНАЧАЛЬНОГО
-        держателя (T9AAA), хотя зону последним держал и освободил T9BBB."""
+        """R1-F1: запись выхода из ожидания называет держателя, последним
+        освободившего зону, а не первоначального.
+
+        Ловит мутацию: `occupier_id` не обновляется на каждой итерации
+        опроса (R1-F1) — запись выхода назвала бы ПЕРВОНАЧАЛЬНОГО
+        держателя (T9AAA), хотя зону последним держал и освободил T9BBB,
+        и `assertIn(second, ...)` покраснеет.
+        """
         first = self._seed_occupier("T9AAA", "a/b")
         second = self._seed_occupier("T9BBB", "a/b")
         calls = {"n": 0}
@@ -1253,7 +1258,12 @@ class WaitForZoneTest(AutoCycleTest):
 
     def test_enter_and_exit_are_journaled_exactly_once(self):
         """AC-2/AC-3: ровно одна запись входа и ровно одна запись выхода —
-        независимо от числа опросов внутри ожидания."""
+        независимо от числа опросов внутри ожидания.
+
+        Ловит мутацию: запись входа «ждёт зоны …» перенесена внутрь цикла
+        опроса (пишется на каждой паузе) — записей входа станет три, и
+        `assertEqual(len(enters), 1)` покраснеет.
+        """
         occupier = self._seed_occupier("T9AAA", "a/b")
         calls = {"n": 0}
 
@@ -1290,7 +1300,12 @@ class WaitForZoneTest(AutoCycleTest):
     def test_lease_lost_during_wait_stops_the_cycle_named(self):
         """R1-F2: чужая живая сессия перехватывает lease этой задачи прямо
         во время ожидания — цикл обязан остановиться именованной причиной,
-        не продолжать опрос как ни в чём не бывало."""
+        не продолжать опрос как ни в чём не бывало.
+
+        Ловит мутацию: проверка `lease.acquire` после паузы убрана из цикла
+        ожидания — опрос не остановится именованной причиной с
+        `sess-other`, и тест покраснеет.
+        """
         self._seed_occupier("T9AAA", "a/b")
 
         def fake_sleep(_):

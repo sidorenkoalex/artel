@@ -293,6 +293,13 @@ class WaitForWindowTest(_QueueTestBase):
             [s["action"] for s in steps])
 
     def test_ceiling_expiry_dequeues_and_exits_without_touching_state(self):
+        """Истёкший потолок ожидания merge-окна: выход с именем задачи,
+        регистрация в очереди снята, состояние задачи не тронуто.
+
+        Ловит мутацию: `finally` в `wait_for_window` не снимает запись
+        очереди на истёкшем потолке — `assertEqual(merge_queue_rows, [])`
+        покраснеет.
+        """
         conn = store.db()
         store.set_merge_lock(conn, self.TASK_B, "sess-holder", 999,
                              "holder-host", store.now())
