@@ -270,12 +270,14 @@ class _GateSandbox(TaskIdSchemaConnTmpRootTest):
         self.sources = {}
         self.answers = {}
 
-    def _show(self, ref, path):
+    def _show(self, ref, path, repo=None):
+        # `repo` — клон проекта задачи (ADR-0021 п.1, этап 2): git задачи
+        # получает репозиторий явно; ответ заглушки от него не зависит.
         if (ref, path) in self.sources:
             return self.sources[(ref, path)], ""
         return None, "файла нет в этой ветке"
 
-    def _ls_tree(self, branch, rel_dir):
+    def _ls_tree(self, branch, rel_dir, repo=None):
         return sorted(self.answers)
 
     def _git(self, *args):
@@ -865,7 +867,7 @@ class MergeGateTest(SchemaSeededTmpRootTest):
         store.update_task(self.conn, self.TASK, state="merge_gate")
 
     def _escalates(self, entries, sources):
-        def show(ref, path):
+        def show(ref, path, repo=None):
             return (sources[(ref, path)], "") if (ref, path) in sources \
                 else (None, "файла нет в этой ветке")
 

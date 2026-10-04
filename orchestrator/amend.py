@@ -648,6 +648,15 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     _record_amend(conn, task_id, detail,
                   f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
                   f"(ветка {artifact_branch.branch_name(task_id)})")
+    _drop_fixed_task_dir(task_id, wt_path)
+
+
+def _drop_fixed_task_dir(task_id: str, wt_path: Path) -> None:
+    """Правка уже в ссылке документов — `tasks/<id>/` в рабочей копии кода
+    больше не нужен (SPEC 01M42NBCADGSGTCBZB8NKBVDVH, требование 1):
+    оставшись, он неотслеживаемым каталогом попадал бы в гейт зон. Зовётся
+    только после фиксации: на отказе правка Оператора остаётся на диске."""
+    acceptance.drop_from_code_copy(task_id, wt_path)
 
 
 def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
@@ -734,6 +743,7 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
                   f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
                   f"(ветка {artifact_branch.branch_name(task_id)}, кодовая "
                   f"ветка {t['branch']} -> {code_head})")
+    _drop_fixed_task_dir(task_id, wt_path)
 
 
 def _record_amend(conn, task_id: str, detail: str, line: str) -> None:

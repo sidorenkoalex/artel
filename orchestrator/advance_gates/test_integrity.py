@@ -115,8 +115,17 @@ class Finding(NamedTuple):
     @property
     def mandate_elements(self) -> tuple:
         """Элементы мандата, которые покрывают ЭТУ находку: путь файла
-        покрывает все его находки, элемент с `::` — только названный
-        метод или класс (требование 4).
+        покрывает все его находки, элемент `путь::Класс` — находки о самом
+        классе и о любом его методе, элемент `путь::Класс::метод` — только
+        находку об этом методе (требование 4; SPEC
+        01M42NB9GKXNP74HAYEJ7C7CA8, требование 1).
+
+        Класс засчитывается через префиксы квалифицированного имени по
+        целым частям `::`, а не префиксом строки: элемент `путь::A` не
+        покрывает класс `AB` того же файла, элемент `путь::A::m1` — метод
+        `A::m1_x`. До этого правила элемент-класс не покрывал находок о
+        методах вовсе, и 03.10 ANSWER-1 задачи 01M41VTQJ9DSX64NFMFAF9W53B с
+        двумя классами получил отказ по двенадцати методам.
 
         У пары переименования засчитываются ОБА пути — старый (`path`) и
         новый (`alias`). Оператор пишет мандат, глядя на ветку и на PR,
@@ -127,8 +136,11 @@ class Finding(NamedTuple):
         paths = (self.path, self.alias) if self.alias else (self.path,)
         if not self.name:
             return paths
-        return paths + tuple(f"{p}{guard.TEST_NAME_SEP}{self.name}"
-                             for p in paths)
+        parts = self.name.split(guard.TEST_NAME_SEP)
+        names = [guard.TEST_NAME_SEP.join(parts[:i])
+                 for i in range(len(parts), 0, -1)]
+        return paths + tuple(f"{p}{guard.TEST_NAME_SEP}{n}"
+                             for p in paths for n in names)
 
 
 class ConditionalSkip(NamedTuple):
@@ -507,7 +519,8 @@ def _observation_lines(observed: list, mandate: dict) -> list:
     у покрытых мандатом — с отметкой «покрыто мандатом ANSWER-n»
     (требование 5, AC-7). Покрытие — тем же правилом, что у находок
     отказа (`Finding.mandate_elements`): путь файла покрывает все находки
-    файла, элемент с `::` — только названный метод."""
+    файла, элемент-класс — находки о его методах, элемент-метод — только
+    названный метод."""
     lines = []
     for finding in observed:
         source = next((mandate[e] for e in finding.mandate_elements
@@ -638,10 +651,15 @@ def refusal_detail(found: list) -> str:
 
 
 def _mandate_hint(task_id: str) -> str:
+    """Обе формы доставки мандата (SPEC 01M42NB9GKXNP74HAYEJ7C7CA8,
+    требование 5): `answer` в `in_dev` уточняет мандат без шага роли,
+    `answer` в `escalated` — прежний ответ на эскалацию."""
     return (f"либо верни тесты на место, либо получи мандат Оператора — "
            f"строка «{TEST_WEAKENING_MANDATE_MARKER} <пути и имена>» в "
-           f"tasks/{task_id}/ANSWER-n.md (команда answer, со ссылкой на "
-           f"основание), и повтори artel.py advance {task_id}")
+           f"tasks/{task_id}/ANSWER-n.md (команда artel.py answer {task_id} "
+           f"<файл>: в состоянии in_dev — без смены состояния, в состоянии "
+           f"escalated — ответом на эскалацию; со ссылкой на основание), и "
+           f"повтори artel.py advance {task_id}")
 
 
 def _test_integrity_gate(conn, task_id: str, t,

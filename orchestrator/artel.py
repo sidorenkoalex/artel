@@ -858,6 +858,8 @@ def _cmd_observe(rest: list) -> None:
         return
     if action not in ("add", "remove", "show", "stop") or len(rest) < 2:
         sys.exit("observe: требуется register|add|remove|show|stop <ID>")
+    if action in ("add", "remove"):
+        _refuse_extra_observe_args(action, rest)
     row = _observation_or_exit(conn, rest[1])
     if action == "show":
         result = {"id": row["id"], "project": row["target"],
@@ -883,6 +885,28 @@ def _cmd_observe(rest: list) -> None:
     else:
         store.remove_observation_tasks(conn, row["id"], task_ids)
     print(json.dumps({"id": row["id"], "tasks": store.observation_tasks(conn, row["id"])}))
+
+
+def _refuse_extra_observe_args(action: str, rest: list) -> None:
+    """Отказ на лишних позиционных аргументах `observe add|remove <ID>`
+    (SPEC 01M42NBCADGSGTCBZB8NKBVDVH, требование 3): `--tasks A B` иначе
+    молча действовал только на `A`. Проверка — до любого изменения
+    списка задач наблюдения."""
+    extra, i = [], 2
+    while i < len(rest):
+        if rest[i] == "--tasks":
+            i += 2
+            continue
+        if not rest[i].startswith("-"):
+            extra.append(rest[i])
+        i += 1
+    if not extra:
+        return
+    value_at = rest.index("--tasks") + 1 if "--tasks" in rest else len(rest)
+    form = ",".join(rest[value_at:value_at + 1] + extra)
+    sys.exit(f"observe {action}: лишний аргумент {' '.join(extra)} — номера "
+             f"задач перечисляются через запятую одним значением: "
+             f"--tasks {form}")
 
 
 def _validated_observation_tasks(conn, raw: str, target: str) -> list[str]:

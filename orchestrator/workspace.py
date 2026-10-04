@@ -109,10 +109,12 @@ def path(task_id: str, target: str | None = None) -> Path:
     return repo_context.projects_root() / target / "worktrees" / task_id
 
 
-def registered_paths(clone: Path) -> list[str]:
-    """Пути всех рабочих копий клона; первая запись — сам клон. Пустой
-    список — git не ответил (вырожденный случай песочниц без реального
-    git)."""
+def registered_paths(clone: Path | None = None) -> list[str]:
+    """Пути всех рабочих копий клона; первая запись — сам клон. Клон не
+    назван — клон артели. Пустой список — git не ответил (вырожденный
+    случай песочниц без реального git)."""
+    if clone is None:
+        clone = repo(config.DEFAULT_TARGET)
     res = gitcmd.in_repo(clone, "worktree", "list", "--porcelain")
     if res is None or res.returncode != 0:
         return []
@@ -130,12 +132,14 @@ def _registered(clone: Path, wt_path: Path) -> bool:
 
 
 def _fetched_base(clone: Path, base: str) -> tuple[str, str]:
-    """(sha, "") — голова `origin/<base>` клона после `fetch origin`
-    (свежесть клона перед заведением рабочей копии, требование 1); ("",
-    причина) — fetch не удался. Приватная ссылка `fetch_ref_sha` — без
-    общего `FETCH_HEAD` (SPEC 01M2ARQGY51B99YNP9PY806AN1)."""
-    gitcmd.in_repo(clone, "fetch", "--quiet", "origin")
-    return gitcmd.fetch_ref_sha("origin", base, repo=clone)
+    """(sha, "") — свежая голова `<base>` в `origin` клона (свежесть клона
+    перед заведением рабочей копии, требование 1); ("", причина) — fetch не
+    удался. Приватная ссылка `fetch_ref_sha` — без общего `FETCH_HEAD`
+    (SPEC 01M2ARQGY51B99YNP9PY806AN1) и без обновления ссылок отслеживания
+    (SPEC 01M42NBCADGSGTCBZB8NKBVDVH, требование 2): их блокировка чужим
+    процессом не должна пропускать шаг роли."""
+    return gitcmd.fetch_ref_sha("origin", base, repo=clone,
+                                tracking_refs=False)
 
 
 def ensure(task_id: str, branch: str,

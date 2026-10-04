@@ -538,7 +538,8 @@ def remote_ref_state(ref: str, repo: Path | None = None) -> tuple[str, str]:
 
 
 def fetch_ref_sha(remote: str, ref: str, *,
-                  repo: Path | None = None) -> tuple[str, str]:
+                  repo: Path | None = None,
+                  tracking_refs: bool = True) -> tuple[str, str]:
     """(sha, "") — голова ветки `ref` в `remote` через ВРЕМЕННУЮ приватную
     ссылку `refs/artel/fetch/<pid>-<uuid>` (SPEC
     01M2ARQGY51B99YNP9PY806AN1, AC-1/AC-2/AC-3): `git fetch <remote>
@@ -567,10 +568,18 @@ def fetch_ref_sha(remote: str, ref: str, *,
     `repo` (по образцу `in_repo`) — клон, в котором идёт ВЕСЬ git-трафик
     примитива (`in_repo`, не голый `git`); `None` (по умолчанию) —
     `config.ROOT`.
+
+    `tracking_refs=False` (SPEC 01M42NBCADGSGTCBZB8NKBVDVH, требование 2)
+    — `--refmap=`: git не обновляет попутно ссылку отслеживания
+    `refs/remotes/<remote>/<ref>` (по имени remote он делает это даже при
+    явной refspec), и чужая блокировка этой ссылки — параллельный push
+    `note` в ту же секунду, инцидент 03.10 22:54Z, «cannot lock ref» — не
+    роняет fetch. По умолчанию — прежнее поведение для остальных вызовов.
     """
     private_ref = f"refs/artel/fetch/{os.getpid()}-{uuid.uuid4().hex}"
     refspec = f"+refs/heads/{ref}:{private_ref}"
-    fetch_args = ("fetch", remote, refspec)
+    refmap = () if tracking_refs else ("--refmap=",)
+    fetch_args = ("fetch", *refmap, remote, refspec)
     fetch = in_repo(repo, *fetch_args) if repo else git(*fetch_args)
     if fetch is None:
         return "", "git не ответил"

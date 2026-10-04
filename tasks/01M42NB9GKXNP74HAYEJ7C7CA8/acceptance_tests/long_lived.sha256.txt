@@ -1,0 +1,1 @@
+7cfab2344a5ef68dc5d8893add0eaeba1ac29bfd947c5e621c18fefd9a6b9d9e  tests/test_01m42nb9gkxnp74hayej7c7ca8_class_mandate.py
