@@ -47,6 +47,28 @@ budget_usd: 100
 - Канарейка строит `projects/artel/repo` и `worktrees/<id>` во временном
   каталоге тем же кодом (её `config.ROOT`/`PROJECTS` — временные).
 
+Подтяжка `main` (возврат по конфликту `docs/codebase-map.md`,
+`orchestrator/workspace.py`; коммит подтяжки 403cc154): `main` принёс
+`gitcmd.fetch_ref_sha(..., tracking_refs=False)` (SPEC
+01M42NBCADGSGTCBZB8NKBVDVH, требование 2 — fetch базы ветки не трогает
+ссылки отслеживания). Разрешение: `workspace._fetched_base` берёт базу
+проекта в клоне одним `fetch_ref_sha("origin", база, repo=клон,
+tracking_refs=False)` — это и есть fetch свежести клона перед заведением
+рабочей копии (требование 1); прежний безусловный `fetch origin` клона
+убран, он двигал ссылки отслеживания и падал бы на их чужой блокировке.
+`workspace.registered_paths(клон=None)` — без аргумента клон артели (так
+его зовёт долгоживущий тест той задачи). Карта регенерирована после
+разрешения. Тесты: `test_01m42nbcadgsgtcbzb8nkbvdvh_workspace_fetch.py`
+(3 passed — клон артели = корень песочницы), `test_workspace.py`,
+`test_gitcmd_fetch_ref_sha.py`, детектор
+`test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py`, новые файлы
+`main` (`amend_cleanup`, `class_mandate`, `guard_spec_paths`,
+`observe_extra_args`, `test_class_mandate_units.py`), `test_amend*.py`,
+`test_answer*.py`, `test_multitarget_invariants.py`,
+`test_01m42pencs26d0656x8fr7dfa7_project_area.py` — зелёные;
+`tests/test_test_integrity_gate.py` был красен на ветке и до подтяжки
+(заглушка `_show` без `repo=`) — исправлена механика заглушек, 51 passed.
+
 Расхождение с оценкой SPEC ($50): детектор долгоживущего теста нашёл 124
 вызова `gitcmd` без репозитория в ~40 модулях, плюс правка существующих
 тестов под новое место рабочей копии и явный `-C`. Потолок поднят до $100
@@ -242,6 +264,7 @@ docs/ пульта), а не включение шага.
 - `tests/test_runner_model_preflight.py` — ADR-0021 п. 7: маркер PLAN.md в каталог документов перед каждым шагом (`seed_plan_marker`) — автокоммит шага уносит каталог в ссылку клона, заглушка git ссылку не видит.
 - `tests/test_spec_budget.py` — ADR-0021 п. 6: клон-заглушка.
 - `tests/test_task_id_prefix_regression.py` — ADR-0021 п. 6: патч `PROJECTS`/`TARGETS`, клон = корень либо клон-заглушка.
+- `tests/test_test_integrity_gate.py` — ADR-0021 п. 6 (SPEC треб. 4): `repo=` у заглушек `_show`/`_ls_tree` (`_GateSandbox`) и `show` (`MergeGateTest._escalates`) — гейт неослабления читает файлы ветки в клоне проекта задачи; тела и утверждения тестовых методов прежние.
 
 #### Изменённые утверждения существующих методов
 Каждое называло прежнее место git задачи; новое утверждение проверяет то же
