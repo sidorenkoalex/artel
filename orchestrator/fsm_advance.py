@@ -104,12 +104,12 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         q_rel = f"tasks/{task_id}/QUESTIONS.md"
         q_paths = artifact_branch.ls_tree(task_id, branch, q_rel)
         if q_paths is None:
-            detail = (f"дерево не на ветке задачи {branch} — не "
-                      f"удалось проверить наличие QUESTIONS.md")
-            store.journal(conn, task_id, "fsm",
-                          "переход отклонён: дерево не на ветке задачи",
-                          detail)
-            print(f"[{task_id}] переход отклонён: {detail}")
+            # Сбой git на перечислении — не «артефакт роли не готов»
+            # (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 5.4).
+            fsm._branch_unread_refusal(
+                conn, task_id, f"git не ответил на перечисление ветки "
+                               f"документов {branch} — не удалось проверить "
+                               f"наличие QUESTIONS.md")
             return False
         if q_paths:
             q_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,

@@ -24,6 +24,7 @@ from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, 
               config, cycle_hint, fixation, github_adapter, gitcmd, lease, pull,
               repo_context,
               review, store, targets, workspace, yamlmini)
+from .advance_gates import refusal_classes
 from .pull import _merge_conflict_note
 
 # Алиас прежнего публичного имени команды `ci-rerun`, переехавшей в
@@ -212,8 +213,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
 
     `_origin_main_source`/`_origin_main_sha` (сверка свежести против
     origin target'а задачи, не локального `config.MAIN_BRANCH` — см. их
-    докстринги) и `_read_branch_text_or_refuse` (чтение SPEC.md с чужой
-    ветки, общее с другими функциями этого модуля) передаются в
+    докстринги) и `_read_foreign_branch_text_or_refuse` (чтение SPEC.md —
+    документа другой роли — с ветки) передаются в
     `pull.evaluate` ПАРАМЕТРАМИ, не импортом `fsm` тем модулем: так
     `mock.patch.object(fsm, "_origin_main_sha", ...)` (существующие
     тесты, AC-5) продолжает долетать до реального `git merge` — патч
@@ -243,7 +244,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
         conn, task_id, t, state,
         origin_main_source=_origin_main_source,
         origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
-        read_branch_text_or_refuse=_read_branch_text_or_refuse,
+        read_branch_text_or_refuse=_read_foreign_branch_text_or_refuse,
         repo_path=repo_path, run_plank=run_plank)
     if isinstance(outcome, pull.Fresh):
         return "fresh"
@@ -355,6 +356,11 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
 
     Звать только когда `gitcmd.on_foreign_branch(branch)` истинно — сама
     функция это не проверяет, только читает и оформляет отказ.
+
+    Только для артефакта роли ТЕКУЩЕГО состояния (SPEC
+    01M446WEVJXARR5CDED8RE9CCR, требование 5.4): его отсутствие на ветке
+    чинит сама роль. Документ другой роли — `_read_foreign_branch_text_or_
+    refuse`.
     """
     text, reason = artifact_branch.show(task_id, branch,
                                         f"tasks/{task_id}/{rel_name}")
@@ -362,8 +368,32 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
         detail = (f"дерево не на ветке задачи {branch} — {rel_name} "
                   f"ветки не прочитан ({reason})")
         store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
+                      refusal_classes.TREE_NOT_ON_BRANCH_REFUSAL_ACTION, detail)
         print(f"[{task_id}] переход отклонён: {detail}")
+    return text
+
+
+def _branch_unread_refusal(conn, task_id: str, detail: str) -> None:
+    """Отказ «git не ответил на ветку документов / чужой документ не
+    прочитан» — класс «чинит Оператор» (SPEC 01M446WEVJXARR5CDED8RE9CCR,
+    требование 5.4): роль текущего состояния его не починит."""
+    store.journal(conn, task_id, "fsm",
+                  refusal_classes.BRANCH_UNREAD_REFUSAL_ACTION, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+
+
+def _read_foreign_branch_text_or_refuse(conn, task_id: str, branch: str,
+                                        rel_name: str) -> str | None:
+    """Текст `tasks/<id>/<rel_name>` — документа ДРУГОЙ роли (SPEC.md в
+    `tests_writing`, в подтяжке main и при поиске планки на выходе
+    `in_dev`) — с ветки; `None` — не прочитан, отказ уже журналирован и
+    напечатан действием класса «чинит Оператор» (требование 5.4)."""
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/{rel_name}")
+    if text is None:
+        _branch_unread_refusal(
+            conn, task_id, f"{rel_name} не прочитан с ветки документов "
+                           f"{branch} ({reason})")
     return text
 
 
@@ -453,11 +483,10 @@ def _answer_baseline_or_refuse(conn, task_id: str, tdir: Path) -> int | None:
     count = _answer_file_count(conn, task_id, tdir)
     if count is None:
         branch, _ = artifact_source.resolve(conn, task_id)
-        detail = (f"дерево не на ветке задачи {branch} — число "
-                  f"ANSWER-*.md не посчитано, эскалация отложена")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
+        _branch_unread_refusal(
+            conn, task_id, f"git не ответил на перечисление ветки документов "
+                           f"{branch} — число ANSWER-*.md не посчитано, "
+                           f"эскалация отложена")
     return count
 
 
@@ -516,12 +545,14 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     spec_text, spec_reason = artifact_branch.show(task_id, branch, spec_rel)
     paths = artifact_branch.ls_tree(task_id, branch, tests_rel)
     if spec_text is None or paths is None:
-        reason = spec_reason if spec_text is None else "acceptance_tests/ ветки не прочитан"
-        detail = (f"дерево не на ветке задачи {branch} — {reason}, "
-                  f"трассируемость AC не проверена")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
+        # SPEC.md — документ analyst, перечисление `acceptance_tests/` —
+        # ответ git: ни то, ни другое test_author не чинит (SPEC
+        # 01M446WEVJXARR5CDED8RE9CCR, требование 5.4).
+        reason = (f"SPEC.md не прочитан ({spec_reason})" if spec_text is None
+                  else "git не ответил на перечисление acceptance_tests/")
+        _branch_unread_refusal(
+            conn, task_id, f"ветка документов {branch}: {reason}, "
+                           f"трассируемость AC не проверена")
         return None
 
     sources: list[str] = []
