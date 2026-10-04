@@ -192,7 +192,8 @@ def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | Non
     return sha or None
 
 
-def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
+def _pull_main_or_escalate(conn, task_id: str, t, state: str,
+                           run_plank: bool = True) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
     01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1..AC-4/AC-8) и, начиная с T053
@@ -231,6 +232,10 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     передаётся замыканием,
     связанным с ТЕМ ЖЕ `repo_path` — весь git-трафик `gitcmd.fetch_ref_sha`
     внутри него идёт в тот же клон, не в `config.ROOT`.
+
+    `run_plank=False` — четвёртая точка, перед шагом разработчика (SPEC
+    01M443BPQEA9ZMJ3R50THNB1MF, требование 6): тот же узел без прогона
+    планки после слияния (см. `pull.evaluate`).
     """
     ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
     repo_path = repo_context.path_or_none(ctx)
@@ -239,7 +244,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
         origin_main_source=_origin_main_source,
         origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
         read_branch_text_or_refuse=_read_branch_text_or_refuse,
-        repo_path=repo_path)
+        repo_path=repo_path, run_plank=run_plank)
     if isinstance(outcome, pull.Fresh):
         return "fresh"
     if isinstance(outcome, pull.Pulled):

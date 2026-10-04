@@ -9,7 +9,8 @@
 класса `A` в AC-2); `answer` в `in_dev` с файлом, несущим только строку
 «Ослабление тестов разрешено: …», отказывает «answer доступна только для
 задачи в состоянии escalated» (AC-4). AC-3 (элемент метода покрывает
-только свой метод), AC-5 (файл без маркеров — прежний отказ) и AC-6
+только свой метод), AC-5 (файл без маркеров — с задачи 01M443BPQEA9ZMJ3R50THNB1MF
+указание Оператора, не мандат) и AC-6
 (рубеж окружения роли отказывает) зелёные с рождения: они держат
 сегодняшнее поведение против правки, которая расширит покрытие или приём.
 
@@ -414,28 +415,45 @@ class AnswerInDevTestMandateTest(AnswerSandbox):
 class AnswerInDevWithoutMarkersTest(AnswerSandbox):
 
     def test_ac5_answer_in_dev_without_markers_keeps_old_refusal(self):
-        """`answer` в `in_dev` с файлом без маркеров мандата — прежний отказ, ANSWER не создан.
+        """`answer` в `in_dev` с файлом без маркеров мандата — указание Оператора, не мандат.
 
         Текст файла — случайный ответ, в котором маркер мандата тестов
         процитирован в середине строки (не в начале — мандатом не
-        считается). Команда отказывает текстом «answer доступна только для
-        задачи в состоянии escalated», ANSWER в ссылке документов нет,
-        состояние `in_dev`.
+        считается). С задачи 01M443BPQEA9ZMJ3R50THNB1MF (требование 1,
+        решение Оператора ANSWER-1 п.1) такой файл — указание: команда
+        завершается без отказа, `ANSWER-1.md` с текстом файла в ссылке
+        документов, состояние `in_dev`; журнал несёт запись «указание
+        Оператора» и не несёт ни записи мандата, ни процитированного
+        элемента.
 
-        Ловит мутацию: ветка `in_dev`/`review` принимает любой файл, когда
-        маркер мандата тестов встречается где угодно в тексте (а не началом
-        строки), или вовсе без маркеров — ANSWER-1.md появится в ссылке и
-        отказа не будет.
+        Ловит мутацию: маркер мандата тестов, встреченный где угодно в
+        тексте (а не началом строки), принимается мандатом — в журнале
+        появится запись «ANSWER создан (мандат …)» с процитированным
+        элементом и не будет записи «указание Оператора»; файл без
+        маркеров по-прежнему отказывается — ANSWER-1.md нет.
         """
         rng = seeded(self)
-        text = (f"Ответ {word(rng)}: см. «{MARKER} tests/test_{word(rng)}.py» "
+        element = f"tests/test_{word(rng)}.py"
+        text = (f"Ответ {word(rng)}: см. «{MARKER} {element}» "
                 f"в прошлой задаче ({self.seed}).\n")
         out, failed = self.run_cmd(answer.cmd_answer, self.task,
                                    self.answer_file(text))
-        self.assertTrue(failed, self.why(f"answer не отказала:\n{out}"))
-        self.assertIn(OLD_REFUSAL, out, self.why(out))
-        self.assertEqual([], self.answers(), self.why("ANSWER создан"))
+        self.assertFalse(failed, self.why(f"answer отказала:\n{out}"))
+        self.assertNotIn(OLD_REFUSAL, out, self.why(out))
+        found = self.answers()
+        self.assertTrue(any(p.endswith("/ANSWER-1.md") for p in found),
+                        self.why(f"ANSWER-1.md нет в ссылке: {found}\n{out}"))
+        rel = next(p for p in found if p.endswith("/ANSWER-1.md"))
+        self.assertIn(text.strip(), self.show(rel), self.why("текст не тот"))
         self.assertEqual("in_dev", self.state(), self.why("состояние сменилось"))
+        journal = self.journal()
+        self.assertTrue(any("указание Оператора" in entry for entry in journal),
+                        self.why(f"нет записи указания: {journal}"))
+        self.assertFalse(any("мандат" in entry.split(" | ", 1)[0]
+                             for entry in journal),
+                         self.why(f"запись мандата в журнале: {journal}"))
+        self.assertFalse(any(element in entry for entry in journal),
+                         self.why(f"элемент {element} в журнале: {journal}"))
 
 
 class AnswerInDevFromRoleEnvironmentTest(AnswerSandbox):

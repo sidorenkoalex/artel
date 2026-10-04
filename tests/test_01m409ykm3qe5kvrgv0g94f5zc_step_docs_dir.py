@@ -40,7 +40,7 @@ from unittest import mock
 
 from orchestrator import config, keychain, models, runner, store
 from tests.sandbox import (FIXTURE_CODEX_MODEL, FIXTURE_TIER, FakeProc,
-                           LightTransitionSandbox, event,
+                           LightTransitionSandbox, TimeWithSleep, event,
                            seed_developer_brief_fixtures,
                            sync_spec_from_worktree)
 
@@ -121,7 +121,7 @@ class StepDocsDirSandbox(LightTransitionSandbox):
 
         for target, attr, value in ((shutil, "which", which),
                                     (subprocess, "run", run),
-                                    (runner.time, "sleep", lambda _: None),
+                                    (runner, "time", TimeWithSleep(lambda _: None)),
                                     (keychain, "token", lambda slot: "tok-test")):
             patcher = mock.patch.object(target, attr, value)
             patcher.start()
