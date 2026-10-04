@@ -6,7 +6,8 @@ CI/свежести, реальный `--no-ff` merge, worktree первым) у
 приёмочные тесты (tasks/T073/acceptance_tests/test_ac1..test_ac3), тем
 же приёмом, что и `tests/test_fsm_retro.py` для соседнего RETRO-вызова
 в том же окне. Здесь — сама функция уборки в изоляции, по образцу
-`tests/test_kill_cleanup.py`/`tests/test_workspace.py`.
+`tests/test_kill_cleanup.py`/`tests/test_workspace.py`. Репозиторий ветки
+называется явно (`self.root` — клон проекта задачи, ADR-0021 п.1, этап 2).
 """
 import subprocess
 import sys
@@ -59,7 +60,7 @@ class DropMergedTaskBranchTest(unittest.TestCase):
         self.git("checkout", "-q", config.MAIN_BRANCH)
         self.git("merge", "-q", "--no-ff", "task/t900-x", "-m", "merge")
 
-        out = cleanup.drop_merged_task_branch("task/t900-x")
+        out = cleanup.drop_merged_task_branch("task/t900-x", self.root)
 
         self.assertEqual(out, "удалена ветка task/t900-x")
         self.assertNotIn("task/t900-x", self.branches())
@@ -71,18 +72,18 @@ class DropMergedTaskBranchTest(unittest.TestCase):
         self.git("commit", "-q", "-m", "T901: работа")
         self.git("checkout", "-q", config.MAIN_BRANCH)
 
-        out = cleanup.drop_merged_task_branch("task/t901-x")
+        out = cleanup.drop_merged_task_branch("task/t901-x", self.root)
 
         self.assertIn("не удалена", out)
         self.assertIn("task/t901-x", self.branches())
 
     def test_missing_branch_is_reported_without_error(self):
-        out = cleanup.drop_merged_task_branch("task/t404-nope")
+        out = cleanup.drop_merged_task_branch("task/t404-nope", self.root)
 
         self.assertEqual(out, "локальной ветки task/t404-nope нет")
 
     def test_empty_branch_is_reported_without_calling_git(self):
-        out = cleanup.drop_merged_task_branch("")
+        out = cleanup.drop_merged_task_branch("", self.root)
 
         self.assertEqual(out, "ветка задачи не записана — нечего удалять")
 

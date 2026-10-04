@@ -12,11 +12,12 @@ from orchestrator import doctor
 
 def _fix_ignored_artifact_files(conn) -> None:
     """`doctor --fix`: убирает из ссылки документов `refs/artifacts/<id>`
-    (ADR-0021 п.3) КАЖДОЙ живой задачи файлы, которые `.gitignore` пульта (`config.ROOT`) считает
-    игнорируемыми (тот же критерий, что `checkpoint._commit_external_
-    step_artifacts` уже применяет к новым автокоммитам, `gitcmd.
-    check_ignore`) — легализация ADR-0013 «вариант A» для файлов,
-    занесённых ДО этой задачи (инцидент 03.09, SPEC «Контекст»).
+    (ADR-0021 п.3) КАЖДОЙ живой задачи файлы, которые `.gitignore` клона
+    её проекта считает игнорируемыми (тот же критерий, что
+    `checkpoint._commit_external_step_artifacts` уже применяет к новым
+    автокоммитам, `gitcmd.check_ignore`) — легализация ADR-0013 «вариант
+    A» для файлов, занесённых ДО этой задачи (инцидент 03.09, SPEC
+    «Контекст»).
 
     Плотницкая запись (`artifact_branch.commit_files`, `remove=`) пишет
     прямо в объектную базу `config.ROOT`, не в рабочее дерево — `main`
@@ -40,7 +41,8 @@ def _fix_ignored_artifact_files(conn) -> None:
             task_id, branch, f"tasks/{task_id}") or []
         if not existing:
             continue
-        ignored = doctor.gitcmd.check_ignore(existing)
+        ignored = doctor.gitcmd.check_ignore(
+            existing, repo=doctor.workspace.task_repo(task_id))
         if not ignored:
             continue
         to_remove = sorted(ignored)

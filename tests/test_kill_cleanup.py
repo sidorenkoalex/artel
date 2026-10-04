@@ -37,7 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
                           gitcmd, store, workspace)
 from tests.sandbox import (capture, capture_new_task_id,  # noqa: E402
-                           resilient_tmp_cleanup)
+                           link_artel_clone_to_root, resilient_tmp_cleanup,
+                           strip_dash_c)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -81,10 +82,16 @@ class TmpRepoTest(unittest.TestCase):
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
                             ("LOGS", self.root / ".artel" / "logs"),
-                            ("WORKTREES", self.root / ".artel" / "worktrees")):
+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
+                            ("PROJECTS", self.root / ".artel" / "projects"),
+                            ("TARGETS", self.root / "targets.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветка и
+        # рабочая копия задачи живут в клоне, сценарии сверяют их git'ом
+        # `self.root`.
+        link_artel_clone_to_root(self.root)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(
@@ -487,7 +494,9 @@ class CleanupWithoutGitTest(TmpRepoTest):
         real_git = gitcmd.git
 
         def flaky(*git_args: str):
-            if git_args and git_args[0] == subcommand:
+            # Сквозь `-C <репозиторий>`: git задачи и легаси-каталога идёт
+            # с явным репозиторием (ADR-0021 п.1, этап 2).
+            if strip_dash_c(git_args)[:1] == (subcommand,):
                 return subprocess.CompletedProcess(
                     git_args, 128, "", f"fatal: {subcommand} не отвечает")
             return real_git(*git_args)

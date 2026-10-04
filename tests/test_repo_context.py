@@ -23,12 +23,14 @@ class ResolveSelfTest(TmpRootTest):
         """Ловит мутацию: `resolve()` читает targets.yaml ДО (или вместо)
         проверки `target_name == DEFAULT_TARGET` — упадёт на
         несуществующем файле (`self.assertFalse` в начале доказывает, что
-        файла нет вовсе), либо вернёт не тот `path`/`remote`/`base`."""
+        файла нет вовсе), либо вернёт не тот `path`/`remote`/`base`; с
+        этапа 2 ADR-0021 (п.1) путь артели — её клон `.artel/projects/artel/
+        repo`, не `config.ROOT`."""
         self.assertFalse(config.TARGETS.exists())
 
         ctx = repo_context.resolve(config.DEFAULT_TARGET)
 
-        self.assertEqual(ctx.path, config.ROOT)
+        self.assertEqual(ctx.path, config.PROJECTS / config.DEFAULT_TARGET / "repo")
         self.assertEqual(ctx.remote, "origin")
         self.assertEqual(ctx.base, config.MAIN_BRANCH)
 
@@ -52,11 +54,11 @@ class ResolveExternalTargetTest(TmpRootTest):
     def test_external_target_reads_targets_yaml(self):
         """Ловит мутацию: поля `RepoContext` перепутаны местами (`remote`
         получает `base`/наоборот) либо `path` читается из `config.ROOT`
-        вместо `.artel/projects/<target>/workspace` (AC-14 — один и тот
-        же адрес, что уже использует `snapshot.py`)."""
+        вместо клона `.artel/projects/<target>/repo` (ADR-0021 п.1, этап 2;
+        до него — общий `workspace/`)."""
         ctx = repo_context.resolve("sled")
 
-        self.assertEqual(ctx.path, config.PROJECTS / "sled" / "workspace")
+        self.assertEqual(ctx.path, config.PROJECTS / "sled" / "repo")
         self.assertEqual(ctx.remote, "http://localhost/sled")
         self.assertEqual(ctx.base, "trunk")
 
@@ -84,13 +86,15 @@ class PathOrNoneTest(unittest.TestCase):
         self.assertIsNone(repo_context.path_or_none(None))
 
     def test_self_context_is_none(self):
-        """Ловит мутацию: `path_or_none` сравнивает `ctx.path` не с
-        `config.ROOT`, а с чем-то ещё (например, всегда возвращает
-        `ctx.path`) — self перестал бы означать «параметр repo= можно не
-        передавать» (self-байт-в-байт сломан)."""
-        ctx = repo_context.RepoContext(path=config.ROOT, remote="origin",
-                                       base=config.MAIN_BRANCH)
-        self.assertIsNone(repo_context.path_or_none(ctx))
+        """Ловит мутацию: `path_or_none` оставляет особый случай артели —
+        возвращает `None` для контекста артели (прежнее «параметр repo=
+        можно не передавать»): git задачи артели ушёл бы в главную копию
+        вместо клона (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7,
+        AC-6). Имя метода — прежнее: `None` теперь только у неразрешённого
+        контекста."""
+        ctx = repo_context.resolve(config.DEFAULT_TARGET)
+        self.assertEqual(repo_context.path_or_none(ctx),
+                         config.PROJECTS / config.DEFAULT_TARGET / "repo")
 
     def test_external_context_is_its_path(self):
         """Ловит мутацию: `path_or_none` возвращает `None` и для внешнего
@@ -104,17 +108,18 @@ class PathOrNoneTest(unittest.TestCase):
 class GitHelperTest(unittest.TestCase):
 
     def test_self_context_calls_plain_git(self):
-        """Ловит мутацию: `repo_context.git` зовёт `gitcmd.in_repo` для
-        self тоже (например, всегда добавляет `-C config.ROOT`) — self
-        перестал бы быть байт-в-байт прежним вызовом `gitcmd.git`."""
-        ctx = repo_context.RepoContext(path=config.ROOT, remote="origin",
-                                       base=config.MAIN_BRANCH)
+        """Ловит мутацию: `repo_context.git` для артели зовёт голый
+        `gitcmd.git` (главная копия) вместо `gitcmd.in_repo` клона артели
+        (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7, требование
+        3, AC-6). Имя метода — прежнее."""
+        ctx = repo_context.resolve(config.DEFAULT_TARGET)
         with mock.patch.object(gitcmd, "git") as git_mock, \
              mock.patch.object(gitcmd, "in_repo") as in_repo_mock:
             repo_context.git(ctx, "status")
 
-        git_mock.assert_called_once_with("status")
-        in_repo_mock.assert_not_called()
+        in_repo_mock.assert_called_once_with(
+            config.PROJECTS / config.DEFAULT_TARGET / "repo", "status")
+        git_mock.assert_not_called()
 
     def test_external_context_calls_in_repo(self):
         """Ловит мутацию: `repo_context.git` зовёт голый `gitcmd.git` для

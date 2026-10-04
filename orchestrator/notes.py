@@ -2,9 +2,10 @@
 от `origin/<config.MAIN_BRANCH>`, минуя пин HEAD главной копии (ADR-0013;
 tasks/01M1VBEHTDYPK3E4RRFHWYYYW3).
 
-Правка `docs/backlog.md` идёт не в рабочей копии `config.ROOT`, а в
-отдельном постоянном git-репозитории (`_work_dir()`, лениво заводится
-`git init` при первом обращении) — HEAD/ветка/рабочее дерево главной
+Правка `docs/backlog.md` идёт не в рабочей копии `config.ROOT`, а в клоне
+артели `.artel/projects/artel/repo` (`_work_dir()`, ADR-0021 п.1; SPEC
+01M42PENCS26D0656X8FR7DFA7, требование 5 — до него отдельный
+`.artel/notes-work`, упразднён) — HEAD/ветка/рабочее дерево и git главной
 копии не трогаются ни при одном исходе (AC-5). Каждая попытка коммита —
 свежий `fetch origin/<MAIN_BRANCH>` + пересчёт правки от актуального
 содержимого: non-fast-forward отклонённый push повторяется с новым
@@ -46,8 +47,10 @@ merge-окна либо задача в состоянии из `config.NOTE_SIL
 меняются (требование 9). Допустимые пути — `docs/**` кроме
 `BACKLOG_REL` (для него `note`) и конфигурация Оператора
 `DOC_COMMIT_CONFIG_PATHS` (требование 3); сверка базы (требование 5) —
-blob-sha пути в `origin/<MAIN_BRANCH>` против `HEAD:<путь>` главной копии
-(пина), чтобы правка поверх устаревшей версии не затёрла чужую.
+blob-sha пути в свежем `origin/<MAIN_BRANCH>` против того же пути в
+`origin/<MAIN_BRANCH>` клона, каким клон знал его ДО fetch этой команды
+(`_known_origin_main`; до SPEC 01M42PENCS26D0656X8FR7DFA7 — `HEAD:<путь>`
+главной копии), чтобы правка поверх устаревшей версии не затёрла чужую.
 
 Единый формат строки бэклога (01M3HST4SGX0SPKAGNHVY7DWHM): текст `--text`
 разбирается ТЕМ ЖЕ `_row_cells`, которым читается шапка раздела, — форма
@@ -108,7 +111,7 @@ import uuid
 from datetime import date
 from pathlib import Path, PurePosixPath
 
-from . import acceptance, config, gitcmd, merge_lock, runner, store
+from . import acceptance, config, gitcmd, merge_lock, runner, store, workspace
 
 BACKLOG_REL = "docs/backlog.md"
 
@@ -225,7 +228,9 @@ NOTE_COMMIT_SUBJECT_PREFIX = "оператор: "
 
 
 def _work_dir() -> Path:
-    return config.ROOT / ".artel" / "notes-work"
+    """Клон артели — рабочий репозиторий `note`/`doc-commit` (SPEC
+    01M42PENCS26D0656X8FR7DFA7, требование 5)."""
+    return workspace.repo(config.DEFAULT_TARGET)
 
 
 def _pending_dir() -> Path:
@@ -274,17 +279,18 @@ def _silence_window_reason() -> str | None:
     return None
 
 
-def _hold_pending(request: dict) -> None:
+def _hold_pending(request: dict, known: str = "") -> None:
     """Удержать запись файлом в `_pending_dir()`. Запись `doc-commit`
     получает базу (`HELD_BASE_KEY`) здесь, а не при сборке запроса:
-    немедленная отправка сверяется с пином (требование 3), и поле базы в
-    ней перевело бы её на сверку удержанной записи. Удержание идёт в том
-    же вызове `doc-commit`, HEAD главной копии за это время не двигается —
-    это и есть база «в момент вызова». Уже несущая поле запись (повторное
+    немедленная отправка сверяется с базой без поля (требование 3), и поле
+    базы в ней перевело бы её на сверку удержанной записи. База — blob
+    пути в `origin/<MAIN_BRANCH>` клона артели, каким клон знал его до
+    fetch этого вызова (`known`, SPEC 01M42PENCS26D0656X8FR7DFA7, требование
+    5, AC-10), не HEAD главной копии. Уже несущая поле запись (повторное
     удержание) базу не переписывает."""
     if request["kind"] == DOC_COMMIT_KIND and HELD_BASE_KEY not in request:
-        request = {**request, HELD_BASE_KEY: _blob_sha(
-            config.ROOT, f"HEAD:{request['path']}")}
+        request = {**request, HELD_BASE_KEY: _known_blob(
+            _work_dir(), known, request["path"])}
     d = _pending_dir()
     d.mkdir(parents=True, exist_ok=True)
     name = f"{int(time.time() * 1000):013d}-{uuid.uuid4().hex[:8]}.json"
@@ -623,24 +629,31 @@ def _commit_message(section_key: str, request: dict,
     return f"{prefix}{section_key} — {request['text'][:80]}"
 
 
-def _origin_url() -> str:
-    res = gitcmd.git("remote", "get-url", "origin")
+def _ensure_work_repo() -> Path:
+    """Клон артели есть (заводится, если нет); не заводится — отказ без
+    отката на главную копию."""
+    work_dir, error = workspace.ensure_clone(config.DEFAULT_TARGET)
+    if error is not None:
+        sys.exit(f"{error} — note недоступна")
+    return work_dir
+
+
+def _known_origin_main(work_dir: Path) -> str:
+    """sha `origin/<MAIN_BRANCH>` клона, каким он известен ДО fetch этой
+    команды — база сверки «правка поверх устаревшей версии» (до SPEC
+    01M42PENCS26D0656X8FR7DFA7 — HEAD главной копии). Пустая строка —
+    ссылки нет."""
+    res = gitcmd.in_repo(work_dir, "rev-parse", "--verify", "--quiet",
+                         f"refs/remotes/origin/{config.MAIN_BRANCH}")
     if res is None or res.returncode != 0:
-        sys.exit("origin не настроен в репозитории пульта — note недоступна")
+        return ""
     return res.stdout.strip()
 
 
-def _ensure_work_repo() -> Path:
-    work_dir = _work_dir()
-    if not (work_dir / ".git").exists():
-        gitcmd.git("init", "-q", str(work_dir))
-    url = _origin_url()
-    existing = gitcmd.in_repo(work_dir, "remote", "get-url", "origin")
-    if existing is not None and existing.returncode == 0:
-        gitcmd.in_repo(work_dir, "remote", "set-url", "origin", url)
-    else:
-        gitcmd.in_repo(work_dir, "remote", "add", "origin", url)
-    return work_dir
+def _known_blob(work_dir: Path, known: str, rel: str) -> str | None:
+    """blob-sha `rel` в коммите `known`; `None` — пути там нет либо базы
+    нет вовсе."""
+    return _blob_sha(work_dir, f"{known}:{rel}") if known else None
 
 
 def _read_backlog(work_dir: Path) -> str:
@@ -741,11 +754,13 @@ def _restore_tree(work_dir: Path, rel: str) -> None:
     gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", rel)
 
 
-def _build_doc_commit(work_dir: Path,
-                      request: dict) -> tuple[str, str, str | None]:
+def _build_doc_commit(work_dir: Path, request: dict,
+                      known: str = "") -> tuple[str, str, str | None]:
     """Валидация записи `doc-commit` от свежего `FETCH_HEAD` (требование
     5, AC-4): blob-sha пути в `origin/<MAIN_BRANCH>` должен совпадать с
-    blob-sha того же пути в HEAD главной копии — иначе правка сделана
+    blob-sha того же пути в `origin/<MAIN_BRANCH>` клона до fetch этой
+    команды (`known`; до SPEC 01M42PENCS26D0656X8FR7DFA7 — HEAD главной
+    копии) — иначе правка сделана
     поверх устаревшей версии и затёрла бы чужую. Оба отсутствуют — новый
     файл, допустим. Сравниваются sha объектов, не декодированный текст:
     точная сверка без вопросов кодировки и переводов строк.
@@ -775,7 +790,7 @@ def _build_doc_commit(work_dir: Path,
                      f"{origin_sha or 'файла нет'}) — собери заново от "
                      f"origin")
     else:
-        pin_sha = _blob_sha(config.ROOT, f"HEAD:{rel}")
+        pin_sha = _known_blob(work_dir, known, rel)
         if origin_sha != pin_sha:
             sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
     content = request["content"]
@@ -861,8 +876,8 @@ def _foreign_backlog_commits(work_dir: Path,
     return foreign
 
 
-def _foreign_base_refusal(work_dir: Path,
-                          origin_sha: str | None) -> str | None:
+def _foreign_base_refusal(work_dir: Path, origin_sha: str | None,
+                          known: str = "") -> str | None:
     """Текст отказа сверки базы `--apply` при ПЕРВОМ построении правки,
     либо `None` — база годна (требование 10).
 
@@ -880,11 +895,15 @@ def _foreign_base_refusal(work_dir: Path,
     коммит не пультовой идентичности: заготовка готовилась от другой версии
     документа и стёрла бы такую правку ЦЕЛИКОМ, а не одной строкой. Git не
     ответил — тоже отказ: сверка закрыта по умолчанию.
+
+    База — `origin/<MAIN_BRANCH>` клона артели до fetch этой команды
+    (`known`, SPEC 01M42PENCS26D0656X8FR7DFA7, требование 5), не HEAD
+    главной копии.
     """
-    if origin_sha is not None and origin_sha == _blob_sha(
-            config.ROOT, f"HEAD:{BACKLOG_REL}"):
+    if origin_sha is not None and origin_sha == _known_blob(
+            work_dir, known, BACKLOG_REL):
         return None
-    pin_commit = gitcmd.head_sha(config.ROOT)
+    pin_commit = known
     foreign = (_foreign_backlog_commits(work_dir, pin_commit)
                if pin_commit else None)
     if foreign is None:
@@ -895,7 +914,7 @@ def _foreign_base_refusal(work_dir: Path,
 
 
 def _build_apply(work_dir: Path, request: dict,
-                 original: str) -> tuple[str, str, str | None]:
+                 original: str, known: str = "") -> tuple[str, str, str | None]:
     """Валидация и построение правки `note --apply` (требования 9-12).
 
     Сверка базы — двумя шагами (требование 10: «если `docs/backlog.md` в
@@ -926,7 +945,7 @@ def _build_apply(work_dir: Path, request: dict,
     origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{BACKLOG_REL}")
     recorded = request.get("base_blob")
     if recorded is None:
-        refusal = _foreign_base_refusal(work_dir, origin_sha)
+        refusal = _foreign_base_refusal(work_dir, origin_sha, known)
         if refusal is not None:
             sys.exit(f"{BACKLOG_REL}: {refusal}")
         request["base_blob"] = origin_sha
@@ -1015,8 +1034,8 @@ def _write_doc(work_dir: Path, rel: str, text: str) -> None:
     target.write_bytes(text.encode("utf-8"))
 
 
-def _fetch_and_build(work_dir: Path,
-                     request: dict) -> tuple[str, str, str | None] | None:
+def _fetch_and_build(work_dir: Path, request: dict,
+                     known: str = "") -> tuple[str, str, str | None] | None:
     """Fetch+checkout свежего `origin/<MAIN_BRANCH>` и валидация+построение
     правки (`_build_for`) — общая точка для немедленного push (`_attempt`,
     `_run`) и для решения «push или удержание» при окне тишины (требование
@@ -1050,10 +1069,10 @@ def _fetch_and_build(work_dir: Path,
         return None
     gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", _target_rel(request))
     if request["kind"] == DOC_COMMIT_KIND:
-        return _build_doc_commit(work_dir, request)
+        return _build_doc_commit(work_dir, request, known)
     original = _read_backlog(work_dir)
     if request["kind"] == APPLY_KIND:
-        return _build_apply(work_dir, request, original)
+        return _build_apply(work_dir, request, original, known)
     return _build_for(request, original)
 
 
@@ -1154,8 +1173,9 @@ def _attempt(request: dict) -> str | None:
     уровне вызывающего кода, не здесь).
     """
     work_dir = _ensure_work_repo()
+    known = _known_origin_main(work_dir)
     for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):
-        prepared = _fetch_and_build(work_dir, request)
+        prepared = _fetch_and_build(work_dir, request, known)
         if prepared is None:
             return None
         new_text, section_key, observation = prepared
@@ -1242,15 +1262,16 @@ def _run(request: dict, bypass_window: bool = False) -> str | None:
     else:
         held, accusative, command = "заметка удержана", "заметку", "note"
     work_dir = _ensure_work_repo()
+    known = _known_origin_main(work_dir)
     for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):
-        prepared = _fetch_and_build(work_dir, request)
+        prepared = _fetch_and_build(work_dir, request, known)
         if prepared is None:
             break
         new_text, section_key, observation = prepared
         if not bypass_window:
             reason = _silence_window_reason()
             if reason is not None:
-                _hold_pending(request)
+                _hold_pending(request, known)
                 print(f"{held}: {reason}; отправка — {command} --flush "
                       f"либо автоматически следующим {command} вне окна")
                 return None
@@ -1258,7 +1279,7 @@ def _run(request: dict, bypass_window: bool = False) -> str | None:
                                observation)
         if sha is not None:
             return sha
-    _hold_pending(request)
+    _hold_pending(request, known)
     sys.exit(
         f"не удалось отправить {accusative} в origin — коммит удержан "
         f"(.artel/notes-pending/), повтори {command} позже либо {command} "

@@ -160,7 +160,7 @@ from scripts import guard
 
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
               auto, budget, catalog, cleanup, config, fsm, gitcmd, liveness,
-              models, roles, runner, store, yamlmini)
+              models, roles, runner, store, workspace, yamlmini)
 from .pool_seal import _pool_dir
 from .providers import codex as codex_provider
 
@@ -1206,6 +1206,7 @@ def _ephemeral_clone(target_sha: str | None = None,
                 f"{origin.stderr.strip()}")
         for attr in _CLONE_CONFIG_ATTRS:
             setattr(config, attr, dest / saved[attr].relative_to(outer_root))
+        _build_artel_project_area(origin_dir)
         catalog.cmd_init()
         if local_layer_text is not None:
             config.MODELS_LOCAL.parent.mkdir(parents=True, exist_ok=True)
@@ -1237,6 +1238,27 @@ def _ephemeral_clone(target_sha: str | None = None,
             setattr(config, attr, value)
         shutil.rmtree(dest, ignore_errors=True)
         shutil.rmtree(origin_dir, ignore_errors=True)
+
+
+def _build_artel_project_area(origin_dir: Path) -> None:
+    """Область проекта артели во временном каталоге клона (SPEC
+    01M42PENCS26D0656X8FR7DFA7, требование 7, AC-12): `projects/artel/repo`
+    — клон origin-заглушки, а не `url` записи `targets.yaml` (тот ведёт в
+    боевой `origin` пульта, куда канарейка не ходит, требование 3 SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ). Хуки — пина клона (`config.ROOT` уже
+    переадресован на него). Рабочие копии задач заводит дальше тот же
+    код, что у боевого пульта (`workspace.ensure` из `catalog.cmd_new`
+    процесса клона). Боевая `.artel/projects/artel` не трогается."""
+    repo = workspace.repo(config.DEFAULT_TARGET)
+    repo.parent.mkdir(parents=True, exist_ok=True)
+    res = gitcmd.in_repo(repo.parent, "clone", "-q", str(origin_dir), repo.name)
+    if res is None or res.returncode != 0:
+        raise RuntimeError(
+            f"canary: клон области проекта артели не создан: "
+            f"{(res.stderr or '').strip() if res is not None else 'git не ответил'}")
+    error = workspace.set_clone_hooks(repo)
+    if error is not None:
+        raise RuntimeError(f"canary: хуки клона области проекта: {error}")
 
 
 def _spec_gate_next_state(conn, task_id: str, t) -> str | None:

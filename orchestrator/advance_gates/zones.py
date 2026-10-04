@@ -195,7 +195,8 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-2), не голый `config.MAIN_BRANCH`:
     # иначе коммит main, ещё не влитый в ветку задачи, выглядит правкой
     # самой задачи и ложно отказывает переход как «вне зон».
-    base = gitcmd.diff_base(t["branch"])
+    repo = workspace.task_repo(task_id)
+    base = gitcmd.diff_base(t["branch"], repo=repo)
     if base is None:
         detail = (f"гейт зон: git не ответил на определение базы сравнения "
                  f"(merge-base с origin/{config.MAIN_BRANCH} либо "
@@ -204,7 +205,7 @@ def _zones_gate(conn, task_id: str, t, branch: str,
         hint = (f"разберись, почему git не отвечает на merge-base "
                f"для {t['branch']}, и повтори artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт зон", detail, hint)
-    files = gitcmd.diff_names(base, t["branch"])
+    files = gitcmd.diff_names(base, t["branch"], repo=repo)
     if files is None:
         detail = (f"гейт зон: git не ответил на список файлов диффа "
                  f"(база {base}...{t['branch']}) — сверка с зонами "
@@ -285,7 +286,7 @@ def _zones_gate(conn, task_id: str, t, branch: str,
 
     # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
     # реально сравнивали, не только литерал diff-диапазона.
-    source = gitcmd.diff_base_source(t["branch"])
+    source = gitcmd.diff_base_source(t["branch"], repo=repo)
     detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES "
              f"(база сравнения {base} от {source}): "
              f"{', '.join(out_of_zone)}")

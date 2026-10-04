@@ -43,7 +43,8 @@ def check_branch_freshness(conn) -> list[doctor.Check]:
             continue
         target_name = t["target"] or doctor.config.DEFAULT_TARGET
         if target_name == doctor.config.DEFAULT_TARGET:
-            behind = doctor.gitcmd.commits_behind(t["branch"])
+            behind = doctor.gitcmd.commits_behind(
+                t["branch"], repo=doctor.workspace.repo(target_name))
         else:
             ctx = doctor.repo_context.resolve(target_name)
             if ctx is None:

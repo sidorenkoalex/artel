@@ -47,7 +47,11 @@ def _auto_ack_gone(conn, source: str, is_live, target: str | None = None) -> Non
 
 def _branch_alert_live(message: str) -> bool:
     match = doctor._BRANCH_ALERT_RE.search(message)
-    return match is None or doctor.gitcmd.branch_exists(match.group(1))
+    # Ветка задачи живёт в клоне её проекта (ADR-0021 п.1): алерт жив,
+    # пока ветка есть хоть в одном клоне.
+    return match is None or any(
+        doctor.gitcmd.branch_exists(match.group(1), repo=clone)
+        for clone in doctor._project_clones())
 
 
 def _dir_alert_live(message: str, known_ids: set) -> bool:

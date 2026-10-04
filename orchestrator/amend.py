@@ -179,7 +179,8 @@ def _group_line_errors(t, rel_tests_dir: str,
     проверяем: тот же исход, что у планки до правила."""
     if t["target"] != config.DEFAULT_TARGET:
         return []
-    locked = _branch_tests_snapshot(t["tests_locked_sha"], rel_tests_dir)
+    locked = _branch_tests_snapshot(t["tests_locked_sha"], rel_tests_dir,
+                                    t["id"])
     if locked is None or not guard.plank_has_group_lines(_test_files(locked)):
         return []
     return guard.group_line_errors_from_files(files)
@@ -379,15 +380,16 @@ def _code_head_long_lived(code_branch: str, task_id: str
                           ) -> tuple[str, dict[str, str]] | None:
     """(голова кодовой ветки, {путь: текст} её долгоживущих файлов задачи);
     `None` — git не ответил."""
-    head = gitcmd.branch_head_sha(code_branch)
-    present = gitcmd.ls_tree_files(head, "tests") if head else None
+    repo = workspace.task_repo(task_id)
+    head = gitcmd.branch_head_sha(code_branch, repo=repo)
+    present = gitcmd.ls_tree_files(head, "tests", repo=repo) if head else None
     if present is None:
         return None
     files: dict[str, str] = {}
     for rel in present:
         if not guard.is_long_lived_test_path(task_id, rel):
             continue
-        text, _reason = gitcmd.show(head, rel)
+        text, _reason = gitcmd.show(head, rel, repo=repo)
         if text is None:
             return None
         files[rel] = text
@@ -397,31 +399,33 @@ def _code_head_long_lived(code_branch: str, task_id: str
 def _head_digests(head: str, task_id: str) -> dict[str, str] | None:
     """{путь: sha256 байтов} долгоживущих файлов задачи в дереве `head` —
     содержимое перечня Р2; `None` — git не ответил."""
-    present = gitcmd.ls_tree_files(head, "tests") if head else None
+    repo = workspace.task_repo(task_id)
+    present = gitcmd.ls_tree_files(head, "tests", repo=repo) if head else None
     if present is None:
         return None
     digests: dict[str, str] = {}
     for rel in present:
         if guard.is_long_lived_test_path(task_id, rel):
-            digest = acceptance_gates.blob_sha256(head, rel)
+            digest = acceptance_gates.blob_sha256(head, rel, repo)
             if digest is None:
                 return None
             digests[rel] = digest
     return digests
 
 
-def _deleted_file_text(code_head: str, rel: str) -> str | None:
+def _deleted_file_text(code_head: str, rel: str, repo: Path) -> str | None:
     """Текст удаляемого файла перечня: с головы кодовой ветки, а если там
-    его уже нет — с родителя коммита, который его удалил."""
-    text, _reason = gitcmd.show(code_head, rel)
+    его уже нет — с родителя коммита, который его удалил. `repo` — клон
+    проекта задачи."""
+    text, _reason = gitcmd.show(code_head, rel, repo=repo)
     if text is not None:
         return text
-    res = gitcmd.git("log", "-1", "--format=%H", "--no-renames",
-                     "--diff-filter=D", code_head, "--", rel)
+    res = gitcmd.in_repo(repo, "log", "-1", "--format=%H", "--no-renames",
+                         "--diff-filter=D", code_head, "--", rel)
     sha = res.stdout.strip() if res is not None and res.returncode == 0 else ""
     if not sha:
         return None
-    text, _reason = gitcmd.show(f"{sha}^", rel)
+    text, _reason = gitcmd.show(f"{sha}^", rel, repo=repo)
     return text
 
 
@@ -658,12 +662,14 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     rel_tests_dir = f"tasks/{task_id}/acceptance_tests"
     tdir = wt_path / "tasks" / task_id
     files = _worktree_long_lived_files(wt_path, task_id)
-    code_head = gitcmd.branch_head_sha(t["branch"])
+    code_head = gitcmd.branch_head_sha(t["branch"],
+                                       repo=workspace.task_repo(task_id))
     if files is None or not code_head:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"долгоживущие файлы worktree {wt_path} или голову "
                  f"{t['branch']}")
-    deleted = {rel: _deleted_file_text(code_head, rel)
+    deleted = {rel: _deleted_file_text(code_head, rel,
+                                         workspace.task_repo(task_id))
                for rel in manifest if rel not in files}
 
     created_spec = _materialize_spec_if_missing(task_id, tdir)
@@ -693,7 +699,8 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
             sys.exit(f"[{task_id}] amend-tests: коммит правки "
                      f"{', '.join(long_changed)} в кодовую ветку не удался — "
                      f"ничего не записано")
-        code_head = gitcmd.branch_head_sha(t["branch"])
+        code_head = gitcmd.branch_head_sha(t["branch"],
+                                           repo=workspace.task_repo(task_id))
     digests = _head_digests(code_head, task_id) if code_head else None
     new_locked, refusal = "", ""
     if digests is not None:
@@ -753,24 +760,19 @@ def _record_amend(conn, task_id: str, detail: str, line: str) -> None:
 
 
 def _branch_tests_snapshot(rev: str, rel_tests_dir: str,
-                           task_id: str | None = None) -> dict[str, str] | None:
+                           task_id: str) -> dict[str, str] | None:
     """{путь: текст} `rel_tests_dir` на git-ревизии `rev` — `rev` может
     быть именем ветки ИЛИ голым sha, `gitcmd.ls_tree_files`/`gitcmd.show`
     принимают любую git-ревизию одинаково (тот же приём, каким
     `fsm_advance._zones_gate` уже сравнивает дерево на разных точках
     истории). `None` — git не ответил на любой из двух вызовов.
-    `task_id` задан — чтение в репозитории задачи (`artifact_branch`,
-    ADR-0021 п.3), иначе — в git пульта."""
-    if task_id:
-        paths = artifact_branch.ls_tree(task_id, rev, rel_tests_dir)
-    else:
-        paths = gitcmd.ls_tree_files(rev, rel_tests_dir)
+    Чтение — в репозитории задачи (`artifact_branch`, ADR-0021 п.3)."""
+    paths = artifact_branch.ls_tree(task_id, rev, rel_tests_dir)
     if paths is None:
         return None
     files = {}
     for rel in paths:
-        text, _reason = (artifact_branch.show(task_id, rev, rel) if task_id
-                         else gitcmd.show(rev, rel))
+        text, _reason = artifact_branch.show(task_id, rev, rel)
         if text is None:
             return None
         files[rel] = text
@@ -942,7 +944,8 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
     задачи, куда планка материализуется с головы ветки документов, как на
     `in_dev -> verifying`. Незакоммиченная правка долгоживущих путей в
     worktree — отказ: прогон проверил бы её, а не голову ветки."""
-    deleted = {rel: _deleted_file_text(code_head, rel)
+    deleted = {rel: _deleted_file_text(code_head, rel,
+                                         workspace.task_repo(task_id))
                for rel in manifest if rel not in head_files}
     errors = _long_lived_errors(task_id, head_files, deleted,
                                 [text for _rel, text in plank_files])

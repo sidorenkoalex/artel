@@ -625,6 +625,7 @@ def fake_git_for(responses: dict) -> callable:
     несёт `fake_git` (эти сценарии — сверка свежести карты/её регенерация
     в tests/test_brief.py — идентичности и веток не касаются)."""
     def fake(*args: str) -> subprocess.CompletedProcess:
+        args = strip_dash_c(args)
         if args and args[0] in responses:
             rc, out, err = responses[args[0]]
             return subprocess.CompletedProcess(list(args), rc, out, err)
@@ -881,6 +882,19 @@ def make_project_repo(target: str, origin: bool = True) -> Path:
 _ABSENT_REF_PREFIXES = ("refs/heads/", "refs/artifacts/")
 
 
+def strip_dash_c(args) -> tuple:
+    """Аргументы git-вызова без ведущих пар `-C <путь>`: с этапа 2 ADR-0021
+    (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 4) пульт адресует git
+    задачи клону проекта явно (`gitcmd.in_repo` -> `git("-C", клон, …)`), и
+    заглушки, разбирающие подкоманду первым позиционным аргументом,
+    смотрят сквозь эту пару — тот же пропуск, что у
+    `SpyRun.git_subcommands`."""
+    args = tuple(args)
+    while len(args) >= 2 and args[0] == "-C":
+        args = args[2:]
+    return args
+
+
 class SpyRun:
     """Подмена `subprocess.run`: команда запоминается; исход зависит от
     `passthrough_unknown`.
@@ -933,6 +947,11 @@ class SpyRun:
 
     def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(cmd))
+        real_cmd = cmd
+        # Распознавание — сквозь ведущие `-C <клон>` (`strip_dash_c`): git
+        # задачи идёт в клон проекта явным репозиторием.
+        if len(cmd) >= 2 and cmd[0] == "git":
+            cmd = ["git", *strip_dash_c(cmd[1:])]
         # Тип stdout/stderr — как у настоящего `subprocess.run`: `bytes`,
         # если вызывающий код не просил текст (`text`/`universal_newlines`/
         # `encoding`) — иначе код вроде `artifact_branch.write_commit`
@@ -973,7 +992,7 @@ class SpyRun:
         if len(cmd) >= 2 and cmd[1] in self._PLUMBING_OK:
             return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
         if self.passthrough_unknown:
-            return network_guarded_real_run(cmd, *args, **kwargs)
+            return network_guarded_real_run(real_cmd, *args, **kwargs)
         return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
 
     def git_subcommands(self) -> list:
@@ -1029,6 +1048,7 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     успехом дефолтной веткой ниже) и отказывался бы заводить worktree
     там, где раньше заводил всегда.
     """
+    args = strip_dash_c(args)
     if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
             and args[-1].startswith(_ABSENT_REF_PREFIXES)):
         return subprocess.CompletedProcess(list(args), 1, "", "")
@@ -1049,6 +1069,33 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
 
 
+def seed_artel_clone_stub() -> Path:
+    """Пустой git-репозиторий на месте клона артели песочницы
+    (`config.PROJECTS/artel/repo`) — настоящим `git init`, мимо подмен
+    `subprocess.run` (`_REAL_RUN`)."""
+    clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
+    clone.mkdir(parents=True, exist_ok=True)
+    _REAL_RUN(["git", "init", "-q", "-b", config.MAIN_BRANCH, str(clone)],
+              capture_output=True, text=True)
+    return clone
+
+
+def link_artel_clone_to_root(root: Path) -> Path:
+    """Клон артели песочницы — сам её репозиторий `root` (символьная
+    ссылка `config.PROJECTS/artel/repo` -> `root`): легаси-сценарии
+    песочницы на настоящем git, написанные до этапа 2 ADR-0021 (SPEC
+    01M42PENCS26D0656X8FR7DFA7), держат ветки задач и ссылки документов
+    в git самой песочницы и сверяют их там же — для них «клон» и
+    «главная копия» один репозиторий. Песочницы, проверяющие область
+    проекта как таковую, клон не связывают (`RealGitSandbox.
+    ARTEL_CLONE_IS_ROOT`)."""
+    clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
+    clone.parent.mkdir(parents=True, exist_ok=True)
+    if not clone.exists():
+        clone.symlink_to(root, target_is_directory=True)
+    return clone
+
+
 class TmpRootTest(unittest.TestCase):
     """Общая песочница: пути `config` — во временном каталоге.
 
@@ -1067,6 +1114,18 @@ class TmpRootTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # Клон артели (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7):
+        # с этапа 2 ветки, рабочие копии и ссылки документов задач артели
+        # живут в `.artel/projects/artel/repo`, и `new` без клона отказывает.
+        # Лёгкой песочнице, у которой корень — не git-репозиторий, клон —
+        # пустой настоящий репозиторий: плотницкая запись ссылки документов
+        # идёт через `SpyRun` как прежде, прочие git-вызовы видят «пустой
+        # репозиторий без origin» — тот же класс исхода, что раньше давал
+        # корень-не-репозиторий. Только при подменённых `ROOT` и `PROJECTS`:
+        # иначе `PROJECTS` — боевой каталог пульта.
+        if {"ROOT", "PROJECTS"} <= set(self.PATCHED_ATTRS):
+            seed_artel_clone_stub()
 
         # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
         # (см. комментарий у `_stub_check_stack` выше) — без этого патча
@@ -1338,6 +1397,14 @@ class RealGitSandbox(TmpRootTest):
     здесь только то, что было byte-identical в обеих копиях.
     """
 
+    # Клон артели — сам репозиторий песочницы (`link_artel_clone_to_root`).
+    # `False` — сценарий ведёт область проекта сам: клон заводит пульт
+    # (`init`/`new`) по `url` записи `targets.yaml`. Песочница области
+    # проекта задачи 01M42PENCS26D0656X8FR7DFA7 (`ProjectAreaSandbox`,
+    # долгоживущий файл — правке не подлежит) узнаётся по своему методу
+    # `project_clone`.
+    ARTEL_CLONE_IS_ROOT = True
+
     def setUp(self):
         # `super().setUp()` не зовётся — своего `setUp` целиком заменяет
         # `TmpRootTest.setUp` (нужен свой порядок: git-репозиторий раньше
@@ -1378,6 +1445,8 @@ class RealGitSandbox(TmpRootTest):
         # ExternalTargetGitSandbox — заводит внешний target напрямую через
         # store, не через cmd_init).
         store.create_schema(store.db())
+        if self.ARTEL_CLONE_IS_ROOT and not hasattr(self, "project_clone"):
+            link_artel_clone_to_root(self.root)
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,

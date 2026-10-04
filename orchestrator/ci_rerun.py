@@ -16,8 +16,9 @@
 …)`), которые импорт по имени сломал бы.
 """
 import sys
+from pathlib import Path
 
-from . import ci, config, cycle_hint, lease, store
+from . import ci, config, cycle_hint, lease, store, workspace
 
 CI_RERUN_ACTION = "повтор CI ветки (ci-rerun)"
 
@@ -103,7 +104,8 @@ def _last_ci_rerun_reason(conn, task_id: str) -> str | None:
     return None
 
 
-def _ci_rerun_outcome(branch: str, rerun_note: str) -> tuple[str, bool]:
+def _ci_rerun_outcome(branch: str, rerun_note: str,
+                      repo: Path | None = None) -> tuple[str, bool]:
     """(текст исхода ожидания для журнала, удался ли повтор) — требование 8.
 
     Исход определяется повторным чтением статуса CI (`ci.verifying_status`
@@ -118,7 +120,7 @@ def _ci_rerun_outcome(branch: str, rerun_note: str) -> tuple[str, bool]:
     """
     if not ci.rerun_started(rerun_note):
         return f"{CI_RERUN_OUTCOME_UNKNOWN}: повтор не запущен", False
-    outcome, note = ci.verifying_status(branch)
+    outcome, note = ci.verifying_status(branch, repo=repo)
     if outcome == ci.VERIFYING_GREEN:
         return f"{CI_RERUN_OUTCOME_GREEN}: {note}", True
     if outcome == ci.VERIFYING_RED:
@@ -153,7 +155,8 @@ def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
     # Требование 2: команда работает только в `verifying` и только при
     # завершённом красном CI. Статус читается до проверки состояния —
     # отказ обязан назвать и состояние, и статус (AC-1).
-    outcome, note = ci.verifying_status(branch)
+    outcome, note = ci.verifying_status(branch,
+                                        repo=workspace.task_repo(task_id))
     if t["state"] != "verifying":
         _ci_rerun_refuse(
             conn, task_id,
@@ -174,7 +177,8 @@ def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
             f"повторять нечего; статус: {note}")
     else:
         rerun_note = _red_rerun(conn, task_id, t, branch)
-    outcome_text, answered = _ci_rerun_outcome(branch, rerun_note)
+    outcome_text, answered = _ci_rerun_outcome(
+        branch, rerun_note, workspace.task_repo(task_id))
 
     # Требование 8: одна запись журнала — основание Оператора, id прогона
     # (внутри `rerun_note`) и исход ожидания.
@@ -237,7 +241,7 @@ def _red_rerun(conn, task_id: str, t, branch: str) -> str:
     # Требование 4: красный статус относится к тому же коммиту, что стоит
     # головой ветки сейчас. Уехала голова — красный статус про другой
     # коммит, и повторять по нему нечего.
-    head, why = ci.head_sha(branch)
+    head, why = ci.head_sha(branch, repo=workspace.task_repo(task_id))
     if not head:
         _ci_rerun_refuse(conn, task_id,
                          f"текущая голова ветки {branch} не определена: {why}")

@@ -79,11 +79,10 @@ def _touched_protected_paths(branch: str, base: str,
     подсветка в MR — необязательное дополнение, отсутствие ответа не
     имеет права держать заведение Draft MR).
 
-    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-8) — клон, в котором
-    считается diff, не всегда `config.ROOT`. `None` (по умолчанию) —
-    прежнее поведение байт-в-байт."""
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-8; ADR-0021 п.1-2) — клон
+    проекта, в котором считается diff, включая артель."""
     args = ("diff", "--name-only", f"{base}...{branch}")
-    res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+    res = gitcmd.in_repo(repo, *args)
     if res is None or res.returncode != 0:
         return []
     paths = [p for p in res.stdout.splitlines() if p]
@@ -114,8 +113,9 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
         return
 
     # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
-    # AC-6/AC-7): push ветки и `gh` внешнего target идут в его клон/форндж,
-    # не в `config.ROOT`/без `--repo` (self, прежнее поведение байт-в-байт).
+    # AC-6/AC-7; ADR-0021 п.1-2): push ветки идёт в клон target'а, включая
+    # артель; `gh` внешнего target — в его форндж, self — без `--repo`
+    # (прежнее поведение байт-в-байт).
     ctx = repo_context.resolve(target_name)
     repo = repo_context.path_or_none(ctx)
     gh_repo_kwargs = {"repo": ctx.remote} if repo is not None else {}
@@ -135,8 +135,7 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
                       f"первом переходе после первого коммита")
         return
 
-    push = (gitcmd.git("push", "-u", "origin", branch) if repo is None
-           else gitcmd.in_repo(repo, "push", "-u", "origin", branch))
+    push = gitcmd.in_repo(repo, "push", "-u", "origin", branch)
     if push is None or push.returncode != 0:
         _incident(conn, task_id, "Draft MR FAILED",
                   f"git push -u origin {branch} не удался: "
@@ -205,8 +204,7 @@ def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:
     remote = gitcmd.remote_branch_sha(branch, repo=repo)
     if local and remote == local:
         return True, ""
-    push = (gitcmd.git("push", "-u", "origin", branch) if repo is None
-           else gitcmd.in_repo(repo, "push", "-u", "origin", branch))
+    push = gitcmd.in_repo(repo, "push", "-u", "origin", branch)
     if push is None or push.returncode != 0:
         err = ((push.stderr or push.stdout).strip()[:300]
               if push is not None else "git не ответил")

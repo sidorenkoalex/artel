@@ -22,7 +22,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import gitcmd, store
+from . import gitcmd, store, workspace
 
 DRY_RUN_MARKER = "сухой прогон — не является прохождением приёмки"
 
@@ -40,13 +40,14 @@ def cmd_acceptance_dry_run(task_id: str) -> None:
     task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
     branch = t["branch"]
+    repo = workspace.task_repo(task_id)
 
-    if not gitcmd.branch_exists(branch):
+    if not gitcmd.branch_exists(branch, repo=repo):
         sys.exit(f"[{task_id}] сухой прогон приёмки: отказ — ветка задачи "
                  f"{branch!r} не существует, приёмочные тесты недоступны")
 
     prefix = f"tasks/{task_id}/acceptance_tests"
-    paths = gitcmd.ls_tree_files(branch, prefix)
+    paths = gitcmd.ls_tree_files(branch, prefix, repo=repo)
     test_paths = sorted(p for p in (paths or []) if _is_test_file(p))
     if not test_paths:
         sys.exit(f"[{task_id}] сухой прогон приёмки: отказ — на ветке "
@@ -54,7 +55,7 @@ def cmd_acceptance_dry_run(task_id: str) -> None:
                  f"тестовых файлов) — приёмочные тесты не заведены")
 
     spec_rel = f"tasks/{task_id}/SPEC.md"
-    spec_text, spec_reason = gitcmd.show(branch, spec_rel)
+    spec_text, spec_reason = gitcmd.show(branch, spec_rel, repo=repo)
     if spec_text is None:
         sys.exit(f"[{task_id}] сухой прогон приёмки: отказ — SPEC.md "
                  f"ветки {branch!r} не прочитан: {spec_reason}")
@@ -62,7 +63,7 @@ def cmd_acceptance_dry_run(task_id: str) -> None:
     sources: list[str] = []
     file_methods: list[tuple[str, list[str]]] = []
     for path in test_paths:
-        text, _ = gitcmd.show(branch, path)
+        text, _ = gitcmd.show(branch, path, repo=repo)
         if text is None:
             continue
         sources.append(text)

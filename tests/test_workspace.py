@@ -1,5 +1,6 @@
 """Юнит-тесты orchestrator/workspace.py: git worktree задачи в
-стандартном месте (SPEC T045).
+стандартном месте (SPEC T045; с этапа 2 ADR-0021 — `.artel/projects/<имя>/
+worktrees/<id>` клона проекта, SPEC 01M42PENCS26D0656X8FR7DFA7).
 
 Git тут настоящий (по образцу tests/test_git_fixation.py RealPultGitTest):
 сама суть модуля — операции `git worktree`, подменять их заглушками
@@ -18,7 +19,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import capture, resilient_tmp_cleanup  # noqa: E402
+from tests.sandbox import (capture, link_artel_clone_to_root,  # noqa: E402
+                           resilient_tmp_cleanup, strip_dash_c)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,10 +65,16 @@ class RealGitWorkspaceTest(unittest.TestCase):
             ("TASKS", self.root / "tasks"),
             ("LOGS", self.root / ".artel" / "logs"),
             ("WORKTREES", self.root / ".artel" / "worktrees"),
+            ("PROJECTS", self.root / ".artel" / "projects"),
+            ("TARGETS", self.root / "targets.yaml"),
         ):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Клон артели — сам этот репозиторий (ADR-0021 п.1, этап 2): ветки
+        # и рабочие копии задач живут в клоне, сценарии класса сверяют их
+        # git'ом `self.root`.
+        self.clone = link_artel_clone_to_root(self.root)
 
         self.capture(catalog.cmd_init)
         # НЕ через `catalog.cmd_new`: с SPEC T048 он сам заводит ветку и
@@ -99,7 +107,8 @@ class RealGitWorkspaceTest(unittest.TestCase):
             (task_id or self.TASK,)).fetchone()
 
     def wt_path(self, task_id=None) -> Path:
-        return config.WORKTREES / (task_id or self.TASK)
+        return (config.PROJECTS / config.DEFAULT_TARGET / "worktrees"
+                / (task_id or self.TASK))
 
     def worktree_list(self) -> str:
         return self.git("worktree", "list", "--porcelain").stdout
@@ -108,14 +117,18 @@ class RealGitWorkspaceTest(unittest.TestCase):
 class PathTest(RealGitWorkspaceTest):
 
     def test_path_is_the_standard_location(self):
+        """Ловит мутацию: рабочая копия задачи артели остаётся в
+        `config.WORKTREES` главной копии, а не в области проекта
+        `.artel/projects/artel/worktrees/<id>` (ADR-0021 п.1, этап 2)."""
         self.assertEqual(workspace.path(self.TASK),
-                         config.WORKTREES / self.TASK)
+                         config.PROJECTS / config.DEFAULT_TARGET / "worktrees"
+                         / self.TASK)
 
 
 class RegisteredPathsTest(RealGitWorkspaceTest):
 
     def test_lists_the_main_checkout(self):
-        paths = workspace.registered_paths()
+        paths = workspace.registered_paths(self.clone)
 
         self.assertEqual(paths, [str(self.root)])
 
@@ -124,11 +137,11 @@ class RegisteredPathsTest(RealGitWorkspaceTest):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.git("worktree", "add", "-b", self.branch, str(path))
 
-        self.assertIn(str(path), workspace.registered_paths())
+        self.assertIn(str(path), workspace.registered_paths(self.clone))
 
     def test_empty_when_git_does_not_answer(self):
         with mock.patch.object(gitcmd, "git", lambda *a: None):
-            self.assertEqual(workspace.registered_paths(), [])
+            self.assertEqual(workspace.registered_paths(self.clone), [])
 
 
 class EnsureTest(RealGitWorkspaceTest):
@@ -189,7 +202,7 @@ class EnsureTest(RealGitWorkspaceTest):
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
-            if args[:2] == ("worktree", "add"):
+            if strip_dash_c(args)[:2] == ("worktree", "add"):
                 return subprocess.CompletedProcess(
                     list(args), 128, "", "fatal: не удалось")
             return real_git(*args)
@@ -308,7 +321,7 @@ class RemoveTest(RealGitWorkspaceTest):
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
-            if args[:2] == ("worktree", "remove"):
+            if strip_dash_c(args)[:2] == ("worktree", "remove"):
                 return subprocess.CompletedProcess(list(args), 1, "", "")
             return real_git(*args)
 
@@ -342,7 +355,7 @@ class CmdWorkspaceTest(RealGitWorkspaceTest):
         real_git = gitcmd.git
 
         def failing_git(*args: str) -> subprocess.CompletedProcess:
-            if args[:2] == ("worktree", "add"):
+            if strip_dash_c(args)[:2] == ("worktree", "add"):
                 return subprocess.CompletedProcess(
                     list(args), 128, "", "fatal: не удалось")
             return real_git(*args)

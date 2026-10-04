@@ -16,16 +16,18 @@
 """
 import sys
 
-from . import gitcmd
+from . import config, gitcmd, workspace
 
 BRANCH_PREFIX = "artifact/"
 _HEADS = "refs/heads/"
 _ARTIFACT_REFS = "refs/artifacts/"
 
 
-def _ls_remote(pattern: str) -> tuple[list[str] | None, str]:
-    """(имена ссылок `origin` под `pattern`, "") либо (None, причина)."""
-    res = gitcmd.git("ls-remote", "origin", pattern)
+def _ls_remote(pattern: str, repo) -> tuple[list[str] | None, str]:
+    """(имена ссылок `origin` под `pattern`, "") либо (None, причина).
+
+    `repo` — клон артели (ADR-0021 п.13), в котором стоит `origin`."""
+    res = gitcmd.in_repo(repo, "ls-remote", "origin", pattern)
     if res is None:
         return None, "git не ответил"
     if res.returncode != 0:
@@ -48,18 +50,19 @@ def _inventory() -> tuple[list[str], list[str], list[str]]:
     """(ветки `artifact/**` в origin, локальные ветки `artifact/*`, ключи
     задач перечня без `refs/artifacts/<id>` в origin). Не прочитано —
     отказ: уборка вслепую недопустима, предпросмотр вслепую бесполезен."""
-    remote, reason = _ls_remote(f"{_HEADS}{BRANCH_PREFIX}*")
+    repo = workspace.repo(config.DEFAULT_TARGET)
+    remote, reason = _ls_remote(f"{_HEADS}{BRANCH_PREFIX}*", repo)
     if remote is None:
         sys.exit(f"artifact-branches-cleanup: ветки origin не прочитаны — "
                  f"{reason}")
     origin_branches = sorted(r[len(_HEADS):] for r in remote
                              if r.startswith(_HEADS + BRANCH_PREFIX))
-    local = gitcmd.list_branches(BRANCH_PREFIX)
+    local = gitcmd.list_branches(BRANCH_PREFIX, repo=repo)
     if local is None:
         sys.exit("artifact-branches-cleanup: локальные ветки не прочитаны — "
                  "git не ответил")
     local_branches = sorted(local)
-    refs, reason = _ls_remote(f"{_ARTIFACT_REFS}*")
+    refs, reason = _ls_remote(f"{_ARTIFACT_REFS}*", repo)
     if refs is None:
         sys.exit(f"artifact-branches-cleanup: ссылки документов origin не "
                  f"прочитаны — {reason}")
@@ -91,16 +94,17 @@ def cmd_artifact_branches_cleanup(execute: bool) -> None:
         sys.exit(f"artifact-branches-cleanup --execute: отказ — у задач "
                  f"{', '.join(missing)} нет {_ARTIFACT_REFS}<id> в origin; "
                  f"ни одна ветка не удалена")
+    repo = workspace.repo(config.DEFAULT_TARGET)
     if origin_branches:
-        res = gitcmd.git("push", "-q", "origin", "--delete",
-                         *(_HEADS + b for b in origin_branches))
+        res = gitcmd.in_repo(repo, "push", "-q", "origin", "--delete",
+                             *(_HEADS + b for b in origin_branches))
         if res is None or res.returncode != 0:
             stderr = (res.stderr or "").strip()[:300] if res is not None else ""
             sys.exit(f"artifact-branches-cleanup --execute: удаление веток "
                      f"в origin не удалось — {stderr or 'git не ответил'}; "
                      f"локальные ветки не тронуты")
     if local_branches:
-        res = gitcmd.git("branch", "-D", *local_branches)
+        res = gitcmd.in_repo(repo, "branch", "-D", *local_branches)
         if res is None or res.returncode != 0:
             stderr = (res.stderr or "").strip()[:300] if res is not None else ""
             sys.exit(f"artifact-branches-cleanup --execute: ветки origin "

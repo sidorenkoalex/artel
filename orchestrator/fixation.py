@@ -34,7 +34,7 @@ import sys
 from datetime import datetime, timezone
 from typing import NamedTuple
 
-from . import config, gitcmd, store
+from . import config, gitcmd, store, workspace
 
 # Идентичность коммитов фиксации внешнего target: это действие
 # оркестратора, а не роли и не Оператора — коммит служебный (диффов кода
@@ -66,12 +66,12 @@ def _read_ref(task_id: str) -> tuple[str, bool]:
     return (sha, True) if sha else ("", False)
 
 
-def external_code_sha(target: str) -> str:
+def external_code_sha(target: str, task_id: str) -> str:
     """sha головы кодовой ветки ЦЕЛЕВОГО (SPEC T094, требование 9, AC-10):
-    HEAD клона `config.PROJECTS/<target>/workspace` — тот же клон, в
-    котором пишет код роль-разработчик (`runner.role_cwd`). Пустая строка
-    — клона ещё нет или git не ответил."""
-    return gitcmd.head_sha(config.PROJECTS / target / "workspace")
+    HEAD рабочей копии задачи `workspace.path(task_id, target)` (ADR-0021
+    п.1-2) — тот же worktree, в котором пишет код роль-разработчик.
+    Пустая строка — рабочей копии ещё нет или git не ответил."""
+    return gitcmd.head_sha(workspace.path(task_id, target))
 
 
 def external_artifact_sha(task_id: str) -> str:
@@ -85,16 +85,17 @@ def external_artifact_sha(task_id: str) -> str:
 
 def default_code_sha(conn, task_id: str) -> str:
     """sha головы кодовой ветки задачи self/артели (`config.DEFAULT_TARGET`,
-    tasks/01M1P9RJVYHTAC087J4B2CAR44, требование 1) — репозиторий пульта
-    (`config.ROOT`), где для self реально живёт код (`runner.role_cwd`:
-    собственный worktree задачи, T045), НЕ фиксация документов (SPEC
+    tasks/01M1P9RJVYHTAC087J4B2CAR44, требование 1) — клон артели
+    (ADR-0021 п.1-2), где для self реально живёт код (`runner.role_cwd`:
+    собственная рабочая копия задачи), НЕ фиксация документов (SPEC
     «Контекст»: её sha ошибочно уходил базой diff).
 
     `gitcmd.branch_head_sha` — независимо от текущего чекаута. Пустая строка — задачи нет в БД (`store.task_branch`)
     либо ветки ещё нет физически (вырожденный случай, как и у
     `external_code_sha`/`external_artifact_sha`)."""
     branch = store.task_branch(conn, task_id)
-    return gitcmd.branch_head_sha(branch) if branch else ""
+    return (gitcmd.branch_head_sha(branch, repo=workspace.task_repo(task_id))
+           if branch else "")
 
 
 def read(task_id: str, target: str) -> tuple[str, bool]:
@@ -334,7 +335,8 @@ def refixate_after_rejected_transition(conn, task_id: str, target: str,
     служащую якорем `_own_step_run_windows`; путает эту запись с
     результатом отклонённого перехода нельзя (см. докстринг выше).
     """
-    dates = gitcmd.commit_committer_dates(entry_sha, current_sha)
+    dates = gitcmd.commit_committer_dates(entry_sha, current_sha,
+                                          repo=workspace.repo(target))
     if not dates:
         return False
     windows = _own_step_run_windows(conn, task_id)

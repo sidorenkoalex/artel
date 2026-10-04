@@ -19,6 +19,7 @@ TEST_WEAKENING_MANDATE_MARKER` — теперь реэкспорт): прове�
 `mandate`).
 """
 import re
+from pathlib import Path
 
 from scripts import guard
 
@@ -123,13 +124,16 @@ def _tree_has(element: str, files: list[str]) -> bool:
     return any(f.startswith(prefix) for f in files)
 
 
-def _tree_files(code_branch: str | None) -> list[str] | None:
+def _tree_files(code_branch: str | None,
+                repo: Path | None = None) -> list[str] | None:
     """Пути дерева КОДОВОЙ ветки задачи; `None` — git не ответил (ветки
     ещё нет, сбой команды). Проверка существования на `None` не
-    применяется — см. `refusals`."""
+    применяется — см. `refusals`.
+
+    `repo` — клон проекта, в котором живёт `code_branch` (ADR-0021 п.1)."""
     if not code_branch:
         return None
-    return gitcmd.ls_tree_files(code_branch, ".")
+    return gitcmd.ls_tree_files(code_branch, ".", repo=repo)
 
 
 def _element_refusal(element: str, marker: str,
@@ -165,7 +169,8 @@ def _element_refusal(element: str, marker: str,
     return None
 
 
-def refusals(text: str, code_branch: str | None) -> list[str]:
+def refusals(text: str, code_branch: str | None,
+            repo: Path | None = None) -> list[str]:
     """Причины отказа по ВСЕМ строкам мандатов текста файла ответа
     Оператора (требование 2); пустой список — файл проверку прошёл.
 
@@ -182,8 +187,10 @@ def refusals(text: str, code_branch: str | None) -> list[str]:
     — удобство Оператора перед рубежом, а сам рубеж (гейт зон) остаётся
     fail-closed и на этом же сбое откажет переходу. Обратное решение
     запрещало бы отвечать на эскалацию при молчащем git.
+
+    `repo` — клон проекта, в котором живёт `code_branch` (ADR-0021 п.1).
     """
-    files = _tree_files(code_branch)
+    files = _tree_files(code_branch, repo)
     found: list[str] = []
     for line in text.splitlines():
         for marker in MANDATE_MARKERS:

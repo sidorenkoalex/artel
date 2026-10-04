@@ -4,7 +4,8 @@ import sys
 
 from scripts import guard
 
-from . import alerts, config, cycle_hint, gitcmd, lease, retro, spend, store
+from . import (alerts, config, cycle_hint, gitcmd, lease, retro, spend, store,
+              workspace)
 
 # Действие журнала, которым `enforce_budget` фиксирует sha головы кодовой
 # ветки в момент эскалации ПО БЮДЖЕТУ из состояния `review` (SPEC
@@ -291,7 +292,8 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
             # самой эскалации. Пусто (git не ответил) — не журналируем
             # вовсе, тот же вырожденный случай, что и у соседних sha-примитивов
             # (`fixation.py`): нечему быть опорой сравнения.
-            code_sha = gitcmd.branch_head_sha(t["branch"])
+            code_sha = gitcmd.branch_head_sha(
+                t["branch"], repo=workspace.task_repo(task_id))
             if code_sha:
                 store.journal(conn, task_id, "fsm",
                               REVIEW_ESCALATION_CODE_SHA_ACTION, code_sha)

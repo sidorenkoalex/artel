@@ -224,13 +224,11 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     семантика (когда состояние меняется, что означает каждый) описана в
     `orchestrator/pull.py` докстринге `evaluate`/классов исходов.
 
-    `repo_path` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4):
-    клон контекста target'а задачи (`orchestrator/repo_context.py`) —
-    `None` для self (прежний путь через `workspace.ensure`, worktree
-    `config.ROOT`), путь `.artel/projects/<target>/workspace` для любого
-    другого target (сравнение и merge подтяжки идут прямо там, без
-    отдельного worktree — внешний target уже стоит на своей ветке задачи
-    в этом клоне, ТЗ-2). `origin_main_sha` передаётся замыканием,
+    `repo_path` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4;
+    SPEC 01M42PENCS26D0656X8FR7DFA7, требование 2): клон проекта задачи
+    (`orchestrator/repo_context.py`) для любого проекта, включая артель;
+    merge подтяжки — в рабочей копии задачи этого клона. `origin_main_sha`
+    передаётся замыканием,
     связанным с ТЕМ ЖЕ `repo_path` — весь git-трафик `gitcmd.fetch_ref_sha`
     внутри него идёт в тот же клон, не в `config.ROOT`.
     """

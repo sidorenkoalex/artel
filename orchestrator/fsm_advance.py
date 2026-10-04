@@ -186,17 +186,17 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
     # Автогейт acceptance (ADR-0007, SPEC T066) — тем же приёмом, что
     # раньше стоял на входе `verifying -> acceptance` (`verifying()`
     # ниже, до ADR-0015): каталог планки резолвится тем же способом,
-    # что и прогон приёмки в `in_dev` выше (worktree self-target либо
-    # workspace внешнего, SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS).
+    # что и прогон приёмки в `in_dev` выше (рабочая копия задачи — в
+    # клоне self либо внешнего target'а, ADR-0021 п.1-2; SPEC
+    # 01M1RNZ6V7TTTTYAHBMF8JBQQS).
     acc_tdir = tdir
     with contextlib.ExitStack() as cleanup:
         if target != config.DEFAULT_TARGET:
-            code_dir = config.PROJECTS / target / "workspace"
-            code_dir.mkdir(parents=True, exist_ok=True)
+            code_dir, _err = workspace.ensure(task_id, t["branch"])
             acc_tdir = cleanup.enter_context(
                 acceptance.plank_in_code_copy(task_id, branch, code_dir))
-        elif workspace.on_task_branch(task_id, t["branch"]) is True:
-            acc_tdir = workspace.path(task_id) / "tasks" / task_id
+        elif workspace.on_task_branch(task_id, t["branch"], target) is True:
+            acc_tdir = workspace.path(task_id, target) / "tasks" / task_id
         fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
                                                t["reviewed_iter"])
     return False
@@ -309,7 +309,8 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # (требование 5, AC-8). Ни один исход не создаёт коммитов и не
     # «будит» CI (требование 7, AC-10).
     branch = t["branch"]
-    outcome, note = ci.verifying_status(branch)
+    outcome, note = ci.verifying_status(branch,
+                                        repo=workspace.task_repo(task_id))
     store.journal(conn, task_id, "orchestrator",
                   fsm.VERIFYING_STATUS_ACTION, note)
     if outcome == ci.VERIFYING_GREEN:
@@ -355,7 +356,8 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # сверять и фиксировать нечего: тот же вырожденный случай «ветка ещё не
     # создана», что у ветко-корректных чтений (инвариант 28).
     code_diff = long_lived = None
-    if target == config.DEFAULT_TARGET and gitcmd.branch_exists(t["branch"]):
+    if target == config.DEFAULT_TARGET and gitcmd.branch_exists(
+            t["branch"], repo=workspace.repo(target)):
         code_diff, long_lived, refusal = _tests_writing_code_diff(
             task_id, t["branch"])
         if _run_gates(conn, task_id, [lambda: refusal]):

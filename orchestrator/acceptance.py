@@ -624,7 +624,8 @@ def full_suite(root: Path, task_id: str) -> FullSuiteRun:
 
 
 def summary(tdir: Path, branch: str | None = None,
-            long_lived: list[Path] | None = None) -> str:
+            long_lived: list[Path] | None = None,
+            repo: Path | None = None) -> str:
     """Сводка в карточку гейта acceptance: пройдено/manual/skip/ci.
 
     Число тестов — статический счёт (`guard.count_test_methods`), не
@@ -677,7 +678,7 @@ def summary(tdir: Path, branch: str | None = None,
     if ci_ns:
         lines.append("ci-критерии (доказательство — CI кодовой ветки):")
         ci_note = ("статус CI не проверен — ветка не названа" if branch is None
-                  else ci.verifying_status(branch)[1])
+                  else ci.verifying_status(branch, repo=repo)[1])
         for n in ci_ns:
             reason = markers[n][1]
             lines.append(f"  AC-{n}" + (f": {reason}" if reason else "")

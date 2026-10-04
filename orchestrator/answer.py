@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 from . import (artifact_branch, artifact_source, cycle_hint, fixation,
-               fsm_advance, gitcmd, lease, runner, store)
+               fsm_advance, gitcmd, lease, runner, store, workspace)
 from .advance_gates import mandate
 
 
@@ -91,7 +91,8 @@ def _read_checked_answer_file(task_id: str, file_path: str,
     разбор аргументов…» стоил задаче лишнего круга ролью. Проверяются все
     строки обоих маркеров, правила — `mandate.refusals`."""
     raw = _read_answer_file(task_id, file_path)
-    problems = mandate.refusals(raw, code_branch)
+    problems = mandate.refusals(raw, code_branch,
+                                repo=workspace.task_repo(task_id))
     if problems:
         sys.exit(f"[{task_id}] answer отказана — строка мандата не прошла "
                  f"проверку:\n" + "\n".join(f"  {p}" for p in problems))

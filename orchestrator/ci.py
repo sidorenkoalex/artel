@@ -18,7 +18,7 @@ from typing import NamedTuple
 
 from scripts import ci_push_class
 
-from . import config, gitcmd
+from . import config, gitcmd, workspace
 
 # Заключения проверок, считающиеся зелёными. `skipped` обязателен: job
 # `protected-paths` идёт только на pull_request и на push репозитория
@@ -60,13 +60,16 @@ def gh(*args: str, timeout: int | None = None,
 def head_sha(branch: str, repo: Path | None = None) -> tuple[str, str]:
     """Sha головного коммита ветки задачи и причина, если его нет.
 
-    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-3) — клон, в котором
-    читается голова (путь, не URL — в отличие от `repo=` у `gh`),
-    не всегда `config.ROOT`. `None` (по умолчанию) — прежнее поведение
-    байт-в-байт.
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-3; ADR-0021 п.1-2) — клон,
+    в котором читается голова (путь, не URL — в отличие от `repo=` у
+    `gh`). `None` (по умолчанию) — клон артели (`workspace.repo
+    (config.DEFAULT_TARGET)`), не `config.ROOT`: прежние вызовы без
+    `repo` всегда были self-target.
     """
+    if repo is None:
+        repo = workspace.repo(config.DEFAULT_TARGET)
     args = ("rev-parse", "--verify", f"refs/heads/{branch}")
-    res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+    res = gitcmd.in_repo(repo, *args)
     sha = res.stdout.strip() if res.returncode == 0 else ""
     if not sha:
         return "", (f"головной коммит ветки {branch} не определён: "
@@ -306,7 +309,7 @@ def _commit_not_found_in_origin(why: str) -> bool:
     return "422" in why
 
 
-def verifying_status(branch: str) -> tuple[str, str]:
+def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
     """Статус CI ветки задачи в состоянии `verifying` (SPEC T079,
     требование 5) — не то же самое, что `branch_status`: тот сворачивает
     любой не-зелёный исход в единое "нельзя мержить" (гейт merge_gate,
@@ -315,9 +318,10 @@ def verifying_status(branch: str) -> tuple[str, str]:
     журнала и (со временем) к разным решениям Оператора.
 
     Не создаёт коммитов и не зовёт ничего, что «будит» CI (требование 5,
-    AC-12) — читает только.
+    AC-12) — читает только. `repo` — клон проекта задачи, как у
+    `head_sha`.
     """
-    sha, why = head_sha(branch)
+    sha, why = head_sha(branch, repo=repo)
     if not sha:
         return VERIFYING_NONE, f"статус CI неизвестен: {why}"
     short = sha[:8]
@@ -433,14 +437,18 @@ def failed_check_names(sha: str) -> tuple[set[str] | None, str]:
             and r.get("conclusion") not in GREEN}, ""
 
 
-def branch_status(branch: str) -> tuple[bool, str]:
+def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     """(Зелёный ли CI ветки, пояснение для журнала и Оператора).
 
     Пояснение возвращается и на зелёном исходе: в журнале задачи должно
     остаться, какой именно коммит и сколькими проверками был признан
     годным к мержу.
+
+    `repo` (ADR-0021 п.1-2) — клон, в котором читается голова ветки;
+    `None` (по умолчанию) — клон артели, тем же приёмом, что у
+    `head_sha`.
     """
-    sha, why = head_sha(branch)
+    sha, why = head_sha(branch, repo=repo)
     if not sha:
         return False, f"статус CI неизвестен: {why}"
 
@@ -531,17 +539,24 @@ class MainLineStatus(NamedTuple):
     note: str
 
 
-def first_parent_line(sha: str, limit: int) -> list[str] | None:
+def first_parent_line(sha: str, limit: int,
+                      repo: Path | None = None) -> list[str] | None:
     """Коммиты первой родительской линии от `sha` назад (сам `sha` первым),
-    не больше `limit`; `None` — git не ответил."""
-    res = gitcmd.git("rev-list", "--first-parent", f"--max-count={limit}", sha)
+    не больше `limit`; `None` — git не ответил.
+
+    `repo` (ADR-0021 п.1-2) — клон, в котором читается линия; `None`
+    (по умолчанию) — клон артели, тем же приёмом, что у `head_sha`."""
+    if repo is None:
+        repo = workspace.repo(config.DEFAULT_TARGET)
+    res = gitcmd.in_repo(repo, "rev-list", "--first-parent",
+                         f"--max-count={limit}", sha)
     if res is None or res.returncode != 0:
         return None
     return [ln.strip() for ln in res.stdout.splitlines()
             if _SHA_LINE_RE.match(ln.strip())]
 
 
-def _push_touches_code(base: str, head: str) -> bool:
+def _push_touches_code(base: str, head: str, repo: Path | None = None) -> bool:
     """Push с головой `head` меняет не только документы — тем же разбором
     пути, что job `changes` (`scripts/ci_push_class.py`), и тем же
     диапазоном: от предыдущей головы push'а `base` (ближайший глубже по
@@ -551,8 +566,13 @@ def _push_touches_code(base: str, head: str) -> bool:
     проверка, пропущенная на его голове, не исполняется на push в main
     вовсе (`protected-paths`, `id-format-greplint` — только
     `pull_request`), а не пропущена как документная. git не ответил —
-    `False`: обход идёт глубже, а не объявляет проверку неисполняемой."""
-    res = gitcmd.git("diff", "--name-only", base, head)
+    `False`: обход идёт глубже, а не объявляет проверку неисполняемой.
+
+    `repo` (ADR-0021 п.1-2) — клон, в котором считается diff; `None`
+    (по умолчанию) — клон артели, тем же приёмом, что у `head_sha`."""
+    if repo is None:
+        repo = workspace.repo(config.DEFAULT_TARGET)
+    res = gitcmd.in_repo(repo, "diff", "--name-only", base, head)
     if res is None or res.returncode != 0:
         return False
     return any(not ci_push_class.is_doc_path(p)
@@ -592,7 +612,7 @@ def _main_line_note(kind: str, ref: str, failed: list, running: list,
             f"({green_count} проверок)")
 
 
-def main_line_status(sha: str) -> MainLineStatus:
+def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
     """Цвет CI main от опорного коммита `sha` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E,
     требование 2) — общее определение для `pin-update`, строки `doctor` и
     гейта мержа.
@@ -612,8 +632,12 @@ def main_line_status(sha: str) -> MainLineStatus:
     идущая либо у опорного коммита ещё нет проверок — `MAIN_RUNNING`; сбой
     `gh` на любом коммите — `MAIN_UNKNOWN` (инвариант 19: неизвестное не
     зелёное); иначе `MAIN_GREEN`.
+
+    `repo` (ADR-0021 п.1-2) — клон, в котором читается первая
+    родительская линия и дифф пропущенных проверок; `None` (по умолчанию)
+    — клон артели, тем же приёмом, что у `head_sha`.
     """
-    line = first_parent_line(sha, MAIN_LINE_MAX_COMMITS) or [sha]
+    line = first_parent_line(sha, MAIN_LINE_MAX_COMMITS, repo=repo) or [sha]
     ref = line[0]
     pending: set[str] | None = None
     failed: list = []
@@ -649,7 +673,7 @@ def main_line_status(sha: str) -> MainLineStatus:
         if skipped_at is not None:
             push_head, names = skipped_at
             skipped_at = None
-            if _push_touches_code(commit, push_head):
+            if _push_touches_code(commit, push_head, repo=repo):
                 pending.difference_update(names)
                 if not pending:
                     break

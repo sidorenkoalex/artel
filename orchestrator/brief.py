@@ -20,7 +20,8 @@ from pathlib import Path
 
 from scripts import codebase_map
 
-from . import alerts, artifact_branch, config, context_package, gitcmd, store
+from . import (alerts, artifact_branch, config, context_package, gitcmd,
+              store, workspace)
 
 MAP_REL = "docs/codebase-map.md"
 # Заголовок компонента карты в тексте брифа (SPEC 01M1RFQ52S0VD22J628TXX96XS,
@@ -253,9 +254,12 @@ def _stale_paths(base_sha: str) -> list[str] | None:
     же способом, что и отказ регенерации (требование 7) — вызывающий код
     обязан завести тот же алерт и пометку, не тихо отдать карту как
     свежую (REVIEW T028 итерация 1, замечание major).
-    """
-    res = gitcmd.git("diff", "--name-only", base_sha, "HEAD", "--",
-                     *MAP_WATCH_GLOBS)
+
+    Сверка — в `config.ROOT` (главная копия пульта), явно: генератор
+    карты (`_regenerate_map`) пишет и коммитит именно туда, не в клон
+    задачи."""
+    res = gitcmd.in_repo(config.ROOT, "diff", "--name-only", base_sha,
+                         "HEAD", "--", *MAP_WATCH_GLOBS)
     if res.returncode != 0:
         return None
     return [p for p in res.stdout.splitlines() if p]
@@ -289,7 +293,7 @@ def _regenerate_map(conn, task_id: str) -> tuple[str | None, str]:
         reason = regen.stderr.strip()[:200] or f"код возврата {regen.returncode}"
         return None, reason
     text = (config.ROOT / MAP_REL).read_text(encoding="utf-8")
-    restore = gitcmd.git("checkout", "--", MAP_REL)
+    restore = gitcmd.in_repo(config.ROOT, "checkout", "--", MAP_REL)
     if restore.returncode != 0:
         alerts.raise_alert(
             conn, store.task_target(conn, task_id), "incident",
@@ -392,18 +396,20 @@ def _manifest_component(conn, task_id: str, role: str, label: str,
 
 
 def _main_branch_text(task_id: str, rel: str) -> str:
-    """Текст `rel` с ГОЛОВЫ ветки `main` пульта (tasks/
-    01M1K7KP0D8ZKRM9KTE75DCCYR, требование 1) — не с диска рабочей копии
-    `config.ROOT`: `CLAUDE.md` — правило системы, а не артефакт задачи,
-    роль обязана видеть версию, действующую в `main` сейчас, а не ту, что
-    была на момент отведения ветки задачи (ADR-0012, замечание R1-F3).
+    """Текст `rel` с ГОЛОВЫ ветки `main` клона артели (ADR-0021 п.1-2;
+    tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, требование 1) — не с диска рабочей
+    копии `config.ROOT`: `CLAUDE.md` — правило системы, а не артефакт
+    задачи, роль обязана видеть версию, действующую в `main` сейчас, а не
+    ту, что была на момент отведения ветки задачи (ADR-0012, замечание
+    R1-F3).
 
     Тот же приём ветко-корректного чтения, что инвариант 28 применяет к
     артефактам задачи (`gitcmd.show`), только с обратным адресом — не
     ветка задачи, а `main`. Git не ответил или файла там нет — шаг не
     начат с именованной причиной (тот же приём, что `_developer_spec_text`
     выше)."""
-    text, reason = gitcmd.show(config.MAIN_BRANCH, rel)
+    text, reason = gitcmd.show(config.MAIN_BRANCH, rel,
+                               repo=workspace.repo(config.DEFAULT_TARGET))
     if text is None:
         sys.exit(f"[{task_id}] бриф не собран: {rel} ветки "
                  f"{config.MAIN_BRANCH} не прочитан ({reason})")
@@ -413,10 +419,11 @@ def _main_branch_text(task_id: str, rel: str) -> str:
 def skills_text(conn, task_id: str, role: str,
                 skill_names: list[str]) -> tuple[str | None, str]:
     """Текст скилов роли (`skills/*.md`, состав из `roles.yaml`) — с
-    ГОЛОВЫ ветки `main` пульта (tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/
-    AC-6), не с диска рабочей копии `config.ROOT`: скилы — правило
-    системы, читается версия, действующая в `main` СЕЙЧАС, а не та, что
-    была на момент отведения ветки задачи (ADR-0012, замечание R1-F3).
+    ГОЛОВЫ ветки `main` клона артели (ADR-0021 п.1-2; tasks/
+    01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-6), не с диска рабочей копии
+    `config.ROOT`: скилы — правило системы, читается версия, действующая
+    в `main` СЕЙЧАС, а не та, что была на момент отведения ветки задачи
+    (ADR-0012, замечание R1-F3).
 
     Фингерпринт каждого скила — в журнал шага той же механикой, что и у
     остальных компонентов брифа (`_journal_component`, требование 2/3,
@@ -431,9 +438,10 @@ def skills_text(conn, task_id: str, role: str,
     (`runner._cmd_run`) решает, как остановить шаг, тем же приёмом, что
     у соседнего `roles.RolesError`."""
     texts = []
+    repo = workspace.repo(config.DEFAULT_TARGET)
     for name in skill_names:
         rel = f"skills/{name}.md"
-        text, reason = gitcmd.show(config.MAIN_BRANCH, rel)
+        text, reason = gitcmd.show(config.MAIN_BRANCH, rel, repo=repo)
         if text is None:
             return None, f"{rel}: {reason}"
         texts.append((rel, text))

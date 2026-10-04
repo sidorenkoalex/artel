@@ -16,7 +16,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from .. import config, gitcmd, store
+from .. import config, gitcmd, store, workspace
 from ._base import GateRefusal, _run_gates
 
 # Действие журнала отказа (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование
@@ -40,7 +40,7 @@ PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION = (
 PLAN_APPENDIX_GATE_FAILURE_ACTION = "переход отклонён: гейт приложений PLAN"
 
 
-def _base_worktree(base: str) -> tuple[Path | None, str]:
+def _base_worktree(base: str, task_repo: Path) -> tuple[Path | None, str]:
     """Временный detached worktree на sha `base` — тот же приём, что
     `fsm_merge_gate._scratch_worktree` уже несёт для мержа.
 
@@ -51,9 +51,13 @@ def _base_worktree(base: str) -> tuple[Path | None, str]:
     несёт правки роли, и приложение, применимое к её дереву, могло бы не
     примениться к main.
 
+    `task_repo` — клон проекта задачи (ADR-0021 п.2), в котором заведён
+    `base` и куда кладётся сам worktree.
+
     (путь, "") — успех; (None, причина) — git не ответил."""
     scratch = Path(tempfile.mkdtemp(prefix="artel-plan-appendix-"))
-    res = gitcmd.git("worktree", "add", "--detach", str(scratch), base)
+    res = gitcmd.in_repo(task_repo, "worktree", "add", "--detach",
+                         str(scratch), base)
     if res is None or res.returncode != 0:
         shutil.rmtree(scratch, ignore_errors=True)
         return None, (res.stderr.strip()[:300] if res is not None
@@ -61,8 +65,8 @@ def _base_worktree(base: str) -> tuple[Path | None, str]:
     return scratch, ""
 
 
-def _drop_base_worktree(repo: Path) -> None:
-    gitcmd.git("worktree", "remove", "--force", str(repo))
+def _drop_base_worktree(repo: Path, task_repo: Path) -> None:
+    gitcmd.in_repo(task_repo, "worktree", "remove", "--force", str(repo))
     shutil.rmtree(repo, ignore_errors=True)
 
 
@@ -135,7 +139,8 @@ def _plan_appendix_gate(conn, task_id: str, t,
 
     Внешний (не self) target — гейт не проверяется, тем же доводом, что
     `_zones_gate`/`_capacity_gate`: `config.PROTECTED_PATHS` — файлы
-    пульта, а `git` здесь ходит в `config.ROOT`, не в клон target'а.
+    пульта, а `git` здесь ходит в клон проекта задачи, не в клон внешнего
+    target'а.
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return None
@@ -145,7 +150,8 @@ def _plan_appendix_gate(conn, task_id: str, t,
     if not appendices:
         return None
 
-    base = gitcmd.diff_base(t["branch"])
+    task_repo = workspace.task_repo(task_id)
+    base = gitcmd.diff_base(t["branch"], repo=task_repo)
     if base is None:
         # Fail-closed (ADR-0002), тем же приёмом, что `_zones_gate`: базы
         # нет — проверить применимость нечем, и пропускать приложение
@@ -154,7 +160,7 @@ def _plan_appendix_gate(conn, task_id: str, t,
                   f"сравнения для ветки {t['branch']} — проверить "
                   f"применимость нечем")
         return _gate_failure_refusal(task_id, detail)
-    repo, reason = _base_worktree(base)
+    repo, reason = _base_worktree(base, task_repo)
     if repo is None:
         detail = (f"приложения PLAN: дерево базы сравнения {base} не "
                   f"развёрнуто — {reason}")
@@ -167,7 +173,7 @@ def _plan_appendix_gate(conn, task_id: str, t,
                           f"применяется к базе сравнения {base}: {answer}")
                 return _inapplicable_refusal(task_id, detail)
     finally:
-        _drop_base_worktree(repo)
+        _drop_base_worktree(repo, task_repo)
     return None
 
 

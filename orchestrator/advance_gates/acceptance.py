@@ -7,6 +7,7 @@
 докстрингом фиксирует это решение дословно, перенесено без правки."""
 import contextlib
 import hashlib
+from pathlib import Path
 
 from scripts import guard
 
@@ -25,12 +26,13 @@ def long_lived_manifest_rel(task_id: str) -> str:
     return f"tasks/{task_id}/acceptance_tests/{guard.LONG_LIVED_MANIFEST_NAME}"
 
 
-def blob_sha256(rev: str, rel: str) -> str | None:
+def blob_sha256(rev: str, rel: str, repo: Path) -> str | None:
     """SHA-256 БАЙТОВ файла `rel` в дереве `rev` (Р2: сумма — от дерева
     коммита, не от текста рабочего каталога и не от текста, прочитанного с
     перекодировкой концов строк); `None` — git не ответил или пути нет.
-    `gitcmd.carpentry` — единственный вход git пульта, отдающий байты."""
-    res = gitcmd.carpentry(config.ROOT, ["show", f"{rev}:{rel}"], None,
+    `gitcmd.carpentry` — единственный вход git пульта, отдающий байты;
+    `repo` — клон проекта задачи (ADR-0021 п.1)."""
+    res = gitcmd.carpentry(repo, ["show", f"{rev}:{rel}"], None,
                            text=False)
     if res is None or res.returncode != 0:
         return None
@@ -53,12 +55,13 @@ def long_lived_manifest(task_id: str, t, target: str
         return {}, ""
     locked = t["tests_locked_sha"]
     rel = long_lived_manifest_rel(task_id)
-    listed = gitcmd.ls_tree_files(locked, rel)
+    repo = workspace.task_repo(task_id)
+    listed = gitcmd.ls_tree_files(locked, rel, repo=repo)
     if listed is None:
         return None, f"git не ответил на дерево лока {locked}"
     if not listed:
         return {}, ""
-    text, reason = gitcmd.show(locked, rel)
+    text, reason = gitcmd.show(locked, rel, repo=repo)
     if text is None:
         return None, f"перечень в дереве лока {locked} не прочитан: {reason}"
     return guard.parse_long_lived_manifest(text)
@@ -82,8 +85,9 @@ def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
                                           store.task_target(conn, task_id))
     problems: list[str] = []
     if digests:
-        head = gitcmd.branch_head_sha(t["branch"])
-        present = gitcmd.ls_tree_files(head, "tests") if head else None
+        repo = workspace.task_repo(task_id)
+        head = gitcmd.branch_head_sha(t["branch"], repo=repo)
+        present = gitcmd.ls_tree_files(head, "tests", repo=repo) if head else None
         if not head:
             reason = f"голова кодовой ветки {t['branch']} не прочитана"
         elif present is None:
@@ -93,7 +97,7 @@ def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
                 if path not in present:
                     problems.append(f"{path} удалён")
                     continue
-                actual = blob_sha256(head, path)
+                actual = blob_sha256(head, path, repo)
                 if actual is None:
                     reason = f"{path} не прочитан на голове {head}"
                     break
@@ -152,7 +156,7 @@ def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
         # (SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требование 3, AC-4) — не
         # спор с локом, тот же критерий, что у
         # `checkpoint._commit_external_step_artifacts`.
-        ignored = gitcmd.check_ignore(names)
+        ignored = gitcmd.check_ignore(names, repo=workspace.task_repo(task_id))
         if ignored is None:
             detail = (f"лок acceptance_tests/ не проверен: git не "
                       f"ответил на проверку .gitignore — сверка "
@@ -238,14 +242,13 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     # кодовой ветки, поэтому исполнимы только из её рабочей копии.
     long_lived = None
     if target != config.DEFAULT_TARGET:
-        run_cwd = config.PROJECTS / target / "workspace"
-        run_cwd.mkdir(parents=True, exist_ok=True)
+        run_cwd, _error = workspace.ensure(task_id, t["branch"])
         acc_tdir = cleanup.enter_context(
             acceptance.plank_in_code_copy(task_id, branch, run_cwd))
         if _missing_plank_refuses():
             return True
-    elif workspace.on_task_branch(task_id, t["branch"]) is True:
-        run_cwd = workspace.path(task_id)
+    elif workspace.on_task_branch(task_id, t["branch"], target) is True:
+        run_cwd = workspace.path(task_id, target)
         acc_tdir = cleanup.enter_context(
             acceptance.plank_in_code_copy(task_id, branch, run_cwd))
         # Сбой чтения перечня (`None`) раньше в `in_dev` уже отклонил
@@ -288,11 +291,13 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
               f"artel.py advance {task_id}")
         return True
     if long_lived is None:
-        card = acceptance.summary(acc_tdir, branch=t["branch"])
+        card = acceptance.summary(acc_tdir, branch=t["branch"],
+                                  repo=workspace.task_repo(task_id))
     else:
         card = acceptance.summary(
             acc_tdir, branch=t["branch"],
-            long_lived=[run_cwd / path for path in long_lived])
+            long_lived=[run_cwd / path for path in long_lived],
+            repo=workspace.task_repo(task_id))
     store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                   f"{card}\nокружение: {fingerprint}")
     print(f"[{task_id}] {card}")

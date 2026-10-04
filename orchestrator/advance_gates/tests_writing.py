@@ -142,18 +142,17 @@ def _tests_writing_acceptance_dir(task_id: str, tdir, target: str,
     """(планка, cwd) материализованной планки для сухого сбора на выходе
     `tests_writing` (требование 2) — тот же трёхветочный выбор каталога,
     что уже несут `_acceptance_run_refuses`/`_review_approved` ниже по
-    конвейеру для прогона той же планки (внешний target — workspace
-    target'а; self на своей ветке — worktree задачи; иначе — `tdir`/
-    `config.ROOT`): отдельная функция, не рефакторинг тех двух (PLAN
-    «Подход») — обе уже плотно покрыты тестами T023-семьи, а совпадение
-    здесь — три строки на ветку, не повод рисковать их поведением ради
-    переиспользования."""
+    конвейеру для прогона той же планки (внешний target — рабочая копия
+    задачи в клоне target'а, ADR-0021 п.1-2; self на своей ветке —
+    worktree задачи; иначе — `tdir`/`config.ROOT`): отдельная функция, не
+    рефакторинг тех двух (PLAN «Подход») — обе уже плотно покрыты тестами
+    T023-семьи, а совпадение здесь — три строки на ветку, не повод
+    рисковать их поведением ради переиспользования."""
     if target != config.DEFAULT_TARGET:
-        run_cwd = config.PROJECTS / target / "workspace"
-        run_cwd.mkdir(parents=True, exist_ok=True)
+        run_cwd, _err = workspace.ensure(task_id, code_branch)
         return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
-    if workspace.on_task_branch(task_id, code_branch) is True:
-        run_cwd = workspace.path(task_id)
+    if workspace.on_task_branch(task_id, code_branch, target) is True:
+        run_cwd = workspace.path(task_id, target)
         return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
     return tdir, config.ROOT
 
@@ -235,8 +234,10 @@ def _tests_writing_code_diff(task_id: str, code_branch: str):
     добавленных долгоживущих файлов задачи на голове ветки (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2, 5). Сбой git — отказ, а не
     пустой дифф: иначе нарушение прошло бы молча (ADR-0002)."""
-    base = gitcmd.diff_base(code_branch)
-    entries = gitcmd.diff_name_status(base, code_branch) if base else None
+    repo = workspace.task_repo(task_id)
+    base = gitcmd.diff_base(code_branch, repo=repo)
+    entries = (gitcmd.diff_name_status(base, code_branch, repo=repo)
+              if base else None)
     if entries is None:
         return None, None, _long_lived_refusal(
             task_id, f"дифф кодовой ветки {code_branch} против базы не "
@@ -244,7 +245,7 @@ def _tests_writing_code_diff(task_id: str, code_branch: str):
     files: dict[str, str] = {}
     for status, path, _new in entries:
         if status == "A" and guard.is_long_lived_test_path(task_id, path):
-            text, reason = gitcmd.show(code_branch, path)
+            text, reason = gitcmd.show(code_branch, path, repo=repo)
             if text is None:
                 return None, None, _long_lived_refusal(
                     task_id, f"{path} не прочитан на голове {code_branch}: "
@@ -287,8 +288,9 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
     errors = [error for status, path, new_path in entries
               if (error := _diff_entry_error(task_id, status, path, new_path))]
     if files:
-        main_ref = gitcmd.diff_base_source(code_branch)
-        on_main = gitcmd.ls_tree_files(main_ref, "tests")
+        repo = workspace.task_repo(task_id)
+        main_ref = gitcmd.diff_base_source(code_branch, repo=repo)
+        on_main = gitcmd.ls_tree_files(main_ref, "tests", repo=repo)
         if on_main is None:
             return _long_lived_refusal(
                 task_id, f"дерево {main_ref} не прочитано — git не ответил, "
@@ -303,7 +305,8 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
                               f"ветки только долгоживущие файлы")
         errors += guard.long_lived_errors_from_files(sorted(files.items()),
                                                      task_id)
-        if workspace.on_task_branch(task_id, code_branch) is not True:
+        if workspace.on_task_branch(task_id, code_branch,
+                                    config.DEFAULT_TARGET) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")
     if not errors:
@@ -320,10 +323,11 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
     головы кодовой ветки. Перечень без записей — пустой файл, тоже
     записывается: отсутствие файла в дереве лока значит «лок снят до
     внедрения перечня», а не «файлов нет». Сбой git — отказ."""
-    head = gitcmd.branch_head_sha(code_branch)
+    repo = workspace.task_repo(task_id)
+    head = gitcmd.branch_head_sha(code_branch, repo=repo)
     digests: dict[str, str] = {}
     for path in paths:
-        digest = blob_sha256(head, path) if head else None
+        digest = blob_sha256(head, path, repo) if head else None
         if digest is None:
             return _long_lived_refusal(
                 task_id, f"{path}: сумма на голове {code_branch} не "

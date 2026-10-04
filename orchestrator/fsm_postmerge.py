@@ -63,7 +63,10 @@ def _map_regen_incident(conn, task_id: str, message: str) -> None:
 
 
 def _git(repo, *args: str):
-    return gitcmd.in_repo(repo, *args) if repo is not None else gitcmd.git(*args)
+    """git в рабочей копии мержа `repo` — временной рабочей копии клона
+    проекта (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 2); `None` —
+    корень пульта (`config.ROOT`), прежний адрес вызова без репозитория."""
+    return gitcmd.in_repo(repo if repo is not None else config.ROOT, *args)
 
 
 def _regenerate_and_commit_map(conn, task_id: str, repo=None) -> None:

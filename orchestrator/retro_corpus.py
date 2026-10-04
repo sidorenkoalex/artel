@@ -9,9 +9,9 @@ tasks/T094/ANSWER-1.md).
 
 ANSWER-1 разводит объёмы буквального требования 14 («fetch'ем
 `refs/artifacts/*`»): в M1 кэш пересобирается проходом по УЖЕ
-СУЩЕСТВУЮЩИМ ЛОКАЛЬНЫМ `refs/artifacts/*` целевых (их локальные клоны —
-`config.PROJECTS/<target>/workspace`, тот же адрес, что и `runner.
-role_cwd`) — без сети. Сетевой `fetch` чужих refs из origin'ов целевых
+СУЩЕСТВУЮЩИМ ЛОКАЛЬНЫМ `refs/artifacts/*` проектов (их клоны —
+`config.PROJECTS/<target>/repo`, включая артель, ADR-0021 п.1; SPEC
+01M42PENCS26D0656X8FR7DFA7, требование 8) — без сети. Сетевой `fetch` чужих refs из origin'ов целевых
 как фоновая машинная обвязка — M2, вне объёма этой задачи.
 
 `CACHE_PATH` — расходный файл под `.artel/`: `rebuild_cache()` полностью
@@ -21,7 +21,7 @@ role_cwd`) — без сети. Сетевой `fetch` чужих refs из orig
 """
 import json
 
-from . import config, gitcmd, targets, yamlmini
+from . import config, gitcmd, repo_context, targets, yamlmini
 
 CACHE_PATH = config.ROOT / ".artel" / "retro-corpus-cache.json"
 
@@ -38,7 +38,8 @@ OPTIONAL_RETRO_FIELDS = ("provider",)
 
 
 def _target_workspace(target: str):
-    return config.PROJECTS / target / "workspace"
+    """Клон проекта — репозиторий его ссылок документов."""
+    return repo_context.clone_path(target)
 
 
 def _local_artifact_refs(target: str) -> list[str]:

@@ -27,11 +27,10 @@ NO_PLANK = "планки нет"
 
 
 def _code_dir(task_id: str, target: str) -> Path:
-    """Рабочая копия кода задачи — тот же выбор, что у прогона пульта
+    """Рабочая копия кода задачи — `worktrees/<id>/` области её проекта
+    (ADR-0021 п.1), тот же выбор, что у прогона пульта
     (`advance_gates/acceptance._acceptance_run_body`)."""
-    if target == config.DEFAULT_TARGET:
-        return workspace.path(task_id)
-    return config.PROJECTS / target / "workspace"
+    return workspace.path(task_id, target)
 
 
 def _is_plank_file(rel: str) -> bool:
@@ -90,7 +89,7 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
     head = f"[{task_id}] plank-run"
 
     code_dir = _code_dir(task_id, target)
-    if not code_dir.is_dir() or code_dir.resolve() == config.ROOT.resolve():
+    if not code_dir.is_dir():
         sys.exit(f"{head}: отказ — рабочей копии кода задачи нет ({code_dir}); "
                  f"планку выложить некуда")
 
