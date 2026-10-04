@@ -13,6 +13,7 @@ from scripts import guard
 
 from .. import (acceptance, agent_log, artifact_branch, config, fsm, gitcmd,
                store, workspace, yamlmini)
+from .refusal_classes import ACCEPTANCE_CODE_COPY_REFUSAL_ACTION
 
 LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень долгоживущих тестов"
 # Подсказка отказа сверки перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
@@ -216,12 +217,18 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     материализуется НА МЕСТЕ в workspace target'а (SPEC
     01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-5).
 
+    Рабочая копия задачи не заведена или не выписана на ветку — отказ
+    своим действием класса «чинит Оператор»
+    (`ACCEPTANCE_CODE_COPY_REFUSAL_ACTION`, SPEC 01M446WEVJXARR5CDED8RE9CCR,
+    требование 5.2): «приёмочные тесты» остаётся за красной планкой,
+    которую чинит developer.
+
     `True` — переход отклонён (планка красная)."""
     def _missing_plank_refuses() -> bool:
         if (acc_tdir / "acceptance_tests").is_dir():
             return False
-        spec_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
-                                                     "SPEC.md")
+        spec_text = fsm._read_foreign_branch_text_or_refuse(conn, task_id,
+                                                             branch, "SPEC.md")
         if spec_text is None:
             return True
         meta = yamlmini.frontmatter(spec_text) or {}
@@ -250,7 +257,7 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
             # на импорте кода — причина `ensure` понятнее этого исхода.
             detail = f"рабочая копия задачи не заведена: {error}"
             store.journal(conn, task_id, "fsm",
-                          "переход отклонён: приёмочные тесты", detail)
+                          ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
             print(f"[{task_id}] переход отклонён: {detail}")
             print(f"  дальше: artel.py workspace {task_id} и повтори "
                   f"artel.py advance {task_id}")
@@ -280,7 +287,7 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
                       f"{t['branch']} — долгоживущие файлы перечня исполнить "
                       f"негде")
             store.journal(conn, task_id, "fsm",
-                          "переход отклонён: приёмочные тесты", detail)
+                          ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
             print(f"[{task_id}] переход отклонён: {detail}")
             print(f"  дальше: artel.py workspace {task_id} и повтори "
                   f"artel.py advance {task_id}")

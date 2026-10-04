@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import agent_log, ci, config, gitcmd, session, spend, store, workspace
+from .advance_gates import refusal_classes
 from .providers.claude import TOOL_CALL_LINE_PREFIX
 
 _SELECTOR_FLAGS = ("--tasks", "--mine", "--all", "--observation")
@@ -48,21 +49,12 @@ _AUTO_STOP_ACTION = "auto остановлен"
 # копируется заново.
 _CI_STATUS_ACTION_PREFIX = "статус CI ветки"
 
-# Отказы предварительного advance класса «роль ещё не закончила» (SPEC
-# 01M290PP4KBTG1KYS1PWKQJH6T, требование 5) — тексты, которые
-# `auto._pre_advance_step` журналирует actor'ом "fsm": копия
-# `auto.REWORK_REFUSAL_ACTION` и литерала "переход отклонён: дерево не на
-# ветке задачи" (`orchestrator/fsm.py`/`orchestrator/fsm_advance.py`), не
-# импорт — зона этой задачи не включает `auto.py`/`fsm.py`/`fsm_advance.py`
-# (SPEC «Не входит»: отдельная пометка класса отказа в самом журнале —
-# задача другой роли), а дозор и так классифицирует события чтением текста
-# журнала, не кодом источника. Артефакт роли просто ещё не готов — не
-# событие, которое Оператору нужно видеть в дозоре наравне с настоящими
-# отказами.
-_PRE_ADVANCE_REFUSAL_ACTIONS = (
-    "переход отклонён: замечания ревью не отработаны",
-    "переход отклонён: дерево не на ветке задачи",
-)
+# Отказы предварительного advance подкласса «роль ещё не закончила» (SPEC
+# 01M290PP4KBTG1KYS1PWKQJH6T, требование 5) — из единого перечня классов
+# отказов (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 1). Артефакт роли
+# просто ещё не готов — не событие, которое Оператору нужно видеть в
+# дозоре наравне с настоящими отказами.
+_PRE_ADVANCE_REFUSAL_ACTIONS = refusal_classes.ROLE_NOT_FINISHED_REFUSAL_ACTIONS
 
 # Ход живого шага роли (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требования 3-7).
 # Живой шаг — последняя «agent run started» задачи без более поздней
