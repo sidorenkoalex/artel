@@ -34,7 +34,10 @@ class CapacityGateGitFailureTest(TmpRootTest):
         self.t = {"title": "Тест гейта ёмкости", "branch": "task/t001-x"}
 
     def _refuses(self, git_diff) -> bool:
-        with mock.patch.object(gitcmd, "git", git_diff):
+        # Сквозь `-C <клон>`: гейт меряет diff в клоне проекта задачи явным
+        # репозиторием (ADR-0021 п.1, этап 2).
+        with mock.patch.object(gitcmd, "git",
+                               lambda *a: git_diff(*strip_dash_c(a))):
             return fsm_advance._capacity_gate_refuses(
                 self.conn, self.task_id, self.t, "in_dev")
 
@@ -73,8 +76,6 @@ class CapacityGateGitFailureTest(TmpRootTest):
         тот же случай, что и обычный ненулевой код возврата: причина
         непустая, гейт обязан отказать, а не пропустить переход."""
         def raising_git(*args):
-            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
-            args = strip_dash_c(args)
             if args and args[0] == "diff":
                 raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
             return subprocess.CompletedProcess(list(args), 0, "", "")
@@ -85,8 +86,6 @@ class CapacityGateGitFailureTest(TmpRootTest):
 
     def test_git_diff_success_under_the_cap_is_unaffected(self):
         def ok_git(*args) -> subprocess.CompletedProcess:
-            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
-            args = strip_dash_c(args)
             return subprocess.CompletedProcess(
                 list(args), 0, "diff --git a b\n+маленький diff", "")
 
@@ -115,7 +114,9 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
             (self.task_id,))]
 
     def _refuses_with(self, git_diff) -> bool:
-        with mock.patch.object(gitcmd, "git", git_diff):
+        # Сквозь `-C <клон>` (ADR-0021 п.1, этап 2).
+        with mock.patch.object(gitcmd, "git",
+                               lambda *a: git_diff(*strip_dash_c(a))):
             return fsm_advance._capacity_gate_refuses(
                 self.conn, self.task_id, self.t, "in_dev")
 
@@ -124,8 +125,6 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
         artifacts_body = "y" * 500
 
         def git_diff(*args) -> subprocess.CompletedProcess:
-            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
-            args = strip_dash_c(args)
             if args and args[0] == "diff":
                 if f":!tasks/{self.task_id}/" in args:
                     return subprocess.CompletedProcess(
@@ -154,8 +153,6 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
         code_body = "x" * (config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 37_856)
 
         def git_diff(*args) -> subprocess.CompletedProcess:
-            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
-            args = strip_dash_c(args)
             if args and args[0] == "diff":
                 if f":!tasks/{self.task_id}/" in args:
                     return subprocess.CompletedProcess(
@@ -185,8 +182,6 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
         code_body = "x" * (config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 37_856)
 
         def git_diff(*args) -> subprocess.CompletedProcess:
-            # Сквозь `-C <репозиторий>`: git идёт с явным репозиторием (ADR-0021 п.1, этап 2).
-            args = strip_dash_c(args)
             if args and args[0] == "diff":
                 if f":!tasks/{self.task_id}/" in args:
                     return subprocess.CompletedProcess(

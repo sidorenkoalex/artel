@@ -193,6 +193,9 @@ class EnforceBudgetReviewEscalationShaTest(TmpRootTest):
             "SELECT * FROM steps WHERE task_id=? ORDER BY id", (self.TASK,))]
 
     def test_escalation_from_review_journals_the_code_sha(self):
+        """Ловит мутацию: `enforce_budget` не журналирует sha головы кодовой ветки
+        при эскалации из `review` — записи `REVIEW_ESCALATION_CODE_SHA_ACTION`
+        нет, гейту «код сменился после вердикта» сверять не с чем."""
         with mock.patch.object(gitcmd, "branch_head_sha",
                                lambda b, repo=None: "a" * 40):
             escalated = budget.enforce_budget(store.db(), self.TASK, "review")
@@ -203,6 +206,8 @@ class EnforceBudgetReviewEscalationShaTest(TmpRootTest):
         self.assertEqual(details, ["a" * 40])
 
     def test_escalation_from_in_dev_does_not_journal_a_code_sha(self):
+        """Ловит мутацию: условие `state == "review"` ослаблено до любого
+        состояния — эскалация из `in_dev` тоже пишет sha кода."""
         store.update_task(store.db(), self.TASK, state="in_dev")
         with mock.patch.object(gitcmd, "branch_head_sha",
                                lambda b, repo=None: "a" * 40):
@@ -213,7 +218,10 @@ class EnforceBudgetReviewEscalationShaTest(TmpRootTest):
         self.assertEqual(details, [])
 
     def test_git_not_answering_does_not_journal_an_empty_sha(self):
-        with mock.patch.object(gitcmd, "branch_head_sha", lambda b, repo=None: ""):
+        """Ловит мутацию: проверка `if code_sha:` убрана — пустой ответ git
+        журналируется пустым sha."""
+        with mock.patch.object(gitcmd, "branch_head_sha",
+                               lambda b, repo=None: ""):
             budget.enforce_budget(store.db(), self.TASK, "review")
 
         details = [d for _, a, d in self.journal()

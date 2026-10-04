@@ -18,7 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import acceptance, agent_log, fsm, gitcmd, store  # noqa: E402
+from orchestrator import (acceptance, agent_log, config, fsm,  # noqa: E402
+                          gitcmd, store)
 from tests.sandbox import LightTransitionSandbox  # noqa: E402
 
 
@@ -48,8 +49,15 @@ class MapConflictAutoResolveTest(LightTransitionSandbox):
         конфликтом на `merge` и списком `conflict_files` на `diff
         --name-only --diff-filter=U`."""
         calls: list = []
+        real_in_repo = gitcmd.in_repo
+        clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
 
         def side_effect(repo, *args):
+            if Path(repo) == clone:
+                # Ссылка документов задачи — в клоне артели (ADR-0021 п.1,
+                # этап 2), не в рабочей копии задачи: настоящий git
+                # песочницы, предмет теста — подтяжка в рабочей копии.
+                return real_in_repo(repo, *args)
             calls.append(args)
             if args[:1] == ("merge",) and "--abort" in args:
                 return self._ok(repo, *args)

@@ -16,7 +16,7 @@ class LongLivedChecklistTest(unittest.TestCase):
         task = {"branch": self.CODE_BRANCH, "tests_locked_sha": "a" * 40,
                 "budget_usd": 5.0}
 
-        def show(branch, path):
+        def show(branch, path, repo=None):
             self.assertEqual((branch, path), (self.CODE_BRANCH, self.PATH))
             return (source, "") if source is not None else (None, "нет файла")
 

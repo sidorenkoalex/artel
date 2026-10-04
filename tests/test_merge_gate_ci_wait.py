@@ -72,7 +72,10 @@ class MergeGateCiWaitUnitTest(TmpRootTest):
         return "\n".join(f"{r['action']} | {r['detail']}" for r in rows).lower()
 
     def patch_branch_status(self, fn):
-        patcher = mock.patch.object(ci, "branch_status", fn)
+        # `repo` — клон проекта задачи (ADR-0021 п.1, этап 2): гейт мержа
+        # спрашивает CI ветки с явным репозиторием; ответ от него не зависит.
+        patcher = mock.patch.object(
+            ci, "branch_status", lambda branch, repo=None: fn(branch))
         patcher.start()
         self.addCleanup(patcher.stop)
 

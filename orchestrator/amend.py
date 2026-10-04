@@ -179,8 +179,10 @@ def _group_line_errors(t, rel_tests_dir: str,
     проверяем: тот же исход, что у планки до правила."""
     if t["target"] != config.DEFAULT_TARGET:
         return []
+    # Задача — из `tasks/<id>/acceptance_tests`: её клон хранит лок.
+    task_id = Path(rel_tests_dir).parts[1]
     locked = _branch_tests_snapshot(t["tests_locked_sha"], rel_tests_dir,
-                                    t["id"])
+                                    task_id)
     if locked is None or not guard.plank_has_group_lines(_test_files(locked)):
         return []
     return guard.group_line_errors_from_files(files)

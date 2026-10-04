@@ -132,7 +132,7 @@ class MutationClaimGateFileSelectionTest(_MutationClaimGateRowTest):
         обрабатывается отдельно — гейт передал бы `None` в
         `test_functions_without_mutation_claim` как валидный текст и
         либо упал, либо ложно отказал на уже несуществующем файле."""
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             return (None, "файла нет в этой ветке")
 
         with mock.patch.object(gitcmd, "diff_base",
@@ -150,7 +150,7 @@ class MutationClaimGateFileSelectionTest(_MutationClaimGateRowTest):
         чтении СУЩЕСТВУЮЩЕГО файла молча пропускал бы проверку заявки
         вместо отказа (R1-F2, REVIEW.md 01M29A0F88P9GKSXFW90F99H2N
         итерации 1)."""
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             return (None, "git не ответил")
 
         with mock.patch.object(gitcmd, "diff_base",
@@ -169,7 +169,7 @@ class MutationClaimGateFileSelectionTest(_MutationClaimGateRowTest):
         легитимное удаление — тест без заявки мутации проскочил бы гейт
         именно там, где штатный (декодируемый) файл был бы пойман
         (R1-F2)."""
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             if branch == "deadbeef":
                 return (None, "новый файл")
             return (None, "не прочитан: 'utf-8' codec can't decode byte 0xff")
@@ -194,7 +194,7 @@ class MutationClaimGateFileSelectionTest(_MutationClaimGateRowTest):
         итерации 3, R1-F2: `ls_tree_files` даёт независимый от текста
         причины ответ «путь есть в дереве», и такой путь обязан
         отказывать, а не пропускаться."""
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             if branch == "deadbeef":
                 return (None, "новый файл")
             return (None, "недоступный blob")
@@ -218,7 +218,7 @@ class MutationClaimGateFileSelectionTest(_MutationClaimGateRowTest):
         файл с непризнанной причиной `gitcmd.show` тоже отказывал бы —
         `ls_tree_files`, вернувший список БЕЗ этого пути, обязан
         подтверждать легитимное удаление так же, как и раньше."""
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             if branch == "deadbeef":
                 return (None, "новый файл")
             return (None, "недоступный blob")
@@ -244,7 +244,7 @@ class MutationClaimGateRefusalContentTest(_MutationClaimGateRowTest):
         (AC-6)."""
         head_source = "def test_new():\n    assert True\n"
 
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             if branch == "deadbeef":
                 return (None, "новый файл")
             return (head_source, "")
@@ -269,7 +269,7 @@ class MutationClaimGateRefusalContentTest(_MutationClaimGateRowTest):
                        '    """Ловит мутацию: пустой список вместо ошибки."""\n'
                        '    assert True\n')
 
-        def fake_show(branch, path):
+        def fake_show(branch, path, repo=None):
             if branch == "deadbeef":
                 return (None, "новый файл")
             return (head_source, "")

@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (acceptance, artifact_source, budget, ci, config,
-                          fixation, fsm_autogate, gates, gitcmd, store,
+from orchestrator import (acceptance, artifact_branch, artifact_source,
+                          budget, ci, config, fixation, fsm_autogate, gates, gitcmd, store,
                           workspace)
 from scripts import guard
 from tests.sandbox import TmpRootTest
@@ -25,6 +25,9 @@ from tests.sandbox import TmpRootTest
 BRANCH = "artifact/T001"
 SHA = "a" * 40
 CODE_BRANCH = "task/t001-x"
+# Клон проекта задачи (ADR-0021 п.1, этап 2): git задачи и чтения
+# документов идут в него явным репозиторием; git здесь замокан.
+REPO = Path("/clone")
 
 
 class _AutogateConditionsUnitTest(unittest.TestCase):
@@ -40,11 +43,11 @@ class _AutogateConditionsUnitTest(unittest.TestCase):
         show_map = show_map or {}
         t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
 
-        def fake_show(branch, rel):
+        def fake_show(branch, rel, repo=None):
             self.assertEqual(branch, BRANCH)
             return (show_map[rel], "") if rel in show_map else (None, "нет файла")
 
-        def fake_verifying_status(branch):
+        def fake_verifying_status(branch, repo=None):
             self.assertEqual(branch, CODE_BRANCH,
                              "ci-критерий обязан спрашивать статус КОДОВОЙ "
                              "ветки задачи, не артефактной")
@@ -52,6 +55,9 @@ class _AutogateConditionsUnitTest(unittest.TestCase):
 
         with mock.patch.object(artifact_source, "resolve",
                                return_value=(BRANCH, True)), \
+             mock.patch.object(artifact_branch, "task_repo",
+                               return_value=REPO), \
+             mock.patch.object(workspace, "task_repo", return_value=REPO), \
              mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
              mock.patch.object(gitcmd, "ls_tree_files",
                                return_value=ls_tree_files), \
@@ -292,7 +298,8 @@ class PullMergeCommitsTest(unittest.TestCase):
         у прочих примитивов `gitcmd`."""
         with mock.patch.object(gitcmd, "git", return_value=None):
             self.assertEqual(
-                fsm_autogate._acceptance_pull_merge_commits(CODE_BRANCH), [])
+                fsm_autogate._acceptance_pull_merge_commits(CODE_BRANCH, REPO),
+                [])
 
     def test_full_sha_lines_are_returned(self):
         """Ловит мутацию: формат `%h` (сокращённый sha) вместо `%H` —
@@ -301,10 +308,11 @@ class PullMergeCommitsTest(unittest.TestCase):
         res = mock.Mock(returncode=0, stdout=f"{SHA}\n")
 
         with mock.patch.object(gitcmd, "git", return_value=res) as git_mock:
-            merges = fsm_autogate._acceptance_pull_merge_commits(CODE_BRANCH)
+            merges = fsm_autogate._acceptance_pull_merge_commits(CODE_BRANCH,
+                                                                 REPO)
 
-        git_mock.assert_called_once_with("log", "--merges", "--format=%H",
-                                         CODE_BRANCH)
+        git_mock.assert_called_once_with("-C", str(REPO), "log", "--merges",
+                                         "--format=%H", CODE_BRANCH)
         self.assertEqual(merges, [SHA])
 
 
@@ -323,7 +331,9 @@ class ManualCriteriaExcludesCiTest(_AutogateConditionsUnitTest):
                   "# AC-1: ci — CI ветки зелёный.\n"
                   "# AC-2: skip — обоснование причины skip.\n")
 
-        with mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
+        with mock.patch.object(artifact_branch, "task_repo",
+                               return_value=REPO), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
              mock.patch.object(gitcmd, "show", return_value=(content, "")):
             items = fsm_autogate._acceptance_manual_criteria(self.TASK, BRANCH)
 
@@ -352,6 +362,9 @@ class AcceptanceChecklistDetailMergesOmittedTest(unittest.TestCase):
 
         with mock.patch.object(artifact_source, "resolve",
                                return_value=(BRANCH, True)), \
+             mock.patch.object(artifact_branch, "task_repo",
+                               return_value=REPO), \
+             mock.patch.object(workspace, "task_repo", return_value=REPO), \
              mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
              mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
              mock.patch.object(gitcmd, "show", return_value=(content, "")), \

@@ -401,6 +401,10 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         "verifying"`), а не проверкой на входе в функцию — упусти это,
         и опрос сработал бы только когда verifying был стартовым
         состоянием, но не когда до него дошли через review.
+
+        Ловит мутацию: дизъюнкт `state == "verifying"` убран из условия цикла
+        `_cmd_auto` — verifying, достигнутый изнутри цикла, останавливает auto,
+        и задача остаётся в `verifying`, не дойдя до `acceptance`.
         """
         self.patch_object(ci, "verifying_status",
                           lambda branch, repo=None: (ci.VERIFYING_GREEN,
@@ -449,7 +453,12 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         ADR-0015 поставила `verifying` перед `review` — без зелёного CI
         цикл встал бы на первом же входе в `verifying`, ни разу не дойдя
         до реценьювера, а предмет теста — именно повтор итерации ревью,
-        не опрос CI."""
+        не опрос CI.
+
+        Ловит мутацию: вердикт `changes_requested` останавливает цикл на
+        Операторе вместо возврата в `in_dev` к шагу developer — задача не
+        доходит до `acceptance` за четыре агентских шага.
+        """
         self.patch_object(ci, "verifying_status",
                           lambda branch, repo=None: (ci.VERIFYING_GREEN,
                                           "CI коммита aaaaaaaa зелёный (2 проверок)"))

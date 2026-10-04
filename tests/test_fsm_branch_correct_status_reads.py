@@ -27,7 +27,7 @@ from orchestrator import (catalog, config, fsm, gitcmd,  # noqa: E402
                           store)
 from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture_new_task_id,
-                           resilient_tmp_cleanup)
+                           link_artel_clone_to_root, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,6 +125,10 @@ class RealGitBranchTest(TmpRootTest):
         for attr in ALL_CONFIG_ATTRS:
             self.patches.enter_context(
                 mock.patch.object(config, attr, self._patched_path(attr)))
+        # Клон артели — сам репозиторий песочницы (ADR-0021 п.1, этап 2):
+        # ветка задачи и ссылка документов живут в клоне, сценарий кладёт
+        # документы чекаутом в `self.root`.
+        link_artel_clone_to_root(self.root)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(

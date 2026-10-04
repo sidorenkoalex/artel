@@ -19,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import github_adapter, targets  # noqa: E402
+from tests.sandbox import strip_dash_c  # noqa: E402
 
 
 def task_row(**overrides) -> dict:
@@ -201,10 +202,15 @@ class EnsureHeadInOriginTest(unittest.TestCase):
         self.journal.assert_not_called()
 
     def test_missing_head_triggers_a_push_and_journals_success(self):
+        """Ловит мутацию: `ensure_head_in_origin` не пушит отсутствующую в origin
+        ветку задачи (или пушит без `-u` либо не ту ветку), либо не журналирует
+        успешный push."""
         pushes = []
 
         def fake_git(*args):
-            pushes.append(args)
+            # Сквозь `-C <клон>`: push ветки задачи идёт из клона проекта
+            # явным репозиторием (ADR-0021 п.1, этап 2).
+            pushes.append(strip_dash_c(args))
             return subprocess.CompletedProcess(list(args), 0, "ok\n", "")
 
         with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
