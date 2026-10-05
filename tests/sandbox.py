@@ -944,6 +944,21 @@ def declared_without_profile(target: str):
             yield skip
 
 
+@contextlib.contextmanager
+def declared_artel_profile():
+    """Сценарий без песочницы путей: `config.TARGETS` на время блока —
+    временный файл с записью артели и её профилем тестов, а не боевой
+    файл пульта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4: без
+    профиля проверки тестов задачи артели отказывают)."""
+    with tempfile.TemporaryDirectory(prefix="artel-targets-") as tmp:
+        path = Path(tmp) / "targets.yaml"
+        path.write_text("targets:\n" + _PROJECT_TARGET_ENTRY.format(
+            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
+            + ARTEL_TEST_PROFILE, encoding="utf-8")
+        with mock.patch.object(config, "TARGETS", path):
+            yield
+
+
 def declare_target(target: str) -> None:
     """Запись проекта `target` (без профиля тестов) в `config.TARGETS`
     песочницы, если её там нет, — без клона: контекст проекта разрешается

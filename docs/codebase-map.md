@@ -1,5 +1,5 @@
 ---
-built_at_sha: 462b03f90daecc7ff94821480eb796782a36ac25
+built_at_sha: 84ee45842ba4cbd3a447f426906047317520cf6f
 ---
 
 # Codebase-map пульта
@@ -2037,6 +2037,7 @@ built_at_sha: 462b03f90daecc7ff94821480eb796782a36ac25
 - `claude_only_run`
 - `clone_artel_from_origin`
 - `declare_target`
+- `declared_artel_profile`
 - `declared_without_profile`
 - `disk_backed_ls_tree_files`
 - `disk_backed_show`
