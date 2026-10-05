@@ -2,7 +2,7 @@
 task: 01M44EP4Q927DJXVX9YMMZ0B7V
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -73,8 +73,13 @@ schema_version: 5
    (готово).
 6. Приложение к `skills/test-authoring.md` — раздел ниже (готово,
    `git apply --check` на чистом дереве прошёл).
-7. После ответа Оператора: правка двух потребителей (вопрос 1) и
-   долгоживущего теста 01M41R4YAM (вопрос 2), повторный прогон, `ready`.
+7. По ANSWER-1: `orchestrator/pull.py:540` и
+   `orchestrator/advance_gates/acceptance.py:228` — `is_dir()` каталога
+   планки заменён на `acceptance.plank_present(...)`; в
+   `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py` (`setUp`,
+   `observed_run`) снимок каталога выкладки исключает
+   `acceptance.PLANK_HELPER_NAME`, утверждения методов не тронуты; карта
+   регенерирована (готово).
 
 ## Покрытие требований
 
@@ -102,11 +107,9 @@ schema_version: 5
   (`tests/test_pull.py::PullEvaluateTest::test_refused_when_plank_missing_and_ac_required`,
   `::test_refused_none_when_branch_text_read_already_refused`,
   `tests/test_branch_freshness_gate.py::BranchFreshnessGateTest::test_approve_refuses_when_spec_read_fails_after_missing_plank`
-  — сейчас красные). Поэтому шаг сдан эскалацией (вопрос 1), а не `ready`.
-  Проверено: замена обоих `is_dir()` на `acceptance.plank_present(...)`
-  делает эти три теста зелёными (прогон `test_pull.py`,
-  `test_branch_freshness_gate.py`, `test_approve_acceptance_full_suite.py`,
-  `test_acceptance_tests_flow.py`: 121 passed); правка откатана до мандата.
+  — до правки красные). По ANSWER-1 (вариант A) оба `is_dir()` заменены
+  на `acceptance.plank_present(...)` — см. «Расширение зон»; отказ
+  сохранён, три теста зелёные.
 - Автокоммит: `_pult.py` в `acceptance_tests/` теперь посторонний —
   копия, оставшаяся в рабочей копии после прерванного `plank-run`,
   отбрасывается с записью журнала, а не уезжает в ссылку (AC-7). Если такая
@@ -229,70 +232,41 @@ index 1216820d..d4337fc7 100644
   стоит закрыть явным белым списком предмета, а не чёрным списком
   непредмета.
 
-## Эскалация
+## Расширение зон
+Пути: orchestrator/pull.py, orchestrator/advance_gates/acceptance.py
 
-**Вопросы** (по блокирующести):
+Обоснование: выкладка кладёт `_pult.py` и к пустой планке (требование 3,
+песочницы планки AC-1/3/4/5/6), поэтому `is_dir()` каталога планки у этих
+двух потребителей перестал отвечать на вопрос «планка есть». Ровно две
+строки — `orchestrator/pull.py:540` и
+`orchestrator/advance_gates/acceptance.py:228` — заменены на
+`acceptance.plank_present(...)`; отказ «планка не найдена в источнике»
+сохранён (`tests/test_pull.py`, `tests/test_branch_freshness_gate.py`
+зелёные). Мандат — ANSWER-1, вопрос 1, вариант A.
 
-1. **Потребители, проверяющие «планка есть» через `is_dir()`, — вне зон
-   (блокирует).** Требование 3 и планка (AC-1, 3, 4, 5, 6 — песочницы со
-   ссылкой без `acceptance_tests/`) требуют класть `_pult.py` и при пустой
-   планке. Тогда `pull.py:540` и `advance_gates/acceptance.py:228` больше
-   не видят «планка не найдена в источнике», а SPEC («Не входит») правку
-   потребителей не разрешает.
-   - **A (дефолт)** — расширить зоны на две строки: `(…/
-     "acceptance_tests").is_dir()` → `acceptance.plank_present(…/
-     "acceptance_tests")` в обоих местах (проверено: три красных теста
-     зеленеют). Строка мандата:
-     `Расширение зон разрешено: orchestrator/pull.py, orchestrator/advance_gates/acceptance.py`
-   - **B** — помощник только при непустой планке, потребители не
-     трогаются. Тогда планке нужна `amend-tests`: в `_scenario.py::
-     PlankHelperSandbox.setUp` ссылка песочницы должна нести тест планки
-     (сейчас AC-1/3/4/5/6 выкладывают ссылку без `acceptance_tests/`).
+## Изменённые утверждения тестов (мандат ANSWER-1, вопрос 2)
+Методы не удалялись и не переименовывались.
+- 2.1–2.3 `tests/test_guard_artifact_disk_read.py`
+  (`DiskReadFormsTest::test_error_text_carries_the_artifact_branch_recipe`,
+  `::test_every_artifact_name_is_covered`,
+  `AnchoringTest::test_recipe_names_the_artifact_not_the_literal_fragment`)
+  — ожидаемый текст рецепта `gitcmd.show(..., "tasks/<id>/X")` →
+  `artifact_text("X")` (требование 6).
+- 2.4–2.5 `tests/test_fsm_advance_tests_writing_artifact_source.py`
+  (`ArtifactSourceGateTest::test_disk_reading_plank_is_refused_with_named_action`,
+  `RefusalClassTest::test_refusal_surfaces_in_test_author_brief_history`)
+  — рецепт и подсказка называют помощник пульта (требование 6).
+- 2.6 `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`
+  (`DraftInTestsWritingTest::test_ac1_tests_writing_runs_draft_with_pult_runner`,
+  `FixedPlankAfterTestsWritingTest::test_ac2_later_states_run_fixed_plank_and_single_file`)
+  — в `setUp` (`observed_run`) снимок каталога выкладки исключает
+  `acceptance.PLANK_HELPER_NAME`; утверждения методов прежние.
 
-2. **Смена утверждений существующих тестов (блокирует сдачу в `ready`).**
-   Требование 6 меняет текст рецепта, требование 3 — состав выкладки.
-   Изменённые утверждения (уже правлены в рабочей копии, кроме п. 2.6):
-   - 2.1 `tests/test_guard_artifact_disk_read.py::DiskReadFormsTest::test_error_text_carries_the_artifact_branch_recipe`
-     — `RECIPE` `'читай из артефактной ветки: gitcmd.show(artifact_branch.branch_name(TASK_ID), "tasks/<id>/PLAN.md")'`
-     → `'читай через помощник пульта рядом с планкой: from _pult import artifact_text; artifact_text("PLAN.md")'`;
-     `'"tasks/<id>/SPEC.md")'` → `'artifact_text("SPEC.md")'`.
-   - 2.2 `tests/test_guard_artifact_disk_read.py::DiskReadFormsTest::test_every_artifact_name_is_covered`
-     — `f'"tasks/<id>/{literal}")'` → `f'artifact_text("{literal}")'`.
-   - 2.3 `tests/test_guard_artifact_disk_read.py::AnchoringTest::test_recipe_names_the_artifact_not_the_literal_fragment`
-     — три `'"tasks/<id>/X")'` → `'artifact_text("X")'` (PLAN.md,
-     ANSWER-1.md, ANSWER-3.md); `assertNotIn("-PLAN.md")` сохранён.
-   - 2.4 `tests/test_fsm_advance_tests_writing_artifact_source.py::ArtifactSourceGateTest::test_disk_reading_plank_is_refused_with_named_action`
-     — рецепт в detail → `artifact_text("PLAN.md")`; подсказка «дальше:
-     перепиши чтение артефактов планки на артефактную ветку (…)» →
-     «… на помощник пульта (from _pult import artifact_text;
-     artifact_text("PLAN.md"), skills/test-authoring.md) …».
-   - 2.5 `tests/test_fsm_advance_tests_writing_artifact_source.py::RefusalClassTest::test_refusal_surfaces_in_test_author_brief_history`
-     — `"gitcmd.show(artifact_branch.branch_name(TASK_ID)"` →
-     `'artifact_text("PLAN.md")'`.
-   - 2.6 (НЕ правлен: долгоживущий файл задачи 01M41R4YAM)
-     `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py::DraftInTestsWritingTest::test_ac1_tests_writing_runs_draft_with_pult_runner`
-     и `::FixedPlankAfterTestsWritingTest::test_ac2_later_states_run_fixed_plank_and_single_file`
-     — снимок `*.py` каталога выкладки (`observed_run` в `setUp`) теперь
-     несёт `_pult.py`, и `assertEqual(snapshot, draft/fixed)` краснеет.
-     Предлагаю исключить `acceptance.PLANK_HELPER_NAME` из снимка в
-     `observed_run`; утверждения методов остаются прежними. Альтернатива —
-     `amend-tests`, если долгоживущие файлы других задач правятся только
-     так.
-   Дефолт: мандат на 2.1–2.6 в таком виде. Строка мандата:
-   `Ослабление тестов разрешено: tests/test_guard_artifact_disk_read.py::DiskReadFormsTest::test_error_text_carries_the_artifact_branch_recipe, tests/test_guard_artifact_disk_read.py::DiskReadFormsTest::test_every_artifact_name_is_covered, tests/test_guard_artifact_disk_read.py::AnchoringTest::test_recipe_names_the_artifact_not_the_literal_fragment, tests/test_fsm_advance_tests_writing_artifact_source.py::ArtifactSourceGateTest::test_disk_reading_plank_is_refused_with_named_action, tests/test_fsm_advance_tests_writing_artifact_source.py::RefusalClassTest::test_refusal_surfaces_in_test_author_brief_history, tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py::DraftInTestsWritingTest::test_ac1_tests_writing_runs_draft_with_pult_runner, tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py::FixedPlankAfterTestsWritingTest::test_ac2_later_states_run_fixed_plank_and_single_file`
-
-**Контекст.** Реализованы требования 1–9 (шаги 1–6). Планка
-(`plank-run`): 32 passed, красны только три теста AC-10, которые читают
-PLAN.md из ссылки, а его там до автокоммита этого шага нет. Своих тестов
-12 (`tests/test_plank_helper.py`), все зелёные; две мутации проверены
-(`_run_targets` на `is_dir()`, снятый резерв имени) — тесты краснеют.
-Прогоны модулей: пакет A (19 файлов выкладки/приёмки/амендмента)
-237 passed; пакет B (инварианты, чекпоинты, карта, явный репозиторий git)
-187 passed. Красны только тесты из вопросов 1 и 2.6:
-`test_pull.py` (2), `test_branch_freshness_gate.py` (1),
-`test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py` (2 метода).
-
-**Блокирует.** Сдачу `ready`: без вопроса 1 ветка ослабляет отказ «планка
-не найдена в источнике» на подтяжке main и на `in_dev -> verifying`. Без
-вопроса 2 гейт неослабления тестов и ревью увидят изменённые утверждения
-без мандата.
+## Проверка
+- `plank-run 01M44EP4Q927DJXVX9YMMZ0B7V`: 35 passed, код выхода 0.
+- `python3 -m pytest tests/test_pull.py tests/test_branch_freshness_gate.py
+  tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py tests/test_plank_helper.py
+  tests/test_approve_acceptance_full_suite.py tests/test_acceptance_tests_flow.py
+  tests/test_pull_long_lived_plank.py tests/test_guard_artifact_disk_read.py
+  tests/test_fsm_advance_tests_writing_artifact_source.py`: 166 passed.
+- Карта регенерирована `scripts/codebase_map.py`.
