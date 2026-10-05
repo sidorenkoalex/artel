@@ -1,5 +1,4 @@
-"""Узел сравнения `tests/` ветки задачи с базой и два гейта на нём — гейт
-неослабления тестов (SPEC 01M3FQ2V77QNK95Z599DM124QN).
+"""Гейт неослабления тестов — узел сравнения `tests/` ветки с базой: ослабление и смена ожидания, сверка с объявленным в SPEC, строгость нового ожидания, храповик (SPEC 01M3FQ2V77QNK95Z599DM124QN, 01M45FJD46BX45VHC36S4VS9QN).
 
 Принцип целостности (ADR-0002, CLAUDE.md, шапка docs/invariants.md)
 запрещает роли удалять, переименовывать и ослаблять тесты; до этой задачи
@@ -32,16 +31,32 @@ fail-closed на сбое git) и `merge_gate_escalates` в
 Тем же проходом по диффу узел наблюдает и изменённые утверждения метода,
 сохранившего имя (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6): нормальную форму
 утверждения считает `guard.test_assertions`, находки пишутся в журнал на
-обоих рубежах и уходят в ревью-пакет, но в узел отказа не входят —
-решение Оператора 02.10: сначала наблюдение, блокировка отдельной задачей.
+обоих рубежах и уходят в ревью-пакет (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6,
+решение Оператора 02.10: сначала наблюдение).
+
+Блокировка — SPEC 01M45FJD46BX45VHC36S4VS9QN (решение Оператора 05.10):
+изменённые утверждения метода стали находкой узла отказа, кроме смены
+ожидания, объявленной в разделе SPEC «Меняемое поведение» и записанной
+`approve` гейта SPEC (запись «объявлена смена поведения тестов» — она же
+решение Оператора; правка раздела после approve на рубежах не действует).
+Различение смены ожидания и ослабления и оценка строгости нового
+ожидания живут в `guard.assertion_changes`; здесь — сверка фактических
+пар «было → стало» с объявленными, исход по каждому методу (запись
+«утверждения тестов: исход рубежа»), храповик (число тестовых методов и
+утверждений диффа `tests/` не убывает) и вызов двустороннего прогона
+(`two_sided`) на переходе либо сверка его записи с головой ветки на
+гейте мержа. Мандат «Ослабление тестов разрешено: …» по-прежнему снимает
+любую находку.
 """
 import ast
+import re
 from typing import NamedTuple
 
 from scripts import guard
 
 from .. import artifact_branch as docs_ref
 from .. import config, gitcmd, store, workspace
+from . import two_sided
 from ._base import GateRefusal, _run_gates
 # Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -69,9 +84,9 @@ TEST_INTEGRITY_ALLOWED_ACTION = "ослабление тестов разреш�
 TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION = "новый тест с условным пропуском"
 
 # Наблюдение за изменёнными утверждениями метода, сохранившего имя (SPEC
-# 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5): решение Оператора 02.10 —
-# сначала наблюдение, блокировка отдельной задачей по его итогам. Записи
-# обычного уровня, переход и мерж от них не зависят.
+# 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5): записи в прежней форме
+# остаются на обоих рубежах и после того, как изменённые утверждения
+# стали находкой (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование 8).
 ASSERTION_OBSERVATION_ACTION = "изменены утверждения тестов (наблюдение)"
 ASSERTION_UNOBSERVED_ACTION = "утверждения тестов: наблюдение не выполнено"
 ASSERTION_UNOBSERVED_PREFIX = "наблюдение не выполнено"
@@ -79,6 +94,28 @@ ASSERTIONS_CHANGED = "утверждения изменены в"
 ASSERTIONS_COVERED = "покрыто мандатом"
 # Сколько утверждений одного метода называет текст находки (требование 4).
 ASSERTION_TEXTS_SHOWN = 3
+
+# Смена поведения в существующих тестах (SPEC 01M45FJD46BX45VHC36S4VS9QN).
+# Запись approve гейта SPEC — объявленный перечень и решение Оператора
+# (требования 3-4); её пишет `fsm._approve_spec_gate`, читает этот узел.
+DECLARED_CHANGE_ACTION = "объявлена смена поведения тестов"
+# Исход рубежа по каждому изменённому или объявленному методу (требование 8).
+OUTCOME_ACTION = "утверждения тестов: исход рубежа"
+# Запись перехода о доказанной смене поведения (требование 10); гейт мержа
+# сверяет её sha с головой ветки (требование 11).
+TWO_SIDED_PASSED_ACTION = "двусторонний прогон пройден"
+# Три причины находки об утверждениях метода (требование 7).
+REASON_OUTSIDE = "смена вне раздела «Меняемое поведение»"
+REASON_WEAKENING = "ослабление"
+REASON_MISMATCH = "смена не совпала с объявленным"
+REASON_TWO_SIDED_MISSING = "двусторонний прогон для текущей головы не записан"
+OUTCOME_EXPECTATION = "смена ожидания по SPEC (требование {n})"
+OUTCOME_UNCHANGED = "объявлен в SPEC, утверждения не изменены"
+OUTCOME_FINDING = "находка"
+TWO_SIDED_FOR_HEAD = "двусторонний прогон для текущей головы"
+TWO_SIDED_NOT_RECORDED = "не записан"
+_TWO_SIDED_RECORD = re.compile(r"^голова ([0-9a-f]+); база ([0-9a-f]*); "
+                               r"методы: (.*)$", re.S)
 
 # Декораторы пропуска, несущие УСЛОВИЕ — подмножество
 # `guard.SKIP_DECORATOR_NAMES`. Остальные из того набора (`skip`,
@@ -402,11 +439,36 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
     return found, passed
 
 
+class MethodChange(NamedTuple):
+    """Метод, сохранивший имя, с изменёнными утверждениями: путь в базе
+    (`path`), второй путь пары переименования (`alias`), путь в голове,
+    квалифицированное имя, исход `guard.assertion_changes` и тексты файла
+    по обе стороны (их берёт двусторонний прогон)."""
+
+    path: str
+    alias: str
+    head_path: str
+    name: str
+    change: guard.AssertionChange
+    base_source: str
+    head_source: str
+
+    @property
+    def address(self) -> str:
+        return f"{self.path}{guard.TEST_NAME_SEP}{self.name}"
+
+    @property
+    def head_address(self) -> str:
+        return f"{self.head_path}{guard.TEST_NAME_SEP}{self.name}"
+
+
 def _assertion_observation(base_path, head_path, renamed_to, base_source,
                            head_source) -> tuple:
     """(находки об изменённых утверждениях одного файла, причина, по
-    которой наблюдение по нему не выполнено) — SPEC
-    01M3Y753QNG6TS5C7MTJS1MEV6, требования 3-4.
+    которой наблюдение по нему не выполнено, изменения по методам) — SPEC
+    01M3Y753QNG6TS5C7MTJS1MEV6, требования 3-4; изменения по методам —
+    `guard.assertion_changes` (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование
+    5).
 
     Удалённый и добавленный файл не сравниваются: у удалённого находка о
     самом файле уже названа, у нового базы нет. Метод, исчезнувший из head,
@@ -415,7 +477,7 @@ def _assertion_observation(base_path, head_path, renamed_to, base_source,
     единственной (AC-5). Неразбираемая сторона — не исключение и не
     находка, а названная причина (AC-9)."""
     if base_path is None or head_path is None:
-        return [], ""
+        return [], "", []
     path = base_path
     base = guard.test_assertions(base_source)
     head = guard.test_assertions(head_source)
@@ -423,7 +485,7 @@ def _assertion_observation(base_path, head_path, renamed_to, base_source,
               if parsed is None]
     if broken:
         return [], (f"{path}: не разбирается ({', '.join(broken)}) — "
-                    f"утверждения не сравнивались")
+                    f"утверждения не сравнивались"), []
     found = []
     for name, texts in guard.changed_test_assertions(base, head).items():
         shown = "; ".join(texts[:ASSERTION_TEXTS_SHOWN])
@@ -431,32 +493,58 @@ def _assertion_observation(base_path, head_path, renamed_to, base_source,
             shown += f"; и ещё {len(texts) - ASSERTION_TEXTS_SHOWN}"
         found.append(Finding(path, name, f"{ASSERTIONS_CHANGED} {name}: "
                                          f"{shown}", renamed_to or ""))
-    return found, ""
+    changes = [MethodChange(path, renamed_to or "", head_path, name, change,
+                            base_source, head_source)
+               for name, change in (guard.assertion_changes(
+                   base_source, head_source) or {}).items()]
+    return found, "", changes
 
 
-def _compare(code_branch: str, repo=None) -> tuple:
-    """Один проход по диффу `tests/` для обоих наблюдателей узла: (находки,
-    прошедшие послабление пропуски, находки об утверждениях, причины
-    невыполненного наблюдения утверждений, текст сбоя git). Сбой git —
-    `(None, [], None, [], detail)`: не собрано ни то, ни другое.
+class Comparison(NamedTuple):
+    """Один проход по диффу `tests/` (`_compare`): находки о файлах,
+    прошедшие послабление пропуски, находки наблюдения утверждений,
+    причины невыполненного наблюдения, изменения утверждений по методам,
+    файлы диффа (путь base, путь head, текст base, текст head) для
+    храповика, база сравнения и текст сбоя git. Сбой git — `found` равен
+    `None`, остальное пусто."""
+
+    found: list | None
+    passed: list
+    observed: list | None
+    unobserved: list
+    changes: list
+    files: list
+    base: str
+    git_detail: str
+
+
+def _git_failure(detail: str) -> Comparison:
+    return Comparison(None, [], None, [], [], [], "", detail)
+
+
+def _compare(code_branch: str, repo=None) -> Comparison:
+    """Один проход по диффу `tests/` для всех наблюдателей узла.
 
     `repo` — клон проекта задачи, в котором живёт `code_branch` (ADR-0021
-    п.1)."""
+    п.1). Храповик (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование 12) считает
+    по тем же текстам файлов этого прохода: новых запросов git нет."""
     base = gitcmd.diff_base(code_branch, repo=repo)
     if base is None:
-        return None, [], None, [], _git_silence(
+        return _git_failure(_git_silence(
             f"определение базы сравнения (merge-base с origin/"
             f"{config.MAIN_BRANCH} либо локальным {config.MAIN_BRANCH}) "
-            f"для ветки {code_branch}")
+            f"для ветки {code_branch}"))
     entries = gitcmd.diff_name_status(base, code_branch, repo=repo)
     if entries is None:
-        return None, [], None, [], _git_silence(
-            f"список файлов диффа (база {base}...{code_branch})")
+        return _git_failure(_git_silence(
+            f"список файлов диффа (база {base}...{code_branch})"))
 
     found: list = []
     passed: list = []
     observed: list = []
     unobserved: list = []
+    changes: list = []
+    files: list = []
     for status, first, second in entries:
         base_path, head_path, renamed_to = _pair(status, first, second)
         if not _in_scope(base_path) and not _in_scope(head_path):
@@ -474,24 +562,27 @@ def _compare(code_branch: str, repo=None) -> tuple:
                 # значит `None` здесь всегда сбой чтения, не легитимное
                 # отсутствие (различать их по тексту причины, как это
                 # вынужден делать гейт заявки мутации, тут не нужно).
-                return None, [], None, [], _git_silence(
-                    f"чтение {path} из {ref} ({reason})")
+                return _git_failure(_git_silence(
+                    f"чтение {path} из {ref} ({reason})"))
             sources[side] = text
+        files.append((base_path, head_path, sources["base"], sources["head"]))
         file_found, file_passed = _file_findings(
             base_path, head_path, renamed_to, sources["base"], sources["head"])
         found += file_found
         passed += file_passed
-        file_observed, reason = _assertion_observation(
+        file_observed, reason, file_changes = _assertion_observation(
             base_path, head_path, renamed_to, sources["base"], sources["head"])
         observed += file_observed
+        changes += file_changes
         if reason:
             unobserved.append(reason)
-    return found, passed, observed, unobserved, ""
+    return Comparison(found, passed, observed, unobserved, changes, files,
+                      base, "")
 
 
 def findings(code_branch: str, repo=None) -> tuple:
-    """(находки ветки против базы сравнения, прошедшие послабление
-    пропуски, текст сбоя git).
+    """(находки ветки против базы сравнения о файлах и методах, прошедшие
+    послабление пропуски, текст сбоя git).
 
     База — `gitcmd.diff_base` (merge-base с origin/main), та же, что у
     гейта заявки мутации и у `_protected_path_diff_gate`. Git не ответил
@@ -505,13 +596,11 @@ def findings(code_branch: str, repo=None) -> tuple:
     01M3HWXFYWVDHGW011P6BZJFYA: находками они не стали, но потеряться не
     имеют права, и вызывающий вход (`uncovered`) пишет их в журнал задачи.
 
-    Находки об изменённых утверждениях (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6)
-    сюда НЕ входят: режим — наблюдение, и узел отказа их не видит
-    (требование 5); их отдаёт `assertion_observation`.
+    Находки об изменённых утверждениях сюда не входят: их исход зависит от
+    объявленного в SPEC и от мандата, его считает общий вход `uncovered`.
     """
-    found, passed, _observed, _unobserved, git_detail = _compare(code_branch,
-                                                                 repo=repo)
-    return found, passed, git_detail
+    cmp = _compare(code_branch, repo=repo)
+    return cmp.found, cmp.passed, cmp.git_detail
 
 
 def _observation_lines(observed: list, mandate: dict) -> list:
@@ -523,26 +612,30 @@ def _observation_lines(observed: list, mandate: dict) -> list:
     названный метод."""
     lines = []
     for finding in observed:
-        source = next((mandate[e] for e in finding.mandate_elements
-                       if e in mandate), None)
+        source = _covering_source(finding, mandate)
         lines.append(finding.line if source is None
                      else f"{finding.line} — {ASSERTIONS_COVERED} {source}")
     return lines
 
 
+def _covering_source(finding: Finding, mandate: dict):
+    """Имя ANSWER-n, чей элемент мандата покрывает `finding`; `None` — не
+    покрыта."""
+    return next((mandate[e] for e in finding.mandate_elements
+                 if e in mandate), None)
+
+
 def assertion_observation(task_id: str, code_branch: str,
                           artifact_branch: str) -> tuple:
     """(строки находок об изменённых утверждениях с отметкой мандата,
-    причины невыполненного наблюдения по файлам, текст сбоя git) — вход
-    ревью-пакета (требование 5, AC-10). Ничего не журналирует: запись
-    пишут рубежи через `uncovered`."""
+    причины невыполненного наблюдения по файлам, текст сбоя git).
+    Ничего не журналирует: запись пишут рубежи через `uncovered`."""
     repo = workspace.task_repo(task_id)
-    _found, _passed, observed, unobserved, git_detail = _compare(code_branch,
-                                                                 repo=repo)
-    if observed is None:
-        return [], [], git_detail
-    mandate = _answer_mandate(artifact_branch, task_id) if observed else {}
-    return _observation_lines(observed, mandate), unobserved, ""
+    cmp = _compare(code_branch, repo=repo)
+    if cmp.observed is None:
+        return [], [], cmp.git_detail
+    mandate = _answer_mandate(artifact_branch, task_id) if cmp.observed else {}
+    return _observation_lines(cmp.observed, mandate), cmp.unobserved, ""
 
 
 def _journal_observation(conn, task_id: str, lines: list,
@@ -587,6 +680,305 @@ def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
     return mandate
 
 
+def declared_changes(conn, task_id: str) -> dict:
+    """{`путь::Класс::метод`: guard.BehaviorChange} из ПОСЛЕДНЕЙ записи
+    «объявлена смена поведения тестов» (требование 4): объявленное берётся
+    из approve гейта SPEC, а не из текущего текста SPEC — правка раздела
+    после approve на рубежах не действует до нового approve. Записи нет —
+    пусто."""
+    records = [row["detail"] or "" for row in store.task_steps(conn, task_id)
+               if row["action"] == DECLARED_CHANGE_ACTION]
+    if not records:
+        return {}
+    items: dict = {}
+    for line in records[-1].splitlines():
+        item, _reason = guard.parse_behavior_change_line(line)
+        if item is not None:
+            items[item.address] = item
+    return items
+
+
+def _declared_item(declared: dict, path: str, alias: str, name: str):
+    for p in (path, alias):
+        if p:
+            item = declared.get(f"{p}{guard.TEST_NAME_SEP}{name}")
+            if item is not None:
+                return item
+    return None
+
+
+def _pairs_text(pairs) -> str:
+    return "; ".join(f"`{old!r}` → `{new!r}`" for old, new in pairs)
+
+
+def _declared_text(item) -> str:
+    """Строка «было → стало (требование N)» объявленного метода — из
+    записи approve (требование 13)."""
+    pairs = "; ".join(f"`{old}` → `{new}`" for old, new in item.pairs)
+    return f"было → стало: {pairs} (требование {item.requirement})"
+
+
+def _change_reason(method: MethodChange, item) -> str:
+    """Причина находки об утверждениях метода (требование 7б); пустая —
+    исход 7а: смена ожидания, совпавшая с объявленным, со строгостью не
+    ниже прежней."""
+    change = method.change
+    if change.kind != guard.ASSERTION_CHANGE_EXPECTATION or change.signs:
+        return f"{REASON_WEAKENING}: {'; '.join(change.signs)}"
+    if item is None:
+        return REASON_OUTSIDE
+    if guard.literal_pair_keys(item.pairs) != guard.value_pair_keys(change.pairs):
+        return f"{REASON_MISMATCH}: фактически {_pairs_text(change.pairs)}"
+    return ""
+
+
+class _Decline(NamedTuple):
+    """Убыль храповика: (методы, утверждения) базы и головы по файлам
+    диффа и файлы с убылью — (путь в base, второй путь, имена методов,
+    исчезнувших или потерявших утверждения)."""
+
+    before: tuple
+    after: tuple
+    files: list
+
+    @property
+    def finding(self) -> Finding:
+        paths = ", ".join(p for p, _alias, _names in self.files)
+        return Finding(self.files[0][0], "",
+                       f"храповик: число тестов и утверждений tests/ убыло — "
+                       f"методы {self.before[0]} → {self.after[0]}, "
+                       f"утверждения {self.before[1]} → {self.after[1]}; "
+                       f"убыль в: {paths}", self.files[0][1])
+
+
+def _counts(source) -> tuple:
+    """(тестовые методы, утверждения по методам) одной стороны файла;
+    неразбираемая или отсутствующая сторона — ноль."""
+    methods = guard.qualified_test_methods(source)
+    assertions = guard.test_assertions(source) or {}
+    return methods, {name: len(found) for name, found in assertions.items()}
+
+
+def _ratchet_decline(files: list) -> _Decline | None:
+    """Храповик (требование 12): общее число тестовых методов и утверждений
+    по файлам диффа `tests/` в голове не меньше, чем в базе. Неизменённые
+    файлы вносят в обе стороны одно и то же и потому не читаются."""
+    before, after, declining = [0, 0], [0, 0], []
+    for base_path, head_path, base_source, head_source in files:
+        base_methods, base_counts = _counts(base_source)
+        head_methods, head_counts = _counts(head_source)
+        b = (len(base_methods), sum(base_counts.values()))
+        h = (len(head_methods), sum(head_counts.values()))
+        before = [before[0] + b[0], before[1] + b[1]]
+        after = [after[0] + h[0], after[1] + h[1]]
+        if h[0] < b[0] or h[1] < b[1]:
+            names = [n for n in base_methods if n not in head_methods] + \
+                [n for n, count in base_counts.items()
+                 if n in head_counts and head_counts[n] < count]
+            path = base_path or head_path
+            alias = head_path if head_path and head_path != path else ""
+            declining.append((path, alias, names))
+    if after[0] >= before[0] and after[1] >= before[1]:
+        return None
+    return _Decline(tuple(before), tuple(after), declining)
+
+
+def _decline_source(decline: _Decline, mandate: dict):
+    """ANSWER-n мандата, покрывающего убыль: каждый файл с убылью покрыт
+    путём (любым путём пары переименования) либо элементами
+    `путь::Класс`/`путь::Класс::метод`, покрывающими каждый его метод,
+    который исчез или потерял утверждения; `None` — не покрыта."""
+    sources = []
+    for path, alias, names in decline.files:
+        source = next((mandate[p] for p in (path, alias) if p in mandate), None)
+        if source is None and names:
+            found = [_covering_source(Finding(path, name, "", alias), mandate)
+                     for name in names]
+            source = found[0] if all(found) else None
+        if source is None:
+            return None
+        sources.append(source)
+    return ", ".join(dict.fromkeys(sources))
+
+
+def ratchet_finding(base: dict, head: dict, mandate: dict):
+    """Находка храповика (требование 12) на синтетических входах: `base`/
+    `head` — {путь файла диффа `tests/`: текст либо `None`}, `mandate` —
+    {элемент мандата: ANSWER-n}. `None` — убыли нет либо мандат её
+    покрывает; иначе `Finding`, называющая числа «было → стало» методов и
+    утверждений и файлы с убылью."""
+    files = [(path, path, base.get(path), head.get(path))
+             for path in sorted(set(base) | set(head))]
+    decline = _ratchet_decline(files)
+    if decline is None or _decline_source(decline, mandate):
+        return None
+    return decline.finding
+
+
+def _proven_addresses(conn, task_id: str, head_sha: str) -> set:
+    """Адреса методов (`путь::Класс::метод`) из записей «двусторонний
+    прогон пройден» для головы `head_sha` (требование 11)."""
+    proven: set = set()
+    if not head_sha:
+        return proven
+    for row in store.task_steps(conn, task_id):
+        if row["action"] != TWO_SIDED_PASSED_ACTION:
+            continue
+        match = _TWO_SIDED_RECORD.match(row["detail"] or "")
+        if match and match.group(1) == head_sha:
+            proven.update(a.strip() for a in match.group(3).split(", "))
+    return proven
+
+
+class _Evaluation(NamedTuple):
+    """Итог узла для рубежа без записей журнала: `rest` — находки без
+    мандата (`None` — git не ответил), `allowed` — строки покрытых
+    мандатом находок, `outcomes` — {`путь::Класс::метод`: исход рубежа},
+    `expectation` — методы исхода 7а без мандата (`MethodChange`),
+    `declared` — объявленное approve, `mandate` и сам проход `cmp`."""
+
+    rest: list | None
+    allowed: list
+    outcomes: dict
+    expectation: list
+    declared: dict
+    mandate: dict
+    cmp: Comparison
+
+
+def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
+              merge_route: bool = False) -> _Evaluation:
+    """Сравнение, различение и сверка с объявленным (требования 4-7, 11-12)
+    без записей журнала — общая часть обоих рубежей и ревью-пакета.
+
+    `merge_route` — гейт мержа: метод исхода 7а проходит, только если для
+    текущей головы ветки записан пройденный двусторонний прогон, иначе —
+    находка (требование 11). Храповик добавляет находку, только когда
+    иных непокрытых находок в проходе нет: иначе отказ уже стоит и
+    адресно называет причину убыли."""
+    repo = workspace.task_repo(task_id)
+    cmp = _compare(code_branch, repo=repo)
+    declared = declared_changes(conn, task_id) if conn is not None else {}
+    if cmp.found is None:
+        return _Evaluation(None, [], {}, [], declared, {}, cmp)
+    mandate = _answer_mandate(artifact_branch, task_id) \
+        if cmp.found or cmp.observed else {}
+
+    # Находка об утверждениях метода по адресу — сам объект: по нему ниже
+    # видно, ушла ли она в остаток или покрыта мандатом.
+    reasons: dict = {}
+    expectation: list = []
+    findings_: list = list(cmp.found)
+
+    def add(method: MethodChange, reason: str) -> None:
+        finding = Finding(method.path, method.name,
+                          f"{method.name}: {reason}", method.alias)
+        reasons[method.address] = (reason, finding)
+        findings_.append(finding)
+
+    for method in cmp.changes:
+        item = _declared_item(declared, method.path, method.alias, method.name)
+        reason = _change_reason(method, item)
+        if reason:
+            add(method, reason)
+        else:
+            expectation.append((method, item))
+
+    outcomes: dict = {}
+    run: list = []
+    proven = set()
+    if merge_route and expectation:
+        proven = _proven_addresses(
+            conn, task_id, gitcmd.branch_head_sha(code_branch, repo=repo))
+    for method, item in expectation:
+        text = OUTCOME_EXPECTATION.format(n=item.requirement)
+        source = _covering_source(Finding(method.path, method.name, "",
+                                          method.alias), mandate)
+        if source is not None:
+            outcomes[method.address] = f"{text}; {ASSERTIONS_COVERED} {source}"
+            continue
+        run.append(method)
+        outcomes[method.address] = text
+        if merge_route:
+            if method.head_address in proven:
+                outcomes[method.address] = (f"{text}; {TWO_SIDED_FOR_HEAD}: "
+                                            f"{two_sided.PASSED}")
+            else:
+                add(method, REASON_TWO_SIDED_MISSING)
+
+    allowed: list = []
+    rest: list = []
+    for finding in findings_:
+        source = _covering_source(finding, mandate)
+        if source is None:
+            rest.append(finding)
+        else:
+            allowed.append(f"{finding.line} — разрешено {source}")
+    if not rest:
+        decline = _ratchet_decline(cmp.files)
+        if decline is not None:
+            source = _decline_source(decline, mandate)
+            if source is None:
+                rest.append(decline.finding)
+            else:
+                allowed.append(f"{decline.finding.line} — разрешено {source}")
+
+    for method in cmp.changes:
+        if method.address not in reasons:
+            continue
+        reason, finding = reasons[method.address]
+        prefix = outcomes.get(method.address)
+        if any(f is finding for f in rest):
+            text = f"{OUTCOME_FINDING}: {reason}"
+        else:
+            text = f"{ASSERTIONS_COVERED} {_covering_source(finding, mandate)}"
+        outcomes[method.address] = f"{prefix}; {text}" if prefix else text
+    changed = {m.address for m in cmp.changes} | \
+        {f"{m.alias}{guard.TEST_NAME_SEP}{m.name}" for m in cmp.changes if m.alias}
+    for address, item in declared.items():
+        if address in changed:
+            continue
+        named = [f for f in cmp.found if f.name == item.name
+                 and item.path in (f.path, f.alias)]
+        if named:
+            source = _covering_source(named[0], mandate)
+            outcomes[address] = (f"{OUTCOME_FINDING}: {named[0].text}"
+                                 if source is None
+                                 else f"{ASSERTIONS_COVERED} {source}")
+        else:
+            outcomes[address] = OUTCOME_UNCHANGED
+    return _Evaluation(rest, allowed, outcomes, run, declared, mandate, cmp)
+
+
+def _journal_pass(conn, task_id: str, ev: _Evaluation) -> None:
+    """Записи прохода, общие обоим рубежам: пропуски, прошедшие
+    послабление, наблюдение утверждений в прежней форме, находки,
+    разрешённые мандатом."""
+    cmp = ev.cmp
+    if cmp.found is None:
+        _journal_observation(conn, task_id, [], [cmp.git_detail])
+        return
+    if cmp.passed:
+        store.journal(conn, task_id, "fsm",
+                      TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION,
+                      "; ".join(skip.line for skip in cmp.passed))
+    _journal_observation(conn, task_id,
+                         _observation_lines(cmp.observed, ev.mandate),
+                         cmp.unobserved)
+    if ev.allowed:
+        store.journal(conn, task_id, "fsm", TEST_INTEGRITY_ALLOWED_ACTION,
+                      "; ".join(ev.allowed))
+
+
+def _journal_outcome(conn, task_id: str, outcomes: dict) -> None:
+    """Запись «утверждения тестов: исход рубежа» (требование 8) — на
+    каждом проходе, где есть изменённый или объявленный метод."""
+    if outcomes:
+        store.journal(conn, task_id, "fsm", OUTCOME_ACTION,
+                      "; ".join(f"{address} — {text}"
+                                for address, text in outcomes.items()))
+
+
 def uncovered(conn, task_id: str, code_branch: str,
               artifact_branch: str) -> tuple:
     """(находки без мандата Оператора, текст сбоя git) — общий вход обоих
@@ -598,50 +990,64 @@ def uncovered(conn, task_id: str, code_branch: str,
 
     Тем же приёмом и тут же — пропуски, прошедшие послабление требования 2
     SPEC 01M3HWXFYWVDHGW011P6BZJFYA: ОДНА запись журнала «новый тест с
-    условным пропуском» (его требование 7). Место записи — этот общий
-    вход, а не обёртки: он единственный у узла, кому доступны `conn` и
-    `task_id`, и зовут его оба рубежа, так что запись появляется на
-    каждом.
+    условным пропуском» (его требование 7), и наблюдение за изменёнными
+    утверждениями в прежней форме (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6).
+    Молчание git — запись «наблюдение не выполнено» рядом с обычной
+    реакцией рубежа на сбой.
 
-    Там же и по тому же доводу — наблюдение за изменёнными утверждениями
-    (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5): его записи пишутся,
-    но в возврат его находки не идут — ни переход, ни мерж от них не
-    зависят. Молчание git — запись «наблюдение не выполнено» рядом с
-    обычной реакцией рубежа на сбой.
+    Изменённые утверждения — находки, кроме смены ожидания, объявленной в
+    SPEC (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование 7); храповик — тоже
+    здесь. Двусторонний прогон и запись исхода рубежа — дело самих гейтов.
     """
-    repo = workspace.task_repo(task_id)
-    found, passed, observed, unobserved, git_detail = _compare(code_branch,
-                                                                repo=repo)
-    if found is None:
-        _journal_observation(conn, task_id, [], [git_detail])
-        return None, git_detail
-    if passed:
-        store.journal(conn, task_id, "fsm",
-                      TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION,
-                      "; ".join(skip.line for skip in passed))
-    mandate = _answer_mandate(artifact_branch, task_id) \
-        if found or observed else {}
-    _journal_observation(conn, task_id, _observation_lines(observed, mandate),
-                         unobserved)
-    if not found:
-        return [], ""
+    ev = _evaluate(conn, task_id, code_branch, artifact_branch)
+    _journal_pass(conn, task_id, ev)
+    return ev.rest, ev.cmp.git_detail
 
-    if not mandate:
-        return found, ""
 
-    allowed: list = []
-    rest: list = []
-    for finding in found:
-        source = next((mandate[e] for e in finding.mandate_elements
-                       if e in mandate), None)
-        if source is None:
-            rest.append(finding)
-        else:
-            allowed.append(f"{finding.line} — разрешено {source}")
-    if allowed:
-        store.journal(conn, task_id, "fsm", TEST_INTEGRITY_ALLOWED_ACTION,
-                      "; ".join(allowed))
-    return rest, ""
+def review_lines(conn, task_id: str, code_branch: str,
+                 artifact_branch: str) -> tuple:
+    """(строки раздела «Изменённые утверждения тестов» ревью-пакета,
+    причины невыполненного наблюдения, текст сбоя git) — требование 13.
+    По каждому методу: прежняя строка наблюдения, исход рубежа, для
+    объявленного — «было → стало (требование N)» из записи approve, для
+    метода исхода 7а — итог двустороннего прогона для текущей головы.
+    Ничего не журналирует."""
+    ev = _evaluate(conn, task_id, code_branch, artifact_branch)
+    cmp = ev.cmp
+    if cmp.found is None:
+        return [], [], cmp.git_detail
+    proven: set = set()
+    if ev.expectation:
+        proven = _proven_addresses(conn, task_id, gitcmd.branch_head_sha(
+            code_branch, repo=workspace.task_repo(task_id)))
+    run = {m.address: m for m in ev.expectation}
+    shown: set = set()
+    lines = []
+    for finding, line in zip(cmp.observed,
+                             _observation_lines(cmp.observed, ev.mandate)):
+        address = f"{finding.path}{guard.TEST_NAME_SEP}{finding.name}"
+        shown.add(address)
+        parts = [line]
+        if address in ev.outcomes:
+            parts.append(f"исход рубежа: {ev.outcomes[address]}")
+        item = _declared_item(ev.declared, finding.path, finding.alias,
+                              finding.name)
+        if item is not None:
+            parts.append(_declared_text(item))
+        if address in run:
+            result = two_sided.PASSED if run[address].head_address in proven \
+                else TWO_SIDED_NOT_RECORDED
+            parts.append(f"{TWO_SIDED_FOR_HEAD}: {result}")
+        lines.append(" — ".join(parts))
+    for address, outcome in ev.outcomes.items():
+        if address in shown:
+            continue
+        parts = [f"{address}: исход рубежа: {outcome}"]
+        item = ev.declared.get(address)
+        if item is not None:
+            parts.append(_declared_text(item))
+        lines.append(" — ".join(parts))
+    return lines, cmp.unobserved, ""
 
 
 def refusal_detail(found: list) -> str:
@@ -662,10 +1068,17 @@ def _mandate_hint(task_id: str) -> str:
            f"повтори artel.py advance {task_id}")
 
 
+def _two_sided_methods(ev: _Evaluation) -> list:
+    return [two_sided.Method(m.path, m.head_path, m.name, m.base_source,
+                             m.head_source) for m in ev.expectation]
+
+
 def _test_integrity_gate(conn, task_id: str, t,
                          artifact_branch: str) -> GateRefusal | None:
     """Гейт `in_dev -> verifying` (требование 6): удаление, переименование
-    и ослабление тестов `tests/` без мандата Оператора переход не проходят.
+    и ослабление тестов `tests/` без мандата Оператора переход не проходят;
+    смена утверждений вне раздела SPEC «Меняемое поведение» и несовпадение
+    с объявленным — тоже (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование 7).
 
     Место в маршруте — сразу ПОСЛЕ гейта заявки мутации и до гейта
     отработки замечаний ревью: оба соседа читают ту же базу сравнения и
@@ -674,6 +1087,11 @@ def _test_integrity_gate(conn, task_id: str, t,
     задевающем оба, и изменила бы журнал и stdout уже существующих
     сценариев (`tests/test_fsm_advance_gate_smoke.py` сверяет их
     байт-в-байт).
+
+    Двусторонний прогон (требование 10) — здесь же, после сравнения и
+    только если оно не дало непокрытых находок: прогон дорогой, дешёвые
+    отказы идут первыми. Нет методов исхода 7а — ни git, ни pytest, ни
+    записи.
 
     Канареечная задача и внешний target — гейт не проверяется, тем же
     условием и по тем же доводам, что у `_mutation_claim_gate` (AC-10):
@@ -685,15 +1103,38 @@ def _test_integrity_gate(conn, task_id: str, t,
     """
     if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
         return None
-    found, git_detail = uncovered(conn, task_id, t["branch"], artifact_branch)
-    if found is None:
+    ev = _evaluate(conn, task_id, t["branch"], artifact_branch)
+    _journal_pass(conn, task_id, ev)
+    if ev.rest is None:
         hint = (f"разберись, почему git не отвечает, и повтори "
                f"artel.py advance {task_id}")
-        return GateRefusal(TEST_INTEGRITY_REFUSAL_ACTION, git_detail, hint)
-    if not found:
+        return GateRefusal(TEST_INTEGRITY_REFUSAL_ACTION, ev.cmp.git_detail,
+                           hint)
+    outcomes = dict(ev.outcomes)
+    if ev.rest:
+        for method in ev.expectation:
+            outcomes[method.address] += ("; двусторонний прогон не "
+                                         "выполнялся: есть непокрытые находки")
+        _journal_outcome(conn, task_id, outcomes)
+        return GateRefusal(TEST_INTEGRITY_REFUSAL_ACTION,
+                           refusal_detail(ev.rest), _mandate_hint(task_id))
+    if not ev.expectation:
+        _journal_outcome(conn, task_id, outcomes)
         return None
-    return GateRefusal(TEST_INTEGRITY_REFUSAL_ACTION, refusal_detail(found),
-                       _mandate_hint(task_id))
+    methods = _two_sided_methods(ev)
+    result = two_sided.run(workspace.task_repo(task_id), t["branch"],
+                           ev.cmp.base, methods)
+    for method in methods:
+        outcomes[f"{method.base_path}{guard.TEST_NAME_SEP}{method.name}"] += (
+            f"; двусторонний прогон: {result.results.get(method.address, '')}")
+    _journal_outcome(conn, task_id, outcomes)
+    if result.refusals:
+        return GateRefusal(TEST_INTEGRITY_REFUSAL_ACTION,
+                           "; ".join(result.refusals), _mandate_hint(task_id))
+    store.journal(conn, task_id, "fsm", TWO_SIDED_PASSED_ACTION,
+                  f"голова {result.head_sha}; база {result.base_sha}; методы: "
+                  f"{', '.join(m.address for m in methods)}")
+    return None
 
 
 def _test_integrity_gate_refuses(conn, task_id: str, t,
@@ -710,7 +1151,10 @@ def _test_integrity_gate_refuses(conn, task_id: str, t,
 def merge_gate_escalates(conn, task_id: str, state: str, code_branch: str,
                          artifact_branch: str) -> bool:
     """Тот же узел на гейте мержа (требование 7): находка без мандата —
-    эскалация с тем же текстом отказа, что на переходе.
+    эскалация с тем же текстом отказа, что на переходе. Двусторонний
+    прогон здесь не повторяется: метод исхода 7а проходит только с
+    записью «двусторонний прогон пройден» для текущей головы ветки (SPEC
+    01M45FJD46BX45VHC36S4VS9QN, требование 11).
 
     `True` — эскалировано (`store.set_state` уже отжурналировал детали),
     вызывающий код обязан остановиться. Молчание git — `False`, fail-open,
@@ -720,10 +1164,14 @@ def merge_gate_escalates(conn, task_id: str, state: str, code_branch: str,
     на `in_dev -> verifying` — второй fail-closed на том же сбое защиты не
     добавляет (AC-12).
     """
-    found, _git_detail = uncovered(conn, task_id, code_branch,
-                                   artifact_branch)
-    if not found:
+    ev = _evaluate(conn, task_id, code_branch, artifact_branch,
+                   merge_route=True)
+    _journal_pass(conn, task_id, ev)
+    if ev.rest is None:
+        return False
+    _journal_outcome(conn, task_id, ev.outcomes)
+    if not ev.rest:
         return False
     store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
-                    detail=refusal_detail(found))
+                    detail=refusal_detail(ev.rest))
     return True
