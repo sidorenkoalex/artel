@@ -9,6 +9,13 @@ schema_version: 5    # версия формата артефакта, см. scr
 # требует поле для schema_version >= 4. Общие зоны (пути, которые трогают
 # все задачи — orchestrator/config.py::COMMON_ZONES) не в счёт.
 # zones: orchestrator/store.py, orchestrator/config.py
+# Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT) — необязательное
+# поле: id задач (полные или префиксы) через запятую, которые обязаны попасть
+# в main (done) раньше этой. Заполни ТОЛЬКО из ТЗ — строки «Порядок: после
+# …»; без основания поля нет. guard проверяет форму, approve на spec_gate —
+# что задачи есть, не killed, того же target и не замыкают цикл; approve на
+# merge_gate не пустит задачу в main, пока зависимости не в done.
+# merge_after: <id1>, <id2>
 # Потолок задачи, $ — ОБЯЗАТЕЛЬНОЕ поле (ADR-0014): guard отказывает
 # SPEC без него. Класс задачи и ориентир по нему — калибровка
 # orchestrator/config.py::BUDGET_CALIBRATION_TABLE (её уровни и правило

@@ -155,6 +155,10 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     if fix:
         print("Уборка игнорируемых файлов ссылок документов живых задач:")
         doctor._fix_ignored_artifact_files(conn)
+        # Клоны проектов — раньше досылки закрытых ссылок (SPEC
+        # 01M446WV7S94FTZGJCGMPJ667F, требование 4): досылка идёт в origin
+        # клона, а свежий клон приносит с собой ссылки документов.
+        doctor._fix_project_clones()
         # Коммит закрытия, не дошедший до origin (ADR-0021 п.3): у закрытой
         # задачи переходов больше нет, досылает его только `--fix` — до
         # `all_checks`, чтобы строка сверки ссылок видела результат.
@@ -170,7 +174,6 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         # — до `all_checks` ниже, чтобы проверка «git-hooks» в том же
         # прогоне уже видела включённую защиту (AC-11).
         doctor._fix_git_hooks()
-        doctor._fix_project_clones()
     checks = doctor.all_checks(conn)
     for c in checks:
         print(f"  [{doctor.LABELS[c.status]}] {c.name}: {c.detail}")

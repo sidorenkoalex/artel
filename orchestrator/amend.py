@@ -34,7 +34,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifact_branch, config, fixation, gitcmd,
-               lease, store, workspace, yamlmini)
+               github_adapter, lease, store, workspace, yamlmini)
 from .advance_gates import acceptance as acceptance_gates
 
 AMEND_ACTION = "правка планки"
@@ -527,6 +527,20 @@ def _recovery_exit(conn, task_id: str, detail: str) -> None:
              f"--from-branch --reason «…»")
 
 
+def _push_code_head(conn, t, task_id: str) -> None:
+    """Голова кодовой ветки — в origin до записи в ссылку документов и
+    сдвига лока (SPEC 01M44ENQCRK02T2MWZB9HC3XHH, требования 1-4): иначе
+    задача в `verifying` опрашивает CI по sha, которого GitHub не видел, и
+    ждёт до потолка. Канарейка origin не трогает — тот же признак, что у
+    рубежа `fsm_advance.py::in_dev` (`_origin_push_gate`)."""
+    if t["is_canary"]:
+        return
+    ok, why = github_adapter.ensure_head_in_origin(conn, task_id, t["branch"])
+    if not ok:
+        _recovery_exit(conn, task_id, f"отправка головы {t['branch']} в "
+                       f"origin не удалась ({why}); почини доступ к origin")
+
+
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
@@ -665,7 +679,8 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     """Правка из worktree задачи с непустым перечнем лока (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): проверки итогового
     состояния планки и долгоживущих файлов — до любой записи; затем строго
-    (а) коммит `long_changed` в кодовую ветку, (б) коммит планки с
+    (а) коммит `long_changed` в кодовую ветку и отправка её головы в origin
+    (SPEC 01M44ENQCRK02T2MWZB9HC3XHH, требование 1), (б) коммит планки с
     перечнем, пересчитанным по новой голове кодовой ветки, в ветку
     документов, (в) сдвиг `tests_locked_sha`. Сбой после (а) — ненулевой
     код с путём восстановления `--from-branch`."""
@@ -710,6 +725,7 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
             sys.exit(f"[{task_id}] amend-tests: коммит правки "
                      f"{', '.join(long_changed)} в кодовую ветку не удался — "
                      f"ничего не записано")
+        _push_code_head(conn, t, task_id)
         code_head = gitcmd.branch_head_sha(t["branch"],
                                            repo=workspace.task_repo(task_id))
     digests = _head_digests(code_head, task_id) if code_head else None
@@ -920,6 +936,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     if long_diverged:
         _check_code_head_long_lived(conn, t, task_id, branch, code_head,
                                     head_files, manifest, plank_files)
+        _push_code_head(conn, t, task_id)
 
     if manifest:
         recomputed = guard.render_long_lived_manifest(head_digests)

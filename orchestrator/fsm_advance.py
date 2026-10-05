@@ -19,7 +19,8 @@ import contextlib
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
-              fsm, fsm_autogate, gitcmd, store, workspace, yamlmini)
+              fsm, fsm_autogate, gitcmd, github_adapter, merge_after, store,
+              workspace, yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
@@ -104,12 +105,12 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         q_rel = f"tasks/{task_id}/QUESTIONS.md"
         q_paths = artifact_branch.ls_tree(task_id, branch, q_rel)
         if q_paths is None:
-            detail = (f"дерево не на ветке задачи {branch} — не "
-                      f"удалось проверить наличие QUESTIONS.md")
-            store.journal(conn, task_id, "fsm",
-                          "переход отклонён: дерево не на ветке задачи",
-                          detail)
-            print(f"[{task_id}] переход отклонён: {detail}")
+            # Сбой git на перечислении — не «артефакт роли не готов»
+            # (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 5.4).
+            fsm._branch_unread_refusal(
+                conn, task_id, f"git не ответил на перечисление ветки "
+                               f"документов {branch} — не удалось проверить "
+                               f"наличие QUESTIONS.md")
             return False
         if q_paths:
             q_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
@@ -317,7 +318,9 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # теперь `auto` (orchestrator/auto.py, требование 1); этот вызов
     # остаётся тем же ОДНИМ опросом что и раньше при ручном advance
     # (требование 5, AC-8). Ни один исход не создаёт коммитов и не
-    # «будит» CI (требование 7, AC-10).
+    # «будит» CI (требование 7, AC-10) — кроме исхода 422: голову, которой
+    # нет в origin, опрос отправляет туда сам (SPEC
+    # 01M44ENQCRK02T2MWZB9HC3XHH, требование 6).
     branch = t["branch"]
     outcome, note = ci.verifying_status(branch,
                                         repo=workspace.task_repo(task_id))
@@ -333,6 +336,14 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail=note)
         return False
+    if ci.verifying_head_not_in_origin(note) and not t["is_canary"]:
+        # GitHub не видит голову (HTTP 422) — без отправки CI по ней не
+        # придёт, и задача ждала бы потолка (SPEC 01M44ENQCRK02T2MWZB9HC3XHH,
+        # требование 6, вариант (а)). Узел сам пишет запись об успехе или
+        # отказе; состояние и отсчёт потолка не меняются — на отказе
+        # следующий опрос повторит попытку. Канарейку origin не трогает,
+        # как рубеж `in_dev` (`_origin_push_gate`).
+        github_adapter.ensure_head_in_origin(conn, task_id, branch)
     # Счётчик попыток остаётся информационной записью (требование 3,
     # AC-7) — эскалацию решает только прошедшее время с момента входа
     # в состояние, не число вызовов advance.
@@ -623,6 +634,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # `spec_gate` выше: потолок обязан устояться до того, как задача
     # продолжит тратить деньги (ADR-0014 п.3).
     _apply_plan_budget(conn, task_id, t, plan_meta)
+    # Канал PLAN зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
+    # требование 3) — тем же местом и тем же правилом, что бюджет из PLAN:
+    # отказ значения пишется в журнал и переход не останавливает.
+    merge_after.apply_plan(conn, task_id, t, plan_meta, plan_text)
     store.update_task(conn, task_id, verifying_attempts=0)
     store.set_state(conn, task_id, "verifying", "fsm",
                     expected_state=state, detail="MR готов — жду зелёного CI ветки")
