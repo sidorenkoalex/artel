@@ -386,7 +386,8 @@ AC-29. Приложения PLAN к `templates/SPEC.md`, `skills/spec-authoring.
 идут эскалацией с мандатом Оператора (требование 16).
 
 - `tests/test_test_integrity_gate.py::AssertionObservationTest::test_transition_passes_and_journals_both_context_cases`: `self.assertFalse(refused)` → `self.assertTrue(refused)` (требование 7)
-- `tests/test_test_integrity_gate.py::AssertionObservationTest::test_mandate_marks_only_covered_findings`: `self.assertIsNone(fsm_advance._test_integrity_gate(...))` для всех трёх случаев → `отказ (не None) для ANSWER-1 и ANSWER-3, None для ANSWER-2` (требование 7)
+- `tests/test_test_integrity_gate.py::AssertionObservationTest::test_mandate_marks_only_covered_findings`: `self.assertIsNone(refusal)` → `self.assertIsNotNone(refusal)` (требование 7)
+Для ANSWER-1 и ANSWER-3 — отказ (не None); для ANSWER-2, где мандат покрывает находку, по-прежнему None.
 - `tests/test_test_integrity_gate.py::AssertionObservationTest::test_merge_gate_and_review_package_carry_the_same_findings`: `self.assertFalse(escalated)` → `self.assertTrue(escalated)`; `self.assertEqual("merge_gate", ...)` → `self.assertEqual("escalated", ...)` (требование 7)
 - `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::VanishedDeletedUnparsableTest::test_ac5_vanished_method_has_single_finding`: `self.assertFalse(self.merge_gate())` → `self.assertTrue(self.merge_gate())` (требование 7)
 - `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::VanishedDeletedUnparsableTest::test_ac5_deleted_file_has_no_assertion_finding`: `self.assertFalse(self.merge_gate())` → `self.assertTrue(self.merge_gate())` (требование 7)
