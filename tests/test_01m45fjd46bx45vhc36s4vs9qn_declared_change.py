@@ -1,8 +1,8 @@
 """Смена ожидания в существующем тесте по разделу SPEC «Меняемое поведение»:
 сверка раздела на approve гейта SPEC, различение смены ожидания и
 ослабления на рубежах `in_dev -> verifying` и гейта мержа, строгость,
-двусторонний прогон, журнал рубежей и раздел ревью-пакета (AC-2 на
-`advance`, AC-3..AC-25, AC-27).
+двусторонний прогон, храповик, журнал рубежей и раздел ревью-пакета (AC-2
+на `advance`, AC-3..AC-27).
 
 Группа: долгоживущий
 
@@ -16,7 +16,23 @@
 (`test_ac5_added_and_reordered_assertions_are_no_change`) и «канарейка и
 внешний target» (`test_ac12_*`) держат сегодняшнее поведение рядом с
 новым и зелёны с рождения; `test_ac25_merge_gate_runs_no_pytest_*` красен
-на второй половине (сдвиг головы не эскалирует).
+на второй половине (сдвиг головы не эскалирует). Храповика нет:
+функции `test_integrity.ratchet_finding` нет — `test_ac26_*` её класса
+падают на `AttributeError`, а покрытая мандатом убыль в журнале
+разрешения не несёт чисел «было → стало».
+
+AC-26 проверяется двумя тестами по решению Оператора (ANSWER-1 задачи):
+через рубеж — покрытая мандатом убыль уходит в журнал «ослабление тестов
+разрешено мандатом Оператора» с числами и файлом, переход проходит; на
+уровне функции храповика — убыль без мандата даёт находку, мандат на файл
+её снимает (при требованиях 5 и 12 убыль как единственная непокрытая
+находка прохода через полный рубеж недостижима). Оба теста AC-26
+провалидированы стабом в памяти процесса (код не правился): стаб
+`ratchet_finding` по `guard.qualified_test_methods`/`guard.test_assertions`
+зелен на 20 зёрнах, его мутант без сравнения итога «head не меньше base»
+красен; обёртка `test_integrity.uncovered`, добавляющая находку храповика
+при пустом остатке и снимающая её мандатом в журнал разрешения, зелена на
+6 зёрнах (обе формы убыли).
 
 Песочница — `tests.sandbox.GitignoreCommittedRealGitSandbox`: пульт и
 клон артели — один настоящий git-репозиторий `self.root`, голый origin
@@ -62,6 +78,7 @@ from unittest import mock
 from orchestrator import (artifact_source, catalog, config, fsm, fsm_advance,
                           projects, review, store, workspace)
 from orchestrator.advance_gates import test_integrity
+from scripts import guard
 from tests.sandbox import GitignoreCommittedRealGitSandbox
 
 DOCS_REF_PREFIX = "refs/artifacts/"
@@ -1731,6 +1748,185 @@ class MergeGateTwoSidedTest(DeclaredChangeSandbox):
         self.assertEqual(self.state(), "escalated", context)
         fresh = "\n".join(d for i, _a, d in self.steps() if i > last)
         self.assertIn(self.name("test_value"), fresh, context)
+
+
+# ---------------------------------------------------------------------------
+# AC-26: храповик (ANSWER-1: через рубеж — покрытая мандатом убыль в
+# журнале разрешения; на уровне функции — находка без иных находок).
+
+def fixture_counts(sources) -> tuple:
+    """(методы, утверждения) по текстам файлов тестов; `None` — ноль."""
+    methods = assertions = 0
+    for source in sources:
+        if source is None:
+            continue
+        methods += len(guard.qualified_test_methods(source))
+        assertions += sum(len(found) for found in
+                          (guard.test_assertions(source) or {}).values())
+    return methods, assertions
+
+
+def counts_pattern(before: int, after: int) -> str:
+    return rf"(?<!\d){before}\s*→\s*{after}(?!\d)"
+
+
+class RatchetGateTest(DeclaredChangeSandbox):
+
+    def test_ac26_mandate_covered_decline_is_journaled_with_counts(self):
+        """Убыль методов либо утверждений, покрытая мандатом на файл, уходит в журнал разрешения с числами «было → стало» и файлом; переход проходит.
+
+        Сценарий: раздела нет. Файл тестов фикстуры в базе — несколько
+        методов по нескольку утверждений; в голове (от зерна) исчез один
+        метод либо из метода удалено утверждение. Мандат ANSWER-1 — путь
+        файла. `advance` доводит задачу до `verifying`, запись «ослабление
+        тестов разрешено мандатом Оператора» называет файл и числа «было →
+        стало» методов и утверждений диффа `tests/` (по
+        `guard.qualified_test_methods`/`guard.test_assertions`).
+
+        Ловит мутацию: находка храповика не заводится, когда прочие
+        находки прохода покрыты мандатом (условие «нет иных находок»
+        проверяется до снятия покрытых) — в журнале разрешения нет чисел
+        «было → стало»; покрытая убыль не уходит в журнал разрешения.
+        """
+        lines = ["self.assertEqual(app.VALUE, {v})", "self.assertTrue(app.VALUE)",
+                 "self.assertGreater(app.VALUE, 0)", "self.assertIsNotNone(app.VALUE)"]
+        v = self.rng.randrange(10, 99)
+        base_methods = {
+            f"test_{word(self.rng)}_{i}": [line.format(v=v) for line in
+                                           self.rng.sample(lines, self.rng.randrange(2, 5))]
+            for i in range(self.rng.randrange(3, 6))}
+        head_methods = {name: list(body) for name, body in base_methods.items()}
+        victim = self.rng.choice(sorted(head_methods))
+        mode = self.rng.choice(("метод", "утверждение"))
+        if mode == "метод":
+            del head_methods[victim]
+        else:
+            head_methods[victim].pop(self.rng.randrange(len(head_methods[victim])))
+        base_src = fixture_source(self.cls, base_methods)
+        head_src = fixture_source(self.cls, head_methods)
+        base = {"app.py": f"VALUE = {v}\n", self.path: base_src}
+        head = {"app.py": f"VALUE = {v}\n", self.path: head_src}
+        (bm, ba), (hm, ha) = fixture_counts([base_src]), fixture_counts([head_src])
+        out = self.scenario(base, head, None, elements=self.path)
+        allowed = "\n".join(self.details(ALLOWED_ACTION))
+        context = self.note(f"убыль: {mode} {victim}; методы {bm} → {hm}, "
+                            f"утверждения {ba} → {ha}\nразрешено: {allowed}\n"
+                            f"вывод:\n{out}\nжурнал:\n{self.journal_text()}")
+        self.assertTrue(hm < bm or ha < ba, context)
+        self.assertEqual(self.state(), "verifying", context)
+        self.assertIn(self.path, allowed, context)
+        self.assertRegex(allowed, counts_pattern(bm, hm), context)
+        self.assertRegex(allowed, counts_pattern(ba, ha), context)
+
+
+class RatchetFindingTest(unittest.TestCase):
+    """Функция храповика узла `test_integrity` на синтетических входах.
+
+    Контракт вызова (решение Оператора, ANSWER-1 задачи):
+    `test_integrity.ratchet_finding(base, head, mandate)`, где `base`/`head`
+    — {путь файла диффа `tests/`: текст файла либо `None`} базы и головы,
+    `mandate` — {элемент мандата: источник ANSWER-n}. Возврат ложен, когда
+    находки нет; иначе его текст (`str`) называет числа «было → стало»
+    методов и утверждений и файлы с убылью.
+    """
+
+    def setUp(self):
+        self.seed = random.randrange(1 << 30)
+        print(f"зерно: {self.seed}")
+        self.rng = random.Random(self.seed)
+        self.cls = f"Fx{word(self.rng).capitalize()}Test"
+        self.declining = f"tests/test_fx_{word(self.rng)}.py"
+        self.growing = f"tests/test_fy_{word(self.rng)}.py"
+
+    def note(self, text: str) -> str:
+        return f"{text} (зерно: {self.seed})"
+
+    def methods(self, count: int, size: int) -> dict:
+        return {f"test_{word(self.rng)}_{i}": [
+            f"self.assertEqual(app.VALUE, {self.rng.randrange(10, 99)})"
+            for _ in range(size)] for i in range(count)}
+
+    def sources(self, decline: bool) -> tuple:
+        """(base, head): файл `declining` теряет метод либо утверждения,
+        файл `growing` прибавляет одно утверждение; при `decline` итог
+        диффа убывает, иначе убыль первого файла не больше прибыли второго."""
+        a_base = self.methods(self.rng.randrange(2, 5), 3)
+        a_head = {name: list(body) for name, body in a_base.items()}
+        victim = self.rng.choice(sorted(a_head))
+        mode = self.rng.choice(("метод", "утверждение"))
+        if decline and mode == "метод":
+            del a_head[victim]
+        elif decline:
+            del a_head[victim][:2]
+        else:
+            a_head[victim].pop()
+        b_base = self.methods(self.rng.randrange(1, 4), 2)
+        b_head = {name: list(body) for name, body in b_base.items()}
+        b_head[self.rng.choice(sorted(b_head))].append("self.assertTrue(app.VALUE)")
+        if not decline:
+            b_head[f"test_{word(self.rng)}_new"] = ["self.assertTrue(app.VALUE)"]
+        base = {self.declining: fixture_source(self.cls, a_base),
+                self.growing: fixture_source(self.cls, b_base)}
+        head = {self.declining: fixture_source(self.cls, a_head),
+                self.growing: fixture_source(self.cls, b_head)}
+        return base, head
+
+    def test_ac26_decline_alone_is_finding_and_file_mandate_covers_it(self):
+        """Убыль итога диффа без мандата — находка с числами «было → стало» и файлом убыли; мандат на этот файл её снимает.
+
+        Сценарий: два файла диффа `tests/` — один теряет метод или два
+        утверждения (от зерна), другой прибавляет одно утверждение; итог
+        убывает. Без мандата возврат истинен, его текст называет числа
+        «было → стало» методов и утверждений (по
+        `guard.qualified_test_methods`/`guard.test_assertions`) и файл с
+        убылью, но не файл с прибылью. Мандат на файл с убылью — находки
+        нет; мандат только на файл с прибылью — находка остаётся.
+
+        Ловит мутацию: снятие сравнения «head не меньше base» по одной из
+        сторон (методы или утверждения) — убыль этой стороны не находка;
+        в находку попадают все файлы диффа, а не только с убылью; мандат
+        засчитывается элементом любого файла диффа — мандат на файл с
+        прибылью снимает находку.
+        """
+        base, head = self.sources(decline=True)
+        (bm, ba) = fixture_counts(base.values())
+        (hm, ha) = fixture_counts(head.values())
+        found = test_integrity.ratchet_finding(base, head, {})
+        text = str(found)
+        context = self.note(f"методы {bm} → {hm}, утверждения {ba} → {ha}\n"
+                            f"находка: {text}")
+        self.assertTrue(hm < bm or ha < ba, context)
+        self.assertTrue(found, context)
+        self.assertIn(self.declining, text, context)
+        self.assertNotIn(self.growing, text, context)
+        self.assertRegex(text, counts_pattern(bm, hm), context)
+        self.assertRegex(text, counts_pattern(ba, ha), context)
+        covered = test_integrity.ratchet_finding(
+            base, head, {self.declining: "ANSWER-1"})
+        self.assertFalse(covered, self.note(f"мандат на файл убыли: {covered}"))
+        other = test_integrity.ratchet_finding(
+            base, head, {self.growing: "ANSWER-1"})
+        self.assertTrue(other, self.note("мандат на файл прибыли снял находку"))
+
+    def test_ac26_no_decline_is_no_finding(self):
+        """Итог диффа не убыл — находки нет, хотя один из файлов потерял утверждение.
+
+        Сценарий: файл с убылью теряет одно утверждение, другой файл
+        прибавляет утверждение и метод; итог методов и утверждений не
+        меньше базы, мандата нет — возврат ложен.
+
+        Ловит мутацию: сравнение «head не меньше base» снято либо идёт по
+        каждому файлу отдельно, а не по итогу диффа — находка на итоге без
+        убыли.
+        """
+        base, head = self.sources(decline=False)
+        (bm, ba) = fixture_counts(base.values())
+        (hm, ha) = fixture_counts(head.values())
+        found = test_integrity.ratchet_finding(base, head, {})
+        context = self.note(f"методы {bm} → {hm}, утверждения {ba} → {ha}\n"
+                            f"находка: {found}")
+        self.assertTrue(hm >= bm and ha >= ba, context)
+        self.assertFalse(found, context)
 
 
 if __name__ == "__main__":
