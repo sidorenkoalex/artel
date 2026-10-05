@@ -21,9 +21,10 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
-              config, cycle_hint, fixation, github_adapter, gitcmd, lease, pull,
-              repo_context,
+              config, cycle_hint, fixation, github_adapter, gitcmd, lease,
+              merge_after, pull, repo_context,
               review, store, targets, workspace, yamlmini)
+from .advance_gates import refusal_classes
 from .pull import _merge_conflict_note
 
 # Алиас прежнего публичного имени команды `ci-rerun`, переехавшей в
@@ -68,6 +69,21 @@ VERIFYING_STATUS_ACTION = "статус CI ветки (verifying)"
 ARTIFACT_ESCALATION_ROLE_STEP_MARKER = (
     "эскалация по артефакту роли: ответ Оператора должен дойти до роли "
     "до следующего предварительного advance")
+
+# Метки эскалации «нужен шаг роли» — один перечень на двух читателей:
+# анкер рубежа переделки `auto._role_step_since_state_entry` и проверку
+# ответа на `approve` из `escalated` (SPEC 01M44ENW1B73Z80PR73HP1C9CG,
+# требование 2) — определения не могут разойтись.
+ROLE_STEP_REQUIRED_MARKERS = (pull.PULL_CONFLICT_ROLE_STEP_MARKER,
+                              ARTIFACT_ESCALATION_ROLE_STEP_MARKER)
+
+# Префикс записей о создании ANSWER — их пишут `answer` (в том числе
+# «ANSWER создан: указание Оператора») и `zones-extend`.
+ANSWER_CREATED_ACTION_PREFIX = "ANSWER создан"
+
+NO_ANSWER_FLAG = "--no-answer"
+APPROVE_NO_ANSWER_REFUSED_ACTION = "approve отклонён: нет ANSWER после эскалации"
+ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION = "эскалация снята без ответа"
 
 # Действия журнала о полном наборе tests/ на `approve` из `acceptance`
 # (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 6-8): три исхода — прогон
@@ -212,8 +228,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
 
     `_origin_main_source`/`_origin_main_sha` (сверка свежести против
     origin target'а задачи, не локального `config.MAIN_BRANCH` — см. их
-    докстринги) и `_read_branch_text_or_refuse` (чтение SPEC.md с чужой
-    ветки, общее с другими функциями этого модуля) передаются в
+    докстринги) и `_read_foreign_branch_text_or_refuse` (чтение SPEC.md —
+    документа другой роли — с ветки) передаются в
     `pull.evaluate` ПАРАМЕТРАМИ, не импортом `fsm` тем модулем: так
     `mock.patch.object(fsm, "_origin_main_sha", ...)` (существующие
     тесты, AC-5) продолжает долетать до реального `git merge` — патч
@@ -243,7 +259,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
         conn, task_id, t, state,
         origin_main_source=_origin_main_source,
         origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
-        read_branch_text_or_refuse=_read_branch_text_or_refuse,
+        read_branch_text_or_refuse=_read_foreign_branch_text_or_refuse,
         repo_path=repo_path, run_plank=run_plank)
     if isinstance(outcome, pull.Fresh):
         return "fresh"
@@ -355,6 +371,11 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
 
     Звать только когда `gitcmd.on_foreign_branch(branch)` истинно — сама
     функция это не проверяет, только читает и оформляет отказ.
+
+    Только для артефакта роли ТЕКУЩЕГО состояния (SPEC
+    01M446WEVJXARR5CDED8RE9CCR, требование 5.4): его отсутствие на ветке
+    чинит сама роль. Документ другой роли — `_read_foreign_branch_text_or_
+    refuse`.
     """
     text, reason = artifact_branch.show(task_id, branch,
                                         f"tasks/{task_id}/{rel_name}")
@@ -362,8 +383,32 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
         detail = (f"дерево не на ветке задачи {branch} — {rel_name} "
                   f"ветки не прочитан ({reason})")
         store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
+                      refusal_classes.TREE_NOT_ON_BRANCH_REFUSAL_ACTION, detail)
         print(f"[{task_id}] переход отклонён: {detail}")
+    return text
+
+
+def _branch_unread_refusal(conn, task_id: str, detail: str) -> None:
+    """Отказ «git не ответил на ветку документов / чужой документ не
+    прочитан» — класс «чинит Оператор» (SPEC 01M446WEVJXARR5CDED8RE9CCR,
+    требование 5.4): роль текущего состояния его не починит."""
+    store.journal(conn, task_id, "fsm",
+                  refusal_classes.BRANCH_UNREAD_REFUSAL_ACTION, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+
+
+def _read_foreign_branch_text_or_refuse(conn, task_id: str, branch: str,
+                                        rel_name: str) -> str | None:
+    """Текст `tasks/<id>/<rel_name>` — документа ДРУГОЙ роли (SPEC.md в
+    `tests_writing`, в подтяжке main и при поиске планки на выходе
+    `in_dev`) — с ветки; `None` — не прочитан, отказ уже журналирован и
+    напечатан действием класса «чинит Оператор» (требование 5.4)."""
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/{rel_name}")
+    if text is None:
+        _branch_unread_refusal(
+            conn, task_id, f"{rel_name} не прочитан с ветки документов "
+                           f"{branch} ({reason})")
     return text
 
 
@@ -453,11 +498,10 @@ def _answer_baseline_or_refuse(conn, task_id: str, tdir: Path) -> int | None:
     count = _answer_file_count(conn, task_id, tdir)
     if count is None:
         branch, _ = artifact_source.resolve(conn, task_id)
-        detail = (f"дерево не на ветке задачи {branch} — число "
-                  f"ANSWER-*.md не посчитано, эскалация отложена")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
+        _branch_unread_refusal(
+            conn, task_id, f"git не ответил на перечисление ветки документов "
+                           f"{branch} — число ANSWER-*.md не посчитано, "
+                           f"эскалация отложена")
     return count
 
 
@@ -516,12 +560,14 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     spec_text, spec_reason = artifact_branch.show(task_id, branch, spec_rel)
     paths = artifact_branch.ls_tree(task_id, branch, tests_rel)
     if spec_text is None or paths is None:
-        reason = spec_reason if spec_text is None else "acceptance_tests/ ветки не прочитан"
-        detail = (f"дерево не на ветке задачи {branch} — {reason}, "
-                  f"трассируемость AC не проверена")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: дерево не на ветке задачи", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
+        # SPEC.md — документ analyst, перечисление `acceptance_tests/` —
+        # ответ git: ни то, ни другое test_author не чинит (SPEC
+        # 01M446WEVJXARR5CDED8RE9CCR, требование 5.4).
+        reason = (f"SPEC.md не прочитан ({spec_reason})" if spec_text is None
+                  else "git не ответил на перечисление acceptance_tests/")
+        _branch_unread_refusal(
+            conn, task_id, f"ветка документов {branch}: {reason}, "
+                           f"трассируемость AC не проверена")
         return None
 
     sources: list[str] = []
@@ -747,7 +793,8 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
 def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None,
                accept_red: str | None = None,
-               fixes_main: str | None = None) -> None:
+               fixes_main: str | None = None,
+               no_answer: bool = False) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -763,13 +810,17 @@ def cmd_approve(task_id: str, sha: str | None = None,
     `fixes_main` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — основание флага
     `approve <id> <sha> --fixes-main "<основание>"`: снимает сверку
     красного CI main на гейте мержа для этой задачи и этого вызова;
-    доезжает только до обработчика `merge_gate`."""
+    доезжает только до обработчика `merge_gate`.
+
+    `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG, требования 3, 5) — флаг
+    `approve <id> --no-answer`: снимает эскалацию «нужен шаг роли» без
+    ANSWER после неё; допустим только в `escalated`."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
-                                 fixes_main))
+                                 fixes_main, no_answer))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -868,11 +919,20 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
         return
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 2) —
+    # проверка по БД тем же мягким отказом, что сверка путей выше: задача
+    # остаётся на spec_gate, ни zones, ни merge_after не пишутся.
+    merge_deps, reason = merge_after.spec_gate_value(conn, task_id, meta)
+    if reason:
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
     # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
     # же моментом входа approve на spec_gate, что и budget/split_
     # assessment рядом — meta уже прочитана выше, поле отсутствует у
     # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
-    store.update_task(conn, task_id, zones=meta.get("zones"))
+    store.update_task(conn, task_id, zones=meta.get("zones"),
+                      merge_after=merge_deps)
     # Перечитывание budget_usd на гейте SPEC (SPEC
     # 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5): Оператор мог поправить
     # SPEC прямо на гейте (сузить рамку и т.п.) уже ПОСЛЕ того, как
@@ -1027,12 +1087,56 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
     # его внешний цикл — orchestrator/fsm_merge_gate.py (SPEC T091):
     # берёт/отпускает мьютекс сама вокруг каждого захода в тело гейта,
     # а не единым `merge_lock.run_window` на весь вызов.
+    #
+    # Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 4) —
+    # до мьютекса и до очереди: задача, которой рано в main, не занимает
+    # окно и не встаёт в FIFO.
+    if merge_after.merge_gate_refuses(conn, task_id, t):
+        return
     from . import fsm_merge_gate
     fsm_merge_gate._cmd_approve_merge_gate_cycle(
         conn, task_id, sid, t, state, fixes_main=fixes_main)
 
 
-def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
+def unanswered_role_step_escalation(conn, task_id: str) -> str | None:
+    """Detail последней записи «state -> escalated», если после неё в
+    журнале есть метка «нужен шаг роли» (`ROLE_STEP_REQUIRED_MARKERS`) и
+    нет записи о создании ANSWER; иначе `None` (SPEC
+    01M44ENW1B73Z80PR73HP1C9CG, требования 2, 7).
+
+    Смотрится только хвост журнала после последней эскалации: метка или
+    ANSWER прошлой, уже снятой эскалации к текущей не относятся. Записи
+    «state -> escalated» нет вовсе — сверять не с чем, `None`.
+
+    ANSWER-n.md, попавший в документы задачи мимо `answer`/`zones-extend`
+    (ручной коммит — путь до SPEC 01M287TPG0HAVXS8CHBCY679WN), записи
+    журнала не оставляет; его выдаёт счёт: файлов ANSWER больше, чем
+    записей о создании ANSWER до последней эскалации, — новый ответ есть."""
+    rows = store.task_steps(conn, task_id)
+    last = None
+    for i, row in enumerate(rows):
+        if row["action"] == "state -> escalated":
+            last = i
+    if last is None:
+        return None
+    tail = rows[last + 1:]
+    if not any(row["action"] in ROLE_STEP_REQUIRED_MARKERS for row in tail):
+        return None
+    if any(_is_answer_created(row) for row in tail):
+        return None
+    files = _answer_file_count(conn, task_id, config.TASKS / task_id)
+    if files is not None and files > sum(1 for row in rows[:last]
+                                         if _is_answer_created(row)):
+        return None
+    return rows[last]["detail"] or ""
+
+
+def _is_answer_created(row) -> bool:
+    return (row["action"] or "").startswith(ANSWER_CREATED_ACTION_PREFIX)
+
+
+def _approve_escalated(conn, task_id: str, t, state: str, sid: str,
+                       no_answer: bool = False) -> None:
     # Ответ Оператора (SPEC T075, AC-3): эскалация со структурированным
     # вопросом роли (QUESTIONS.md/spec_writing, `AC-n: escalate`/
     # tests_writing, REVIEW.md `status: escalate`/review) зафиксировала
@@ -1055,6 +1159,25 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
                           "approve отклонён: нет ANSWER", detail)
             print(f"[{task_id}] {detail}")
             return
+    # Эскалация «нужен шаг роли» (конфликт подтяжки, вопрос в артефакте
+    # роли) `answer_baseline` не пишет, но её возврат ведёт к шагу роли —
+    # снятая без ответа, она отправляет роль работать без подготовленного
+    # ответа (прецедент 02.10.2026, SPEC 01M44ENW1B73Z80PR73HP1C9CG).
+    # Снятие без ответа — только явным флагом и видно в журнале. Сверка
+    # baseline выше флагом не обходится (требование 4).
+    escalation = unanswered_role_step_escalation(conn, task_id)
+    if escalation is not None:
+        if not no_answer:
+            detail = (f"approve отклонён: ANSWER после эскалации нет — "
+                      f"ответь роли: artel.py answer {task_id} "
+                      f"<файл-с-ответом>; снять эскалацию без ответа: "
+                      f"artel.py approve {task_id} {NO_ANSWER_FLAG}")
+            store.journal(conn, task_id, "fsm",
+                          APPROVE_NO_ANSWER_REFUSED_ACTION, detail)
+            print(f"[{task_id}] {detail}")
+            return
+        store.journal(conn, task_id, "operator",
+                      ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION, escalation)
     # Куда возвращать — знает только тот, кто эскалировал: провал агента
     # (cmd_run) пишет в escalated_from состояние своего шага, потому что
     # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
@@ -1071,9 +1194,13 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
 
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                 accept_red: str | None = None,
-                fixes_main: str | None = None) -> None:
+                fixes_main: str | None = None,
+                no_answer: bool = False) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if no_answer and state != "escalated":
+        sys.exit(f"[{task_id}] approve отклонён: флаг {NO_ANSWER_FLAG} "
+                 f"допустим только в состоянии escalated, задача в {state}")
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
         return
     # Явный sha, совпавший с живой головой, — решение Оператора: голову,
@@ -1091,12 +1218,13 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # `partial`, а не шестым параметром во всех четырёх обработчиках:
     # сигнатура «(conn, task_id, t, state, sid)» остаётся общей для
     # таблицы. Тем же приёмом `fixes_main` (SPEC
-    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`.
+    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`, и
+    # `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) — только для `escalated`.
     handler = {
         "spec_gate": _approve_spec_gate,
         "acceptance": partial(_approve_acceptance, accept_red=accept_red),
         "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main),
-        "escalated": _approve_escalated,
+        "escalated": partial(_approve_escalated, no_answer=no_answer),
     }.get(state)
     if handler is None:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")

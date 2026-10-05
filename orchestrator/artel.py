@@ -140,7 +140,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   observe show|stop <observation-id> [--json] |
   hook-migrate inspect|apply|restore --client codex|claude --config <path>
                [--backup <path>] [--verified] [--json] |
-  approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"] |
+  approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
+          [--no-answer] |
   reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
   kill <id> | release <id> |
@@ -435,16 +436,36 @@ escalate` из `tests_writing`, вердикт REVIEW.md `status: escalate` из
 `review`) требует нового ANSWER-n.md на ветке — `approve` из `escalated`
 без него отказывает и печатает, какого файла не хватает; эскалации
 класса «лимит» (бюджет, попытки агента, итерации ревью, отказы приёмки,
-инцидент целостности, конфликт подтяжки главной ветки) ответа не
-требуют, как и до этой задачи. Следующий запуск роли получает ответ
+инцидент целостности) ответа не требуют, как и до этой задачи;
+эскалация с меткой «нужен шаг роли» (конфликт подтяжки главной ветки)
+требует ANSWER после себя либо флага `--no-answer` (ниже). Следующий запуск роли получает ответ
 (и исходный вопрос, если он был) в своём брифе (`orchestrator/brief.py`).
 
 `answer <id> <файл>` для задачи в `in_dev`/`review` (SPEC
-01M287TPG0HAVXS8CHBCY679WN) — принимается ТОЛЬКО если текст файла
-несёт строку «Расширение зон разрешено: <пути>»: коммитит
+01M287TPG0HAVXS8CHBCY679WN, 01M443BPQEA9ZMJ3R50THNB1MF) — файл со
+строкой «Расширение зон разрешено: <пути>» оформляет мандат: коммитит
 `ANSWER-n.md` тем же путём, что и для `escalated`, состояние задачи не
-меняется. Файл без этой строки в `in_dev`/`review` отказывает так же,
-как любое состояние вне `escalated`.
+меняется. Файл без строк мандатов принимается как указание Оператора
+роли: `ANSWER-n.md` коммитится в ссылку документов, lease не берётся,
+журнал пишет «ANSWER создан: указание Оператора», текст доходит до
+роли на её следующем шаге; пустой файл — отказ.
+
+`answer` разбирает аргументы до любого действия (SPEC
+01M44ENW1B73Z80PR73HP1C9CG): ключ вместо файла (`answer <id> --from
+<файл>`), отсутствующий аргумент файла, несуществующий файл и лишние
+аргументы — отказ с названным аргументом и синтаксисом `artel.py answer
+<id> <файл-с-ответом>`; ANSWER не создаётся, lease не берётся, журнал
+не пишется — в любом состоянии задачи.
+
+`approve <id> [sha] --no-answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) —
+эскалация с меткой «нужен шаг роли» (конфликт подтяжки, эскалация по
+содержимому артефакта роли) без ANSWER после последней записи «state
+-> escalated» снимается `approve` только с этим флагом; без него —
+отказ, называющий `answer <id> <файл-с-ответом>` и флаг. С флагом
+переход прежний, а журнал получает отдельную запись Оператора
+«эскалация снята без ответа» с текстом эскалации. Сверку `answer_
+baseline` (вопрос роли) флаг не обходит; вне `escalated` флаг —
+отказ.
 
 `zones-extend <id> <путь1>[, <путь2>]` (SPEC 01M287TPG0HAVXS8CHBCY679WN)
 — коммитит `ANSWER-n.md` с той же строкой маркера и текстом «мандат
@@ -798,7 +819,7 @@ def _cmd_run_or_detach(rest: list) -> None:
         rest, "run <id> [--attach | --client codex|claude --chat <id>]",
         _CYCLE_FLAGS_RUN)
     if attach:
-        runner.cmd_run(task_id)
+        runner.cmd_run_and_advance(task_id)
         return
     _launch_detached("run", task_id, client, chat)
 
@@ -1412,21 +1433,70 @@ def _fixes_main_arg(rest: list) -> str | None:
     return reason
 
 
-def _approve_sha_arg(rest: list) -> str | None:
-    """Позиционный `sha` команды `approve <id> [sha]` — первый аргумент
-    после `<id>`, не являющийся ни флагом `--accept-red`/`--fixes-main`,
-    ни его основанием (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8:
-    разбор позиционного sha не меняется); `None` — sha не передан."""
+NO_ANSWER_FLAG = fsm.NO_ANSWER_FLAG
+
+
+def _approve_reason_indices(rest: list) -> set[int]:
+    """Позиции флагов `--accept-red`/`--fixes-main` и их оснований."""
     skipped: set[int] = set()
     for flag in (ACCEPT_RED_FLAG, FIXES_MAIN_FLAG):
         if flag in rest:
             flag_idx = rest.index(flag)
             skipped.update((flag_idx, flag_idx + 1))
+    return skipped
+
+
+def _approve_no_answer_arg(rest: list) -> bool:
+    """Флаг `approve <id> [sha] --no-answer` (SPEC
+    01M44ENW1B73Z80PR73HP1C9CG, требование 3) — снятие эскалации «нужен
+    шаг роли» без ответа. Основание другого флага, совпавшее с текстом
+    флага, флагом не считается."""
+    skipped = _approve_reason_indices(rest)
+    return any(arg == NO_ANSWER_FLAG and i not in skipped
+               for i, arg in enumerate(rest[1:], start=1))
+
+
+def _approve_sha_arg(rest: list) -> str | None:
+    """Позиционный `sha` команды `approve <id> [sha]` — первый аргумент
+    после `<id>`, не являющийся ни флагом `--accept-red`/`--fixes-main`,
+    ни его основанием (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8:
+    разбор позиционного sha не меняется), ни флагом `--no-answer` (SPEC
+    01M44ENW1B73Z80PR73HP1C9CG, требование 5); `None` — sha не передан."""
+    skipped = _approve_reason_indices(rest)
     for i, arg in enumerate(rest[1:], start=1):
-        if i in skipped:
+        if i in skipped or arg == NO_ANSWER_FLAG:
             continue
         return arg
     return None
+
+
+_ANSWER_SYNTAX = "artel.py answer {id} <файл-с-ответом>"
+
+
+def _answer_args(rest: list) -> tuple[str, str]:
+    """(id, путь файла) команды `answer` либо отказ ДО исполнения (SPEC
+    01M44ENW1B73Z80PR73HP1C9CG, требование 1): ключ вместо файла, нет
+    файла, лишние аргументы. Прецедент 02.10.2026 — `answer <id> --from
+    <файл>` брал «--from» за путь и отказывал общим «файл ответа не
+    прочитан», подготовленный ответ до роли не дошёл. Состояние задачи
+    здесь не читается — отказ одинаков в любом состоянии и стоит раньше
+    lease, журнала и коммита."""
+    syntax = _ANSWER_SYNTAX.format(id=rest[0] if rest else "<id>")
+    if not rest:
+        sys.exit(f"answer: не передан id задачи и файл ответа; синтаксис: {syntax}")
+    if len(rest) < 2:
+        sys.exit(f"answer: не передан файл ответа; синтаксис: {syntax}")
+    path = rest[1]
+    if path.startswith("--"):
+        sys.exit(f"answer: получен ключ «{path}» вместо файла ответа — ключей "
+                 f"у команды нет; синтаксис: {syntax}")
+    if len(rest) > 2:
+        extra = " ".join(rest[2:])
+        sys.exit(f"answer: лишние аргументы после файла ответа: {extra}; "
+                 f"синтаксис: {syntax}")
+    if not Path(path).is_file():
+        sys.exit(f"answer: файла ответа нет: {path}; синтаксис: {syntax}")
+    return rest[0], path
 
 
 def _cmd_pin(rest: list) -> None:
@@ -1540,10 +1610,11 @@ def main() -> None:
         "approve": lambda: fsm.cmd_approve(
             rest[0], _approve_sha_arg(rest),
             accept_red=_accept_red_arg(rest),
-            fixes_main=_fixes_main_arg(rest)),
+            fixes_main=_fixes_main_arg(rest),
+            no_answer=_approve_no_answer_arg(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
-        "answer": lambda: answer.cmd_answer(rest[0], rest[1]),
+        "answer": lambda: answer.cmd_answer(*_answer_args(rest)),
         "zones-extend": lambda: answer.cmd_zones_extend(rest[0], rest[1]),
         "kill": lambda: cleanup.cmd_kill(rest[0], confirmed="--yes" in rest[1:]),
         "release": lambda: release.cmd_release(rest[0]),

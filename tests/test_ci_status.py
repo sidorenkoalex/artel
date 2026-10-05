@@ -540,6 +540,45 @@ class VerifyingStatus422Test(_HeadShaPatchedTest):
         self.assertNotIn("push", note.lower())
 
 
+class VerifyingHeadNotInOriginTest(_HeadShaPatchedTest):
+    """`ci.verifying_head_not_in_origin` (SPEC 01M44ENQCRK02T2MWZB9HC3XHH,
+    требование 6): по `note` статуса узнаёт исход 422 — и только его, —
+    чтобы обработчик `verifying` отправил голову в origin без второго
+    опроса `gh`."""
+
+    def set_check_runs(self, runs, why: str = "") -> None:
+        patcher = mock.patch.object(ci, "check_runs", lambda sha: (runs, why))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(ci, "run_list", lambda branch: ([], ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_422_note_is_detected(self):
+        """Ловит мутацию: предикат не узнаёт текст исхода 422 (сверяет не
+        тот префикс или текст исхода разошёлся с константой) — обработчик
+        `verifying` не отправит голову и задача снова ждёт до потолка."""
+        self.set_check_runs(None, "gh не ответил: HTTP 422: No commit found")
+
+        _outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertTrue(ci.verifying_head_not_in_origin(note), note)
+
+    def test_other_none_outcomes_are_not_detected(self):
+        """Ловит мутацию: предикат истинен на любом `note` (или на любом
+        «проверок нет») — узел отправки зовётся вне исхода 422, вопреки
+        требованию 7."""
+        for runs, why in (([], ""), (None, "gh не ответил: gh молчал 10 с")):
+            with self.subTest(runs=runs, why=why):
+                self.set_check_runs(runs, why)
+
+                _outcome, note = ci.verifying_status("task/t001-x")
+
+                self.assertFalse(ci.verifying_head_not_in_origin(note), note)
+        self.assertFalse(ci.verifying_head_not_in_origin(
+            f"CI коммита {SHA[:8]} не зелёный: tests=failure"))
+
+
 class VerifyingIsRedTest(unittest.TestCase):
     """`ci.verifying_is_red` (SPEC T086, требование 2): различает
     завершённый красный CI от прочих трёх исходов `verifying_status` по

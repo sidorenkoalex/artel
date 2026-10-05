@@ -797,6 +797,19 @@ AUTO_STOP_BUDGET = ("эскалация по бюджету — нужен Оп�
                     "подними потолок: artel.py budget {id} <usd>  "
                     "(или artel.py kill {id})")
 
+# Эскалация с меткой «нужен шаг роли» без ANSWER после неё (SPEC
+# 01M44ENW1B73Z80PR73HP1C9CG, требование 7): голый `approve` отказывает,
+# подсказка называет оба выхода — ответ роли и явное снятие без ответа.
+# `{id}` — тем же `.format`, что у `AUTO_STOP`.
+ESCALATED_ROLE_STEP_HINT = (
+    "ответь роли: artel.py answer {id} <файл-с-ответом>, затем approve "
+    "той же задачи; снять эскалацию без ответа: "
+    "artel.py approve {id} --no-answer")
+AUTO_STOP_ESCALATED_ROLE_STEP = (
+    "эскалация «нужен шаг роли» без ответа — нужен Оператор",
+    "разберись: artel.py log {id}; " + ESCALATED_ROLE_STEP_HINT + "; "
+    + _BOTH_COMMANDS)
+
 # Завершённый красный CI в `verifying` (SPEC T086, требование 2, AC-4):
 # `auto` останавливает цикл сам, не дожидаясь потолка времени — verifying
 # сам не возвращает задачу в разработку (ADR-0009, «Последствия»), только

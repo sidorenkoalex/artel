@@ -33,7 +33,8 @@ from typing import NamedTuple
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, spend, stack, yamlmini, zone_lock  # noqa: E402
+from orchestrator import (config, idgen, spend, stack, yamlmini,  # noqa: E402
+                          zone_lock)
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -2586,6 +2587,56 @@ def role_budget_cap_errors(path: Path | str, meta: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Зависимости мержа `merge_after` (SPEC 01M44EP0D47F498TEE08MNGBYT,
+# требование 1): guard проверяет только ФОРМУ поля, без доступа к БД —
+# существование, состояние, target и циклы проверяет гейт SPEC
+# (`orchestrator/merge_after.py`). Поле необязательное, проверка — для SPEC
+# любой `schema_version`, если поле есть.
+
+MERGE_AFTER_FIELD = "merge_after"
+
+
+def merge_after_items(raw) -> list[str]:
+    """Элементы значения `merge_after` в порядке записи: список через
+    запятую; `None`/пустая строка — пустой список. Пустые элементы между
+    запятыми отбрасываются тем же правилом, что у списка зон."""
+    if raw is None:
+        return []
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def merge_after_form_errors(items: list[str], own_task_id) -> list[str]:
+    """Причины по форме элементов `merge_after`: элемент не в формате id
+    задачи пульта (`idgen.is_task_id_form`), повтор, совпадение с id самой
+    задачи. Каждая причина называет поле и элемент. Общая для guard и для
+    каналов переписывания значения (`orchestrator/merge_after.py`)."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not idgen.is_task_id_form(item):
+            errors.append(f"{MERGE_AFTER_FIELD}: элемент «{item}» не в формате "
+                          f"id задачи (полный id или его префикс)")
+        elif item in seen:
+            errors.append(f"{MERGE_AFTER_FIELD}: элемент «{item}» указан "
+                          f"повторно")
+        elif own_task_id and item == str(own_task_id):
+            errors.append(f"{MERGE_AFTER_FIELD}: элемент «{item}» — id самой "
+                          f"задачи, задача не может зависеть от себя")
+        seen.add(item)
+    return errors
+
+
+def spec_merge_after_errors(path: Path | str, meta: dict) -> list[str]:
+    """Форма поля `merge_after` SPEC (требование 1, AC-1); поля нет —
+    ошибок нет. `path` — только для текста ошибок."""
+    if (meta.get("type") or "") != "spec" or MERGE_AFTER_FIELD not in meta:
+        return []
+    items = merge_after_items(meta.get(MERGE_AFTER_FIELD))
+    return [f"{path}: {e}" for e in merge_after_form_errors(items,
+                                                            meta.get("task"))]
+
+
+# --------------------------------------------------------------------------
 # Заявка на деление секцией «## Деление» SPEC (01M1SHJZCE0Y4DXAAWQ2W585A7,
 # требование 1): роль не вправе звать команды пульта из worktree (T056) —
 # аналитик оформляет заявку текстом SPEC, заводит подзадачи сам пульт на
@@ -3032,6 +3083,7 @@ def _content_errors(label: str, text: str) -> list[str]:
         errors.extend(split_assessment_errors(label, text, meta))
         errors.extend(spec_zones_errors(label, meta))
         errors.extend(spec_budget_field_errors(label, meta))
+        errors.extend(spec_merge_after_errors(label, meta))
         errors.extend(division_section_errors(label, text, meta))
 
     if atype in ("spec", "plan"):
