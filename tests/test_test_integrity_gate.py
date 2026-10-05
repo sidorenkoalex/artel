@@ -763,8 +763,11 @@ class EarlyReturnFindingTest(_GateSandbox):
         стоял годами, отказывает переходу за чужой давний код."""
         self.entries = [("M", self.PATH, None)]
         self.sources[(BASE, self.PATH)] = EARLY_RETURN
+        # Правка головы — не смена утверждения (SPEC
+        # 01M45FJD46BX45VHC36S4VS9QN, требование 16): та делается находкой
+        # сама по себе и заслонила бы предмет сценария.
         self.sources[(CODE_BRANCH, self.PATH)] = EARLY_RETURN.replace(
-            "self.assertTrue(READY)", "self.assertTrue(bool(READY))")
+            "READY = False\n", "READY = False\nEXTRA = 1\n")
         self.assertIsNone(self.refusal())
 
     def test_early_return_is_covered_by_the_operator_mandate(self):
@@ -994,21 +997,25 @@ class AssertionObservationTest(_GateSandbox):
                 if action == test_integrity.ASSERTION_OBSERVATION_ACTION]
 
     def test_transition_passes_and_journals_both_context_cases(self):
-        """Переход `in_dev -> verifying` выполнен, журнал несёт одну запись
-        «изменены утверждения тестов (наблюдение)» с обоими случаями.
+        """Переход `in_dev -> verifying` отклонён (оба случая — смена вне
+        раздела SPEC «Меняемое поведение», SPEC 01M45FJD46BX45VHC36S4VS9QN,
+        требование 7), журнал несёт одну запись «изменены утверждения
+        тестов (наблюдение)» с обоими случаями в прежней форме.
 
         Ловит мутацию: находка об утверждениях не доходит до журнала либо
-        блокирует переход."""
+        не блокирует переход."""
         with self.patched():
             refused = fsm_advance._test_integrity_gate_refuses(
                 self.conn, self.task_id, self.t, ARTIFACT_BRANCH)
-        self.assertFalse(refused)
+        self.assertTrue(refused)
         self.assertEqual([f"{CLONE_HOME_LINE}; {STACK_SECTION_LINE}"],
                          self.observations())
 
     def test_mandate_marks_only_covered_findings(self):
         """Мандат `путь::Класс::метод` и мандат на путь помечают находку
-        «покрыто мандатом ANSWER-n»; мандат на другой метод — нет.
+        «покрыто мандатом ANSWER-n»; мандат на другой метод — нет. Переход
+        проходит только с мандатом, покрывающим обе находки (SPEC
+        01M45FJD46BX45VHC36S4VS9QN, требование 7).
 
         Ловит мутацию: находка заведена без имени метода либо под другим
         именем."""
@@ -1016,26 +1023,32 @@ class AssertionObservationTest(_GateSandbox):
             ("ANSWER-1.md",
              f"{CONTEXT_PATH}::CloneHomeTest::test_defect_names_home",
              [f"{CLONE_HOME_LINE} — покрыто мандатом ANSWER-1",
-              STACK_SECTION_LINE]),
+              STACK_SECTION_LINE], True),
             ("ANSWER-2.md", CONTEXT_PATH,
              [f"{CLONE_HOME_LINE} — покрыто мандатом ANSWER-2",
-              f"{STACK_SECTION_LINE} — покрыто мандатом ANSWER-2"]),
+              f"{STACK_SECTION_LINE} — покрыто мандатом ANSWER-2"], False),
             ("ANSWER-3.md", f"{CONTEXT_PATH}::CloneHomeTest::test_other",
-             [CLONE_HOME_LINE, STACK_SECTION_LINE]),
+             [CLONE_HOME_LINE, STACK_SECTION_LINE], True),
         )
-        for name, allowed, expected in cases:
+        for name, allowed, expected, refused in cases:
             with self.subTest(mandate=allowed):
                 self.answers.clear()
                 self.conn.execute("DELETE FROM steps")
                 self.add_answer(name, allowed)
                 with self.patched():
-                    self.assertIsNone(fsm_advance._test_integrity_gate(
-                        self.conn, self.task_id, self.t, ARTIFACT_BRANCH))
+                    refusal = fsm_advance._test_integrity_gate(
+                        self.conn, self.task_id, self.t, ARTIFACT_BRANCH)
+                if refused:
+                    self.assertIsNotNone(refusal)
+                else:
+                    self.assertIsNone(refusal)
                 self.assertEqual(["; ".join(expected)], self.observations())
 
     def test_merge_gate_and_review_package_carry_the_same_findings(self):
-        """Гейт мержа пишет ту же запись и мерж не останавливает; раздел
-        «Изменённые утверждения тестов» входа ревьювера несёт те же находки.
+        """Гейт мержа пишет ту же запись и эскалирует мерж (смена вне
+        раздела SPEC «Меняемое поведение», SPEC 01M45FJD46BX45VHC36S4VS9QN,
+        требование 7); раздел «Изменённые утверждения тестов» входа
+        ревьювера несёт те же находки.
 
         Ловит мутацию: наблюдение есть только на одном рубеже либо не
         доходит до ревьювера."""
@@ -1047,8 +1060,8 @@ class AssertionObservationTest(_GateSandbox):
             part = review._changed_assertions_part(
                 self.conn, self.task_id, CODE_BRANCH, ARTIFACT_BRANCH,
                 config.DEFAULT_TARGET, "run")
-        self.assertFalse(escalated)
-        self.assertEqual("merge_gate",
+        self.assertTrue(escalated)
+        self.assertEqual("escalated",
                          store.get_task(self.conn, self.task_id)["state"])
         self.assertEqual([f"{CLONE_HOME_LINE}; {STACK_SECTION_LINE}"],
                          self.observations())
