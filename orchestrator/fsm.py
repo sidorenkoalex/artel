@@ -879,6 +879,15 @@ def _cleanup_divided_parent(conn, task_id: str, branch: str) -> None:
         print(f"  {note}")
 
 
+def _disk_spec_text(task_id: str) -> str:
+    """Текст SPEC.md задачи с диска; нечитаемый — пустой (раздела
+    обоснования тогда нет)."""
+    try:
+        return (config.TASKS / task_id / "SPEC.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # tests_writing до кода (SPEC T023, требование 1): пропускается
     # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
@@ -923,6 +932,16 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # проверка по БД тем же мягким отказом, что сверка путей выше: задача
     # остаётся на spec_gate, ни zones, ни merge_after не пишутся.
     merge_deps, reason = merge_after.spec_gate_value(conn, task_id, meta)
+    # Сверка с заявленным Оператором (SPEC 01M45D29BQJE8FJYJA4JQWSYFZ,
+    # требования 5-6) — с колонкой ДО её перезаписи ниже. Раздел
+    # обоснования на дисковом пути читается отдельно: `spec_text` там пуст,
+    # а подставить в него текст значило бы включить сверку путей и деление
+    # там, где их сегодня нет.
+    added: list[str] = []
+    if not reason:
+        added, reason = merge_after.spec_gate_declared_refusal(
+            conn, task_id, t, meta, merge_deps,
+            spec_text if foreign else _disk_spec_text(task_id))
     if reason:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
@@ -933,6 +952,7 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
     store.update_task(conn, task_id, zones=meta.get("zones"),
                       merge_after=merge_deps)
+    merge_after.record_added(conn, task_id, added)
     # Перечитывание budget_usd на гейте SPEC (SPEC
     # 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5): Оператор мог поправить
     # SPEC прямо на гейте (сузить рамку и т.п.) уже ПОСЛЕ того, как
