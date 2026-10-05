@@ -2494,6 +2494,59 @@ class TestWeakeningNeedsTheOperatorTest(TmpRootTest):
         self.assertEqual("escalated",
                          store.get_task(self.conn, self.TASK)["state"])
 
+    def test_an_undeclared_assertion_change_needs_the_operator(self):
+        """Смена утверждения метода вне раздела SPEC «Меняемое
+        поведение» отказывает переходу `in_dev → verifying`, а мандат
+        Оператора на этот метод снимает отказ (SPEC
+        01M45FJD46BX45VHC36S4VS9QN, требование 7).
+
+        Ловит мутацию: изменённые утверждения снова только наблюдаются —
+        смена ожидаемого значения в существующем тесте без записи approve
+        и без мандата проходит переход молча, как до этой задачи; либо
+        находка об утверждениях заведена мимо `Finding.mandate_elements`
+        — мандат Оператора на метод её не снимает."""
+        path = "tests/test_expectation.py"
+        base = ("import unittest\n\n\n"
+                "class ExpectTest(unittest.TestCase):\n\n"
+                "    def test_value(self):\n"
+                "        self.assertEqual(compute(), 1)\n")
+        sources = {(self.BASE, path): base,
+                   (self.BRANCH, path): base.replace("compute(), 1",
+                                                     "compute(), 2")}
+
+        def show(ref, rel, repo=None):
+            if (ref, rel) in sources:
+                return sources[(ref, rel)], ""
+            return self._show(ref, rel, repo)
+
+        def gate(answers):
+            with mock.patch.object(gitcmd, "diff_base",
+                                   return_value=self.BASE), \
+                 mock.patch.object(gitcmd, "diff_name_status",
+                                   return_value=[("M", path, None)]), \
+                 mock.patch.object(gitcmd, "show", show), \
+                 mock.patch.object(gitcmd, "ls_tree_files",
+                                   return_value=answers), \
+                 mock.patch.object(gitcmd, "git", self._git):
+                t = store.get_task(self.conn, self.TASK)
+                box = []
+                capture(lambda: box.append(
+                    fsm_advance._test_integrity_gate_refuses(
+                        self.conn, self.TASK, t, self.ARTIFACT)))
+                return box[0]
+
+        self.assertTrue(gate([]), "смена вне раздела SPEC обязана "
+                                  "остановить переход")
+        actions = [row["action"] for row in self.conn.execute(
+            "SELECT action FROM steps WHERE task_id=?", (self.TASK,))]
+        self.assertIn("переход отклонён: гейт неослабления тестов", actions)
+
+        self.answer_text = (f"# Ответ\n\nОслабление тестов разрешено: "
+                            f"{path}::ExpectTest::test_value\n"
+                            f"Основание: ADR-0002.\n")
+        self.assertFalse(gate([self.ANSWER]),
+                         "мандат Оператора обязан снимать отказ")
+
 
 class MainCopyGitUnchangedDuringTaskTest(unittest.TestCase):
     """Инвариант 40: git главной копии пульта не меняется в ходе задачи
