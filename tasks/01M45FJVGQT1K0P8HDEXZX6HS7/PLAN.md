@@ -2,7 +2,7 @@
 task: 01M45FJVGQT1K0P8HDEXZX6HS7
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -191,7 +191,9 @@ declared_without_profile`), и пропуск идёт по правилу тр�
 - Временная декларация артели с профилем (`tests/sandbox.py::
   declared_artel_profile`) вместо боевого `targets.yaml`:
   `tests/test_fsm_advance_tests_writing_test_groups.py`
-  (`AmendGroupLineTest.errors`).
+  (`AmendGroupLineTest.errors`), `tests/test_ci_status_kind_gate.py`
+  (`NonRedStatusSkipsRerunTest.setUp` — наследник `FsmTest`; без
+  приложения 2 песочница `FsmTest` читала бы боевой файл).
 - Посеянная запись артели убрана там, где предмет — сам файл или его
   отсутствие (`config.TARGETS.unlink()` в `setUp`):
   `tests/test_multitarget.py`, `tests/test_repo_context.py`.
@@ -240,6 +242,70 @@ declared_without_profile`), и пропуск идёт по правилу тр�
   merge-base — без заявки нет ни одного.
 
 ## Проверено исполнением
+
+Итерация после второго возврата из `verifying` (CI 8ddb330d: 14 падений
+в `tests/test_invariants.py` и 2 в `tests/test_ci_status_kind_gate.py`).
+Различие окружения найдено: красный прогон шёл **без приложений PLAN**.
+Это прогон по событию `pull_request` (черновик PR ветки задачи).
+- Трассировка CI называет `tests/test_invariants.py:251
+  approve_with_isolated_root`. Строка 251 — это `return
+  original_approve(...)` под `mock.patch.object(config, "ROOT",
+  retro_root)` в файле **без** приложения 2. С наложенным приложением 2
+  (хунк `@@ -172,10 +172,19 @@` добавляет 9 строк до неё) та же строка
+  стоит на 260 (`grep -n "return original_approve"
+  tests/test_invariants.py` → 249, 251 на чистом дереве).
+- `.github/workflows/ci.yml:204`, `:251` — шаг `scripts/plan_appendix_ci.py`
+  стоит под `if: github.event_name == 'push' && ...`. Триггер workflow —
+  и `push`, и `pull_request` (`ci.yml:3-15`). Сам сценарий тоже не берётся
+  за `pull_request` (`scripts/plan_appendix_ci.py:75-80::task_branch`), и
+  это закреплено тестом `tests/test_plan_appendix_ci.py::TaskBranchTest::
+  test_only_task_push_is_processed` (требование 2 SPEC
+  01M443HV9SJYVYQTHJSQ87QV68: «их прогоны не меняются»). Строки
+  «приложение N наложено», которые видел Оператор, — из `push`-прогона того
+  же коммита. `ci.branch_status` берёт check-run'ы обоих прогонов по sha
+  головы (`orchestrator/ci.py:754-760`), красный `pull_request` красит
+  статус.
+- Воспроизведение (рабочая копия на чистом HEAD, `git status` пуст, без
+  приложений): `python3 -m pytest tests/test_invariants.py
+  tests/test_ci_status_kind_gate.py -p no:cacheprovider -p timeout -o
+  timeout=120` — **16 failed, 62 passed**. Набор совпадает с CI
+  поимённо: MergeOnlyFromMergeGateTest ×3, MergeNeedsGreenCiTest ×2,
+  FreshVerdictGuardsAcceptanceTest ×3, ExhaustedBudgetIsNotBypassableTest,
+  ParallelTaskLimitIsNotBypassableTest, CountersNeverResetTest ×2,
+  ManualGatesNeedTheOperatorTest[merge_gate], AgentRunsOnlyFromRunTest[review],
+  NonRedStatusSkipsRerunTest ×2.
+- Только приложение 1 (`targets.yaml`) без приложения 2: 2 failed, 74 passed.
+  Остаются `FreshVerdictGuardsAcceptanceTest::test_escalation_and_return_do_not_make_the_verdict_fresh`
+  и `::test_stale_verdict_is_not_passed_by_any_command`: «переход
+  отклонён: SPEC.md не прочитан с ветки документов … (файла нет на
+  диске)». Это требование 6: прогон приёмки идёт в рабочей копии и
+  без планки читает SPEC, а сценарий `FsmTest` SPEC на диск не кладёт.
+  Чинит только `write_plan` приложения 2. Ослабить чтение SPEC в коде —
+  значит ослабить отказ, на это я не иду.
+- Кандидаты Оператора (1) и (3) проверены. `seed_artel_targets` в CI не
+  находит файла раньше посева: `FsmTest` без приложения 2 `config.TARGETS`
+  не подменяет вовсе и читает боевой `targets.yaml` чекаута. Порядок и
+  xdist ни при чём: тот же набор падает в одном процессе. Кандидат (2):
+  гейт мержа читает профиль из `config.TARGETS`
+  (`project_profile.decide` → `repo_context.profile_of` →
+  `targets.target`), не из дерева мержа и не из клона.
+
+Правка в моей зоне: `tests/test_ci_status_kind_gate.py::
+NonRedStatusSkipsRerunTest.setUp` теперь берёт свою декларацию артели с
+профилем (`tests/sandbox.py::declared_artel_profile`) и не зависит от
+песочницы `FsmTest` и боевого `targets.yaml`. Это дополнение фикстуры,
+утверждения и тестовые методы не тронуты. Проверено:
+- без приложений `tests/test_ci_status_kind_gate.py` — 2 passed (было
+  2 failed);
+- с обоими приложениями `tests/test_invariants.py
+  tests/test_ci_status_kind_gate.py` — 76 passed, приложения сняты
+  `git checkout`.
+
+Оставшиеся 14 падений `tests/test_invariants.py` в `pull_request`-прогоне
+закрыть в зонах задачи нельзя. Песочница инвариантов меняется только
+приложением 2 (SPEC, требование 7), а `pull_request`-прогон приложений по
+замыслу не накладывает. См. «Эскалация». Карта перегенерирована
+(`python3 scripts/codebase_map.py`).
 
 Итерация после возврата из `verifying` (CI 87fdc026 красный с наложенными
 приложениями). Причина: локально рабочая копия несла незакоммиченный
@@ -438,3 +504,53 @@ HEAD ветки задачи — применяются; после наложе
   приложения `git apply` руками и снимать `git checkout` — кандидат на
   команду пульта (`orchestrator/plank_run.py` по образцу
   `scripts/plan_appendix_ci.py`).
+- Причина возврата из `verifying` называла падения, но не событие
+  прогона CI (`push`/`pull_request`). Две итерации ушли на поиск различия
+  окружения, хотя упали два разных прогона одного sha. Стоит, чтобы
+  `ci.failed_check_names`/запись возврата называли событие и id прогона
+  (`orchestrator/ci.py`).
+- Класс «код задачи краснеет без своего приложения PLAN» механика
+  01M443HV9SJYVYQTHJSQ87QV68 не покрывает: `pull_request`-прогон проверяет
+  дерево без приложений, а мержится дерево с ними. Эта задача — первая
+  такого класса, следующая будет такой же.
+
+## Эскалация
+
+**Вопросы** (по блокирующести):
+
+1. Как сделать зелёным `pull_request`-прогон CI ветки, чей код по
+   требованию 4 SPEC краснеет без приложений PLAN (14 падений
+   `tests/test_invariants.py`, без приложения 2 не чинятся)? Все варианты —
+   вне прав роли: `.github/` защищён, `scripts/plan_appendix_ci.py` вне зон
+   задачи, его поведение на `pull_request` закреплено тестом и требованием
+   2 SPEC 01M443HV9SJYVYQTHJSQ87QV68.
+   - **A.** Отдельная задача Оператора: шаг приложений в `ci.yml` (jobs
+     `python`, `python-min`) идёт и на `pull_request` ветки `task/**`
+     (условие по `github.head_ref`), `plan_appendix_ci.task_branch` берёт
+     ветку из `GITHUB_HEAD_REF` при `pull_request`. Меняется утверждение
+     `tests/test_plan_appendix_ci.py::TaskBranchTest::test_only_task_push_is_processed`
+     (`assertIsNone(task_branch("pull_request", ...))` → имя ветки).
+     Эта задача ставит `merge_after` на ту задачу.
+   - **B.** Отдельная задача: `ci.branch_status` для ветки задачи с
+     приложениями PLAN не считает check-run'ы `pull_request`-прогона —
+     меняет семантику гейта CI, решение за Оператором.
+   - **C.** Разово: Оператор закрывает черновик PR ветки задачи. Следующий
+     пуш (коммит этого шага — новый sha) даёт только `push`-прогон с
+     приложениями. Нужно проверить, что `github_adapter.ensure_draft_mr` не
+     откроет PR снова до мержа.
+   - **Дефолт при молчании:** A. Задача ждёт в эскалации, `merge_after`
+     предлагается после задачи по A.
+2. Засчитать ли правку `tests/test_ci_status_kind_gate.py` (своя
+   декларация артели с профилем в `NonRedStatusSkipsRerunTest.setUp`)?
+   Варианты: оставить / откатить. **Дефолт:** оставить — это дополнение
+   фикстуры, класс зелёный и без приложений, и с ними.
+
+**Контекст.** Диагноз и прогоны — в «Проверено исполнением», абзац
+«Итерация после второго возврата». Код задачи, приложения PLAN и их
+применимость не менялись. С обоими приложениями `tests/test_invariants.py`
+и `tests/test_ci_status_kind_gate.py` — 76 passed. Без приложений — 14
+failed (было 16). Предыдущий возврат (CI 87fdc026), вероятно, был тем же
+классом: часть его падений могла прийти из `pull_request`-прогона.
+
+**Блокирует.** Зелёный CI ветки по обоим прогонам sha головы, а значит —
+`verifying -> review` и гейт мержа.
