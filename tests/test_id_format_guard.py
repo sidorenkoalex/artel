@@ -239,6 +239,18 @@ AC-1. Критерий.
 
 class IdFormatSampleOnForeignBranchTest(RealGitBranchTest):
 
+    def setUp(self):
+        super().setUp()
+        # Выход из `tests_writing` заводит рабочую копию задачи и для
+        # артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6): базе её
+        # ветки нужен `origin`.
+        origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", str(origin))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "-q", "origin",
+                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+
     def _write_acceptance_test_on_branch(self, content: str) -> None:
         # `write_on_task_branch` зовёт `.format(task=...)` на содержимом
         # (SPEC.md/QUESTIONS.md-шаблоны несут `{task}`) — фигурные скобки

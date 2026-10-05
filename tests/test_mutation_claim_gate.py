@@ -12,7 +12,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm_advance, gitcmd  # noqa: E402
-from tests.sandbox import TaskIdSchemaConnTmpRootTest  # noqa: E402
+from tests.sandbox import (TaskIdSchemaConnTmpRootTest,  # noqa: E402
+                           declared_without_profile)
 
 
 def _task_row(target=config.DEFAULT_TARGET, is_canary=False):
@@ -78,7 +79,11 @@ class MutationClaimGateSkipConditionsTest(unittest.TestCase):
             raise AssertionError("гейт заявки мутации не обязан звать "
                                  "diff_base для внешнего target")
 
-        with mock.patch.object(gitcmd, "diff_base", boom):
+        # Внешний проект объявлен в targets.yaml без профиля тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 3): необъявленному гейт
+        # отказывает — контекст не разрешён (требование 5).
+        with declared_without_profile("some-external-target"), \
+                mock.patch.object(gitcmd, "diff_base", boom):
             refusal = fsm_advance._mutation_claim_gate(
                 None, "T001", t, "task/t001-x")
         self.assertIsNone(refusal)

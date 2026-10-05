@@ -202,6 +202,11 @@ def _tests_writing_code_copy_gate(task_id: str, target: str,
     проекта, включая артель (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование
     6): отката на главную копию пульта нет."""
     _path, error = workspace.ensure(task_id, code_branch)
+    if error is None and workspace.on_task_branch(
+            task_id, code_branch, target) is False:
+        # `ensure` отдаёт уже заведённую копию, не сверяя её ветку: сбор в
+        # ней проверял бы чужой код.
+        error = f"рабочая копия задачи не выписана на ветку {code_branch}"
     if error is None:
         return None
     return GateRefusal(CODE_COPY_REFUSAL_ACTION, error,

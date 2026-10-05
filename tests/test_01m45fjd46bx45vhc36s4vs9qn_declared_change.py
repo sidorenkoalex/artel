@@ -79,7 +79,7 @@ from orchestrator import (artifact_source, catalog, config, fsm, fsm_advance,
                           projects, review, store, workspace)
 from orchestrator.advance_gates import test_integrity
 from scripts import guard
-from tests.sandbox import GitignoreCommittedRealGitSandbox
+from tests.sandbox import GitignoreCommittedRealGitSandbox, declare_target
 
 DOCS_REF_PREFIX = "refs/artifacts/"
 
@@ -1124,7 +1124,11 @@ class OutOfScopeTest(DeclaredChangeSandbox):
         conn = store.db()
         row = dict(store.get_task(conn, self.task_id))
         row["target"] = f"{config.DEFAULT_TARGET}-{word(self.rng)}"
-        out = self.run_cmd(fsm_advance.in_dev, conn, self.task_id, row,
+        # Внешний проект объявлен в targets.yaml без профиля тестов: проект
+        # с неразрешённым контекстом гейт отклоняет (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требования 3, 5).
+        declare_target(row["target"])
+        out =self.run_cmd(fsm_advance.in_dev, conn, self.task_id, row,
                            config.TASKS / self.task_id, config.DEFAULT_TARGET,
                            "in_dev")
         self.assert_untouched(out)

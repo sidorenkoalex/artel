@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from orchestrator import acceptance, amend, config, fsm, store  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import LightTransitionSandbox  # noqa: E402
+from tests.sandbox import (LightTransitionSandbox,  # noqa: E402
+                           declared_without_profile)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -238,7 +239,10 @@ class AmendGroupLineTest(unittest.TestCase):
         old = {f"{self.TDIR}/test_ac.py": plank(None)}
         new = {f"{self.TDIR}/test_ac.py": plank(guard.GROUP_ONE_OFF)}
         self.assertEqual(self.errors(config.DEFAULT_TARGET, old, edit), [])
-        self.assertEqual(self.errors("sled", new, edit), [])
+        # Внешний проект объявлен без профиля тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требования 3, 5).
+        with declared_without_profile("sled"):
+            self.assertEqual(self.errors("sled", new, edit), [])
         self.assertEqual(self.errors(config.DEFAULT_TARGET, None, edit), [])
 
 

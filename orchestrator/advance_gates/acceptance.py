@@ -287,6 +287,20 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
         print(f"  дальше: artel.py workspace {task_id} и повтори "
               f"artel.py advance {task_id}")
         return True
+    if workspace.on_task_branch(task_id, t["branch"], target) is False:
+        # `ensure` отдаёт уже заведённую копию, не сверяя её ветку: прогон
+        # в ней проверял бы чужой код, а долгоживущие файлы перечня молча
+        # выпали бы из группы (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+        # требование 9).
+        detail = (f"рабочая копия задачи не выписана на ветку "
+                  f"{t['branch']} — планку и долгоживущие файлы перечня "
+                  f"исполнить негде")
+        store.journal(conn, task_id, "fsm",
+                      ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: artel.py workspace {task_id} и повтори "
+              f"artel.py advance {task_id}")
+        return True
     acc_tdir = cleanup.enter_context(
         acceptance.plank_in_code_copy(task_id, branch, run_cwd))
     # Долгоживущие файлы перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,

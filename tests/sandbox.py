@@ -60,6 +60,7 @@ _RoleHomeReferenceTmpRootTest` — единственный, где сужени
 (нужен настоящий `config.ROOT`), несёт explicit-комментарий.
 """
 import atexit
+import contextlib
 import errno
 import importlib
 import io
@@ -923,6 +924,24 @@ def seed_artel_targets() -> None:
         "targets:\n" + _PROJECT_TARGET_ENTRY.format(
             name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
         + ARTEL_TEST_PROFILE, encoding="utf-8")
+
+
+@contextlib.contextmanager
+def declared_without_profile(target: str):
+    """Сценарий без песочницы путей: `config.TARGETS` на время блока —
+    временный файл с одной записью проекта `target` без профиля тестов
+    (контекст разрешён, профиля нет — SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 3). Запись о пропуске проверки (`project_profile.
+    journal_skip`) подменена: у такого сценария нет БД; блок отдаёт
+    подмену, чтобы сценарий мог её сверить."""
+    from orchestrator import project_profile
+    with tempfile.TemporaryDirectory(prefix="artel-targets-") as tmp:
+        path = Path(tmp) / "targets.yaml"
+        path.write_text("targets:\n" + _PROJECT_TARGET_ENTRY.format(
+            name=target, base=config.MAIN_BRANCH), encoding="utf-8")
+        with mock.patch.object(config, "TARGETS", path), \
+                mock.patch.object(project_profile, "journal_skip") as skip:
+            yield skip
 
 
 def declare_target(target: str) -> None:
