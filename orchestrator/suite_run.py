@@ -37,8 +37,8 @@ import traceback
 from pathlib import Path
 from typing import NamedTuple
 
-from . import (acceptance, agent_log, config, gitcmd, liveness, repo_context,
-               store, workspace)
+from . import (acceptance, agent_log, appendix_tree, config, gitcmd,
+               liveness, repo_context, store, workspace)
 
 # «Роль» в имени лога прогона: `.artel/logs/<id>-suiterun-<n>.log`, номер
 # прогона — номер `agent_log.new_agent_log`, второй нумерации нет.
@@ -454,8 +454,16 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
             return (f"[{task_id}] suite-run №{run_no}: отказ — перечня "
                     f"упавших прошлого прогона нет"), False
     wt = workspace.path(task_id, target)
-    green, output = acceptance.run_full_suite(
-        wt, command=command, targets=targets, extra=_PYTEST_FLAGS, log=log)
+    # Рабочая копия с незакоммиченными правками плюс приложения PLAN (SPEC
+    # 01M46C776SZEMYPBQGPNJN1TXY) — тем же узлом, что у автогейта и
+    # approve; база ниже идёт без приложений задачи (требование 6).
+    with appendix_tree.suite_tree(conn, task_id, wt) as tree:
+        if tree.root is None:
+            return (f"[{task_id}] suite-run №{run_no}: отказ — "
+                    f"{tree.refusal}"), False
+        green, output = acceptance.run_full_suite(
+            tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
+            log=log)
     parsed = parse(green, output)
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": [n for n, _ in parsed.failures]})
@@ -463,8 +471,11 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
                                    run_no, mode)
     with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
         fh.write(_log_appendix(parsed, base_failed))
-    return (render(task_id, run_no, mode, parsed, base_failed, base_note, log),
-            parsed.outcome == acceptance.FULL_SUITE_GREEN)
+    report = render(task_id, run_no, mode, parsed, base_failed, base_note, log)
+    if tree.note or tree.warning:
+        head, _, rest = report.partition("\n")
+        report = "\n".join([head, tree.mark("прогон ветки"), rest])
+    return report, parsed.outcome == acceptance.FULL_SUITE_GREEN
 
 
 def background(task_id: str, run_text: str, mode: str) -> None:
