@@ -1,0 +1,19 @@
+# RETRO: 01M45FJD46BX45VHC36S4VS9QN — Смена поведения в существующих тестах без эскалации; ослабление — по-прежнему мандатом
+
+Итог: done, sha abb6f81598c1a81608ebed4f6be63a3bef76f271
+Адрес артефактов: abb6f81598c1a81608ebed4f6be63a3bef76f271:tasks/01M45FJD46BX45VHC36S4VS9QN/
+Суть: Смена поведения в существующих тестах без эскалации; ослабление — по-прежнему мандатом — Сегодня правка утверждения существующего тестового метода, даже прямо вызванная требованием SPEC, проходит через эскалацию разработчика и ответ Оператора мандатом.
+
+Стоимость итого: $38.69
+  analyst: $5.08, токенов 6492929 (input=94, output=72179, cache_write=301933, cache_read=6118723), провайдер claude, модель claude-opus-5-5
+  test_author: $11.27, токенов 20632800 (input=214, output=182930, cache_write=451657, cache_read=19997999), провайдер claude, модель claude-opus-5-5
+  developer: $16.30, токенов 35440201 (input=286, output=169870, cache_write=750218, cache_read=34519827), провайдер claude, модель claude-opus-5-5
+  reviewer: $6.03, токенов 7337509 (input=88, output=38624, cache_write=486794, cache_read=6812003), провайдер claude, модель claude-opus-5-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: 3 (последняя): эскалация от ревьювера
+
+Приёмочные тесты: 4 тест(ов), 0 manual, 0 skip
+
+Приложения Оператора применены: templates/SPEC.md, skills/spec-authoring.md, skills/coding-standards.md, skills/review-checklist.md, docs/invariants.md, tests/test_invariants.py
