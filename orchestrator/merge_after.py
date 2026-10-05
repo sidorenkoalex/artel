@@ -1,4 +1,4 @@
-"""Зависимости мержа `merge_after`: проверка на гейте SPEC и в каналах переписывания, отказ на гейте мержа.
+"""Зависимости мержа `merge_after`: заявление при `new` строкой ТЗ «Порядок: после …» (заявленное значение — сразу в колонке `merge_after`), сверка SPEC с заявленным на гейте SPEC, добавка `status` «[мерж после: …]» до `acceptance`, проверка в каналах переписывания, отказ на гейте мержа.
 
 SPEC 01M44EP0D47F498TEE08MNGBYT. Порядок «эта задача — только после той»
 до этой задачи жил текстом ТЗ, и пульт его не исполнял: очередь
@@ -25,7 +25,20 @@ merge_after_form_errors`); здесь — проверка по БД (`check`): 
 подсказкой повтора, убитая — отдельный отказ с каналом снятия `answer`.
 `status`/`show` печатают зависимости заново из БД на каждый вызов
 (`status_suffix`, `show_line`).
+
+SPEC 01M45D29BQJE8FJYJA4JQWSYFZ: зависимость, названная Оператором в ТЗ
+строкой «Порядок: после …», не ждёт пересказа аналитиком. `new --tz`
+разбирает строку (`declared_from_tz`) и проверяет её тем же `check` до
+заведения задачи — target заводимой задачи передаётся явно, строки БД ещё
+нет. Прошедшее значение пишется сразу в колонку `merge_after`: до первого
+прохода гейта SPEC её пишут только `new` и мандат Оператора в `escalated`,
+значит колонка и есть заявленное значение, и `approve` на `spec_gate`
+сверяет с ней поле SPEC ДО перезаписи (`spec_gate_declared_refusal`):
+потеря заявленной — отказ, добавка аналитика — только с обоснованием в
+разделе «## Обоснование зависимостей мержа».
 """
+import re
+
 from scripts import guard
 
 from . import store
@@ -39,6 +52,26 @@ NONE_WORD = "нет"
 # Состояния задачи, в которых `status` печатает ожидание зависимостей:
 # задача уже готова к мержу или вот-вот будет (требование 5).
 STATUS_WAIT_STATES = ("acceptance", "merge_gate")
+
+# Состояния до гейта SPEC: колонка в них — заявленное Оператором значение,
+# `status` печатает его своей добавкой, отличной от «[ждёт мержа:».
+STATUS_DECLARED_STATES = ("spec_writing", "spec_gate")
+
+# Строка ТЗ, заявляющая зависимости: метка с первой позиции, затем слово
+# «после». «Порядок: без зависимостей» под неё не подходит и ничего не
+# заявляет. Перечень кончается на конце строки, «(» или «.» — дальше в
+# исторических ТЗ идёт пояснение свободным текстом.
+ORDER_LINE = "Порядок: после"
+_ORDER_LINE_RE = re.compile(r"^Порядок:[ \t]+после(?!\w)(.*)$", re.M)
+_ORDER_LIST_END = re.compile(r"[(.]")
+
+DECLARED_ACTION = "merge_after заявлен Оператором"
+ADDED_ACTION = "merge_after: добавлено аналитиком"
+JUSTIFICATION_SECTION = "Обоснование зависимостей мержа"
+
+# Переходы, после которых задача уже прошла гейт SPEC: дальше колонка —
+# рабочее значение (PLAN, мандат), а не заявленное, и сверки с ним нет.
+_PAST_SPEC_GATE_ACTIONS = ("state -> tests_writing", "state -> in_dev")
 
 # Состояние зависимости, которой нет в БД (строку убрали мимо пульта):
 # печатается вместо состояния и на гейте мержа читается как убитая — ждать
@@ -90,18 +123,23 @@ def _cycle_path(graph: dict[str, list[str]], start: str,
     return None
 
 
-def check(conn, task_id: str, items: list[str]) -> tuple[list[str], list[str]]:
+def check(conn, task_id: str | None, items: list[str], *,
+          target: str | None = None) -> tuple[list[str], list[str]]:
     """(полные id в порядке `items`, причины отказа) — проверка значения
     `merge_after` задачи `task_id` правилами требований 1-2. Причины не
     пусты — перечень id не годен и не возвращается.
 
     Сначала форма (тот же узел, что у guard), затем каждый элемент по БД,
     затем цикл — только для значения, чьи элементы все годны: граф с
-    несуществующим или неоднозначным узлом не строится."""
+    несуществующим или неоднозначным узлом не строится.
+
+    `task_id=None` с явным `target` — проверка для ещё не заведённой задачи
+    (`new --tz`): строки БД нет, и `store.task_target` молча вернул бы
+    target по умолчанию вместо target'а заводимой задачи."""
     reasons = guard.merge_after_form_errors(items, task_id)
     if reasons:
         return [], reasons
-    own_target = store.task_target(conn, task_id)
+    own_target = target if target is not None else store.task_target(conn, task_id)
     resolved: list[tuple[str, str]] = []
     for item in items:
         matches = store.task_id_matches(conn, item)
@@ -154,6 +192,95 @@ def spec_gate_value(conn, task_id: str,
     if reasons:
         return None, "; ".join(reasons)
     return column(ids), None
+
+
+def declared_from_tz(conn, tz_raw: str,
+                     target: str) -> tuple[list[str], list[str]]:
+    """(заявленные полные id в порядке строки, причины отказа `new`) из
+    строки ТЗ «Порядок: после …» (SPEC 01M45D29BQJE8FJYJA4JQWSYFZ,
+    требования 1-2). Строки нет — ([], []). Элементы проверяет `check` для
+    ещё не заведённой задачи target'а `target`."""
+    tails = [m.group(1) for m in _ORDER_LINE_RE.finditer(tz_raw)]
+    if not tails:
+        return [], []
+    if len(tails) > 1:
+        return [], [f"строка «{ORDER_LINE}» повторена — значение задаёт "
+                    f"одна строка"]
+    tail = _ORDER_LIST_END.split(tails[0], maxsplit=1)[0]
+    items = guard.merge_after_items(tail)
+    if not items:
+        return [], [f"в строке «{ORDER_LINE}» нет ни одного id задачи"]
+    return check(conn, None, items, target=target)
+
+
+def record_declared(conn, task_id: str, ids: list[str]) -> None:
+    """Заявленное значение — в колонку при заведении, с записью журнала
+    (требование 3); пустое — колонка и журнал не трогаются."""
+    if not ids:
+        return
+    store.update_task(conn, task_id, merge_after=column(ids))
+    store.journal(conn, task_id, "operator", DECLARED_ACTION, _text(ids))
+    print(f"[{task_id}] {DECLARED_ACTION}: {_text(ids)}")
+
+
+def _declared_in_force(conn, task_id: str) -> bool:
+    """Колонка всё ещё заявленное значение — задача ни разу не проходила
+    гейт SPEC (повторный приход на `spec_gate` после прохода сверяет уже
+    рабочее значение не с чем)."""
+    return not any(r["action"] in _PAST_SPEC_GATE_ACTIONS
+                   for r in store.task_steps(conn, task_id))
+
+
+def _justified(section: str, item: str, dep: str) -> bool:
+    """Раздел обоснования называет зависимость полным id либо тем же
+    элементом, что стоит в поле, — словом целиком: короткий префикс внутри
+    чужого id обоснованием не считается."""
+    words = set(re.findall(r"[0-9A-Za-z]+", section))
+    return dep in words or item in words
+
+
+def spec_gate_declared_refusal(conn, task_id: str, t, meta: dict,
+                               new_value: str | None,
+                               spec_text: str) -> tuple[list[str], str | None]:
+    """(добавленные аналитиком полные id, причина отказа) — сверка уже
+    проверенного значения поля SPEC `new_value` с заявленным Оператором
+    (колонка до перезаписи, требования 5-6). Заявленного нет или гейт SPEC
+    уже пройден — сверки нет: ([], None)."""
+    declared = stored(t["merge_after"])
+    if not declared or not _declared_in_force(conn, task_id):
+        return [], None
+    new_ids = stored(new_value)
+    lost = [d for d in declared if d not in new_ids]
+    if lost:
+        return [], (f"{FIELD} SPEC теряет зависимости, заявленные Оператором "
+                    f"строкой ТЗ «{ORDER_LINE}»: {_text(lost)} — снять "
+                    f"заявленную может только Оператор: мандат "
+                    f"«{MERGE_AFTER_MANDATE_MARKER} …» в ANSWER (artel.py "
+                    f"answer {task_id} <файл>) либо эскалация аналитика с "
+                    f"вопросом")
+    section = guard.section_body(spec_text, JUSTIFICATION_SECTION)
+    # `new_value` — итог `check` по элементам поля: тот же порядок и длина.
+    pairs = [(item, dep) for item, dep in
+             zip(guard.merge_after_items(meta.get(FIELD)), new_ids)
+             if dep not in declared]
+    added = [dep for _, dep in pairs]
+    unjustified = [dep for item, dep in pairs
+                   if not _justified(section, item, dep)]
+    if unjustified:
+        return [], (f"{FIELD} SPEC добавляет зависимости сверх заявленных "
+                    f"Оператором без обоснования: {_text(unjustified)} — "
+                    f"назови каждую в разделе «## {JUSTIFICATION_SECTION}» "
+                    f"SPEC")
+    return added, None
+
+
+def record_added(conn, task_id: str, added: list[str]) -> None:
+    """Запись журнала о принятой добавке аналитика — отдельно от
+    заявленных (требование 6)."""
+    if not added:
+        return
+    store.journal(conn, task_id, "operator", ADDED_ACTION, _text(added))
+    print(f"[{task_id}] {ADDED_ACTION}: {_text(added)}")
 
 
 def rewrite(conn, task_id: str, new_ids: list[str], channel: str,
@@ -290,13 +417,20 @@ def merge_gate_refuses(conn, task_id: str, t) -> bool:
 def status_suffix(conn, t) -> str:
     """Добавка строки `status` (требование 5) — только в `acceptance`/
     `merge_gate` и только пока есть зависимости не в `done`; тем же
-    приёмом, что `catalog._zone_wait_suffix`."""
-    if t["state"] not in STATUS_WAIT_STATES:
+    приёмом, что `catalog._zone_wait_suffix`. До гейта SPEC
+    (`STATUS_DECLARED_STATES`) — своя добавка «[мерж после: …]» с
+    заявленными Оператором зависимостями (SPEC 01M45D29BQJE8FJYJA4JQWSYFZ,
+    требование 4)."""
+    if t["state"] in STATUS_WAIT_STATES:
+        label = "ждёт мержа"
+    elif t["state"] in STATUS_DECLARED_STATES:
+        label = "мерж после"
+    else:
         return ""
     pending = [(d, s) for d, s in _dependency_states(conn, t) if s != "done"]
     if not pending:
         return ""
-    return f"  [ждёт мержа: {_listing(pending)}]"
+    return f"  [{label}: {_listing(pending)}]"
 
 
 def show_line(conn, t) -> str | None:

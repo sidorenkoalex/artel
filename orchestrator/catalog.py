@@ -495,6 +495,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     # Файл ТЗ читается ДО побочных эффектов: нечитаемый путь не должен
     # оставлять после себя наполовину созданную задачу.
     tz_raw = None
+    target = target or config.DEFAULT_TARGET
+    declared: list[str] = []
     if tz_path is not None:
         try:
             tz_raw = Path(tz_path).read_text(encoding="utf-8")
@@ -504,10 +506,23 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         # 2-4) — здесь же, ДО id/ветки/строки БД (требование 3, AC-3):
         # отказ не оставляет ни артефактной ветки, ни строки задачи.
         refusal = _tz_path_refusal(tz_path, tz_raw)
+        # Зависимости мержа строки «Порядок: после …» (SPEC
+        # 01M45D29BQJE8FJYJA4JQWSYFZ, требования 1-2) — тем же рубежом;
+        # обе причины печатаются одним заходом. Канарейка строку не
+        # разбирает (требование 8): её ТЗ — учебный шаблон пула.
+        order_reasons: list[str] = []
+        if not canary:
+            declared, order_reasons = merge_after.declared_from_tz(
+                conn, tz_raw, target)
+        if order_reasons:
+            refusal = "\n".join(
+                ([refusal] if refusal else [])
+                + [f"ТЗ {tz_path}: «{merge_after.ORDER_LINE}»: {r}"
+                   for r in order_reasons]
+                + ["new: зависимости мержа ТЗ не годны — задача не заведена"])
         if refusal is not None:
             sys.exit(refusal)
 
-    target = target or config.DEFAULT_TARGET
     # Клон проекта — до id, ссылки документов и строки БД (SPEC
     # 01M42PENCS26D0656X8FR7DFA7, требование 1, AC-3): не завёлся — отказ
     # без следов, отката на главную копию нет.
@@ -523,6 +538,7 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     _ensure_task_worktree(conn, task_id, target)
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)
+    merge_after.record_declared(conn, task_id, declared)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
     if model_set is not None:
