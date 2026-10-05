@@ -2,7 +2,7 @@
 task: 01M45FJD46BX45VHC36S4VS9QN
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -69,9 +69,12 @@ schema_version: 5
   головы; текст «переход и мерж от них не зависят» заменён текстом
   требования 13.
 - **Существующие тесты** (требование 16): правка ровно методов раздела
-  «Меняемое поведение» SPEC и фикстуры `EarlyReturnFindingTest` — см.
-  «Эскалация»: смена утверждений существующих методов на пине пульта идёт
-  эскалацией с мандатом.
+  «Меняемое поведение» SPEC и фикстуры `EarlyReturnFindingTest`. Смена
+  утверждений восьми методов раздела покрыта мандатом Оператора
+  `tasks/01M45FJD46BX45VHC36S4VS9QN/ANSWER-2.md` (вариант (а), строка
+  «Ослабление тестов разрешено: …» по каждому из восьми методов); методы
+  не удалены и не переименованы. Фикстура раннего return правит в голове
+  модуль (`EXTRA = 1`), а не утверждение — мандат ей не нужен.
 
 ## Шаги
 
@@ -173,6 +176,11 @@ schema_version: 5
 - Строку раздела SPEC этой самой задачи («для всех трёх случаев →…»)
   новая проверка формы сочла бы негодной — задача уже прошла гейт SPEC,
   на её рубежи это не влияет.
+- Имя `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::MergeGateObservationTest::test_ac8_merge_gate_journals_and_does_not_escalate`
+  расходится с новым поведением (гейт мержа теперь эскалирует): по
+  решению Оператора (ANSWER-2) метод не переименован, докстринг описывает
+  новое поведение. Переименование — отдельная правка с мандатом, если
+  понадобится.
 
 ## Предложения системе
 
@@ -417,50 +425,4 @@ index 26907ae0..0e403649 100644
  class MainCopyGitUnchangedDuringTaskTest(unittest.TestCase):
      """Инвариант 40: git главной копии пульта не меняется в ходе задачи
 ```
-
-## Эскалация
-
-- **Вопросы**
-  1. Мандат на смену утверждений существующих методов по разделу SPEC
-     «Меняемое поведение» (требование 16 — на пине пульта новой механики
-     ещё нет, правка идёт эскалацией). Изменены ровно методы раздела, «было
-     → стало» — как в разделе:
-     - `tests/test_test_integrity_gate.py::AssertionObservationTest::test_transition_passes_and_journals_both_context_cases`:
-       `self.assertFalse(refused)` → `self.assertTrue(refused)`;
-     - `tests/test_test_integrity_gate.py::AssertionObservationTest::test_mandate_marks_only_covered_findings`:
-       `self.assertIsNone(fsm_advance._test_integrity_gate(...))` во всех
-       трёх случаях → отказ (`assertIsNotNone`) для ANSWER-1 и ANSWER-3,
-       `assertIsNone` для ANSWER-2 (флаг ожидания добавлен в кортеж
-       случаев, сверка записи наблюдения прежняя);
-     - `tests/test_test_integrity_gate.py::AssertionObservationTest::test_merge_gate_and_review_package_carry_the_same_findings`:
-       `self.assertFalse(escalated)` → `self.assertTrue(escalated)`;
-       `"merge_gate"` → `"escalated"`;
-     - `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::VanishedDeletedUnparsableTest::test_ac5_vanished_method_has_single_finding`,
-       `::VanishedDeletedUnparsableTest::test_ac5_deleted_file_has_no_assertion_finding`,
-       `::MandateMarkTest::test_ac7_method_mandate_marks_only_named_method`,
-       `::MandateMarkTest::test_ac7_other_method_mandate_does_not_mark`:
-       `self.assertFalse(self.merge_gate())` → `self.assertTrue(self.merge_gate())`;
-     - `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::MergeGateObservationTest::test_ac8_merge_gate_journals_and_does_not_escalate`:
-       `self.assertFalse(self.merge_gate())` → `self.assertTrue(...)`;
-       `self.assertEqual(STATE, self.state())` → `self.assertEqual("escalated", self.state())`.
-
-     Докстринги этих методов поправлены под новое поведение (заявки
-     «Ловит мутацию» сохранены); имена методов не менялись (имя
-     `test_ac8_merge_gate_journals_and_does_not_escalate` теперь
-     расходится с поведением — переименование не делал, это отдельная
-     эскалация, если нужно). Фикстура
-     `tests/test_test_integrity_gate.py::EarlyReturnFindingTest::test_early_return_present_in_base_is_not_a_finding`
-     правит в голове не утверждение, а модуль (`EXTRA = 1`); утверждения
-     метода не менялись — мандат не нужен.
-     Варианты: (а) мандат строкой ANSWER-n.md:
-     `Ослабление тестов разрешено: tests/test_test_integrity_gate.py::AssertionObservationTest::test_transition_passes_and_journals_both_context_cases, tests/test_test_integrity_gate.py::AssertionObservationTest::test_mandate_marks_only_covered_findings, tests/test_test_integrity_gate.py::AssertionObservationTest::test_merge_gate_and_review_package_carry_the_same_findings, tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::VanishedDeletedUnparsableTest::test_ac5_vanished_method_has_single_finding, tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::VanishedDeletedUnparsableTest::test_ac5_deleted_file_has_no_assertion_finding, tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::MandateMarkTest::test_ac7_method_mandate_marks_only_named_method, tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::MandateMarkTest::test_ac7_other_method_mandate_does_not_mark, tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::MergeGateObservationTest::test_ac8_merge_gate_journals_and_does_not_escalate`;
-     (б) иное решение по отдельным методам — назвать их.
-     Дефолт при молчании: нет — без мандата правка не сдаётся.
-- **Контекст** — код задачи и тесты готовы (см. «Влияние на систему»:
-  прогоны), приложения проверены `git apply --check`; правка методов уже
-  лежит в рабочей копии (`git diff` по двум файлам тестов показывает ровно
-  перечисленные смены и докстринги).
-- **Блокирует** — сдачу PLAN `ready` и переход `in_dev -> verifying`: по
-  навыку разработчика смена утверждений существующих методов сдаётся
-  только с мандатом. После ANSWER сниму `escalate` и сдам `ready`.
 
