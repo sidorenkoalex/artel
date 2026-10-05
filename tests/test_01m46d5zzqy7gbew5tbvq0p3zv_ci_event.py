@@ -149,7 +149,7 @@ class FakeGitHub:
                 conclusion, age = None, config.CI_STUCK_CHECK_MINUTES + 30
             else:
                 status, conclusion, age = "completed", state, 3
-            url = (f"https://github.com/{OWNER_REPO}/actions/runs/{run_id}"
+            url = (f"http://127.0.0.1/{OWNER_REPO}/actions/runs/{run_id}"
                    f"/job/{check_id}")
             created.append({
                 "id": check_id, "name": name, "status": status,
@@ -173,7 +173,7 @@ class FakeGitHub:
             "head_branch": "main", "run_number": self.rng.randint(1, 9999),
             "run_attempt": 1, "check_suite_id": suite,
             "status": run_status, "conclusion": run_conclusion,
-            "html_url": f"https://github.com/{OWNER_REPO}/actions/runs/{run_id}",
+            "html_url": f"http://127.0.0.1/{OWNER_REPO}/actions/runs/{run_id}",
             "_checks": created,
         }
         self.runs.append(run)
@@ -194,7 +194,7 @@ class FakeGitHub:
                 "started_at": check["started_at"],
                 "completed_at": check["completed_at"],
                 "html_url": check["html_url"],
-                "check_run_url": (f"https://api.github.com/repos/{OWNER_REPO}"
+                "check_run_url": (f"http://127.0.0.1/repos/{OWNER_REPO}"
                                   f"/check-runs/{check['id']}")}
 
     def cli_run(self, run: dict) -> dict:
