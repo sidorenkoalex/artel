@@ -408,17 +408,26 @@ def _docs_revision(task_id: str, rev: str) -> str:
 def _plank_helper_text(task_id: str, code_dir: Path, revision: str) -> str:
     """Исходный текст `orchestrator/plank_helper.py` с подставленными
     значениями выкладки. База диффа и её источник — `gitcmd.diff_base`/
-    `diff_base_source` ветки рабочей копии, те же, что у гейта зон (рабочая
-    копия делит ссылки с клоном проекта); помощник их сам не считает."""
+    `diff_base_source` той же пары, что у гейта зон (`_zones_gate`): ветка
+    задачи из БД в клоне проекта `workspace.task_repo` — рабочая копия
+    делит с ним ссылки, а её собственный git на пути выкладки не
+    спрашивается. Строки задачи в БД нет (песочница без пульта) — ветка
+    под HEAD рабочей копии. Помощник базу сам не считает."""
+    from . import store, workspace  # workspace -> runner -> acceptance
     code_dir = Path(code_dir).resolve()
-    branch = gitcmd.current_branch(code_dir) or "HEAD"
+    branch = (store.task_branch(store.db(), task_id)
+              if config.DB.exists() else "")
+    repo = workspace.task_repo(task_id)
+    if not branch:
+        branch = gitcmd.current_branch(code_dir) or "HEAD"
+        repo = code_dir
     values = {
         "TASK_ID": task_id,
         "CODE_ROOT": str(code_dir),
         "DOCS_REPO": str(artifact_branch.task_repo(task_id)),
         "DOCS_REVISION": revision,
-        "DIFF_BASE": gitcmd.diff_base(branch, repo=code_dir),
-        "DIFF_BASE_SOURCE": gitcmd.diff_base_source(branch, repo=code_dir),
+        "DIFF_BASE": gitcmd.diff_base(branch, repo=repo),
+        "DIFF_BASE_SOURCE": gitcmd.diff_base_source(branch, repo=repo),
     }
     text = _PLANK_HELPER_SOURCE.read_text(encoding="utf-8")
     for name in _PLANK_HELPER_VALUE_NAMES:
