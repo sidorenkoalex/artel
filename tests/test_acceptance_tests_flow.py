@@ -1018,7 +1018,12 @@ class AcceptanceRunTest(TmpRootTest):
         self.assertIn(config.CLI_VERSION_PIN, details[0])
 
     def test_no_acceptance_tests_directory_does_not_block_legacy_tasks(self):
-        """Задачи без acceptance_tests/ (skip_tests, либо старше T023)."""
+        """Задачи без acceptance_tests/ (skip_tests, либо старше T023).
+
+        Ловит мутацию: прогон приёмки на `in_dev -> verifying` перестаёт
+        учитывать `skip_tests` SPEC и отклоняет задачу без планки
+        «планка не найдена в источнике» — задача остаётся в `in_dev`, тест
+        покраснеет."""
         self.enter_in_dev()
         # Задача с легитимным пропуском `tests_writing`: прогон идёт в
         # рабочей копии задачи и у артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
