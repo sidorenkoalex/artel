@@ -28,6 +28,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import ci, fsm, fsm_merge_gate, store  # noqa: E402
+from tests.sandbox import declared_artel_profile  # noqa: E402
 from tests.test_invariants import FsmTest  # noqa: E402
 
 RUNNING = (False, "CI коммита abc12345 ещё идёт: guard")
@@ -52,6 +53,15 @@ class NonRedStatusSkipsRerunTest(FsmTest):
 
     def setUp(self):
         super().setUp()
+        # Своя декларация артели с профилем тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4), а не та, что даёт
+        # песочница `FsmTest`: без приложения PLAN к `tests/test_invariants.py`
+        # (прогон CI по `pull_request` приложений не накладывает) она читает
+        # боевой `targets.yaml`, и `approve` отказывал бы по профилю, не
+        # дойдя до ожидания CI — предмета этого класса.
+        declared = declared_artel_profile()
+        declared.__enter__()
+        self.addCleanup(declared.__exit__, None, None, None)
         self.write_spec("ready")
         self.write_plan("ready")
         self.write_review("approved", 1)
