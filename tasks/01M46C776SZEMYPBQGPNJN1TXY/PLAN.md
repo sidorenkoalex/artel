@@ -2,7 +2,7 @@
 task: 01M46C776SZEMYPBQGPNJN1TXY
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -123,16 +123,25 @@ schema_version: 5
 
 ### Проверено исполнением
 - `tests/test_01m46c776szemypbqgpnjn1txy_suite_run_appendix.py`: 9 passed.
-- `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py`: на ветке
-  5 passed, 9 failed, причина — в эскалации. Временная копия этого файла с
-  `test_profile` в фикстуре `TARGETS_YAML` (дифф ниже; копия удалена,
-  зафиксированный файл не правился): 14 passed.
+- `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py`: до ANSWER-1
+  на ветке 5 passed, 9 failed (у фикстуры `TARGETS_YAML` не было
+  `test_profile`). Оператор поправил фикстуру через `amend-tests`
+  (688e1f82). После этого весь файл зелёный.
+- После ANSWER-1 (интерпретатор роли, `-p timeout -o timeout=120`): оба
+  долгоживущих файла задачи, `tests/test_appendix_tree.py`,
+  `test_plan_appendix`, `test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied`,
+  `test_fsm_autogate`, `test_approve_acceptance_full_suite`, `test_suite_run`,
+  `test_01m462qaceh29rprd2rzhghqfm_suite_run` — 131 passed.
+- `suite-run` №3 (полный набор, после ANSWER-1): 4445 passed, 1 failed,
+  2 skipped. Упал только
+  `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`:
+  это окружение роли, см. «Предложения системе».
 - Мутация «приложения в обратном порядке» в `apply_in_order` даёт красные
   `AppendixOrderTest`, `MergeGateUnchangedTest` (временная копия) и
   `suite_run_appendix::OrderTest`. Мутации «без `ls-files --others`» и
   «без `already_applied`» дают красный `tests/test_appendix_tree.py`.
-- `suite-run` №1/№2 (полный набор, пульт): упало 10 — 9 из них в
-  `test_01m46c776…_appendix_gates.py` (эскалация) и
+- `suite-run` №1/№2 (полный набор, до ANSWER-1): упало 10 — 9 из них в
+  `test_01m46c776…_appendix_gates.py` (фикстура) и
   `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`.
   Последний к диффу не относится: в PATH роли нет `/bin`
   (`shutil.which('ps')` → `None`), и `liveness._group_member_count`
@@ -161,59 +170,3 @@ schema_version: 5
   красен в любом прогоне роли, включая `suite-run`, фон которого
   наследует окружение роли (`orchestrator/runner.role_env`).
 
-## Эскалация
-
-Код причины: долгоживущий тест расходится с main после подтяжки (фикстура,
-а не устройство кода).
-
-**Вопросы**
-
-1. (блокирующий) Фикстура
-   `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py::TARGETS_YAML`
-   описывает артель без `test_profile`. После подтяжки main (8aa3ba90,
-   приходит с 01M45FJVGQT1K0P8HDEXZX6HS7) `project_profile.decide` даёт
-   артели без профиля отказ (ADR-0002). Поэтому автогейт пишет «автогейт
-   приёмки пропущен: у проекта «artel» нет поля test_profile», а гейт
-   мержа останавливается на `_profile_refusal_exit`. Тесты писались на пине
-   7934bf2a, где этого правила ещё не было. На ветке красны 9 методов:
-   `AutogateAppendixTest::test_ac1_…`, `AppendixOrderTest::test_ac4_…`,
-   `WorkingCopyIntactTest::test_ac5_autogate_…`,
-   `InapplicableAppendixTest::test_ac6_autogate_…`,
-   `GitFailureTest::test_ac7_…`, `TempTreeRemovedTest::test_ac8_…`,
-   `NoAppendixTest::test_ac9_plan_without_appendices_…`,
-   `JournalMarkTest::test_ac10_autogate_…`, `MergeGateUnchangedTest::test_ac12_…`.
-   Все методы approve зелёные. Предлагаю `amend-tests`: дописать профиль
-   артели в фикстуру. Утверждения не меняются, меняются только тестовые
-   данные. С этой правкой все 14 методов файла зелёные на коде ветки.
-   Патч применяется (`git apply --check` на чистом дереве ветки — OK):
-
-   ```
-   diff --git a/tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py b/tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py
-   index 780818f7..9a81b4c3 100644
-   --- a/tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py
-   +++ b/tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py
-   @@ -60,6 +60,12 @@ TARGETS_YAML = """targets:
-        no_paths: []
-        project_skills: []
-        merge_gate: operator
-   +    test_profile:
-   +      command: [python3, -m, pytest]
-   +      long_lived_dir: tests
-   +      long_lived_name: test_<id>_<name>.py
-   +      weakening_scope: [tests/**/*.py]
-   +      mutation_claim_scope: [tests/test_*.py]
-    """
-
-    GATES_YAML = "gates:\n  acceptance: auto\n"
-   ```
-
-   Варианты: (а) `amend-tests` с этим патчем; (б) иной текст профиля на
-   усмотрение Оператора/test_author. Дефолт при молчании — (а).
-
-**Контекст.** Реализация готова (раздел «Подход»). Файл `suite_run_appendix`
-зелёный, все гейты по approve зелёные, гейт мержа проверен на временной
-копии файла с профилем. Код в worktree не закоммичен, его коммитит пульт.
-
-**Блокирует.** Выход из `in_dev`: зафиксированный долгоживущий файл на
-ветке красный не из-за кода задачи, а из-за фикстуры, которую разработчик
-править не вправе.
