@@ -21,6 +21,7 @@ from pathlib import Path
 from scripts import codebase_map
 
 from . import alerts, artifact_branch, config, context_package, gitcmd, store
+from .advance_gates import refusal_classes
 
 MAP_REL = "docs/codebase-map.md"
 # Заголовок компонента карты в тексте брифа (SPEC 01M1RFQ52S0VD22J628TXX96XS,
@@ -62,20 +63,12 @@ _RETURN_TRIGGER_STATES_BY_TARGET = {"spec_writing": frozenset({"spec_gate"})}
 # мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
 # при частом топтании на одном состоянии.
 ADVANCE_REFUSAL_LIMIT = 5
-# Тексты action, которыми `orchestrator/auto.py::_pre_advance_step`/
-# `_rework_gate_blocks` журналируют отказы КЛАССА «роль ещё не закончила»
-# (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование 3, П2 копилки 11.09):
-# читать роли нечего — задача просто ждёт своего следующего шага, не
-# настоящий отказ гейта/guard, `advance_refusal_history` ниже такие
-# записи из блока «почини это» исключает. Собственная копия
-# `auto.ROLE_NOT_FINISHED_REFUSAL_ACTIONS` — тот же приём, что уже
-# дублирует `REFUSAL_ACTION_PREFIX` между `store.py` и `auto.py`: этот
-# модуль не может импортировать `auto.py` обратно (цикл `auto.py ->
-# fsm.py -> review.py -> brief.py` уже существует).
-_ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (
-    "переход отклонён: замечания ревью не отработаны",
-    "переход отклонён: дерево не на ветке задачи",
-)
+# Отказы подкласса «роль ещё не закончила» (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E,
+# требование 3, П2 копилки 11.09): читать роли нечего — задача просто ждёт
+# своего следующего шага, `advance_refusal_history` ниже такие записи из
+# блока «почини это» исключает. Источник — единый перечень классов
+# отказов (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 1), не своя копия.
+_ROLE_NOT_FINISHED_REFUSAL_ACTIONS = refusal_classes.ROLE_NOT_FINISHED_REFUSAL_ACTIONS
 # Источник алерта «карта крупнее потолка файла брифа» (tasks/
 # 01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-21): сигнал, что лимит пакета начал
 # жать — в отличие от пропуска артефакта конкретной задачи (AC-22),

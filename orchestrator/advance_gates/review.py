@@ -8,6 +8,7 @@ from scripts import guard
 
 from .. import auto, budget, config, gitcmd, store, workspace, yamlmini
 from ._base import GateRefusal, _run_gates
+from .refusal_classes import MUTATION_CLAIM_GIT_REFUSAL_ACTION
 
 
 def _code_sha_at_review_escalation(conn, task_id: str) -> str | None:
@@ -185,7 +186,10 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
     круг ревью и CI стоил дороже самой проверки. Рубеж по образцу
     `_zones_gate` выше — та же база сравнения, то же чтение содержимого
     файлов через git, тот же приём отказа на сбое git (fail-closed,
-    ADR-0002), не пропуск перехода молча.
+    ADR-0002), не пропуск перехода молча. Сбой git журналируется своим
+    действием класса «чинит Оператор» (`MUTATION_CLAIM_GIT_REFUSAL_ACTION`,
+    SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 5.1): прежнее действие
+    гейта остаётся за отсутствующей заявкой, которую дописывает роль.
 
     Внешний (не self) target и канареечная задача — гейт не проверяется,
     тем же условием, что `_origin_push_gate` (требование 3/AC-8): дифф в
@@ -204,7 +208,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
                  f"сверка заявки мутации невозможна")
         hint = (f"разберись, почему git не отвечает на merge-base "
                f"для {branch}, и повтори artel.py advance {task_id}")
-        return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+        return GateRefusal(MUTATION_CLAIM_GIT_REFUSAL_ACTION, detail, hint)
     files = gitcmd.diff_names(base, branch, repo=repo)
     if files is None:
         detail = (f"гейт заявки мутации: git не ответил на список файлов "
@@ -212,7 +216,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
                  f"невозможна")
         hint = (f"разберись, почему git не отвечает на diff "
                f"{base}...{branch}, и повтори artel.py advance {task_id}")
-        return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+        return GateRefusal(MUTATION_CLAIM_GIT_REFUSAL_ACTION, detail, hint)
 
     # Только tests/test_*.py на верхнем уровне каталога (AC-5) — тот же
     # шаблон путей, что и остальные проверки заявок в acceptance_tests/
@@ -254,8 +258,8 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
                 hint = (f"разберись, почему git не отвечает на show "
                        f"{branch}:{path}, и повтори artel.py advance "
                        f"{task_id}")
-                return GateRefusal("переход отклонён: гейт заявки мутации",
-                                  detail, hint)
+                return GateRefusal(MUTATION_CLAIM_GIT_REFUSAL_ACTION, detail,
+                                   hint)
             # Файл легитимно удалён в HEAD — заявку мутации сравнивать не
             # с чем, пропускаем (требование 2).
             continue

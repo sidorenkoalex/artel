@@ -9,7 +9,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, cycle_hint,
-              gitcmd, idgen, liveness, merge_queue, models, providers, retro, runner,
+              gitcmd, idgen, liveness, merge_after, merge_queue, models,
+              providers, retro, runner,
               store, targets, workspace, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
@@ -844,6 +845,9 @@ def cmd_status() -> None:
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         division = _division_suffix(rows, r)
         tokens = _tokens_field(conn, r["id"])
+        # Ожидание зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
+        # требование 5) — последней добавкой строки, заново из БД.
+        deps_wait = merge_after.status_suffix(conn, r)
         # Набор моделей задачи — сразу за бюджетом (SPEC
         # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
         # модели шагов, и тариф, по которому тратится этот бюджет.
@@ -855,6 +859,7 @@ def cmd_status() -> None:
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
             f"  токенов {tokens}  {r['title']}"
             f"{flag}{mark}{holder}{zone}{wave_breaker}{division}{merge_wait}"
+            f"{deps_wait}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
@@ -885,6 +890,9 @@ def cmd_show(task_id: str) -> None:
     if model_set:
         print(f"  набор задачи: {model_set} "
               f"({t['model_set_members'] or '—'})")
+    deps_line = merge_after.show_line(conn, t)
+    if deps_line:
+        print(deps_line)
     for name in ("SPEC.md", "PLAN.md", "REVIEW.md", "TEST_REPORT.md"):
         meta = _artifact_frontmatter(t["target"], task_id, name)
         if meta:

@@ -36,7 +36,8 @@ import sys
 from pathlib import Path
 
 from . import (artifact_branch, artifact_source, cycle_hint, fixation,
-               fsm_advance, gitcmd, lease, runner, store, workspace)
+               fsm_advance, gitcmd, lease, merge_after, runner, store,
+               workspace)
 from .advance_gates import mandate
 
 
@@ -98,7 +99,7 @@ def _read_answer_file(task_id: str, file_path: str) -> str:
         sys.exit(f"[{task_id}] файл ответа не прочитан из {file_path}: {exc}")
 
 
-def _read_checked_answer_file(task_id: str, file_path: str,
+def _read_checked_answer_file(conn, task_id: str, file_path: str,
                               code_branch: str | None) -> str:
     """Текст файла ответа, прошедший проверку строк мандатов (SPEC
     01M3GKJBXEBHB6ZA48J7VG8Z8W, требование 2).
@@ -110,7 +111,8 @@ def _read_checked_answer_file(task_id: str, file_path: str,
     строки обоих маркеров, правила — `mandate.refusals`."""
     raw = _read_answer_file(task_id, file_path)
     problems = mandate.refusals(raw, code_branch,
-                                repo=workspace.task_repo(task_id))
+                                repo=workspace.task_repo(task_id),
+                                conn=conn, task_id=task_id)
     if problems:
         sys.exit(f"[{task_id}] answer отказана — строка мандата не прошла "
                  f"проверку:\n" + "\n".join(f"  {p}" for p in problems))
@@ -147,7 +149,8 @@ def _has_mandate_lines(raw: str) -> bool:
     return any(mandate.elements(line, marker) is not None
                for line in raw.splitlines()
                for marker in (fsm_advance._ZONES_MANDATE_MARKER,
-                              mandate.TEST_WEAKENING_MANDATE_MARKER))
+                              mandate.TEST_WEAKENING_MANDATE_MARKER,
+                              mandate.MERGE_AFTER_MANDATE_MARKER))
 
 
 def _instruction_text(conn, task_id: str, file_path: str) -> str | None:
@@ -255,33 +258,58 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     ветвях состояния, сразу за чтением файла: отказать надо до коммита
     ANSWER, и в `escalated` тоже — маркер мандата законен в любом
     принимаемом состоянии, а прежде содержимое файла там не разбиралось
-    вовсе."""
+    вовсе.
+
+    Мандат зависимостей мержа «Зависимости мержа: …» (SPEC
+    01M44EP0D47F498TEE08MNGBYT, требование 3) принимается в тех же
+    состояниях и дополнительно в `merge_gate` — иначе у задачи, которой
+    гейт мержа отказал из-за убитой зависимости, не было бы штатного
+    выхода, кроме `kill`. В `merge_gate` действует тот же рубеж окружения
+    роли, а файл без этой строки отказывается, как раньше. Новое значение
+    пишется в БД после коммита ANSWER: проверено оно до коммита."""
     t = store.get_task(conn, task_id)
     state = t["state"]
     mandate_paths: list[str] = []
     test_elements: list[str] = []
+    merge_deps: list[str] | None = None
     if state == "escalated":
-        raw = _read_checked_answer_file(task_id, file_path, t["branch"])
+        raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])
+        merge_deps = merge_after.mandate_value(conn, task_id, raw)
     elif state in INSTRUCTION_STATES:
         if runner.in_role_environment():
             sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
-        raw = _read_checked_answer_file(task_id, file_path, t["branch"])
+        raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])
         mandate_paths = _zones_mandate_marker_paths(raw)
         # Мандат тестов принимается здесь тем же рубежом и той же
         # проверкой строк, что мандат зон (SPEC 01M42NB9GKXNP74HAYEJ7C7CA8,
         # требование 3): иначе уточнить его в `in_dev` можно было только
         # новой эскалацией developer — полным шагом роли.
         test_elements = _test_mandate_marker_elements(raw)
-        if not mandate_paths and not test_elements:
+        merge_deps = merge_after.mandate_value(conn, task_id, raw)
+        if not mandate_paths and not test_elements and merge_deps is None:
             sys.exit(f"[{task_id}] answer доступна только для задачи в "
                      f"состоянии escalated (сейчас: {state})")
+    elif state == "merge_gate":
+        if runner.in_role_environment():
+            sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
+        raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])
+        merge_deps = merge_after.mandate_value(conn, task_id, raw)
+        if merge_deps is None:
+            sys.exit(f"[{task_id}] answer в состоянии merge_gate принимает "
+                     f"только строку «{mandate.MERGE_AFTER_MANDATE_MARKER} "
+                     f"…» — ANSWER не создан")
     else:
         sys.exit(f"[{task_id}] answer доступна только для задачи в "
                  f"состоянии escalated (сейчас: {state})")
 
     rel_answer, branch = _commit_answer(conn, task_id, raw)
 
-    if mandate_paths or test_elements:
+    if merge_deps is not None:
+        merge_after.rewrite(conn, task_id, merge_deps,
+                            f"мандат Оператора {Path(rel_answer).name}",
+                            "operator")
+
+    if mandate_paths or test_elements or merge_deps is not None:
         kinds = []
         if mandate_paths:
             kinds.append(f"мандат на расширение зон: "
@@ -289,7 +317,12 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
         if test_elements:
             kinds.append(f"мандат на ослабление тестов: "
                          f"{', '.join(test_elements)}")
+        if merge_deps is not None:
+            kinds.append(f"мандат на зависимости мержа: "
+                         f"{', '.join(merge_deps) or merge_after.NONE_WORD}")
         action = f"ANSWER создан ({'; '.join(kinds)})"
+        if state == "escalated":
+            action += ", ждёт approve"
     elif state == "escalated":
         # Требование 3: ответ эскалацию НЕ снимает — её снимает `approve`,
         # и до 26.09 журнал об этом ожидании не говорил, а цикл `auto`
@@ -302,6 +335,8 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
           f"ветку {branch}")
     if state == "escalated":
         print(f"  дальше: artel.py approve {task_id} (снятие эскалации)")
+    elif state == "merge_gate":
+        print(f"  дальше: artel.py approve {task_id} (merge)")
 
 
 def cmd_zones_extend(task_id: str, paths_arg: str,
