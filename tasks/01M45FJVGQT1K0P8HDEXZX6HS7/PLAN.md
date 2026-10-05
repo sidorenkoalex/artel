@@ -2,7 +2,7 @@
 task: 01M45FJVGQT1K0P8HDEXZX6HS7
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -242,6 +242,23 @@ declared_without_profile`), и пропуск идёт по правилу тр�
   merge-base — без заявки нет ни одного.
 
 ## Проверено исполнением
+
+Итерация после ответа Оператора (ANSWER-2, 05.10). Вопрос 1 — вариант C:
+черновой PR ветки задачи (sidorenkoalex/artel#220) Оператор закрыл;
+`pull_request`-прогона на новом sha не будет, CI ветки — только
+`push`-прогон с наложенными приложениями (`scripts/plan_appendix_ci.py`).
+Повторно PR пульт не откроет: `github_adapter.ensure_draft_mr` выходит по
+признаку `draft_mr_created` (`orchestrator/github_adapter.py:113`), признак
+у задачи стоит. `merge_after` не ставится (постоянное исправление —
+отдельная задача Оператора). Вопрос 2 — правка
+`tests/test_ci_status_kind_gate.py::NonRedStatusSkipsRerunTest.setUp`
+остаётся, она в перечне правок фикстур («Тесты»). Код задачи и приложения
+по ответу не менялись. Перепроверено на HEAD 098b8a0d:
+- `git apply --check` обоих приложений на чистом дереве — применяются;
+- с наложенными приложениями `python3 -m pytest tests/test_invariants.py
+  tests/test_ci_status_kind_gate.py -p no:cacheprovider -p timeout -o
+  timeout=120` — 76 passed; приложения сняты `git checkout`, `git status`
+  пуст.
 
 Итерация после второго возврата из `verifying` (CI 8ddb330d: 14 падений
 в `tests/test_invariants.py` и 2 в `tests/test_ci_status_kind_gate.py`).
@@ -513,44 +530,3 @@ HEAD ветки задачи — применяются; после наложе
   01M443HV9SJYVYQTHJSQ87QV68 не покрывает: `pull_request`-прогон проверяет
   дерево без приложений, а мержится дерево с ними. Эта задача — первая
   такого класса, следующая будет такой же.
-
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. Как сделать зелёным `pull_request`-прогон CI ветки, чей код по
-   требованию 4 SPEC краснеет без приложений PLAN (14 падений
-   `tests/test_invariants.py`, без приложения 2 не чинятся)? Все варианты —
-   вне прав роли: `.github/` защищён, `scripts/plan_appendix_ci.py` вне зон
-   задачи, его поведение на `pull_request` закреплено тестом и требованием
-   2 SPEC 01M443HV9SJYVYQTHJSQ87QV68.
-   - **A.** Отдельная задача Оператора: шаг приложений в `ci.yml` (jobs
-     `python`, `python-min`) идёт и на `pull_request` ветки `task/**`
-     (условие по `github.head_ref`), `plan_appendix_ci.task_branch` берёт
-     ветку из `GITHUB_HEAD_REF` при `pull_request`. Меняется утверждение
-     `tests/test_plan_appendix_ci.py::TaskBranchTest::test_only_task_push_is_processed`
-     (`assertIsNone(task_branch("pull_request", ...))` → имя ветки).
-     Эта задача ставит `merge_after` на ту задачу.
-   - **B.** Отдельная задача: `ci.branch_status` для ветки задачи с
-     приложениями PLAN не считает check-run'ы `pull_request`-прогона —
-     меняет семантику гейта CI, решение за Оператором.
-   - **C.** Разово: Оператор закрывает черновик PR ветки задачи. Следующий
-     пуш (коммит этого шага — новый sha) даёт только `push`-прогон с
-     приложениями. Нужно проверить, что `github_adapter.ensure_draft_mr` не
-     откроет PR снова до мержа.
-   - **Дефолт при молчании:** A. Задача ждёт в эскалации, `merge_after`
-     предлагается после задачи по A.
-2. Засчитать ли правку `tests/test_ci_status_kind_gate.py` (своя
-   декларация артели с профилем в `NonRedStatusSkipsRerunTest.setUp`)?
-   Варианты: оставить / откатить. **Дефолт:** оставить — это дополнение
-   фикстуры, класс зелёный и без приложений, и с ними.
-
-**Контекст.** Диагноз и прогоны — в «Проверено исполнением», абзац
-«Итерация после второго возврата». Код задачи, приложения PLAN и их
-применимость не менялись. С обоими приложениями `tests/test_invariants.py`
-и `tests/test_ci_status_kind_gate.py` — 76 passed. Без приложений — 14
-failed (было 16). Предыдущий возврат (CI 87fdc026), вероятно, был тем же
-классом: часть его падений могла прийти из `pull_request`-прогона.
-
-**Блокирует.** Зелёный CI ветки по обоим прогонам sha головы, а значит —
-`verifying -> review` и гейт мержа.
