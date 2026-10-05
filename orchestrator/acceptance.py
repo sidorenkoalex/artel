@@ -22,7 +22,7 @@ from typing import Iterator, NamedTuple
 
 from scripts import guard
 
-from . import agent_log, artifact_branch, ci, config, gitcmd, stack
+from . import agent_log, artifact_branch, ci, config, gitcmd, stack, suite_lock
 
 
 def _pytest_command(*args: str, command: list[str] | None = None) -> list[str]:
@@ -572,6 +572,15 @@ FULL_SUITE_GREEN = "зелёный прогон"
 FULL_SUITE_RED = "красный прогон"
 FULL_SUITE_TIMEOUT = "таймаут прогона"
 FULL_SUITE_NO_TESTS = "tests/ нет в worktree"
+# Прогон не запускался: замок полных прогонов машины занят дольше
+# `config.FULL_SUITE_LOCK_WAIT_SEC` (SPEC 01M46D5T8SZ9D6S34TZFX8S46V,
+# требование 2) — ни красный прогон, ни таймаут прогона. Константа —
+# одновременно начало текста исхода (`_not_started_note`), по которому его
+# различает `_full_suite_outcome`.
+FULL_SUITE_NOT_STARTED = "прогон не начат"
+
+# Запись журнала задачи об ожидании замка прогоном гейта (требование 2).
+FULL_SUITE_LOCK_WAIT_ACTION = "полный прогон ждёт замок"
 
 # Текст вырожденного исхода «в рабочей копии нет каталога tests/» — одна
 # константа и для `run_full_suite` (производитель), и для
@@ -597,6 +606,15 @@ def _full_suite_timeout_note() -> str:
     return (f"прогон полного набора tests/ превысил "
             f"{config.FULL_SUITE_TIMEOUT_SEC}с — завис или ждёт сетевой "
             f"ответ")
+
+
+def _not_started_note(holder: dict) -> str:
+    """Текст исхода «прогон не начат» — функция по тому же доводу, что
+    `_full_suite_timeout_note`: предел ожидания подменяют тесты."""
+    return (f"{FULL_SUITE_NOT_STARTED}: машина занята прогоном "
+            f"{suite_lock.describe(holder)} — замок полных прогонов не "
+            f"освободился за {config.FULL_SUITE_LOCK_WAIT_SEC} с ожидания, "
+            f"pytest не запускался")
 
 
 class FullSuiteRun(NamedTuple):
@@ -628,6 +646,8 @@ def _full_suite_outcome(green: bool, output: str) -> str:
         return FULL_SUITE_GREEN
     if output.startswith(FULL_SUITE_NO_TESTS_NOTE):
         return FULL_SUITE_NO_TESTS
+    if output.startswith(f"{FULL_SUITE_NOT_STARTED}: "):
+        return FULL_SUITE_NOT_STARTED
     if output.startswith(_full_suite_timeout_note()):
         return FULL_SUITE_TIMEOUT
     return FULL_SUITE_RED
@@ -650,12 +670,15 @@ def _write_full_suite_log(task_id: str, output: str) -> Path | None:
 
 
 def _full_suite_detail(outcome: str, digest: str,
-                       log_path: Path | None) -> str:
+                       log_path: Path | None, note: str = "") -> str:
     """Строка журнала об исходе прогона: различимая причина, выжимка
-    разбора и путь к файлу лога (требования 4-6)."""
+    разбора и путь к файлу лога (требования 4-6). `note` — текст исхода
+    «прогон не начат» с держателем замка."""
     if outcome == FULL_SUITE_NO_TESTS:
         # Прогона не было — ни выжимки, ни лога не существует.
         return FULL_SUITE_NO_TESTS_NOTE
+    if outcome == FULL_SUITE_NOT_STARTED:
+        return note or FULL_SUITE_NOT_STARTED
     head = {
         FULL_SUITE_GREEN: "полный набор tests/ зелёный",
         FULL_SUITE_RED: "полный набор tests/ красный",
@@ -709,12 +732,73 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     прямо в этот файл по ходу прогона (ход прогона читается из него, пока
     прогон идёт), а на пределе времени убивается вся группа процессов
     pytest с рабочими xdist — фоновому прогону некому добить сирот.
+
+    Прогон идёт под замком полных прогонов машины (`suite_lock`, SPEC
+    01M46D5T8SZ9D6S34TZFX8S46V, требования 1-4), `_machine_lock`: прогон
+    без задачи (`notes`) пишет ожидание в вывод; процесс, уже держащий
+    замок (`full_suite` гейта, фоновый процесс `suite-run`), идёт без
+    второго взятия.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, FULL_SUITE_NO_TESTS_NOTE
     argv = _pytest_command(*targets, command=command) + [
         "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist", *extra]
+    with _machine_lock(None) as holder:
+        if holder is not None:
+            return False, _not_started_note(holder)
+        return _run_full_suite_now(argv, root, log)
+
+
+@contextlib.contextmanager
+def _machine_lock(task_id: str | None) -> Iterator[dict | None]:
+    """Замок полных прогонов машины на время прогона: даёт `None` — замок
+    за текущим процессом, иначе держатель, не отпустивший замок за
+    `config.FULL_SUITE_LOCK_WAIT_SEC` (прогон тогда не запускается).
+
+    Ожидание — до входа в прогон, поэтому в предел прогона
+    `config.FULL_SUITE_TIMEOUT_SEC` не входит (требование 2); взятый здесь
+    замок снимается на любом исходе тела — зелёном, красном, таймауте,
+    исключении (требование 4). Уже держащий замок процесс его не берёт и
+    не снимает: снимет тот, кто брал."""
+    if suite_lock.held_by_me():
+        yield None
+        return
+    holder = suite_lock.wait_acquire(
+        task_id, suite_lock.KIND_GATE if task_id else suite_lock.KIND_NOTES,
+        config.FULL_SUITE_LOCK_WAIT_SEC,
+        lambda busy: _journal_lock_wait(task_id, busy))
+    if holder is not None:
+        yield holder
+        return
+    try:
+        yield None
+    finally:
+        suite_lock.release()
+
+
+def _journal_lock_wait(task_id: str | None, holder: dict) -> None:
+    """Запись об ожидании замка: журнал задачи и вывод; без задачи —
+    только вывод. Сбой записи журнала прогон не роняет: ожидание и сам
+    прогон от неё не зависят."""
+    text = (f"машина занята прогоном {suite_lock.describe(holder)} — "
+            f"полный прогон tests/ ждёт замок не дольше "
+            f"{config.FULL_SUITE_LOCK_WAIT_SEC} с; ожидание в предел прогона "
+            f"{config.FULL_SUITE_TIMEOUT_SEC} с не входит")
+    if task_id:
+        from . import store  # store -> ... -> acceptance
+        try:
+            store.journal(store.db(), task_id, "orchestrator",
+                          FULL_SUITE_LOCK_WAIT_ACTION, text)
+        except Exception as exc:  # noqa: BLE001 — запись не условие прогона
+            text += f" (запись журнала не удалась: {type(exc).__name__})"
+    print(f"[{task_id}] {text}" if task_id else text, flush=True)
+
+
+def _run_full_suite_now(argv: list[str], root: Path,
+                        log: Path | None) -> tuple[bool, str]:
+    """Сам прогон `run_full_suite` — замок уже взят; предел
+    `config.FULL_SUITE_TIMEOUT_SEC` отсчитывается отсюда."""
     if log is not None:
         return _run_full_suite_to_log(argv, root, log)
     try:
@@ -886,8 +970,19 @@ def full_suite(root: Path, task_id: str) -> FullSuiteRun:
     лога не заводит: пустой файл в каталоге логов только мешает читать
     настоящие.
     """
-    green, output = run_full_suite(root)
+    # Замок берётся здесь, а не в `run_full_suite`: ожидание пишется в
+    # журнал задачи гейта (требование 2), а `run_full_suite` внутри взятого
+    # замка идёт без второго взятия.
+    with _machine_lock(task_id) as holder:
+        if holder is not None:
+            green, output = False, _not_started_note(holder)
+        else:
+            green, output = run_full_suite(root)
     outcome = _full_suite_outcome(green, output)
+    if outcome == FULL_SUITE_NOT_STARTED:
+        # Прогона не было: ни лога, ни выжимки, ни итога по sha.
+        return FullSuiteRun(green, outcome, "", None,
+                            _full_suite_detail(outcome, "", None, output))
     _remember_gate_failures(root, outcome, output)
     log_path = (_write_full_suite_log(task_id, output)
                 if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
