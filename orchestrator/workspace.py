@@ -128,8 +128,15 @@ def _fetch_docs_refs(clone: Path) -> None:
     `git clone` их не приносит, и без них `doctor` видел бы каждую
     закрытую задачу «без локальной ссылки». Узел тот же, что у
     `docs --fetch-all` — сдвиг только вперёд. Неудача не отменяет
-    заведение клона: причина — одной строкой."""
+    заведение клона: причина — одной строкой. Каталога клона нет, хотя
+    `git clone` ответил успехом, — fetch'у некуда класть ссылки, git не
+    спрашивается."""
     from . import artifact_branch  # лениво: `artifact_branch` импортирует этот модуль
+    if not clone.is_dir():
+        print(f"клон {clone}: ссылки документов refs/artifacts/* из origin "
+              f"не подтянуты — каталога клона нет после git clone; "
+              f"повтор: artel.py docs --fetch-all")
+        return
     outcomes, reason = artifact_branch.fetch_all_from_origin(clone)
     if outcomes is None:
         print(f"клон {clone}: ссылки документов refs/artifacts/* из origin "
