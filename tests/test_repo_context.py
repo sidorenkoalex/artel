@@ -19,6 +19,13 @@ from tests.sandbox import TmpRootTest  # noqa: E402
 
 class ResolveSelfTest(TmpRootTest):
 
+    def setUp(self):
+        super().setUp()
+        # Предмет — разрешение артели без файла: посеянная песочницей
+        # запись артели с профилем тестов (`seed_artel_targets`, SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7) ему не нужна.
+        config.TARGETS.unlink()
+
     def test_self_target_does_not_touch_targets_yaml(self):
         """Ловит мутацию: `resolve()` читает targets.yaml ДО (или вместо)
         проверки `target_name == DEFAULT_TARGET` — упадёт на

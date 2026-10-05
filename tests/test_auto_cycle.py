@@ -28,7 +28,8 @@ from orchestrator import (agent_log, alerts, auto, brief, budget,  # noqa: E402
                           catalog, ci, config, fsm, gitcmd, github_adapter,
                           pause, runner, store, zone_lock)
 from orchestrator.advance_gates import zones  # noqa: E402
-from tests.sandbox import seed_artel_clone_stub  # noqa: E402
+from tests.sandbox import (seed_artel_clone_stub,  # noqa: E402
+                           seed_artel_targets)
 from tests.sandbox import (SpyRun, TimeWithSleep, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
@@ -170,6 +171,18 @@ class SpyCommand:
         self.calls.append(args)
 
 
+PRE_A4_SPEC_MD = """---
+task: {task}
+type: spec
+author_role: analyst
+status: approved
+schema_version: 1
+---
+
+# SPEC: цикл auto
+"""
+
+
 class AutoCycleTest(unittest.TestCase):
     """Песочница цикла: БД и артефакты во временном каталоге, агент подменён."""
 
@@ -205,6 +218,9 @@ class AutoCycleTest(unittest.TestCase):
         # живут в нём, `new` без клона отказывает — пустой настоящий
         # репозиторий песочницы.
         seed_artel_clone_stub()
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4): без профиля проверки тестов задачи артели отказывают.
+        seed_artel_targets()
 
         # git настоящему репозиторию в этих тестах не нужен: цикл его не
         # зовёт, а команды внутри него (ревью-пакет, merge) либо подменены,
@@ -240,6 +256,12 @@ class AutoCycleTest(unittest.TestCase):
         # на диск (симуляция ветко-корректного fallback), каталог для них
         # заводит сам файл, не `cmd_new`.
         self.tdir.mkdir(parents=True, exist_ok=True)
+        # SPEC до A4 (`schema_version: 1`) — планки не требует: прогон
+        # приёмки в рабочей копии задачи читает SPEC, когда планки нет
+        # (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6). Тест, которому
+        # нужен свой SPEC, переписывает файл.
+        (self.tdir / "SPEC.md").write_text(
+            PRE_A4_SPEC_MD.format(task=self.TASK), encoding="utf-8")
 
     # ------------------------------------------------------------ утилиты
 

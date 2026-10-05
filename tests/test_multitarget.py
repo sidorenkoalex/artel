@@ -173,6 +173,12 @@ TmpRootTest = _MultitargetTmpRootTest
 class TargetsFileTest(TmpRootTest):
     """Критерий 1: запись target'а читается кодом, невалидная — отказ с полем."""
 
+    def setUp(self):
+        super().setUp()
+        # Предмет класса — сам файл: сценарии пишут его сами, посеянная
+        # песочницей запись артели (`seed_artel_targets`) им не нужна.
+        config.TARGETS.unlink()
+
     def test_artel_record_is_read(self):
         self.write_targets()
 

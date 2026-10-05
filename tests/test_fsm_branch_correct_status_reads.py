@@ -27,7 +27,8 @@ from orchestrator import (catalog, config, fsm, gitcmd,  # noqa: E402
                           store)
 from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture_new_task_id,
-                           link_artel_clone_to_root, resilient_tmp_cleanup)
+                           link_artel_clone_to_root, resilient_tmp_cleanup,
+                           seed_artel_targets)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -129,6 +130,9 @@ class RealGitBranchTest(TmpRootTest):
         # ветка задачи и ссылка документов живут в клоне, сценарий кладёт
         # документы чекаутом в `self.root`.
         link_artel_clone_to_root(self.root)
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4) — тем же приёмом, что `TmpRootTest.setUp`.
+        seed_artel_targets()
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(

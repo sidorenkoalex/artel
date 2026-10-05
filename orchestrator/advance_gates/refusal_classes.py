@@ -83,6 +83,9 @@ REFUSAL_CLASSES = {
     "переход отклонён: гейт неослабления тестов": OPERATOR_FIXES,
     "переход отклонён: голова не в origin": OPERATOR_FIXES,
     "переход отклонён: рабочая копия задачи не заведена": OPERATOR_FIXES,
+    # `project_profile.REFUSAL_ACTION`: чинится targets.yaml (SPEC
+    # 01M45FJVGQT1K0P8HDEXZX6HS7, требования 4-5).
+    "переход отклонён: профиль тестов проекта": OPERATOR_FIXES,
     ("переход отклонён: фиксация не обновлена: голова ссылки документов "
      "не прочитана"): OPERATOR_FIXES,
 }
