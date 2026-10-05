@@ -96,6 +96,18 @@ class FreshVerdictIterationTest(unittest.TestCase):
         self.assertEqual(artifacts.fresh_verdict_iteration({"iteration": " 3 "}, 2), 3)
 
 
+PRE_A4_SPEC_MD = """---
+task: {task}
+type: spec
+author_role: analyst
+status: approved
+schema_version: 1
+---
+
+# SPEC: свежесть вердикта
+"""
+
+
 class ReviewFreshnessScenarioTest(unittest.TestCase):
 
     def setUp(self):
@@ -190,6 +202,11 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         # `current_branch()` пустым), так что fsm читает их отсюда же.
         self.tdir = config.TASKS / self.TASK
         self.tdir.mkdir(parents=True, exist_ok=True)
+        # SPEC до A4 (`schema_version: 1`) — планки не требует: прогон
+        # приёмки в рабочей копии задачи читает SPEC, когда планки нет
+        # (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6).
+        (self.tdir / "SPEC.md").write_text(
+            PRE_A4_SPEC_MD.format(task=self.TASK), encoding="utf-8")
         self.set_state("review")
         self.write_plan_ready()
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from scripts import guard
 
-from . import config, repo_context, stack, store
+from . import config, repo_context, store
 
 # Действие журнала отказа перехода по профилю или контексту проекта —
 # класс «чинит Оператор» (`advance_gates.refusal_classes`): чинится
@@ -81,15 +81,6 @@ class Profile:
                    mutation_claim_scope=tuple(values["mutation_claim_scope"]),
                    report=values.get("report") or "",
                    install=tuple(values.get("install") or ()))
-
-    def pytest_command(self) -> list[str]:
-        """Начало команды прогона: первый элемент `python3` — интерпретатор
-        venv пульта (`stack.pytest_python_executable()`), а не `python3` по
-        PATH процесса, который зовёт гейт."""
-        command = list(self.command)
-        if command[0] == "python3":
-            command[0] = stack.pytest_python_executable()
-        return command
 
     def in_weakening_scope(self, path: str | None) -> bool:
         return bool(path) and any(mask_matches(mask, path)

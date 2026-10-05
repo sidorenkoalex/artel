@@ -66,7 +66,8 @@ from unittest import mock
 from orchestrator import (artel, artifact_branch, catalog, config, doctor,
                           fixation, fsm_merge_gate, store)
 from scripts import guard
-from tests.sandbox import RealGitSandbox, capture, patch_pult_sleep
+from tests.sandbox import (ARTEL_TEST_PROFILE, RealGitSandbox, capture,
+                           patch_pult_sleep)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -161,7 +162,10 @@ class MainCiSandbox(RealGitSandbox):
                 "    token_slot: artel-token\n"
                 "    no_paths: []\n"
                 "    project_skills: []\n"
-                "    merge_gate: operator\n", encoding="utf-8")
+                "    merge_gate: operator\n"
+                # Профиль тестов артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+                # требование 4): без него проверки тестов отказывают.
+                + ARTEL_TEST_PROFILE, encoding="utf-8")
             self.git("add", "-A")
             self.git("commit", "-q", "-m", "код пульта")
         self.base_sha = self.git("rev-parse", "HEAD").strip()

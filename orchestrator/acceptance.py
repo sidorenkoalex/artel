@@ -42,11 +42,15 @@ def _pytest_command(*args: str, command: list[str] | None = None) -> list[str]:
     returncode вместо тихого пропуска таймаута отдельного теста.
 
     `command` — начало команды из профиля тестов проекта
-    (`project_profile.Profile.pytest_command`, SPEC
-    01M45FJVGQT1K0P8HDEXZX6HS7, требование 1): пути тестов и флаги пульта
-    добавляются к нему; не назван — команда пульта."""
+    (`project_profile.Profile.command`, SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 1): первый элемент `python3` — тот же интерпретатор venv
+    пульта, пути тестов и флаги пульта добавляются к нему; не назван —
+    команда пульта. Интерпретатор резолвится здесь, при сборке команды
+    прогона, а не в гейте: гейт, чей прогон не состоится, venv не ищет."""
     head = (list(command) if command
             else [stack.pytest_python_executable(), "-m", "pytest"])
+    if head[0] == "python3":
+        head[0] = stack.pytest_python_executable()
     return [*head, *args,
             "-p", "no:cacheprovider", "-p", "timeout",
             "-o", f"timeout={stack.PER_TEST_TIMEOUT_SEC}"]

@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import project_profile, stack  # noqa: E402
+from orchestrator import acceptance, project_profile, stack  # noqa: E402
 from scripts import guard  # noqa: E402
 
 TASK = "01M45FJVGQT1K0P8HDEXZX6HS7"
@@ -77,17 +77,22 @@ class ProfileValuesTest(unittest.TestCase):
 
     def test_non_python_command_passes_as_is(self):
         """Команда профиля, начинающаяся не с `python3`, идёт как есть: на
-        интерпретатор пульта заменяется только `python3`.
+        интерпретатор пульта заменяется только `python3`; флаги пульта
+        добавляются к любой команде.
 
         Ловит мутацию: первый элемент команды заменяется интерпретатором
         venv безусловно — `npx jest` превратится в `<python> jest`.
         """
         with mock.patch.object(stack, "pytest_python_executable",
                                return_value="/venv/bin/python"):
-            self.assertEqual(_profile(command=["npx", "jest"]).pytest_command(),
-                             ["npx", "jest"])
-            self.assertEqual(_profile().pytest_command(),
-                             ["/venv/bin/python", "-m", "pytest"])
+            jest = acceptance._pytest_command(
+                "t", command=list(_profile(command=["npx", "jest"]).command))
+            self.assertEqual(jest[:3], ["npx", "jest", "t"])
+            self.assertIn("no:cacheprovider", jest)
+            self.assertEqual(
+                acceptance._pytest_command(
+                    "t", command=list(_profile().command))[:4],
+                ["/venv/bin/python", "-m", "pytest", "t"])
 
     def test_scopes_come_from_their_own_fields(self):
         """Область неослабления и область заявки мутации — каждая из своего

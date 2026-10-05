@@ -1,5 +1,5 @@
 ---
-built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
+built_at_sha: 87fdc026f67af1b411900479661b926cc6a2affe
 ---
 
 # Codebase-map пульта
@@ -38,7 +38,7 @@ built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/artifact_branch.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/two_sided.py`, `orchestrator/amend.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/notes.py`, `orchestrator/plank_run.py`, `orchestrator/pull.py`, `orchestrator/runner.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3ychs4f08vtv6xx10vf92h3_task_model_set.py`, `tests/test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension.py`, `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_acceptance.py`, `tests/test_acceptance_collect.py`, `tests/test_acceptance_pycache.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_approve_acceptance_full_suite.py`, `tests/test_branch_freshness_gate.py`, `tests/test_docs_dir_layout.py`, `tests/test_external_code_copy_refusal.py`, `tests/test_fsm_advance_tests_writing_artifact_source.py`, `tests/test_fsm_advance_tests_writing_dry_collect.py`, `tests/test_fsm_advance_tests_writing_test_groups.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_model_sets.py`, `tests/test_plan_appendix.py`, `tests/test_plank_helper.py`, `tests/test_plank_run_edges.py`, `tests/test_pull.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_pull_long_lived_plank.py`
+**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/two_sided.py`, `orchestrator/amend.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/notes.py`, `orchestrator/plank_run.py`, `orchestrator/pull.py`, `orchestrator/runner.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3ychs4f08vtv6xx10vf92h3_task_model_set.py`, `tests/test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension.py`, `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_acceptance.py`, `tests/test_acceptance_collect.py`, `tests/test_acceptance_pycache.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_approve_acceptance_full_suite.py`, `tests/test_branch_freshness_gate.py`, `tests/test_docs_dir_layout.py`, `tests/test_external_code_copy_refusal.py`, `tests/test_fsm_advance_tests_writing_artifact_source.py`, `tests/test_fsm_advance_tests_writing_dry_collect.py`, `tests/test_fsm_advance_tests_writing_test_groups.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_model_sets.py`, `tests/test_plan_appendix.py`, `tests/test_plank_helper.py`, `tests/test_plank_run_edges.py`, `tests/test_project_profile.py`, `tests/test_pull.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_pull_long_lived_plank.py`
 
 ## orchestrator/advance_gates/__init__.py
 
@@ -1035,7 +1035,7 @@ built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `orchestrator/targets.py`
 
-**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/amend.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_01m3ydhty1y67kb98fvshrec4n_draft_mr_remote_base.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_amend.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_draft_mr_commits.py`, `tests/test_draft_mr_remote_base_args.py`, `tests/test_git_fixation.py`, `tests/test_github_adapter.py`, `tests/test_long_lived_transitions.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_protected_test_settings.py`
+**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/amend.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_01m3ydhty1y67kb98fvshrec4n_draft_mr_remote_base.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_amend.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_draft_mr_commits.py`, `tests/test_draft_mr_remote_base_args.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_git_fixation.py`, `tests/test_github_adapter.py`, `tests/test_long_lived_transitions.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_protected_test_settings.py`
 
 ## orchestrator/idgen.py
 
@@ -1292,7 +1292,7 @@ built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
 - `refusal_hint`
 - `unresolved_reason`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/repo_context.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/review.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/amend.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/review.py`, `tests/sandbox.py`, `tests/test_project_profile.py`
 
@@ -1619,7 +1619,7 @@ built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/roles.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/doctor/__init__.py`, `orchestrator/project_profile.py`, `orchestrator/providers/claude.py`, `orchestrator/providers/codex.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/guard.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3y8570h9y57ytp3m7e1amhg_required_artifact.py`, `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443bpqea9zmj3r50thnb1mf_developer_step.py`, `tests/test_01m446x1b7fb8jdmyfp5apwtve_pytest_journal.py`, `tests/test_agent_failure.py`, `tests/test_agent_prompt.py`, `tests/test_artel_bootstrap.py`, `tests/test_git_hooks.py`, `tests/test_invariants.py`, `tests/test_project_profile.py`, `tests/test_provider_scoped_step_env.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_role_prompt_test_author_mission.py`, `tests/test_runner_model_preflight.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`, `tests/test_stack_optional_tools.py`, `tests/test_task_model_set_units.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/doctor/__init__.py`, `orchestrator/providers/claude.py`, `orchestrator/providers/codex.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/guard.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3y8570h9y57ytp3m7e1amhg_required_artifact.py`, `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443bpqea9zmj3r50thnb1mf_developer_step.py`, `tests/test_01m446x1b7fb8jdmyfp5apwtve_pytest_journal.py`, `tests/test_agent_failure.py`, `tests/test_agent_prompt.py`, `tests/test_artel_bootstrap.py`, `tests/test_git_hooks.py`, `tests/test_invariants.py`, `tests/test_project_profile.py`, `tests/test_provider_scoped_step_env.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_role_prompt_test_author_mission.py`, `tests/test_runner_model_preflight.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`, `tests/test_stack_optional_tools.py`, `tests/test_task_model_set_units.py`
 
 ## orchestrator/store.py
 
@@ -4008,7 +4008,7 @@ built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
@@ -4797,7 +4797,7 @@ built_at_sha: 28dc4778457b3e0cedd92e3b1094f37c7c303821
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/project_profile.py`, `orchestrator/stack.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/project_profile.py`, `orchestrator/stack.py`, `scripts/guard.py`
 
 **Импортируется:** —
 

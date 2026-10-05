@@ -315,7 +315,7 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
                                      project_profile.CHECK_LONG_LIVED_RUN,
                                      decision)
     else:
-        command = decision.profile.pytest_command()
+        command = list(decision.profile.command)
         digests, _reason = long_lived_manifest(task_id, t, target)
         if digests is not None and t["tests_locked_sha"]:
             long_lived = sorted(digests)
