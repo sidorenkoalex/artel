@@ -537,7 +537,7 @@ def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
     try:
         tdir = acceptance.materialize_from_branch(task_id, artifact_branch_name,
                                                    wt_path)
-        if not (tdir / "acceptance_tests").is_dir():
+        if not acceptance.plank_present(tdir / "acceptance_tests"):
             spec_text = read_branch_text_or_refuse(conn, task_id, artifact_branch_name,
                                                    "SPEC.md")
             if spec_text is None:

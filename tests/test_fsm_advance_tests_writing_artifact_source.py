@@ -130,12 +130,13 @@ class ArtifactSourceGateTest(_ArtifactSourceSandbox):
         self.assertEqual(len(rows), 1, out)
         detail = rows[0]["detail"]
         self.assertIn(f"acceptance_tests/test_ac.py:{DISK_READ_LINENO}: ", detail)
-        self.assertIn("gitcmd.show(artifact_branch.branch_name(TASK_ID), "
-                      '"tasks/<id>/PLAN.md")', detail)
+        self.assertIn('from _pult import artifact_text; '
+                      'artifact_text("PLAN.md")', detail)
         self.assertIn(detail, out)
         self.assertIn(f"дальше: перепиши чтение артефактов планки на "
-                      f"артефактную ветку (skills/test-authoring.md) и "
-                      f"повтори artel.py advance {self.TASK}", out)
+                      f"помощник пульта (from _pult import artifact_text; "
+                      f"artifact_text(\"PLAN.md\"), skills/test-authoring.md) "
+                      f"и повтори artel.py advance {self.TASK}", out)
 
     def test_refusal_precedes_dry_collect(self):
         """На планке с чтением с диска субпроцесс сухого сбора не
@@ -231,7 +232,7 @@ class RefusalClassTest(_ArtifactSourceSandbox):
             store.db(), self.TASK, "test_author", "tests_writing")
 
         self.assertIn(gates.ARTIFACT_DISK_READ_ACTION, text)
-        self.assertIn("gitcmd.show(artifact_branch.branch_name(TASK_ID)", text)
+        self.assertIn('artifact_text("PLAN.md")', text)
 
 
 if __name__ == "__main__":

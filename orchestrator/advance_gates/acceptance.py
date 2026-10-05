@@ -225,7 +225,7 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
 
     `True` — переход отклонён (планка красная)."""
     def _missing_plank_refuses() -> bool:
-        if (acc_tdir / "acceptance_tests").is_dir():
+        if acceptance.plank_present(acc_tdir / "acceptance_tests"):
             return False
         spec_text = fsm._read_foreign_branch_text_or_refuse(conn, task_id,
                                                              branch, "SPEC.md")

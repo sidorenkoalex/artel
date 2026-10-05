@@ -1129,13 +1129,25 @@ EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в ката
 ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
     r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
+# Имя помощника пульта рядом с планкой (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
+# требования 3-5; источник — `orchestrator/plank_helper.py`, выкладка —
+# `acceptance.PLANK_HELPER_NAME`). Под `_*.py` подходит, но планке не
+# принадлежит: пульт кладёт его при каждой выкладке, и копия, оставшаяся в
+# рабочей копии кода, не должна доехать до ссылки документов — поэтому
+# автокоммит отбрасывает его как посторонний.
+RESERVED_PLANK_HELPER_NAME = "_pult.py"
+RESERVED_PLANK_HELPER_HINT = "имя занято помощником пульта"
+
 
 def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
     """`rel_to_acceptance_tests` — путь файла относительно `acceptance_tests/`
     (`/`-разделённый, например `test_x.py` или `docs/codebase-map.md`).
     `True` — файл вне разрешённого набора первого уровня (AC-1 задачи
-    01M1SAA01YRRTWAVADT2F81RRQ)."""
+    01M1SAA01YRRTWAVADT2F81RRQ) либо зарезервированное имя помощника
+    пульта `RESERVED_PLANK_HELPER_NAME`."""
     if "/" in rel_to_acceptance_tests:
+        return True
+    if rel_to_acceptance_tests == RESERVED_PLANK_HELPER_NAME:
         return True
     return not ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(rel_to_acceptance_tests)
 
@@ -1484,9 +1496,12 @@ _ANCHOR_NAMES = frozenset({"__file__"})
 _ANCHOR_ATTR_SUFFIXES = ("config.ROOT", "config.TASKS")
 _ANCHOR_LITERAL_ROOT = "tasks"
 
+# Рецепт называет помощник пульта `_pult.py` (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
+# требование 6): он читает ссылку документов ревизии выкладки и работает без
+# пакета `orchestrator` рабочей копии и без `.artel/`.
 ARTIFACT_DISK_READ_RECIPE_TMPL = (
-    "читай из артефактной ветки: "
-    "gitcmd.show(artifact_branch.branch_name(TASK_ID), \"tasks/<id>/{name}\")")
+    "читай через помощник пульта рядом с планкой: "
+    "from _pult import artifact_text; artifact_text(\"{name}\")")
 
 
 def _dotted_name(node: ast.AST) -> str | None:
@@ -1637,9 +1652,10 @@ def artifact_disk_read_errors_from_files(files: list[tuple[str, str]]) -> list[s
     `(self.tdir / "SPEC.md").write_text(…)` вложенной песочницы) — не
     нарушение: имя артефакта там называет фикстуру, не артефакт задачи.
 
-    Каждая ошибка: `<label>:<строка литерала>: … — читай из артефактной
-    ветки: gitcmd.show(artifact_branch.branch_name(TASK_ID),
-    "tasks/<id>/<имя>")` (требование 3). Один литерал в нескольких
+    Каждая ошибка: `<label>:<строка литерала>: … — читай через помощник
+    пульта рядом с планкой: from _pult import artifact_text;
+    artifact_text("<имя>")` (требование 3; рецепт — SPEC
+    01M44EP4Q927DJXVX9YMMZ0B7V, требование 6). Один литерал в нескольких
     вложенных выражениях сразу (`open(os.path.join(…, "PLAN.md"))`) —
     одна ошибка, не две. Файл, который не разбирается (`SyntaxError`),
     ошибок здесь не даёт: синтаксис планки — предмет сухого сбора того же

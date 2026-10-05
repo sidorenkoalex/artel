@@ -176,7 +176,19 @@ def _run_targets(tests_dir: Path, extra: list[str]) -> list[str]:
     файлы `tests/` кодовой ветки задачи (`extra`, пути от `cwd` прогона,
     SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 3, 9) — обе группы в одном
     прогоне, второго не заводится."""
-    return ([str(tests_dir)] if tests_dir.is_dir() else []) + list(extra)
+    return ([str(tests_dir)] if plank_present(tests_dir) else []) + list(extra)
+
+
+def plank_present(tests_dir: Path) -> bool:
+    """В каталоге планки есть что-то кроме помощника пульта `_pult.py`
+    (`materialize_*` кладут его и к пустой планке) и кеша байткода: только
+    помощник — та же «планка не заведена», что и отсутствие каталога.
+    Вопрос «есть ли планка» после выкладки задаётся этой функцией, не
+    `is_dir()` каталога."""
+    if not tests_dir.is_dir():
+        return False
+    return any(p.name not in (PLANK_HELPER_NAME, "__pycache__")
+               for p in tests_dir.iterdir())
 
 
 def run(tdir: Path, cwd: Path | None = None,
@@ -327,9 +339,10 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     (`gitcmd.ls_tree_files`/`gitcmd.show`), не с диска `code_dir`; меняется
     только каталог, в который планка записывается перед прогоном.
 
-    Ветки нет, или в ней нет `acceptance_tests/` — валидный исход
-    (каталог не создаётся/остаётся нетронутым): `run()`/`summary()` уже
-    умеют трактовать отсутствие `acceptance_tests/` как «тесты не
+    В ветке нет `acceptance_tests/` — валидный исход: в каталоге планки
+    лежит только помощник пульта `_pult.py` (SPEC
+    01M44EP4Q927DJXVX9YMMZ0B7V, требование 3), и `run()`/`collect()`/
+    `summary()` читают такой каталог через `plank_present` как «тесты не
     заведены», не отказ.
 
     Git не ответил на `ls_tree_files` (`None`, отдельно от легитимно
@@ -348,7 +361,12 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     tdir = code_dir / "tasks" / task_id
     tests_dir = tdir / "acceptance_tests"
     prefix = f"tasks/{task_id}/acceptance_tests/"
-    paths = artifact_branch.ls_tree(task_id, branch,
+    # Список и тексты читаются по sha, разрешённому один раз: коммит в
+    # ссылку посреди выкладки не смешивает две ревизии, а помощник планки
+    # (`_pult.py`) называет ровно ту ревизию, с которой выложены файлы.
+    revision = _docs_revision(task_id, branch)
+    source = revision or branch
+    paths = artifact_branch.ls_tree(task_id, source,
                                     f"tasks/{task_id}/acceptance_tests")
     if paths is None:
         return tdir
@@ -356,11 +374,82 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     for rel in paths:
         if not rel.startswith(prefix):
             continue
-        text, _ = artifact_branch.show(task_id, branch, rel)
+        text, _ = artifact_branch.show(task_id, source, rel)
         if text is not None:
             wanted[rel[len(prefix):]] = text
-    _write_plank(tests_dir, wanted)
+    _write_plank(tests_dir, _with_plank_helper(task_id, wanted, code_dir,
+                                               revision))
     return tdir
+
+
+# Имя файла помощника пульта в каталоге планки (SPEC
+# 01M44EP4Q927DJXVX9YMMZ0B7V, требования 3, 5): зарезервировано — свой файл
+# планки с этим именем отклоняет выход из `tests_writing`
+# (`advance_gates/tests_writing.py`), а при выкладке побеждает файл пульта.
+PLANK_HELPER_NAME = "_pult.py"
+
+# Блок значений выкладки в исходном тексте помощника: строка `ИМЯ = …`
+# заменяется целиком подставленным литералом.
+_PLANK_HELPER_SOURCE = Path(__file__).with_name("plank_helper.py")
+_PLANK_HELPER_VALUE_NAMES = ("TASK_ID", "CODE_ROOT", "DOCS_REPO",
+                             "DOCS_REVISION", "DIFF_BASE", "DIFF_BASE_SOURCE")
+
+
+def _docs_revision(task_id: str, rev: str) -> str:
+    """sha коммита `rev` (имя ссылки документов или уже sha) в репозитории
+    задачи; пустая строка — git не ответил или ревизии нет."""
+    res = artifact_branch.git(task_id, "rev-parse", "--verify", "--quiet",
+                              f"{rev}^{{commit}}")
+    if res is None or res.returncode != 0:
+        return ""
+    return res.stdout.strip()
+
+
+def _plank_helper_text(task_id: str, code_dir: Path, revision: str) -> str:
+    """Исходный текст `orchestrator/plank_helper.py` с подставленными
+    значениями выкладки. База диффа и её источник — `gitcmd.diff_base`/
+    `diff_base_source` той же пары, что у гейта зон (`_zones_gate`): ветка
+    задачи из БД в клоне проекта `workspace.task_repo` — рабочая копия
+    делит с ним ссылки, а её собственный git на пути выкладки не
+    спрашивается. Строки задачи в БД нет (песочница без пульта) — ветка
+    под HEAD рабочей копии. Помощник базу сам не считает."""
+    from . import store, workspace  # workspace -> runner -> acceptance
+    code_dir = Path(code_dir).resolve()
+    branch = (store.task_branch(store.db(), task_id)
+              if config.DB.exists() else "")
+    repo = workspace.task_repo(task_id)
+    if not branch:
+        branch = gitcmd.current_branch(code_dir) or "HEAD"
+        repo = code_dir
+    values = {
+        "TASK_ID": task_id,
+        "CODE_ROOT": str(code_dir),
+        "DOCS_REPO": str(artifact_branch.task_repo(task_id)),
+        "DOCS_REVISION": revision,
+        "DIFF_BASE": gitcmd.diff_base(branch, repo=repo),
+        "DIFF_BASE_SOURCE": gitcmd.diff_base_source(branch, repo=repo),
+    }
+    text = _PLANK_HELPER_SOURCE.read_text(encoding="utf-8")
+    for name in _PLANK_HELPER_VALUE_NAMES:
+        text, count = re.subn(rf"^{name} = .*$",
+                              lambda _m, n=name: f"{n} = {values[n]!r}",
+                              text, count=1, flags=re.MULTILINE)
+        if count != 1:
+            raise RuntimeError(f"{_PLANK_HELPER_SOURCE}: нет строки "
+                               f"значения выкладки {name}")
+    return text
+
+
+def _with_plank_helper(task_id: str, wanted: dict[str, str | bytes],
+                       code_dir: Path, revision: str
+                       ) -> dict[str, str | bytes]:
+    """`wanted` плюс помощник пульта: поверх одноимённого файла планки (он
+    побеждает) и вне прунинга `_write_plank`. Кладётся и к пустой планке —
+    роль, гоняющая свои проверки рядом, получает помощник всегда; каталог,
+    где кроме помощника ничего нет, `plank_present` по-прежнему читает как
+    «тесты не заведены»."""
+    return {**wanted,
+            PLANK_HELPER_NAME: _plank_helper_text(task_id, code_dir, revision)}
 
 
 def _write_plank(tests_dir: Path, wanted: dict[str, str | bytes]) -> None:
@@ -389,9 +478,15 @@ def materialize_files(task_id: str, files: dict[str, str | bytes],
     """`tasks/<id>/acceptance_tests/` каталога `code_dir` из явного набора
     файлов — черновика планки, ещё не зафиксированного в ссылке документов
     (`plank-run` в `tests_writing`, SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
-    требование 1). Возврат — тот же, что у `materialize_from_branch`."""
+    требование 1). Возврат — тот же, что у `materialize_from_branch`.
+
+    Ревизия ссылки документов помощника `_pult.py` — голова ссылки на
+    момент выкладки: черновик в ссылку ещё не записан, артефакты задачи
+    планка читает оттуда."""
     tdir = code_dir / "tasks" / task_id
-    _write_plank(tdir / "acceptance_tests", files)
+    revision = _docs_revision(task_id, artifact_branch.branch_name(task_id))
+    _write_plank(tdir / "acceptance_tests",
+                 _with_plank_helper(task_id, files, code_dir, revision))
     return tdir
 
 
@@ -650,7 +745,7 @@ def summary(tdir: Path, branch: str | None = None,
     групп нет, прежний вид сводки.
     """
     tests_dir = tdir / "acceptance_tests"
-    if not tests_dir.is_dir() and long_lived is None:
+    if not plank_present(tests_dir) and long_lived is None:
         return "acceptance_tests/ нет — приёмочные тесты не заведены"
     _, markers = guard.scan_acceptance_tests(tdir)
     manual = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
