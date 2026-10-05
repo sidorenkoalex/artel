@@ -21,7 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
-                          store, workspace)
+                          github_adapter, store, workspace)
 from tests.sandbox import seed_artel_clone_stub  # noqa: E402
 from tests.sandbox import (LightTransitionSandbox, SpyRun,  # noqa: E402
                            capture, disk_backed_ls_tree_files,
@@ -50,7 +50,30 @@ schema_version: 1
 """
 
 
+PRE_A4_SPEC_MD = """---
+task: {task}
+type: spec
+author_role: analyst
+status: approved
+schema_version: 1
+---
+
+# SPEC: свежесть ветки
+"""
+
+
 class BranchFreshnessGateTest(LightTransitionSandbox):
+
+    def setUp(self):
+        super().setUp()
+        # Песочница сеет запись артели с профилем тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4), а запись несёт
+        # `forge: github` — черновик запроса на слияние (он сам зовёт
+        # `commits_behind`) не предмет этого файла, и без записи его не было.
+        forge_patcher = mock.patch.object(github_adapter, "_is_github_target",
+                                          return_value=False)
+        forge_patcher.start()
+        self.addCleanup(forge_patcher.stop)
 
     # ------------------------------------------------------------ утилиты
 
@@ -138,6 +161,13 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
     def setup_recording(self) -> None:
         self.merge_calls: list = []
         self.abort_calls: list = []
+        # SPEC до A4 (`schema_version: 1`) на диске: прогон приёмки идёт в
+        # рабочей копии задачи и для артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 6) и без планки читает SPEC — такой SPEC планки не
+        # требует, переход доходит до `acceptance.run`.
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            PRE_A4_SPEC_MD.format(task=self.TASK), encoding="utf-8")
 
     # ----------------------------------------------------- ветка не отстала
 

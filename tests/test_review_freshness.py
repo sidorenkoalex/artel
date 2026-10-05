@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
                           gitcmd, review, runner, stack, store)
-from tests.sandbox import seed_artel_clone_stub  # noqa: E402
+from tests.sandbox import (seed_artel_clone_stub,  # noqa: E402
+                           seed_artel_targets)
 from tests.sandbox import (SpyRun, _stub_check_stack, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
@@ -132,6 +133,9 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         # живут в нём, `new` без клона отказывает — пустой настоящий
         # репозиторий песочницы.
         seed_artel_clone_stub()
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4): без профиля проверки тестов задачи артели отказывают.
+        seed_artel_targets()
 
         # Ревью-пакет (T011) собирается настоящим git. В песочнице его нет —
         # подменяем сам вызов: тестам этого модуля важен номер итерации в

@@ -14,7 +14,9 @@ regression-защита общего источника образцов от к
 тем же приёмом, что tests/test_fsm_branch_correct_status_reads.py).
 """
 import re
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -48,7 +50,10 @@ class AcceptanceTest(unittest.TestCase):
 '''.format(sample=_id_format_sample())
 
 TEST_CLEAN = '''"""Красен до реализации: фикстура для юнит-теста guard-проверки образца
-формата идентификатора задачи — без образца."""
+формата идентификатора задачи — без образца.
+
+Группа: разовый
+"""
 import unittest
 
 
