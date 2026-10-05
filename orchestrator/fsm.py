@@ -70,6 +70,21 @@ ARTIFACT_ESCALATION_ROLE_STEP_MARKER = (
     "эскалация по артефакту роли: ответ Оператора должен дойти до роли "
     "до следующего предварительного advance")
 
+# Метки эскалации «нужен шаг роли» — один перечень на двух читателей:
+# анкер рубежа переделки `auto._role_step_since_state_entry` и проверку
+# ответа на `approve` из `escalated` (SPEC 01M44ENW1B73Z80PR73HP1C9CG,
+# требование 2) — определения не могут разойтись.
+ROLE_STEP_REQUIRED_MARKERS = (pull.PULL_CONFLICT_ROLE_STEP_MARKER,
+                              ARTIFACT_ESCALATION_ROLE_STEP_MARKER)
+
+# Префикс записей о создании ANSWER — их пишут `answer` (в том числе
+# «ANSWER создан: указание Оператора») и `zones-extend`.
+ANSWER_CREATED_ACTION_PREFIX = "ANSWER создан"
+
+NO_ANSWER_FLAG = "--no-answer"
+APPROVE_NO_ANSWER_REFUSED_ACTION = "approve отклонён: нет ANSWER после эскалации"
+ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION = "эскалация снята без ответа"
+
 # Действия журнала о полном наборе tests/ на `approve` из `acceptance`
 # (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 6-8): три исхода — прогон
 # пропущен (worktree не заведён), набор зелёный, краснота принята
@@ -778,7 +793,8 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
 def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None,
                accept_red: str | None = None,
-               fixes_main: str | None = None) -> None:
+               fixes_main: str | None = None,
+               no_answer: bool = False) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -794,13 +810,17 @@ def cmd_approve(task_id: str, sha: str | None = None,
     `fixes_main` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — основание флага
     `approve <id> <sha> --fixes-main "<основание>"`: снимает сверку
     красного CI main на гейте мержа для этой задачи и этого вызова;
-    доезжает только до обработчика `merge_gate`."""
+    доезжает только до обработчика `merge_gate`.
+
+    `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG, требования 3, 5) — флаг
+    `approve <id> --no-answer`: снимает эскалацию «нужен шаг роли» без
+    ANSWER после неё; допустим только в `escalated`."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
-                                 fixes_main))
+                                 fixes_main, no_answer))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -1078,7 +1098,45 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
         conn, task_id, sid, t, state, fixes_main=fixes_main)
 
 
-def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
+def unanswered_role_step_escalation(conn, task_id: str) -> str | None:
+    """Detail последней записи «state -> escalated», если после неё в
+    журнале есть метка «нужен шаг роли» (`ROLE_STEP_REQUIRED_MARKERS`) и
+    нет записи о создании ANSWER; иначе `None` (SPEC
+    01M44ENW1B73Z80PR73HP1C9CG, требования 2, 7).
+
+    Смотрится только хвост журнала после последней эскалации: метка или
+    ANSWER прошлой, уже снятой эскалации к текущей не относятся. Записи
+    «state -> escalated» нет вовсе — сверять не с чем, `None`.
+
+    ANSWER-n.md, попавший в документы задачи мимо `answer`/`zones-extend`
+    (ручной коммит — путь до SPEC 01M287TPG0HAVXS8CHBCY679WN), записи
+    журнала не оставляет; его выдаёт счёт: файлов ANSWER больше, чем
+    записей о создании ANSWER до последней эскалации, — новый ответ есть."""
+    rows = store.task_steps(conn, task_id)
+    last = None
+    for i, row in enumerate(rows):
+        if row["action"] == "state -> escalated":
+            last = i
+    if last is None:
+        return None
+    tail = rows[last + 1:]
+    if not any(row["action"] in ROLE_STEP_REQUIRED_MARKERS for row in tail):
+        return None
+    if any(_is_answer_created(row) for row in tail):
+        return None
+    files = _answer_file_count(conn, task_id, config.TASKS / task_id)
+    if files is not None and files > sum(1 for row in rows[:last]
+                                         if _is_answer_created(row)):
+        return None
+    return rows[last]["detail"] or ""
+
+
+def _is_answer_created(row) -> bool:
+    return (row["action"] or "").startswith(ANSWER_CREATED_ACTION_PREFIX)
+
+
+def _approve_escalated(conn, task_id: str, t, state: str, sid: str,
+                       no_answer: bool = False) -> None:
     # Ответ Оператора (SPEC T075, AC-3): эскалация со структурированным
     # вопросом роли (QUESTIONS.md/spec_writing, `AC-n: escalate`/
     # tests_writing, REVIEW.md `status: escalate`/review) зафиксировала
@@ -1101,6 +1159,25 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
                           "approve отклонён: нет ANSWER", detail)
             print(f"[{task_id}] {detail}")
             return
+    # Эскалация «нужен шаг роли» (конфликт подтяжки, вопрос в артефакте
+    # роли) `answer_baseline` не пишет, но её возврат ведёт к шагу роли —
+    # снятая без ответа, она отправляет роль работать без подготовленного
+    # ответа (прецедент 02.10.2026, SPEC 01M44ENW1B73Z80PR73HP1C9CG).
+    # Снятие без ответа — только явным флагом и видно в журнале. Сверка
+    # baseline выше флагом не обходится (требование 4).
+    escalation = unanswered_role_step_escalation(conn, task_id)
+    if escalation is not None:
+        if not no_answer:
+            detail = (f"approve отклонён: ANSWER после эскалации нет — "
+                      f"ответь роли: artel.py answer {task_id} "
+                      f"<файл-с-ответом>; снять эскалацию без ответа: "
+                      f"artel.py approve {task_id} {NO_ANSWER_FLAG}")
+            store.journal(conn, task_id, "fsm",
+                          APPROVE_NO_ANSWER_REFUSED_ACTION, detail)
+            print(f"[{task_id}] {detail}")
+            return
+        store.journal(conn, task_id, "operator",
+                      ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION, escalation)
     # Куда возвращать — знает только тот, кто эскалировал: провал агента
     # (cmd_run) пишет в escalated_from состояние своего шага, потому что
     # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
@@ -1117,9 +1194,13 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
 
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                 accept_red: str | None = None,
-                fixes_main: str | None = None) -> None:
+                fixes_main: str | None = None,
+                no_answer: bool = False) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if no_answer and state != "escalated":
+        sys.exit(f"[{task_id}] approve отклонён: флаг {NO_ANSWER_FLAG} "
+                 f"допустим только в состоянии escalated, задача в {state}")
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
         return
     # Явный sha, совпавший с живой головой, — решение Оператора: голову,
@@ -1137,12 +1218,13 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # `partial`, а не шестым параметром во всех четырёх обработчиках:
     # сигнатура «(conn, task_id, t, state, sid)» остаётся общей для
     # таблицы. Тем же приёмом `fixes_main` (SPEC
-    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`.
+    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`, и
+    # `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) — только для `escalated`.
     handler = {
         "spec_gate": _approve_spec_gate,
         "acceptance": partial(_approve_acceptance, accept_red=accept_red),
         "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main),
-        "escalated": _approve_escalated,
+        "escalated": partial(_approve_escalated, no_answer=no_answer),
     }.get(state)
     if handler is None:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")

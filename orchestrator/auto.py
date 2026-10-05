@@ -342,8 +342,7 @@ _ESCALATED_RETURN_DETAILS = ("эскалация разрешена, продо�
 # 01M2XFSJ1Z7BS6HR69SAT1D81Y, требование 3) — один класс: разрешить
 # основание некому, кроме роли, и ответ Оператора обязан дойти до неё
 # раньше следующего предварительного advance.
-_ROLE_STEP_REQUIRED_MARKERS = (pull.PULL_CONFLICT_ROLE_STEP_MARKER,
-                               fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER)
+_ROLE_STEP_REQUIRED_MARKERS = fsm.ROLE_STEP_REQUIRED_MARKERS
 
 
 def _role_step_since_state_entry(conn, task_id: str, state: str,
@@ -532,6 +531,9 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
             store.get_task(conn, task_id)) is not None:
         reason, hint = config.AUTO_STOP_BUDGET
         needs_sha = False
+    elif state == "escalated" and fsm.unanswered_role_step_escalation(
+            conn, task_id) is not None:
+        reason, hint = config.AUTO_STOP_ESCALATED_ROLE_STEP
     sha_hint = set_hint = ""
     if needs_sha:
         target = store.task_target(conn, task_id)
@@ -813,8 +815,10 @@ def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
         if new_state == "escalated" and just_escalated_via_pull_conflict:
             streak = _pull_conflict_marker_streak(store.task_steps(conn, task_id))
             if streak >= 2:
-                hint = (f"artel.py show {task_id} — реши конфликт вручную, "
-                        f"затем artel.py answer/approve {task_id}")
+                # Эскалация только что поднята — ANSWER после неё нет,
+                # голый `approve` отказал бы (SPEC 01M44ENW1B73Z80PR73HP1C9CG).
+                hint = (f"artel.py show {task_id} — реши конфликт вручную; "
+                        + config.ESCALATED_ROLE_STEP_HINT.format(id=task_id))
                 reason = (f"предварительный advance дважды упёрся в "
                           f"{_PULL_CONFLICT_BASIS_LABEL} без шага роли — "
                           f"решение Оператора")
