@@ -22,9 +22,12 @@ schema_version: 5
   раз (`rev-parse <rev>^{commit}` в репозитории задачи) и читает список и
   тексты планки по этому sha — помощник называет ровно ту ревизию, с
   которой выложены файлы; `materialize_files` (черновик) берёт голову ссылки.
-- База и источник: `gitcmd.diff_base`/`diff_base_source` ветки рабочей
-  копии (`gitcmd.current_branch(code_dir)`, `repo=code_dir` — рабочая копия
-  делит ссылки с клоном, значение совпадает с гейтом зон).
+- База и источник: `gitcmd.diff_base`/`diff_base_source` той же пары, что
+  у `_zones_gate`: ветка задачи из БД (`store.task_branch`) в клоне
+  проекта `workspace.task_repo(task_id)`. Git рабочей копии на пути
+  выкладки не спрашивается. Только когда строки задачи в БД нет (песочница
+  без пульта), берётся ветка под HEAD рабочей копии
+  (`gitcmd.current_branch(code_dir)`, `repo=code_dir`).
 - `artifact_text`: `git ls-tree -z <sha> -- tasks/<id>/<name>` → нет записи
   `blob` — `None`; иначе `cat-file blob`. Любой ненулевой код git —
   `ArtifactReadError` (подкласс `GitError`). `GIT_CEILING_DIRECTORIES` и
@@ -67,8 +70,7 @@ schema_version: 5
    и подсказка по записи журнала, новая подсказка гейта источника
    артефактов (готово).
 4. `tests/test_plank_helper.py` — 12 тестов с заявками мутаций; правка
-   тестов прежнего рецепта и фикстуры `test_branch_freshness_gate.py`
-   (готово, см. «Эскалация», вопрос 2).
+   тестов прежнего рецепта (готово, мандат ANSWER-1, вопрос 2).
 5. `docs/codebase-map.md` — регенерирован `scripts/codebase_map.py`
    (готово).
 6. Приложение к `skills/test-authoring.md` — раздел ниже (готово,
@@ -80,6 +82,21 @@ schema_version: 5
    `observed_run`) снимок каталога выкладки исключает
    `acceptance.PLANK_HELPER_NAME`, утверждения методов не тронуты; карта
    регенерирована (готово).
+8. Возврат из verifying (CI красный на 4fc50c64:
+   `tests/test_fsm_map_conflict_autoresolve.py::MapConflictAutoResolveTest`
+   — `test_map_only_conflict_autoresolves_without_escalation`,
+   `test_map_only_conflict_journal_records_orchestrator_and_method`,
+   «неожиданный gitcmd.in_repo вызов: ('rev-parse', '--abbrev-ref',
+   'HEAD')»). Причина: `acceptance._plank_helper_text` спрашивал ветку и
+   базу у git рабочей копии (`current_branch`, `rev-parse --verify`,
+   `merge-base` с `repo=code_dir`), а заглушка теста отвечает только на
+   вызовы своего предмета. Исправлено в коде, тест не тронут: база считается
+   как в `_zones_gate` — ветка из БД, `repo=workspace.task_repo(task_id)`
+   (импорт `store`/`workspace` внутри функции: `workspace -> runner ->
+   acceptance` дал бы цикл). Тот же класс закрыт для всех тестов с
+   такими заглушками: правка фикстуры `tests/test_branch_freshness_gate.py`
+   из прошлой итерации больше не нужна и отменена — файл равен main
+   (готово).
 
 ## Покрытие требований
 
@@ -117,11 +134,12 @@ schema_version: 5
   с подсказкой про занятое имя, хотя файл положил пульт. На практике после
   такой записи у шага test_author всегда есть более поздние записи, и гейт
   её не читает. Риск записан ниже.
-- Выкладка делает 4–5 лишних чтений git (`rev-parse`, `merge-base`).
-  Тесты с подменой `gitcmd.in_repo`, считающие каждый вызов, это
-  замечают: `test_branch_freshness_gate.py` — фикстура
-  `_fixation_response` теперь отвечает на эти чтения сама, утверждения
-  не тронуты.
+- Выкладка делает несколько дополнительных чтений git: `rev-parse`
+  ревизии в репозитории ссылки документов, `rev-parse`/`merge-base` базы
+  в клоне проекта. В рабочей копии кода они не идут: тесты, где
+  `gitcmd.in_repo` рабочей копии подменён строгой заглушкой
+  (`test_fsm_map_conflict_autoresolve.py`, `test_branch_freshness_gate.py`),
+  проходят без правки.
 - Гейты, лимиты и инварианты не ослаблены. Правило отказа «чтение с
   диска» не тронуто; заменён только текст рецепта.
 - Откат: revert merge-коммита задачи; приложение к скилу Оператор
@@ -230,7 +248,14 @@ index 1216820d..d4337fc7 100644
   (`test_branch_freshness_gate.py::_recording_ok`), краснеют от любого
   нового чтения git в общем узле. Класс «фикстура считает чужие вызовы»
   стоит закрыть явным белым списком предмета, а не чёрным списком
-  непредмета.
+  непредмета. Повтор класса — возврат из verifying этой задачи
+  (`test_fsm_map_conflict_autoresolve.py`): CI поймал то, что выборка
+  модулей в шаге пропустила.
+- Причина возврата из verifying требует «полный прогон tests/ перед
+  сдачей», а сторож роли `conftest.py` полный прогон в шаге запрещает.
+  Требования противоречат друг другу; текст причины возврата стоит
+  согласовать со сторожем (например: «прогони упавшие модули и модули с
+  тем же классом заглушек»).
 
 ## Расширение зон
 Пути: orchestrator/pull.py, orchestrator/advance_gates/acceptance.py
@@ -263,10 +288,40 @@ index 1216820d..d4337fc7 100644
   `acceptance.PLANK_HELPER_NAME`; утверждения методов прежние.
 
 ## Проверка
+Итерация после возврата из verifying (шаг 8):
 - `plank-run 01M44EP4Q927DJXVX9YMMZ0B7V`: 35 passed, код выхода 0.
-- `python3 -m pytest tests/test_pull.py tests/test_branch_freshness_gate.py
-  tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py tests/test_plank_helper.py
-  tests/test_approve_acceptance_full_suite.py tests/test_acceptance_tests_flow.py
-  tests/test_pull_long_lived_plank.py tests/test_guard_artifact_disk_read.py
-  tests/test_fsm_advance_tests_writing_artifact_source.py`: 166 passed.
+- Полный прогон `tests/` в шаге отклонён сторожем роли `conftest.py`
+  («полный прогон набора тестов внутри шага запрещён — его гоняет CI»).
+  Вместо него прогнаны батчами все модули, где упоминаются `in_repo`,
+  `materialize_*`, `acceptance.run` или `plank` (`grep -lE` по `tests/`):
+  - `test_fsm_map_conflict_autoresolve.py` (оба упавших в CI метода),
+    `test_plank_helper.py`, `test_branch_freshness_gate.py`,
+    `test_pull.py`, `test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`:
+    54 passed;
+  - `test_acceptance_collect.py`, `test_acceptance_tests_flow.py`,
+    `test_acceptance.py`, `test_amend_remove.py`, `test_amend_long_lived.py`,
+    `test_amend.py`, `test_approve_acceptance_full_suite.py`,
+    `test_artifact_materialization.py`,
+    `test_fsm_advance_tests_writing_{artifact_source,dry_collect,test_groups}.py`,
+    `test_guard_artifact_disk_read.py`: 216 passed;
+  - `test_fsm_autogate{,_long_lived}.py`,
+    `test_long_lived_{transitions,step_end_to_end}.py`,
+    `test_pull_{conflict_marker_states,additive_conflict,long_lived_plank}.py`,
+    `test_runner_pre_step_pull.py`, `test_zones_gate.py`,
+    `test_01m443bpqea9zmj3r50thnb1mf_developer_step.py`,
+    `test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`,
+    `test_01m41w15bk20wbtd9tmbtsxnza_plank_run_role.py`,
+    `test_plank_run_edges.py`: 118 passed;
+  - `test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`,
+    `test_01m42nbcadgsgtcbzb8nkbvdvh_amend_cleanup.py`,
+    `test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py`,
+    `test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py`,
+    `test_artifact_escalation_marker.py`, `test_docs_dir_layout.py`,
+    `test_long_lived_manifest.py`, `test_multitarget.py`,
+    `test_timeout_checkpoint.py`, `test_test_author_long_lived_artifact.py`,
+    `test_git_fixation.py`,
+    `test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py`: 203 passed.
+- Остальные модули этого перечня (канарейка, наборы моделей,
+  `test_sandbox.py`, `test_repo_context.py` и др.) в шаге не гонялись —
+  полный набор гоняет CI.
 - Карта регенерирована `scripts/codebase_map.py`.
