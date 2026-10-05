@@ -774,14 +774,33 @@ def _run_full_suite_to_log(argv: list[str], root: Path,
 
 _FAILED_ENTRY = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - (.*))?$",
                            re.MULTILINE)
+_SHORT_SUMMARY_HEADER = re.compile(r"^=+ short test summary info =+$",
+                                   re.MULTILINE)
+# Разделитель секции вывода pytest («==== FAILURES ====», итоговая строка
+# «==== 1 failed in 0.1s ====») — конец блока сводки.
+_SECTION_RULE = re.compile(r"^=+ .* =+$", re.MULTILINE)
+
+
+def short_summary_block(output: str) -> str:
+    """Текст блока «short test summary info» — от его заголовка до
+    следующего разделителя секции; блока нет — пустая строка. Заголовок —
+    последний в выводе: захваченный вывод упавшего теста печатается раньше
+    сводки и вправе содержать что угодно, в том числе строки `FAILED …`/
+    `ERROR …` (захваченный лог `ERROR    m:файл:строка …`)."""
+    headers = list(_SHORT_SUMMARY_HEADER.finditer(output))
+    if not headers:
+        return ""
+    start = headers[-1].end()
+    end = _SECTION_RULE.search(output, start)
+    return output[start:end.start() if end else len(output)]
 
 
 def failed_entries(output: str) -> list[tuple[str, str]]:
     """(id теста, первая строка сообщения) из блока «short test summary
     info» — по одной паре на упавший тест, без повторов; сообщения нет —
-    пустая строка."""
+    пустая строка. Строки вне блока не читаются (`short_summary_block`)."""
     seen = {}
-    for node, message in _FAILED_ENTRY.findall(output):
+    for node, message in _FAILED_ENTRY.findall(short_summary_block(output)):
         seen.setdefault(node.strip(), (message or "").strip())
     return list(seen.items())
 

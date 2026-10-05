@@ -1,5 +1,5 @@
 ---
-built_at_sha: c1407e4888758e73d191052eb4ef69dcae08dca5
+built_at_sha: f93447ed7f04cdbd69eef7b255153b70811bc67f
 ---
 
 # Codebase-map пульта
@@ -38,6 +38,7 @@ built_at_sha: c1407e4888758e73d191052eb4ef69dcae08dca5
 - `run_summary_line`
 - `save_failures`
 - `saved_failures`
+- `short_summary_block`
 - `suite_results_dir`
 - `summary`
 

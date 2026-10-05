@@ -72,6 +72,11 @@ _PROGRESS = re.compile(
     rf"^(?:\[gw\d+\] \[\s*\d+%\] (?P<s1>{_STATUS}) (?P<n1>.+?)"
     rf"|(?P<n2>\S.*?::.+?) (?P<s2>{_STATUS})(?: +\[\s*\d+%\])?)\s*$",
     re.MULTILINE)
+# Первая секция отчёта pytest после строк хода («==== FAILURES ====» и
+# далее): в ней захваченный вывод тестов, и строка вида «<x>::<y> PASSED»
+# оттуда — не ход прогона.
+_REPORT_SECTION = re.compile(r"^=+ (?!test session starts =).* =+$",
+                             re.MULTILINE)
 _SUMMARY_COUNT = re.compile(
     r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)")
 
@@ -147,14 +152,7 @@ def _pult_command(task_id: str) -> str:
 
 # ---------------------------------------------------------------- замок
 
-def _live_lock_holder() -> dict | None:
-    """Держатель замка, если его процесс жив; замок мёртвого процесса
-    прогон не держит (требование 13)."""
-    holder = _read_json(_lock_path())
-    return holder if holder and _alive(holder.get("pid")) else None
-
-
-def _acquire_lock(task_id: str, run_no: int) -> dict | None:
+def _acquire_lock(task_id: str, run_no: int | None) -> dict | None:
     """Замок прогонов машины за текущим процессом: `None` — взят, иначе
     держатель. Создание файла `O_EXCL` — атомарно; брошенный замок (pid
     мёртв) снимается и берётся заново."""
@@ -185,6 +183,24 @@ def _fresh(path: Path) -> bool:
         return time.time() - path.stat().st_mtime < _FRESH_LOCK_SEC
     except OSError:
         return False
+
+
+def _hand_lock(task_id: str, run_no: int, pid: int) -> None:
+    """Замок, взятый процессом команды, — за фоновым процессом прогона:
+    держателем становится `pid`, задача и номер прогона те же."""
+    _write_json(_lock_path(), {"task_id": task_id, "pid": pid, "run": run_no})
+
+
+def _adopt_lock(task_id: str, run_no: int) -> dict | None:
+    """Фоновый процесс принимает замок, переданный ему командой (тот же
+    id задачи и номер прогона), — `None`; замка для него нет — берёт сам
+    (`_acquire_lock`): вызов `background` в обход команды."""
+    holder = _read_json(_lock_path())
+    if (holder is not None and holder.get("task_id") == task_id
+            and holder.get("run") == run_no):
+        _hand_lock(task_id, run_no, os.getpid())
+        return None
+    return _acquire_lock(task_id, run_no)
 
 
 def _release_lock() -> None:
@@ -239,7 +255,11 @@ class Parsed(NamedTuple):
 
 def _progress(output: str) -> dict[str, str]:
     """id теста -> исход по строкам хода прогона; упавший хоть раз (в том
-    числе на teardown после PASSED) остаётся упавшим."""
+    числе на teardown после PASSED) остаётся упавшим. Читаются только
+    строки до секций отчёта (`_REPORT_SECTION`)."""
+    section = _REPORT_SECTION.search(output)
+    if section is not None:
+        output = output[:section.start()]
     statuses = {}
     for match in _PROGRESS.finditer(output):
         node = (match.group("n1") or match.group("n2")).strip()
@@ -453,7 +473,7 @@ def background(task_id: str, run_text: str, mode: str) -> None:
     логу, а не тишину; замок снимается в `finally` (требование 13)."""
     run_no = int(run_text)
     log = _log_path(task_id, run_no)
-    holder = _acquire_lock(task_id, run_no)
+    holder = _adopt_lock(task_id, run_no)
     if holder is not None:
         _write_json(_result_path(task_id), {
             "run": run_no, "green": False,
@@ -613,23 +633,35 @@ def cmd_suite_run(rest: list) -> None:
               f"{running.get('log')}; отчёт: {_pult_command(task_id)} "
               f"--wait <минуты>")
         return
-    holder = _live_lock_holder()
+    # Замок берётся здесь, атомарно, до запуска фонового процесса и
+    # передаётся ему: два одновременных запуска не могут оба ответить
+    # «запущен» — второй отказывает сразу, с держателем (требование 13).
+    holder = _acquire_lock(task_id, None)
     if holder is not None:
         sys.exit(f"{head}: отказ — на машине уже идёт прогон suite-run "
                  f"задачи {holder.get('task_id')} (pid {holder.get('pid')}); "
                  f"одновременно идёт один прогон — повтори после его конца")
     mode = MODE_FAILED if failed else MODE_FULL
-    log = agent_log.new_agent_log(task_id, LOG_KIND)
-    run_no = int(log.stem.rsplit("-", 1)[1])
-    _task_dir(task_id).mkdir(parents=True, exist_ok=True)
-    # Признак роли снимается: это прогон пульта, сторож `conftest.py` его
-    # не отклоняет, даже когда команду позвал процесс роли (требование 3).
-    env = {k: v for k, v in os.environ.items() if k != config.ARTEL_ROLE_ENV}
-    with open(_task_dir(task_id) / "background.log", "ab") as errors:
-        proc = subprocess.Popen(
-            [sys.executable, "-c", _CHILD, task_id, str(run_no), mode],
-            cwd=str(config.ROOT), env=env, stdin=subprocess.DEVNULL,
-            stdout=errors, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        log = agent_log.new_agent_log(task_id, LOG_KIND)
+        run_no = int(log.stem.rsplit("-", 1)[1])
+        _hand_lock(task_id, run_no, os.getpid())
+        _task_dir(task_id).mkdir(parents=True, exist_ok=True)
+        # Признак роли снимается: это прогон пульта, сторож `conftest.py`
+        # его не отклоняет, даже когда команду позвал процесс роли
+        # (требование 3).
+        env = {k: v for k, v in os.environ.items()
+               if k != config.ARTEL_ROLE_ENV}
+        with open(_task_dir(task_id) / "background.log", "ab") as errors:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _CHILD, task_id, str(run_no), mode],
+                cwd=str(config.ROOT), env=env, stdin=subprocess.DEVNULL,
+                stdout=errors, stderr=subprocess.STDOUT,
+                start_new_session=True)
+    except BaseException:
+        _release_lock()
+        raise
+    _hand_lock(task_id, run_no, proc.pid)
     _write_json(_run_path(task_id), {"run": run_no, "pid": proc.pid,
                                      "log": str(log), "mode": mode,
                                      "started": time.time()})
