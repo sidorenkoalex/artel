@@ -109,7 +109,8 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"обязательно: код, оставленный в worktree незакоммиченным, по "
             f"итогам шага коммитит пульт в ветку задачи. tasks/<id>/ "
             f"коммитить не нужно — автокоммит оркестратора сам перенесёт "
-            f"PLAN.md в артефактную ветку."
+            f"PLAN.md в артефактную ветку.\n"
+            f"{suite_run_note(task_id)}"
         )
         brief_text = brief.developer_brief(conn, task_id)
     else:
@@ -151,6 +152,23 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                   f"документов задачи недоступна.")
         mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
     return mission, brief_text, package
+
+
+def suite_run_note(task_id: str) -> str:
+    """Строка миссии разработчика о полном прогоне тестов (SPEC
+    01M462QACEH29RPRD2RZHGHQFM, требование 16): той же формой, что
+    `plank-run` в `docs_dir_note`, — полный путь к `artel.py` пульта. 05.10
+    роль без такой команды сама делила набор на пачки и обходила сторож."""
+    pult = config.ROOT / "orchestrator" / "artel.py"
+    return (
+        f"Полный набор тестов — только командой пульта `python3 {pult} "
+        f"suite-run {task_id}`: она запускает прогон фоном (параллель, "
+        f"сравнение с базой ветки) и сразу возвращается; отчёт — `python3 "
+        f"{pult} suite-run {task_id} --wait <минуты, не больше "
+        f"{config.SUITE_RUN_MAX_WAIT_MIN}>`, повтор только упавших — "
+        f"`python3 {pult} suite-run {task_id} --failed`. Сначала — тесты "
+        f"затронутых модулей; файлы tests/ в обход сторожа не перечисляй и "
+        f"набор на пачки своими сценариями не дели.")
 
 
 def docs_dir_note(task_id: str, docs_dir) -> str:
