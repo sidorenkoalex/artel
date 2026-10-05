@@ -2,7 +2,7 @@
 task: 01M46D5ZZQY7GBEW5TBVQ0P3ZV
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -142,59 +142,13 @@ schema_version: 5
   разработчик не может прогнать затронутый модуль целиком; их стоит
   изолировать от признака шага роли в песочнице.
 
-## Эскалация
-**Вопросы**
-1. (блокирует) Долгоживущий файл `tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`
-   нарушает инвариант `tests/test_invariants.py::NoNetworkAddressesInTestsTest::test_no_dns_hostname_addresses_in_tests_tree`
-   тремя адресами фикстуры (строки 152, 176, 197). Файл под суммой лока —
-   разработчик его не правит. Варианты: (а) Оператор применяет правку ниже
-   командой `amend-tests` (меняются только строковые литералы адресов, ни
-   одного assert и ожидаемого значения); (б) разрешить разработчику правку
-   с перефиксацией суммы иным путём. Дефолт — (а).
-
-Правка для `amend-tests` (проверена: 8 passed, 29 subtests; инвариант — passed):
-
-```diff
---- a/tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py
-+++ b/tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py
-@@ -149,7 +149,7 @@ class FakeGitHub:
-                 conclusion, age = None, config.CI_STUCK_CHECK_MINUTES + 30
-             else:
-                 status, conclusion, age = "completed", state, 3
--            url = (f"https://github.com/{OWNER_REPO}/actions/runs/{run_id}"
-+            url = (f"http://127.0.0.1/{OWNER_REPO}/actions/runs/{run_id}"
-                    f"/job/{check_id}")
-             created.append({
-                 "id": check_id, "name": name, "status": status,
-@@ -173,7 +173,7 @@ class FakeGitHub:
-             "head_branch": "main", "run_number": self.rng.randint(1, 9999),
-             "run_attempt": 1, "check_suite_id": suite,
-             "status": run_status, "conclusion": run_conclusion,
--            "html_url": f"https://github.com/{OWNER_REPO}/actions/runs/{run_id}",
-+            "html_url": f"http://127.0.0.1/{OWNER_REPO}/actions/runs/{run_id}",
-             "_checks": created,
-         }
-         self.runs.append(run)
-@@ -194,7 +194,7 @@ class FakeGitHub:
-                 "started_at": check["started_at"],
-                 "completed_at": check["completed_at"],
-                 "html_url": check["html_url"],
--                "check_run_url": (f"https://api.github.com/repos/{OWNER_REPO}"
-+                "check_run_url": (f"http://127.0.0.1/repos/{OWNER_REPO}"
-                                   f"/check-runs/{check['id']}")}
- 
-     def cli_run(self, run: dict) -> dict:
-```
-
-**Контекст**
-- Свой нарушитель `tests/test_ci_status.py:1036` исправлен (см. «Возврат из
-  verifying»); после этого единственный нарушитель инварианта — долгоживущий
-  файл задачи.
-- Причина возврата прямо просит заменить хост в долгоживущем файле, но
-  `skills/coding-standards.md` («Долгоживущие файлы задачи … не правь их,
-  расхождение с ними эскалируй (правка — amend-tests)») и лок сумм
-  (`long_lived.sha256.txt`) этого разработчику не дают: правка откажется
-  гейтом лока на `in_dev -> verifying`.
-
-**Блокирует**
-- Зелёный CI ветки (инвариант адресов) и переход в `verifying`.
+## Ответ на эскалацию (ANSWER-1)
+- Оператор внёс правку долгоживущего файла командой `amend-tests` (коммит
+  6065c546, сумма лока обновлена): в трёх строках фикстуры хост заменён на
+  127.0.0.1, проверки не менялись. Код задачи после ответа не менялся.
+- Проверено после ответа: `tests/test_invariants.py -k NoNetworkAddresses` —
+  2 passed; `tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`,
+  `tests/test_ci_status.py`, `tests/test_ci_stuck_check_run.py`,
+  `tests/test_ci_status_kind_gate.py`,
+  `tests/test_01m3y75c9ty76083cg1pk00em4_stuck_check.py` — 104 passed,
+  68 subtests.
