@@ -124,6 +124,55 @@ class StrictnessDirectionTest(unittest.TestCase):
                           "self.assertEqual(app.L, [1, -3])")
 
 
+class SignedLiteralTest(unittest.TestCase):
+    """Знак над числовой константой — часть литерала (ANSWER-3 задачи,
+    замечание ревью R1-F2): `-2` в исходнике — `UnaryOp(USub, Constant)`."""
+
+    def test_negative_to_negative_gives_signed_pair(self):
+        """`-2` → `-3` — смена ожидания с фактической парой `(-2, -3)`, и объявленная пара `-2` → `-3` с ней совпадает.
+
+        Ловит мутацию: знак не входит в значение литерала — фактическая
+        пара `(2, 3)`, объявленная честная пара `-2` → `-3` не совпадает.
+        """
+        found = change("self.assertEqual(app.N, -2)",
+                       "self.assertEqual(app.N, -3)")
+        self.assertEqual(guard.ASSERTION_CHANGE_EXPECTATION, found.kind, found)
+        self.assertEqual(((-2, -3),), found.pairs)
+        self.assertEqual((), found.signs, found)
+        self.assertEqual(guard.literal_pair_keys([("-2", "-3")]),
+                         guard.value_pair_keys(found.pairs))
+
+    def test_positive_to_negative_is_an_equality_expectation_change(self):
+        """`1` → `-1` на позиции равенства — смена ожидания с парой `(1, -1)`, не сдвиг формы.
+
+        Ловит мутацию: маскируется только `Constant`, не знак над ним —
+        маскированные формы `1` и `-1` различаются, и смена значения
+        уходит в «ослабление или иная смена».
+        """
+        found = change("self.assertEqual(app.N, 1)",
+                       "self.assertEqual(app.N, -1)")
+        self.assertEqual(guard.ASSERTION_CHANGE_EXPECTATION, found.kind, found)
+        self.assertEqual(((1, -1),), found.pairs)
+        self.assertEqual((), found.signs, found)
+
+    def test_order_bound_is_rated_by_signed_value(self):
+        """Граница `assertGreater(x, -5)`: `-3` — ужесточение, `-7` — ослабление.
+
+        Ловит мутацию: знаковый литерал не получает роль границы порядка —
+        смена `-5` → `-3` даёт «правило не умеет оценить строгость»; либо
+        граница оценивается без знака (`5` → `7`) — сдвиг вниз `-5` → `-7`
+        принят за ужесточение.
+        """
+        tight = change("self.assertGreater(app.N, -5)",
+                       "self.assertGreater(app.N, -3)")
+        self.assertEqual(guard.ASSERTION_CHANGE_EXPECTATION, tight.kind, tight)
+        self.assertEqual((), tight.signs, tight)
+        weak = change("self.assertGreater(app.N, -5)",
+                      "self.assertGreater(app.N, -7)")
+        self.assertEqual(guard.ASSERTION_CHANGE_EXPECTATION, weak.kind, weak)
+        self.assertTrue(any("разрешающую" in s for s in weak.signs), weak)
+
+
 class PairKeysTest(unittest.TestCase):
 
     def test_declared_pairs_compare_by_type_and_value(self):

@@ -1032,9 +1032,44 @@ class AssertionChange(NamedTuple):
     signs: tuple
 
 
+def _literal(node: ast.AST) -> tuple | None:
+    """`(значение,)` литерала на позиции константы, иначе `None`.
+
+    Отрицательное число в исходнике — `UnaryOp(USub, Constant)`, не
+    `Constant`: знак над числовой константой — часть литерала, иначе
+    `-2` → `-3` читалось бы парой `(2, 3)`, а `1` → `-1` — сдвигом формы
+    (ANSWER-3 задачи, R1-F2)."""
+    if isinstance(node, ast.Constant):
+        return (node.value,)
+    if isinstance(node, ast.UnaryOp) and \
+            isinstance(node.op, (ast.USub, ast.UAdd)) and \
+            isinstance(node.operand, ast.Constant) and \
+            isinstance(node.operand.value, (int, float, complex)) and \
+            not isinstance(node.operand.value, bool):
+        value = node.operand.value
+        return (-value if isinstance(node.op, ast.USub) else +value,)
+    return None
+
+
+def _literal_positions(node: ast.AST):
+    """Литералы нормальной формы по порядку обхода: `(узел, значение)`.
+    У двух форм с равной маскированной формой позиции идут узел в узел."""
+    found = _literal(node)
+    if found is not None:
+        yield node, found[0]
+        return
+    for child in ast.iter_child_nodes(node):
+        yield from _literal_positions(child)
+
+
 class _LiteralMasker(ast.NodeTransformer):
     def visit_Constant(self, node):
         return ast.Name(id=LITERAL_MASK_LABEL, ctx=ast.Load())
+
+    def visit_UnaryOp(self, node):
+        if _literal(node) is not None:
+            return ast.Name(id=LITERAL_MASK_LABEL, ctx=ast.Load())
+        return self.generic_visit(node)
 
 
 def _masked_form(node: ast.AST) -> str:
@@ -1055,13 +1090,14 @@ def _divergence(base: ast.AST, head: ast.AST) -> str:
     """Первая структурная развилка двух нормальных форм одного вида:
     `SIGN_COMPUTED` — на месте константы base в head вызов, атрибут или
     имя; `SIGN_OTHER_FORM` — любая иная; пустая строка — развилки нет."""
-    if type(base) is not type(head):
-        if isinstance(base, ast.Constant) and \
-                isinstance(head, (ast.Call, ast.Attribute, ast.Name)):
+    if _literal(base) is not None:
+        if _literal(head) is not None:
+            return ""
+        if isinstance(head, (ast.Call, ast.Attribute, ast.Name)):
             return SIGN_COMPUTED
         return SIGN_OTHER_FORM
-    if isinstance(base, ast.Constant):
-        return ""
+    if type(base) is not type(head):
+        return SIGN_OTHER_FORM
     for field, left in ast.iter_fields(base):
         right = getattr(head, field, None)
         if isinstance(left, list):
@@ -1112,7 +1148,7 @@ def _constant_roles(node: ast.AST) -> dict:
     roles: dict = {}
 
     def equality(expr):
-        if isinstance(expr, ast.Constant):
+        if _literal(expr) is not None:
             roles[id(expr)] = ("equality",)
         elif isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
             for elt in expr.elts:
@@ -1135,11 +1171,11 @@ def _constant_roles(node: ast.AST) -> dict:
                     tolerance(kw.value, kw.arg, True)
 
     def tolerance(expr, name, weaker_if_larger):
-        if isinstance(expr, ast.Constant):
+        if _literal(expr) is not None:
             roles[id(expr)] = ("tolerance", name, weaker_if_larger)
 
     def single(expr, role):
-        if isinstance(expr, ast.Constant):
+        if expr is not None and _literal(expr) is not None:
             roles[id(expr)] = role
 
     def order(left, op, right, negate):
@@ -1266,17 +1302,17 @@ def _value_key(value) -> tuple:
 
 def _expectation_pairs(base_node: ast.AST, head_node: ast.AST) -> list:
     """[(константа base, константа head, признак)] по позициям, где
-    константы двух утверждений с равной маскированной формой различаются.
-    Равная маскированная форма — равная структура, поэтому обход
-    `ast.walk` обеих сторон идёт узел в узел."""
+    литералы двух утверждений с равной маскированной формой различаются
+    (литерал — константа либо знак над числовой константой, `_literal`).
+    Равная маскированная форма — равная структура вне литералов, поэтому
+    позиции литералов обеих сторон идут узел в узел."""
     roles = _constant_roles(base_node)
     pairs = []
-    for left, right in zip(ast.walk(base_node), ast.walk(head_node)):
-        if isinstance(left, ast.Constant) and isinstance(right, ast.Constant) \
-                and _value_key(left.value) != _value_key(right.value):
-            pairs.append((left.value, right.value,
-                          _strictness_sign(roles.get(id(left)), left.value,
-                                           right.value)))
+    for (left, old), (_right, new) in zip(_literal_positions(base_node),
+                                          _literal_positions(head_node)):
+        if _value_key(old) != _value_key(new):
+            pairs.append((old, new,
+                          _strictness_sign(roles.get(id(left)), old, new)))
     return pairs
 
 
