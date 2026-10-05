@@ -1128,7 +1128,7 @@ class OutOfScopeTest(DeclaredChangeSandbox):
         # с неразрешённым контекстом гейт отклоняет (SPEC
         # 01M45FJVGQT1K0P8HDEXZX6HS7, требования 3, 5).
         declare_target(row["target"])
-        out =self.run_cmd(fsm_advance.in_dev, conn, self.task_id, row,
+        out = self.run_cmd(fsm_advance.in_dev, conn, self.task_id, row,
                            config.TASKS / self.task_id, config.DEFAULT_TARGET,
                            "in_dev")
         self.assert_untouched(out)
