@@ -13,8 +13,11 @@
 """
 import contextlib
 import io
+import json
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from scripts import plan_appendix_ci as pac
@@ -55,19 +58,36 @@ def workflow(python_steps: list[str], min_steps: list[str]) -> str:
 class TaskBranchTest(unittest.TestCase):
 
     def test_only_task_push_is_processed(self):
-        """Сценарий берётся только за пуш `task/**`; `main`, прочие ветки и
-        pull_request — None (требование 2: их прогоны не меняются).
+        """Сценарий берётся за пуш `task/**` и за pull_request ветки задачи
+        того же репозитория (ref головы — `refs/heads/<GITHUB_HEAD_REF>`,
+        SPEC 01M466ZERXQKXTR5RQCDYVDZJQ, требование 1); `main` и прочие
+        ветки — None (требование 2: их прогоны не меняются).
 
-        Ловит мутацию: проверка события или префикса `refs/heads/task/`
-        снята — пуш `main` или pull_request ветки задачи отдают имя ветки,
-        и тест краснеет.
+        Ловит мутацию: проверка префикса `refs/heads/task/` снята — пуш
+        `main` отдаёт имя ветки; отбор события оставлен только на push —
+        pull_request ветки задачи отдаёт None; и тест краснеет.
         """
         self.assertEqual(pac.task_branch("push", "refs/heads/task/01abc-x"),
                          "01abc-x")
         self.assertIsNone(pac.task_branch("push", "refs/heads/main"))
         self.assertIsNone(pac.task_branch("push", "refs/heads/feature/task"))
-        self.assertIsNone(pac.task_branch("pull_request",
-                                          "refs/heads/task/01abc-x"))
+        self.assertEqual(pac.task_branch("pull_request",
+                                         "refs/heads/task/01abc-x"),
+                         "01abc-x")
+
+    def test_other_events_and_bare_prefix_are_skipped(self):
+        """Событие не push/pull_request (`workflow_dispatch`,
+        `pull_request_target`) и голый префикс `refs/heads/task/` без имени
+        — None.
+
+        Ловит мутацию: отбор события снят (любое событие с ref `task/**`
+        обрабатывается) или пустое имя ветки после префикса засчитано —
+        тест краснеет.
+        """
+        for event in ("workflow_dispatch", "pull_request_target", ""):
+            self.assertIsNone(pac.task_branch(event,
+                                              "refs/heads/task/01abc-x"))
+        self.assertIsNone(pac.task_branch("push", "refs/heads/task/"))
 
     def test_main_push_never_touches_git(self):
         """Пуш `main` — код 0 без единого вызова git.
@@ -79,6 +99,65 @@ class TaskBranchTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(pac.run("push", "refs/heads/main"), 0)
         git.assert_not_called()
+
+
+class TestedRefTest(unittest.TestCase):
+
+    def pr_env(self, tmp: str, head_repo: str, head_ref: str = "task/01abc-x"):
+        event = Path(tmp) / "event.json"
+        event.write_text(json.dumps({"pull_request": {"head": {
+            "ref": head_ref, "repo": {"full_name": head_repo}}}}),
+            encoding="utf-8")
+        return {"GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_REF": "refs/pull/7/merge",
+                "GITHUB_HEAD_REF": head_ref,
+                "GITHUB_REPOSITORY": "o/artel",
+                "GITHUB_EVENT_PATH": str(event)}
+
+    def test_push_ref_and_same_repo_pr_head(self):
+        """Push — `GITHUB_REF` как есть; pull_request того же репозитория —
+        `refs/heads/<GITHUB_HEAD_REF>`, а не `refs/pull/<N>/merge`.
+
+        Ловит мутацию: на pull_request берётся `GITHUB_REF` — ref
+        `refs/pull/7/merge`, ветка задачи не узнаётся, тест краснеет.
+        """
+        self.assertEqual(pac.tested_ref({"GITHUB_EVENT_NAME": "push",
+                                         "GITHUB_REF": "refs/heads/main"}),
+                         "refs/heads/main")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(pac.tested_ref(self.pr_env(tmp, "o/artel")),
+                             "refs/heads/task/01abc-x")
+
+    def test_fork_head_is_not_task_branch(self):
+        """pull_request из форка с веткой `task/**` — пустой ref.
+
+        Ловит мутацию: репозиторий головы не сверяется с
+        `GITHUB_REPOSITORY` — форк отдаёт `refs/heads/task/01abc-x`, тест
+        краснеет.
+        """
+        with tempfile.TemporaryDirectory() as tmp, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(pac.tested_ref(self.pr_env(tmp, "fork/artel")),
+                             "")
+
+    def test_unreadable_event_file_fails_closed_only_for_task_head(self):
+        """Файл события не читается: голова `task/**` — `CiError` (код 1),
+        голова не `task/**` — пустой ref без чтения файла.
+
+        Ловит мутацию: непрочитанный файл события трактуется как «тот же
+        репозиторий» или «форк» — `CiError` не поднят; либо файл читается
+        до отбора ветки — голова `feature/x` падает `CiError`; тест
+        краснеет.
+        """
+        env = {"GITHUB_EVENT_NAME": "pull_request",
+               "GITHUB_REF": "refs/pull/7/merge",
+               "GITHUB_HEAD_REF": "task/01abc-x",
+               "GITHUB_REPOSITORY": "o/artel",
+               "GITHUB_EVENT_PATH": "/nonexistent/artel-event.json"}
+        with self.assertRaises(pac.CiError):
+            pac.tested_ref(env)
+        env["GITHUB_HEAD_REF"] = "feature/x"
+        self.assertEqual(pac.tested_ref(env), "")
 
 
 class DocsRefForBranchTest(unittest.TestCase):
@@ -152,6 +231,32 @@ class WorkflowErrorsTest(unittest.TestCase):
         errors = pac.workflow_errors(workflow([TESTS, STEP], [STEP, TESTS]))
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("job python:", errors[0])
+
+    def test_push_only_condition_in_dash_and_multiline_forms(self):
+        """Условие push-only на строке дефиса (`- if: …`) и с переносом на
+        следующую строку — нарушение с именем job; условие с
+        `pull_request` в тех же формах и условие другого шага — нет.
+
+        Ловит мутацию: условие ищется только на отдельной строке `if:`
+        (не на строке дефиса) или продолжение не склеивается — на
+        переносе `pull_request` во второй строке ложное нарушение; условие
+        берётся у соседнего шага — push-only шаг пуша main перед шагом
+        сценария даёт нарушение; тест краснеет.
+        """
+        push_only = ("      - if: github.event_name == 'push' && "
+                     "startsWith(github.ref, 'refs/heads/task/')\n"
+                     "        run: python3 scripts/plan_appendix_ci.py")
+        wrapped = ("      - name: приложения\n"
+                   "        if: github.event_name == 'push' ||\n"
+                   "          github.event_name == 'pull_request'\n"
+                   "        run: python3 scripts/plan_appendix_ci.py")
+        main_step = ("      - if: github.event_name == 'push'\n"
+                     "        run: echo main")
+        errors = pac.workflow_errors(workflow([push_only, TESTS],
+                                              [main_step, wrapped, TESTS]))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("job python:", errors[0])
+        self.assertIn("только push", errors[0])
 
 
 if __name__ == "__main__":
