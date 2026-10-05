@@ -19,8 +19,8 @@ import contextlib
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
-              fsm, fsm_autogate, gitcmd, merge_after, store, workspace,
-              yamlmini)
+              fsm, fsm_autogate, gitcmd, github_adapter, merge_after, store,
+              workspace, yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
@@ -318,7 +318,9 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # теперь `auto` (orchestrator/auto.py, требование 1); этот вызов
     # остаётся тем же ОДНИМ опросом что и раньше при ручном advance
     # (требование 5, AC-8). Ни один исход не создаёт коммитов и не
-    # «будит» CI (требование 7, AC-10).
+    # «будит» CI (требование 7, AC-10) — кроме исхода 422: голову, которой
+    # нет в origin, опрос отправляет туда сам (SPEC
+    # 01M44ENQCRK02T2MWZB9HC3XHH, требование 6).
     branch = t["branch"]
     outcome, note = ci.verifying_status(branch,
                                         repo=workspace.task_repo(task_id))
@@ -334,6 +336,14 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail=note)
         return False
+    if ci.verifying_head_not_in_origin(note) and not t["is_canary"]:
+        # GitHub не видит голову (HTTP 422) — без отправки CI по ней не
+        # придёт, и задача ждала бы потолка (SPEC 01M44ENQCRK02T2MWZB9HC3XHH,
+        # требование 6, вариант (а)). Узел сам пишет запись об успехе или
+        # отказе; состояние и отсчёт потолка не меняются — на отказе
+        # следующий опрос повторит попытку. Канарейку origin не трогает,
+        # как рубеж `in_dev` (`_origin_push_gate`).
+        github_adapter.ensure_head_in_origin(conn, task_id, branch)
     # Счётчик попыток остаётся информационной записью (требование 3,
     # AC-7) — эскалацию решает только прошедшее время с момента входа
     # в состояние, не число вызовов advance.

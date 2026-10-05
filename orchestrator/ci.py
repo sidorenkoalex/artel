@@ -209,6 +209,10 @@ VERIFYING_RED = "red"
 # исхода висит дольше `config.CI_STUCK_CHECK_MINUTES`. Не зелёный и не
 # красный — задачу не двигает, но `ci-rerun` в нём перезапускает прогон.
 VERIFYING_STUCK = "stuck"
+# Начало `note` исхода «голова ветки не в origin» (HTTP 422) у
+# `verifying_status` — вход `verifying_head_not_in_origin` ниже. Исход сам
+# остаётся `VERIFYING_NONE`: для остальных потребителей это «проверок нет».
+HEAD_NOT_IN_ORIGIN_NOTE = "голова ветки не в origin"
 
 # Статусы check-run'а, в которых проверка может зависнуть (требование 2).
 _STUCK_STATUSES = {"in_progress", "queued"}
@@ -343,8 +347,9 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
     runs, why = check_runs(sha)
     if runs is None and _commit_not_found_in_origin(why):
         return VERIFYING_NONE, (
-            f"голова ветки не в origin — GitHub не нашёл коммит {short} "
-            f"({why}); подсказка: git push -u origin {branch}")
+            f"{HEAD_NOT_IN_ORIGIN_NOTE} — GitHub не нашёл коммит {short} "
+            f"({why}); пульт сам отправит голову ветки {branch} в origin "
+            f"(push) при опросе verifying")
     if not runs:
         first_source = (f"у коммита {short} нет ни одной проверки CI"
                         if runs is not None else
@@ -394,6 +399,14 @@ def verifying_is_red(note: str) -> bool:
     `gh` второй раз за ту же итерацию.
     """
     return "не зелёный:" in note
+
+
+def verifying_head_not_in_origin(note: str) -> bool:
+    """Был ли `note` из `verifying_status` исходом 422 «голова ветки не в
+    origin» (SPEC 01M44ENQCRK02T2MWZB9HC3XHH, требование 6): по тексту уже
+    прочитанного статуса, как `verifying_is_red`, без второго опроса `gh`.
+    Обработчик `verifying` на нём отправляет голову в origin сам."""
+    return note.startswith(HEAD_NOT_IN_ORIGIN_NOTE)
 
 
 # Короткая форма sha, которую `verifying_status`/`branch_status` кладут в
