@@ -122,7 +122,8 @@ schema_version: 5
 - `tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py` — долгоживущий файл
   задачи под суммой `acceptance_tests/long_lived.sha256.txt` (70267394…):
   его правка разработчиком отказывается гейтом лока, канал — `amend-tests`.
-  Не правлен, см. «Эскалация». Правка проверена временно (возвращена
+  Разработчиком не правлен — эскалирован, правку внёс Оператор (см. «Ответ
+  на эскалацию (ANSWER-1)»). Правка проверена временно (возвращена
   `git checkout`): с ней `test_no_dns_hostname_addresses_in_tests_tree` —
   passed, долгоживущий файл — 8 passed, 29 subtests.
 
@@ -152,3 +153,13 @@ schema_version: 5
   `tests/test_ci_status_kind_gate.py`,
   `tests/test_01m3y75c9ty76083cg1pk00em4_stuck_check.py` — 104 passed,
   68 subtests.
+- Повторно в шаге после ответа: `-k NoNetworkAddresses` — 2 passed;
+  долгоживущий файл + `tests/test_ci_status.py` — 85 passed, 60 subtests.
+  `suite-run` №2 (полный набор): 4420 passed, 2 skipped, 1 failed —
+  `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
+  (`AssertionError: 0 not greater than or equal to 1`, повтор №3 — то же).
+  К задаче не относится: diff ветки — только `orchestrator/ci.py`,
+  `tests/test_ci_status.py`, долгоживущий файл и карта; `liveness.py` и
+  его тест не тронуты и `ci` не импортируют. База в прогоне не досчиталась,
+  так что упавшие с базой не сравнивались. Похоже на зависимость теста от
+  окружения шага роли (подсчёт группы процессов).
