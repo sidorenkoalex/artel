@@ -152,7 +152,8 @@ schema_version: 5
   `test_mutation_claim_gate.py`, статистика правила, деление — 443 passed;
 - переходы (`test_long_lived_transitions.py`, `test_acceptance_tests_flow.py`,
   `test_multitarget.py`, `test_git_fixation.py`, …) — 201 passed;
-- `tests/test_guard_assertion_changes.py` — 13 passed; под временной
+- `tests/test_guard_assertion_changes.py` — 16 passed (13 + 3 сторожа
+  `SignedLiteralTest` итерации 2); под временной
   мутацией (направление `assertNotAlmostEqual`, признак `setUp`) — два
   сторожа красны, код возвращён. Сторож инварианта 38 из Приложения 6 —
   красен при снятой причине «смена вне раздела», зелен на коде задачи.
@@ -164,6 +165,36 @@ schema_version: 5
 `git apply --check` каждого из шести приложений на чистом дереве
 (HEAD 893ccbf5 + код задачи без приложений) — код 0 у всех шести.
 
+### Итерация 2 (REVIEW итерации 1, ANSWER-3)
+
+- **R1-F2 (ANSWER-3, вопрос 2 (а)) — исправлено.** `scripts/guard.py`:
+  `_literal` — литерал на позиции константы: `Constant` либо
+  `UnaryOp(USub/UAdd, Constant)` над числом (не `bool`) со знаковым
+  значением. Его маскирует `_LiteralMasker.visit_UnaryOp`; пары
+  `_expectation_pairs` идут по `_literal_positions` (параллельный
+  `ast.walk` сбивался бы на `-2` против `1` — у знаковой стороны лишние
+  узлы); роли строгости `_constant_roles` (`equality`/`tolerance`/
+  `single`) и развилка `_divergence` видят тот же литерал. Итог:
+  `-2` → `-3` — пара `(-2, -3)`, совпадает с объявленной `` `-2` → `-3` ``;
+  `1` → `-1` — смена ожидания на позиции равенства; граница порядка
+  оценивается по знаковому значению.
+- Сторожа — `tests/test_guard_assertion_changes.py::SignedLiteralTest`
+  (три метода, заявки «Ловит мутацию»). Временные мутации, каждая
+  прогнана и возвращена: знак не входит в значение — 3 failed;
+  `visit_UnaryOp` не маскирует — 1 failed
+  (`test_positive_to_negative_…`); `single` принимает только `Constant` —
+  1 failed (`test_order_bound_…`).
+- **R1-F1 (ANSWER-3, вопрос 1)** — код не меняется: строку SPEC Оператор
+  правит в снимке на main после мержа; проверка формы раздела не
+  ослаблена.
+- Прогоны после правки: `test_guard_assertion_changes.py`,
+  `test_guard_test_ast.py`, `…_section_form.py`, `test_test_integrity_gate.py`,
+  `…assertion_observation.py`, `…class_mandate.py`,
+  `test_fsm_advance_gate_smoke.py`, `test_review_package.py` — 260 passed;
+  `…_declared_change.py` — 42 passed (`timeout=300`); планка
+  `plank-run` — 4 passed, код 0. Карта регенерирована
+  (`scripts/codebase_map.py`).
+
 ## Риски
 
 - Повторный approve SPEC, из которого раздел убран, записи объявления не
@@ -174,8 +205,9 @@ schema_version: 5
   константы во вложенных вызовах — «правило не умеет оценить строгость»,
   то есть отказ, а не пропуск (fail-closed по требованию 9).
 - Строку раздела SPEC этой самой задачи («для всех трёх случаев →…»)
-  новая проверка формы сочла бы негодной — задача уже прошла гейт SPEC,
-  на её рубежи это не влияет.
+  новая проверка формы отклоняет; после мержа снимок документов в
+  `tasks/` main покрасил бы `guard --all` (R1-F1). По ANSWER-3 Оператор
+  правит строку в снимке на main сразу после мержа, до pin-update.
 - Имя `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py::MergeGateObservationTest::test_ac8_merge_gate_journals_and_does_not_escalate`
   расходится с новым поведением (гейт мержа теперь эскалирует): по
   решению Оператора (ANSWER-2) метод не переименован, докстринг описывает
