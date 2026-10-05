@@ -9,9 +9,11 @@
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
 import contextlib
+import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -663,7 +665,9 @@ def _full_suite_detail(outcome: str, digest: str,
     return f"{head}: {digest}{log_note}"
 
 
-def run_full_suite(root: Path) -> tuple[bool, str]:
+def run_full_suite(root: Path, command: list[str] | None = None,
+                   targets: tuple = ("tests",), extra: tuple = (),
+                   log: Path | None = None) -> tuple[bool, str]:
     """(зелено, ПОЛНЫЙ вывод прогона) — прогон ПОЛНОГО пакета `tests/`
     каталога `root` через pytest (SPEC T066, требование 2в; переход раннера —
     SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
@@ -696,21 +700,157 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     лога (`full_suite` выше), а в журнал уходит уже не он, а выжимка
     `run_digest`, ограниченная `config.LOG_TAIL_*` — записи журнала от
     этого только короче, чем были со срезом.
+
+    Параметры команды `suite-run` (SPEC 01M462QACEH29RPRD2RZHGHQFM,
+    требования 1, 6, 10); гейты их не передают, и их прогон не меняется:
+    `command` — начало команды из профиля тестов проекта (как у `run()`);
+    `targets` — пути или id тестов вместо `tests` (повтор упавших);
+    `extra` — флаги pytest после флагов параллели; `log` — вывод идёт
+    прямо в этот файл по ходу прогона (ход прогона читается из него, пока
+    прогон идёт), а на пределе времени убивается вся группа процессов
+    pytest с рабочими xdist — фоновому прогону некому добить сирот.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, FULL_SUITE_NO_TESTS_NOTE
+    argv = _pytest_command(*targets, command=command) + [
+        "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist", *extra]
+    if log is not None:
+        return _run_full_suite_to_log(argv, root, log)
     try:
         with _pytest_env() as env:
             res = subprocess.run(
-                _pytest_command("tests") + [
-                    "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"],
-                cwd=root, env=env, capture_output=True, text=True,
+                argv, cwd=root, env=env, capture_output=True, text=True,
                 timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
         return False, f"{_full_suite_timeout_note()}\n{output}"
     return res.returncode == 0, res.stdout + res.stderr
+
+
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _run_full_suite_to_log(argv: list[str], root: Path,
+                           log: Path) -> tuple[bool, str]:
+    """Прогон `run_full_suite` с выводом прямо в файл `log`. Вывод
+    читается из файла байтами с заменой не-UTF-8: чужой проект вправе
+    печатать что угодно, а разбор не имеет права уронить фоновый прогон.
+    `PYTHONUNBUFFERED` — иначе на пределе времени SIGKILL съел бы
+    неслитый буфер, и числа успевшей части пропали бы (требование 6)."""
+    timed_out = False
+    with _pytest_env() as env, open(log, "wb") as fh:
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(argv, cwd=root, env=env, stdout=fh,
+                                stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+        try:
+            code = proc.wait(timeout=config.FULL_SUITE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(proc.pid)
+            proc.wait()
+        except BaseException:
+            _kill_group(proc.pid)
+            proc.wait()
+            raise
+    output = log.read_bytes().decode("utf-8", errors="replace")
+    if timed_out:
+        return False, f"{_full_suite_timeout_note()}\n{output}"
+    return code == 0, output
+
+
+# ----------------------------------------- сохранённые итоги полного набора
+#
+# Перечень упавших тестов завершённого прогона полного набора по sha дерева,
+# на котором он шёл (SPEC 01M462QACEH29RPRD2RZHGHQFM, требования 7-8):
+# итог базы для `suite-run` любой задачи с этой базой — второй раз база не
+# прогоняется. Пишут его гейты (`full_suite`) и прогон базы `suite-run`.
+
+_FAILED_ENTRY = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - (.*))?$",
+                           re.MULTILINE)
+
+
+def failed_entries(output: str) -> list[tuple[str, str]]:
+    """(id теста, первая строка сообщения) из блока «short test summary
+    info» — по одной паре на упавший тест, без повторов; сообщения нет —
+    пустая строка."""
+    seen = {}
+    for node, message in _FAILED_ENTRY.findall(output):
+        seen.setdefault(node.strip(), (message or "").strip())
+    return list(seen.items())
+
+
+def suite_results_dir() -> Path:
+    """Каталог сохранённых итогов — в каталоге логов пульта; функция, а не
+    константа: `config.LOGS` подменяют тесты."""
+    return config.LOGS / "fullsuite-results"
+
+
+def saved_failures(sha: str) -> list[str] | None:
+    """Перечень упавших сохранённого итога по `sha`; `None` — итога нет
+    или файл не читается (прогон базы тогда идёт заново)."""
+    path = suite_results_dir() / f"{sha}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        failed = data["failed"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return [str(n) for n in failed] if isinstance(failed, list) else None
+
+
+def save_failures(sha: str, failed: list[str], source: str) -> None:
+    """Итог завершённого прогона по `sha`. Запись через временный файл и
+    `replace` — читатель не увидит половину файла; сбой записи не
+    поднимается: итог — ускорение `suite-run`, не условие гейта."""
+    folder = suite_results_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / f".{sha}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps({"sha": sha, "failed": sorted(failed),
+                                   "source": source}, ensure_ascii=False),
+                       encoding="utf-8")
+        tmp.replace(folder / f"{sha}.json")
+    except OSError:
+        pass
+
+
+def clean_tree_sha(root: Path) -> str | None:
+    """sha HEAD каталога `root`, если его дерево совпадает с коммитом
+    (без изменённых и неотслеживаемых файлов вне `tasks/` — туда пульт
+    выкладывает планку); иначе `None`: итог грязного дерева не итог sha."""
+    head = gitcmd.in_repo(root, "rev-parse", "HEAD")
+    if head is None or head.returncode != 0 or not head.stdout.strip():
+        return None
+    status = gitcmd.in_repo(root, "status", "--porcelain",
+                            "--untracked-files=all", "--", ".",
+                            ":(exclude)tasks")
+    if status is None or status.returncode != 0 or status.stdout.strip():
+        return None
+    return head.stdout.strip()
+
+
+def _remember_gate_failures(root: Path, outcome: str, output: str) -> None:
+    """Сохранение итога прогона гейта (требование 7): только завершённый
+    прогон с итоговой строкой pytest (требование 8) и только чистое
+    дерево. Сбой git здесь — молча без сохранения: исход гейта от этого
+    не зависит (требование 1)."""
+    if outcome not in (FULL_SUITE_GREEN, FULL_SUITE_RED):
+        return
+    if not run_summary_line(output):
+        return
+    try:
+        sha = clean_tree_sha(root)
+    except (OSError, ValueError, AttributeError):
+        return
+    if sha:
+        save_failures(sha, [node for node, _ in failed_entries(output)],
+                      "гейт")
 
 
 def full_suite(root: Path, task_id: str) -> FullSuiteRun:
@@ -729,6 +869,7 @@ def full_suite(root: Path, task_id: str) -> FullSuiteRun:
     """
     green, output = run_full_suite(root)
     outcome = _full_suite_outcome(green, output)
+    _remember_gate_failures(root, outcome, output)
     log_path = (_write_full_suite_log(task_id, output)
                 if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
     digest = run_digest(output)
