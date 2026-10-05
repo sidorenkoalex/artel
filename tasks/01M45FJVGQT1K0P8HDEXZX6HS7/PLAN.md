@@ -144,6 +144,36 @@ orchestrator/advance_gates/acceptance.py:37: workspace.repo(config.DEFAULT_TARGE
 `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py`,
 `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_profile_refusals.py` и планка.
 
+Ревью, итерация 1 (R1-F1): требования 3 и 5 для внешнего проекта держала
+только планка с пометкой «разовый». Сторожа в `tests/` — новый файл
+`tests/test_project_profile_gates.py` (11 методов, все с заявками «Ловит
+мутацию»), песочница — задача проекта `sled` в БД, настоящий
+`store.journal`, git гейтов подменён примитивами `gitcmd`:
+- `SkipIsJournaledTest` — проект без профиля: запись
+  `проверка тестов не выполняется: <проверка>` с причиной «у проекта
+  «sled» нет test_profile» ровно одна на гейте заявки мутации, гейте
+  неослабления, сверке перечня (`_long_lived_manifest_refuses`, задача с
+  `tests_locked_sha`) и разделе пакета ревью (`review.
+  _changed_assertions_part`, пометка о пропуске в разделе);
+- `ForeignProfileMutationClaimTest` — профиль с `mutation_claim_scope:
+  [checks/**/test_*.py]`: тест без заявки в `checks/unit/test_a.py` —
+  отказ, `tests/test_x.py` заявки не требует;
+- `ForeignProfileWeakeningTest` — `weakening_scope: [checks/**/*.py]`:
+  удаление тестов в `checks/test_alpha.py` — отказ, тот же дифф в
+  `tests/test_alpha.py` — без отказа;
+- `ForeignProfileLongLivedPathTest` — `_diff_entry_error` с
+  `long_lived_dir: checks`, `long_lived_name: check_<id>_<name>.py`: путь по
+  шаблону профиля законен, `tests/test_<id>_x.py` — «вне checks/»,
+  `checks/test_<id>_x.py` — без префикса задачи, подсказка называет шаблон
+  профиля.
+
+Временные мутации (каждая отдельно, код возвращён, `git status` —
+только новый файл и карта): `journal_skip` → `return` — 4 failed;
+зашитый фильтр `tests/test_*.py` верхнего уровня в `_mutation_claim_gate`
+(мутация ревьювера) — 2 failed; `_test_integrity_gate` без `scope=` — 2
+failed; каталог `tests/` зашит в `_diff_entry_error` — 3 failed;
+`Profile.is_long_lived` с артельными умолчаниями `guard` — 1 failed.
+
 **Меняемое поведение / смена ожиданий существующих тестов.** Раздела
 «Меняемое поведение» в SPEC нет, мандата Оператора на смену ожиданий не
 требуется: ни одно утверждение существующего теста не изменено. Тесты,
@@ -242,6 +272,20 @@ declared_without_profile`), и пропуск идёт по правилу тр�
   merge-base — без заявки нет ни одного.
 
 ## Проверено исполнением
+
+Итерация после ревью (REVIEW.md, итерация 1, R1-F1). Код реализации и
+приложения не менялись; добавлен `tests/test_project_profile_gates.py`,
+карта перегенерирована (`python3 scripts/codebase_map.py`).
+- `python3 -B -m pytest tests/test_project_profile_gates.py
+  tests/test_project_profile.py tests/test_mutation_claim_gate.py
+  tests/test_test_integrity_gate.py
+  tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py
+  tests/test_01m45fjvgqt1k0p8hdexzx6hs7_profile_refusals.py -p
+  no:cacheprovider -p timeout -o timeout=120` — 95 passed, 49 subtests
+  passed.
+- Пять временных мутаций (перечень и итоги — «Тесты») — каждая красит
+  новый файл; прогоны с `-B` (без устаревшего `.pyc`), исходники
+  восстановлены, временный сценарий мутаций удалён.
 
 Итерация после ответа Оператора (ANSWER-2, 05.10). Вопрос 1 — вариант C:
 черновой PR ветки задачи (sidorenkoalex/artel#220) Оператор закрыл;
