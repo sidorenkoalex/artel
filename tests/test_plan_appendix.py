@@ -27,7 +27,8 @@ from orchestrator import (acceptance, artifact_branch, auto,  # noqa: E402
                           gitcmd, store)
 from orchestrator.advance_gates import plan_appendix  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import RealGitSandbox, TmpRootTest, capture  # noqa: E402
+from tests.sandbox import (ARTEL_TEST_PROFILE, RealGitSandbox,  # noqa: E402
+                           TmpRootTest, capture)
 
 # Защищённый путь-файл и защищённый каталог — от `config.PROTECTED_PATHS`,
 # не литералом: список меняет Оператор, и тест обязан пережить его
@@ -592,7 +593,7 @@ TARGETS_YAML = """targets:
     no_paths: []
     project_skills: []
     merge_gate: operator
-"""
+""" + ARTEL_TEST_PROFILE
 
 BASE_TEXT = "первая строка базы\nвторая строка базы\nтретья строка базы\n"
 

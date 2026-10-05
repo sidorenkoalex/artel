@@ -27,6 +27,7 @@ from orchestrator import (acceptance, artifact_branch, brief, checkpoint,  # noq
                           store)
 from orchestrator.advance_gates import acceptance as acceptance_gates  # noqa: E402
 from scripts import guard  # noqa: E402
+from tests.sandbox import declare_target  # noqa: E402
 from tests.test_timeout_checkpoint import _WorktreeCheckpointTest  # noqa: E402
 
 LONG_LIVED_SOURCE = '''"""Долгоживущий файл фикстуры.
@@ -146,6 +147,10 @@ class _LongLivedGitTest(_WorktreeCheckpointTest):
         super().setUp()
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
         self.own = f"tests/test_{self.TASK.lower()}_alpha.py"
+        # Внешний проект сценариев объявлен в targets.yaml без профиля
+        # тестов: проект с неразрешённым контекстом проверки тестов
+        # отклоняют (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 5).
+        declare_target("sled")
 
     def set_row(self, **fields) -> None:
         store.update_task(store.db(), self.TASK, **fields)

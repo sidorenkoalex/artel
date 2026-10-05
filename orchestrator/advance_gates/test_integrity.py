@@ -55,7 +55,7 @@ from typing import NamedTuple
 from scripts import guard
 
 from .. import artifact_branch as docs_ref
-from .. import config, gitcmd, store, workspace
+from .. import config, gitcmd, project_profile, store, workspace
 from . import two_sided
 from ._base import GateRefusal, _run_gates
 # Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
@@ -522,12 +522,18 @@ def _git_failure(detail: str) -> Comparison:
     return Comparison(None, [], None, [], [], [], "", detail)
 
 
-def _compare(code_branch: str, repo=None) -> Comparison:
+def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
     """Один проход по диффу `tests/` для всех наблюдателей узла.
 
     `repo` — клон проекта задачи, в котором живёт `code_branch` (ADR-0021
     п.1). Храповик (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование 12) считает
-    по тем же текстам файлов этого прохода: новых запросов git нет."""
+    по тем же текстам файлов этого прохода: новых запросов git нет.
+
+    `scope` — область узла: `weakening_scope` профиля тестов проекта
+    (`project_profile.Profile.in_weakening_scope`, SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5); не названа — `_in_scope`
+    (область артели) для вызовов вне рубежей."""
+    in_scope = scope or _in_scope
     base = gitcmd.diff_base(code_branch, repo=repo)
     if base is None:
         return _git_failure(_git_silence(
@@ -547,7 +553,7 @@ def _compare(code_branch: str, repo=None) -> Comparison:
     files: list = []
     for status, first, second in entries:
         base_path, head_path, renamed_to = _pair(status, first, second)
-        if not _in_scope(base_path) and not _in_scope(head_path):
+        if not in_scope(base_path) and not in_scope(head_path):
             continue
         sources = {}
         for side, ref, path in (("base", base, base_path),
@@ -580,7 +586,7 @@ def _compare(code_branch: str, repo=None) -> Comparison:
                       base, "")
 
 
-def findings(code_branch: str, repo=None) -> tuple:
+def findings(code_branch: str, repo=None, scope=None) -> tuple:
     """(находки ветки против базы сравнения о файлах и методах, прошедшие
     послабление пропуски, текст сбоя git).
 
@@ -599,7 +605,7 @@ def findings(code_branch: str, repo=None) -> tuple:
     Находки об изменённых утверждениях сюда не входят: их исход зависит от
     объявленного в SPEC и от мандата, его считает общий вход `uncovered`.
     """
-    cmp = _compare(code_branch, repo=repo)
+    cmp = _compare(code_branch, repo=repo, scope=scope)
     return cmp.found, cmp.passed, cmp.git_detail
 
 
@@ -626,12 +632,12 @@ def _covering_source(finding: Finding, mandate: dict):
 
 
 def assertion_observation(task_id: str, code_branch: str,
-                          artifact_branch: str) -> tuple:
+                          artifact_branch: str, scope=None) -> tuple:
     """(строки находок об изменённых утверждениях с отметкой мандата,
     причины невыполненного наблюдения по файлам, текст сбоя git).
     Ничего не журналирует: запись пишут рубежи через `uncovered`."""
     repo = workspace.task_repo(task_id)
-    cmp = _compare(code_branch, repo=repo)
+    cmp = _compare(code_branch, repo=repo, scope=scope)
     if cmp.observed is None:
         return [], [], cmp.git_detail
     mandate = _answer_mandate(artifact_branch, task_id) if cmp.observed else {}
@@ -847,7 +853,7 @@ class _Evaluation(NamedTuple):
 
 
 def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
-              merge_route: bool = False) -> _Evaluation:
+              merge_route: bool = False, scope=None) -> _Evaluation:
     """Сравнение, различение и сверка с объявленным (требования 4-7, 11-12)
     без записей журнала — общая часть обоих рубежей и ревью-пакета.
 
@@ -857,7 +863,7 @@ def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
     иных непокрытых находок в проходе нет: иначе отказ уже стоит и
     адресно называет причину убыли."""
     repo = workspace.task_repo(task_id)
-    cmp = _compare(code_branch, repo=repo)
+    cmp = _compare(code_branch, repo=repo, scope=scope)
     declared = declared_changes(conn, task_id) if conn is not None else {}
     if cmp.found is None:
         return _Evaluation(None, [], {}, [], declared, {}, cmp)
@@ -980,7 +986,7 @@ def _journal_outcome(conn, task_id: str, outcomes: dict) -> None:
 
 
 def uncovered(conn, task_id: str, code_branch: str,
-              artifact_branch: str) -> tuple:
+              artifact_branch: str, scope=None) -> tuple:
     """(находки без мандата Оператора, текст сбоя git) — общий вход обоих
     гейтов.
 
@@ -999,20 +1005,20 @@ def uncovered(conn, task_id: str, code_branch: str,
     SPEC (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование 7); храповик — тоже
     здесь. Двусторонний прогон и запись исхода рубежа — дело самих гейтов.
     """
-    ev = _evaluate(conn, task_id, code_branch, artifact_branch)
+    ev = _evaluate(conn, task_id, code_branch, artifact_branch, scope=scope)
     _journal_pass(conn, task_id, ev)
     return ev.rest, ev.cmp.git_detail
 
 
 def review_lines(conn, task_id: str, code_branch: str,
-                 artifact_branch: str) -> tuple:
+                 artifact_branch: str, scope=None) -> tuple:
     """(строки раздела «Изменённые утверждения тестов» ревью-пакета,
     причины невыполненного наблюдения, текст сбоя git) — требование 13.
     По каждому методу: прежняя строка наблюдения, исход рубежа, для
     объявленного — «было → стало (требование N)» из записи approve, для
     метода исхода 7а — итог двустороннего прогона для текущей головы.
     Ничего не журналирует."""
-    ev = _evaluate(conn, task_id, code_branch, artifact_branch)
+    ev = _evaluate(conn, task_id, code_branch, artifact_branch, scope=scope)
     cmp = ev.cmp
     if cmp.found is None:
         return [], [], cmp.git_detail
@@ -1093,17 +1099,30 @@ def _test_integrity_gate(conn, task_id: str, t,
     отказы идут первыми. Нет методов исхода 7а — ни git, ни pytest, ни
     записи.
 
-    Канареечная задача и внешний target — гейт не проверяется, тем же
-    условием и по тем же доводам, что у `_mutation_claim_gate` (AC-10):
-    дифф в `config.ROOT` не видит код внешнего target, а канареечный
-    `verifying` убивает задачу сразу по входу.
+    Канареечная задача — гейт не проверяется, тем же условием и по тем же
+    доводам, что у `_mutation_claim_gate` (AC-10): канареечный `verifying`
+    убивает задачу сразу по входу.
+
+    Область — `weakening_scope` профиля тестов проекта, дифф — в клоне
+    проекта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 5): проект без
+    профиля гейт не проверяет и пишет об этом запись в журнал;
+    неразрешённый контекст и артель без профиля — отказ.
 
     Git не ответил — отказ, не пропуск (fail-closed, ADR-0002, AC-11):
     сломанный git не значит «ослабления нет», значит «сверить нечем».
     """
-    if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
+    if t["is_canary"]:
         return None
-    ev = _evaluate(conn, task_id, t["branch"], artifact_branch)
+    decision = project_profile.decide(t["target"])
+    if decision.refusal:
+        return GateRefusal(project_profile.REFUSAL_ACTION, decision.refusal,
+                           project_profile.refusal_hint(task_id))
+    if decision.profile is None:
+        project_profile.journal_skip(conn, task_id,
+                                     project_profile.CHECK_WEAKENING, decision)
+        return None
+    ev = _evaluate(conn, task_id, t["branch"], artifact_branch,
+                   scope=decision.profile.in_weakening_scope)
     _journal_pass(conn, task_id, ev)
     if ev.rest is None:
         hint = (f"разберись, почему git не отвечает, и повтори "
@@ -1149,7 +1168,7 @@ def _test_integrity_gate_refuses(conn, task_id: str, t,
 
 
 def merge_gate_escalates(conn, task_id: str, state: str, code_branch: str,
-                         artifact_branch: str) -> bool:
+                         artifact_branch: str, scope=None) -> bool:
     """Тот же узел на гейте мержа (требование 7): находка без мандата —
     эскалация с тем же текстом отказа, что на переходе. Двусторонний
     прогон здесь не повторяется: метод исхода 7а проходит только с
@@ -1165,7 +1184,7 @@ def merge_gate_escalates(conn, task_id: str, state: str, code_branch: str,
     добавляет (AC-12).
     """
     ev = _evaluate(conn, task_id, code_branch, artifact_branch,
-                   merge_route=True)
+                   merge_route=True, scope=scope)
     _journal_pass(conn, task_id, ev)
     if ev.rest is None:
         return False

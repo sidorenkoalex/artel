@@ -66,7 +66,10 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(1 + 1, 2)
 """
 
-AC_TEST_WITH_MARKER = '''"""Красен до реализации: маркер красноты для прохождения guard'а T064."""
+AC_TEST_WITH_MARKER = '''"""Красен до реализации: маркер красноты для прохождения guard'а T064.
+
+Группа: разовый
+"""
 import unittest
 
 

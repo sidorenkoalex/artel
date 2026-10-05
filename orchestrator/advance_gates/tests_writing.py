@@ -3,7 +3,7 @@
 перенесено дословно из `orchestrator/fsm_advance.py`."""
 from scripts import guard
 
-from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
+from .. import (acceptance, artifact_branch, artifacts, checkpoint,
                 cycle_hint, fixation, github_adapter, gitcmd, store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
@@ -180,23 +180,15 @@ def _reserved_plank_helper_refusal(task_id: str) -> GateRefusal | None:
 def _tests_writing_acceptance_dir(task_id: str, tdir, target: str,
                                   branch: str, code_branch: str):
     """(планка, cwd) материализованной планки для сухого сбора на выходе
-    `tests_writing` (требование 2) — тот же трёхветочный выбор каталога,
-    что уже несут `_acceptance_run_refuses`/`_review_approved` ниже по
-    конвейеру для прогона той же планки (внешний target — рабочая копия
-    задачи в клоне target'а, ADR-0021 п.1-2; self на своей ветке —
-    worktree задачи; иначе — `tdir`/`config.ROOT`): отдельная функция, не
-    рефакторинг тех двух (PLAN «Подход») — обе уже плотно покрыты тестами
-    T023-семьи, а совпадение здесь — три строки на ветку, не повод
-    рисковать их поведением ради переиспользования."""
-    if target != config.DEFAULT_TARGET:
-        # Отказ `ensure` уже отклонил переход гейтом
-        # `_tests_writing_code_copy_gate`; здесь — идемпотентный повтор.
-        run_cwd, _err = workspace.ensure(task_id, code_branch)
-        return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
-    if workspace.on_task_branch(task_id, code_branch, target) is True:
-        run_cwd = workspace.path(task_id, target)
-        return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
-    return tdir, config.ROOT
+    `tests_writing` (требование 2): рабочая копия задачи в области
+    проекта (ADR-0021 п.1-2) — одна ветка логики для любого проекта,
+    включая артель (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6): сбор в
+    главной копии пульта проверял бы код пина, а не код задачи. `tdir` и
+    `target` больше не участвуют в выборе — сигнатура прежняя."""
+    # Отказ `ensure` уже отклонил переход гейтом
+    # `_tests_writing_code_copy_gate`; здесь — идемпотентный повтор.
+    run_cwd, _err = workspace.ensure(task_id, code_branch)
+    return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
 
 
 CODE_COPY_REFUSAL_ACTION = "переход отклонён: рабочая копия задачи не заведена"
@@ -204,15 +196,17 @@ CODE_COPY_REFUSAL_ACTION = "переход отклонён: рабочая ко
 
 def _tests_writing_code_copy_gate(task_id: str, target: str,
                                   code_branch: str) -> GateRefusal | None:
-    """Рабочая копия задачи внешнего проекта заведена до сухого сбора
-    планки (ревью 01M42PENCS26D0656X8FR7DFA7, R1-F3): иначе планка легла бы
-    в каталог без кода и сухой сбор упал бы на импорте с непонятной
-    причиной. Артель здесь не проверяется — её планка собирается в рабочей
-    копии, только если та уже на ветке задачи (`_tests_writing_acceptance_
-    dir`)."""
-    if target == config.DEFAULT_TARGET:
-        return None
+    """Рабочая копия задачи заведена до сухого сбора планки (ревью
+    01M42PENCS26D0656X8FR7DFA7, R1-F3): иначе планка легла бы в каталог без
+    кода и сухой сбор упал бы на импорте с непонятной причиной. Для любого
+    проекта, включая артель (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование
+    6): отката на главную копию пульта нет."""
     _path, error = workspace.ensure(task_id, code_branch)
+    if error is None and workspace.on_task_branch(
+            task_id, code_branch, target) is False:
+        # `ensure` отдаёт уже заведённую копию, не сверяя её ветку: сбор в
+        # ней проверял бы чужой код.
+        error = f"рабочая копия задачи не выписана на ветку {code_branch}"
     if error is None:
         return None
     return GateRefusal(CODE_COPY_REFUSAL_ACTION, error,
@@ -254,25 +248,30 @@ TEST_GROUPS_ACTION = "переход отклонён: группы приёмо
 
 
 def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
-                                    target: str) -> GateRefusal | None:
+                                    profile) -> GateRefusal | None:
     """Строка группы у каждого `test_*.py` планки и проверки долгоживущих
     файлов — признаки требования 3 и «Ловит мутацию» у каждого метода
     (SPEC 01M3N0BWYQ9KHVN41Z4G72706R, требования 1-4, 6-7; ADR-0020).
     Правила — `scripts/guard.py`, здесь только область и отказ.
 
-    Только target `config.DEFAULT_TARGET` (требование 7) — включая
-    канареечные задачи. Файлы — те же, что у сухого сбора (`acc_tdir`).
+    Любой проект с профилем тестов (`profile` — `project_profile.Profile`;
+    SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 5) — включая канареечные
+    задачи; `None` — профиля нет, пропуск журналирует вызывающий
+    обработчик. Файлы — те же, что у сухого сбора (`acc_tdir`).
 
     Подсказка test_author — в `detail`, не только в печати: история
     отказов брифа роли читает журнал (требование 6)."""
-    if target != config.DEFAULT_TARGET:
+    if profile is None:
         return None
     files = guard.acceptance_test_files(acc_tdir)
     # Долгоживущий файл в планке — отказ с подсказкой перенести его в
-    # `tests/` (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 4): временная
-    # оговорка задачи 1 снята; проверки задачи 1 для такого файла остаются.
+    # каталог долгоживущих тестов (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    # требование 4): временная оговорка задачи 1 снята; проверки задачи 1
+    # для такого файла остаются.
     errors = (guard.group_line_errors_from_files(files)
-              + guard.long_lived_plank_errors(files, task_id)
+              + guard.long_lived_plank_errors(files, task_id,
+                                              profile.long_lived_dir,
+                                              profile.long_lived_name)
               + guard.long_lived_errors_from_files(files, task_id))
     if not errors:
         return None
@@ -284,9 +283,9 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
 LONG_LIVED_ACTION = "переход отклонён: долгоживущие файлы tests/"
 
 
-def _long_lived_refusal(task_id: str, detail: str) -> GateRefusal:
+def _long_lived_refusal(task_id: str, detail: str, profile) -> GateRefusal:
     hint = (f"test_author только добавляет файлы "
-            f"{guard.long_lived_path_prefix(task_id)}<имя>.py со строкой "
+            f"{profile.long_lived_example(task_id)} со строкой "
             f"«Группа: {guard.GROUP_LONG_LIVED}»; верни прочее к базе ветки "
             f"и повтори artel.py advance {task_id}")
     return GateRefusal(LONG_LIVED_ACTION, f"{detail}\nдальше: {hint}", hint)
@@ -302,12 +301,14 @@ def _long_lived_git_refusal(task_id: str, detail: str) -> GateRefusal:
                        f"{detail}\nдальше: {hint}", hint)
 
 
-def _tests_writing_code_diff(task_id: str, code_branch: str):
+def _tests_writing_code_diff(task_id: str, code_branch: str, profile):
     """(записи диффа, {путь: текст}, отказ) — дифф кодовой ветки против её
     базы (`gitcmd.diff_base`, `gitcmd.diff_name_status`) и тексты
     добавленных долгоживущих файлов задачи на голове ветки (SPEC
-    01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2, 5). Сбой git — отказ, а не
-    пустой дифф: иначе нарушение прошло бы молча (ADR-0002)."""
+    01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2, 5) — по каталогу и шаблону
+    имени профиля тестов проекта (`profile`, SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7). Сбой git — отказ, а не пустой дифф: иначе
+    нарушение прошло бы молча (ADR-0002)."""
     repo = workspace.task_repo(task_id)
     base = gitcmd.diff_base(code_branch, repo=repo)
     entries = (gitcmd.diff_name_status(base, code_branch, repo=repo)
@@ -318,7 +319,7 @@ def _tests_writing_code_diff(task_id: str, code_branch: str):
                      f"прочитан — git не ответил, проверка невозможна")
     files: dict[str, str] = {}
     for status, path, _new in entries:
-        if status == "A" and guard.is_long_lived_test_path(task_id, path):
+        if status == "A" and profile.is_long_lived(task_id, path):
             text, reason = gitcmd.show(code_branch, path, repo=repo)
             if text is None:
                 return None, None, _long_lived_git_refusal(
@@ -329,9 +330,11 @@ def _tests_writing_code_diff(task_id: str, code_branch: str):
 
 
 def _diff_entry_error(task_id: str, status: str, path: str,
-                      new_path: str | None) -> str | None:
+                      new_path: str | None, profile) -> str | None:
     """Нарушение правила «только добавление» одной записью диффа
-    (требование 2); `None` — запись законна."""
+    (требование 2); `None` — запись законна. Каталог и имя — профиля
+    тестов проекта (у артели `tests/`, `test_<id>_<имя>.py`)."""
+    directory = f"{profile.long_lived_dir}/"
     if status[:1] in ("R", "C"):
         return (f"{path} -> {new_path}: переименование/копия — test_author "
                 f"не трогает существующие файлы")
@@ -341,16 +344,18 @@ def _diff_entry_error(task_id: str, status: str, path: str,
         return f"{path}: удаление файла базы ветки — существующие файлы не трогаются"
     if status != "A":
         return f"{path}: изменение «{status}» — допустимо только добавление"
-    if not path.startswith("tests/"):
-        return f"{path}: путь вне tests/ — кодовая ветка несёт только файлы tests/"
-    if not guard.is_long_lived_test_path(task_id, path):
+    if not path.startswith(directory):
+        return (f"{path}: путь вне {directory} — кодовая ветка несёт только "
+                f"файлы {directory}")
+    if not profile.is_long_lived(task_id, path):
         return (f"{path}: файл без префикса задачи — имя "
-                f"{guard.long_lived_path_prefix(task_id)}<имя>.py")
+                f"{profile.long_lived_example(task_id)}")
     return None
 
 
 def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
-                                   files: dict[str, str]) -> GateRefusal | None:
+                                   files: dict[str, str],
+                                   profile) -> GateRefusal | None:
     """Гейт «только добавление» на выходе из `tests_writing` (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2-3; ADR-0020, п. 7 — второй
     рубеж за откатом чекпоинта): дифф кодовой ветки несёт только
@@ -358,13 +363,18 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
     существует в `origin/main`, каждый — со строкой `Группа: долгоживущий`
     и проходит статические проверки задачи 1 (признаки, «Ловит мутацию»).
     Сухой сбор — тем же вызовом, что планка (`_tests_writing_dry_collect_
-    gate`), он требует выписанной рабочей копии кодовой ветки."""
+    gate`), он требует выписанной рабочей копии кодовой ветки.
+
+    Каталог и шаблон имени — профиля тестов проекта (`profile`, SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5)."""
     errors = [error for status, path, new_path in entries
-              if (error := _diff_entry_error(task_id, status, path, new_path))]
+              if (error := _diff_entry_error(task_id, status, path, new_path,
+                                             profile))]
     if files:
         repo = workspace.task_repo(task_id)
         main_ref = gitcmd.diff_base_source(code_branch, repo=repo)
-        on_main = gitcmd.ls_tree_files(main_ref, "tests", repo=repo)
+        on_main = gitcmd.ls_tree_files(main_ref, profile.long_lived_dir,
+                                       repo=repo)
         if on_main is None:
             return _long_lived_git_refusal(
                 task_id, f"дерево {main_ref} не прочитано — git не ответил, "
@@ -375,17 +385,17 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
             group, group_error = guard.plank_file_group(files[path])
             if group != guard.GROUP_LONG_LIVED and (group or group_error):
                 errors.append(f"{path}: нет строки «Группа: "
-                              f"{guard.GROUP_LONG_LIVED}» — в tests/ кодовой "
-                              f"ветки только долгоживущие файлы")
+                              f"{guard.GROUP_LONG_LIVED}» — в "
+                              f"{profile.long_lived_dir}/ кодовой ветки "
+                              f"только долгоживущие файлы")
         errors += guard.long_lived_errors_from_files(sorted(files.items()),
                                                      task_id)
-        if workspace.on_task_branch(task_id, code_branch,
-                                    config.DEFAULT_TARGET) is not True:
+        if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")
     if not errors:
         return None
-    return _long_lived_refusal(task_id, "; ".join(errors))
+    return _long_lived_refusal(task_id, "; ".join(errors), profile)
 
 
 def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
@@ -437,7 +447,9 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
 
 
 def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
-                                    extra: list[str] = ()) -> GateRefusal | None:
+                                    extra: list[str] = (),
+                                    command: list[str] | None = None
+                                    ) -> GateRefusal | None:
     """Требование 2/AC-4/AC-5: сухой сбор материализованной планки
     (`acceptance.collect`) ПОСЛЕ трассируемости AC и гейта AC-8, ДО
     перевода задачи в `in_dev` — отказ сбора (импорт/синтаксис планки)
@@ -455,14 +467,20 @@ def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
 
     `extra` — долгоживущие файлы `tests/` задачи: собираются тем же вызовом
     из рабочей копии кодовой ветки (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
-    требование 3)."""
+    требование 3).
+
+    `command` — начало команды прогона из профиля тестов проекта (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 6); `None` — команда пульта
+    (проект без профиля)."""
     refusal = _tests_writing_artifact_source_gate(acc_tdir, task_id)
     if refusal is not None:
         return refusal
+    kwargs = {"command": list(command)} if command else {}
     if extra:
-        collected, tail = acceptance.collect(acc_tdir, run_cwd, extra=list(extra))
+        collected, tail = acceptance.collect(acc_tdir, run_cwd, extra=list(extra),
+                                             **kwargs)
     else:
-        collected, tail = acceptance.collect(acc_tdir, run_cwd)
+        collected, tail = acceptance.collect(acc_tdir, run_cwd, **kwargs)
     if collected:
         return None
     hint = f"почини импорт/синтаксис планки и повтори artel.py advance {task_id}"

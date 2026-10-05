@@ -26,7 +26,8 @@ from orchestrator import (config, fsm_advance, fsm_merge_gate,  # noqa: E402
                           gitcmd, review, store)
 from orchestrator.advance_gates import test_integrity  # noqa: E402
 from tests.sandbox import (SchemaSeededTmpRootTest,  # noqa: E402
-                           TaskIdSchemaConnTmpRootTest)
+                           TaskIdSchemaConnTmpRootTest,
+                           declared_without_profile)
 
 BASE = "basesha"
 CODE_BRANCH = "task/t001-x"
@@ -367,7 +368,11 @@ class SkipConditionsTest(unittest.TestCase):
         def boom(*args, **kwargs):
             raise AssertionError("внешнему target гейт не звонит diff_base")
 
-        with mock.patch.object(gitcmd, "diff_base", boom):
+        # Внешний проект объявлен в targets.yaml без профиля тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 3): необъявленному гейт
+        # отказывает — контекст не разрешён (требование 5).
+        with declared_without_profile("sled"), \
+                mock.patch.object(gitcmd, "diff_base", boom):
             self.assertIsNone(fsm_advance._test_integrity_gate(
                 None, "T001", _task_row(target="sled"), ARTIFACT_BRANCH))
 

@@ -2,11 +2,13 @@
 `_mutation_claim_gate`, `_review_rework_gate` и их помощники дат/sha (SPEC
 01M2CYQR0357VAQFZ5VACJD9TD, требование 1) — перенесено дословно из
 `orchestrator/fsm_advance.py`."""
+import posixpath
 from datetime import datetime, timezone
 
 from scripts import guard
 
-from .. import auto, budget, config, gitcmd, store, workspace, yamlmini
+from .. import (auto, budget, config, gitcmd, project_profile, store,
+                workspace, yamlmini)
 from ._base import GateRefusal, _run_gates
 from .refusal_classes import MUTATION_CLAIM_GIT_REFUSAL_ACTION
 
@@ -191,14 +193,27 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
     SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 5.1): прежнее действие
     гейта остаётся за отсутствующей заявкой, которую дописывает роль.
 
-    Внешний (не self) target и канареечная задача — гейт не проверяется,
-    тем же условием, что `_origin_push_gate` (требование 3/AC-8): дифф в
-    `config.ROOT` не видит код внешнего target, а канареечный `verifying`
-    не ждёт CI и не читает origin — сверка тестов ветки здесь так же не
-    имеет смысла.
+    Канареечная задача — гейт не проверяется, тем же условием, что
+    `_origin_push_gate` (требование 3/AC-8): канареечный `verifying` не
+    ждёт CI и не читает origin — сверка тестов ветки здесь не имеет
+    смысла.
+
+    Область заявки — `mutation_claim_scope` профиля тестов проекта (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5), дифф — в клоне проекта:
+    проект без профиля гейт не проверяет и пишет об этом запись в журнал,
+    неразрешённый контекст и артель без профиля — отказ.
     """
-    if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
+    if t["is_canary"]:
         return None
+    decision = project_profile.decide(t["target"])
+    if decision.refusal:
+        return GateRefusal(project_profile.REFUSAL_ACTION, decision.refusal,
+                           project_profile.refusal_hint(task_id))
+    if decision.profile is None:
+        project_profile.journal_skip(conn, task_id,
+                                     project_profile.CHECK_MUTATION, decision)
+        return None
+    profile = decision.profile
     repo = workspace.task_repo(task_id)
     base = gitcmd.diff_base(branch, repo=repo)
     if base is None:
@@ -218,12 +233,10 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
                f"{base}...{branch}, и повтори artel.py advance {task_id}")
         return GateRefusal(MUTATION_CLAIM_GIT_REFUSAL_ACTION, detail, hint)
 
-    # Только tests/test_*.py на верхнем уровне каталога (AC-5) — тот же
-    # шаблон путей, что и остальные проверки заявок в acceptance_tests/
-    # (guard.scan_redness_markers).
-    test_files = [f for f in files
-                 if f.startswith("tests/test_") and f.endswith(".py")
-                 and f.count("/") == 1]
+    # Область заявки — маски профиля (у артели `tests/test_*.py`: только
+    # верхний уровень каталога, AC-5 — тот же шаблон путей, что и остальные
+    # проверки заявок в acceptance_tests/, guard.scan_redness_markers).
+    test_files = [f for f in files if profile.in_mutation_claim_scope(f)]
 
     per_file: list[str] = []
     for path in test_files:
@@ -237,10 +250,11 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
             # недоступный blob, гонка со сборкой мусора), не совпадающий
             # ни с «git не ответил», ни с `UnicodeDecodeError`, который
             # молча трактовался бы как удаление. Источник истины —
-            # `gitcmd.ls_tree_files(branch, "tests")`: путь есть в дереве
+            # `gitcmd.ls_tree_files` по каталогу файла: путь есть в дереве
             # HEAD — это сбой чтения независимо от текста причины; путь
             # реально отсутствует — легитимное удаление (требование 2).
-            tree = gitcmd.ls_tree_files(branch, "tests", repo=repo)
+            tree = gitcmd.ls_tree_files(branch, posixpath.dirname(path) or ".",
+                                        repo=repo)
             if tree is not None:
                 is_failure = path in tree
             else:

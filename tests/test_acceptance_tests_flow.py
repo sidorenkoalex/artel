@@ -34,7 +34,7 @@ from tests.sandbox import (FakeProc, TmpDirTest, TmpRootTest,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git,
                            link_artel_clone_to_root, patch_sleep,
-                           resilient_tmp_cleanup)
+                           resilient_tmp_cleanup, seed_artel_targets)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1018,8 +1018,18 @@ class AcceptanceRunTest(TmpRootTest):
         self.assertIn(config.CLI_VERSION_PIN, details[0])
 
     def test_no_acceptance_tests_directory_does_not_block_legacy_tasks(self):
-        """Задачи без acceptance_tests/ (skip_tests, либо старше T023)."""
+        """Задачи без acceptance_tests/ (skip_tests, либо старше T023).
+
+        Ловит мутацию: прогон приёмки на `in_dev -> verifying` перестаёт
+        учитывать `skip_tests` SPEC и отклоняет задачу без планки
+        «планка не найдена в источнике» — задача остаётся в `in_dev`, тест
+        покраснеет."""
         self.enter_in_dev()
+        # Задача с легитимным пропуском `tests_writing`: прогон идёт в
+        # рабочей копии задачи и у артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 6), где SPEC без skip_tests и без планки отклоняется
+        # «планка не найдена в источнике», как у внешнего проекта.
+        self.write_spec(SPEC_V2, extra="skip_tests: задача до планки\n")
 
         self.capture(fsm.cmd_advance, self.TASK)
 
@@ -1199,6 +1209,9 @@ class LockTest(unittest.TestCase):
             WORKTREES=self.root / ".artel" / "worktrees")
         self.patches.start()
         self.addCleanup(self.patches.stop)
+        # Запись артели с профилем тестов: без неё проверки тестов задачи
+        # артели отказывают (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4).
+        seed_artel_targets()
         # Клон артели — сам репозиторий песочницы (ADR-0021 п.1, этап 2):
         # ветки задачи и ссылка документов живут в клоне, сценарий правит
         # их git'ом `self.root`.
@@ -1295,12 +1308,18 @@ class LockTest(unittest.TestCase):
         return locked
 
     def commit_feature_code(self) -> None:
-        """Код разработчика в кодовой ветке — после лока, как в конвейере."""
-        self.git("checkout", "-q", self.code_branch)
-        (self.root / "feature.txt").write_text("код фичи\n", encoding="utf-8")
-        self.git("add", "feature.txt")
-        self.git("commit", "-q", "-m", f"{self.TASK}: код фичи")
-        self.git("checkout", "-q", config.MAIN_BRANCH)
+        """Код разработчика в кодовой ветке — после лока, как в конвейере:
+        в рабочей копии задачи, которую выход из `tests_writing` заводит и
+        у артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6) — ветка
+        занята ею, чекаут в `self.root` git не даст."""
+        wt = workspace.path(self.TASK, config.DEFAULT_TARGET)
+        (wt / "feature.txt").write_text("код фичи\n", encoding="utf-8")
+        for args in (("add", "feature.txt"),
+                     ("commit", "-q", "-m", f"{self.TASK}: код фичи")):
+            res = subprocess.run(["git", *args], cwd=wt, capture_output=True,
+                                 text=True)
+            self.assertEqual(res.returncode, 0,
+                             f"git {' '.join(args)}: {res.stderr}")
 
     def test_edit_after_lock_blocks_in_dev_to_review(self):
         self.enter_in_dev()

@@ -197,11 +197,13 @@ jobs:
       - name: зависимости из файла закреплённых версий (01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 3)
         run: python3 -m pip install -r requirements.lock
       - name: приложения PLAN задачи на дереве ветки (01M443HV9SJYVYQTHJSQ87QV68, требование 1)
-        # Только пуш task/**: тесты идут на дереве «код ветки плюс
-        # приложения её PLAN» (PLAN — из ссылки документов задачи в
-        # origin). Ничего не коммитит и не пушит; шаг стоит до снимка
+        # Пуш task/** и pull_request из ветки task/** того же репозитория
+        # (01M466ZERXQKXTR5RQCDYVDZJQ): тесты идут на дереве «код ветки
+        # плюс приложения её PLAN» (PLAN — из ссылки документов задачи в
+        # origin); на pull_request — на merge-коммите PR с базой, как у
+        # ворот мержа. Ничего не коммитит и не пушит; шаг стоит до снимка
         # ссылок ниже и сам ссылок не заводит.
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')) || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'task/') && github.event.pull_request.head.repo.full_name == github.repository)
         run: python3 scripts/plan_appendix_ci.py
       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
       - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
@@ -248,7 +250,7 @@ jobs:
       - name: зависимости из файла закреплённых версий для минимальной версии Python (01M29BANMM8X8JWJ5GDTJWKB0Z)
         run: python3 -m pip install -r requirements.lock
       - name: приложения PLAN задачи на дереве ветки (01M443HV9SJYVYQTHJSQ87QV68, требование 1)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')) || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'task/') && github.event.pull_request.head.repo.full_name == github.repository)
         run: python3 scripts/plan_appendix_ci.py
       - name: tests.test_invariants на минимальной объявленной версии Python (AC-2)
         run: |

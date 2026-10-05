@@ -23,7 +23,7 @@ from scripts import guard
 from . import agent_log, artifact_branch, ci, config, gitcmd, stack
 
 
-def _pytest_command(*args: str) -> list[str]:
+def _pytest_command(*args: str, command: list[str] | None = None) -> list[str]:
     """Общая часть команды pytest обоих раннеров: интерпретатор venv
     пульта (`stack.pytest_python_executable()` — не голый `"python3"`,
     резолвящийся по PATH ВЫЗЫВАЮЩЕГО процесса, а не роли: гейты/
@@ -39,8 +39,19 @@ def _pytest_command(*args: str) -> list[str]:
     загрузка по имени `timeout` — тот же плагин, что и так подключился бы
     автоматически (никакого эффекта, если он уже установлен), но при ЕГО
     ОТСУТСТВИИ в интерпретаторе даёт громкий `ImportError`/красный
-    returncode вместо тихого пропуска таймаута отдельного теста."""
-    return [stack.pytest_python_executable(), "-m", "pytest", *args,
+    returncode вместо тихого пропуска таймаута отдельного теста.
+
+    `command` — начало команды из профиля тестов проекта
+    (`project_profile.Profile.command`, SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 1): первый элемент `python3` — тот же интерпретатор venv
+    пульта, пути тестов и флаги пульта добавляются к нему; не назван —
+    команда пульта. Интерпретатор резолвится здесь, при сборке команды
+    прогона, а не в гейте: гейт, чей прогон не состоится, venv не ищет."""
+    head = (list(command) if command
+            else [stack.pytest_python_executable(), "-m", "pytest"])
+    if head[0] == "python3":
+        head[0] = stack.pytest_python_executable()
+    return [*head, *args,
             "-p", "no:cacheprovider", "-p", "timeout",
             "-o", f"timeout={stack.PER_TEST_TIMEOUT_SEC}"]
 
@@ -192,7 +203,8 @@ def plank_present(tests_dir: Path) -> bool:
 
 
 def run(tdir: Path, cwd: Path | None = None,
-        extra: list[str] = ()) -> tuple[bool, str]:
+        extra: list[str] = (),
+        command: list[str] | None = None) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
     01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `cwd`, равным
     рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
@@ -236,6 +248,9 @@ def run(tdir: Path, cwd: Path | None = None,
 
     `extra` — долгоживущие файлы `tests/` задачи (`_run_targets`): они
     исполняются тем же вызовом pytest, и при пустой планке тоже.
+
+    `command` — начало команды из профиля тестов проекта
+    (`_pytest_command`).
     """
     tests_dir = tdir / "acceptance_tests"
     targets = _run_targets(tests_dir, extra)
@@ -248,7 +263,7 @@ def run(tdir: Path, cwd: Path | None = None,
     try:
         with _pytest_env() as env:
             res = subprocess.run(
-                _pytest_command(*targets),
+                _pytest_command(*targets, command=command),
                 cwd=run_cwd, env=env, capture_output=True, text=True,
                 timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
@@ -261,7 +276,8 @@ def run(tdir: Path, cwd: Path | None = None,
 
 
 def collect(tdir: Path, cwd: Path | None = None,
-            extra: list[str] = ()) -> tuple[bool, str]:
+            extra: list[str] = (),
+            command: list[str] | None = None) -> tuple[bool, str]:
     """(собралось, хвост вывода) — сухой сбор планки `pytest
     --collect-only -q` (SPEC 01M2ARQRDV4YY9TVPHXN2E7136, требование 1,
     AC-1/AC-2/AC-3): та же команда, тот же интерпретатор и те же флаги
@@ -290,7 +306,8 @@ def collect(tdir: Path, cwd: Path | None = None,
 
     `extra` — тот же контракт, что у `run()`: долгоживущие файлы `tests/`
     собираются тем же вызовом из `cwd` — рабочей копии кодовой ветки
-    (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 3).
+    (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 3). `command` — тот же
+    контракт, что у `run()`.
     """
     tests_dir = tdir / "acceptance_tests"
     targets = _run_targets(tests_dir, extra)
@@ -303,7 +320,8 @@ def collect(tdir: Path, cwd: Path | None = None,
     try:
         with _pytest_env() as env:
             res = subprocess.run(
-                _pytest_command(*targets, "--collect-only", "-q"),
+                _pytest_command(*targets, "--collect-only", "-q",
+                                command=command),
                 cwd=run_cwd, env=env, capture_output=True, text=True,
                 timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:

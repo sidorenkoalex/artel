@@ -12,6 +12,7 @@ from unittest import mock
 
 from orchestrator import acceptance, fsm, fsm_advance, fsm_autogate, store, workspace
 from orchestrator.advance_gates import acceptance as acceptance_gate
+from tests.sandbox import declare_target
 from tests.test_docs_dir_layout import TASK, DocsDirSandbox
 
 EXTERNAL = "ext-proj"
@@ -21,6 +22,10 @@ REASON = "клон /нет/repo из git@example.invalid:ext.git не завед
 class ExternalCodeCopyRefusalTest(DocsDirSandbox):
     def setUp(self):
         super().setUp()
+        # Внешний проект объявлен в targets.yaml (без профиля тестов):
+        # проверки тестов проекта с неразрешённым контекстом отказывают
+        # раньше `ensure` (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 5).
+        declare_target(EXTERNAL)
         self.t = store.get_task(self.conn, TASK)
         self.branch = "refs/artifacts/" + TASK
         patcher = mock.patch.object(

@@ -2501,22 +2501,39 @@ _LONG_LIVED_NAME = re.compile(r"[a-z0-9_]+")
 _MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (\S.*)")
 
 
-def long_lived_path_prefix(task_id: str) -> str:
-    """`tests/test_<полный id в нижнем регистре>_` (Р1): только полный id
-    ULID уникален — первые 10 знаков у него метка времени, и у задач,
-    заведённых в одну миллисекунду, совпадают; нижний регистр — форма
-    имени ветки и допустимого имени модуля Python."""
-    return f"tests/test_{task_id.lower()}_"
+# Каталог и шаблон имени долгоживущего файла по умолчанию — значения
+# профиля тестов артели (`targets.yaml`, поле `test_profile`; SPEC
+# 01M45FJVGQT1K0P8HDEXZX6HS7, требование 1). Гейты задачи передают
+# значения профиля своего проекта явно; умолчание держат потребители вне
+# гейтов тестов (чекпоинт, бриф, миссия роли).
+LONG_LIVED_DIR = "tests"
+LONG_LIVED_TEMPLATE = "test_<id>_<name>.py"
 
 
-def is_long_lived_test_path(task_id: str, rel: str) -> bool:
-    """`rel` — `tests/test_<префикс задачи>_<имя>.py`, `<имя>` непустое из
-    `[a-z0-9_]` (Р1): файл, который test_author задачи вправе добавить в
-    кодовую ветку."""
-    prefix = long_lived_path_prefix(task_id)
-    if not (rel.startswith(prefix) and rel.endswith(".py")):
-        return False
-    return bool(_LONG_LIVED_NAME.fullmatch(rel[len(prefix):-len(".py")]))
+def long_lived_path_prefix(task_id: str, directory: str = LONG_LIVED_DIR,
+                           template: str = LONG_LIVED_TEMPLATE) -> str:
+    """`<каталог>/` и часть шаблона до `<name>` с подставленным `<id>` —
+    у артели `tests/test_<полный id в нижнем регистре>_` (Р1): только
+    полный id ULID уникален — первые 10 знаков у него метка времени, и у
+    задач, заведённых в одну миллисекунду, совпадают; нижний регистр —
+    форма имени ветки и допустимого имени модуля Python."""
+    head = template.split("<name>", 1)[0].replace("<id>", task_id.lower())
+    return f"{directory}/{head}"
+
+
+def is_long_lived_test_path(task_id: str, rel: str,
+                            directory: str = LONG_LIVED_DIR,
+                            template: str = LONG_LIVED_TEMPLATE) -> bool:
+    """`rel` — `<каталог>/<шаблон>` с `<id>` задачи и непустым `<имя>` из
+    `[a-z0-9_]` (Р1; у артели `tests/test_<id задачи>_<имя>.py`): файл,
+    который test_author задачи вправе добавить в кодовую ветку."""
+    parts = re.split(r"(<id>|<name>)", template)
+    pattern = re.escape(f"{directory}/") + "".join(
+        re.escape(task_id.lower()) if part == "<id>"
+        else _LONG_LIVED_NAME.pattern if part == "<name>"
+        else re.escape(part)
+        for part in parts)
+    return re.fullmatch(pattern, rel) is not None
 
 
 def render_long_lived_manifest(digests: dict[str, str]) -> str:
@@ -2541,11 +2558,14 @@ def parse_long_lived_manifest(text: str) -> tuple[dict[str, str] | None, str]:
     return digests, ""
 
 
-def long_lived_plank_errors(files: list[tuple[str, str]], task_id: str) -> list[str]:
+def long_lived_plank_errors(files: list[tuple[str, str]], task_id: str,
+                            directory: str = LONG_LIVED_DIR,
+                            template: str = LONG_LIVED_TEMPLATE) -> list[str]:
     """Долгоживущий файл в каталоге приёмочных тестов (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 4): временная оговорка задачи 1
-    снята, место такого файла — `tests/` кодовой ветки по правилу имени Р1."""
-    prefix = long_lived_path_prefix(task_id)
+    снята, место такого файла — каталог долгоживущих тестов кодовой ветки
+    по правилу имени Р1 (у артели — `tests/`)."""
+    prefix = long_lived_path_prefix(task_id, directory, template)
     return [f"{label}: «Группа: {GROUP_LONG_LIVED}» в каталоге приёмочных "
             f"тестов — перенеси файл в {prefix}<имя>.py кодовой ветки"
             for label, source in files
