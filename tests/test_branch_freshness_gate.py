@@ -97,6 +97,14 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
                 ("git", "-C", str(repo), *args), 0, "", "")  # нечего коммитить
         if args[:1] == ("add",):
             return self._ok(repo, *args)
+        if (args[:2] == ("rev-parse", "--abbrev-ref")
+                or args[:3] == ("rev-parse", "--verify", "--quiet")
+                or args[:1] == ("merge-base",)):
+            # Значения помощника планки `_pult.py` при выкладке (SPEC
+            # 01M44EP4Q927DJXVX9YMMZ0B7V, требование 2): ветка рабочей
+            # копии, наличие `origin/<main>` и база диффа — чтения, не
+            # предмет этого файла; пустой ответ — «база не определена».
+            return self._ok(repo, *args)
         if args[:1] in (("checkout",), ("reset",)):
             # Очистка worktree перед merge (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ,
             # требования 1-2): отбрасывание карты (`checkout --`) и

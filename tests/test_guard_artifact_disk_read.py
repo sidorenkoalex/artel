@@ -25,9 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import guard  # noqa: E402
 
-RECIPE = ('читай из артефактной ветки: '
-          'gitcmd.show(artifact_branch.branch_name(TASK_ID), '
-          '"tasks/<id>/PLAN.md")')
+# Рецепт — помощник пульта `_pult.py` (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
+# требование 6), до неё — `gitcmd.show(artifact_branch.branch_name(…), …)`.
+RECIPE = ('читай через помощник пульта рядом с планкой: '
+          'from _pult import artifact_text; artifact_text("PLAN.md")')
 
 # Пролог фикстурной планки: `TASK_DIR` — якорное имя (от `Path(__file__)`),
 # `FIXTURE_DIR` — неякорное (от `tempfile`), оба на уровне модуля.
@@ -115,8 +116,9 @@ class DiskReadFormsTest(unittest.TestCase):
 
     def test_error_text_carries_the_artifact_branch_recipe(self):
         """Требование 3: текст ошибки — файл, строка и рецепт с
-        `gitcmd.show(artifact_branch.branch_name(TASK_ID), "tasks/<id>/
-        PLAN.md")`, имя артефакта в рецепте — найденное, не всегда PLAN.md.
+        `artifact_text("PLAN.md")` помощника пульта (SPEC
+        01M44EP4Q927DJXVX9YMMZ0B7V, требование 6), имя артефакта в рецепте
+        — найденное, не всегда PLAN.md.
 
         Ловит мутацию: рецепт сокращён до констатации «читает с диска» или
         подставляет одно и то же имя `PLAN.md` в рецепт для любого
@@ -124,7 +126,7 @@ class DiskReadFormsTest(unittest.TestCase):
         errors = errors_for('plan = TASK_DIR / "PLAN.md"')
         self.assertIn(RECIPE, errors[0])
         errors = errors_for('spec = TASK_DIR / "SPEC.md"')
-        self.assertIn('"tasks/<id>/SPEC.md")', errors[0])
+        self.assertIn('artifact_text("SPEC.md")', errors[0])
 
     def test_every_artifact_name_is_covered(self):
         """AC-5: семь имён из `guard.ARTIFACT_FILE_NAMES` в одном и том же
@@ -143,7 +145,7 @@ class DiskReadFormsTest(unittest.TestCase):
             with self.subTest(artifact=name):
                 errors = errors_for(f'path = TASK_DIR / "{literal}"')
                 self.assertEqual(len(errors), 1, errors)
-                self.assertIn(f'"tasks/<id>/{literal}")', errors[0])
+                self.assertIn(f'artifact_text("{literal}")', errors[0])
 
     def test_nested_expressions_over_one_literal_report_one_error(self):
         """`open(os.path.join(..., "PLAN.md"))` — два выражения доступа
@@ -281,19 +283,21 @@ class AnchoringTest(unittest.TestCase):
 
     def test_recipe_names_the_artifact_not_the_literal_fragment(self):
         """R1-F2 REVIEW.md итерации 1: для части f-строки `f"{TASK}-PLAN.md"`
-        рецепт называет `tasks/<id>/PLAN.md`, а не несуществующий
-        `tasks/<id>/-PLAN.md`; имя файла из литерала подставляется только
-        когда basename начинается с имени артефакта (`ANSWER-1.md`).
+        рецепт называет `artifact_text("PLAN.md")`, а не несуществующий
+        `-PLAN.md`; имя файла из литерала подставляется только когда
+        basename начинается с имени артефакта (`ANSWER-1.md`). Рецепт —
+        помощник пульта (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V, требование 6), до
+        неё — `"tasks/<id>/PLAN.md"` в `gitcmd.show`.
 
         Ловит мутацию: условие подстановки basename вернулось к `name in
         basename` — фрагмент `-PLAN.md` ушёл бы в рецепт как есть."""
         errors = errors_for('plan = TASK_DIR / f"{TASK}-PLAN.md"')
-        self.assertIn('"tasks/<id>/PLAN.md")', errors[0])
+        self.assertIn('artifact_text("PLAN.md")', errors[0])
         self.assertNotIn("-PLAN.md", errors[0])
         errors = errors_for('answer = TASK_DIR / "ANSWER-1.md"')
-        self.assertIn('"tasks/<id>/ANSWER-1.md")', errors[0])
+        self.assertIn('artifact_text("ANSWER-1.md")', errors[0])
         errors = errors_for('answer = Path("tasks/01FIXTURETASK/ANSWER-3.md")')
-        self.assertIn('"tasks/<id>/ANSWER-3.md")', errors[0])
+        self.assertIn('artifact_text("ANSWER-3.md")', errors[0])
 
 
 class AllowedSourcesTest(unittest.TestCase):

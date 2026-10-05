@@ -77,6 +77,9 @@ def _registry_gate(conn, task_id: str, tdir, review_text, meta) -> GateRefusal |
     return GateRefusal("переход отклонён: реестр замечаний", detail, hint)
 
 
+STRAY_PLANK_FILES_ACTION = "переход отклонён: посторонние файлы планки"
+
+
 def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | None:
     """Требование 3/AC-8 (SPEC 01M2ARQRDV4YY9TVPHXN2E7136): пока запись
     журнала `checkpoint.STRAY_ACCEPTANCE_FILES_ACTION` («посторонние файлы
@@ -114,7 +117,16 @@ def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | N
     lease (обычный путь однократного `artel.py advance <id>`, не только
     тестовая песочница) журналировал бы «lease взят» ПОЗЖЕ отброшенной
     записи планки и гейт молчал бы всегда, даже когда отброшенные файлы
-    реально остались последней содержательной записью визита."""
+    реально остались последней содержательной записью визита.
+
+    Зарезервированное имя помощника пульта (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
+    требование 5): `_pult.py` первого уровня планки в ссылке документов
+    отклоняет выход своим действием; тот же файл черновика автокоммит
+    отбрасывает как посторонний (`guard.is_extraneous_acceptance_test_file`),
+    и отказ по записи журнала ниже называет то же основание в подсказке."""
+    reserved = _reserved_plank_helper_refusal(task_id)
+    if reserved is not None:
+        return reserved
     rows = [r for r in store.task_steps(conn, task_id) if r["actor"] != "lease"]
     marker = "state -> tests_writing"
     since = 0
@@ -134,8 +146,35 @@ def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | N
     hint = (f"верни отброшенные файлы либо перепиши планку без них "
            f"(skills/test-authoring.md: общий код — только модули _*.py) "
            f"и повтори artel.py advance {task_id}")
-    return GateRefusal("переход отклонён: посторонние файлы планки",
-                       refusal_detail, hint)
+    reserved_rel = f"acceptance_tests/{guard.RESERVED_PLANK_HELPER_NAME}"
+    if reserved_rel in [n.strip() for n in names.split(",")]:
+        hint = (f"{guard.RESERVED_PLANK_HELPER_NAME}: "
+                f"{guard.RESERVED_PLANK_HELPER_HINT} — переименуй свой файл, "
+                f"а остальные отброшенные верни либо перепиши планку без "
+                f"них, и повтори artel.py advance {task_id}")
+    return GateRefusal(STRAY_PLANK_FILES_ACTION, refusal_detail, hint)
+
+
+def _reserved_plank_helper_refusal(task_id: str) -> GateRefusal | None:
+    """`_pult.py` первого уровня `acceptance_tests/` в голове ссылки
+    документов — отказ: пульт кладёт под этим именем свой помощник, и файл
+    планки при выкладке был бы молча перетёрт. Действие — то же, что у
+    отброшенных посторонних файлов: класс «чинит роль»
+    (`refusal_classes.REFUSAL_CLASSES`), test_author переименует файл сам.
+    Git не ответил на список — гейт молчит: сухой сбор того же выхода
+    читает ту же ссылку и откажет своим диагнозом."""
+    rel_dir = f"tasks/{task_id}/acceptance_tests"
+    paths = artifact_branch.ls_tree(task_id, artifact_branch.branch_name(task_id),
+                                    rel_dir)
+    if not paths or f"{rel_dir}/{guard.RESERVED_PLANK_HELPER_NAME}" not in paths:
+        return None
+    detail = (f"в планке ссылки документов лежит "
+              f"{rel_dir}/{guard.RESERVED_PLANK_HELPER_NAME}")
+    hint = (f"{guard.RESERVED_PLANK_HELPER_NAME}: "
+            f"{guard.RESERVED_PLANK_HELPER_HINT} — переименуй свой файл "
+            f"(например, в _plank.py), убери {guard.RESERVED_PLANK_HELPER_NAME} "
+            f"из acceptance_tests/ и повтори artel.py advance {task_id}")
+    return GateRefusal(STRAY_PLANK_FILES_ACTION, detail, hint)
 
 
 def _tests_writing_acceptance_dir(task_id: str, tdir, target: str,
@@ -205,8 +244,9 @@ def _tests_writing_artifact_source_gate(acc_tdir, task_id: str) -> GateRefusal |
     errors = guard.scan_artifact_disk_reads(acc_tdir)
     if not errors:
         return None
-    hint = (f"перепиши чтение артефактов планки на артефактную ветку "
-            f"(skills/test-authoring.md) и повтори artel.py advance {task_id}")
+    hint = (f"перепиши чтение артефактов планки на помощник пульта "
+            f"(from _pult import artifact_text; artifact_text(\"PLAN.md\"), "
+            f"skills/test-authoring.md) и повтори artel.py advance {task_id}")
     return GateRefusal(ARTIFACT_DISK_READ_ACTION, "; ".join(errors), hint)
 
 
