@@ -11,8 +11,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_branch, artifact_source, budget, ci, config, fixation,
-              gates, gitcmd, models, store, workspace)
+from . import (acceptance, appendix_tree, artifact_branch, artifact_source,
+              budget, ci, config, fixation, gates, gitcmd, models, store,
+              workspace)
 from .advance_gates import acceptance as acceptance_gates
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
@@ -294,13 +295,21 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     # с полным выводом прогона. До этой задачи все три исхода писались
     # одной фразой «полный набор tests/ красный», а вывод отбрасывался —
     # 26.09 причину красноты восстанавливали по времени событий.
-    run = acceptance.full_suite(wt_root, task_id)
+    #
+    # Набор идёт на голове ветки с наложенными приложениями PLAN (SPEC
+    # 01M46C776SZEMYPBQGPNJN1TXY): код задачи вправе краснеть без них, и
+    # прогон рабочей копии судил бы не то дерево, что ляжет в main.
+    with appendix_tree.suite_tree(conn, task_id, wt_root,
+                                  branch=t["branch"]) as tree:
+        if tree.root is None:
+            return ok, f"автогейт: {tree.refusal}"
+        run = acceptance.full_suite(tree.root, task_id)
     if not run.green:
-        return ok, f"автогейт: {run.detail}"
-    ok.append("полный набор tests/ в worktree ветки зелёный"
-              + (f" — {run.digest}" if run.digest else "")
-              + (f" (лог прогона: {run.log_path})"
-                 if run.log_path is not None else ""))
+        return ok, f"автогейт: {tree.mark(run.detail)}"
+    ok.append(tree.mark("полный набор tests/ в worktree ветки зелёный"
+                        + (f" — {run.digest}" if run.digest else "")
+                        + (f" (лог прогона: {run.log_path})"
+                           if run.log_path is not None else "")))
 
     if budget.budget_block(t) is not None:
         return ok, "автогейт: бюджет задачи исчерпан"
