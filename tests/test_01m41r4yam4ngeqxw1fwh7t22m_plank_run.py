@@ -39,7 +39,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import artel, config, role_prompt, stack, store, workspace
+from orchestrator import (acceptance, artel, config, role_prompt, stack, store,
+                          workspace)
 from tests.sandbox import RealGitSandbox, alias_docs_ref_to_branch
 
 FIXTURE_TASK = "01M0000000000000000000PLNK"
@@ -90,7 +91,8 @@ class PlankRunSandbox(RealGitSandbox):
                 if plank.is_dir():
                     snapshot = {p.relative_to(plank).as_posix():
                                 p.read_text(encoding="utf-8")
-                                for p in sorted(plank.rglob("*.py"))}
+                                for p in sorted(plank.rglob("*.py"))
+                                if p.name != acceptance.PLANK_HELPER_NAME}
                 self.pytest_calls.append((list(cmd), dict(kwargs), snapshot))
                 if self.raise_in_pytest is not None:
                     raise self.raise_in_pytest

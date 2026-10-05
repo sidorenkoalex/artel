@@ -1,5 +1,5 @@
 ---
-built_at_sha: be1c989d5bd99bf241a16abdbe9f923506128dfe
+built_at_sha: 6592f543e54661b38279bd3f3f2c8091f318768f
 ---
 
 # Codebase-map пульта
@@ -38,7 +38,7 @@ built_at_sha: be1c989d5bd99bf241a16abdbe9f923506128dfe
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/artifact_branch.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/stack.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/amend.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/notes.py`, `orchestrator/plank_run.py`, `orchestrator/pull.py`, `orchestrator/runner.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3ychs4f08vtv6xx10vf92h3_task_model_set.py`, `tests/test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_acceptance.py`, `tests/test_acceptance_collect.py`, `tests/test_acceptance_pycache.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_approve_acceptance_full_suite.py`, `tests/test_branch_freshness_gate.py`, `tests/test_docs_dir_layout.py`, `tests/test_external_code_copy_refusal.py`, `tests/test_fsm_advance_tests_writing_artifact_source.py`, `tests/test_fsm_advance_tests_writing_dry_collect.py`, `tests/test_fsm_advance_tests_writing_test_groups.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_model_sets.py`, `tests/test_plan_appendix.py`, `tests/test_plank_helper.py`, `tests/test_plank_run_edges.py`, `tests/test_pull.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_pull_long_lived_plank.py`
+**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/amend.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/notes.py`, `orchestrator/plank_run.py`, `orchestrator/pull.py`, `orchestrator/runner.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3ychs4f08vtv6xx10vf92h3_task_model_set.py`, `tests/test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension.py`, `tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_acceptance.py`, `tests/test_acceptance_collect.py`, `tests/test_acceptance_pycache.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_approve_acceptance_full_suite.py`, `tests/test_branch_freshness_gate.py`, `tests/test_docs_dir_layout.py`, `tests/test_external_code_copy_refusal.py`, `tests/test_fsm_advance_tests_writing_artifact_source.py`, `tests/test_fsm_advance_tests_writing_dry_collect.py`, `tests/test_fsm_advance_tests_writing_test_groups.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_model_sets.py`, `tests/test_plan_appendix.py`, `tests/test_plank_helper.py`, `tests/test_plank_run_edges.py`, `tests/test_pull.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_pull_long_lived_plank.py`
 
 ## orchestrator/advance_gates/__init__.py
 
@@ -2424,7 +2424,7 @@ built_at_sha: be1c989d5bd99bf241a16abdbe9f923506128dfe
 **Публичные функции:**
 - `is_pytest_call`
 
-**Импортирует:** `orchestrator/artel.py`, `orchestrator/config.py`, `orchestrator/role_prompt.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/config.py`, `orchestrator/role_prompt.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_plank_run_edges.py`
 
