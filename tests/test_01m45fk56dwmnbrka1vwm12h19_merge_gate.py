@@ -2,13 +2,16 @@
 в диффе, применение приложений PLAN и карта кодовой базы.
 
 Группа: долгоживущий
-Красен до реализации: на гейте мержа сверка защищённых путей диффа и применение приложений PLAN включены только для артели — дифф внешнего проекта под его `no_paths` мержится без эскалации, приложения PLAN внешнего проекта не применяются и записи «нет профиля тестов» нет (AC-5, AC-9); шаг карты включён признаком артели, а не наличием генератора — у артели без `scripts/codebase_map.py` он заводит инцидент «регенерация карты FAILED», у внешнего проекта с генератором карта не строится (AC-11). Случаи «дифф только по пути пульта у внешнего проекта не эскалирует» (AC-5) и классы полного прогона артели (AC-9) держат сегодняшнее поведение и зелёные с рождения.
+Красен до реализации: на гейте мержа сверка защищённых путей диффа и применение приложений PLAN включены только для артели — дифф внешнего проекта под его `no_paths` мержится без эскалации, приложения PLAN внешнего проекта не применяются, записи «нет профиля тестов» нет, а у проекта с профилем команда профиля не исполняется и красный прогон мерж не останавливает (AC-5, AC-9); шаг карты включён признаком артели, а не наличием генератора — у артели без `scripts/codebase_map.py` он заводит инцидент «регенерация карты FAILED», у внешнего проекта с генератором карта не строится (AC-11). Случаи «дифф только по пути пульта у внешнего проекта не эскалирует» (AC-5) и классы полного прогона артели (AC-9) держат сегодняшнее поведение и зелёные с рождения.
 
 Сценарий — сквозной `fsm.cmd_approve` задачи на `merge_gate` в настоящем git
 песочницы (`tests.sandbox.RealGitSandbox`): корень — клон артели с bare
 `origin`; внешний проект — свой клон с bare `origin`
 (`tests.sandbox.make_project_repo`), запись в `targets.yaml` песочницы с
-полем `no_paths` из случайных каталогов `zn…/` и без профиля тестов. Ветка
+полем `no_paths` из случайных каталогов `zn…/` и без профиля тестов (запись
+артели несёт профиль артели). Сценарий «с профилем» (`ProfileSuiteTest`)
+дописывает внешнему проекту `test_profile`, чья команда прогона — скрипт
+песочницы, и гоняет полный прогон по-настоящему, без подмены. Ветка
 задачи заведена рабочей копией (`workspace.ensure`) от `origin` клона
 проекта, код закоммичен в неё; PLAN.md (с разделами «## Приложение» по
 сценарию) и SPEC.md — в ссылке документов автокоммитом шага
@@ -22,15 +25,20 @@
 
 Провалидировано временным стабом реализации (удалён, не закоммичен):
 сверка диффа и применение приложений по перечню проекта без развилки,
-запись «нет профиля тестов» вместо прогона у внешнего проекта, шаг карты
+запись «нет профиля тестов» вместо прогона у внешнего проекта без профиля,
+прогон командой профиля после любого приложения у проекта с профилем, шаг
+карты
 по наличию генератора в дереве мержа — все методы зелёные.
 
 Зерно печатается и входит в текст каждого провала.
 """
 import contextlib
 import io
+import json
 import os
 import random
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -38,6 +46,10 @@ from unittest import mock
 from orchestrator import (acceptance, catalog, checkpoint, ci, config, fsm,
                           github_adapter, idgen, store, workspace)
 from tests.sandbox import RealGitSandbox, capture, make_project_repo
+
+# Настоящий прогон полного набора — для сценария «с профилем», где команда
+# профиля обязана исполниться (подмена ниже его иначе глушит).
+REAL_RUN_FULL_SUITE = acceptance.run_full_suite
 
 ARTEL = config.DEFAULT_TARGET
 EXT = "vnesh"
@@ -69,6 +81,45 @@ TARGET_ENTRY = """  {name}:
     no_paths: [{no_paths}]
     project_skills: []
     merge_gate: operator
+"""
+
+# Профиль тестов артели — как в `targets.yaml` пульта: без него пульт
+# проекту артели отказывает (fail-closed). Внешнему проекту не пишется,
+# кроме сценария «с профилем» (`ProfileSuiteTest`), — там свой.
+ARTEL_PROFILE = """    test_profile:
+      command: [python3, -m, pytest]
+      long_lived_dir: tests
+      long_lived_name: test_<id>_<name>.py
+      weakening_scope: [tests/**/*.py]
+      mutation_claim_scope: [tests/test_*.py]
+"""
+
+# Профиль тестов внешнего проекта в сценарии «с профилем»: команда прогона —
+# скрипт песочницы `SUITE_SCRIPT`.
+PROFILE_TEMPLATE = """    test_profile:
+      command: [{python}, {script}]
+      long_lived_dir: tests
+      long_lived_name: test_<id>_<name>.py
+      weakening_scope: [tests/**/*.py]
+      mutation_claim_scope: [tests/test_*.py]
+"""
+
+# Команда прогона профиля: запоминает каталог запуска и содержимое путей из
+# `watch.txt` в нём (`calls.jsonl`), выходит с кодом из `exit_code` — оба
+# файла рядом со скриптом пишет сценарий.
+SUITE_SCRIPT = """import json, os, sys
+from pathlib import Path
+here = Path(__file__).resolve().parent
+watch = (here / "watch.txt").read_text(encoding="utf-8").split()
+seen = {rel: (Path(rel).read_text(encoding="utf-8")
+              if Path(rel).is_file() else None) for rel in watch}
+with open(here / "calls.jsonl", "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"cwd": os.getcwd(), "seen": seen},
+                        ensure_ascii=False) + "\\n")
+code = int((here / "exit_code").read_text(encoding="utf-8"))
+print("1 passed" if code == 0 else
+      "FAILED tests/test_profile.py::test_profile - профиль\\n1 failed")
+sys.exit(code)
 """
 
 PLAN_TEXT = """---
@@ -176,6 +227,7 @@ class MergeGateSandbox(RealGitSandbox):
         text = "targets:\n" + TARGET_ENTRY.format(
             name=ARTEL, url="http://localhost/artel", base=config.MAIN_BRANCH,
             no_paths=", ".join(config.PROTECTED_PATHS))
+        text += ARTEL_PROFILE
         text += TARGET_ENTRY.format(
             name=EXT, url=f"file:///nonexistent/{EXT}", base=config.MAIN_BRANCH,
             no_paths=", ".join(self.ext_dirs))
@@ -356,6 +408,106 @@ class ExternalAppendixTest(MergeGateSandbox):
         noted = [e for e in self.journal(task)
                  if "профил" in e.lower() and "прогон" in e.lower()]
         self.assertTrue(noted, context)
+
+
+class ProfileSuiteTest(MergeGateSandbox):
+    """Внешний проект с профилем тестов: команда профиля — скрипт песочницы."""
+
+    def setUp(self):
+        super().setUp()
+        self.suite_dir = Path(tempfile.mkdtemp(dir=self.root / ".artel"))
+        (self.suite_dir / "suite.py").write_text(SUITE_SCRIPT, encoding="utf-8")
+        self.set_suite_exit(0)
+        self.watch([])
+        self.ext_profile = PROFILE_TEMPLATE.format(
+            python=sys.executable, script=self.suite_dir / "suite.py")
+        self.write_targets()
+        self.commit_to_project_main(EXT, {
+            f"tests/test_{self.word()}.py": "def test_ok():\n    pass\n"})
+
+    def write_targets(self) -> None:
+        super().write_targets()
+        profile = getattr(self, "ext_profile", "")
+        if profile:
+            with config.TARGETS.open("a", encoding="utf-8") as fh:
+                fh.write(profile)
+
+    def fake_full_suite(self, root, *args, **kwargs):
+        """Прогон по-настоящему: команда профиля обязана исполниться."""
+        self.full_suite_calls.append(Path(root))
+        return REAL_RUN_FULL_SUITE(root, *args, **kwargs)
+
+    def set_suite_exit(self, code: int) -> None:
+        (self.suite_dir / "exit_code").write_text(str(code), encoding="utf-8")
+
+    def watch(self, rels: list[str]) -> None:
+        (self.suite_dir / "watch.txt").write_text("\n".join(rels),
+                                                  encoding="utf-8")
+
+    def suite_calls(self) -> list[dict]:
+        log = self.suite_dir / "calls.jsonl"
+        if not log.is_file():
+            return []
+        calls = [json.loads(line) for line in
+                 log.read_text(encoding="utf-8").splitlines() if line]
+        log.unlink()
+        return calls
+
+    def test_ac9_external_profile_runs_profile_command_red_refuses_merge(self):
+        """С профилем тестов любое применённое приложение внешнего проекта запускает полный прогон командой профиля; красный прогон — отказ мержа.
+
+        Сценарий: запись внешнего проекта несёт `test_profile`, чья команда —
+        скрипт песочницы (запоминает каталог запуска и содержимое путей
+        приложений в нём; код выхода задаёт сценарий). Две задачи (порядок
+        случаен), у каждой одно-два приложения — новые файлы под случайными
+        записями `no_paths` (не классы сбора тестов артели).
+        Зелёный прогон (код 0): скрипт профиля исполнен, и в дереве его
+        запуска уже лежит строка каждого приложения; задача в `done`, строки
+        приложений — в `origin/main` проекта.
+        Красный прогон (код 1): скрипт профиля исполнен на дереве с
+        приложениями; задача осталась на `merge_gate`, строк приложений в
+        `origin/main` нет, журнал несёт запись «merge FAILED».
+
+        Ловит мутацию: у внешнего проекта полный прогон требуют только
+        классы приложений артели (`tests/`, `pyproject.toml`, …) — скрипт
+        профиля не исполнен; прогон идёт командой пульта, а не командой
+        профиля — скрипт не исполнен; профиль внешнего проекта не читается
+        и действует ветка «без профиля» — прогона нет; красный исход прогона
+        не останавливает мерж — задача в `done`, строки в `origin/main`.
+        """
+        outcomes = [0, 1]
+        self.rng.shuffle(outcomes)
+        for code in outcomes:
+            with self.subTest(exit_code=code):
+                self.set_suite_exit(code)
+                lines = {}
+                for _ in range(self.rng.randint(1, 2)):
+                    rel = self.ext_protected_path()
+                    lines[rel] = f"строка приложения {self.word()}"
+                self.watch(list(lines))
+                task = self.new_task(EXT, self.code(),
+                                     [new_file_diff(rel, line)
+                                      for rel, line in lines.items()])
+                out = self.approve(task)
+                calls = self.suite_calls()
+                context = self.context(task, out + f"\n--- запуски профиля: {calls}")
+                ran_on_merge_tree = [
+                    c for c in calls
+                    if all(line in (c["seen"].get(rel) or "")
+                           for rel, line in lines.items())]
+                self.assertTrue(ran_on_merge_tree, context)
+                tree = self.origin_tree(EXT)
+                if code == 0:
+                    self.assertEqual(self.state(task), "done", context)
+                    for rel, line in lines.items():
+                        self.assertIn(rel, tree, context)
+                        self.assertIn(line, self.origin_file(EXT, rel), context)
+                else:
+                    self.assertEqual(self.state(task), "merge_gate", context)
+                    for rel in lines:
+                        self.assertNotIn(rel, tree, context)
+                    self.assertTrue([e for e in self.journal(task)
+                                     if e.startswith("merge FAILED")], context)
 
 
 class ArtelFullSuiteClassesTest(MergeGateSandbox):

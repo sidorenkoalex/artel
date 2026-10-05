@@ -40,6 +40,16 @@ TARGET_ENTRY = """  {name}:
     merge_gate: operator
 """
 
+# Профиль тестов артели — как в `targets.yaml` пульта: без него пульт
+# проекту артели отказывает (fail-closed). Внешнему проекту не пишется.
+ARTEL_PROFILE = """    test_profile:
+      command: [python3, -m, pytest]
+      long_lived_dir: tests
+      long_lived_name: test_<id>_<name>.py
+      weakening_scope: [tests/**/*.py]
+      mutation_claim_scope: [tests/test_*.py]
+"""
+
 
 class DraftMrSandbox(RealGitSandbox):
     """Клон внешнего проекта и шпион форджа."""
@@ -61,6 +71,7 @@ class DraftMrSandbox(RealGitSandbox):
             + TARGET_ENTRY.format(name=ARTEL, url="http://localhost/artel",
                                   base=config.MAIN_BRANCH,
                                   no_paths=", ".join(config.PROTECTED_PATHS))
+            + ARTEL_PROFILE
             + TARGET_ENTRY.format(name=EXT, url="http://localhost/vnesh",
                                   base=config.MAIN_BRANCH,
                                   no_paths=", ".join(self.no_paths)),
