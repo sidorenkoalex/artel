@@ -37,10 +37,12 @@ schema_version: 5
 `переход отклонён: профиль тестов проекта` класса «чинит Оператор»
 (`refusal_classes`). Маски: `*` — внутри сегмента, `**` — любое число
 сегментов, включая ноль (`project_profile.mask_matches`). Команда прогона:
-`acceptance._pytest_command(..., command=...)`, первый элемент `python3`
-заменяется на `stack.pytest_python_executable()`
-(`Profile.pytest_command`), флаги пульта (без кеша, `pytest-timeout`)
-добавляются как раньше. Префикс и признак долгоживущего файла —
+гейт передаёт `Profile.command` как есть в
+`acceptance._pytest_command(..., command=...)`; там, при сборке команды
+прогона, первый элемент `python3` заменяется на
+`stack.pytest_python_executable()`, флаги пульта (без кеша,
+`pytest-timeout`) добавляются как раньше. Интерпретатор не резолвится в
+гейте: гейт, чей прогон не состоится (или подменён в тесте), venv не ищет. Префикс и признак долгоживущего файла —
 `guard.long_lived_path_prefix` / `is_long_lived_test_path` с аргументами
 каталога и шаблона; умолчания равны значениям артели и остаются для
 потребителей вне гейтов тестов (чекпоинт, бриф, миссия роли).
@@ -132,7 +134,11 @@ orchestrator/advance_gates/acceptance.py:37: workspace.repo(config.DEFAULT_TARGE
 Свои (заявки «Ловит мутацию», каждая проверена временной мутацией —
 тест красный, код возвращён): `tests/test_project_profile.py` — маски
 (`*` в сегменте, `**` в середине и в хвосте, буквальная точка), команда не
-на Python идёт как есть, области из своих подполей, префикс и признак
+на Python идёт как есть через `acceptance._pytest_command` (метод
+`test_non_python_command_passes_as_is` переведён с удалённого
+`Profile.pytest_command` на `_pytest_command`; файл новый в ветке, мутация
+«замена первого элемента безусловно» перепроверена — красный), области из
+своих подполей, префикс и признак
 долгоживущего файла по нестандартному каталогу и шаблону. Требования 1-6
 по переходам покрывают долгоживущие файлы задачи
 `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py`,
@@ -168,7 +174,15 @@ declared_without_profile`), и пропуск идёт по правилу тр�
   `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py` (там же
   `config.TARGETS` песочницы возвращён в дерево главной копии — её
   сценарий коммитит правку декларации).
+- Запись артели с профилем (`ARTEL_TEST_PROFILE`) в декларации, которую
+  песочница пишет сама поверх посеянной (итерация после возврата из
+  `verifying`: в CI эти песочницы читали свою запись без профиля):
+  `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` (`MainCiSandbox`,
+  `COPY_CODE`), `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`
+  (`AppliedAppendixMergeSandbox`).
 - Посев `seed_artel_targets()` в собственных песочницах:
+  `tests/test_advance_guard.py` (`AdvanceGuardTest.setUp` — патчит
+  `config.TARGETS` на несуществующий файл песочницы),
   `tests/test_review_freshness.py`, `tests/test_auto_cycle.py`,
   `tests/test_agent_prompt.py`, `tests/test_fsm_branch_correct_status_reads.py`,
   `tests/test_acceptance_tests_flow.py` (`LockTest`),
@@ -193,12 +207,20 @@ declared_without_profile`), и пропуск идёт по правилу тр�
   `tests_writing` заводится от базы в `origin`): `tests/test_amend.py`,
   `tests/test_id_format_guard.py`, `tests/test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py`.
 - SPEC до A4 на диске к выходу из `in_dev` (прогон приёмки в рабочей копии
-  без планки читает SPEC — требование 6): `tests/test_review_freshness.py`,
+  без планки читает SPEC — требование 6):
+  `tests/test_review_freshness.py` (`ReviewFreshnessScenarioTest.setUp`,
+  `PRE_A4_SPEC_MD`),
   `tests/test_auto_cycle.py` (`AutoCycleTest.setUp`),
   `tests/test_branch_freshness_gate.py` (`setup_recording`; там же
   черновик запроса на слияние выключен: посеянная запись несёт
   `forge: github`, а черновик зовёт `commits_behind`, которого сценарий
   не ждёт).
+- Черновик запроса на слияние выключен (`github_adapter._is_github_target`
+  → `False`) в `tests/test_fsm_map_conflict_autoresolve.py`
+  (`MapConflictAutoResolveTest.setUp`): посеянная запись артели несёт
+  `forge: github`, черновик зовёт `gh` тем же `subprocess.run`, что
+  сценарий подменил под регенератор карты и считает
+  (`regen.assert_called_once`); без записи черновика не было.
 - Строка группы в фикстуре планки (гейт строк группы теперь видит планку
   ветки задачи, а не копию пина): `tests/test_id_format_guard.py`
   (`TEST_CLEAN`), `tests/test_step_refixation.py`.
@@ -218,6 +240,45 @@ declared_without_profile`), и пропуск идёт по правилу тр�
   merge-base — без заявки нет ни одного.
 
 ## Проверено исполнением
+
+Итерация после возврата из `verifying` (CI 87fdc026 красный с наложенными
+приложениями). Причина: локально рабочая копия несла незакоммиченный
+`targets.yaml` с профилем, а часть песочниц не несла своей записи артели с
+профилем (или писала свою без него). Прогоны ниже — с наложенными обоими
+приложениями (`git apply` блоков PLAN), без иных незакоммиченных правок
+`targets.yaml`; после прогонов приложения сняты (`git checkout`), рабочая
+копия их не несёт. Временных файлов `.chunk*`, `.runchunk.py`,
+`.dbgrun.py` в корне рабочей копии нет (`find -maxdepth 1 -name '.*'`).
+
+- Файлы из причины возврата, каждый `python3 -m pytest <файл>
+  -p no:cacheprovider -p timeout -o timeout=120`: `tests/test_invariants.py`
+  — 74 passed; `tests/test_review_freshness.py`,
+  `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`,
+  `tests/test_ci_status_kind_gate.py`,
+  `tests/test_fsm_map_conflict_autoresolve.py`,
+  `tests/test_advance_guard.py` — зелёные (вместе с `test_doctor`,
+  `test_review_registry_gate`, `test_verifying_ceiling`,
+  `test_branch_freshness_gate` — 165 passed).
+- `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`: 9 тестов гейта мержа
+  из причины возврата краснели на «нет test_profile» — их песочница пишет
+  свою запись артели, теперь с профилем. Локально все 16 сценариев этого
+  файла, зовущие `approve`/`pin --to`, отказывают «команда недоступна
+  процессу роли developer» (признак шага роли, на базе так же) — обходить
+  признак не стал, итог этих 9 покажет CI.
+- Класс «песочница подменяет `config.TARGETS` без записи артели с
+  профилем»: перебраны все файлы `tests/`, где есть `config.TARGETS`, без
+  `seed_artel_targets`/`ARTEL_TEST_PROFILE`; все прогнаны — зелёные
+  (75 passed и 174 passed двумя пачками).
+- Модули прогона команды: `test_project_profile`, `test_acceptance*`,
+  `test_fsm_advance_tests_writing_*`, `test_long_lived_*`,
+  `test_pull_long_lived_plank`, `test_fsm_autogate*`, `test_amend*`,
+  `test_acceptance_tests_flow`, `test_mutation_claim_gate`,
+  `test_test_integrity_gate`, долгоживущие файлы задачи — зелёные.
+- Планка: `artel.py plank-run 01M45FJVGQT1K0P8HDEXZX6HS7` — 31 passed.
+- `git apply --check` обоих приложений на чистом дереве HEAD —
+  применяются (блоки приложений не менялись).
+
+Прежняя итерация:
 
 - Долгоживущие файлы задачи: `python3 -m pytest
   tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py
@@ -370,3 +431,10 @@ HEAD ветки задачи — применяются; после наложе
 - `RealGitSandbox` (`tests/sandbox.py`) теперь сеет `targets.yaml` под
   `.artel/`; песочницы, коммитящие декларацию в дерево, обязаны
   возвращать путь сами — кандидат на явный флаг класса в части 3.
+- Нет команды пульта «прогнать файлы `tests/` с наложенными приложениями
+  PLAN» (как `plank-run` для планки): локальный прогон шёл с рабочей
+  копией, где правка защищённого пути лежала незакоммиченной, и разошёлся
+  с CI (возврат из `verifying` этой задачи). Приходится накладывать
+  приложения `git apply` руками и снимать `git checkout` — кандидат на
+  команду пульта (`orchestrator/plank_run.py` по образцу
+  `scripts/plan_appendix_ci.py`).
