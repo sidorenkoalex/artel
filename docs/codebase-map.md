@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1f83672a538fa126cd3a73b882658aec347d2cab
+built_at_sha: 79db1032fc5a37f5e4a0b27772b400631136e5c4
 ---
 
 # Codebase-map пульта
@@ -1957,6 +1957,7 @@ built_at_sha: 1f83672a538fa126cd3a73b882658aec347d2cab
 **Публичные функции:**
 - `apply_appendix`
 - `check_workflow`
+- `check_workflow_on_run`
 - `condition_push_only`
 - `docs_ref_for_branch`
 - `main`

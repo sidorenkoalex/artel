@@ -259,5 +259,110 @@ class WorkflowErrorsTest(unittest.TestCase):
         self.assertIn("только push", errors[0])
 
 
+class CheckWorkflowOnRunTest(unittest.TestCase):
+    """`--check-workflow` на прогоне ветки задачи сперва накладывает
+    приложения PLAN (ANSWER-1 01M466ZERXQKXTR5RQCDYVDZJQ). Само наложение
+    (`run`) покрыто долгоживущими сквозными тестами; здесь — что сторож
+    зовёт его ровно на прогонах ветки задачи и проверяет файл после."""
+
+    PUSH_ONLY = ("      - if: github.event_name == 'push' && "
+                 "startsWith(github.ref, 'refs/heads/task/')\n"
+                 "        run: python3 scripts/plan_appendix_ci.py")
+    WITH_PR = ("      - if: github.event_name == 'push' || "
+               "github.event_name == 'pull_request'\n"
+               "        run: python3 scripts/plan_appendix_ci.py")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="artel-wf-run-")
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "ci.yml"
+        self.path.write_text(workflow([self.PUSH_ONLY, TESTS],
+                                      [self.PUSH_ONLY, TESTS]),
+                             encoding="utf-8")
+        self.calls = []
+
+    def appendix_run(self, code: int):
+        """Заместитель `run`: «приложение» PLAN чинит условие шага в файле."""
+        def fake(event_name, ref):
+            self.calls.append((event_name, ref))
+            if code == 0:
+                self.path.write_text(workflow([self.WITH_PR, TESTS],
+                                              [self.WITH_PR, TESTS]),
+                                     encoding="utf-8")
+            return code
+        return fake
+
+    def check(self, env: dict, code: int = 0) -> tuple[int, str]:
+        err = io.StringIO()
+        with mock.patch.object(pac, "run", side_effect=self.appendix_run(code)), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            result = pac.check_workflow_on_run(self.path, env)
+        return result, err.getvalue()
+
+    def test_task_branch_run_checks_workflow_with_appendices(self):
+        """Пуш `task/**` и pull_request `task/**` того же репозитория:
+        сторож зелёный на файле, который зелен только после приложений;
+        вне CI и на пуше `main` — файл как есть (push-only — код 1), `run`
+        не зовётся.
+
+        Ловит мутацию: `--check-workflow` не накладывает приложения (или
+        накладывает после проверки) — на прогоне ветки задачи код 1;
+        наложение зовётся и вне прогона ветки задачи — `run` вызван при
+        пустом окружении или пуше `main`; тест краснеет.
+        """
+        push = {"GITHUB_EVENT_NAME": "push",
+                "GITHUB_REF": "refs/heads/task/01abc-x"}
+        self.assertEqual(self.check(push)[0], 0)
+        self.assertEqual(self.calls, [("push", "refs/heads/task/01abc-x")])
+
+        self.setUp()
+        with tempfile.TemporaryDirectory() as tmp:
+            event = Path(tmp) / "event.json"
+            event.write_text(json.dumps({"pull_request": {"head": {
+                "repo": {"full_name": "o/artel"}}}}), encoding="utf-8")
+            pr = {"GITHUB_EVENT_NAME": "pull_request",
+                  "GITHUB_REF": "refs/pull/7/merge",
+                  "GITHUB_HEAD_REF": "task/01abc-x",
+                  "GITHUB_REPOSITORY": "o/artel",
+                  "GITHUB_EVENT_PATH": str(event)}
+            self.assertEqual(self.check(pr)[0], 0)
+        self.assertEqual(self.calls,
+                         [("pull_request", "refs/heads/task/01abc-x")])
+
+        for env in ({}, {"GITHUB_EVENT_NAME": "push",
+                         "GITHUB_REF": "refs/heads/main"}):
+            self.setUp()
+            code, err = self.check(env)
+            self.assertEqual(code, 1, env)
+            self.assertIn("только push", err)
+            self.assertEqual(self.calls, [], env)
+
+    def test_failed_appendices_are_red_before_the_check(self):
+        """Наложение отказало (неприменимое приложение, сбой git) — код 1,
+        даже если файл как есть сторож бы пропустил.
+
+        Ловит мутацию: код `run` игнорируется и сторож проверяет файл —
+        здесь файл без нарушений, код 0, тест краснеет; `CiError`
+        наложения не перехвачен — исключение вместо кода 1.
+        """
+        self.path.write_text(workflow([self.WITH_PR, TESTS],
+                                      [self.WITH_PR, TESTS]),
+                             encoding="utf-8")
+        push = {"GITHUB_EVENT_NAME": "push",
+                "GITHUB_REF": "refs/heads/task/01abc-x"}
+        code, err = self.check(push, code=1)
+        self.assertEqual(code, 1)
+        self.assertIn("не наложены", err)
+
+        err = io.StringIO()
+        with mock.patch.object(pac, "run",
+                               side_effect=pac.CiError("git упал")), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(pac.check_workflow_on_run(self.path, push), 1)
+        self.assertIn("git упал", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

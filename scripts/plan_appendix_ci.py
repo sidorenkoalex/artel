@@ -41,7 +41,9 @@ CI при недоступном PLAN пропустил бы ровно тот 
 jobs `python` и `python-min` файла `.github/workflows/ci.yml` шаг
 сценария стоит перед прогоном pytest, и его условие `if:` не допускает
 одно событие push (SPEC 01M466ZERXQKXTR5RQCDYVDZJQ, требование 5). Его
-зовёт job `guard` того же файла.
+зовёт job `guard` того же файла. На прогоне ветки задачи (тот же отбор, что
+у шага приложений) сторож сперва накладывает приложения PLAN на дерево
+чекаута и проверяет файл после них (`check_workflow_on_run`).
 """
 import json
 import os
@@ -347,9 +349,37 @@ def check_workflow(path: Path) -> int:
     return 1 if errors else 0
 
 
+def check_workflow_on_run(path: Path, env) -> int:
+    """`--check-workflow` с приложениями PLAN прогона ветки задачи (ANSWER-1
+    01M466ZERXQKXTR5RQCDYVDZJQ).
+
+    Сторож проверяет `.github/workflows/ci.yml`, а этот файл защищён и
+    меняется только приложением PLAN: без наложения сторож видит workflow
+    без правки задачи, и задача, ужесточающая сторож вместе с правкой
+    файла, красила бы job `guard` своей ветки по построению. Поэтому на
+    прогоне ветки задачи (тот же отбор, что у шага приложений: `tested_ref`
+    + `task_branch`) приложения сначала накладываются тем же `run` на
+    дерево чекаута — сторож видит workflow, с которым ветка смержится. Вне
+    CI и на прочих прогонах — файл как есть. Сбой git и неприменимое
+    приложение — код 1, без проверки файла (fail-closed)."""
+    try:
+        event_name = env.get("GITHUB_EVENT_NAME", "")
+        ref = tested_ref(env)
+        if task_branch(event_name, ref) is not None \
+                and run(event_name, ref) != 0:
+            print(f"{path}: приложения PLAN не наложены — сторож не "
+                  f"проверяет файл без правки задачи", file=sys.stderr)
+            return 1
+    except CiError as exc:
+        print(f"приложения PLAN не наложены: {exc}", file=sys.stderr)
+        return 1
+    return check_workflow(path)
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "--check-workflow":
-        return check_workflow(Path(argv[1] if len(argv) > 1 else WORKFLOW_REL))
+        return check_workflow_on_run(
+            Path(argv[1] if len(argv) > 1 else WORKFLOW_REL), os.environ)
     try:
         return run(os.environ.get("GITHUB_EVENT_NAME", ""),
                    tested_ref(os.environ))
