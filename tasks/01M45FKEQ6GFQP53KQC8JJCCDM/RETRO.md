@@ -1,0 +1,21 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 750d4c3de63122fa028a750738315dfde2ac5c49
+---
+
+# RETRO: 01M45FKEQ6GFQP53KQC8JJCCDM — Этап 3 ADR-0021, часть 3 из 3: прочие развилки DEFAULT_TARGET, тест-сторож, сквозной тест внешнего потока
+
+Итог: killed — причина: kill switch
+Адрес артефактов: артефакты не сохранены (ветка удалена при kill)
+Суть: Этап 3 ADR-0021, часть 3 из 3: прочие развилки DEFAULT_TARGET, тест-сторож, сквозной тест внешнего потока — --- task: 01M45FKEQ6GFQP53KQC8JJCCDM type: tz author_role: operator status: draft schema_version: 2 --- # ТЗ: Этап 3 ADR-0021, часть 3 из 3: прочие развилки DEFAULT_TARGET, тест-сторож, сквозной тест внешнего потока # ТЗ: Этап 3 ADR-0021, часть 3 из 3: прочие развилки, сторож и сквозной тест внешнего потока Источник: ADR-0021 (принят 29.09.2026), пункты 8, 9, 12, 13 («этап 3: проверки из пункта 8 переводятся на `repo_context`, развилки `DEFAULT_TARGET` удаляются; профиль тестов проекта»).
+
+Стоимость итого: $17.22
+  analyst: $2.06, токенов 2499854 (input=42, output=24837, cache_write=136490, cache_read=2338485), провайдер claude, модель claude-opus-5-5
+  test_author: $15.16, токенов 959225 (input=14, output=4104, cache_write=9178, cache_read=945929), провайдер claude, модель claude-opus-5-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: нет
+
+Приёмочные тесты: 34 тест(ов), 0 manual, 0 skip
