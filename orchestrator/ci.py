@@ -283,13 +283,15 @@ def _check_age_minutes(run: dict, now: datetime) -> float | None:
     return (now - moment).total_seconds() / 60
 
 
-def _stuck_checks(unfinished: list) -> list[str]:
+def _stuck_checks(unfinished: list, index: "_RunIndex | None") -> list[str]:
     """Описания зависших проверок среди незавершённых: `in_progress`/
     `queued` без `conclusion` старше `config.CI_STUCK_CHECK_MINUTES`.
 
     Описание несёт имя, id check-run'а (по нему `ci-rerun` находит прогон
     workflow) и возраст — Оператор отличает зависшую проверку от идущей и
-    находит её в GitHub (требование 2, AC-6).
+    находит её в GitHub (требование 2, AC-6) — и событие с номером её
+    прогона (SPEC 01M46D5ZZQY7GBEW5TBVQ0P3ZV, AC-2): номер прогона стоит
+    не в форме «check-run id», и `stuck_check_ids` его не берёт.
     """
     now = datetime.now(timezone.utc)
     stuck = []
@@ -300,9 +302,163 @@ def _stuck_checks(unfinished: list) -> list[str]:
         if age is None or age <= config.CI_STUCK_CHECK_MINUTES:
             continue
         stuck.append(f"{run.get('name', '?')} (check-run id {run.get('id')}, "
-                     f"status={run.get('status')}) висит {int(age)} мин "
+                     f"status={run.get('status')}; "
+                     f"{_run_label(run, index)}) висит {int(age)} мин "
                      f"без исхода")
     return stuck
+
+
+# Событие и номер workflow-прогона проверки (SPEC 01M46D5ZZQY7GBEW5TBVQ0P3ZV).
+# На один sha бывают два прогона одного workflow (push и pull_request) с
+# одноимёнными проверками; текст без события не говорил, какой из двух
+# логов читать (05.10, голова 8ddb330d: push зелёный, pull_request красный).
+# Check-run события не несёт — его отдаёт прогон коммита.
+UNDEFINED_EVENT = "событие не определено"
+
+# Ссылка check-run'а задания Actions: `…/actions/runs/<id прогона>/job/<id>`.
+_RUN_URL_RE = re.compile(r"/actions/runs/(\d+)(?:/|$)")
+
+
+class _RunIndex(NamedTuple):
+    """Прогоны коммита: по `check_suite_id` и по id прогона."""
+    by_suite: dict
+    by_id: dict
+
+
+def _int_or_none(value) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) \
+        else None
+
+
+def _check_suite_id(check: dict) -> int | None:
+    suite = check.get("check_suite")
+    return _int_or_none(suite.get("id")) if isinstance(suite, dict) else None
+
+
+def _url_run_id(check: dict) -> int | None:
+    for key in ("details_url", "html_url"):
+        url = check.get(key)
+        match = _RUN_URL_RE.search(url) if isinstance(url, str) else None
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _commit_workflow_runs(sha: str, checks: list) -> _RunIndex | None:
+    """Прогоны коммита для подписи его проверок; `None` — подписывать нечем.
+
+    `None` и при сбое запроса (код `gh`, неразборный ответ), и когда ни
+    один check-run не несёт связки с прогоном (`check_suite.id` или ссылки
+    на прогон): сопоставлять тогда не с чем, а запрос был бы лишним. Исход
+    статуса от этого не зависит — проверки подписываются «событие не
+    определено» (требование 3).
+    """
+    if not any(_check_suite_id(c) is not None or _url_run_id(c) is not None
+               for c in checks):
+        return None
+    res = gh("api", f"repos/{{owner}}/{{repo}}/actions/runs"
+                    f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
+    if res.returncode != 0:
+        return None
+    try:
+        payload = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    if not isinstance(runs, list):
+        return None
+    index = _RunIndex({}, {})
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        run_id = _int_or_none(run.get("id", run.get("databaseId")))
+        if run_id is None:
+            continue
+        index.by_id[run_id] = run
+        suite = _int_or_none(run.get("check_suite_id"))
+        if suite is not None:
+            index.by_suite[suite] = run
+    return index
+
+
+def _run_of(check: dict, index: _RunIndex | None) -> dict | None:
+    """Прогон check-run'а: по `check_suite.id`, иначе по ссылке на прогон."""
+    if index is None:
+        return None
+    run = index.by_suite.get(_check_suite_id(check))
+    if run is None:
+        run = index.by_id.get(_url_run_id(check))
+    return run
+
+
+def _run_event(check: dict, index: _RunIndex | None) -> str:
+    run = _run_of(check, index)
+    event = run.get("event") if run is not None else None
+    return event if isinstance(event, str) and event else ""
+
+
+def _run_label(check: dict, index: _RunIndex | None) -> str:
+    """«<событие>, прогон <id прогона>»; событие не узнано — «событие не
+    определено» (с номером прогона, если он известен из ссылки)."""
+    run = _run_of(check, index)
+    run_id = (_int_or_none(run.get("id", run.get("databaseId")))
+              if run is not None else None) or _url_run_id(check)
+    event = _run_event(check, index)
+    head = event or UNDEFINED_EVENT
+    return f"{head}, прогон {run_id}" if run_id is not None else head
+
+
+def _event_divergence(checks: list, index: _RunIndex | None,
+                      where: str = "") -> list[str]:
+    """Проверки, исполнившиеся зелёными в прогоне одного события и
+    красными в прогоне другого (требование 2, AC-6): «<имя><where> —
+    зелёная в <события>, красная в <события>». `skipped` зелёным исходом
+    здесь не считается: проверка не исполнялась.
+
+    Текст не несёт подстрок, на которых стоят разборщики статуса («не
+    зелёный:», «ещё идёт», «неизвестен», «check-run id»)."""
+    green: dict[str, list[str]] = {}
+    red: dict[str, list[str]] = {}
+    for check in checks:
+        event = _run_event(check, index)
+        if not event or not check_finished(check)[0]:
+            continue
+        conclusion = check.get("conclusion")
+        if conclusion in _EXECUTED_GREEN:
+            side = green
+        elif conclusion not in GREEN:
+            side = red
+        else:
+            continue
+        events = side.setdefault(str(check.get("name", "?")), [])
+        if event not in events:
+            events.append(event)
+    items = []
+    for name, red_events in red.items():
+        green_events = green.get(name, [])
+        if any(g != r for g in green_events for r in red_events):
+            items.append(f"{name}{where} — зелёная в {', '.join(green_events)}"
+                         f", красная в {', '.join(red_events)}")
+    return items
+
+
+def _divergence_phrase(items: list[str]) -> str:
+    """Отдельная фраза о расхождении исхода по событиям, "" — его нет."""
+    return (f"; исход по событиям расходится: {'; '.join(items)}"
+            if items else "")
+
+
+def _failed_listing(failed: list, index: _RunIndex | None) -> str:
+    """«<имя>=<заключение> (<событие>, прогон <id>)» по каждому check-run'у
+    (AC-1)."""
+    return ", ".join(f"{r.get('name', '?')}={r.get('conclusion')} "
+                     f"({_run_label(r, index)})" for r in failed)
+
+
+def _running_listing(unfinished: list, index: _RunIndex | None) -> str:
+    """«<имя> (<событие>, прогон <id>)» по каждой идущей проверке (AC-2)."""
+    return ", ".join(f"{r.get('name', '?')} ({_run_label(r, index)})"
+                     for r in unfinished)
 
 
 def stuck_check_ids(note: str) -> list[str]:
@@ -366,24 +522,28 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         return VERIFYING_NONE, f"{first_source}, {detail} — проверок нет вовсе"
 
     unfinished, reread = _unfinished_checks(runs)
-    stuck = _stuck_checks(unfinished)
+    failed = [r for r in runs if r.get("conclusion") not in GREEN]
+    # Прогоны спрашиваются только на не-зелёном исходе: зелёный текст и
+    # число запросов на нём задача не трогает.
+    index = (_commit_workflow_runs(sha, runs) if unfinished or failed
+             else None)
+    divergence = _divergence_phrase(_event_divergence(runs, index))
+    stuck = _stuck_checks(unfinished, index)
     if stuck:
         # Зависшая проверка важнее идущих рядом: без перезапуска коммит не
         # станет зелёным, сколько ни жди остальные.
         return VERIFYING_STUCK, _with_reread(
             f"CI коммита {short}: проверка зависла (порог "
             f"{config.CI_STUCK_CHECK_MINUTES} мин) — {'; '.join(stuck)}; "
-            f"перезапуск — ci-rerun", reread)
-    running = [str(r.get("name", "?")) for r in unfinished]
-    if running:
+            f"перезапуск — ci-rerun{divergence}", reread)
+    if unfinished:
         return VERIFYING_RUNNING, _with_reread(
-            f"CI коммита {short} ещё идёт: {', '.join(running)}", reread)
-
-    failed = [f"{r.get('name', '?')}={r.get('conclusion')}" for r in runs
-             if r.get("conclusion") not in GREEN]
+            f"CI коммита {short} ещё идёт: "
+            f"{_running_listing(unfinished, index)}{divergence}", reread)
     if failed:
         return VERIFYING_RED, _with_reread(
-            f"CI коммита {short} не зелёный: {', '.join(failed)}", reread)
+            f"CI коммита {short} не зелёный: "
+            f"{_failed_listing(failed, index)}{divergence}", reread)
     return VERIFYING_GREEN, _with_reread(
         f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
 
@@ -490,16 +650,18 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     # Состояния «проверка зависла» здесь нет (SPEC 01M3Y75C9TY76083CG1PK00EM4,
     # «Не входит»): на гейте мержа проверка без исхода — просто не зелёная.
     unfinished, reread = _unfinished_checks(runs)
-    running = [str(r.get("name", "?")) for r in unfinished]
-    if running:
+    failed = [r for r in runs if r.get("conclusion") not in GREEN]
+    index = (_commit_workflow_runs(sha, runs) if unfinished or failed
+             else None)
+    divergence = _divergence_phrase(_event_divergence(runs, index))
+    if unfinished:
         return False, _with_reread(
-            f"CI коммита {short} ещё идёт: {', '.join(running)}", reread)
-
-    failed = [f"{r.get('name', '?')}={r.get('conclusion')}" for r in runs
-              if r.get("conclusion") not in GREEN]
+            f"CI коммита {short} ещё идёт: "
+            f"{_running_listing(unfinished, index)}{divergence}", reread)
     if failed:
         return False, _with_reread(
-            f"CI коммита {short} не зелёный: {', '.join(failed)}", reread)
+            f"CI коммита {short} не зелёный: "
+            f"{_failed_listing(failed, index)}{divergence}", reread)
     return True, _with_reread(
         f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
 
@@ -622,17 +784,55 @@ def _verdict_of_runs(runs: list) -> tuple[str, str] | None:
     return MAIN_GREEN, ""
 
 
+def _main_line_runs(failed: list, running: list,
+                    runs_at: dict) -> tuple[dict, str]:
+    """(Подписи «событие, прогон» по (проверка, коммит), фраза о
+    расхождении исхода по событиям) для упавших и идущих проверок линии
+    (SPEC 01M46D5ZZQY7GBEW5TBVQ0P3ZV, AC-4/AC-6).
+
+    Прогоны спрашиваются у того коммита линии, где проверка упала или
+    идёт, а не у опорного: глубже головы у неё свой прогон."""
+    commits = list(dict.fromkeys([c for _n, _c, c in failed]
+                                 + [c for _n, c in running]))
+    indexes = {c: _commit_workflow_runs(c, runs_at[c]) for c in commits}
+
+    def label(name: str, commit: str, selected) -> str:
+        checks = [r for r in runs_at[commit]
+                  if str(r.get("name", "?")) == name and selected(r)]
+        return "; ".join(_run_label(r, indexes[commit]) for r in checks) \
+            or UNDEFINED_EVENT
+
+    labels = {}
+    for name, _conclusion, commit in failed:
+        labels[(name, commit)] = label(
+            name, commit, lambda r: r.get("status") == "completed"
+            and r.get("conclusion") not in GREEN)
+    for name, commit in running:
+        labels[(name, commit)] = label(
+            name, commit, lambda r: r.get("status") != "completed")
+    items = []
+    for commit in dict.fromkeys(c for _n, _c, c in failed):
+        names = {n for n, _c, c in failed if c == commit}
+        items += _event_divergence(
+            [r for r in runs_at[commit] if str(r.get("name", "?")) in names],
+            indexes[commit], where=f" на {commit[:8]}")
+    return labels, _divergence_phrase(items)
+
+
 def _main_line_note(kind: str, ref: str, failed: list, running: list,
-                    red_since: str, why: str, green_count: int) -> str:
+                    red_since: str, why: str, green_count: int,
+                    labels: dict, divergence: str) -> str:
     short = ref[:8]
     if kind == MAIN_RED:
-        listing = ", ".join(f"{name}={conclusion} на {sha[:8]}"
+        listing = ", ".join(f"{name}={conclusion} на {sha[:8]} "
+                            f"({labels[(name, sha)]})"
                             for name, conclusion, sha in failed)
-        return f"main красный с {red_since[:8]}: {listing}"
+        return f"main красный с {red_since[:8]}: {listing}{divergence}"
     if kind == MAIN_RUNNING:
-        listing = ", ".join(f"{name} на {sha[:8]}" for name, sha in running)
+        listing = ", ".join(f"{name} на {sha[:8]} ({labels[(name, sha)]})"
+                            for name, sha in running)
         return (f"CI main {short} не подтверждён: "
-                f"{why or f'проверки ещё идут: {listing}'}")
+                f"{why or f'проверки ещё идут: {listing}{divergence}'}")
     if kind == MAIN_UNKNOWN:
         return f"CI main {short} не подтверждён: {why}"
     return (f"CI main {short} зелёный по первой родительской линии "
@@ -676,6 +876,9 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
     # Голова push'а и пропущенные на ней проверки: класс её push'а известен
     # только у следующей глубже головы с проверками.
     skipped_at: tuple[str, list] | None = None
+    # Check-run'ы пройденных коммитов — для подписи упавших и идущих
+    # проверок прогоном их коммита после обхода.
+    runs_at: dict[str, list] = {}
     for commit in line:
         runs, reason = check_runs(commit)
         if runs is None and pending is None \
@@ -698,6 +901,7 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
             pending = {str(r.get("name", "?")) for r in runs}
         if not runs:
             continue
+        runs_at[commit] = runs
         if skipped_at is not None:
             push_head, names = skipped_at
             skipped_at = None
@@ -736,8 +940,9 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
         red_since = max((c for _n, _c, c in failed), key=line.index)
     elif not kind:
         kind = MAIN_RUNNING if running else MAIN_GREEN
+    labels, divergence = _main_line_runs(failed, running, runs_at)
     note = _main_line_note(kind, ref, failed, running, red_since, why,
-                           green_count)
+                           green_count, labels, divergence)
     return MainLineStatus(kind, ref, failed, running, red_since, note)
 
 

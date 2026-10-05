@@ -20,7 +20,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
+from . import (acceptance, appendix_tree, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
               config, cycle_hint, fixation, github_adapter, gitcmd, lease,
               merge_after, pull, repo_context,
               review, store, targets, workspace, yamlmini)
@@ -1103,19 +1103,36 @@ def _acceptance_full_suite_ok(conn, task_id: str, t,
                       ACCEPTANCE_SUITE_SKIPPED_ACTION, detail)
         print(f"[{task_id}] {ACCEPTANCE_SUITE_SKIPPED_ACTION}: {detail}")
         return True
-    run = acceptance.full_suite(wt_root, task_id)
+    # Голова ветки с наложенными приложениями PLAN (SPEC
+    # 01M46C776SZEMYPBQGPNJN1TXY) — тот же узел, что у автогейта: иначе
+    # одна планка проходила бы автогейт и не проходила approve. Отказ
+    # наложения или git — отказ приёмки, `--accept-red` его не снимает:
+    # принимается краснота прогона, а прогона не было.
+    with appendix_tree.suite_tree(conn, task_id, wt_root,
+                                  branch=t["branch"]) as tree:
+        if tree.root is None:
+            reason = tree.refusal
+            store.journal(conn, task_id, "operator", "approve отклонён",
+                          reason)
+            print(f"[{task_id}] approve отклонён: {reason}")
+            print(f"  почини приложения PLAN и повтори: artel.py approve "
+                  f"{task_id}")
+            return False
+        run = acceptance.full_suite(tree.root, task_id)
+    run_detail = tree.mark(run.detail)
     if run.green:
         store.journal(conn, task_id, "operator", ACCEPTANCE_SUITE_GREEN_ACTION,
-                      run.detail)
-        print(f"[{task_id}] {ACCEPTANCE_SUITE_GREEN_ACTION}: {run.digest}")
+                      run_detail)
+        print(f"[{task_id}] {ACCEPTANCE_SUITE_GREEN_ACTION}: "
+              f"{tree.mark(run.digest)}")
         return True
     if accept_red:
-        detail = f"основание: {accept_red}\n{run.detail}"
+        detail = f"основание: {accept_red}\n{run_detail}"
         store.journal(conn, task_id, "operator", ACCEPTANCE_RED_ACCEPTED_ACTION,
                       detail)
         print(f"[{task_id}] {ACCEPTANCE_RED_ACCEPTED_ACTION}: {detail}")
         return True
-    reason = f"полный набор tests/ не пройден — {run.detail}"
+    reason = f"полный набор tests/ не пройден — {run_detail}"
     store.journal(conn, task_id, "operator", "approve отклонён", reason)
     print(f"[{task_id}] approve отклонён: {reason}")
     print(f"  почини набор и повтори: artel.py approve {task_id}")

@@ -23,8 +23,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_branch, artifact_source, ci, cleanup,
-              config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
+from . import (acceptance, appendix_tree, artifact_branch, artifact_source,
+              ci, cleanup, config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
               merge_lock, merge_queue, project_profile, repo_context, store,
               workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
@@ -769,16 +769,12 @@ def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
     тем же принципом деградации, что `_overlay_artifact_snapshot` уже
     применяет к провалу материализации снимка. Ничего некорректного в
     main это не пропускает — не применяется ничего."""
-    branch, _foreign = artifact_source.resolve(conn, task_id)
-    text, reason = artifact_branch.show(task_id, branch,
-                                        f"tasks/{task_id}/PLAN.md")
-    if text is None:
+    appendices, errors, unread = appendix_tree.read_plan(conn, task_id)
+    if unread:
         store.journal(conn, task_id, "orchestrator",
                       "приложения PLAN не прочитаны",
-                      f"PLAN.md не читается с ветки {branch}: {reason} — "
-                      f"приложения не применяются")
+                      f"{unread} — приложения не применяются")
         return []
-    appendices, errors = guard.plan_appendices(text)
     if errors:
         detail = f"приложения PLAN не разобраны: {'; '.join(errors)}"
         store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
@@ -920,17 +916,18 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     # многофайловый блок git применяет целиком, и `git add` ниже обязан
     # унести в коммит все его файлы, иначе правка Оператора уезжает в
     # никуда вместе со scratch-деревом.
-    paths: list[str] = []
-    for number, appendix in enumerate(appendices, 1):
-        answer = git_apply(scratch, appendix)
-        if answer and _appendix_already_in_main(conn, task_id, number,
-                                                appendix, scratch):
-            continue
-        if answer:
-            _return_inapplicable_appendix(conn, task_id, state, appendix,
-                                          answer, scratch, ctx)
-            return ("stopped", [])
-        paths.extend(p for p in appendix.paths if p not in paths)
+    # Наложение — общий узел `appendix_tree.apply_in_order` (SPEC
+    # 01M46C776SZEMYPBQGPNJN1TXY, требование 7): тем же порядком и тем же
+    # `git_apply` приложения ложатся на дерево полного прогона автогейта,
+    # approve и `suite-run`.
+    paths, failure = appendix_tree.apply_in_order(
+        scratch, appendices,
+        lambda number, appendix: _appendix_already_in_main(
+            conn, task_id, number, appendix, scratch))
+    if failure is not None:
+        _return_inapplicable_appendix(conn, task_id, state, failure.appendix,
+                                      failure.answer, scratch, ctx)
+        return ("stopped", [])
     if not paths:
         # Все приложения уже в main: коммитить нечего, `git commit` на
         # пустом индексе отказал бы и сорвал мерж.
