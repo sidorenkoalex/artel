@@ -25,7 +25,7 @@ from pathlib import Path
 from orchestrator import (cleanup, config, doctor, fixation, fsm,
                           fsm_merge_gate, projects, repo_context, snapshot,
                           store)
-from tests.sandbox import AutoOriginSandbox, capture
+from tests.sandbox import ARTEL_TEST_PROFILE, AutoOriginSandbox, capture
 
 REF_PREFIX = "refs/artifacts/"
 PROJECT_NAMES = ("sled", "sani", "drovni", "rozvalni")
@@ -40,6 +40,7 @@ def _targets_yaml(external: str) -> str:
     return ("targets:\n"
             f"  {config.DEFAULT_TARGET}:\n"
             + entry.format(name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
+            + ARTEL_TEST_PROFILE
             + f"  {external}:\n"
             + entry.format(name=external, base=config.MAIN_BRANCH))
 

@@ -29,7 +29,7 @@ from unittest import mock
 
 from orchestrator import (acceptance, catalog, checkpoint, ci, config, fsm,
                           github_adapter, idgen, store)
-from tests.sandbox import RealGitSandbox, capture
+from tests.sandbox import ARTEL_TEST_PROFILE, RealGitSandbox, capture
 
 # Защищённые файлы — от `config.PROTECTED_PATHS`, не литералом: перечень
 # меняет Оператор. Вне `tests/` и `.github/` — их правка приложением
@@ -105,9 +105,11 @@ class AppliedAppendixMergeSandbox(RealGitSandbox):
             "в config.PROTECTED_PATHS нет двух защищённых файлов вне tests/"))
         self.files = self.rng.sample(PROTECTED_FILES, 2)
 
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4): без профиля проверки тестов задачи артели отказывают.
         config.TARGETS.write_text(TARGETS_YAML.format(
-            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH),
-            encoding="utf-8")
+            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
+            + ARTEL_TEST_PROFILE, encoding="utf-8")
         for rel in self.files:
             path = self.root / rel
             path.parent.mkdir(parents=True, exist_ok=True)

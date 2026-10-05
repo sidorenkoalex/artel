@@ -80,6 +80,37 @@ def resolve(target_name: str) -> "RepoContext | None":
                        base=entry["base"], target=target_name)
 
 
+PROFILE_PRESENT = "есть"
+PROFILE_ABSENT = "нет"
+PROFILE_UNREAD = "не прочитан"
+
+
+@dataclass(frozen=True)
+class ProfileAnswer:
+    """Профиль тестов проекта из его записи `targets.yaml` (ADR-0021 пп.
+    8-9; SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 2): `outcome` — один
+    из трёх исходов, `values` — разобранные подполя (только при
+    `PROFILE_PRESENT`), `reason` — почему не прочитан."""
+    outcome: str
+    values: dict | None = None
+    reason: str = ""
+
+
+def profile_of(target_name: str) -> ProfileAnswer:
+    """Профиль тестов проекта `target_name` — у артели тоже из её записи
+    `targets.yaml`, как у любого проекта. Три исхода: профиль есть, у
+    записи нет поля, профиль не прочитан (файл или запись не годны —
+    `targets.check` проверяет и само поле)."""
+    try:
+        entry = targets.target(target_name)
+    except targets.TargetsError as exc:
+        return ProfileAnswer(PROFILE_UNREAD, reason=str(exc))
+    values = entry.get(targets.PROFILE_FIELD)
+    if values is None:
+        return ProfileAnswer(PROFILE_ABSENT)
+    return ProfileAnswer(PROFILE_PRESENT, values=dict(values))
+
+
 def is_artel(ctx: "RepoContext | None") -> bool:
     """Проект контекста — артель (`config.DEFAULT_TARGET`): признак шагов
     гейта мержа, нужных только пульту (SPEC 01M42PENCS26D0656X8FR7DFA7,

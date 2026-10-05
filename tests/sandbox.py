@@ -60,6 +60,7 @@ _RoleHomeReferenceTmpRootTest` — единственный, где сужени
 (нужен настоящий `config.ROOT`), несёт explicit-комментарий.
 """
 import atexit
+import contextlib
 import errno
 import importlib
 import io
@@ -892,6 +893,89 @@ _PROJECT_TARGET_ENTRY = """  {name}:
     merge_gate: operator
 """
 
+# Профиль тестов артели — значения записи `artel` боевого targets.yaml
+# (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 1): без него проверки тестов
+# задачи артели отказывают (требование 4), и песочница, которой предмет —
+# не профиль, получала бы отказ вместо своего сценария.
+ARTEL_TEST_PROFILE = """    test_profile:
+      command: [python3, -m, pytest]
+      long_lived_dir: tests
+      long_lived_name: test_<id>_<name>.py
+      weakening_scope: [tests/**/*.py]
+      mutation_claim_scope: [tests/test_*.py]
+      report: junit-xml
+      install: []
+"""
+
+# Адрес-заглушка записи артели песочницы: `clone_artel_from_origin`
+# заменяет его настоящим `origin`.
+_ARTEL_PLACEHOLDER_URL = "file:///nonexistent/{name}"
+
+
+def seed_artel_targets() -> None:
+    """`config.TARGETS` песочницы с записью артели и её профилем тестов —
+    если файла ещё нет. Сценарий, которому нужна своя декларация,
+    переписывает файл целиком; `make_project_repo` дописывает к ней
+    запись внешнего проекта."""
+    if config.TARGETS.exists():
+        return
+    config.TARGETS.parent.mkdir(parents=True, exist_ok=True)
+    config.TARGETS.write_text(
+        "targets:\n" + _PROJECT_TARGET_ENTRY.format(
+            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
+        + ARTEL_TEST_PROFILE, encoding="utf-8")
+
+
+@contextlib.contextmanager
+def declared_without_profile(target: str):
+    """Сценарий без песочницы путей: `config.TARGETS` на время блока —
+    временный файл с одной записью проекта `target` без профиля тестов
+    (контекст разрешён, профиля нет — SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 3). Запись о пропуске проверки (`project_profile.
+    journal_skip`) подменена: у такого сценария нет БД; блок отдаёт
+    подмену, чтобы сценарий мог её сверить."""
+    from orchestrator import project_profile
+    with tempfile.TemporaryDirectory(prefix="artel-targets-") as tmp:
+        path = Path(tmp) / "targets.yaml"
+        path.write_text("targets:\n" + _PROJECT_TARGET_ENTRY.format(
+            name=target, base=config.MAIN_BRANCH), encoding="utf-8")
+        with mock.patch.object(config, "TARGETS", path), \
+                mock.patch.object(project_profile, "journal_skip") as skip:
+            yield skip
+
+
+@contextlib.contextmanager
+def declared_artel_profile():
+    """Сценарий без песочницы путей: `config.TARGETS` на время блока —
+    временный файл с записью артели и её профилем тестов, а не боевой
+    файл пульта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4: без
+    профиля проверки тестов задачи артели отказывают)."""
+    with tempfile.TemporaryDirectory(prefix="artel-targets-") as tmp:
+        path = Path(tmp) / "targets.yaml"
+        path.write_text("targets:\n" + _PROJECT_TARGET_ENTRY.format(
+            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
+            + ARTEL_TEST_PROFILE, encoding="utf-8")
+        with mock.patch.object(config, "TARGETS", path):
+            yield
+
+
+def declare_target(target: str) -> None:
+    """Запись проекта `target` (без профиля тестов) в `config.TARGETS`
+    песочницы, если её там нет, — без клона: контекст проекта разрешается
+    (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 5 — проверки тестов
+    отказывают проекту с неразрешённым контекстом)."""
+    try:
+        text = config.TARGETS.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    if f"\n  {target}:" in "\n" + text:
+        return
+    if "targets:" not in text:
+        text = "targets:\n" + text
+    config.TARGETS.write_text(
+        text.rstrip("\n") + "\n" + _PROJECT_TARGET_ENTRY.format(
+            name=target, base=config.MAIN_BRANCH), encoding="utf-8")
+
 
 def make_project_repo(target: str, origin: bool = True) -> Path:
     """Клон внешнего проекта `target` по адресу `repo_context`
@@ -1191,13 +1275,19 @@ def clone_artel_from_origin(origin) -> Path:
         text = config.TARGETS.read_text(encoding="utf-8")
     except FileNotFoundError:
         text = ""
+    placeholder = _ARTEL_PLACEHOLDER_URL.format(name=config.DEFAULT_TARGET)
     if f"\n  {config.DEFAULT_TARGET}:" not in "\n" + text:
         if "targets:" not in text:
             text = "targets:\n" + text
         entry = _PROJECT_TARGET_ENTRY.format(
             name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH).replace(
-            f"file:///nonexistent/{config.DEFAULT_TARGET}", str(origin))
+            placeholder, str(origin))
         config.TARGETS.write_text(text.rstrip("\n") + "\n" + entry,
+                                  encoding="utf-8")
+    elif placeholder in text:
+        # Запись артели, посеянная песочницей (`seed_artel_targets`), — с
+        # адресом-заглушкой: клону нужен настоящий `origin`.
+        config.TARGETS.write_text(text.replace(placeholder, str(origin)),
                                   encoding="utf-8")
     path, error = workspace.ensure_clone(config.DEFAULT_TARGET)
     if error is not None:
@@ -1239,6 +1329,11 @@ class TmpRootTest(unittest.TestCase):
         # иначе `PROJECTS` — боевой каталог пульта.
         if {"ROOT", "PROJECTS"} <= set(self.PATCHED_ATTRS):
             seed_artel_clone_stub()
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4: без профиля артели проверки тестов отказывают) —
+        # только при подменённом `TARGETS`: иначе это боевой файл пульта.
+        if "TARGETS" in self.PATCHED_ATTRS:
+            seed_artel_targets()
 
         # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
         # (см. комментарий у `_stub_check_stack` выше) — без этого патча
@@ -1543,7 +1638,14 @@ class RealGitSandbox(TmpRootTest):
         self.git("commit", "-q", "-m", "init")
 
         for attr in ALL_CONFIG_ATTRS:
-            patcher = mock.patch.object(config, attr, self._patched_path(attr))
+            path = self._patched_path(attr)
+            if attr == "TARGETS":
+                # Декларация проектов — под игнорируемым `.artel/`, не в
+                # дереве репозитория песочницы: посеянная запись артели
+                # (`seed_artel_targets`, SPEC 01M45FJVGQT1K0P8HDEXZX6HS7)
+                # иначе лежала бы неотслеживаемым файлом в `git status`.
+                path = self.root / ".artel" / "targets.yaml"
+            patcher = mock.patch.object(config, attr, path)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -1560,6 +1662,9 @@ class RealGitSandbox(TmpRootTest):
         store.create_schema(store.db())
         if self.ARTEL_CLONE_IS_ROOT and not hasattr(self, "project_clone"):
             link_artel_clone_to_root(self.root)
+        # Запись артели с профилем тестов — тем же приёмом, что
+        # `TmpRootTest.setUp` (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4).
+        seed_artel_targets()
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,

@@ -12,7 +12,7 @@ from pathlib import Path
 from scripts import guard
 
 from .. import (acceptance, agent_log, artifact_branch, config, fsm, gitcmd,
-               store, workspace, yamlmini)
+               project_profile, store, workspace, yamlmini)
 from .refusal_classes import ACCEPTANCE_CODE_COPY_REFUSAL_ACTION
 
 LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень долгоживущих тестов"
@@ -47,14 +47,22 @@ def long_lived_manifest(task_id: str, t, target: str
     """({путь: sha256}, "") перечня долгоживущих файлов из дерева коммита
     лока `tests_locked_sha` — неизменного, в отличие от головы ветки
     документов, правку которой ловит сверка лока; (None, причина) — git не
-    ответил или перечень испорчен.
+    ответил, перечень испорчен, контекст проекта не разрешён или у артели
+    нет профиля тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования 4-5:
+    отказ, а не пропуск).
 
-    Пустой словарь — сверять нечего: задача вне области правила (внешний
-    target, `skip_tests` — лока нет), либо лок снят до внедрения перечня
-    (задача 2 ADR-0020) и файла в дереве лока нет. У задачи, залоченной
-    после внедрения, перечень в дереве лока есть всегда: выход из
-    `tests_writing` без записанного перечня отказывает."""
-    if target != config.DEFAULT_TARGET or not t["tests_locked_sha"]:
+    Пустой словарь — сверять нечего: задача вне области правила (проект
+    без профиля тестов — пропуск журналирует вызывающий рубеж; `skip_tests`
+    — лока нет), либо лок снят до внедрения перечня (задача 2 ADR-0020) и
+    файла в дереве лока нет. У задачи, залоченной после внедрения, перечень
+    в дереве лока есть всегда: выход из `tests_writing` без записанного
+    перечня отказывает."""
+    if not t["tests_locked_sha"]:
+        return {}, ""
+    decision = project_profile.decide(target)
+    if decision.refusal:
+        return None, decision.refusal
+    if decision.profile is None:
         return {}, ""
     locked = t["tests_locked_sha"]
     rel = long_lived_manifest_rel(task_id)
@@ -82,15 +90,26 @@ def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
     Строка задачи читается здесь, а не берётся у вызывающего: на гейте
     мержа его `t` мог быть прочитан до подтяжки main.
 
+    Каталог долгоживущих файлов — профиля тестов проекта; у проекта без
+    профиля сверка не выполняется и пишет об этом запись в журнал (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 3).
+
     `True` — переход отклонён (журнал и печать уже сделаны)."""
     t = store.get_task(conn, task_id)
-    digests, reason = long_lived_manifest(task_id, t,
-                                          store.task_target(conn, task_id))
+    target = store.task_target(conn, task_id)
+    decision = project_profile.decide(target)
+    if t["tests_locked_sha"] and not decision.refusal \
+            and decision.profile is None:
+        project_profile.journal_skip(conn, task_id,
+                                     project_profile.CHECK_MANIFEST, decision)
+        return False
+    digests, reason = long_lived_manifest(task_id, t, target)
     problems: list[str] = []
     if digests:
         repo = workspace.task_repo(task_id)
         head = gitcmd.branch_head_sha(t["branch"], repo=repo)
-        present = gitcmd.ls_tree_files(head, "tests", repo=repo) if head else None
+        present = (gitcmd.ls_tree_files(head, decision.profile.long_lived_dir,
+                                        repo=repo) if head else None)
         if not head:
             reason = f"голова кодовой ветки {t['branch']} не прочитана"
         elif present is None:
@@ -244,58 +263,70 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
         print(f"[{task_id}] переход отклонён: {detail}")
         return True
 
-    acc_tdir = tdir
-    run_cwd = config.ROOT
+    # Профиль тестов проекта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования
+    # 3-6): контекст не разрешён или у артели нет профиля — отказ; у
+    # проекта без профиля — планка командой пульта, без долгоживущих.
+    decision = project_profile.decide(target)
+    if decision.refusal:
+        store.journal(conn, task_id, "fsm", project_profile.REFUSAL_ACTION,
+                      decision.refusal)
+        print(f"[{task_id}] переход отклонён: {decision.refusal}")
+        print(f"  дальше: {project_profile.refusal_hint(task_id)}")
+        return True
+    # Прогон — в рабочей копии задачи в области проекта, одна ветка логики
+    # для любого проекта (требование 6): прогон в главной копии пульта
+    # проверял бы код пина, а не код задачи.
+    run_cwd, error = workspace.ensure(task_id, t["branch"])
+    if error is not None:
+        # Без рабочей копии планка легла бы в пустой каталог и упала бы
+        # на импорте кода — причина `ensure` понятнее этого исхода.
+        detail = f"рабочая копия задачи не заведена: {error}"
+        store.journal(conn, task_id, "fsm",
+                      ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: artel.py workspace {task_id} и повтори "
+              f"artel.py advance {task_id}")
+        return True
+    if workspace.on_task_branch(task_id, t["branch"], target) is False:
+        # `ensure` отдаёт уже заведённую копию, не сверяя её ветку: прогон
+        # в ней проверял бы чужой код, а долгоживущие файлы перечня молча
+        # выпали бы из группы (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+        # требование 9).
+        detail = (f"рабочая копия задачи не выписана на ветку "
+                  f"{t['branch']} — планку и долгоживущие файлы перечня "
+                  f"исполнить негде")
+        store.journal(conn, task_id, "fsm",
+                      ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: artel.py workspace {task_id} и повтори "
+              f"artel.py advance {task_id}")
+        return True
+    acc_tdir = cleanup.enter_context(
+        acceptance.plank_in_code_copy(task_id, branch, run_cwd))
     # Долгоживущие файлы перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
-    # требование 9) — в том же прогоне, что планка; они лежат в `tests/`
-    # кодовой ветки, поэтому исполнимы только из её рабочей копии.
+    # требование 9) — в том же прогоне, что планка; они лежат в кодовой
+    # ветке, поэтому исполнимы только из её рабочей копии. Сбой чтения
+    # перечня (`None`) раньше в `in_dev` уже отклонил переход узлом сверки
+    # `_long_lived_manifest_refuses`.
     long_lived = None
-    if target != config.DEFAULT_TARGET:
-        run_cwd, error = workspace.ensure(task_id, t["branch"])
-        if error is not None:
-            # Без рабочей копии планка легла бы в пустой каталог и упала бы
-            # на импорте кода — причина `ensure` понятнее этого исхода.
-            detail = f"рабочая копия задачи не заведена: {error}"
-            store.journal(conn, task_id, "fsm",
-                          ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
-            print(f"[{task_id}] переход отклонён: {detail}")
-            print(f"  дальше: artel.py workspace {task_id} и повтори "
-                  f"artel.py advance {task_id}")
-            return True
-        acc_tdir = cleanup.enter_context(
-            acceptance.plank_in_code_copy(task_id, branch, run_cwd))
-        if _missing_plank_refuses():
-            return True
-    elif workspace.on_task_branch(task_id, t["branch"], target) is True:
-        run_cwd = workspace.path(task_id, target)
-        acc_tdir = cleanup.enter_context(
-            acceptance.plank_in_code_copy(task_id, branch, run_cwd))
-        # Сбой чтения перечня (`None`) раньше в `in_dev` уже отклонил
-        # переход узлом сверки `_long_lived_manifest_refuses`.
+    command = None
+    if decision.profile is None:
+        project_profile.journal_skip(conn, task_id,
+                                     project_profile.CHECK_LONG_LIVED_RUN,
+                                     decision)
+    else:
+        command = list(decision.profile.command)
         digests, _reason = long_lived_manifest(task_id, t, target)
         if digests is not None and t["tests_locked_sha"]:
             long_lived = sorted(digests)
-        if _missing_plank_refuses():
-            return True
-    else:
-        # Без рабочей копии на ветке задачи долгоживущие файлы перечня
-        # исполнить негде; прогон одной планки молча выронил бы их группу
-        # (требование 9) — отказ, как на выходе из `tests_writing`.
-        digests, _reason = long_lived_manifest(task_id, t, target)
-        if digests is None or digests:
-            detail = (f"рабочая копия задачи не выписана на ветку "
-                      f"{t['branch']} — долгоживущие файлы перечня исполнить "
-                      f"негде")
-            store.journal(conn, task_id, "fsm",
-                          ACCEPTANCE_CODE_COPY_REFUSAL_ACTION, detail)
-            print(f"[{task_id}] переход отклонён: {detail}")
-            print(f"  дальше: artel.py workspace {task_id} и повтори "
-                  f"artel.py advance {task_id}")
-            return True
+    if _missing_plank_refuses():
+        return True
+    kwargs = {"command": command} if command else {}
     if long_lived:
-        green, tail = acceptance.run(acc_tdir, cwd=run_cwd, extra=long_lived)
+        green, tail = acceptance.run(acc_tdir, cwd=run_cwd, extra=long_lived,
+                                     **kwargs)
     else:
-        green, tail = acceptance.run(acc_tdir, cwd=run_cwd)
+        green, tail = acceptance.run(acc_tdir, cwd=run_cwd, **kwargs)
     # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
     # исхода прогона приёмочных тестов, значение поля `detail`
     # существующего журнального события, без новой таблицы/колонки.

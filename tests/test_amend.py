@@ -729,6 +729,10 @@ class AmendFromBranchDivergenceDetailTest(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        # Выход из `tests_writing` заводит рабочую копию задачи и для
+        # артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6): базе её
+        # ветки нужен `origin`.
+        self.add_synced_origin()
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(
             catalog.cmd_new, "amend --from-branch, несколько файлов")
