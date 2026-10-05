@@ -33,8 +33,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifact_branch, config, fixation, gitcmd,
-               github_adapter, lease, store, workspace, yamlmini)
+from . import (acceptance, alerts, artifact_branch, fixation, gitcmd,
+               github_adapter, lease, project_profile, store, workspace,
+               yamlmini)
 from .advance_gates import acceptance as acceptance_gates
 
 AMEND_ACTION = "правка планки"
@@ -171,13 +172,19 @@ def _test_files(snapshot: dict[str, str]) -> list[tuple[str, str]]:
 def _group_line_errors(t, rel_tests_dir: str,
                        files: list[tuple[str, str]]) -> list[str]:
     """Ошибки строки группы правки (SPEC 01M3N0BWYQ9KHVN41Z4G72706R,
-    требования 1-2, 7): только target `config.DEFAULT_TARGET` и только
-    планка, зафиксированная после появления правила — её `test_*.py` на
-    `tests_locked_sha` несут строку группы (`guard.plank_has_group_lines`;
-    планка, зафиксированная раньше, строк группы не несёт и не
-    проверяется). Лок не читается — сверять не с чем, правку не
-    проверяем: тот же исход, что у планки до правила."""
-    if t["target"] != config.DEFAULT_TARGET:
+    требования 1-2, 7): любой проект с профилем тестов (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5; без профиля проверка не
+    выполняется — запись о пропуске пишет `_profile_or_exit`, отказ по
+    контексту и профилю артели — тоже он) и только планка, зафиксированная
+    после появления правила — её `test_*.py` на `tests_locked_sha` несут
+    строку группы (`guard.plank_has_group_lines`; планка, зафиксированная
+    раньше, строк группы не несёт и не проверяется). Лок не читается —
+    сверять не с чем, правку не проверяем: тот же исход, что у планки до
+    правила."""
+    decision = project_profile.decide(t["target"])
+    if decision.refusal:
+        return [decision.refusal]
+    if decision.profile is None:
         return []
     # Задача — из `tasks/<id>/acceptance_tests`: её клон хранит лок.
     task_id = Path(rel_tests_dir).parts[1]
@@ -186,6 +193,32 @@ def _group_line_errors(t, rel_tests_dir: str,
     if locked is None or not guard.plank_has_group_lines(_test_files(locked)):
         return []
     return guard.group_line_errors_from_files(files)
+
+
+def _task_profile(task_id: str):
+    """Профиль тестов проекта задачи для узлов долгоживущих файлов, когда
+    вызывающий его не передал: они работают только при непустом перечне
+    лока, а перечень бывает только у проекта с профилем."""
+    return project_profile.decide(workspace.task_target(task_id)).profile
+
+
+def _profile_or_exit(conn, task_id: str):
+    """Профиль тестов проекта задачи (`project_profile.Profile`) либо
+    `None` — профиля нет, и проверка строк группы правки не выполняется:
+    запись о пропуске в журнал (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 3). Контекст проекта не разрешён или у артели профиль не
+    задан или не прочитан — отказ команды до любой записи (требования
+    4-5). Первым шагом команды: без контекста не читается и ссылка
+    документов, а отказ обязан назвать контекст."""
+    decision = project_profile.for_task(conn, task_id)
+    if decision.refusal:
+        store.journal(conn, task_id, "operator", "amend-tests отклонён",
+                      decision.refusal)
+        sys.exit(f"[{task_id}] amend-tests: отказ — {decision.refusal}")
+    if decision.profile is None:
+        project_profile.journal_skip(conn, task_id,
+                                     project_profile.CHECK_GROUPS, decision)
+    return decision.profile
 
 
 def _refuse_group_lines(conn, task_id: str, errors: list[str]) -> None:
@@ -355,18 +388,21 @@ def _lock_manifest(conn, task_id: str, t) -> tuple[dict[str, str] | None, str]:
         task_id, t, store.task_target(conn, task_id))
 
 
-def _worktree_long_lived_files(wt_path: Path, task_id: str) -> dict[str, str] | None:
+def _worktree_long_lived_files(wt_path: Path, task_id: str,
+                               profile=None) -> dict[str, str] | None:
     """{путь: текст} долгоживущих файлов задачи, которые лежат на диске
     worktree (отслеживаемые и новые, не игнорируемые git) — итоговое
-    состояние правки; `None` — git не ответил или файл не прочитан."""
+    состояние правки; `None` — git не ответил или файл не прочитан.
+    Каталог и шаблон имени — профиля тестов проекта (`profile`)."""
+    profile = profile or _task_profile(task_id)
     res = gitcmd.in_repo(wt_path, "ls-files", "--cached", "--others",
-                         "--exclude-standard", "--", "tests")
+                         "--exclude-standard", "--", profile.long_lived_dir)
     if res is None or res.returncode != 0:
         return None
     files: dict[str, str] = {}
     for rel in sorted(set(res.stdout.splitlines())):
         rel = rel.strip()
-        if not guard.is_long_lived_test_path(task_id, rel):
+        if not profile.is_long_lived(task_id, rel):
             continue
         path = wt_path / rel
         if not path.is_file():
@@ -378,18 +414,20 @@ def _worktree_long_lived_files(wt_path: Path, task_id: str) -> dict[str, str] | 
     return files
 
 
-def _code_head_long_lived(code_branch: str, task_id: str
+def _code_head_long_lived(code_branch: str, task_id: str, profile=None
                           ) -> tuple[str, dict[str, str]] | None:
-    """(голова кодовой ветки, {путь: текст} её долгоживущих файлов задачи);
-    `None` — git не ответил."""
+    """(голова кодовой ветки, {путь: текст} её долгоживущих файлов задачи
+    по профилю тестов проекта); `None` — git не ответил."""
+    profile = profile or _task_profile(task_id)
     repo = workspace.task_repo(task_id)
     head = gitcmd.branch_head_sha(code_branch, repo=repo)
-    present = gitcmd.ls_tree_files(head, "tests", repo=repo) if head else None
+    present = (gitcmd.ls_tree_files(head, profile.long_lived_dir, repo=repo)
+               if head else None)
     if present is None:
         return None
     files: dict[str, str] = {}
     for rel in present:
-        if not guard.is_long_lived_test_path(task_id, rel):
+        if not profile.is_long_lived(task_id, rel):
             continue
         text, _reason = gitcmd.show(head, rel, repo=repo)
         if text is None:
@@ -398,16 +436,20 @@ def _code_head_long_lived(code_branch: str, task_id: str
     return head, files
 
 
-def _head_digests(head: str, task_id: str) -> dict[str, str] | None:
-    """{путь: sha256 байтов} долгоживущих файлов задачи в дереве `head` —
-    содержимое перечня Р2; `None` — git не ответил."""
+def _head_digests(head: str, task_id: str,
+                  profile=None) -> dict[str, str] | None:
+    """{путь: sha256 байтов} долгоживущих файлов задачи в дереве `head` по
+    профилю тестов проекта — содержимое перечня Р2; `None` — git не
+    ответил."""
+    profile = profile or _task_profile(task_id)
     repo = workspace.task_repo(task_id)
-    present = gitcmd.ls_tree_files(head, "tests", repo=repo) if head else None
+    present = (gitcmd.ls_tree_files(head, profile.long_lived_dir, repo=repo)
+               if head else None)
     if present is None:
         return None
     digests: dict[str, str] = {}
     for rel in present:
-        if guard.is_long_lived_test_path(task_id, rel):
+        if profile.is_long_lived(task_id, rel):
             digest = acceptance_gates.blob_sha256(head, rel, repo)
             if digest is None:
                 return None
@@ -440,19 +482,21 @@ def _method_names(source: str) -> set[str]:
 
 def _long_lived_errors(task_id: str, files: dict[str, str],
                        deleted: dict[str, str | None],
-                       plank_sources: list[str]) -> list[str]:
+                       plank_sources: list[str], profile=None) -> list[str]:
     """Проверки итогового состояния долгоживущих файлов (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): в `tests/` — только
     «Группа: долгоживущий»; признаки и «Ловит мутацию» — узлом выхода из
     `tests_writing`; удаление файла перечня — только переносом, без потери
     метода (ADR-0020, пункт 8). Файл, который не разбирается, строкой
     группы не проверяется — его точнее назовёт сухой сбор."""
+    profile = profile or _task_profile(task_id)
     errors: list[str] = []
     for rel, text in sorted(files.items()):
         group, group_error = guard.plank_file_group(text)
         if group != guard.GROUP_LONG_LIVED and (group or group_error):
             errors.append(f"{rel}: нет строки «Группа: {guard.GROUP_LONG_LIVED}» "
-                          f"— в tests/ кодовой ветки только долгоживущие файлы")
+                          f"— в {profile.long_lived_dir}/ кодовой ветки только "
+                          f"долгоживущие файлы")
     errors += guard.long_lived_errors_from_files(sorted(files.items()), task_id)
     kept: set[str] = set()
     for source in [*plank_sources, *files.values()]:
@@ -542,6 +586,7 @@ def _push_code_head(conn, t, task_id: str) -> None:
 
 
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
+    profile = _profile_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
@@ -575,7 +620,8 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     # 1, 7): без перечня правка `tests/` — прежнее «за пределами».
     manifest, manifest_reason = _lock_manifest(conn, task_id, t)
     long_changed = sorted(p for p in changed
-                          if guard.is_long_lived_test_path(task_id, p))
+                          if profile is not None
+                          and profile.is_long_lived(task_id, p))
     outside = [p for p in changed if not p.startswith(prefix)
                and not (manifest and p in long_changed)]
     if manifest is None and long_changed:
@@ -615,7 +661,7 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
 
     if manifest:
         _amend_with_long_lived(conn, t, task_id, reason, wt_path, disk,
-                               manifest, long_changed, removed)
+                               manifest, long_changed, removed, profile)
         return
 
     # AC-1/AC-4: трассируемость AC — ДО прогона планки (копилка 11.09,
@@ -675,7 +721,8 @@ def _drop_fixed_task_dir(task_id: str, wt_path: Path) -> None:
 
 def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
                            disk: dict[str, bytes], manifest: dict[str, str],
-                           long_changed: list[str], removed: list[str]) -> None:
+                           long_changed: list[str], removed: list[str],
+                           profile=None) -> None:
     """Правка из worktree задачи с непустым перечнем лока (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): проверки итогового
     состояния планки и долгоживущих файлов — до любой записи; затем строго
@@ -684,10 +731,11 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     перечнем, пересчитанным по новой голове кодовой ветки, в ветку
     документов, (в) сдвиг `tests_locked_sha`. Сбой после (а) — ненулевой
     код с путём восстановления `--from-branch`."""
+    profile = profile or _task_profile(task_id)
     old_locked = t["tests_locked_sha"]
     rel_tests_dir = f"tasks/{task_id}/acceptance_tests"
     tdir = wt_path / "tasks" / task_id
-    files = _worktree_long_lived_files(wt_path, task_id)
+    files = _worktree_long_lived_files(wt_path, task_id, profile)
     code_head = gitcmd.branch_head_sha(t["branch"],
                                        repo=workspace.task_repo(task_id))
     if files is None or not code_head:
@@ -709,11 +757,13 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
         _refuse_traceability(conn, task_id, trace_errors)
     plank_files = guard.acceptance_test_files(tdir)
     group_errors = (_group_line_errors(t, rel_tests_dir, plank_files)
-                    + guard.long_lived_plank_errors(plank_files, task_id))
+                    + guard.long_lived_plank_errors(plank_files, task_id,
+                                                    profile.long_lived_dir,
+                                                    profile.long_lived_name))
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
     errors = _long_lived_errors(task_id, files, deleted,
-                                [text for _rel, text in plank_files])
+                                [text for _rel, text in plank_files], profile)
     if errors:
         _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files)
@@ -728,7 +778,7 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
         _push_code_head(conn, t, task_id)
         code_head = gitcmd.branch_head_sha(t["branch"],
                                            repo=workspace.task_repo(task_id))
-    digests = _head_digests(code_head, task_id) if code_head else None
+    digests = _head_digests(code_head, task_id, profile) if code_head else None
     new_locked, refusal = "", ""
     if digests is not None:
         docs_files = dict(disk)
@@ -857,6 +907,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
 
     Голова, сдвинутая мимо пульта, лок не получает: правку планки ролью
     узаконивает не эта команда, а `approve <id> <sha>`."""
+    profile = _profile_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
@@ -897,8 +948,8 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     head_digests: dict[str, str] = {}
     code_head = ""
     if manifest:
-        code = _code_head_long_lived(t["branch"], task_id)
-        digests = _head_digests(code[0], task_id) if code else None
+        code = _code_head_long_lived(t["branch"], task_id, profile)
+        digests = _head_digests(code[0], task_id, profile) if code else None
         if code is None or digests is None:
             sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                      f"долгоживущие файлы головы кодовой ветки {t['branch']}")
@@ -930,12 +981,14 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     plank_files = _test_files(new_snapshot)
     group_errors = _group_line_errors(t, rel_tests_dir, plank_files)
     if manifest:
-        group_errors += guard.long_lived_plank_errors(plank_files, task_id)
+        group_errors += guard.long_lived_plank_errors(plank_files, task_id,
+                                                      profile.long_lived_dir,
+                                                      profile.long_lived_name)
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
     if long_diverged:
         _check_code_head_long_lived(conn, t, task_id, branch, code_head,
-                                    head_files, manifest, plank_files)
+                                    head_files, manifest, plank_files, profile)
         _push_code_head(conn, t, task_id)
 
     if manifest:
@@ -966,18 +1019,20 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
 def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                                 code_head: str, head_files: dict[str, str],
                                 manifest: dict[str, str],
-                                plank_files: list[tuple[str, str]]) -> None:
+                                plank_files: list[tuple[str, str]],
+                                profile=None) -> None:
     """Проверки требования 1 по долгоживущим файлам головы кодовой ветки
     для `--from-branch` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
     статические — по текстам из git; сухой сбор и прогон — в worktree
     задачи, куда планка материализуется с головы ветки документов, как на
     `in_dev -> verifying`. Незакоммиченная правка долгоживущих путей в
     worktree — отказ: прогон проверил бы её, а не голову ветки."""
+    profile = profile or _task_profile(task_id)
     deleted = {rel: _deleted_file_text(code_head, rel,
                                          workspace.task_repo(task_id))
                for rel in manifest if rel not in head_files}
     errors = _long_lived_errors(task_id, head_files, deleted,
-                                [text for _rel, text in plank_files])
+                                [text for _rel, text in plank_files], profile)
     if errors:
         _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     wt_path, error = workspace.ensure(task_id, t["branch"])
@@ -987,7 +1042,7 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
     if changed is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"статус worktree {wt_path}")
-    dirty = sorted(p for p in changed if guard.is_long_lived_test_path(task_id, p))
+    dirty = sorted(p for p in changed if profile.is_long_lived(task_id, p))
     if dirty:
         sys.exit(f"[{task_id}] amend-tests: отказ — в worktree незакоммиченная "
                  f"правка {', '.join(dirty)}; --from-branch проверяет голову "

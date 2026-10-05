@@ -43,7 +43,7 @@ from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # 
                            capture, capture_new_task_id,
                            disk_backed_ls_tree_files, disk_backed_show,
                            patch_pult_sleep, patch_sleep,
-                           resilient_tmp_cleanup)
+                           resilient_tmp_cleanup, seed_artel_targets)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -172,10 +172,19 @@ class FsmTest(unittest.TestCase):
                             # 01M41M6KGWA9PJ6G1KPDC6XY70, требование 6):
                             # прерванный прогон не оставляет `tasks/<id>/`
                             # в рабочей копии, `addCleanup` до него не доходит.
-                            ("TASKS", root / "tasks")):
+                            ("TASKS", root / "tasks"),
+                            # Декларация проектов — своя (SPEC
+                            # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 7):
+                            # проверки тестов задачи артели читают её профиль
+                            # тестов из targets.yaml, а песочница не зависит
+                            # от боевого файла.
+                            ("TARGETS", root / "targets.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Запись артели с полем test_profile: без профиля проверки тестов
+        # задачи артели отказывают (требование 4).
+        seed_artel_targets()
 
         # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
         # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `ROOT` этого

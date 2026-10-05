@@ -19,8 +19,8 @@ import contextlib
 from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
-              fsm, fsm_autogate, gitcmd, github_adapter, merge_after, store,
-              workspace, yamlmini)
+              fsm, fsm_autogate, gitcmd, github_adapter, merge_after,
+              project_profile, store, workspace, yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
@@ -188,29 +188,37 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
     # Автогейт acceptance (ADR-0007, SPEC T066) — тем же приёмом, что
     # раньше стоял на входе `verifying -> acceptance` (`verifying()`
     # ниже, до ADR-0015): каталог планки резолвится тем же способом,
-    # что и прогон приёмки в `in_dev` выше (рабочая копия задачи — в
-    # клоне self либо внешнего target'а, ADR-0021 п.1-2; SPEC
-    # 01M1RNZ6V7TTTTYAHBMF8JBQQS).
-    acc_tdir = tdir
+    # что и прогон приёмки в `in_dev` выше: рабочая копия задачи в клоне
+    # проекта — одна ветка логики для любого проекта, включая артель
+    # (ADR-0021 п.1-2; SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, SPEC
+    # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6).
+    decision = project_profile.decide(target)
+    if decision.refusal:
+        # Задача уже в `acceptance`: без контекста или профиля артели
+        # автогейт не проводится, решение остаётся Оператору.
+        _autogate_skipped(conn, task_id, decision.refusal)
+        return False
     with contextlib.ExitStack() as cleanup:
-        if target != config.DEFAULT_TARGET:
-            code_dir, error = workspace.ensure(task_id, t["branch"], target)
-            if error is not None:
-                # Задача уже в `acceptance`: без рабочей копии автогейт
-                # прогнал бы планку без кода; решение остаётся Оператору.
-                store.journal(conn, task_id, "fsm",
-                              "автогейт приёмки пропущен",
+        code_dir, error = workspace.ensure(task_id, t["branch"])
+        if error is not None:
+            # Без рабочей копии автогейт прогнал бы планку без кода.
+            _autogate_skipped(conn, task_id,
                               f"рабочая копия задачи не заведена: {error}")
-                print(f"[{task_id}] автогейт приёмки пропущен: рабочая "
-                      f"копия задачи не заведена: {error}")
-                return False
-            acc_tdir = cleanup.enter_context(
-                acceptance.plank_in_code_copy(task_id, branch, code_dir))
-        elif workspace.on_task_branch(task_id, t["branch"], target) is True:
-            acc_tdir = workspace.path(task_id, target) / "tasks" / task_id
+            return False
+        if decision.profile is None:
+            project_profile.journal_skip(conn, task_id,
+                                         project_profile.CHECK_MANIFEST,
+                                         decision)
+        acc_tdir = cleanup.enter_context(
+            acceptance.plank_in_code_copy(task_id, branch, code_dir))
         fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
                                                t["reviewed_iter"])
     return False
+
+
+def _autogate_skipped(conn, task_id: str, reason: str) -> None:
+    store.journal(conn, task_id, "fsm", "автогейт приёмки пропущен", reason)
+    print(f"[{task_id}] автогейт приёмки пропущен: {reason}")
 
 
 def _review_changes_requested(conn, task_id: str, t, state: str) -> bool:
@@ -363,24 +371,45 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     return False
 
 
+def _project_profile_gate(task_id: str,
+                          decision: project_profile.Decision
+                          ) -> GateRefusal | None:
+    """Отказ перехода по профилю тестов проекта (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требования 4-5): контекст проекта не
+    разрешён либо у артели профиль не задан или не прочитан."""
+    if not decision.refusal:
+        return None
+    return GateRefusal(project_profile.REFUSAL_ACTION, decision.refusal,
+                       project_profile.refusal_hint(task_id))
+
+
 def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # test_author закончил: каждый AC-n — тест либо пометка
     # manual/skip/escalate (SPEC T023, требование 4). Ветка-источник
     # `tasks/<id>/` (SPEC T094, требование 10) — артефактная ветка
     # пульта для внешнего target, не кодовая ветка целевого (та в
     # `config.ROOT` не существует вовсе).
+    #
+    # Профиль тестов проекта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования
+    # 3-5) — первым: без разрешённого контекста не читается и ссылка
+    # документов, а отказ обязан назвать контекст, не её.
+    decision = project_profile.decide(target)
+    if _run_gates(conn, task_id,
+                  [lambda: _project_profile_gate(task_id, decision)]):
+        return False
+    profile = decision.profile
     branch, foreign = artifact_source.resolve(conn, task_id)
-    # Долгоживущие файлы `tests/` кодовой ветки (SPEC
-    # 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2-6) — только target `artel`
-    # (требование 11); задача со `skip_tests` в `tests_writing` не входит.
+    # Долгоживущие файлы кодовой ветки (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    # требования 2-6) — у проекта с профилем тестов, по его каталогу и
+    # шаблону имени; задача со `skip_tests` в `tests_writing` не входит.
     # Кодовой ветки ещё нет в git — долгоживущих файлов в ней быть не может,
     # сверять и фиксировать нечего: тот же вырожденный случай «ветка ещё не
     # создана», что у ветко-корректных чтений (инвариант 28).
     code_diff = long_lived = None
-    if target == config.DEFAULT_TARGET and gitcmd.branch_exists(
+    if profile is not None and gitcmd.branch_exists(
             t["branch"], repo=workspace.repo(target)):
         code_diff, long_lived, refusal = _tests_writing_code_diff(
-            task_id, t["branch"])
+            task_id, t["branch"], profile)
         if _run_gates(conn, task_id, [lambda: refusal]):
             return False
     result = fsm._tests_writing_ac_state(
@@ -423,15 +452,22 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                    lambda: _tests_writing_code_copy_gate(
                        task_id, target, t["branch"])]):
         return False
+    if profile is None:
+        # Проект без профиля работает только с разовыми тестами: проверки,
+        # зависящие от языка, не выполняются — и не молча (требование 3).
+        for check in (project_profile.CHECK_LONG_LIVED,
+                      project_profile.CHECK_GROUPS):
+            project_profile.journal_skip(conn, task_id, check, decision)
     acc_tdir, run_cwd = _tests_writing_acceptance_dir(
         task_id, tdir, target, branch, t["branch"])
     long_lived_paths = sorted(long_lived or {})
-    gates = [lambda: _tests_writing_test_groups_gate(acc_tdir, task_id, target)]
+    gates = [lambda: _tests_writing_test_groups_gate(acc_tdir, task_id, profile)]
     if code_diff is not None:
         gates.append(lambda: _tests_writing_long_lived_gate(
-            task_id, t["branch"], code_diff, long_lived))
+            task_id, t["branch"], code_diff, long_lived, profile))
+    command = profile.pytest_command() if profile is not None else None
     gates.append(lambda: _tests_writing_dry_collect_gate(
-        acc_tdir, run_cwd, task_id, extra=long_lived_paths))
+        acc_tdir, run_cwd, task_id, extra=long_lived_paths, command=command))
     if code_diff is not None:
         gates.append(lambda: _tests_writing_manifest_gate(
             conn, task_id, t["branch"], long_lived_paths))

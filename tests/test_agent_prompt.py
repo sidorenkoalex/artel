@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, catalog, config, gitcmd,  # noqa: E402
                           models, runner, stack, store)
-from tests.sandbox import seed_artel_clone_stub  # noqa: E402
+from tests.sandbox import seed_artel_clone_stub, seed_artel_targets  # noqa: E402
 from tests.sandbox import (FakeProc, SANDBOX_ROLES_TEXT, SpyRun,  # noqa: E402
                            _stub_check_stack, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -77,6 +77,9 @@ class PromptChannelTest(unittest.TestCase):
         # живут в нём, `new` без клона отказывает — пустой настоящий
         # репозиторий песочницы.
         seed_artel_clone_stub()
+        # Запись артели с профилем тестов: без неё ревью-пакет задачи
+        # артели не собирается (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4).
+        seed_artel_targets()
         config.ROLES.write_text(SANDBOX_ROLES_TEXT, encoding="utf-8")
         models.ensure_local_template()
         # git не спрашиваем: ревью-пакет собирается на заготовке. Не

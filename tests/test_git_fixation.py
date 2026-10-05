@@ -69,6 +69,14 @@ ARTEL_TARGETS_YAML = f"""targets:
     no_paths: []
     project_skills: []
     merge_gate: operator
+    test_profile:
+      command: [python3, -m, pytest]
+      long_lived_dir: tests
+      long_lived_name: test_<id>_<name>.py
+      weakening_scope: [tests/**/*.py]
+      mutation_claim_scope: [tests/test_*.py]
+      report: junit-xml
+      install: []
 """
 
 # REVIEW.md-заглушка со статусом ВНЕ config.REVIEW_VERDICTS (SPEC
