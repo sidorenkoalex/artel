@@ -11,10 +11,18 @@
 
 Запуск — без аргументов, тем же контрактом, что соседний
 `scripts/ci_push_class.py`: входы — переменные окружения Actions
-(`GITHUB_EVENT_NAME`, `GITHUB_REF`), git зовётся из PATH в текущем
-каталоге (чекаут `actions/checkout`).
+(`GITHUB_EVENT_NAME`, `GITHUB_REF`; на pull_request — `GITHUB_HEAD_REF`,
+`GITHUB_REPOSITORY` и файл события `GITHUB_EVENT_PATH`), git зовётся из
+PATH в текущем каталоге (чекаут `actions/checkout`).
 
-- Не пуш ветки `task/**` — ничего не делается, код 0 (требование 2).
+- Не пуш ветки `task/**` и не pull_request из ветки `task/**` того же
+  репозитория — ничего не делается, git не зовётся, код 0 (требование 2;
+  SPEC 01M466ZERXQKXTR5RQCDYVDZJQ, требования 2-3). Ветка форка с именем
+  `task/**` — тоже не ветка задачи.
+- pull_request ветки задачи (SPEC 01M466ZERXQKXTR5RQCDYVDZJQ, требование
+  1): ветка — из `GITHUB_HEAD_REF`, приложения накладываются на дерево
+  чекаута как есть — merge-коммит PR с базой, то дерево, на котором их
+  накладывают ворота мержа; голова ветки не перевыкладывается.
 - PLAN читается из ссылки документов задачи `refs/artifacts/<id>` в
   `origin` (ADR-0021: в кодовой ветке PLAN.md нет). Ссылки нет, PLAN.md в
   ней нет, приложений в PLAN нет — код 0, дерево не тронуто.
@@ -31,10 +39,15 @@ CI при недоступном PLAN пропустил бы ровно тот 
 
 Режим `--check-workflow [путь]` — сторож самого шага (требование 7): в
 jobs `python` и `python-min` файла `.github/workflows/ci.yml` шаг
-сценария стоит перед прогоном pytest. Его зовёт job `guard` того же
-файла.
+сценария стоит перед прогоном pytest, и его условие `if:` не допускает
+одно событие push (SPEC 01M466ZERXQKXTR5RQCDYVDZJQ, требование 5). Его
+зовёт job `guard` того же файла. На прогоне ветки задачи (тот же отбор, что
+у шага приложений) сторож сперва накладывает приложения PLAN на дерево
+чекаута и проверяет файл после них (`check_workflow_on_run`).
 """
+import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -47,6 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import guard  # noqa: E402
 
 TASK_BRANCH_PREFIX = "refs/heads/task/"
+PROCESSED_EVENTS = ("push", "pull_request")
 # Пространство ссылок документов задачи — `artifact_branch.branch_name`;
 # модуль пульта сюда не тянется: сценарию нужен только префикс.
 DOCS_REF_PREFIX = "refs/artifacts/"
@@ -73,11 +87,57 @@ def _git_or_fail(what: str, *args: str) -> str:
 
 
 def task_branch(event_name: str, ref: str) -> str | None:
-    """Имя ветки задачи без `task/` для пуша `task/**`; иначе None —
-    прогоны `main`, прочих веток и pull_request сценарий не трогает."""
-    if event_name != "push" or not ref.startswith(TASK_BRANCH_PREFIX):
+    """Имя ветки задачи без `task/` для прогона ветки `task/**`; иначе None
+    — прогоны `main`, прочих веток и прочих событий сценарий не трогает.
+
+    `ref` — ссылка проверяемой ветки: на push это `GITHUB_REF`, на
+    pull_request — `refs/heads/<GITHUB_HEAD_REF>` головы PR того же
+    репозитория (`tested_ref`); сам `GITHUB_REF` pull_request
+    (`refs/pull/<N>/merge`) ветки не называет."""
+    if event_name not in PROCESSED_EVENTS:
+        return None
+    if not ref.startswith(TASK_BRANCH_PREFIX) or ref == TASK_BRANCH_PREFIX:
         return None
     return ref[len(TASK_BRANCH_PREFIX):]
+
+
+def _head_repo(event_path: str) -> str:
+    """`pull_request.head.repo.full_name` файла события Actions."""
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        name = event["pull_request"]["head"]["repo"]["full_name"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise CiError(f"репозиторий головы PR не прочитан из файла события "
+                      f"{event_path or '(GITHUB_EVENT_PATH пуст)'}: "
+                      f"{exc!r}") from exc
+    if not isinstance(name, str) or not name:
+        raise CiError(f"в файле события {event_path} нет "
+                      f"pull_request.head.repo.full_name")
+    return name
+
+
+def tested_ref(env) -> str:
+    """Ссылка проверяемой ветки для `task_branch`; пустая строка — ветки
+    задачи того же репозитория у прогона нет.
+
+    pull_request: голова — `GITHUB_HEAD_REF`; ветка форка (репозиторий
+    головы в файле события не `GITHUB_REPOSITORY`) — не ветка задачи, даже
+    с именем `task/**`: её PLAN не наш. Файл события читается только для
+    головы `task/**` — прочие ветки решаются без него. Не прочитан —
+    код 1 (`CiError`): гадать «форк или нет» значило бы молча пропустить
+    приложения либо наложить чужие. Git здесь не зовётся."""
+    event_name = env.get("GITHUB_EVENT_NAME", "")
+    if event_name != "pull_request":
+        return env.get("GITHUB_REF", "")
+    head = env.get("GITHUB_HEAD_REF", "")
+    if task_branch(event_name, f"refs/heads/{head}") is None:
+        return ""
+    if _head_repo(env.get("GITHUB_EVENT_PATH", "")) != env.get(
+            "GITHUB_REPOSITORY", ""):
+        print(f"pull_request из форка (ветка {head}) — приложения PLAN не "
+              f"накладываются")
+        return ""
+    return f"refs/heads/{head}"
 
 
 def docs_ref_for_branch(branch_rest: str,
@@ -142,8 +202,8 @@ def apply_appendix(appendix: guard.PlanAppendix) -> str:
 def run(event_name: str, ref: str) -> int:
     branch_rest = task_branch(event_name, ref)
     if branch_rest is None:
-        print(f"не пуш ветки task/** ({event_name} {ref}) — приложения PLAN "
-              f"не накладываются")
+        print(f"не прогон ветки task/** того же репозитория ({event_name} "
+              f"{ref or '-'}) — приложения PLAN не накладываются")
         return 0
     owned = docs_ref_for_branch(branch_rest, remote_docs_refs())
     if owned is None:
@@ -168,7 +228,8 @@ def run(event_name: str, ref: str) -> int:
         answer = apply_appendix(appendix)
         if answer:
             print(f"[{task_id}] приложение {number} ({paths}) не "
-                  f"накладывается на дерево ветки: {answer}", file=sys.stderr)
+                  f"накладывается на дерево чекаута: {answer}",
+                  file=sys.stderr)
             return 1
         print(f"[{task_id}] приложение {number} наложено: {paths}")
     print(f"[{task_id}] приложений наложено: {len(appendices)} — только в "
@@ -196,10 +257,58 @@ def _job_block(text: str, job: str) -> list[str]:
     return out
 
 
+_PUSH_COMPARISON = re.compile(
+    r"""github\.event_name\s*==\s*['"]push['"]""")
+
+
+def _step_condition(block: list[str], at: int) -> str | None:
+    """Значение `if:` шага, которому принадлежит строка `block[at]`; None
+    — условия у шага нет. Шаг — элемент списка `- ` от его строки с
+    дефисом до следующего элемента того же отступа (разбор по отступам,
+    как `_job_block`); значение с продолжением на более глубоких строках
+    склеивается."""
+    start = next((i for i in range(at, -1, -1)
+                  if block[i].lstrip().startswith("- ")), None)
+    if start is None:
+        return None
+    dash = len(block[start]) - len(block[start].lstrip())
+    end = next((i for i in range(start + 1, len(block))
+                if block[i].strip()
+                and len(block[i]) - len(block[i].lstrip()) <= dash),
+               len(block))
+    lines = block[start:end]
+    for i, ln in enumerate(lines):
+        body = ln.strip()
+        if i == 0:
+            body = body[2:].lstrip()
+        if not body.startswith("if:"):
+            continue
+        key_col = dash + 2 if i == 0 else len(ln) - len(ln.lstrip())
+        parts = [body[len("if:"):].strip()]
+        for cont in lines[i + 1:]:
+            if not cont.strip():
+                continue
+            if len(cont) - len(cont.lstrip()) <= key_col:
+                break
+            parts.append(cont.strip())
+        return " ".join(p for p in parts if p)
+    return None
+
+
+def condition_push_only(condition: str) -> bool:
+    """Условие шага допускает только событие push: сравнивает
+    `github.event_name` с `'push'` и не упоминает `pull_request`
+    (требование 5). Условие, не сравнивающее событие, — не push-only."""
+    return (_PUSH_COMPARISON.search(condition) is not None
+            and "pull_request" not in condition)
+
+
 def workflow_errors(text: str) -> list[str]:
-    """Нарушения требования 1 в тексте workflow: в каждом из
-    `WORKFLOW_JOBS` строка запуска сценария есть и стоит раньше первого
-    вызова pytest. Пустой список — шаг на месте."""
+    """Нарушения в тексте workflow: в каждом из `WORKFLOW_JOBS` строка
+    запуска сценария есть, стоит раньше первого вызова pytest, и условие
+    её шага не ограничено одним push — прогоны pull_request веток
+    `task/**` тоже идут с приложениями (SPEC 01M466ZERXQKXTR5RQCDYVDZJQ,
+    требование 5). Пустой список — шаг на месте."""
     errors = []
     for job in WORKFLOW_JOBS:
         block = _job_block(text, job)
@@ -215,6 +324,13 @@ def workflow_errors(text: str) -> list[str]:
             errors.append(f"job {job}: нет шага `python3 {SCRIPT_REL}`")
         elif pytest_at is not None and pytest_at < script:
             errors.append(f"job {job}: шаг {SCRIPT_REL} стоит после pytest")
+        if script is not None:
+            condition = _step_condition(block, script)
+            if condition is not None and condition_push_only(condition):
+                errors.append(f"job {job}: условие шага {SCRIPT_REL} "
+                              f"пропускает только push ({condition}) — "
+                              f"pull_request веток task/** идут без "
+                              f"приложений PLAN")
     return errors
 
 
@@ -233,12 +349,40 @@ def check_workflow(path: Path) -> int:
     return 1 if errors else 0
 
 
+def check_workflow_on_run(path: Path, env) -> int:
+    """`--check-workflow` с приложениями PLAN прогона ветки задачи (ANSWER-1
+    01M466ZERXQKXTR5RQCDYVDZJQ).
+
+    Сторож проверяет `.github/workflows/ci.yml`, а этот файл защищён и
+    меняется только приложением PLAN: без наложения сторож видит workflow
+    без правки задачи, и задача, ужесточающая сторож вместе с правкой
+    файла, красила бы job `guard` своей ветки по построению. Поэтому на
+    прогоне ветки задачи (тот же отбор, что у шага приложений: `tested_ref`
+    + `task_branch`) приложения сначала накладываются тем же `run` на
+    дерево чекаута — сторож видит workflow, с которым ветка смержится. Вне
+    CI и на прочих прогонах — файл как есть. Сбой git и неприменимое
+    приложение — код 1, без проверки файла (fail-closed)."""
+    try:
+        event_name = env.get("GITHUB_EVENT_NAME", "")
+        ref = tested_ref(env)
+        if task_branch(event_name, ref) is not None \
+                and run(event_name, ref) != 0:
+            print(f"{path}: приложения PLAN не наложены — сторож не "
+                  f"проверяет файл без правки задачи", file=sys.stderr)
+            return 1
+    except CiError as exc:
+        print(f"приложения PLAN не наложены: {exc}", file=sys.stderr)
+        return 1
+    return check_workflow(path)
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "--check-workflow":
-        return check_workflow(Path(argv[1] if len(argv) > 1 else WORKFLOW_REL))
+        return check_workflow_on_run(
+            Path(argv[1] if len(argv) > 1 else WORKFLOW_REL), os.environ)
     try:
         return run(os.environ.get("GITHUB_EVENT_NAME", ""),
-                   os.environ.get("GITHUB_REF", ""))
+                   tested_ref(os.environ))
     except CiError as exc:
         print(f"приложения PLAN не наложены: {exc}", file=sys.stderr)
         return 1
