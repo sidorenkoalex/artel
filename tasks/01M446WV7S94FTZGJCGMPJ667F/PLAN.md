@@ -15,6 +15,18 @@ schema_version: 5
   `docs --fetch-all`: fetch в приватное пространство и сдвиг локальной
   ссылки только вперёд. Неудача — одна строка с причиной в stdout, исход
   `ensure_clone` остаётся успешным. Ветка «каталог уже есть» не меняется.
+- Возврат из verifying (CI красный на 3516dc44,
+  `tests/test_branch_freshness_gate.py::TargetSourcedRemoteTest::
+  test_pull_freshness_fetches_inside_the_target_clone_not_the_pult`):
+  причина — `cmd_init` песочницы заводит клон `acme` заглушкой git, у
+  которой `clone` отвечает rc=0, но каталога не создаёт; `_fetch_docs_refs`
+  делал `git -C <клон> fetch ... refs/artifacts/*` в несуществующий
+  каталог, и тест брал его как `fetch_calls[0]`. Правка без правки теста:
+  `_fetch_docs_refs` (`orchestrator/workspace.py`) не зовёт fetch, если
+  после успешного `git clone` каталога клона нет, — fetch'у некуда класть
+  ссылки (настоящий git в таком случае тоже отказал бы); причина —
+  одной строкой с подсказкой `docs --fetch-all`, исход `ensure_clone` не
+  меняется. Сторож — `tests/test_workspace_clone_docs_refs.py`.
 - `check_artifact_ref_sync`: закрытая задача без локальной ссылки, у
   которой ссылка в origin = коммиту закрытия, не даёт проблемы, а
   считается; при ненулевом счёте к результату добавляется одна строка
@@ -81,9 +93,28 @@ schema_version: 5
   отсутствии объекта — каждый из пяти тестов краснел на своей мутации,
   код возвращён.
 - Карта `docs/codebase-map.md` регенерирована.
+- Итерация после возврата из verifying: `tests/test_branch_freshness_gate.py`
+  + `tests/test_workspace_clone_docs_refs.py` — 14 passed; мутация
+  (условие каталога клона снято) красит оба — и новый сторож, и
+  `TargetSourcedRemoteTest`; код возвращён. Планка — 5 passed.
+  Полный набор в шаге запрещён конвенцией (решение Оператора 05.09) —
+  вместо него все 87 модулей `tests/`, задевающих `cmd_init`/`cmd_new`/
+  `ensure_clone`/`cmd_doctor`/`artifact_ref_sync`, тремя пачками:
+  609 passed; 867 passed; 420 passed / 16 failed — все 16 в
+  `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` с отказом «artel.py
+  approve/pin-update: команда недоступна процессу роли developer»
+  (тест зовёт CLI пульта под окружением шага роли), к правке не
+  относятся; в CI окружения роли нет.
 
 ## Риски
 - Песочницы тестов, где клон артели — ссылка на корень: клон «уже есть»,
   fetch не идёт — их поведение не меняется.
 
 ## Предложения системе
+- `tests/test_branch_freshness_gate.py::TargetSourcedRemoteTest` берёт
+  `fetch_calls[0]` из всех вызовов git с `cmd_init` — любой новый fetch
+  на заведении клона ломает его без изменения поведения сверки свежести;
+  надёжнее отбирать вызовы, сделанные только внутри `cmd_advance`.
+- `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` красный в шаге роли
+  (CLI пульта отказывает процессу роли) — его нельзя прогнать в шаге,
+  хотя возврат требует «полный прогон tests/».
