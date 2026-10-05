@@ -1033,7 +1033,7 @@ class RunEventLabelTest(_HeadShaPatchedTest):
     def linked(name: str, conclusion: str, suite: int | None,
                run_id: int) -> dict:
         check = dict(run(name, conclusion=conclusion),
-                     details_url=f"https://github.com/o/r/actions/runs/"
+                     details_url=f"http://127.0.0.1/o/r/actions/runs/"
                                  f"{run_id}/job/7{run_id}")
         if suite is not None:
             check["check_suite"] = {"id": suite}
