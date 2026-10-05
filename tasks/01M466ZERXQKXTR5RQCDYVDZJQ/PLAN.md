@@ -2,7 +2,7 @@
 task: 01M466ZERXQKXTR5RQCDYVDZJQ
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -36,6 +36,17 @@ schema_version: 5
   глубоких строках); `condition_push_only` — сравнение
   `github.event_name == 'push'` без упоминания `pull_request`. Шаг без
   `if:` или без сравнения события — не нарушение.
+- Сторож на прогоне ветки задачи (ANSWER-1, вариант А):
+  `check_workflow_on_run(path, env)` — на прогоне ветки задачи (тот же
+  отбор, что у шага приложений: `tested_ref` + `task_branch` — пуш
+  `task/**` или pull_request `task/**` того же репозитория) сначала
+  накладывает приложения PLAN тем же `run` на дерево чекаута, затем
+  `check_workflow` проверяет ci.yml — job `guard` видит workflow, с
+  которым ветка смержится. Вне CI (нет `GITHUB_*`) и на прочих прогонах —
+  файл как есть, `run` не зовётся. Отказ `run` (неприменимое приложение)
+  и `CiError` (сбой git, нечитаемый файл события) — код 1 без проверки
+  файла. Ничего не коммитится, ссылки не заводятся (свойства `run`).
+  `main(["--check-workflow", …])` зовёт его с `os.environ`.
 
 Приложение 1 — `.github/workflows/ci.yml` (требование 4): условие шага в
 обоих jobs пропускает пуш `task/**` и pull_request из `task/**` того же
@@ -51,8 +62,10 @@ schema_version: 5
    `docs/codebase-map.md` регенерирована. Сделано.
 2. Приложение 1 к `.github/workflows/ci.yml` (ниже). Сделано, проверено
    `git apply --check`.
-3. Доставка правки workflow так, чтобы CI ветки был зелёным, — см.
-   «Эскалация» (блокирует сдачу).
+3. Доставка правки workflow так, чтобы job `guard` ветки был зелёным
+   (ANSWER-1, вариант А): `check_workflow_on_run` + тесты
+   `CheckWorkflowOnRunTest` (2 метода) в `tests/test_plan_appendix_ci.py`;
+   карта регенерирована. Сделано.
 
 ## Покрытие требований
 
@@ -74,6 +87,14 @@ schema_version: 5
 по `GITHUB_REF`; сторож без условия; без склейки продолжения `if:`) —
 каждая красит `tests/test_plan_appendix_ci.py`.
 
+Итерация после ANSWER-1: те же три файла сценария — 23 passed;
+`tests/test_plan_appendix_ci.py` + `tests/test_codebase_map.py` — 47
+passed. Мутации `check_workflow_on_run`: наложение не зовётся (условие
+`False`) и код `run` игнорируется — оба метода `CheckWorkflowOnRunTest`
+красные. `artel.py plank-run` — «планки нет» (у задачи только
+долгоживущие файлы в `tests/`, прогнаны выше). `git apply --check`
+Приложения 1 на дереве ветки — код 0.
+
 ## Влияние на систему
 
 - Существующий метод `TaskBranchTest::test_only_task_push_is_processed`:
@@ -82,16 +103,17 @@ schema_version: 5
   то же. Прочие методы не тронуты; добавлены
   `TaskBranchTest::test_other_events_and_bare_prefix_are_skipped`,
   `TestedRefTest` (3 метода),
-  `WorkflowErrorsTest::test_push_only_condition_in_dash_and_multiline_forms`.
+  `WorkflowErrorsTest::test_push_only_condition_in_dash_and_multiline_forms`,
+  `CheckWorkflowOnRunTest` (2 метода).
 - Сторож шага строже: добавлено нарушение, ни одно прежнее не снято.
-- **Job `guard` в CI ветки задачи.** Его шаг `plan_appendix_ci.py
-  --check-workflow .github/workflows/ci.yml` идёт по ci.yml ветки — без
-  приложений (их накладывают только jobs `python`/`python-min`, и
-  определение workflow прогона берётся из закоммиченного файла). С новым
-  сторожем этот шаг на ветке задачи красный и на push, и на pull_request,
-  пока правка ci.yml не в main; `ci.verifying_status`/`branch_status`
-  считают все check-run'ы — задача не пройдёт `verifying` и ворота мержа.
-  Это и есть предмет эскалации.
+- **Job `guard` в CI ветки задачи** (ANSWER-1, вариант А). Его шаг
+  `--check-workflow .github/workflows/ci.yml` на прогонах веток задач
+  теперь сначала накладывает приложения PLAN: появляется git
+  (`ls-remote`/`fetch` ссылки документов из `origin`) в job `guard` на
+  ветках `task/**`; неприменимое приложение или сбой git красят и
+  `guard` — как и `python`/`python-min`. На `main` и прочих прогонах
+  сторож прежний. Модифицированный ci.yml остаётся только в дереве
+  раннера; шаг сторожа — последний в job `guard`.
 - Откат: revert merge-коммита задачи (сценарий, тесты и ci.yml вместе).
 
 ## Риски
@@ -145,39 +167,3 @@ index 8b4b4583..63bc280f 100644
          run: |
 ```
 
-## Эскалация
-
-**Вопросы** (один, блокирующий):
-
-1. Как сделать зелёным job `guard` в CI ветки задачи, если требование 5
-   (и долгоживущий AC-6) делает `--check-workflow` красным на ci.yml без
-   приложения, а job `guard` всегда проверяет ci.yml ветки без приложений?
-   - **А (дефолт при молчании)** — в зоне задачи: режим
-     `--check-workflow` на прогоне ветки задачи (тот же отбор, что у
-     наложения: пуш `task/**` или pull_request `task/**` того же
-     репозитория) сначала накладывает приложения PLAN задачи на дерево
-     чекаута тем же `run`, затем проверяет ci.yml — сторож видит ровно тот
-     workflow, с которым ветка смержится. Вне CI (нет `GITHUB_*`, как в
-     AC-6) и на прочих прогонах — проверка файла как есть. Цена: git в
-     job `guard` на ветках задач; неприменимое приложение красит и
-     `guard`.
-   - **Б** — Оператор отдельным MR вносит Приложение 1 в main до мержа
-     задачи (правка безопасна и без нового кода: старый сценарий на
-     pull_request отвечает «не пуш» с кодом 0); после подтяжки main я
-     убираю Приложение 1 из PLAN (иначе push-прогон ветки упадёт на уже
-     наложенном приложении). Отходит от формулировки требования 4
-     («приложением к PLAN»).
-   - **В** — другое решение Оператора (например, шаг наложения приложений
-     и в job `guard` — тоже только через main, как Б).
-
-**Контекст.** Код и тесты сделаны (шаги 1-2), долгоживущие тесты задачи
-зелёные; диагноз — `.github/workflows/ci.yml:48-49` (шаг сторожа в job
-`guard` без наложения приложений), `orchestrator/ci.py:383,499` (все
-check-run'ы, не только `python`/`python-min`, должны быть в `GREEN`).
-Проверено: `--check-workflow` на ci.yml без приложения — код 1 (оба jobs),
-с приложением — код 0.
-
-**Блокирует.** Сдачу `ready`: с нынешним кодом CI ветки красный в
-`guard`, `verifying` и ворота мержа не пройдут. При ответе А — правка
-`scripts/plan_appendix_ci.py::main`/`check_workflow` и тест на неё; при Б
-— только удаление Приложения 1 после подтяжки main.
