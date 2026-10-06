@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fixation, fsm, gitcmd, store  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
+from tests.sandbox import init_bare_origin  # noqa: E402
 
 # SPEC schema_version 2 с AC-разметкой — spec_gate направляет approve в
 # tests_writing (guard.requires_ac_markup), тот же приём, что
@@ -90,7 +91,7 @@ class _RefixationTest(RealPultGitTest):
         # ROOT` origin не несёт вовсе.
         origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(origin))
+        init_bare_origin(origin, self.git)
         self.git("remote", "add", "origin", str(origin))
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

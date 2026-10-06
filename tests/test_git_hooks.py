@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import doctor, gitcmd, repo_context, runner, stack  # noqa: E402
 from tests.sandbox import (RealGitSandbox, TmpRootTest, capture,  # noqa: E402
-                           fake_git, resilient_tmp_cleanup)
+                           fake_git, init_bare_origin, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOKS_DIR = REPO_ROOT / "scripts" / "git-hooks"
@@ -97,8 +97,7 @@ class _HookedRepoTest(unittest.TestCase):
     def add_origin(self) -> None:
         origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
-        subprocess.run(["git", "init", "-q", "--bare", str(origin)],
-                       check=True, capture_output=True)
+        init_bare_origin(origin)
         self.git_ok("remote", "add", "origin", str(origin))
 
     def remote_ref(self, ref: str) -> str:

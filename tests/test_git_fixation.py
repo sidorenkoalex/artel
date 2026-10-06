@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           fsm_advance, fsm_autogate, gates, github_adapter,
                           gitcmd, projects, runner, store)
-from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
+from tests.sandbox import (FakeProc, TmpRootTest, artel_target_entry, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            is_claude_call, link_artel_clone_to_root,
                            make_project_repo, network_guarded_real_run,
@@ -60,24 +60,7 @@ TARGETS_YAML = """targets:
 # `artel` — обычная запись target (A7, AC-1): `RealPultGitTest` заводит
 # self-задачи через generic-путь `cmd_new`, тем же приёмом, что и
 # `TARGETS_YAML` выше для 'sled'.
-ARTEL_TARGETS_YAML = f"""targets:
-  {config.DEFAULT_TARGET}:
-    forge: github
-    url: file:///nonexistent/artel
-    base: main
-    token_slot: artel-token
-    no_paths: []
-    project_skills: []
-    merge_gate: operator
-    test_profile:
-      command: [python3, -m, pytest]
-      long_lived_dir: tests
-      long_lived_name: test_<id>_<name>.py
-      weakening_scope: [tests/**/*.py]
-      mutation_claim_scope: [tests/test_*.py]
-      report: junit-xml
-      install: []
-"""
+ARTEL_TARGETS_YAML = "targets:\n" + artel_target_entry(base="main")
 
 # REVIEW.md-заглушка со статусом ВНЕ config.REVIEW_VERDICTS (SPEC
 # 01M1NWCHVTYQ0M8PCJ1YJ2N78P): `fsm_advance.review` читает `status` из

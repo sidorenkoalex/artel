@@ -27,7 +27,7 @@ from orchestrator import (acceptance, artifact_branch, auto,  # noqa: E402
                           gitcmd, store)
 from orchestrator.advance_gates import plan_appendix  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import (ARTEL_TEST_PROFILE, RealGitSandbox,  # noqa: E402
+from tests.sandbox import (RealGitSandbox, artel_target_entry,  # noqa: E402
                            TmpRootTest, capture)
 
 # Защищённый путь-файл и защищённый каталог — от `config.PROTECTED_PATHS`,
@@ -634,16 +634,8 @@ class RefusalClassTest(unittest.TestCase):
                          auto._IN_DEV_ROLE_FIXABLE_REFUSAL_ACTIONS)
 
 
-TARGETS_YAML = """targets:
-  artel:
-    forge: github
-    url: http://localhost/artel
-    base: {base}
-    token_slot: artel-token
-    no_paths: []
-    project_skills: []
-    merge_gate: operator
-""" + ARTEL_TEST_PROFILE
+TARGETS_YAML = "targets:\n" + artel_target_entry(
+    base="{base}", url="http://localhost/artel")
 
 BASE_TEXT = "первая строка базы\nвторая строка базы\nтретья строка базы\n"
 

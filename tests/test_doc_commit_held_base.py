@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import config, notes, store
-from tests.sandbox import RealGitSandbox, clone_artel_from_origin
+from tests.sandbox import RealGitSandbox, clone_artel_from_origin, init_bare_origin
 
 
 def run_command(fn, argv) -> str:
@@ -73,7 +73,7 @@ class NetworkHoldBaseTest(HeldBaseUnitSandbox):
         # заведённый `init` из живого origin; недоступным origin становится
         # потом — у клона (SPEC 01M42PENCS26D0656X8FR7DFA7, требование 5).
         origin = Path(self.source_dir) / "origin.git"
-        self.git("init", "-q", "--bare", str(origin))
+        init_bare_origin(origin, self.git)
         self.git("remote", "add", "origin", str(origin))
         self.git("push", "-q", "origin",
                  f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

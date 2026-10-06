@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, cleanup, config, fsm,  # noqa: E402
                           gitcmd, store, workspace)
-from tests.sandbox import seed_artel_clone_stub  # noqa: E402
+from tests.sandbox import init_bare_origin, seed_artel_clone_stub  # noqa: E402
 from tests.sandbox import link_artel_clone_to_root  # noqa: E402
 from tests.sandbox import (SpyRun, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -242,7 +242,7 @@ class PrefixWorkspaceTest(unittest.TestCase):
         # без настоящего origin, синхронного с main, fetch отказывает.
         self.origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(self.origin))
+        init_bare_origin(self.origin, self.git)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

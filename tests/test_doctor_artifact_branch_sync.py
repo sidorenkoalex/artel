@@ -10,7 +10,7 @@ from pathlib import Path
 
 from orchestrator import (artifact_branch, config, doctor, gitcmd,
                           repo_context, snapshot, store)
-from tests.sandbox import AutoOriginSandbox
+from tests.sandbox import AutoOriginSandbox, init_bare_origin
 
 EXTERNAL_TARGET = "extproj"
 
@@ -170,7 +170,7 @@ class SyncExcludesTerminalAndForeignTargetTest(ArtifactBranchSyncSandbox):
         self.git("-C", str(project), "init", "-q", "-b", config.MAIN_BRANCH)
         bare = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, bare, ignore_errors=True)
-        self.git("init", "-q", "--bare", bare)
+        init_bare_origin(bare, self.git)
         self.git("-C", str(project), "remote", "add", "origin", bare)
         return project
 

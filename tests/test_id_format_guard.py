@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm, gitcmd  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import TmpDirTest  # noqa: E402
+from tests.sandbox import TmpDirTest, init_bare_origin  # noqa: E402
 from tests.test_fsm_branch_correct_status_reads import (  # noqa: E402
     RealGitBranchTest)
 
@@ -251,7 +251,7 @@ class IdFormatSampleOnForeignBranchTest(RealGitBranchTest):
         # ветки нужен `origin`.
         origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(origin))
+        init_bare_origin(origin, self.git)
         self.git("remote", "add", "origin", str(origin))
         self.git("push", "-q", "origin",
                  f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

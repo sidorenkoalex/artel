@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
                           gitcmd, store, workspace)
-from tests.sandbox import (capture, capture_new_task_id,  # noqa: E402
+from tests.sandbox import (capture, capture_new_task_id, init_bare_origin,  # noqa: E402
                            link_artel_clone_to_root, resilient_tmp_cleanup,
                            strip_dash_c)
 
@@ -74,7 +74,7 @@ class TmpRepoTest(unittest.TestCase):
         # именованно отказывается заводить worktree.
         self.origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "--bare", str(self.origin))
+        init_bare_origin(self.origin, self.git)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "origin", f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
 

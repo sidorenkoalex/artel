@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tests.sandbox import (_is_local_git_address,  # noqa: E402
+from tests.sandbox import (_is_local_git_address, artel_target_entry,  # noqa: E402
                            _network_git_command_denial, network_guarded_real_run)
 
 
@@ -101,6 +101,16 @@ class NetworkGuardedRealRunTest(unittest.TestCase):
 
         real_run.assert_called_once_with(["git", "status"], cwd="/tmp")
         self.assertEqual(0, res.returncode)
+
+
+class SandboxFixtureBuildersTest(unittest.TestCase):
+
+    def test_artel_entry_keeps_profile_when_url_is_replaced(self):
+        """Ловит мутацию: подстановка URL выбрасывает test_profile из записи артели."""
+        entry = artel_target_entry(url="file:///tmp/artel-origin.git")
+        self.assertIn("url: file:///tmp/artel-origin.git\n", entry)
+        self.assertIn("    test_profile:\n", entry)
+        self.assertIn("      long_lived_dir: tests\n", entry)
 
 
 if __name__ == "__main__":

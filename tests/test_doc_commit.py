@@ -20,7 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, config, notes, store  # noqa: E402
-from tests.sandbox import (RealGitSandbox, capture,  # noqa: E402
+from tests.sandbox import (RealGitSandbox, capture, init_bare_origin,  # noqa: E402
                            clone_artel_from_origin)
 
 BACKLOG_TEXT = """## Копилка
@@ -155,7 +155,7 @@ class DocCommitSandbox(RealGitSandbox):
         self.addCleanup(role_patcher.stop)
         self.origin = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", self.origin)
+        init_bare_origin(self.origin, self.git)
         self.git("remote", "add", "origin", self.origin)
         for rel, text in ((notes.BACKLOG_REL, BACKLOG_TEXT),
                           (DOC_REL, ROADMAP_TEXT),

@@ -34,6 +34,7 @@ from orchestrator import (acceptance, artifact_branch, ci, config, fsm,  # noqa:
                           github_adapter, gitcmd, store, workspace)
 from orchestrator.advance_gates import acceptance as acceptance_gates  # noqa: E402
 from tests.test_git_fixation import PLAN_READY, RealPultGitTest  # noqa: E402
+from tests.sandbox import init_bare_origin  # noqa: E402
 
 SPEC_TEXT = """---
 task: {task}
@@ -150,7 +151,7 @@ class _TransitionSandbox(RealPultGitTest):
         super().setUp()
         origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(origin))
+        init_bare_origin(origin, self.git)
         self.git("remote", "add", "origin", str(origin))
         (self.root / "tests").mkdir(exist_ok=True)
         (self.root / self.EXISTING).write_text(EXISTING_SOURCE, encoding="utf-8")
