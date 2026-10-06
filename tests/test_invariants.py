@@ -42,7 +42,7 @@ from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
                            capture, capture_new_task_id,
                            disk_backed_ls_tree_files, disk_backed_show,
-                           patch_pult_sleep, patch_sleep,
+                           patch_pult_sleep, patch_retry_pause, patch_sleep,
                            resilient_tmp_cleanup, seed_artel_targets)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -278,6 +278,13 @@ class FsmTest(unittest.TestCase):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # Пауза повтора агента без сна — тот же приём, что умолчание
+        # `tests.sandbox.TmpRootTest.setUp` (SPEC 01M48WR0HKZW8KJCBWDZTFC4ZY):
+        # класс на голом `TestCase` его не наследует.
+        self.retry_pauses = []
+        pause_patcher = patch_retry_pause(self.retry_pauses)
+        pause_patcher.start()
+        self.addCleanup(pause_patcher.stop)
 
         self.set_ci(GREEN_CI)
 
