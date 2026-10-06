@@ -18,7 +18,7 @@ def check(name: str, conclusion: str, run_id: int, suite_id: int,
           status: str = "completed") -> dict:
     return {"name": name, "conclusion": conclusion, "status": status,
             "check_suite": {"id": suite_id},
-            "details_url": f"https://github.com/o/r/actions/runs/{run_id}/job/1"}
+            "details_url": f"http://127.0.0.1/o/r/actions/runs/{run_id}/job/1"}
 
 
 def workflow(run_id: int, suite_id: int, event: str,
