@@ -28,6 +28,8 @@ targets:
     # гейты пульта (orchestrator/repo_context.py::protected_paths). У artel
     # перечень пульта — config.PROTECTED_PATHS, а это поле — его зеркало:
     # совпадение держит сторож tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py.
+    # Зеркало внесено в main вперёд кода задачи 01M45FK56DWMNBRKA1VWM12H19
+    # (решение Оператора 06.10, коммит 09256315).
     no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini]
     project_skills: []
     merge_gate: operator
