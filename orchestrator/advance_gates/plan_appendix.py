@@ -148,6 +148,9 @@ def _plan_appendix_gate(conn, task_id: str, t,
     (`repo_context.protected_paths`), применимость — в клоне проекта
     задачи. Контекст не разрешён, а PLAN несёт приложения, — отказ,
     называющий проект: допустить пути не по чему.
+
+    Приложение, уже наложенное в базе сравнения, — пропуск с записью
+    журнала (`_appendix_already_in_base`), не отказ.
     """
     target = store.task_target(conn, task_id)
     ctx = repo_context.resolve(target)
@@ -185,15 +188,48 @@ def _plan_appendix_gate(conn, task_id: str, t,
                   f"развёрнуто — {reason}")
         return _gate_failure_refusal(task_id, detail)
     try:
-        for appendix in appendices:
+        for number, appendix in enumerate(appendices, start=1):
             answer = git_apply(repo, appendix)
-            if answer:
-                detail = (f"приложение PLAN {', '.join(appendix.paths)} не "
-                          f"применяется к базе сравнения {base}: {answer}")
-                return _inapplicable_refusal(task_id, detail)
+            if not answer:
+                continue
+            if _appendix_already_in_base(conn, task_id, number, appendix,
+                                         repo, base):
+                continue
+            detail = (f"приложение PLAN {', '.join(appendix.paths)} не "
+                      f"применяется к базе сравнения {base}: {answer}")
+            return _inapplicable_refusal(task_id, detail)
     finally:
         _drop_base_worktree(repo, task_repo)
     return None
+
+
+# Действие журнала: приложение уже наложено в базе сравнения и проверкой
+# применимости пропущено (решение Оператора ANSWER-5 задачи
+# 01M45FK56DWMNBRKA1VWM12H19).
+PLAN_APPENDIX_ALREADY_IN_BASE_ACTION = "приложение PLAN уже в базе"
+
+
+def _appendix_already_in_base(conn, task_id: str, number: int, appendix,
+                              repo: Path, base: str) -> bool:
+    """Приложение, не легшее прямым `git apply`, уже наложено в базе
+    сравнения: `git apply --reverse --check` на её дереве проходит. То же
+    признание и тот же `git_apply`, что у ворот мержа
+    (`fsm_merge_gate._appendix_already_in_main`): Оператор внёс приложение
+    в main раньше кода, и без этого исхода гейт отказывал бы задаче на уже
+    сделанной работе, хотя мерж её принял бы (решение Оператора ANSWER-5
+    задачи 01M45FK56DWMNBRKA1VWM12H19).
+
+    Неприменимое в обе стороны (частично наложенное, битое) — False, и
+    вызывающий отказывает, как прежде."""
+    if git_apply(repo, appendix, "--reverse", "--check"):
+        return False
+    paths = ", ".join(appendix.paths)
+    store.journal(conn, task_id, "orchestrator",
+                  f"{PLAN_APPENDIX_ALREADY_IN_BASE_ACTION}: {paths}",
+                  f"приложение {number} ({paths}) уже наложено в базе "
+                  f"сравнения {base} (`git apply --reverse --check` "
+                  f"проходит) — проверка применимости пропущена")
+    return True
 
 
 def _plan_appendix_gate_refuses(conn, task_id: str, t,

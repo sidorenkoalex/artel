@@ -563,6 +563,50 @@ class SequentialApplyGateTest(RealGitSandbox):
                      if line.strip()]
         self.assertEqual(len(worktrees), 1, f"остались деревья: {worktrees}")
 
+    def test_appendix_already_in_base_passes_with_a_journal_record(self):
+        """Приложение, уже наложенное в базе сравнения (Оператор внёс его
+        в main раньше кода), гейт пропускает и пишет в журнал задачи
+        запись с номером и путём приложения; приложение, неприменимое в
+        обе стороны, по-прежнему отказывает (ANSWER-5 задачи
+        01M45FK56DWMNBRKA1VWM12H19).
+
+        Ловит мутацию: исход «уже наложено» снят (гейт отказывает на
+        любом не легшем прямо приложении — тупик задачи, чьё приложение
+        Оператор уже внёс в main), либо признание дано без
+        `--reverse --check` (битое приложение проходит гейт), либо запись
+        журнала снята (пропуск идёт молча)."""
+        applied = ("```diff\n"
+                   f"diff --git a/{PROTECTED_FILE} b/{PROTECTED_FILE}\n"
+                   f"--- a/{PROTECTED_FILE}\n+++ b/{PROTECTED_FILE}\n"
+                   "@@ -1,3 +1,3 @@\n alpha\n-бета-до\n+beta\n gamma\n"
+                   "```\n")
+        bad = ("```diff\n"
+               f"diff --git a/{PROTECTED_FILE} b/{PROTECTED_FILE}\n"
+               f"--- a/{PROTECTED_FILE}\n+++ b/{PROTECTED_FILE}\n"
+               "@@ -1,3 +1,3 @@\n нет такой строки\n-и такой нет\n+новая\n"
+               " и этой нет\n```\n")
+
+        refuses = plan_appendix._plan_appendix_gate_refuses(
+            self.conn, self.TASK, {"branch": self.branch},
+            f"## Приложение 1\n\n{applied}")
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertFalse(refuses, [r["action"] for r in steps])
+        self.assertEqual(
+            [r["action"] for r in steps],
+            [f"{plan_appendix.PLAN_APPENDIX_ALREADY_IN_BASE_ACTION}: "
+             f"{PROTECTED_FILE}"])
+        self.assertIn(f"приложение 1 ({PROTECTED_FILE})", steps[0]["detail"])
+
+        refuses = plan_appendix._plan_appendix_gate_refuses(
+            self.conn, self.TASK, {"branch": self.branch},
+            f"## Приложение 1\n\n{bad}")
+
+        self.assertTrue(refuses)
+        self.assertEqual(
+            store.task_steps(self.conn, self.TASK)[-1]["action"],
+            plan_appendix.PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION)
+
 
 class RefusalClassTest(unittest.TestCase):
     """Класс отказа гейта применимости в `orchestrator/auto.py` (AC-6) —
