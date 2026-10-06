@@ -1,0 +1,23 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 4d6f5b77bab91b7836b0d95bd0c6e15f8fcf2cb6
+---
+
+# RETRO: 01M484RNV3QBDY3B0M16J916ZP — Этап 3 ADR-0021, часть 3 из 3: прочие развилки, сторож и сквозной тест внешнего потока
+
+Итог: done, sha 4d6f5b77bab91b7836b0d95bd0c6e15f8fcf2cb6
+Адрес артефактов: refs/artifacts/01M484RNV3QBDY3B0M16J916ZP
+Суть: Этап 3 ADR-0021, часть 3 из 3: прочие развилки, сторож и сквозной тест внешнего потока — ADR-0021 (пп. 8, 9, 12, 13) требует на этапе 3 удалить развилки `target == DEFAULT_TARGET`: артель должна идти по общему потоку, как любой проект.
+
+Стоимость итого: $44.61
+  analyst: $2.41, токенов 2878989 (input=48, output=32367, cache_write=153056, cache_read=2693518), провайдер claude, модель claude-opus-5-5
+  test_author: $21.89, токенов 24056787 (input=182, output=131690, cache_write=379264, cache_read=23545651), провайдер claude, модель claude-opus-5-5
+  developer: $7.35, токенов 57517452 (input=600, output=59037, cache_write=1007055, cache_read=56450760), провайдер claude, модель claude-opus-5-5
+  reviewer: $1.50, токенов 1373846 (input=20, output=9987, cache_write=131773, cache_read=1232066), провайдер claude, модель claude-opus-5-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: 1 (последняя): эскалация от разработчика: **Вопросы** (по блокирующести):…
+
+Приёмочные тесты: 2 тест(ов), 0 manual, 0 skip
