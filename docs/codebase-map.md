@@ -1,5 +1,5 @@
 ---
-built_at_sha: 2c72ad93ae6c3d285e11aee773ca05b4b732e434
+built_at_sha: 27ccce74f915bcc64ae3b3de6e65bbb0ec4544bb
 ---
 
 # Codebase-map пульта
@@ -3965,6 +3965,17 @@ built_at_sha: 2c72ad93ae6c3d285e11aee773ca05b4b732e434
 - `iso_ago`
 
 **Импортирует:** `orchestrator/ci.py`, `orchestrator/ci_rerun.py`, `orchestrator/config.py`, `orchestrator/store.py`
+
+**Импортируется:** —
+
+## tests/test_ci_workflow_mergeable.py
+
+**Назначение:** Выбор единственного полного прогона CI при открытом PR ветки задачи.
+
+**Публичные функции:**
+- `open_pr_script`
+
+**Импортирует:** —
 
 **Импортируется:** —
 
