@@ -318,6 +318,9 @@ AC-18. `tests/test_full_suite_profile_timeout.py` зелёный и при на�
   файла, входящего в ключ.
 - Правка `targets.yaml` (подполе `full_suite_timeout_sec` профиля
   артели) — требование 17 меняет только тестовый файл.
+- Правка содержимого `.artel/logs/fullsuite-results/` руками — это каталог
+  данных выполнения пульта (`acceptance.suite_results_dir()`), не путь
+  репозитория; код пишет туда только через `acceptance.suite_results_dir()`.
 - Прогон ветки задачи в `suite-run` (не базы) — повторное использование
   его итога не вводится.
 - Изменение прогона планки задачи (`acceptance.run`) и прогона `notes`/
