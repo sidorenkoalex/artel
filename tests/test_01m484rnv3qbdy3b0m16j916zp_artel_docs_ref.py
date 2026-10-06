@@ -355,6 +355,11 @@ class ArtelFreshnessSandbox(RealGitSandbox):
         print(f"зерно: {self.seed}")
         self.rng = random.Random(self.seed)
         origin = self.add_synced_origin()
+        # HEAD голого `origin` — на `config.MAIN_BRANCH`, как у форджа: без
+        # этого клон в git с веткой по умолчанию `master` (CI Linux) не
+        # заводит локальную `main`.
+        self.git("--git-dir", str(origin), "symbolic-ref", "HEAD",
+                 f"refs/heads/{config.MAIN_BRANCH}")
         self.clone = clone_artel_from_origin(origin)
         self.conn = store.db()
 

@@ -86,6 +86,10 @@ def word(rng, k=6) -> str:
     return "".join(rng.choices(string.ascii_lowercase, k=k))
 
 
+# Номерные задачи пульта для сценариев строк 24-25 (литералы, см. линт
+# формата id в CI).
+LEGACY_TASK_DIRS = ("T007", "T042", "T118", "T256", "T391", "T804")
+
 class _SeedMixin:
     def seed_rng(self):
         self.seed = random.randrange(1 << 30)
@@ -235,9 +239,12 @@ class PredicateLightTest(_SeedMixin, SchemaTmpRootTest):
         `config.DEFAULT_TARGET` — под подменой счётчик сеется из каталога
         области проекта (b), а не из `config.TASKS`.
         """
-        a, b = self.rng.sample(range(2, 400), 2)
-        (config.TASKS / f"T{a:03d}").mkdir(parents=True)
-        (config.PROJECTS / self.ext / "tasks" / f"T{b:03d}").mkdir(parents=True)
+        # Имена — литералы `Tnnn` (линт CI запрещает форматировать id задачи
+        # вне orchestrator/idgen.py), число — из имени.
+        name_a, name_b = self.rng.sample(LEGACY_TASK_DIRS, 2)
+        a, b = int(name_a[1:]), int(name_b[1:])
+        (config.TASKS / name_a).mkdir(parents=True)
+        (config.PROJECTS / self.ext / "tasks" / name_b).mkdir(parents=True)
         self.assertEqual(coldstart.observed_max_task_number(self.ext), b,
                          self.msg("без подмены — каталог проекта"))
         with self.as_artel():
@@ -256,10 +263,11 @@ class PredicateLightTest(_SeedMixin, SchemaTmpRootTest):
         «сканировать ли ветки/RETRO/историю main» сравнением имени с
         `config.DEFAULT_TARGET` — под подменой RETRO не учтён, счётчик 0.
         """
-        n = self.rng.randrange(5, 900)
+        name = self.rng.choice(LEGACY_TASK_DIRS)
+        n = int(name[1:])
         retro = config.ROOT / "docs" / "retro"
         retro.mkdir(parents=True)
-        (retro / f"T{n:03d}.md").write_text("# RETRO\n", encoding="utf-8")
+        (retro / f"{name}.md").write_text("# RETRO\n", encoding="utf-8")
         self.assertEqual(coldstart.observed_max_task_number(self.ext), 0,
                          self.msg("без подмены RETRO пульта не сканируется"))
         with self.as_artel():
