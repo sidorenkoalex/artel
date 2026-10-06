@@ -2,7 +2,7 @@
 task: 01M484RNV3QBDY3B0M16J916ZP
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -10,24 +10,24 @@ schema_version: 5
 
 ## Подход
 
-Код требования 1 внесён (коммит пульта 0d010214 после таймаута прошлого
-шага, сверен на этом шаге). Строки таблицы SPEC «удалить» сняты без новой
-механики: фильтр «только артель» заменён фильтром «тот же проект»
-(`zone_lock`, `catalog`), а в остальных местах фильтр просто убран
-(стоп-кран, `_dirty_refuses`, паспорт, «sha зафиксирован», `show`,
-`docs --fetch-all`, `diff_bytes`, гейт отработки ревью, свежесть ветки).
+Код требования 1 внесён (коммит пульта 0d010214 после таймаута шага,
+сверен на следующем шаге). Строки таблицы SPEC «удалить» сняты без новой
+механики. В `zone_lock` и `catalog` фильтр «только артель» заменён
+фильтром «тот же проект». В остальных местах фильтр просто убран:
+стоп-кран, `_dirty_refuses`, паспорт, «sha зафиксирован», `show`,
+`docs --fetch-all`, `diff_bytes`, гейт отработки ревью, свежесть ветки.
 Оставленные строки (16, 18, 19, 21, 24, 25, 28, 29) узнают артель одной
 функцией `repo_context.is_artel`. Признак принимает контекст, имя
-проекта, строку задачи и путь клона, потому что эти развилки держат
-разные формы субъекта. Своё разрешение remote/базы в `fsm.py` (строка 17)
-заменено на `repo_context.resolve`.
+проекта, строку задачи и путь клона: эти развилки держат разные формы
+субъекта. Своё разрешение remote и базы в `fsm.py` (строка 17) заменено
+на `repo_context.resolve`.
 
-Сторож (требование 3) и сквозной тест (требования 4–5) — долгоживущие
-файлы test_author `tests/test_01m484rnv3qbdy3b0m16j916zp_*.py`. Новых
-своих тестов на эти свойства не пишу (требование 7 их засчитывает), свой
-тест — только на формы субъекта `is_artel`
-(`tests/test_repo_context.py::IsArtelSubjectsTest`). Карта (требование 6)
-описана первыми строками докстрингов `repo_context`,
+Сторож (требование 3) и сквозной тест (требования 4–5) — это
+долгоживущие файлы test_author `tests/test_01m484rnv3qbdy3b0m16j916zp_*.py`.
+Своих тестов на эти свойства нет: требование 7 их засчитывает. Свой тест
+написан только на формы субъекта `is_artel`
+(`tests/test_repo_context.py::IsArtelSubjectsTest`). Карту (требование 6)
+описывают первые строки докстрингов `repo_context` и
 `advance_gates/__init__`.
 
 Две защитные правки — следствие паспорта у артели (строка 14). Паспорт
@@ -39,18 +39,21 @@ schema_version: 5
 - `artifact_branch.write_commit`: пустой или не-байтовый ответ
   `hash-object` значит «запись не удалась», а не исключение.
 
+На этом шаге закрыта причина возврата — эскалация, на которую ответил
+ANSWER-1. Ожидания 15 методов сменены по мандату ослабления с соблюдением
+условий 1–4 ответа (перечень — в «Влиянии на систему»).
+
 ## Шаги
 
-1. Требование 1: строки 1–15, 17, 20, 22, 23, 26, 27 — удалить развилку;
-   строки 16, 18, 19, 21, 24, 25, 28, 29 — признак `repo_context.is_artel`
-   (требование 2). Сделано.
-2. Требования 3–5: долгоживущие файлы test_author зелёные на ветке
-   (42 passed, 15 subtests). Планка `plank-run`: 2 passed.
-3. Требование 6: докстринги модулей, `python3 scripts/codebase_map.py`.
-   Сделано.
-4. Требование 7: смена ожиданий существующих тестов. Обвязки двух классов
-   поправлены без смены утверждений (см. «Влияние на систему»). Остальное
-   ждёт мандата — раздел «Эскалация».
+1. Требование 1: строки 1–15, 17, 20, 22, 23, 26, 27 — развилка
+   удалена; строки 16, 18, 19, 21, 24, 25, 28, 29 — признак
+   `repo_context.is_artel` (требование 2).
+2. Требования 3–5: долгоживущие файлы test_author зелёные на ветке.
+   Планка `plank-run` зелёная.
+3. Требование 6: докстринги модулей, затем `python3 scripts/codebase_map.py`
+   (карта пересобрана и на этом шаге).
+4. Требование 7: смена ожиданий 15 существующих методов по мандату
+   ANSWER-1. Обвязки двух классов поправлены без смены утверждений.
 5. Требование 8: разбивка ниже.
 
 ### Разбивка упоминаний `config.DEFAULT_TARGET` в `orchestrator/` (требование 8)
@@ -82,33 +85,90 @@ schema_version: 5
 
 ## Влияние на систему
 
-- Прогоны: долгоживущие файлы задачи — 42 passed; планка — 2 passed.
-  Полный набор `suite-run` №4: 4516 прошло, 19 упало. Повтор упавших
-  (№5) — те же 19.
-- Проверка причин. Временный возврат паспорта артели к прежнему
-  `send_pending` (проба, сразу отменена) — 12 из 19 зеленеют. Это
-  следствие строки 14 (AC-5): переход FSM артели теперь добавляет коммит
-  паспорта в `refs/artifacts/<id>`, голова ссылки и фиксация сдвигаются
-  на него. Ещё 5 — прямые следствия строк 7, 9, 11, 23, 27. Одно —
-  следствие строки 15 (лишний `rev-parse` ссылки документов для поля
-  `артефакты=`).
-- Обвязки поправлены без смены утверждений:
-  - `tests/test_doctor.py::BranchFreshnessCheckTest` — `setUp` подменяет
+### Методы, сменившие ожидание по мандату ANSWER-1 (условие 4)
+
+Имена не менялись, ни один метод не удалён, число утверждений ни в одном
+не уменьшилось. Проверки «является предком» не применялись: там, где
+ожидание касается цепочки коммитов, сверяется точный список родителей.
+
+- `tests/test_alerts_wave_breaker.py::CheckWaveBreakerFailureTest::test_foreign_target_is_not_counted`.
+  Было: `assertFalse(opened)`, алертов волны `[]`. Стало:
+  `assertTrue(opened)`, алертов волны ровно 1. «Ловит мутацию» описывает
+  возврат счёта волны только по артели.
+- `tests/test_runner_wave_breaker.py::WaveBreakerAlertsOpenTest::test_foreign_target_alert_is_not_returned`.
+  Было: `wave_breaker_alerts_open(...) == []`. Стало: длина результата 1.
+  «Ловит мутацию» описывает возврат отбора по проекту артели.
+- `tests/test_catalog_wave_breaker_status.py::WaveBreakerSuffixTest::test_empty_for_foreign_target_even_if_alert_open`.
+  Было: суффикс `""`. Стало: суффикс
+  `"  [СТОП-КРАН ВОЛНЫ: run/auto не начинают новый шаг]"` (точное
+  равенство). «Ловит мутацию» описывает пометку только у артели.
+- `tests/test_split_assessment_merge_gate.py::SnapshotSplitAssessmentTest::test_external_target_skips_diff_but_still_reads_split_assessment`.
+  Было: `assertIsNone(row["diff_bytes"])`. Стало: `diff_bytes` равен
+  длине диффа в байтах (`len(diff_text.encode("utf-8"))`). Утверждение о
+  `split_assessment` не тронуто.
+- `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`.
+  Было: точный перечень git-вызовов кончается
+  `rev-parse --verify --quiet refs/heads/<ветка>`. Стало: после него ещё
+  `["-C", clone, "rev-parse", "--verify", "--quiet", "refs/artifacts/<id>"]`
+  (поле `артефакты=`). Перечень остаётся точным: любое чтение diff
+  по-прежнему его ломает.
+- `tests/test_step_refixation.py::OwnStepCommitRefixesWithoutIncidentTest::test_refixation_is_journaled_with_both_shas`,
+  `::ForeignCommitKeepsIncidentTest::test_fixed_sha_is_not_touched`,
+  `::ForeignCommitKeepsIncidentTest::test_integrity_incident_still_raised`,
+  `::UnclosedRunWindowNotCountedTest::test_commit_inside_unfinished_run_still_escalates`.
+  Было: `entry_sha` — возврат `enter_tests_writing()`, то есть голова
+  ссылки ДО `approve`. Стало: `entry_sha = self.head()` сразу после
+  `enter_tests_writing()`, то есть голова ПОСЛЕ `approve` с коммитом
+  паспорта. Утверждения методов не тронуты. Общий помощник
+  `enter_tests_writing` не менялся: соседние методы вне мандата не задеты.
+- `tests/test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py::ApproveAfterIncidentTest::test_ac9_approve_exit_from_incident`.
+  Было: `head == moved`. Стало: список родителей головы ровно `[moved]`.
+  Утверждение `fixed == head` остаётся.
+- `tests/test_artifact_ref_sync.py::SendAfterCommitTest::test_refusal_is_journaled_commit_kept_and_retried_on_transition`.
+  Было: после `set_state` `origin_head() == head`. Стало:
+  `origin_head() == local_head()` и `parents(local_head()) == [head]`.
+- `tests/test_artifact_ref_sync.py::KillDocsRefTest::test_synced_ref_kills_with_a_closing_commit_in_origin`.
+  Было: `parents(head) == [head0]`. Стало: точная цепочка. У коммита
+  закрытия ровно один родитель — коммит паспорта. Его родители ровно
+  `[head0]`, а `diff --name-only head0 паспорт` ровно
+  `[tasks/<id>/PASSPORT.md]`. Утверждения о RETRO.md и
+  `origin_head == head` не тронуты.
+- `tests/test_division_parent_cleanup.py::DivisionParentCleanupTest::test_division_keeps_the_artifact_branch_of_the_parent`.
+  Было: голова артефактной ветки родителя после `approve` равна
+  `head_before`. Стало: ссылка есть, родители новой головы ровно
+  `[head_before]`, а `diff --name-only head_before голова` ровно
+  `[tasks/<PARENT>/PASSPORT.md]`: SPEC.md не тронут, RETRO.md нет.
+  Утверждение о «## Деление» в SPEC.md не тронуто. Мутация из докстринга
+  проверена временной правкой: после `cleanup_killed_task` в
+  `fsm._cleanup_divided_parent` дописан `snapshot.commit_closing(...,
+  "killed")`. Тест покраснел (родитель головы — не `head_before`), код
+  возвращён.
+- `tests/test_git_fixation.py::RunnerEscalationHintsIncludeShaTest::test_agent_failure_escalation_hint_includes_full_fixed_sha`.
+  Было: sha в подсказке — возврат `enter_in_dev()`. Стало:
+  `sha = self.head()` после перехода в `escalated`, как в соседнем
+  `test_integrity_incident_hint_includes_full_fixed_sha`.
+- `tests/test_git_fixation.py::AutogateMergeGateHintIncludesShaTest::test_autogate_transition_hint_includes_full_fixed_sha`.
+  Было: `fixed_sha` прочитан до автогейта. Стало: прочитан из БД после
+  перехода в `merge_gate`.
+
+### Прочее
+
+- Прогоны этого шага: `suite-run` №6 (полный набор) — прошло 4534,
+  упало 1, пропущено 2. Упал только `test_liveness` (см. ниже); база не
+  досчитана. Планка `plank-run` — 2 passed.
+- Обвязки поправлены без смены утверждений (прошлый шаг):
+  - `tests/test_doctor.py::BranchFreshnessCheckTest`: `setUp` подменяет
     `gitcmd.in_repo` (`fetch` успешен), лямбды `commits_behind` принимают
-    `base=`. Строка 27: артель тоже идёт через `fetch` и
-    `origin/<base>`. Без этой подмены `test_stale_active_task_warns`
-    красный, а соседние методы проходили бы впустую (задача
-    пропускалась до `commits_behind`).
-  - `tests/test_fsm_map_conflict_autoresolve.py::MapConflictAutoResolveTest`
-    — `setUp` глушит `artifact_branch.append_passport_line` тем же
-    приёмом, что уже стоящая там заглушка черновика MR. Глобальный мок
-    `subprocess.run` регенератора карты ловил плотницкий
-    `git hash-object` паспорта.
+    `base=`. Причина — строка 27: артель тоже идёт через `fetch` и
+    `origin/<base>`.
+  - `tests/test_fsm_map_conflict_autoresolve.py::MapConflictAutoResolveTest`:
+    `setUp` глушит `artifact_branch.append_passport_line` тем же приёмом,
+    что и заглушку черновика MR.
+- `orchestrator/fsm.py`: на этом шаге только перенос строки докстринга
+  `_snapshot_split_assessment`, поведение не менялось.
 - `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
-  красный и при отдельном прогоне. `orchestrator/liveness.py` ни от чего
-  не импортирует и в диффе задачи не тронут, падение от задачи не
-  зависит (похоже на ограничение окружения шага на сигналы группе
-  процессов). Отмечаю, не чиню.
+  по ANSWER-1 (вопрос 2, вариант а) — падение окружения роли, задача его
+  не трогает.
 - Инварианты, гейты и лимиты не ослаблены. Стоп-кран волны теперь
   блокирует больше задач, замок зон действует у любого проекта, паспорт
   ведётся и у артели. Защищённые пути не тронуты, приложений к PLAN нет.
@@ -117,102 +177,23 @@ schema_version: 5
 ## Риски
 
 - Паспорт у артели — коммит в `refs/artifacts/<id>` на каждом переходе.
-  На каждом переходе добавляется push ссылки в `origin`; отказ push
-  досылается тем же `send_pending`-механизмом следующего перехода.
-- Стоп-кран волны теперь останавливает шаги внешних проектов. До
-  подключения реального внешнего проекта эффекта нет.
+  К каждому переходу добавляется push ссылки в `origin`. Отказ push
+  досылается механизмом `send_pending` на следующем переходе.
+- Стоп-кран волны теперь останавливает шаги внешних проектов. Пока
+  реальный внешний проект не подключён, эффекта нет.
 
 ## Предложения системе
 
 - `tests/` патчат глобальный `subprocess.run` (`fsm.subprocess` — это
-  модуль stdlib) под одну точку: любая новая git-запись по пути перехода
-  ловится чужим моком (`MapConflictAutoResolveTest` — второй случай после
-  `gh` черновика MR). Стоит отдать регенератору карты свою точку подмены.
+  модуль stdlib) под одну точку. Поэтому любая новая git-запись на пути
+  перехода попадает в чужой мок (`MapConflictAutoResolveTest` — второй
+  случай после `gh` черновика MR). Стоит дать регенератору карты свою
+  точку подмены.
 - Точные перечни git-вызовов шага (`tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`)
-  краснеют от любого нового чтения по пути шага, не относящегося к
+  краснеют от любого нового чтения на пути шага, даже не относящегося к
   предмету теста (здесь — поле `артефакты=`).
-
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. Мандат на смену ожиданий существующих тестов (требование 7 SPEC). Все
-   смены — прямые следствия решений «удалить» таблицы SPEC. Для каждой
-   ниже: метод, было → стало, строка таблицы.
-
-   Стоп-кран волны, замер диффа, точный перечень git-вызовов:
-   - `tests/test_alerts_wave_breaker.py::CheckWaveBreakerFailureTest::test_foreign_target_is_not_counted`.
-     Было: три задачи внешнего проекта с отказом «1b» не поднимают алерт
-     (`assertFalse(opened)`, алертов `[]`). Стало: поднимают
-     (`assertTrue(opened)`, один алерт волны). Строка 7, AC-3.
-   - `tests/test_runner_wave_breaker.py::WaveBreakerAlertsOpenTest::test_foreign_target_alert_is_not_returned`.
-     Было: алерт волны с `target=<другой>` не возвращается (`[]`).
-     Стало: возвращается (отбор по источнику — один элемент). Строка 9.
-   - `tests/test_catalog_wave_breaker_status.py::WaveBreakerSuffixTest::test_empty_for_foreign_target_even_if_alert_open`.
-     Было: суффикс `""`. Стало:
-     `"  [СТОП-КРАН ВОЛНЫ: run/auto не начинают новый шаг]"`. Строка 11.
-   - `tests/test_split_assessment_merge_gate.py::SnapshotSplitAssessmentTest::test_external_target_skips_diff_but_still_reads_split_assessment`.
-     Было: `assertIsNone(row["diff_bytes"])`. Стало: `diff_bytes` равен
-     длине диффа в клоне проекта (в сценарии 14). Строка 23, AC-10.
-   - `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`.
-     Было: перечень git-вызовов шага кончается чтением кодовой ветки
-     `rev-parse --verify --quiet refs/heads/<ветка>`. Стало: за ним ещё
-     `["-C", clone, "rev-parse", "--verify", "--quiet", "refs/artifacts/<id>"]`
-     (поле `артефакты=` записи «sha зафиксирован»). Чтения diff в шаге
-     разработчика по-прежнему нет. Строка 15, AC-6.
-
-   Паспорт у артели (строка 14, AC-5): голова ссылки и фиксация после
-   перехода — коммит паспорта поверх прежней головы.
-   - `tests/test_step_refixation.py::OwnStepCommitRefixesWithoutIncidentTest::test_refixation_is_journaled_with_both_shas`,
-     `tests/test_step_refixation.py::ForeignCommitKeepsIncidentTest::test_fixed_sha_is_not_touched`,
-     `tests/test_step_refixation.py::ForeignCommitKeepsIncidentTest::test_integrity_incident_still_raised`,
-     `tests/test_step_refixation.py::UnclosedRunWindowNotCountedTest::test_commit_inside_unfinished_run_still_escalates`.
-     Было: `entry_sha` — голова ссылки ДО `approve` в `tests_writing`
-     (`enter_tests_writing`), с ним сверяются `fixed_sha` и тексты
-     журнала и инцидента. Стало: `entry_sha` — голова ссылки ПОСЛЕ
-     `approve` (= `tasks.fixed_sha` на входе в `tests_writing`). Остальные
-     утверждения те же.
-   - `tests/test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py::ApproveAfterIncidentTest::test_ac9_approve_exit_from_incident`.
-     Было: `assertEqual(self.head(task_id), moved)` после
-     `approve <id> <moved>`. Стало: родитель головы — `moved`. Утверждение
-     `fixed == head` остаётся.
-   - `tests/test_artifact_ref_sync.py::SendAfterCommitTest::test_refusal_is_journaled_commit_kept_and_retried_on_transition`.
-     Было: после `set_state` `origin_head() == head`. Стало:
-     `origin_head() == local_head()`, и `head` — родитель головы
-     (досланная ссылка несёт коммит паспорта поверх `head`).
-   - `tests/test_artifact_ref_sync.py::KillDocsRefTest::test_synced_ref_kills_with_a_closing_commit_in_origin`.
-     Было: `parents(head) == [head0]`. Стало: `head0` — предок коммита
-     закрытия (между ними коммит паспорта перехода в `killed`). Остальные
-     утверждения (RETRO.md, `origin_head == head`) те же.
-   - `tests/test_division_parent_cleanup.py::DivisionParentCleanupTest::test_division_keeps_the_artifact_branch_of_the_parent`.
-     Было: голова артефактной ветки родителя после `approve` равна
-     `head_before`. Стало: `head_before` — предок новой головы, ссылка не
-     удалена. Утверждение о SPEC.md с разделом «## Деление» остаётся.
-   - `tests/test_git_fixation.py::RunnerEscalationHintsIncludeShaTest::test_agent_failure_escalation_hint_includes_full_fixed_sha`.
-     Было: в подсказке — sha из `enter_in_dev()` (до эскалации). Стало:
-     sha головы ПОСЛЕ перехода в `escalated` (`self.head()`), как в
-     соседнем `test_integrity_incident_hint_includes_full_fixed_sha`.
-   - `tests/test_git_fixation.py::AutogateMergeGateHintIncludesShaTest::test_autogate_transition_hint_includes_full_fixed_sha`.
-     Было: `fixed_sha` прочитан до автогейта. Стало: прочитан после
-     перехода в `merge_gate`.
-
-   Варианты: (а) мандат на весь список — смену проводит раздел SPEC
-   «Меняемое поведение» (механика 01M45FJD46BX45VHC36S4VS9QN), правки
-   тестов — следующим шагом developer; (б) мандат частичный — для
-   исключённых методов сказать, какое поведение кода вернуть (например,
-   паспорт у артели не вести — тогда строка 14 и AC-5 отпадают, и 10
-   тестов паспорта не меняются).
-   **Дефолт:** (а).
-
-2. `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
-   красный на ветке и при отдельном прогоне, к диффу не относится.
-   Варианты: (а) считать падением окружения шага, задача его не трогает;
-   (б) завести отдельную строку бэклога. **Дефолт:** (а).
-
-**Контекст.** Код требований 1–2 и 6 внесён, долгоживущие файлы и планка
-зелёные. Обвязки двух классов поправлены без смены утверждений (см.
-«Влияние на систему»). Полный набор красный только по перечню вопроса 1
-и `test_liveness` (вопрос 2).
-
-**Блокирует.** Зелёный полный набор `tests/` и, значит, выход из `in_dev`:
-без мандата правка утверждений этих методов — нарушение неослабления.
+- В ответе на эскалацию Оператор отметил: раздел SPEC «Меняемое
+  поведение» засчитывается только на approve гейта SPEC. Требование 7 этой
+  SPEC («после мандата смену проводит раздел "Меняемое поведение"») этим
+  неисполнимо по букве. Для задач, где мандаты выдаются по эскалации,
+  analyst-шаблону стоит сразу ссылаться на мандат ослабления.
