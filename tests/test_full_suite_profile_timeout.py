@@ -1,5 +1,6 @@
 """Предел полного прогона из test_profile: разбор, раннер и диагностика."""
 import contextlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -18,13 +19,16 @@ class FullSuiteProfileTimeoutTest(unittest.TestCase):
         (self.root / "tests").mkdir()
         original = config.TARGETS.read_text(encoding="utf-8")
         self.targets_path = self.root / "targets.yaml"
-        self.targets_path.write_text(original, encoding="utf-8")
+        self.targets_path.write_text(re.sub(
+            r"(?m)^      full_suite_timeout_sec: .*\n", "", original),
+            encoding="utf-8")
         patcher = mock.patch.object(config, "TARGETS", self.targets_path)
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def set_timeout(self, value: str) -> None:
         text = self.targets_path.read_text(encoding="utf-8")
+        text = re.sub(r"(?m)^      full_suite_timeout_sec: .*\n", "", text)
         self.targets_path.write_text(
             text.replace("    test_profile:\n",
                          f"    test_profile:\n      full_suite_timeout_sec: {value}\n", 1),

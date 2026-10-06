@@ -894,7 +894,8 @@ def _commit_applied_appendices(conn, task_id: str, paths: list[str],
 
 
 def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
-                          ctx: repo_context.RepoContext) -> None:
+                          ctx: repo_context.RepoContext,
+                          fresh_suite: bool = False) -> None:
     """Полный набор тестов в scratch-дереве, где приложения УЖЕ применены
     (требование 5/AC-10/AC-11) — у артели только для путей
     `_FULL_SUITE_APPENDIX_PREFIXES`, у внешнего проекта — после любого
@@ -917,8 +918,13 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     needed, command = _full_suite_command(conn, task_id, paths, scratch, ctx)
     if not needed:
         return
-    run = (acceptance.full_suite(scratch, task_id) if command is None
-           else acceptance.full_suite(scratch, task_id, command=command))
+    if command is None:
+        run = (acceptance.full_suite(scratch, task_id, fresh=True)
+               if fresh_suite else acceptance.full_suite(scratch, task_id))
+    else:
+        run = (acceptance.full_suite(scratch, task_id, command=command,
+                                     fresh=True) if fresh_suite else
+               acceptance.full_suite(scratch, task_id, command=command))
     if run.green:
         store.journal(conn, task_id, "orchestrator",
                       "полный прогон после приложений", run.detail)
@@ -945,7 +951,8 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
 
 
 def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
-                           ctx: repo_context.RepoContext):
+                           ctx: repo_context.RepoContext,
+                           fresh_suite: bool = False):
     """Приложения PLAN к защищённым путям — применение пультом (SPEC
     01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6): ПОСЛЕ плотницкого merge и
     ДО снимка артефактов, то есть коммит приложений ложится в main раньше
@@ -994,7 +1001,8 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     # Прогон — после коммита и ДО записи «применены»/push: красный исход
     # означает, что приложения не поедут в main вовсе, и объявлять их
     # применёнными раньше его нечестно.
-    _full_suite_or_refuse(conn, task_id, paths, scratch, ctx)
+    _full_suite_or_refuse(conn, task_id, paths, scratch, ctx,
+                          fresh_suite=fresh_suite)
     store.journal(conn, task_id, "orchestrator",
                   f"приложения применены: {', '.join(paths)}",
                   f"коммит {sha} в scratch-дереве мержа")
@@ -1220,7 +1228,8 @@ def _profile_refusal_exit(conn, task_id: str, target: str) -> None:
 
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             confirmed_ci_note: str | None = None,
-                            fixes_main: str | None = None) -> tuple:
+                            fixes_main: str | None = None,
+                            fresh_suite: bool = False) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
     (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): короткая
     композиция шагов — защищённые пути в диффе (SPEC
@@ -1298,7 +1307,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     if merge_kind != "ok":
         return ("stopped",)
     appendix_kind, applied = _apply_plan_appendices(conn, task_id, state,
-                                                    scratch, ctx)
+                                                     scratch, ctx, fresh_suite)
     if appendix_kind != "ok":
         return ("stopped",)
     final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx,
@@ -1313,8 +1322,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
 
 
 def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
-                                  state: str,
-                                  fixes_main: str | None = None) -> None:
+                                   state: str,
+                                   fixes_main: str | None = None,
+                                   fresh_suite: bool = False) -> None:
     """Внешний цикл гейта `merge_gate` (SPEC T087, требования 1-6, 10;
     решение Оператора 31.08, аудит v6 Q-5; SPEC
     01M291EJMA995AZ61MEMDZKWRY, требования 1-2, 4-5): чередует тело
@@ -1380,7 +1390,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
         while True:
             outcome = _cmd_approve_merge_gate(
                 conn, task_id, state, t, confirmed_ci_note,
-                fixes_main=fixes_main)
+                fixes_main=fixes_main, fresh_suite=fresh_suite)
             confirmed_ci_note = None
             if outcome[0] not in ("wait", "moved"):
                 return
