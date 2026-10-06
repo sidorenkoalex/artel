@@ -18,7 +18,9 @@
   (`acceptance.saved_failures`), иначе — прогоном базы во временной
   рабочей копии клона тем же фоновым процессом;
 - `--failed` повторяет только упавшие прошлого прогона задачи;
-- на машине одновременно идёт один прогон (замок держит фоновый процесс).
+- на машине одновременно идёт один полный прогон — замок общий с гейтами
+  пульта и `notes` (`suite_lock`, SPEC 01M46D5T8SZ9D6S34TZFX8S46V); его
+  держит фоновый процесс, а занятый замок — немедленный отказ команды.
 
 Состояния задачи команда не меняет, lease не берёт, журнал шагов не пишет:
 всё её хозяйство — в каталоге логов пульта (`_state_dir`), поэтому она в
@@ -38,7 +40,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import (acceptance, agent_log, appendix_tree, config, gitcmd,
-               liveness, repo_context, store, workspace)
+               liveness, repo_context, store, suite_lock, workspace)
 
 # «Роль» в имени лога прогона: `.artel/logs/<id>-suiterun-<n>.log`, номер
 # прогона — номер `agent_log.new_agent_log`, второй нумерации нет.
@@ -58,9 +60,7 @@ MODE_FAILED = "failed"
 _PYTEST_FLAGS = ("-vv",)
 
 _POLL_SEC = 1.0
-# Замок, только что созданный соседом, ещё может быть пуст: столько секунд
-# пустой файл считается занятым, а не брошенным.
-_FRESH_LOCK_SEC = 5
+_FRESH_LOCK_SEC = suite_lock.FRESH_SEC
 
 _CHILD = ("import sys; from orchestrator import suite_run; "
           "suite_run.background(*sys.argv[1:])")
@@ -93,7 +93,7 @@ def _task_dir(task_id: str) -> Path:
 
 
 def _lock_path() -> Path:
-    return _state_dir() / "lock.json"
+    return suite_lock.path()
 
 
 def _run_path(task_id: str) -> Path:
@@ -151,63 +151,27 @@ def _pult_command(task_id: str) -> str:
 
 
 # ---------------------------------------------------------------- замок
+#
+# Замок полных прогонов машины — общий с гейтами пульта и `notes`
+# (`suite_lock`, SPEC 01M46D5T8SZ9D6S34TZFX8S46V, требование 1): прогон
+# гейта при занятом замке ждёт, `suite-run` — отказывает сразу.
 
 def _acquire_lock(task_id: str, run_no: int | None) -> dict | None:
-    """Замок прогонов машины за текущим процессом: `None` — взят, иначе
-    держатель. Создание файла `O_EXCL` — атомарно; брошенный замок (pid
-    мёртв) снимается и берётся заново."""
-    path = _lock_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"task_id": task_id, "pid": os.getpid(),
-                          "run": run_no}, ensure_ascii=False)
-    for _ in range(3):
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            holder = _read_json(path)
-            if holder is not None and _alive(holder.get("pid")):
-                return holder
-            if holder is None and _fresh(path):
-                return {"task_id": "?", "pid": "?"}
-            with contextlib.suppress(FileNotFoundError):
-                path.unlink()
-            continue
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-        return None
-    return _read_json(path) or {"task_id": "?", "pid": "?"}
-
-
-def _fresh(path: Path) -> bool:
-    try:
-        return time.time() - path.stat().st_mtime < _FRESH_LOCK_SEC
-    except OSError:
-        return False
+    """Замок прогонов машины за текущим процессом без ожидания: `None` —
+    взят, иначе держатель (в том числе прогон гейта)."""
+    return suite_lock.acquire(task_id, run_no)
 
 
 def _hand_lock(task_id: str, run_no: int, pid: int) -> None:
-    """Замок, взятый процессом команды, — за фоновым процессом прогона:
-    держателем становится `pid`, задача и номер прогона те же."""
-    _write_json(_lock_path(), {"task_id": task_id, "pid": pid, "run": run_no})
+    suite_lock.hand(task_id, run_no, pid)
 
 
 def _adopt_lock(task_id: str, run_no: int) -> dict | None:
-    """Фоновый процесс принимает замок, переданный ему командой (тот же
-    id задачи и номер прогона), — `None`; замка для него нет — берёт сам
-    (`_acquire_lock`): вызов `background` в обход команды."""
-    holder = _read_json(_lock_path())
-    if (holder is not None and holder.get("task_id") == task_id
-            and holder.get("run") == run_no):
-        _hand_lock(task_id, run_no, os.getpid())
-        return None
-    return _acquire_lock(task_id, run_no)
+    return suite_lock.adopt(task_id, run_no)
 
 
 def _release_lock() -> None:
-    holder = _read_json(_lock_path())
-    if holder is not None and holder.get("pid") == os.getpid():
-        with contextlib.suppress(FileNotFoundError):
-            _lock_path().unlink()
+    suite_lock.release()
 
 
 # ---------------------------------------------------- профиль тестов проекта
@@ -347,6 +311,7 @@ def render(task_id: str, run_no: int, mode: str, parsed: Parsed,
             f"прогон не уложился в предел {config.FULL_SUITE_TIMEOUT_SEC} с "
             f"и оборван — числа и упавшие по успевшей части"),
         acceptance.FULL_SUITE_NO_TESTS: acceptance.FULL_SUITE_NO_TESTS_NOTE,
+        acceptance.FULL_SUITE_NOT_STARTED: acceptance.FULL_SUITE_NOT_STARTED,
     }[parsed.outcome]
     what = "повтор упавших" if mode == MODE_FAILED else "полный набор"
     lines = [f"[{task_id}] suite-run №{run_no} ({what}): {title}",
@@ -489,8 +454,8 @@ def background(task_id: str, run_text: str, mode: str) -> None:
         _write_json(_result_path(task_id), {
             "run": run_no, "green": False,
             "report": (f"[{task_id}] suite-run №{run_no}: отказ — на машине "
-                       f"уже идёт прогон suite-run задачи "
-                       f"{holder.get('task_id')} (pid {holder.get('pid')})")})
+                       f"уже идёт прогон "
+                       f"{suite_lock.describe(holder)}")})
         return
     try:
         try:
@@ -649,9 +614,9 @@ def cmd_suite_run(rest: list) -> None:
     # «запущен» — второй отказывает сразу, с держателем (требование 13).
     holder = _acquire_lock(task_id, None)
     if holder is not None:
-        sys.exit(f"{head}: отказ — на машине уже идёт прогон suite-run "
-                 f"задачи {holder.get('task_id')} (pid {holder.get('pid')}); "
-                 f"одновременно идёт один прогон — повтори после его конца")
+        sys.exit(f"{head}: отказ — на машине уже идёт прогон "
+                 f"{suite_lock.describe(holder)}; одновременно идёт один "
+                 f"полный прогон — повтори после его конца")
     mode = MODE_FAILED if failed else MODE_FULL
     try:
         log = agent_log.new_agent_log(task_id, LOG_KIND)

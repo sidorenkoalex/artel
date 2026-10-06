@@ -1126,6 +1126,16 @@ def _acceptance_full_suite_ok(conn, task_id: str, t,
         print(f"[{task_id}] {ACCEPTANCE_SUITE_GREEN_ACTION}: "
               f"{tree.mark(run.digest)}")
         return True
+    if run.outcome == acceptance.FULL_SUITE_NOT_STARTED:
+        # Замок полных прогонов машины не освободился (SPEC
+        # 01M46D5T8SZ9D6S34TZFX8S46V): прогона не было, и `--accept-red`
+        # его не снимает — тем же доводом, что отказ наложения выше.
+        reason = f"полный набор tests/ не проверен — {run_detail}"
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        print(f"  повтори, когда машина освободится: artel.py approve "
+              f"{task_id}")
+        return False
     if accept_red:
         detail = f"основание: {accept_red}\n{run_detail}"
         store.journal(conn, task_id, "operator", ACCEPTANCE_RED_ACCEPTED_ACTION,

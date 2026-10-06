@@ -869,7 +869,13 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     итоговую строку pytest, имена упавших тестов и путь к файлу с полным
     выводом прогона — той же поверхностью, что и автогейт приёмки. До
     этой правки здесь лежал сырой хвост вывода, в котором имена упавших
-    тестов тонули."""
+    тестов тонули.
+
+    Отказ различает исход прогона (SPEC 01M46D5T8SZ9D6S34TZFX8S46V,
+    требование 5): поломкой приложений назван только красный прогон.
+    Таймаут и «прогон не начат» (замок полных прогонов машины не
+    освободился) о приложениях ничего не говорят — 05.10 прогон, оборванный
+    на 99% без единого падения, был назван поломкой приложением."""
     if not _appendix_needs_full_suite(paths):
         return
     run = acceptance.full_suite(scratch, task_id)
@@ -877,12 +883,23 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
         store.journal(conn, task_id, "orchestrator",
                       "полный прогон после приложений", run.detail)
         return
-    detail = f"приложения ломают тесты: {run.detail}"
+    if run.outcome == acceptance.FULL_SUITE_TIMEOUT:
+        detail = (f"прогон не уложился в {config.FULL_SUITE_TIMEOUT_SEC} с "
+                  f"(полный набор tests/ после приложений): {run.detail}")
+        advice = (f"прогон оборван по пределу времени, это не исход "
+                  f"тестов; повтори: artel.py approve {task_id}")
+    elif run.outcome == acceptance.FULL_SUITE_NOT_STARTED:
+        detail = f"полный набор tests/ после приложений — {run.detail}"
+        advice = (f"прогон не запускался; повтори, когда машина "
+                  f"освободится: artel.py approve {task_id}")
+    else:
+        detail = f"приложения ломают тесты: {run.detail}"
+        advice = (f"почини приложение к {', '.join(paths)} и повтори: "
+                  f"artel.py approve {task_id}")
     store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
     _drop_scratch_worktree(ctx, scratch)
     sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
-             f"  задача осталась на гейте merge; почини приложение к "
-             f"{', '.join(paths)} и повтори: artel.py approve {task_id}")
+             f"  задача осталась на гейте merge; {advice}")
 
 
 def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
