@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import (acceptance, agent_log, appendix_tree, config, gitcmd,
-               liveness, repo_context, store, suite_lock, workspace)
+               liveness, project_profile, repo_context, store, suite_lock,
+               workspace)
 
 # «Роль» в имени лога прогона: `.artel/logs/<id>-suiterun-<n>.log`, номер
 # прогона — номер `agent_log.new_agent_log`, второй нумерации нет.
@@ -302,14 +303,17 @@ def _group_lines(failures: list) -> list[str]:
 
 
 def render(task_id: str, run_no: int, mode: str, parsed: Parsed,
-           base_failed: set | None, base_note: str, log: Path) -> str:
+           base_failed: set | None, base_note: str, log: Path,
+           limit: tuple[int, str] | None = None) -> str:
     """Короткий отчёт для шага роли (требования 11-12)."""
+    seconds, source = limit or (config.FULL_SUITE_TIMEOUT_SEC, "config")
     title = {
         acceptance.FULL_SUITE_GREEN: "зелёный прогон",
         acceptance.FULL_SUITE_RED: "красный прогон",
         acceptance.FULL_SUITE_TIMEOUT: (
-            f"прогон не уложился в предел {config.FULL_SUITE_TIMEOUT_SEC} с "
-            f"и оборван — числа и упавшие по успевшей части"),
+            f"прогон не уложился в предел {seconds} с "
+            f"(источник: {source}) и оборван — числа и упавшие по "
+            f"успевшей части"),
         acceptance.FULL_SUITE_NO_TESTS: acceptance.FULL_SUITE_NO_TESTS_NOTE,
         acceptance.FULL_SUITE_NOT_STARTED: acceptance.FULL_SUITE_NOT_STARTED,
     }[parsed.outcome]
@@ -374,7 +378,8 @@ def _base_copy(clone: Path, sha: str):
 
 
 def _base(task_id: str, target: str, branch: str, command: list[str],
-          run_no: int, mode: str) -> tuple[set | None, str]:
+          run_no: int, mode: str,
+          limit: tuple[int, str] | None = None) -> tuple[set | None, str]:
     """(упавшие на базе, пояснение) — `None` вместо множества: база не
     посчитана, и сравнение не выдумывается (требования 7-8, 10)."""
     clone = workspace.repo(target)
@@ -393,7 +398,7 @@ def _base(task_id: str, target: str, branch: str, command: list[str],
             return None, refusal
         green, output = acceptance.run_full_suite(
             copy, command=command, targets=("tests",), extra=_PYTEST_FLAGS,
-            log=base_log)
+            log=base_log, limit=limit)
     parsed = parse(green, output)
     if not parsed.finished:
         return None, (f"прогон базы {sha[:12]} не завершён "
@@ -412,6 +417,7 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
     command, refusal = _profile_command(target)
     if refusal:
         return f"[{task_id}] suite-run №{run_no}: отказ — {refusal}", False
+    limit = project_profile.full_suite_limit(target)
     targets = ("tests",)
     if mode == MODE_FAILED:
         targets = tuple(_read_failed(task_id) or ())
@@ -428,15 +434,16 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
                     f"{tree.refusal}"), False
         green, output = acceptance.run_full_suite(
             tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
-            log=log)
+            log=log, limit=limit)
     parsed = parse(green, output)
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": [n for n, _ in parsed.failures]})
     base_failed, base_note = _base(task_id, target, task["branch"], command,
-                                   run_no, mode)
+                                   run_no, mode, limit)
     with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
         fh.write(_log_appendix(parsed, base_failed))
-    report = render(task_id, run_no, mode, parsed, base_failed, base_note, log)
+    report = render(task_id, run_no, mode, parsed, base_failed, base_note,
+                    log, limit)
     if tree.note or tree.warning:
         head, _, rest = report.partition("\n")
         report = "\n".join([head, tree.mark("прогон ветки"), rest])

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from scripts import guard
 
-from . import config, repo_context, store
+from . import config, repo_context, store, targets
 
 # Действие журнала отказа перехода по профилю или контексту проекта —
 # класс «чинит Оператор» (`advance_gates.refusal_classes`): чинится
@@ -71,6 +71,7 @@ class Profile:
     mutation_claim_scope: tuple
     report: str = ""
     install: tuple = ()
+    full_suite_timeout_sec: int | None = None
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -80,7 +81,8 @@ class Profile:
                    weakening_scope=tuple(values["weakening_scope"]),
                    mutation_claim_scope=tuple(values["mutation_claim_scope"]),
                    report=values.get("report") or "",
-                   install=tuple(values.get("install") or ()))
+                   install=tuple(values.get("install") or ()),
+                   full_suite_timeout_sec=values.get("full_suite_timeout_sec"))
 
     def in_weakening_scope(self, path: str | None) -> bool:
         return bool(path) and any(mask_matches(mask, path)
@@ -148,6 +150,17 @@ def decide(target: str) -> Decision:
 
 def for_task(conn, task_id: str) -> Decision:
     return decide(store.task_target(conn, task_id))
+
+
+def full_suite_limit(target: str) -> tuple[int, str]:
+    """Действующий предел полного набора и его источник для проекта."""
+    answer = repo_context.profile_of(target)
+    if answer.outcome == repo_context.PROFILE_UNREAD:
+        raise targets.TargetsError(answer.reason)
+    value = (answer.values or {}).get("full_suite_timeout_sec")
+    if value is not None:
+        return value, f"профиль тестов проекта {target}"
+    return config.FULL_SUITE_TIMEOUT_SEC, "config"
 
 
 def journal_skip(conn, task_id: str, check: str, decision: Decision) -> None:

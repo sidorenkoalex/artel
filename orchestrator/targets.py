@@ -34,7 +34,7 @@ FIELDS = {
 # SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 1). Вид подполя: "list" —
 # непустой список строк, "list0" — список строк, возможно пустой, "dir" —
 # относительный путь каталога, "template" — шаблон имени с `<id>` и
-# `<name>`, "report" — одно из `PROFILE_REPORTS`.
+# `<name>`, "report" — одно из `PROFILE_REPORTS`, "positive_int" — целое > 0.
 PROFILE_FIELD = "test_profile"
 PROFILE_FIELDS = {
     "command": "list",               # начало команды прогона тестов
@@ -44,10 +44,11 @@ PROFILE_FIELDS = {
     "mutation_claim_scope": "list",  # маски области заявки «Ловит мутацию»
     "report": "report",              # формат отчёта прогона
     "install": "list0",              # команда установки зависимостей
+    "full_suite_timeout_sec": "positive_int",  # предел полного набора tests/
 }
 # `report` и `install` описываются и проверяются, но пультом не
 # исполняются — их отсутствие поведения пульта не меняет.
-PROFILE_OPTIONAL = ("report", "install")
+PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec")
 PROFILE_REPORTS = ("junit-xml",)
 
 
@@ -141,6 +142,9 @@ def _check_profile(where: str, profile: object) -> None:
 def _profile_value_error(kind: str, value: object) -> str:
     """Причина, по которой значение подполя профиля не годно; пусто —
     годно."""
+    if kind == "positive_int":
+        return "не положительное целое число секунд" if (
+            type(value) is not int or value <= 0) else ""
     if kind in ("list", "list0"):
         if not isinstance(value, list) or not all(
                 isinstance(item, str) and item for item in value):
