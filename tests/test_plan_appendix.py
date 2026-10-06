@@ -389,13 +389,17 @@ class PlanAppendixGateTest(TmpRootTest):
         self.assertEqual(self.actions(),
                          [plan_appendix.PLAN_APPENDIX_GATE_FAILURE_ACTION])
 
-    def test_external_target_skips_the_gate(self):
-        """Внешний (не self) target — гейт не проверяется: защищённые пути
-        списка это файлы ПУЛЬТА, а git здесь ходит в `config.ROOT`.
+    def test_unresolved_external_target_refuses_without_git(self):
+        """Внешний проект, чей контекст не разрешён (записи `other` в
+        `targets.yaml` нет), а PLAN несёт приложение, — отказ перехода
+        действием сбоя гейта (fail-closed, ADR-0002; SPEC
+        01M45FK56DWMNBRKA1VWM12H19, требование 3, AC-12), и git при этом
+        не зовётся: проверять приложение не в чем.
 
-        Ловит мутацию: проверка target'а убрана — задача внешнего проекта
-        отказывала бы на приложении к своему `tests/…`, сверяя его с
-        деревом пульта, где такого файла нет вовсе."""
+        Ловит мутацию: неразрешённый контекст внешнего проекта снова
+        пропускает гейт молча (`return False`, как до снятия развилки) —
+        приложение уехало бы на мерж ни разу не проверенным; вторая
+        мутация — гейт идёт в git `config.ROOT` пульта вместо отказа."""
         store.update_task(self.conn, self.TASK, target="other")
         text = f"## Приложение\n\n{diff_block(PROTECTED_FILE)}"
 
@@ -407,7 +411,9 @@ class PlanAppendixGateTest(TmpRootTest):
             refuses = plan_appendix._plan_appendix_gate_refuses(
                 self.conn, self.TASK, self.t, text)
 
-        self.assertFalse(refuses)
+        self.assertTrue(refuses)
+        self.assertEqual(self.actions(),
+                         [plan_appendix.PLAN_APPENDIX_GATE_FAILURE_ACTION])
 
     def test_refusal_action_reaches_the_refusal_history(self):
         """Действие отказа начинается с `store.REFUSAL_ACTION_PREFIX` —
