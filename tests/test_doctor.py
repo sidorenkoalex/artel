@@ -1544,13 +1544,25 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
     `LeasesCheckTest`/`OrphansTest`.
     """
 
+    def setUp(self):
+        super().setUp()
+        # С SPEC 01M484RNV3QBDY3B0M16J916ZP (строка 27) свежесть ветки
+        # артели сверяется с `origin/<base>` клона после `fetch origin
+        # <base>`, как у любого проекта: `fetch` здесь отвечает успехом,
+        # иначе задача молча пропускалась бы до `commits_behind`.
+        patcher = mock.patch.object(
+            doctor.gitcmd, "in_repo",
+            return_value=subprocess.CompletedProcess(["git"], 0, "", ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_stale_active_task_warns(self):
         """Ловит мутацию: отставание ветки задачи сверх порога не даёт warn
         либо поднимает incident."""
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b, repo=None: config.STALE_BRANCH_WARN_COMMITS + 1):
+                               lambda b, base=None, repo=None: config.STALE_BRANCH_WARN_COMMITS + 1):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(any(c.status == "warn" for c in checks))
@@ -1564,7 +1576,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b, repo=None: config.STALE_BRANCH_WARN_COMMITS):
+                               lambda b, base=None, repo=None: config.STALE_BRANCH_WARN_COMMITS):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(all(c.status == "ok" for c in checks))
@@ -1577,7 +1589,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         checked_branches = []
         with mock.patch.object(
                 doctor.gitcmd, "commits_behind",
-                lambda b, repo=None: checked_branches.append(b) or 999):
+                lambda b, base=None, repo=None: checked_branches.append(b) or 999):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertEqual(checked_branches, [])
@@ -1589,7 +1601,7 @@ class BranchFreshnessCheckTest(InitializedTmpRootTest):
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         with mock.patch.object(doctor.gitcmd, "commits_behind",
-                               lambda b, repo=None: None):
+                               lambda b, base=None, repo=None: None):
             checks = doctor.check_branch_freshness(store.db())
 
         self.assertTrue(all(c.status == "ok" for c in checks))

@@ -18,8 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (acceptance, agent_log, config, fsm,  # noqa: E402
-                          gitcmd, github_adapter, store)
+from orchestrator import (acceptance, agent_log, artifact_branch,  # noqa: E402
+                          config, fsm, gitcmd, github_adapter, store)
 from tests.sandbox import LightTransitionSandbox  # noqa: E402
 
 
@@ -38,6 +38,14 @@ class MapConflictAutoResolveTest(LightTransitionSandbox):
                                           return_value=False)
         forge_patcher.start()
         self.addCleanup(forge_patcher.stop)
+        # Паспорт задачи ведётся и у артели (SPEC 01M484RNV3QBDY3B0M16J916ZP,
+        # строка 14): его коммит в ссылку документов пишет плотницкий git
+        # тем же `subprocess.run`, что подменён под регенератор карты;
+        # паспорт — «только для глаз», не предмет этого файла.
+        passport_patcher = mock.patch.object(artifact_branch,
+                                             "append_passport_line")
+        passport_patcher.start()
+        self.addCleanup(passport_patcher.stop)
 
     # ------------------------------------------------------------ утилиты
 
