@@ -24,7 +24,9 @@ schema_version: 5
 2. Добавить юнит-тесты на пропуск полного набора, завершение PR, push без PR, прочие пропуски, внешний target, выбор ре-рана и соответствие имён `ci.yml`.
 3. Приложить точный diff `.github/workflows/ci.yml`, проверить `git apply --check` и `scripts/plan_appendix_ci.py --check-workflow`; прогнать планку, тесты затронутых модулей, обновить карту и запустить полный набор командой пульта.
 
-Затронутые тесты (`test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`, `test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`, `test_ci_full_suite_once.py`, `test_ci_status.py`, `test_ci_rerun_command.py`) — 117 passed. Метод AC-8 отдельно прошёл с ранее падавшим зерном 196307456. `plank-run` — 1 passed. `python3 scripts/codebase_map.py` выполнен. Полный набор `suite-run` пока не стартовал: замок удерживает прогон задачи 01M48WRE8BHFDY011Q0HQGQ91B.
+Затронутые тесты (`test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`, `test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`, `test_ci_full_suite_once.py`, `test_ci_status.py`, `test_ci_rerun_command.py`) — 117 passed. Метод AC-8 отдельно прошёл с ранее падавшим зерном 196307456. `plank-run` — 1 passed. `python3 scripts/codebase_map.py` выполнен. На предыдущей итерации полный набор `suite-run` не стартовал: замок удерживал прогон задачи 01M48WRE8BHFDY011Q0HQGQ91B.
+
+После возврата из `verifying` адрес `details_url` в `tests/test_ci_full_suite_once.py:21` заменён на `http://127.0.0.1/o/r/actions/runs/{run_id}/job/1`. Проверка `tests/test_invariants.py` вместе с обоими файлами тестов задачи: 92 passed. Карта пересобрана командой `python3 scripts/codebase_map.py`. Повторный `suite-run` из роли отказал с `PermissionError` на `/Users/al.sidorenko/projects/artel/.artel/logs/suite-run/lock.json` (тот же ранее записанный системный пробел).
 
 ## Покрытие требований
 
