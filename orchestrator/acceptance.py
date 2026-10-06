@@ -8,6 +8,7 @@
 а не проверкой. guard.py содержимое файлов принципиально не исполняет
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
+import ast
 import contextlib
 import json
 import os
@@ -19,6 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, NamedTuple
+from xml.etree import ElementTree
 
 from scripts import guard
 
@@ -337,6 +339,118 @@ def collect(tdir: Path, cwd: Path | None = None,
         return False, "планка не содержит ни одного теста"
     tail = (res.stdout + res.stderr)[-2000:]
     return False, f"{location_note}\n{tail}"
+
+
+# Зерно, которое печатают долгоживущие файлы `tests/` строкой «зерно: N»
+# (SPEC 01M48FRD9RJDBBVT2SN0FY5G2A, требование 2).
+_SEED_LINE = re.compile(r"зерно: (\d+)")
+
+
+def carries_random_seed(path: Path) -> bool:
+    """Файл импортирует модуль `random` (`import random` или `from random
+    import …`) в любом месте — признак «несёт случайное зерно» (SPEC
+    01M48FRD9RJDBBVT2SN0FY5G2A, требование 2). Разбор синтаксиса, а не
+    поиск подстроки: слово `random` в докстринге или комментарии признаком
+    не является. Файл, который не читается или не разбирается, — `False`:
+    повторы идут только после зелёного первого прогона, а такой файл
+    первый прогон не прошёл бы."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+                alias.name == "random" for alias in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and node.level == 0 \
+                and node.module == "random":
+            return True
+    return False
+
+
+class RedTest(NamedTuple):
+    """Красный тест одного прогона: узел pytest, зёрна, напечатанные им
+    строкой «зерно: N», и пометка, если узел назван не по отчёту pytest."""
+    node: str
+    seeds: tuple[str, ...]
+    note: str = ""
+
+
+def _junit_node(classname: str, name: str, files: list[str]) -> str:
+    """Узел `файл::Класс::метод` по паре `classname`/`name` отчёта junit:
+    `classname` — точечный путь модуля (от корня pytest) и класса, файл —
+    тот из `files`, чей точечный путь или его хвост (корень pytest бывает
+    глубже `cwd`, если над файлами нет файла настроек) начинает
+    `classname`; не нашёлся — `classname::name`."""
+    for rel in files:
+        parts = Path(rel).with_suffix("").parts
+        for start in range(len(parts)):
+            dotted = ".".join(parts[start:])
+            if classname == dotted:
+                return f"{rel}::{name}"
+            if classname.startswith(dotted + "."):
+                return f"{rel}::{classname[len(dotted) + 1:]}::{name}"
+    return f"{classname}::{name}"
+
+
+def _junit_red_tests(report: Path, files: list[str]) -> list[RedTest] | None:
+    """Красные тесты отчёта junit (`failure`/`error`) с их зёрнами; `None` —
+    отчёта нет или он не разбирается."""
+    try:
+        root = ElementTree.parse(report).getroot()
+    except (OSError, ElementTree.ParseError):
+        return None
+    reds: list[RedTest] = []
+    for case in root.iter("testcase"):
+        problems = [el for el in case if el.tag in ("failure", "error")]
+        if not problems:
+            continue
+        text = "\n".join(
+            [el.text or "" for el in case if el.tag == "system-out"]
+            + [(el.get("message") or "") + "\n" + (el.text or "")
+               for el in problems])
+        seeds = tuple(dict.fromkeys(_SEED_LINE.findall(text)))
+        reds.append(RedTest(_junit_node(case.get("classname") or "",
+                                        case.get("name") or "", files),
+                            seeds))
+    return reds
+
+
+def run_repeat(files: list[str], cwd: Path,
+               command: list[str] | None = None) -> list[RedTest]:
+    """Повторный прогон долгоживущих файлов `files` (пути от `cwd`) без
+    планки (SPEC 01M48FRD9RJDBBVT2SN0FY5G2A, требование 2): красные тесты
+    прогона, пустой список — прогон зелёный.
+
+    Имена и зёрна — из отчёта junit pytest с выводом теста
+    (`junit_logging=system-out`): хвост текстового вывода обрезан и не
+    связывает зерно с тестом. Прогон ограничен
+    `config.ACCEPTANCE_TIMEOUT_SEC`; истёкший предел и красный исход без
+    названных отчётом тестов — красный повтор по каждому файлу с пометкой
+    причины: повтор, исход которого неизвестен, зелёным не считается."""
+    with tempfile.TemporaryDirectory(prefix="artel-seed-repeat-") as tmp:
+        report = Path(tmp) / "junit.xml"
+        try:
+            with _pytest_env() as env:
+                res = subprocess.run(
+                    _pytest_command(*files, f"--junitxml={report}",
+                                    "-o", "junit_logging=system-out",
+                                    command=command),
+                    cwd=cwd, env=env, capture_output=True, text=True,
+                    timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired as exc:
+            seeds = tuple(dict.fromkeys(_SEED_LINE.findall(
+                _timeout_text(exc.stdout) + _timeout_text(exc.stderr))))
+            note = f"прогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с"
+            return [RedTest(rel, seeds, note) for rel in files]
+        if res.returncode == 0:
+            return []
+        reds = _junit_red_tests(report, files)
+    if reds:
+        return reds
+    note = f"pytest вернул {res.returncode}, отчёт не назвал тестов"
+    seeds = tuple(dict.fromkeys(_SEED_LINE.findall(res.stdout + res.stderr)))
+    return [RedTest(rel, seeds, note) for rel in files]
 
 
 def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
