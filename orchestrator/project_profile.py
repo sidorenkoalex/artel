@@ -120,9 +120,8 @@ class Decision:
 
 
 def unresolved_reason(target: str) -> str:
-    return (f"контекст проекта «{target}» не разрешён: записи проекта нет в "
-            f"targets.yaml или файл не читается — проверки тестов без него "
-            f"не выполняются")
+    return (f"{repo_context.unresolved_reason(target)} — проверки тестов без "
+            f"него не выполняются")
 
 
 def decide(target: str) -> Decision:

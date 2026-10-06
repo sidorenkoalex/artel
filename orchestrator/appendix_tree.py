@@ -67,17 +67,22 @@ def apply_in_order(tree: Path, appendices: list,
     return paths, None
 
 
-def read_plan(conn, task_id: str) -> tuple[list, list[str], str]:
+def read_plan(conn, task_id: str,
+              protected: tuple) -> tuple[list, list[str], str]:
     """(приложения, ошибки разбора, причина непрочитанного PLAN) — PLAN.md
     задачи из ссылки документов (`artifact_source.resolve`), тот же
     источник, что у гейта мержа. Непрочитанный PLAN — `([], [], причина)`:
-    решает вызывающий (гейт мержа — «приложений нет» с записью журнала)."""
+    решает вызывающий (гейт мержа — «приложений нет» с записью журнала).
+
+    `protected` — перечень защищённых путей проекта задачи
+    (`repo_context.protected_paths`, SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требование 2): допуск путей приложений идёт по нему."""
     branch, _foreign = artifact_source.resolve(conn, task_id)
     text, reason = artifact_branch.show(task_id, branch,
                                         f"tasks/{task_id}/PLAN.md")
     if text is None:
         return [], [], f"PLAN.md не читается с ветки {branch}: {reason}"
-    appendices, errors = guard.plan_appendices(text)
+    appendices, errors = guard.plan_appendices(text, protected)
     return appendices, errors, ""
 
 
@@ -212,10 +217,12 @@ def suite_tree(conn, task_id: str, wt: Path, branch: str | None = None):
     Временное дерево снимается с учёта клона и удаляется на любом исходе,
     включая исключение внутри блока (требование 2)."""
     target = workspace.task_target(task_id)
-    if not repo_context.is_artel(repo_context.resolve(target)):
+    ctx = repo_context.resolve(target)
+    if not repo_context.is_artel(ctx):
         yield SuiteTree(wt, "", "", "")
         return
-    appendices, errors, unread = read_plan(conn, task_id)
+    appendices, errors, unread = read_plan(conn, task_id,
+                                           repo_context.protected_paths(ctx))
     if errors:
         yield SuiteTree(None, "", (f"приложения PLAN не разобраны: "
                                    f"{'; '.join(errors)} — полный набор не "

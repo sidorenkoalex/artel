@@ -938,6 +938,27 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
     return "\n".join(item.line for item in items), ""
 
 
+def _spec_protected_zones_refusal(conn, task_id: str, meta: dict) -> str:
+    """Причина отказа `approve` на гейте SPEC по защищённым зонам либо
+    пустая строка (SPEC 01M45FK56DWMNBRKA1VWM12H19, требования 2-3, AC-10):
+    элемент `zones:` под перечнем защищённых путей проекта задачи
+    (`repo_context.protected_paths`) правится только приложением к PLAN —
+    тот же текст `guard.PROTECTED_ZONE_REFUSAL`, что у «Зоны:» ТЗ на `new`.
+    Контекст проекта не разрешён — отказ, называющий проект."""
+    zones = guard.zone_items(meta.get("zones"))
+    if not zones:
+        return ""
+    target = store.task_target(conn, task_id)
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        return (f"{repo_context.unresolved_reason(target)} — зоны SPEC не "
+                f"сверить с защищёнными путями проекта")
+    protected = guard.protected_zones(zones, repo_context.protected_paths(ctx))
+    if not protected:
+        return ""
+    return f"в zones SPEC {', '.join(protected)} — {guard.PROTECTED_ZONE_REFUSAL}"
+
+
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # tests_writing до кода (SPEC T023, требование 1): пропускается
     # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
@@ -975,6 +996,11 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     unclassified = guard.spec_unclassified_paths(spec_text, meta)
     if unclassified:
         reason = guard.unclassified_paths_refusal(unclassified)
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
+    reason = _spec_protected_zones_refusal(conn, task_id, meta)
+    if reason:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
         return

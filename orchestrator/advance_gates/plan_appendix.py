@@ -16,7 +16,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from .. import config, gitcmd, store, workspace
+from .. import config, gitcmd, repo_context, store, workspace
 from ._base import GateRefusal, _run_gates
 
 # Действие журнала отказа (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование
@@ -139,17 +139,31 @@ def _plan_appendix_gate(conn, task_id: str, t,
     не пользуется.
 
     Ошибки разбора требования 1 (блок без заголовка `diff --git`, путь вне
-    `config.PROTECTED_PATHS`) — тот же отказ: пропустить такой блок молча
-    значит потерять правку до самого мержа, где о ней уже некому узнать.
+    перечня защищённых путей проекта) — тот же отказ: пропустить такой
+    блок молча значит потерять правку до самого мержа, где о ней уже
+    некому узнать.
 
-    Внешний (не self) target — гейт не проверяется, тем же доводом, что
-    `_zones_gate`/`_capacity_gate`: `config.PROTECTED_PATHS` — файлы
-    пульта, а `git` здесь ходит в клон проекта задачи, не в клон внешнего
-    target'а.
+    Любой проект с разрешённым контекстом (SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требование 3): допуск путей — по перечню проекта задачи
+    (`repo_context.protected_paths`), применимость — в клоне проекта
+    задачи. Контекст не разрешён, а PLAN несёт приложения, — отказ,
+    называющий проект: допустить пути не по чему.
     """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return None
-    appendices, errors = guard.plan_appendices(plan_text)
+    target = store.task_target(conn, task_id)
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        # Пустой перечень отвергает любой путь, поэтому пустой разбор
+        # значит «в PLAN нет ни одного блока приложения» — тогда и
+        # проверять нечего (AC-7 выше).
+        if guard.plan_appendices(plan_text, ()) == ([], []):
+            return None
+        detail = (f"приложения PLAN: {repo_context.unresolved_reason(target)} "
+                  f"— допуск путей и применимость проверить нечем")
+        hint = (f"почини {config.TARGETS.name} (запись проекта «{target}») "
+                f"и повтори artel.py advance {task_id}")
+        return GateRefusal(PLAN_APPENDIX_GATE_FAILURE_ACTION, detail, hint)
+    appendices, errors = guard.plan_appendices(
+        plan_text, repo_context.protected_paths(ctx))
     if errors:
         return _inapplicable_refusal(task_id, "; ".join(errors))
     if not appendices:

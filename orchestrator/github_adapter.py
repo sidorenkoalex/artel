@@ -70,10 +70,13 @@ def _incident(conn, task_id: str, action: str, message: str) -> None:
 
 
 def _touched_protected_paths(branch: str, base: str,
-                             repo=None) -> list[str]:
-    """Пути `config.PROTECTED_PATHS`, затронутые диффом `base...branch`
-    (A7, требование 7, AC-16) — независимо от предупреждения, которое
-    уже печатает CI-job protected-paths (не заменяет его, дополняет).
+                             repo=None, protected=None) -> list[str]:
+    """Пути перечня защищённых путей `protected`, затронутые диффом
+    `base...branch` (A7, требование 7, AC-16) — независимо от
+    предупреждения, которое уже печатает CI-job protected-paths (не
+    заменяет его, дополняет). `protected` — перечень проекта задачи
+    (`repo_context.protected_paths`, SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требование 2); `None` — `config.PROTECTED_PATHS`.
 
     Git не ответил на diff — пустой список (не отказ и не эскалация:
     подсветка в MR — необязательное дополнение, отсутствие ответа не
@@ -86,7 +89,15 @@ def _touched_protected_paths(branch: str, base: str,
     if res is None or res.returncode != 0:
         return []
     paths = [p for p in res.stdout.splitlines() if p]
-    return [p for p in paths if config.is_protected_path(p)]
+    return [p for p in paths if config.is_protected_path(p, protected)]
+
+
+def _protected_paths_source(ctx) -> str:
+    """Имя перечня в тексте подсветки: у артели — константа пульта, у
+    внешнего проекта — поле его записи."""
+    if repo_context.is_artel(ctx):
+        return "config.PROTECTED_PATHS"
+    return f"no_paths проекта {ctx.target} в targets.yaml"
 
 
 def _gh_repo_kwargs(target_name: str, ctx) -> dict:
@@ -170,12 +181,17 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     # на MR — в дополнение к предупреждению CI-job protected-paths, не
     # взамен него. Отказ комментария — не отказ Draft MR (та уже
     # заведена): incident тем же приёмом, что и остальные сбои модуля.
-    protected = _touched_protected_paths(branch, base, repo=repo)
+    # Перечень — проекта задачи (SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    # требование 2); контекст не разрешён — подсветки нет, как и
+    # черновика выше (`push` в клон без контекста не дойдёт).
+    protected = (_touched_protected_paths(
+        branch, base, repo=repo, protected=repo_context.protected_paths(ctx))
+        if ctx is not None else [])
     if protected:
         comment = ci.gh(
             "pr", "comment", branch, "--body",
             f"⚠️ Диф задачи {task_id} затрагивает защищённые пути: "
-            f"{', '.join(protected)} (config.PROTECTED_PATHS).",
+            f"{', '.join(protected)} ({_protected_paths_source(ctx)}).",
             **gh_repo_kwargs)
         if comment is None or comment.returncode != 0:
             detail = ((comment.stderr or comment.stdout).strip()[:300]

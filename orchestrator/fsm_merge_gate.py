@@ -48,8 +48,10 @@ GUARD_ALL_TIMEOUT_SEC = 300
 MAIN_CI_AFTER_MERGE_ACTION = "CI main после мержа"
 
 
-def _touches_protected_path(path: str) -> bool:
-    return config.is_protected_path(path)
+def _touches_protected_path(path: str, protected=None) -> bool:
+    # `protected` — перечень проекта задачи (`repo_context.protected_paths`);
+    # `None` — `config.PROTECTED_PATHS`.
+    return config.is_protected_path(path, protected)
 
 
 def _protected_path_refusal_detail(paths: list[str]) -> str:
@@ -70,12 +72,10 @@ def _protected_path_diff_gate(conn, task_id: str, state: str, branch: str,
     защищённый путь ТОЛЬКО когда сам merge конфликтует, а бесконфликтный
     дифф (новый файл, не тронутый на main) доходил до `done` молча.
 
-    Только артель (`repo_context.is_artel(ctx)` — признак проекта, не
-    путь: путь артели — клон, SPEC 01M42PENCS26D0656X8FR7DFA7,
-    требование 3; тот же довод, что
-    карта/RETRO в `_publish_merge_artifacts`): защищённые пути этого
-    списка — файлы пульта, у внешнего target'а их либо нет вовсе, либо
-    это не те же файлы её репозитория.
+    Любой проект, по перечню защищённых путей проекта задачи
+    (`repo_context.protected_paths`, SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требования 1-3): у артели — `config.PROTECTED_PATHS`, у внешнего
+    проекта — поле `no_paths` его записи; дифф — в клоне контекста.
 
     `True` — эскалировано (`store.set_state` уже отжурналировал именованный
     текст AC-4), вызывающий код обязан остановиться; `False` — дифф чист
@@ -87,15 +87,14 @@ def _protected_path_diff_gate(conn, task_id: str, state: str, branch: str,
     `_perform_carpentry_merge` сами требуют рабочий git) — расширять
     список мест отказа тем же git-failure не добавляет защиты.
     """
-    if not repo_context.is_artel(ctx):
-        return False
     base = gitcmd.diff_base(branch, repo=ctx.path)
     if base is None:
         return False
     files = gitcmd.diff_names(base, branch, repo=ctx.path)
     if files is None:
         return False
-    protected = [f for f in files if _touches_protected_path(f)]
+    perimeter = repo_context.protected_paths(ctx)
+    protected = [f for f in files if _touches_protected_path(f, perimeter)]
     if not protected:
         return False
     detail = _protected_path_refusal_detail(protected)
@@ -217,7 +216,8 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
     Список не пуст — содержательный конфликт: `git merge --abort`
     возвращает scratch-дерево в чистое состояние (требование 5), а
     задача уходит в `in_dev` (AC-3) либо, если конфликт задевает
-    защищённый путь (`config.PROTECTED_PATHS`), в `escalated` (AC-4) —
+    защищённый путь (перечень проекта `repo_context.protected_paths`), в
+    `escalated` (AC-4) —
     оба перехода несут перечень конфликтующих файлов в журнал через
     `detail` `store.set_state`. Если сам `git merge --abort` не удался,
     scratch-дерево остаётся с незавершённым merge НАРОЧНО (для разбора
@@ -250,7 +250,8 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
 
     _drop_scratch_worktree(ctx, repo)
     file_list = ", ".join(files)
-    protected = [f for f in files if _touches_protected_path(f)]
+    perimeter = repo_context.protected_paths(ctx)
+    protected = [f for f in files if _touches_protected_path(f, perimeter)]
     if protected:
         detail = (f"конфликт merge затрагивает защищённый путь "
                   f"({', '.join(protected)}); конфликтующие файлы: "
@@ -753,6 +754,41 @@ def _appendix_needs_full_suite(paths: list[str]) -> bool:
                for p in paths)
 
 
+# Действие журнала: у внешнего проекта без профиля тестов применённые
+# приложения не прогоняются (SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 6).
+FULL_SUITE_SKIPPED_ACTION = "полный прогон приложений не выполнен"
+
+
+def _full_suite_command(conn, task_id: str, paths: list[str], scratch: Path,
+                        ctx: repo_context.RepoContext) -> tuple[bool, list | None]:
+    """(нужен ли полный прогон после приложений `paths`, команда прогона;
+    `None` — команда пульта) — SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 6.
+
+    Артель — прежние классы `_FULL_SUITE_APPENDIX_PREFIXES` и команда
+    пульта. Внешний проект — прогон после КАЖДОГО применённого
+    приложения: пульт не знает, какие файлы чужого репозитория влияют на
+    сбор и прогон его тестов. Команда — из профиля тестов проекта; профиля
+    нет — прогона нет, и журнал задачи несёт об этом запись. Профиль не
+    прочитан — отказ мержа (`_profile_refusal_exit` в начале тела уже
+    отказал бы; здесь — на случай правки `targets.yaml` посреди окна)."""
+    if repo_context.is_artel(ctx):
+        return _appendix_needs_full_suite(paths), None
+    decision = project_profile.decide(ctx.target)
+    if decision.profile is not None:
+        return True, list(decision.profile.command)
+    if decision.refusal:
+        store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
+                      decision.refusal)
+        _drop_scratch_worktree(ctx, scratch)
+        sys.exit(f"[{task_id}] merge отклонён: {decision.refusal}\n"
+                 f"  задача осталась на гейте merge; почини targets.yaml и "
+                 f"повтори: artel.py approve {task_id}")
+    store.journal(conn, task_id, "orchestrator", FULL_SUITE_SKIPPED_ACTION,
+                  f"{decision.skip}: нет профиля тестов — приложения "
+                  f"{', '.join(paths)} применены без полного прогона")
+    return False, None
+
+
 def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
                                ctx: repo_context.RepoContext) -> list:
     """Приложения PLAN.md задачи с ветки-источника артефактов (SPEC
@@ -769,7 +805,8 @@ def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
     тем же принципом деградации, что `_overlay_artifact_snapshot` уже
     применяет к провалу материализации снимка. Ничего некорректного в
     main это не пропускает — не применяется ничего."""
-    appendices, errors, unread = appendix_tree.read_plan(conn, task_id)
+    appendices, errors, unread = appendix_tree.read_plan(
+        conn, task_id, repo_context.protected_paths(ctx))
     if unread:
         store.journal(conn, task_id, "orchestrator",
                       "приложения PLAN не прочитаны",
@@ -859,10 +896,11 @@ def _commit_applied_appendices(conn, task_id: str, paths: list[str],
 def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
                           ctx: repo_context.RepoContext) -> None:
     """Полный набор тестов в scratch-дереве, где приложения УЖЕ применены
-    (требование 5/AC-10/AC-11) — только для путей
-    `_FULL_SUITE_APPENDIX_PREFIXES`. Красный прогон — именованный отказ
-    мержа: задача остаётся на `merge_gate`, scratch убран, main не
-    продвинут, приложения не опубликованы.
+    (требование 5/AC-10/AC-11) — у артели только для путей
+    `_FULL_SUITE_APPENDIX_PREFIXES`, у внешнего проекта — после любого
+    приложения, командой его профиля (`_full_suite_command`). Красный
+    прогон — именованный отказ мержа: задача остаётся на `merge_gate`,
+    scratch убран, main не продвинут, приложения не опубликованы.
 
     Прогон и разбор его вывода — общий узел `acceptance.full_suite` (SPEC
     01M3FQ3JVC3DGGM33XCX8TC7ME, требование 5): detail отказа несёт
@@ -876,9 +914,11 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     Таймаут и «прогон не начат» (замок полных прогонов машины не
     освободился) о приложениях ничего не говорят — 05.10 прогон, оборванный
     на 99% без единого падения, был назван поломкой приложением."""
-    if not _appendix_needs_full_suite(paths):
+    needed, command = _full_suite_command(conn, task_id, paths, scratch, ctx)
+    if not needed:
         return
-    run = acceptance.full_suite(scratch, task_id)
+    run = (acceptance.full_suite(scratch, task_id) if command is None
+           else acceptance.full_suite(scratch, task_id, command=command))
     if run.green:
         store.journal(conn, task_id, "orchestrator",
                       "полный прогон после приложений", run.detail)
@@ -916,15 +956,13 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     `skills/test-authoring.md` применить стало некому — дыра, которую
     закрывает эта функция.
 
-    Только артель (`repo_context.is_artel(ctx)`), тем же доводом, что
-    карта и RETRO ниже: `config.PROTECTED_PATHS` — файлы пульта, у
-    внешнего target'а их либо нет вовсе, либо это не те же файлы.
+    Любой проект (SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 3): допуск
+    путей — по перечню защищённых путей проекта задачи, полный прогон —
+    по правилу проекта (`_full_suite_command`).
 
     `("ok", пути)` — применять было нечего либо всё применено и
     закоммичено; `("stopped", [])` — приложение неприменимо к подтянутому
     main, задача возвращена в `in_dev` (требование 4)."""
-    if not repo_context.is_artel(ctx):
-        return ("ok", [])
     appendices = _plan_appendices_or_refuse(conn, task_id, scratch, ctx)
     if not appendices:
         return ("ok", [])
@@ -961,6 +999,26 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     return ("ok", paths)
 
 
+MAP_GENERATOR_REL = "scripts/codebase_map.py"
+# Действие журнала: в дереве мержа нет генератора карты, шаг карты не
+# выполнялся (SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 7).
+MAP_SKIPPED_ACTION = "карта кодовой базы не строится"
+
+
+def _map_step(conn, task_id: str, scratch: Path) -> None:
+    """Регенерация и коммит карты кодовой базы — если в дереве мержа есть
+    генератор `MAP_GENERATOR_REL` (SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требование 7): признак — само дерево проекта, не имя проекта. Нет
+    генератора — ни коммита, ни инцидента, только запись в журнал задачи:
+    молча шаг не пропускается."""
+    if (scratch / MAP_GENERATOR_REL).is_file():
+        fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
+        return
+    store.journal(conn, task_id, "orchestrator", MAP_SKIPPED_ACTION,
+                  f"в дереве мержа нет генератора {MAP_GENERATOR_REL} — "
+                  f"карта не регенерируется и не коммитится")
+
+
 def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
                              ctx: repo_context.RepoContext,
                              applied_appendices: list[str] | None = None) -> str:
@@ -970,17 +1028,17 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     tasks/<id>/, значит это часть содержимого, на которое указывает
     `merge_sha`, а не служебная правка вроде карты/RETRO после него.
 
-    Карта кодовой базы (SPEC T042) и RETRO (SPEC T043, требование 8,
-    адресуется на `merge_sha` — сразу после merge/наложения снимка, ДО
-    любых последующих служебных коммитов) — оба шага ТОЛЬКО для self
+    Карта кодовой базы (SPEC T042) — у любого проекта, в дереве мержа
+    которого есть генератор (`_map_step`, SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требование 7). RETRO (SPEC T043, требование 8, адресуется на
+    `merge_sha` — сразу после merge/наложения снимка, ДО любых
+    последующих служебных коммитов) — ТОЛЬКО для self
     (`repo_context.is_artel(ctx)`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
-    требование 4, AC-13 —
-    «в пульте — только кухня пульта», для внешнего target ни карта, ни
-    RETRO в её main НЕ коммитятся вовсе (RETRO внешнего target остаётся
-    только в коммите закрытия `refs/artifacts/<id>`, `orchestrator/
-    snapshot.py`). Для self —
-    оба провала некритичны, push ниже выполняется независимо от их
-    исхода; оба шага работают В SCRATCH (AC-9) — не в `config.ROOT`.
+    требование 4, AC-13 — для внешнего target RETRO в её main НЕ
+    коммитится (остаётся только в коммите закрытия `refs/artifacts/<id>`,
+    `orchestrator/snapshot.py`). Провалы карты и RETRO некритичны, push
+    ниже выполняется независимо от их исхода; оба шага работают В
+    SCRATCH (AC-9) — не в `config.ROOT`.
 
     `_guard_task_root_or_refuse` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
     AC-7/AC-8) — сразу после наложения снимка, ДО карты/RETRO/push:
@@ -1000,8 +1058,8 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     _overlay_artifact_snapshot(conn, task_id, scratch)
     _guard_task_root_or_refuse(conn, task_id, scratch, ctx)
     merge_sha = gitcmd.head_sha(scratch)
+    _map_step(conn, task_id, scratch)
     if repo_context.is_artel(ctx):
-        fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
         _guard_all_or_refuse(conn, task_id, scratch, ctx)
         fsm_postmerge._generate_and_commit_retro(
             conn, task_id, merge_sha, repo=scratch,

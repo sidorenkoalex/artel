@@ -3,7 +3,8 @@
 `orchestrator/fsm_advance.py`."""
 from scripts import guard
 
-from .. import artifact_branch, checkpoint, config, gitcmd, store, workspace
+from .. import (artifact_branch, checkpoint, config, gitcmd, repo_context,
+                store, workspace)
 from ._base import GateRefusal, _run_gates
 # Маркер мандата и разбор строк через запятую живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -33,12 +34,14 @@ def _touches_zone(path: str, zones: list[str]) -> bool:
     return any(path == z or path.startswith(z) for z in zones)
 
 
-def _protected_paths_touched(files: list[str]) -> list[str]:
-    """Файлы `files`, задевающие `config.PROTECTED_PATHS` — общей формулой
-    `config.is_protected_path` (SPEC 01M3MVXZXF25KYY2P213E0M39X,
-    требование 5). Порядок — как во входном списке (обычно порядок `git
-    diff --name-only`), без сортировки."""
-    return [f for f in files if config.is_protected_path(f)]
+def _protected_paths_touched(files: list[str], protected=None) -> list[str]:
+    """Файлы `files`, задевающие перечень защищённых путей `protected`
+    (перечень проекта задачи, `repo_context.protected_paths`; `None` —
+    `config.PROTECTED_PATHS`) — общей формулой `config.is_protected_path`
+    (SPEC 01M3MVXZXF25KYY2P213E0M39X, требование 5). Порядок — как во
+    входном списке (обычно порядок `git diff --name-only`), без
+    сортировки."""
+    return [f for f in files if config.is_protected_path(f, protected)]
 
 
 def _protected_path_refusal_detail(paths: list[str]) -> str:
@@ -175,9 +178,13 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     journal` под действием `"переход отклонён: ..."`, что и остальные отказы
     этого перехода (AC-5, T078 подхватывает через `store.refusal_history`).
 
-    Внешний (не self) target — гейт не проверяется: тот же довод, что
-    `_capacity_gate` — `git diff` в `config.ROOT` не видит код внешнего
-    target.
+    Любой проект с разрешённым контекстом (SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требования 3, 5): дифф — в рабочей копии задачи, защищённые пути — по
+    перечню проекта (`repo_context.protected_paths`), общие зоны вне
+    конфликта — только у артели: пути `config.COMMON_ZONES` — пути
+    репозитория пульта, в чужом репозитории они ничего не значат.
+    Контекст не разрешён — отказ, называющий проект (fail-closed,
+    ADR-0002): сверить дифф не с чем, а пропуск молча снял бы гейт.
 
     Задача без ЗАЯВЛЕННОЙ зоны вовсе (`zones` и `zones_extension` оба
     пусты) — гейт не звонится (AC-7): `zones` обязателен только для SPEC
@@ -186,11 +193,18 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     заявляла — сравнивать дифф не с чем, и буквальное прочтение AC-1
     («вне заявленных путей») отказало бы ей на КАЖДОМ файле вне
     COMMON_ZONES, регрессия для всего, что не участвует в этой механике."""
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return None
     declared = _split_zone_paths(t["zones"]) + _split_zone_paths(t["zones_extension"])
     if not declared:
         return None
+    target = store.task_target(conn, task_id)
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        detail = (f"гейт зон: {repo_context.unresolved_reason(target)} — "
+                  f"сверка диффа с зонами и защищёнными путями проекта "
+                  f"невозможна")
+        hint = (f"почини {config.TARGETS.name} (запись проекта «{target}») "
+                f"и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт зон", detail, hint)
     # База сравнения — merge-base с origin/main или локальным main (tasks/
     # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-2), не голый `config.MAIN_BRANCH`:
     # иначе коммит main, ещё не влитый в ветку задачи, выглядит правкой
@@ -248,7 +262,7 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     # обычное исключение ниже) защищённые пути не покрывают — мандат на
     # расширение зон не мандат на правку защищённого пути (факт 11.09,
     # «Контекст» SPEC).
-    protected = _protected_paths_touched(files)
+    protected = _protected_paths_touched(files, repo_context.protected_paths(ctx))
     if protected:
         detail = _protected_path_refusal_detail(protected)
         hint = (f"предложи правку unified-диффом в приложении к PLAN.md — "
@@ -257,7 +271,8 @@ def _zones_gate(conn, task_id: str, t, branch: str,
                f"диффе")
         return GateRefusal("переход отклонён: защищённый путь", detail, hint)
 
-    zones = declared + list(config.COMMON_ZONES)
+    common = list(config.COMMON_ZONES) if repo_context.is_artel(ctx) else []
+    zones = declared + common
     out_of_zone = [f for f in files if not _touches_zone(f, zones)]
     if not out_of_zone:
         return None

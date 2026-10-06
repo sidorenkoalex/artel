@@ -312,10 +312,11 @@ class PlanAppendix(NamedTuple):
     diff: str
 
 
-def _appendix_path_is_protected(path: str) -> bool:
+def _appendix_path_is_protected(path: str, protected=None) -> bool:
     # Общая формула всех мест сверки с перечнем (SPEC
-    # 01M3MVXZXF25KYY2P213E0M39X, требование 5).
-    return config.is_protected_path(path)
+    # 01M3MVXZXF25KYY2P213E0M39X, требование 5); `protected=None` —
+    # перечень артели `config.PROTECTED_PATHS`.
+    return config.is_protected_path(path, protected)
 
 
 def _diff_blocks(body: str) -> tuple[list[str], str]:
@@ -361,9 +362,15 @@ def _appendix_section_bodies(text: str) -> list[str]:
     return bodies
 
 
-def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
+def plan_appendices(text: str,
+                    protected=None) -> tuple[list[PlanAppendix], list[str]]:
     """Приложения PLAN.md и именованные ошибки требования 1 (SPEC
     01M2YSHDKWFJN3XSJ618Z74FNF, AC-1..AC-4).
+
+    `protected` — перечень защищённых путей проекта задачи (SPEC
+    01M45FK56DWMNBRKA1VWM12H19, требование 2): вызовы пульта передают его
+    явно (`repo_context.protected_paths`); `None` — перечень артели
+    `config.PROTECTED_PATHS`, в том числе в самостоятельном запуске guard.
 
     Разбирается КАЖДЫЙ блок ```diff КАЖДОГО раздела «## Приложение…» —
     и порядок приложений на выходе равен порядку их появления в тексте:
@@ -407,7 +414,7 @@ def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
                 continue
             paths = list(dict.fromkeys(old for old, _new in headers))
             unprotected = [p for p in paths
-                           if not _appendix_path_is_protected(p)]
+                           if not _appendix_path_is_protected(p, protected)]
             if unprotected:
                 errors.extend(appendix_unprotected_path_error(p)
                               for p in unprotected)
@@ -3556,14 +3563,18 @@ def unclassified_paths_refusal(paths) -> str:
             f"{UNCLASSIFIED_PATH_HINT}")
 
 
-def protected_zones(zones) -> list[str]:
-    """Элементы зон, попадающие под `config.PROTECTED_PATHS` — с учётом
+def protected_zones(zones, protected=None) -> list[str]:
+    """Элементы зон, попадающие под перечень защищённых путей — с учётом
     вложенности (`templates/SPEC.md` под `templates/`) и маски
     (`tests/sub/conftest.py` под `**/conftest.py`), общей формулой
     `config.is_protected_path` (SPEC 01M3MVXZXF25KYY2P213E0M39X, требования
     5-6: против прежнего `zone_lock._covered_by` расходится только на
-    «записи-файле плюс суффикс» и только в сторону «защищён»)."""
-    return sorted(z for z in set(zones) if config.is_protected_path(z))
+    «записи-файле плюс суффикс» и только в сторону «защищён»).
+
+    `protected` — перечень проекта задачи (SPEC 01M45FK56DWMNBRKA1VWM12H19,
+    требование 2); `None` — перечень артели `config.PROTECTED_PATHS`."""
+    return sorted(z for z in set(zones)
+                  if config.is_protected_path(z, protected))
 
 
 def spec_unclassified_paths(text: str, meta: dict,
@@ -3604,6 +3615,27 @@ def spec_path_errors(path: Path) -> list[str]:
     if not unclassified:
         return []
     return [f"{path}: {unclassified_paths_refusal(unclassified)}"]
+
+
+def plan_appendix_errors(path: Path) -> list[str]:
+    """Ошибки разбора разделов «## Приложение» PLAN-файла `path` по
+    перечню артели `config.PROTECTED_PATHS` (SPEC
+    01M45FK56DWMNBRKA1VWM12H19, требование 2, AC-7) — тем же узлом
+    `plan_appendices`, что гейт применимости на выходе `in_dev`: без
+    этой находки guard говорил «ок» PLAN'у, чьё приложение гейт отвергнет.
+    Перечня проекта самостоятельный запуск не знает. Как
+    `spec_path_errors`, только при запуске по файлам: исторические PLAN
+    обхода `--all` не перепроверяются. Не PLAN или нечитаемый файл —
+    пусто: это уже нарушение `check()`."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    meta = yamlmini.frontmatter(text)
+    if meta is None or meta.get("type") != "plan":
+        return []
+    _appendices, errors = plan_appendices(text)
+    return [f"{path}: {error}" for error in errors]
 
 
 def _content_errors(label: str, text: str) -> list[str]:
@@ -3783,6 +3815,7 @@ def main() -> int:
         all_errors.extend(check(f))
         if args != ["--all"]:
             all_errors.extend(spec_path_errors(f))
+            all_errors.extend(plan_appendix_errors(f))
 
     if sandbox_reuse_warnings:
         print("GUARD: предупреждения (не блокируют переход гейта):")
