@@ -23,7 +23,7 @@ from scripts import guard
 from . import (acceptance, appendix_tree, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
               config, cycle_hint, fixation, github_adapter, gitcmd, lease,
               merge_after, pull, repo_context,
-              review, store, targets, workspace, yamlmini)
+              review, store, workspace, yamlmini)
 from .advance_gates import refusal_classes
 from .pull import _merge_conflict_note
 
@@ -139,27 +139,18 @@ def _origin_main_source(target_name: str) -> tuple[str, str] | None:
     так же, как при неответившем git (AC-8: расхождение/поломка
     конфигурации не имеет права двигать ни сверку, ни merge).
 
-    Self-target (`config.DEFAULT_TARGET`) — прежний литерал `"origin"`
-    (её пульт всегда несёт именно такой remote, ANSWER-1 «для self-target
-    — origin пульта») БЕЗ обращения к `targets.yaml`: лёгкие песочницы
-    этой сверки (`tests/test_branch_freshness_gate.py`, приёмочные тесты
-    задачи) намеренно не заводят `config.TARGETS` для self-target
-    сценария — чтение файла здесь безусловно сломало бы их (требование 4,
-    AC-9). Любой другой target — `targets.target(name)["url"]` (адрес
-    репозитория) как remote, её же `["base"]` как ветка: `targets.yaml`
-    не несёт отдельного поля «имя remote» (протокол git одинаково
-    принимает и имя настроенного remote, и голый URL вторым аргументом
-    `git fetch`/`git merge`), а `["url"]` — уже существующее поле записи
-    (ADR-0003 п.2), в точности «конфигурация target», которую требует
-    AC-10.
+    Адрес и база — из `repo_context.resolve`, единственного места
+    разрешения контекста проекта; своего разрешения по имени проекта здесь
+    нет (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 17). У артели это
+    `"origin"` и `config.MAIN_BRANCH` без чтения `targets.yaml`, у прочих
+    проектов — адрес форджа (`url`) и база (`base`) их записи: протокол git
+    одинаково принимает и имя remote, и голый URL вторым аргументом
+    `git fetch`/`git merge`.
     """
-    if target_name == config.DEFAULT_TARGET:
-        return "origin", config.MAIN_BRANCH
-    try:
-        entry = targets.target(target_name)
-    except targets.TargetsError:
+    ctx = repo_context.resolve(target_name)
+    if ctx is None:
         return None
-    return entry["url"], entry["base"]
+    return ctx.remote, ctx.base
 
 
 def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | None:
@@ -333,11 +324,11 @@ def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
     вырожденный случай, на котором `confirm_fixation` пропускает дальше;
     старые (не-git) песочницы `advance` продолжают работать без изменений.
 
-    Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»):
-    документы внешней задачи живут в ссылке `refs/artifacts/<id>`
-    репозитория проекта (ADR-0021 п.3), рабочей копии у неё нет — это не
-    забытый коммит роли (та ADR-0003 §4 workspace вообще не коммитит
-    сама), и наивная сверка отказывала бы там всегда.
+    У задачи любого проекта есть рабочая копия кода (этап 2, ADR-0021
+    п.2), поэтому сверка одна для всех проектов (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 12); документы задачи — в ссылке
+    `refs/artifacts/<id>` её проекта, чистоту которой даёт
+    `fixation.read`.
 
     Код результата шага коммитит пульт (`checkpoint.commit_success_
     checkpoint`), не роль (SPEC 01M3VFYP4RXBY0BG8D3A0B18HD, требование 3):
@@ -345,8 +336,6 @@ def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
     отказ перехода с названием результата шага и отсылкой к записи
     журнала об отказе git, а не к долгу роли коммитить.
     """
-    if target != config.DEFAULT_TARGET:
-        return False
     if _uncommitted_step_result_refuses(conn, task_id):
         return True
     current, clean = fixation.read(task_id, target)
@@ -420,14 +409,17 @@ def _snapshot_split_assessment(conn, task_id: str, t) -> None:
     отказывает переходу (в отличие от `fsm_advance._capacity_gate_
     refuses`, которая именно отказывает на том же diff).
 
-    Diff — только self target, тем же доводом, что и `_capacity_gate_
-    refuses`: `git diff` в `config.ROOT` не видит код внешнего target.
-    Секция «Оценка объёма и деление» читается с АРТЕФАКТНОЙ ветки —
+    Diff — у задачи любого проекта, в клоне её проекта
+    (`repo_context.resolve`, SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 23):
+    база — база проекта, ветка задачи живёт в его клоне. Контекст не
+    разрешён — колонка остаётся NULL, как при сбое git. Секция «Оценка объёма и деление» читается с АРТЕФАКТНОЙ ветки —
     `tasks/<id>/` живёт только там (A7, `artifact_source.resolve`),
     независимо от target.
     """
-    if store.task_target(conn, task_id) == config.DEFAULT_TARGET:
-        diff, _, reason = review.git_diff_part(config.MAIN_BRANCH, t["branch"])
+    ctx = repo_context.resolve(store.task_target(conn, task_id))
+    if ctx is not None:
+        diff, _, reason = review.git_diff_part(ctx.base, t["branch"],
+                                               repo=ctx.path)
         if not reason:
             store.update_task(conn, task_id, diff_bytes=len(diff.encode("utf-8")))
 
@@ -542,8 +534,7 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     ветке покрытие AC значило бы пропустить задачу в `in_dev` мимо лока
     либо отказать с ложной причиной «не все критерии покрыты».
     """
-    if (store.task_target(conn, task_id) == config.DEFAULT_TARGET
-            and _uncommitted_step_result_refuses(conn, task_id)):
+    if _uncommitted_step_result_refuses(conn, task_id):
         return None
     extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources))
     if not artifact_branch.on_foreign_rev(task_id, branch):
@@ -901,7 +892,9 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
     """(текст записи «объявлена смена поведения тестов», причина отказа
     approve) по разделу SPEC «Меняемое поведение» (SPEC
     01M45FJD46BX45VHC36S4VS9QN, требование 3). Раздела нет, задача
-    канареечная или внешнего target — `("", "")`: ни сверки, ни записи.
+    канареечная или не артели (`repo_context.is_artel`) — `("", "")`: ни
+    сверки, ни записи. Перевод сверки на внешние проекты — вне SPEC
+    01M484RNV3QBDY3B0M16J916ZP (строка 29: граница части 1 этапа 3).
 
     Каждый названный метод обязан существовать в голове main репозитория
     задачи под этим квалифицированным именем (`guard.
@@ -909,7 +902,7 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
     отказ с именем метода либо причиной. Текст записи — строки раздела как
     есть, по одной на метод: узел неослабления разбирает их тем же
     `guard.parse_behavior_change_line`."""
-    if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
+    if t["is_canary"] or not repo_context.is_artel(t):
         return "", ""
     items, errors = guard.behavior_change_items(spec_text)
     if errors:

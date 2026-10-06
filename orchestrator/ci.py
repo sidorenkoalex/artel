@@ -18,7 +18,7 @@ from typing import NamedTuple
 
 from scripts import ci_push_class
 
-from . import config, gitcmd, workspace
+from . import config, gitcmd, repo_context, workspace
 
 # Заключения проверок, считающиеся зелёными. `skipped` обязателен: job
 # `protected-paths` идёт только на pull_request и на push репозитория
@@ -65,8 +65,9 @@ def _repo_kwargs(repo: Path | None) -> dict:
     `tests/test_invariants.py::MergeNeedsGreenCiTest` (инвариант 19);
     внешний клон и любой другой репозиторий (главная копия у `pin-update`
     и `doctor main-ci`) передаются явно. Исход тот же: умолчание этих
-    функций — тот же клон артели."""
-    if repo is None or repo == workspace.repo(config.DEFAULT_TARGET):
+    функций — тот же клон артели. Клон артели узнаётся признаком
+    `repo_context.is_artel` (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 19)."""
+    if repo is None or repo_context.is_artel(repo):
         return {}
     return {"repo": repo}
 

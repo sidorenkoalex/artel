@@ -8,7 +8,9 @@
 её зовут два независимых потребителя: `store.seed_task_counters`
 (посев счётчика) и `doctor.check_task_counters` (проверка расхождения).
 
-Ветки/RETRO/история `main` сканируются только для `config.DEFAULT_TARGET`:
+Ветки/RETRO/история `main` сканируются только для артели (признак
+`repo_context.is_artel`; SPEC 01M484RNV3QBDY3B0M16J916ZP, строки 24-25):
+номерные задачи `Tnnn` и их следы есть только в истории самого пульта;
 сегодня `catalog.cmd_new` заводит номерные задачи только этого target'а
 (ADR-0005 п.6 — формат id второго target ещё не выбран, tasks/T020/PLAN.md,
 «Риски», п.2); для прочих target единственный источник — их собственный
@@ -17,7 +19,7 @@
 import re
 from pathlib import Path
 
-from . import config, gitcmd, store, workspace
+from . import config, gitcmd, repo_context, store, workspace
 
 _BRANCH_NUMBER_RE = re.compile(r"^task/t0*(\d+)-", re.IGNORECASE)
 _MAIN_SUBJECT_RE = re.compile(r"^T0*(\d+):", re.IGNORECASE)
@@ -28,7 +30,7 @@ def observed_max_task_number(target: str) -> int:
     """Максимум номера `Tnnn`, наблюдаемый в мире для `target`; 0 — ничего
     не найдено (пустой проект — счётчик сеется от 1, как и раньше)."""
     best = _max_from_task_dirs(_tasks_dir(target))
-    if target == config.DEFAULT_TARGET:
+    if repo_context.is_artel(target):
         clone = workspace.repo(config.DEFAULT_TARGET)
         if clone.exists():
             best = max(best, _max_from_branches(clone))
@@ -38,7 +40,7 @@ def observed_max_task_number(target: str) -> int:
 
 
 def _tasks_dir(target: str) -> Path:
-    if target == config.DEFAULT_TARGET:
+    if repo_context.is_artel(target):
         return config.TASKS
     return config.PROJECTS / target / "tasks"
 

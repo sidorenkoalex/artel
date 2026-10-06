@@ -143,5 +143,38 @@ class GitHelperTest(unittest.TestCase):
         git_mock.assert_not_called()
 
 
+class IsArtelSubjectsTest(TmpRootTest):
+    """Признак артели `is_artel` (SPEC 01M484RNV3QBDY3B0M16J916ZP,
+    требование 2) на каждой форме, которую ему передают оставленные
+    развилки: контекст, имя, строка задачи, путь клона."""
+
+    def test_each_subject_form_answers_by_project(self):
+        """Контекст, имя, строка задачи и путь клона артели — «артель»;
+        те же формы внешнего проекта и неразрешённый контекст (`None`) — нет.
+        Строка задачи с пустой колонкой `target` — артель (умолчание
+        колонки, как `store.task_target`).
+
+        Ловит мутацию: признак сравнивает только `RepoContext.target` (как
+        до задачи) — на имени, строке задачи или пути клона он падает либо
+        отвечает «не артель», и оставленные развилки (`coldstart`,
+        `ci._repo_kwargs`, `fsm._behavior_change_declaration`) уводят
+        артель в ветку внешнего проекта; либо пустой `target` строки
+        считается внешним проектом."""
+        artel, other = config.DEFAULT_TARGET, "sled"
+        for subject in (repo_context.RepoContext(Path("/x"), "origin", "main",
+                                                 target=artel),
+                        artel, {"target": artel}, {"target": None},
+                        repo_context.clone_path(artel)):
+            with self.subTest(subject=subject):
+                self.assertTrue(repo_context.is_artel(subject))
+        for subject in (None,
+                        repo_context.RepoContext(Path("/x"), "u", "main",
+                                                 target=other),
+                        other, {"target": other},
+                        repo_context.clone_path(other)):
+            with self.subTest(subject=subject):
+                self.assertFalse(repo_context.is_artel(subject))
+
+
 if __name__ == "__main__":
     unittest.main()

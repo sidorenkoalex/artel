@@ -216,9 +216,17 @@ def carpentry(repo: Path, args: list, env: dict, *,
     (`pult_env(env)`, SPEC 01M2XMCC837R5CX9M58VARK85G, требование 7):
     `GIT_INDEX_FILE`/`GIT_AUTHOR_*`/`GIT_COMMITTER_*` плотницкой записи
     доходят до git нетронутыми.
+
+    Ошибка запуска (git не установлен) — ненулевой код возврата, как у
+    `git()`: запись в ссылку документов на переходе FSM (паспорт задачи) не
+    имеет права ронять сам переход — kill switch срабатывает и без git.
     """
-    return subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
-                          capture_output=True, text=text, input=input)
+    try:
+        return subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
+                              capture_output=True, text=text, input=input)
+    except OSError as exc:
+        return subprocess.CompletedProcess(["git", *args], 1,
+                                           "" if text else b"", str(exc))
 
 
 def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
