@@ -725,9 +725,11 @@ class VanishedDeletedUnparsableTest(ObservationSandbox):
     def test_ac5_vanished_method_has_single_finding(self):
         """Исчезнувший метод — одна находка «метод … исчез», без находки об утверждениях.
 
-        Мандат на `AlphaTest::test_two` снимает находку об исчезновении,
-        чтобы мерж не эскалировал; соседний `test_one` со сменой
-        ожидаемого значения — контроль, что наблюдение выполнено.
+        Мандат на `AlphaTest::test_two` снимает находку об исчезновении;
+        соседний `test_one` со сменой ожидаемого значения — контроль, что
+        наблюдение выполнено, а его смена вне раздела SPEC «Меняемое
+        поведение» эскалирует мерж (SPEC 01M45FJD46BX45VHC36S4VS9QN,
+        требование 7).
 
         Ловит мутацию: метод, которого нет в head, сравнивается как
         «все утверждения удалены» — во всём журнале `AlphaTest::test_two`
@@ -736,7 +738,7 @@ class VanishedDeletedUnparsableTest(ObservationSandbox):
         self.commit_diff({"tests/test_alpha.py": ALPHA_TWO},
                          {"tests/test_alpha.py": ALPHA_ONE_CHANGED})
         self.add_mandate("tests/test_alpha.py::AlphaTest::test_two")
-        self.assertFalse(self.merge_gate())
+        self.assertTrue(self.merge_gate())
         detail = self.observation()
         self.assertIn(f"{CHANGED}AlphaTest::test_one:", detail)
         everything = self.all_details()
@@ -755,7 +757,7 @@ class VanishedDeletedUnparsableTest(ObservationSandbox):
                          {"tests/test_alpha.py": ALPHA_TWO_CHANGED,
                           "tests/test_epsilon.py": None})
         self.add_mandate("tests/test_epsilon.py")
-        self.assertFalse(self.merge_gate())
+        self.assertTrue(self.merge_gate())
         detail = self.observation()
         self.assertIn(f"{CHANGED}AlphaTest::test_one:", detail)
         self.assertNotIn("EpsilonTest", detail)
@@ -818,7 +820,7 @@ class MandateMarkTest(ObservationSandbox):
         отметок две.
         """
         self.add_mandate("tests/test_alpha.py::AlphaTest::test_one")
-        self.assertFalse(self.merge_gate())
+        self.assertTrue(self.merge_gate())
         detail = self.observation()
         self.assertEqual(1, detail.count("покрыто мандатом ANSWER-1"), detail)
 
@@ -849,7 +851,7 @@ class MandateMarkTest(ObservationSandbox):
         self.git("commit", "-q", "-m", "голова: изменён только test_one")
         self.checkout(config.MAIN_BRANCH)
         self.add_mandate("tests/test_alpha.py::AlphaTest::test_two")
-        self.assertFalse(self.merge_gate())
+        self.assertTrue(self.merge_gate())
         detail = self.observation()
         self.assertIn(f"{CHANGED}AlphaTest::test_one:", detail)
         self.assertNotIn("покрыто мандатом", detail)
@@ -881,16 +883,21 @@ CONTEXT_HEAD = CONTEXT_BASE.replace("self.pult_home", "self.clone_home") \
 class MergeGateObservationTest(ObservationSandbox):
 
     def test_ac8_merge_gate_journals_and_does_not_escalate(self):
-        """Гейт мержа на диффе двух случаев «Контекста» пишет запись наблюдения и мерж не останавливает.
+        """Гейт мержа на диффе двух случаев «Контекста» пишет запись наблюдения и эскалирует мерж.
 
-        Ловит мутацию: находки об утверждениях влиты в узел отказа —
-        гейт мержа вернёт `True` и задача уйдёт в `escalated`;
+        Оба случая — смена утверждений вне раздела SPEC «Меняемое
+        поведение»: с SPEC 01M45FJD46BX45VHC36S4VS9QN (требование 7) она
+        эскалирует гейт мержа, а запись наблюдения остаётся прежней
+        (требование 8).
+
+        Ловит мутацию: находки об утверждениях не влиты в узел отказа —
+        гейт мержа вернёт `False` и задача останется в `merge_gate`;
         наблюдение подключено только к переходу — записи на мерже нет.
         """
         self.commit_diff({"tests/test_context.py": CONTEXT_BASE},
                          {"tests/test_context.py": CONTEXT_HEAD})
-        self.assertFalse(self.merge_gate())
-        self.assertEqual(STATE, self.state())
+        self.assertTrue(self.merge_gate())
+        self.assertEqual("escalated", self.state())
         detail = self.observation()
         self.assertIn(f"tests/test_context.py: {CHANGED}"
                       f"CloneHomeTest::test_defect_names_home: ", detail)

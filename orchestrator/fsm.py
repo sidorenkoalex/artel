@@ -20,7 +20,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
+from . import (acceptance, appendix_tree, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
               config, cycle_hint, fixation, github_adapter, gitcmd, lease,
               merge_after, pull, repo_context,
               review, store, targets, workspace, yamlmini)
@@ -888,6 +888,56 @@ def _disk_spec_text(task_id: str) -> str:
         return ""
 
 
+def _main_head_for_declaration(repo: Path) -> str:
+    """sha головы main репозитория задачи: `origin/<main>`, если такая
+    ссылка есть (её же берёт база сравнения `gitcmd.diff_base`), иначе
+    локальный `<main>`; пустая строка — git не ответил."""
+    return (gitcmd.branch_head_sha(f"refs/remotes/origin/{config.MAIN_BRANCH}",
+                                   repo=repo)
+            or gitcmd.branch_head_sha(config.MAIN_BRANCH, repo=repo))
+
+
+def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
+    """(текст записи «объявлена смена поведения тестов», причина отказа
+    approve) по разделу SPEC «Меняемое поведение» (SPEC
+    01M45FJD46BX45VHC36S4VS9QN, требование 3). Раздела нет, задача
+    канареечная или внешнего target — `("", "")`: ни сверки, ни записи.
+
+    Каждый названный метод обязан существовать в голове main репозитория
+    задачи под этим квалифицированным именем (`guard.
+    qualified_test_methods`); нет файла, нет метода или git молчит — мягкий
+    отказ с именем метода либо причиной. Текст записи — строки раздела как
+    есть, по одной на метод: узел неослабления разбирает их тем же
+    `guard.parse_behavior_change_line`."""
+    if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
+        return "", ""
+    items, errors = guard.behavior_change_items(spec_text)
+    if errors:
+        return "", "; ".join(errors)
+    if not items:
+        return "", ""
+    repo = workspace.task_repo(task_id)
+    head = _main_head_for_declaration(repo)
+    if not head:
+        return "", (f"раздел «{guard.BEHAVIOR_CHANGE_SECTION}»: git не ответил "
+                    f"на голову {config.MAIN_BRANCH} репозитория задачи "
+                    f"({repo}) — сверить названные методы не с чем")
+    missing = []
+    for item in items:
+        text, why = gitcmd.show(head, item.path, repo=repo)
+        if text is None:
+            missing.append(f"{item.address} — файла нет в "
+                           f"{config.MAIN_BRANCH} ({why})")
+        elif item.name not in guard.qualified_test_methods(text):
+            missing.append(f"{item.address} — метода нет в "
+                           f"{config.MAIN_BRANCH}")
+    if missing:
+        return "", (f"раздел «{guard.BEHAVIOR_CHANGE_SECTION}» называет "
+                    f"методы, которых нет в голове {config.MAIN_BRANCH} "
+                    f"{head[:12]}: {'; '.join(missing)}")
+    return "\n".join(item.line for item in items), ""
+
+
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # tests_writing до кода (SPEC T023, требование 1): пропускается
     # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
@@ -946,6 +996,23 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
         return
+    # Раздел «Меняемое поведение» (SPEC 01M45FJD46BX45VHC36S4VS9QN,
+    # требование 3) — тем же мягким отказом: каждый названный метод обязан
+    # существовать в голове main репозитория задачи.
+    declared, reason = _behavior_change_declaration(
+        task_id, t, spec_text if foreign else _disk_spec_text(task_id))
+    if reason:
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
+    if declared:
+        # Отложенный импорт — тем же приёмом, что `review` зовёт узел:
+        # `test_integrity` тянет соседей гейтов, импортирующих `fsm`.
+        from .advance_gates import test_integrity
+        store.journal(conn, task_id, "operator",
+                      test_integrity.DECLARED_CHANGE_ACTION, declared)
+        print(f"[{task_id}] {test_integrity.DECLARED_CHANGE_ACTION}:\n"
+              f"{declared}")
     # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
     # же моментом входа approve на spec_gate, что и budget/split_
     # assessment рядом — meta уже прочитана выше, поле отсутствует у
@@ -1036,19 +1103,46 @@ def _acceptance_full_suite_ok(conn, task_id: str, t,
                       ACCEPTANCE_SUITE_SKIPPED_ACTION, detail)
         print(f"[{task_id}] {ACCEPTANCE_SUITE_SKIPPED_ACTION}: {detail}")
         return True
-    run = acceptance.full_suite(wt_root, task_id)
+    # Голова ветки с наложенными приложениями PLAN (SPEC
+    # 01M46C776SZEMYPBQGPNJN1TXY) — тот же узел, что у автогейта: иначе
+    # одна планка проходила бы автогейт и не проходила approve. Отказ
+    # наложения или git — отказ приёмки, `--accept-red` его не снимает:
+    # принимается краснота прогона, а прогона не было.
+    with appendix_tree.suite_tree(conn, task_id, wt_root,
+                                  branch=t["branch"]) as tree:
+        if tree.root is None:
+            reason = tree.refusal
+            store.journal(conn, task_id, "operator", "approve отклонён",
+                          reason)
+            print(f"[{task_id}] approve отклонён: {reason}")
+            print(f"  почини приложения PLAN и повтори: artel.py approve "
+                  f"{task_id}")
+            return False
+        run = acceptance.full_suite(tree.root, task_id)
+    run_detail = tree.mark(run.detail)
     if run.green:
         store.journal(conn, task_id, "operator", ACCEPTANCE_SUITE_GREEN_ACTION,
-                      run.detail)
-        print(f"[{task_id}] {ACCEPTANCE_SUITE_GREEN_ACTION}: {run.digest}")
+                      run_detail)
+        print(f"[{task_id}] {ACCEPTANCE_SUITE_GREEN_ACTION}: "
+              f"{tree.mark(run.digest)}")
         return True
+    if run.outcome == acceptance.FULL_SUITE_NOT_STARTED:
+        # Замок полных прогонов машины не освободился (SPEC
+        # 01M46D5T8SZ9D6S34TZFX8S46V): прогона не было, и `--accept-red`
+        # его не снимает — тем же доводом, что отказ наложения выше.
+        reason = f"полный набор tests/ не проверен — {run_detail}"
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        print(f"  повтори, когда машина освободится: artel.py approve "
+              f"{task_id}")
+        return False
     if accept_red:
-        detail = f"основание: {accept_red}\n{run.detail}"
+        detail = f"основание: {accept_red}\n{run_detail}"
         store.journal(conn, task_id, "operator", ACCEPTANCE_RED_ACCEPTED_ACTION,
                       detail)
         print(f"[{task_id}] {ACCEPTANCE_RED_ACCEPTED_ACTION}: {detail}")
         return True
-    reason = f"полный набор tests/ не пройден — {run.detail}"
+    reason = f"полный набор tests/ не пройден — {run_detail}"
     store.journal(conn, task_id, "operator", "approve отклонён", reason)
     print(f"[{task_id}] approve отклонён: {reason}")
     print(f"  почини набор и повтори: artel.py approve {task_id}")

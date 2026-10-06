@@ -562,6 +562,9 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
             роли — выкладка узлом пульта, раннер и таймаут пульта, уборка
             только `tasks/<id>/` рабочей копии (SPEC
             01M41R4YAM4NGEQXW1FWH7T22M)
+  suite_run команда `suite-run <id> [--wait <минуты> | --failed]`: полный
+            прогон тестов проекта задачи фоном у пульта, сравнение с базой
+            ветки, повтор упавших (SPEC 01M462QACEH29RPRD2RZHGHQFM)
   docs_fetch команда `docs <id> [файл]`/`docs --fetch-all`: ссылка
             документов задачи из origin её репозитория, только вперёд
             (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ)
@@ -688,8 +691,8 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           docs_fetch, dry_run, fsm, lease,
                           liveness, models, notes, pause, pin, plank_run,
                           pool_seal, projects, prune, release, report, runner,
-                          session, store, venv, version, watch, workspace,
-                          zone_lock)
+                          session, store, suite_run, venv, version, watch,
+                          workspace, zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -1527,10 +1530,13 @@ def _cmd_pause(rest: list) -> None:
 #: читающих команд разбирает `_role_allowed_command`. `plank-run` пишет
 #: только временную выкладку `tasks/<id>/` рабочей копии кода и сам её
 #: убирает — состояния пульта не меняет (SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
-#: требование 2).
+#: требование 2). `suite-run` пишет только в каталог логов пульта (лог,
+#: перечень упавших, итог базы, состояние прогона и замок) — состояния
+#: задачи, lease и журнала не трогает (SPEC 01M462QACEH29RPRD2RZHGHQFM,
+#: требование 14).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
-     "acceptance-dry-run", "plank-run"))
+     "acceptance-dry-run", "plank-run", "suite-run"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -1644,6 +1650,7 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "plank-run": lambda: plank_run.cmd_plank_run(
             rest[0], rest[1] if len(rest) > 1 else None),
+        "suite-run": lambda: suite_run.cmd_suite_run(rest),
         # `docs` и `artifact-branches-cleanup` ходят в сеть и переписывают
         # локальные ссылки — вне белого списка ролей.
         "docs": lambda: docs_fetch.cmd_docs(rest),

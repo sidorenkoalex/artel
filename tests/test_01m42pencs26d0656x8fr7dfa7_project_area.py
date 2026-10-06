@@ -67,7 +67,8 @@ from orchestrator import (acceptance, artel, catalog, checkpoint, config,
                           doctor, fixation, keychain, notes, plank_run,
                           repo_context,
                           retro_corpus, runner, stack, store)
-from tests.sandbox import (FakeProc, RealGitSandbox, _stub_check_stack,
+from tests.sandbox import (ARTEL_TEST_PROFILE, FakeProc,
+                           RealGitSandbox, _stub_check_stack,
                            capture, capture_new_task_id, is_claude_call,
                            patch_pult_sleep,
                            resilient_tmp_cleanup)
@@ -164,6 +165,13 @@ class ProjectAreaSandbox(RealGitSandbox):
             (self.root / "tests" / "test_green.py").write_text(
                 "def test_green():\n    assert True\n", encoding="utf-8")
         self.extra_main_files()
+        # `targets.yaml` этой песочницы — файл в git главной копии (правка —
+        # коммитом, `add_external_project`), а не посеянная под `.artel/`
+        # запись артели `RealGitSandbox` (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7).
+        targets_patcher = mock.patch.object(config, "TARGETS",
+                                            self.root / "targets.yaml")
+        targets_patcher.start()
+        self.addCleanup(targets_patcher.stop)
 
         origin_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, origin_tmp)
@@ -187,8 +195,11 @@ class ProjectAreaSandbox(RealGitSandbox):
     # ------------------------------------------------------------ targets
 
     def write_targets(self) -> None:
+        # Запись артели — с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4): без него проверки тестов задачи артели отказывают.
         text = "targets:\n" + "".join(
             TARGET_ENTRY.format(name=name, url=url, base=config.MAIN_BRANCH)
+            + (ARTEL_TEST_PROFILE if name == ARTEL else "")
             for name, url in self.targets.items())
         config.TARGETS.write_text(text, encoding="utf-8")
 

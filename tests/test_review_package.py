@@ -27,7 +27,7 @@ from orchestrator import (artifact_branch, catalog, config,  # noqa: E402
 from tests.sandbox import (FakeProc, RealGitSandbox, SpyRun,  # noqa: E402
                            TmpRootTest, _stub_check_stack, capture,
                            capture_new_task_id, seed_artel_clone_stub,
-                           strip_dash_c)
+                           seed_artel_targets, strip_dash_c)
 
 SPEC_MD = """---
 task: T001
@@ -869,11 +869,17 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                             # Область проектов (ADR-0021 п.1, этап 2): `new`
                             # без клона артели отказывает, ссылка документов
                             # задачи живёт в клоне — он в песочнице.
-                            ("PROJECTS", root / ".artel" / "projects")):
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            # Декларация проектов — своя, с профилем тестов
+                            # артели (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+                            # требование 4: без профиля пакет ревью задачи
+                            # артели не собирается), а не боевой файл пульта.
+                            ("TARGETS", root / "targets.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         seed_artel_clone_stub()
+        seed_artel_targets()
 
         # Артефакты живут в ветке задачи; рабочее дерево здесь на них не
         # похоже — так же, как у оркестратора после мержа соседней задачи.

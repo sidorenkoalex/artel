@@ -869,8 +869,10 @@ def _assertion_text(source: str, node: ast.AST) -> str:
 
 
 def _own_assertions(func: ast.AST, source: str, imports: set) -> list:
-    """[(нормальная форма, исходный текст)] утверждений тела `func` на
-    любой глубине, в порядке исходного текста."""
+    """[(нормальная форма, исходный текст, узел нормальной формы)]
+    утверждений тела `func` на любой глубине, в порядке исходного текста.
+    Узел нужен различению смены ожидания и ослабления
+    (`assertion_changes`): строка `ast.dump` позиций констант не несёт."""
     local_names = _local_names(func)
     found = []
     for node in ast.walk(func):
@@ -879,9 +881,9 @@ def _own_assertions(func: ast.AST, source: str, imports: set) -> list:
         normal = _AssertionNormalizer(local_names, imports).visit(
             copy.deepcopy(node))
         found.append((node.lineno, node.col_offset, ast.dump(normal),
-                      _assertion_text(source, node)))
+                      _assertion_text(source, node), normal))
     found.sort(key=lambda item: item[:2])
-    return [(key, text) for _line, _col, key, text in found]
+    return [(key, text, normal) for _line, _col, key, text, normal in found]
 
 
 def _helper_calls(func: ast.AST, methods: dict, functions: dict) -> list:
@@ -915,6 +917,17 @@ def test_assertions(source) -> dict[str, list] | None:
 
     `None` — текста нет либо он не парсится: сравнивать утверждения не с
     чем, и вызывающий обязан отличить это от «утверждений нет»."""
+    records = _assertion_records(source)
+    if records is None:
+        return None
+    return {name: [(key, text) for key, text, _node in found]
+            for name, found in records.items()}
+
+
+def _assertion_records(source) -> dict[str, list] | None:
+    """То же, что `test_assertions`, но тройками (нормальная форма,
+    исходный текст, узел нормальной формы) — один обход на оба вида
+    ответа, чтобы различение смены ожидания не разошлось с наблюдением."""
     tree = _parse_or_none(source)
     if tree is None:
         return None
@@ -964,6 +977,437 @@ def changed_test_assertions(base: dict, head: dict) -> dict[str, list]:
         if lost:
             changed[name] = lost
     return changed
+
+
+# Смена ожидания и ослабление (SPEC 01M45FJD46BX45VHC36S4VS9QN, требования 5
+# и 9): различение живёт здесь, рядом с `changed_test_assertions`, — пульт
+# и CLI читают одно правило, копии в `orchestrator/` нет. Маскированная
+# форма — нормальная форма, где каждая константа-литерал заменена одной
+# меткой; угловые скобки делают метку невозможной как имя Python.
+LITERAL_MASK_LABEL = "<литерал>"
+ASSERTION_CHANGE_EXPECTATION = "смена ожидания"
+ASSERTION_CHANGE_OTHER = "ослабление или иная смена"
+SIGN_REMOVED = "утверждение удалено"
+SIGN_OTHER_KIND = "другой вид утверждения"
+SIGN_COMPUTED = "литерал заменён вычисленным значением"
+SIGN_OTHER_FORM = "иная смена формы утверждения"
+SIGN_UNRATED = "правило не умеет оценить строгость"
+
+# Позиции констант, у которых правило умеет оценить строгость (требование
+# 9): методы `unittest`, чьи два первых аргумента сравниваются на
+# равенство (сюда же сравниваемые значения `assert[Not]AlmostEqual`: смена
+# значения строгость не меняет, допуск оценивается отдельно), вызовы
+# `mock`, чьи аргументы сверяются на равенство, и методы порядка с
+# оператором, которым они сравнивают первый аргумент со вторым.
+_EQUALITY_METHODS = frozenset((
+    "assertEqual", "assertNotEqual", "assertIs", "assertIsNot",
+    "assertListEqual", "assertTupleEqual", "assertSetEqual",
+    "assertDictEqual", "assertMultiLineEqual", "assertSequenceEqual",
+    "assertCountEqual", "assertAlmostEqual", "assertNotAlmostEqual"))
+_MOCK_CALL_ASSERTS = frozenset((
+    "assert_called_with", "assert_called_once_with", "assert_any_call",
+    "assert_has_calls"))
+_ORDER_METHODS = {"assertGreater": ast.Gt, "assertGreaterEqual": ast.GtE,
+                  "assertLess": ast.Lt, "assertLessEqual": ast.LtE}
+_REGEX_METHODS = frozenset(("assertRegex", "assertRaisesRegex",
+                            "assertWarnsRegex"))
+_REGEX_ANCHORS = ("^", "$", "\\A", "\\Z")
+_REGEX_WILDCARDS = (".*", ".+")
+# Отрицание оператора порядка: `assertFalse(x > c)` — это `x <= c`.
+_NEGATED_ORDER = {ast.Gt: ast.LtE, ast.GtE: ast.Lt, ast.Lt: ast.GtE,
+                  ast.LtE: ast.Gt}
+
+
+class AssertionChange(NamedTuple):
+    """Исход различения одного метода, сохранившего имя (требование 5):
+    `kind` — `ASSERTION_CHANGE_EXPECTATION` либо `ASSERTION_CHANGE_OTHER`;
+    `pairs` — фактическая смена значений смены ожидания, пары (константа
+    base, константа head) в порядке появления; `signs` — признаки
+    ослабления: у иной смены — почему правило смены ожидания её не
+    признало, у смены ожидания — оценка строгости пар (требование 9),
+    пусто — строгость не ниже прежней."""
+
+    kind: str
+    pairs: tuple
+    signs: tuple
+
+
+def _literal(node: ast.AST) -> tuple | None:
+    """`(значение,)` литерала на позиции константы, иначе `None`.
+
+    Отрицательное число в исходнике — `UnaryOp(USub, Constant)`, не
+    `Constant`: знак над числовой константой — часть литерала, иначе
+    `-2` → `-3` читалось бы парой `(2, 3)`, а `1` → `-1` — сдвигом формы
+    (ANSWER-3 задачи, R1-F2)."""
+    if isinstance(node, ast.Constant):
+        return (node.value,)
+    if isinstance(node, ast.UnaryOp) and \
+            isinstance(node.op, (ast.USub, ast.UAdd)) and \
+            isinstance(node.operand, ast.Constant) and \
+            isinstance(node.operand.value, (int, float, complex)) and \
+            not isinstance(node.operand.value, bool):
+        value = node.operand.value
+        return (-value if isinstance(node.op, ast.USub) else +value,)
+    return None
+
+
+def _literal_positions(node: ast.AST):
+    """Литералы нормальной формы по порядку обхода: `(узел, значение)`.
+    У двух форм с равной маскированной формой позиции идут узел в узел."""
+    found = _literal(node)
+    if found is not None:
+        yield node, found[0]
+        return
+    for child in ast.iter_child_nodes(node):
+        yield from _literal_positions(child)
+
+
+class _LiteralMasker(ast.NodeTransformer):
+    def visit_Constant(self, node):
+        return ast.Name(id=LITERAL_MASK_LABEL, ctx=ast.Load())
+
+    def visit_UnaryOp(self, node):
+        if _literal(node) is not None:
+            return ast.Name(id=LITERAL_MASK_LABEL, ctx=ast.Load())
+        return self.generic_visit(node)
+
+
+def _masked_form(node: ast.AST) -> str:
+    return ast.dump(_LiteralMasker().visit(copy.deepcopy(node)))
+
+
+def _assertion_kind(node: ast.AST) -> str:
+    """Вид утверждения: `assert` либо имя вызываемого (последний сегмент)."""
+    if isinstance(node, ast.Assert):
+        return "assert"
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return _called_dotted_name(func) or "?"
+
+
+def _divergence(base: ast.AST, head: ast.AST) -> str:
+    """Первая структурная развилка двух нормальных форм одного вида:
+    `SIGN_COMPUTED` — на месте константы base в head вызов, атрибут или
+    имя; `SIGN_OTHER_FORM` — любая иная; пустая строка — развилки нет."""
+    if _literal(base) is not None:
+        if _literal(head) is not None:
+            return ""
+        if isinstance(head, (ast.Call, ast.Attribute, ast.Name)):
+            return SIGN_COMPUTED
+        return SIGN_OTHER_FORM
+    if type(base) is not type(head):
+        return SIGN_OTHER_FORM
+    for field, left in ast.iter_fields(base):
+        right = getattr(head, field, None)
+        if isinstance(left, list):
+            if not isinstance(right, list):
+                return SIGN_OTHER_FORM
+            for x, y in zip(left, right):
+                found = _divergence(x, y) if isinstance(x, ast.AST) \
+                    else ("" if x == y else SIGN_OTHER_FORM)
+                if found:
+                    return found
+            if len(left) != len(right):
+                return SIGN_OTHER_FORM
+        elif isinstance(left, ast.AST):
+            if not isinstance(right, ast.AST):
+                return SIGN_OTHER_FORM
+            found = _divergence(left, right)
+            if found:
+                return found
+        elif left != right:
+            return SIGN_OTHER_FORM
+    return ""
+
+
+def _other_change_sign(lost: tuple, candidates: list) -> str:
+    """Признак утверждения base, которому не нашлось пары с равной
+    маскированной формой (требование 5); `candidates` — ещё не
+    сопоставленные утверждения head (берётся первое того же вида, иначе
+    первое вообще, и оно из кандидатов убирается)."""
+    _key, text, node = lost
+    if not candidates:
+        return f"{SIGN_REMOVED}: {text}"
+    kind = _assertion_kind(node)
+    same = [c for c in candidates if _assertion_kind(c[2]) == kind]
+    other = (same or candidates)[0]
+    candidates.remove(other)
+    if not same:
+        return (f"{SIGN_OTHER_KIND} ({kind} → {_assertion_kind(other[2])}): "
+                f"{text} → {other[1]}")
+    return f"{_divergence(node, other[2]) or SIGN_OTHER_FORM}: {text} → {other[1]}"
+
+
+def _constant_roles(node: ast.AST) -> dict:
+    """{id константы нормальной формы: роль} — позиции, у которых правило
+    требования 9 умеет оценить строгость. Роль — кортеж: `("equality",)`,
+    `("tolerance", имя, слабее_если_больше)`, `("regex",)`,
+    `("regex_not",)`, `("membership", отрицание)`, `("order", граница)`;
+    константа без роли — «правило не умеет оценить строгость»."""
+    roles: dict = {}
+
+    def equality(expr):
+        if _literal(expr) is not None:
+            roles[id(expr)] = ("equality",)
+        elif isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+            for elt in expr.elts:
+                equality(elt)
+        elif isinstance(expr, ast.Dict):
+            for elt in list(expr.keys) + list(expr.values):
+                if elt is not None:
+                    equality(elt)
+        elif isinstance(expr, ast.UnaryOp) and \
+                isinstance(expr.op, (ast.USub, ast.UAdd)):
+            equality(expr.operand)
+        elif isinstance(expr, ast.Call) and _approx_call(expr):
+            if expr.args:
+                equality(expr.args[0])
+            for index, name in ((1, "rel"), (2, "abs")):
+                if len(expr.args) > index:
+                    tolerance(expr.args[index], name, True)
+            for kw in expr.keywords:
+                if kw.arg in ("rel", "abs"):
+                    tolerance(kw.value, kw.arg, True)
+
+    def tolerance(expr, name, weaker_if_larger):
+        if _literal(expr) is not None:
+            roles[id(expr)] = ("tolerance", name, weaker_if_larger)
+
+    def single(expr, role):
+        if expr is not None and _literal(expr) is not None:
+            roles[id(expr)] = role
+
+    def order(left, op, right, negate):
+        if negate:
+            op = _NEGATED_ORDER[op]
+        greater = op in (ast.Gt, ast.GtE)
+        single(left, ("order", "upper" if greater else "lower"))
+        single(right, ("order", "lower" if greater else "upper"))
+
+    def compare(expr, negate):
+        if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
+            expr, negate = expr.operand, not negate
+        if not isinstance(expr, ast.Compare) or len(expr.ops) != 1:
+            return
+        op, right = type(expr.ops[0]), expr.comparators[0]
+        if op in (ast.Eq, ast.NotEq, ast.Is, ast.IsNot):
+            equality(expr.left)
+            equality(right)
+        elif op in (ast.In, ast.NotIn):
+            single(expr.left, ("membership", (op is ast.NotIn) != negate))
+        elif op in _NEGATED_ORDER:
+            order(expr.left, op, right, negate)
+
+    if isinstance(node, ast.Assert):
+        compare(node.test, False)
+        return roles
+    name = _assertion_kind(node)
+    args = node.args
+    keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+    if name in ("assertTrue", "assertFalse") and args:
+        compare(args[0], name == "assertFalse")
+    elif name in _ORDER_METHODS and len(args) >= 2:
+        order(args[0], _ORDER_METHODS[name], args[1], False)
+    elif name in ("assertIn", "assertNotIn") and args:
+        single(args[0], ("membership", name == "assertNotIn"))
+    elif name in _REGEX_METHODS:
+        for expr in args[1:2] + [keywords.get("expected_regex")]:
+            single(expr, ("regex",))
+    elif name == "assertNotRegex":
+        for expr in args[1:2] + [keywords.get("unexpected_regex")]:
+            single(expr, ("regex_not",))
+    elif name in _EQUALITY_METHODS:
+        for expr in args[:2]:
+            equality(expr)
+        if name in ("assertAlmostEqual", "assertNotAlmostEqual"):
+            # У `assertNotAlmostEqual` направление обратное (требование 9).
+            direct = name == "assertAlmostEqual"
+            if len(args) > 2:
+                tolerance(args[2], "places", not direct)
+            for kw_name, larger in (("places", not direct), ("delta", direct)):
+                if kw_name in keywords:
+                    tolerance(keywords[kw_name], kw_name, larger)
+    elif name in _MOCK_CALL_ASSERTS:
+        for expr in args + list(keywords.values()):
+            equality(expr)
+    elif name in ("raises", "warns") and "match" in keywords:
+        single(keywords["match"], ("regex",))
+    return roles
+
+
+def _approx_call(node: ast.Call) -> bool:
+    func = node.func
+    return (isinstance(func, ast.Attribute) and func.attr == "approx") or \
+        (isinstance(func, ast.Name) and func.id == "approx")
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _strictness_sign(role, old, new) -> str:
+    """Признак ослабления одной пары смены ожидания (требование 9); пустая
+    строка — строгость не ниже прежней."""
+    shown = f"{old!r} → {new!r}"
+    unrated = f"{SIGN_UNRATED}: {shown}"
+    if role is None:
+        return unrated
+    kind = role[0]
+    if kind == "equality":
+        return ""
+    if kind == "tolerance":
+        _kind, name, weaker_if_larger = role
+        if not (_is_number(old) and _is_number(new)):
+            return unrated
+        if new != old and (new > old) == weaker_if_larger:
+            return f"допуск {name} ослаблен: {shown}"
+        return ""
+    if kind == "regex_not":
+        return f"{SIGN_UNRATED} (регулярное выражение assertNotRegex): {shown}"
+    if kind == "regex":
+        if not (isinstance(old, str) and isinstance(new, str)):
+            return unrated
+        for anchor in _REGEX_ANCHORS:
+            if new.count(anchor) < old.count(anchor):
+                return f"регулярное выражение потеряло якорь {anchor}: {shown}"
+        for wildcard in _REGEX_WILDCARDS:
+            if new.count(wildcard) > old.count(wildcard):
+                return f"в регулярное выражение добавлено {wildcard}: {shown}"
+        return ""
+    if kind == "membership":
+        if not (isinstance(old, str) and isinstance(new, str)):
+            return unrated
+        negated = role[1]
+        if not negated and (new == "" or (new != old and new in old)):
+            return f"строка вхождения стала собственной подстрокой прежней: {shown}"
+        if negated and old != new and old in new:
+            return f"прежняя строка невхождения — собственная подстрока новой: {shown}"
+        return ""
+    if kind == "order":
+        if not (_is_number(old) and _is_number(new)):
+            return unrated
+        lower = role[1] == "lower"
+        if (lower and new < old) or (not lower and new > old):
+            return f"граница сдвинута в разрешающую сторону: {shown}"
+        return ""
+    return unrated
+
+
+def _value_key(value) -> tuple:
+    """Сравнение констант по типу и значению (требование 6): `1` и `1.0`,
+    `True` и `1` — разные значения."""
+    return type(value).__name__, repr(value)
+
+
+def _expectation_pairs(base_node: ast.AST, head_node: ast.AST) -> list:
+    """[(константа base, константа head, признак)] по позициям, где
+    литералы двух утверждений с равной маскированной формой различаются
+    (литерал — константа либо знак над числовой константой, `_literal`).
+    Равная маскированная форма — равная структура вне литералов, поэтому
+    позиции литералов обеих сторон идут узел в узел."""
+    roles = _constant_roles(base_node)
+    pairs = []
+    for (left, old), (_right, new) in zip(_literal_positions(base_node),
+                                          _literal_positions(head_node)):
+        if _value_key(old) != _value_key(new):
+            pairs.append((old, new,
+                          _strictness_sign(roles.get(id(left)), old, new)))
+    return pairs
+
+
+def assertion_changes(base_source, head_source) -> dict | None:
+    """{квалифицированное имя: AssertionChange} по методам, имя которых
+    есть по обе стороны и у которых изменены утверждения (SPEC
+    01M45FJD46BX45VHC36S4VS9QN, требования 5 и 9).
+
+    R — утверждения base, которых в head меньше (то же, что отдаёт
+    `changed_test_assertions`), A — утверждения head, которых в base
+    меньше; сравниваются мультимножества нормальных форм `test_assertions`.
+    R пусто — метода в ответе нет: добавленные и переставленные
+    утверждения сменой не являются. Каждое утверждение R сопоставляется
+    первому по порядку появления ещё свободному утверждению A с равной
+    маскированной формой — все сопоставились: смена ожидания с
+    фактическими парами констант; иначе — ослабление или иная смена с
+    признаком (утверждений меньше, другой вид, литерал заменён
+    вычисленным значением, иной сдвиг маскированной формы).
+
+    `None` — одна из сторон не разбирается (тот же контракт, что у
+    `test_assertions`)."""
+    base = _assertion_records(base_source)
+    head = _assertion_records(head_source)
+    if base is None or head is None:
+        return None
+    changes: dict = {}
+    for name, base_items in base.items():
+        if name not in head:
+            continue
+        head_items = head[name]
+        left = Counter(key for key, _text, _node in head_items)
+        lost = []
+        for item in base_items:
+            if left[item[0]] > 0:
+                left[item[0]] -= 1
+            else:
+                lost.append(item)
+        if not lost:
+            continue
+        right = Counter(key for key, _text, _node in base_items)
+        added = []
+        for item in head_items:
+            if right[item[0]] > 0:
+                right[item[0]] -= 1
+            else:
+                added.append(item)
+        free = list(added)
+        matched, unmatched = [], []
+        for item in lost:
+            mask = _masked_form(item[2])
+            pair = next((a for a in free if _masked_form(a[2]) == mask), None)
+            if pair is None:
+                unmatched.append(item)
+            else:
+                free.remove(pair)
+                matched.append((item, pair))
+        if unmatched:
+            signs = tuple(_other_change_sign(item, free) for item in unmatched)
+            changes[name] = AssertionChange(ASSERTION_CHANGE_OTHER, (), signs)
+            continue
+        pairs, signs = [], []
+        for item, pair in matched:
+            for old, new, sign in _expectation_pairs(item[2], pair[2]):
+                pairs.append((old, new))
+                if sign:
+                    signs.append(sign)
+        changes[name] = AssertionChange(ASSERTION_CHANGE_EXPECTATION,
+                                        tuple(pairs), tuple(signs))
+    return changes
+
+
+def literal_pair_keys(pairs) -> set | None:
+    """Множество пар (база, голова) для сверки с объявленным (требование
+    6): каждая сторона — значение, сравниваемое по типу и значению.
+    Пары-тексты (из раздела SPEC) читаются `ast.literal_eval`; сторона,
+    которая не читается как литерал, ни с чем не совпадает — тогда `None`."""
+    keys = set()
+    for old, new in pairs:
+        sides = []
+        for side in (old, new):
+            if isinstance(side, str):
+                try:
+                    side = ast.literal_eval(side)
+                except (ValueError, SyntaxError, TypeError, MemoryError,
+                        RecursionError):
+                    return None
+            sides.append(_value_key(side))
+        keys.add(tuple(sides))
+    return keys
+
+
+def value_pair_keys(pairs) -> set:
+    """То же множество для фактических пар `AssertionChange.pairs` —
+    значения уже константы, не тексты."""
+    return {(_value_key(old), _value_key(new)) for old, new in pairs}
 
 
 def test_functions_without_mutation_claim(base_source: str | None,
@@ -2057,22 +2501,39 @@ _LONG_LIVED_NAME = re.compile(r"[a-z0-9_]+")
 _MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (\S.*)")
 
 
-def long_lived_path_prefix(task_id: str) -> str:
-    """`tests/test_<полный id в нижнем регистре>_` (Р1): только полный id
-    ULID уникален — первые 10 знаков у него метка времени, и у задач,
-    заведённых в одну миллисекунду, совпадают; нижний регистр — форма
-    имени ветки и допустимого имени модуля Python."""
-    return f"tests/test_{task_id.lower()}_"
+# Каталог и шаблон имени долгоживущего файла по умолчанию — значения
+# профиля тестов артели (`targets.yaml`, поле `test_profile`; SPEC
+# 01M45FJVGQT1K0P8HDEXZX6HS7, требование 1). Гейты задачи передают
+# значения профиля своего проекта явно; умолчание держат потребители вне
+# гейтов тестов (чекпоинт, бриф, миссия роли).
+LONG_LIVED_DIR = "tests"
+LONG_LIVED_TEMPLATE = "test_<id>_<name>.py"
 
 
-def is_long_lived_test_path(task_id: str, rel: str) -> bool:
-    """`rel` — `tests/test_<префикс задачи>_<имя>.py`, `<имя>` непустое из
-    `[a-z0-9_]` (Р1): файл, который test_author задачи вправе добавить в
-    кодовую ветку."""
-    prefix = long_lived_path_prefix(task_id)
-    if not (rel.startswith(prefix) and rel.endswith(".py")):
-        return False
-    return bool(_LONG_LIVED_NAME.fullmatch(rel[len(prefix):-len(".py")]))
+def long_lived_path_prefix(task_id: str, directory: str = LONG_LIVED_DIR,
+                           template: str = LONG_LIVED_TEMPLATE) -> str:
+    """`<каталог>/` и часть шаблона до `<name>` с подставленным `<id>` —
+    у артели `tests/test_<полный id в нижнем регистре>_` (Р1): только
+    полный id ULID уникален — первые 10 знаков у него метка времени, и у
+    задач, заведённых в одну миллисекунду, совпадают; нижний регистр —
+    форма имени ветки и допустимого имени модуля Python."""
+    head = template.split("<name>", 1)[0].replace("<id>", task_id.lower())
+    return f"{directory}/{head}"
+
+
+def is_long_lived_test_path(task_id: str, rel: str,
+                            directory: str = LONG_LIVED_DIR,
+                            template: str = LONG_LIVED_TEMPLATE) -> bool:
+    """`rel` — `<каталог>/<шаблон>` с `<id>` задачи и непустым `<имя>` из
+    `[a-z0-9_]` (Р1; у артели `tests/test_<id задачи>_<имя>.py`): файл,
+    который test_author задачи вправе добавить в кодовую ветку."""
+    parts = re.split(r"(<id>|<name>)", template)
+    pattern = re.escape(f"{directory}/") + "".join(
+        re.escape(task_id.lower()) if part == "<id>"
+        else _LONG_LIVED_NAME.pattern if part == "<name>"
+        else re.escape(part)
+        for part in parts)
+    return re.fullmatch(pattern, rel) is not None
 
 
 def render_long_lived_manifest(digests: dict[str, str]) -> str:
@@ -2097,11 +2558,14 @@ def parse_long_lived_manifest(text: str) -> tuple[dict[str, str] | None, str]:
     return digests, ""
 
 
-def long_lived_plank_errors(files: list[tuple[str, str]], task_id: str) -> list[str]:
+def long_lived_plank_errors(files: list[tuple[str, str]], task_id: str,
+                            directory: str = LONG_LIVED_DIR,
+                            template: str = LONG_LIVED_TEMPLATE) -> list[str]:
     """Долгоживущий файл в каталоге приёмочных тестов (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 4): временная оговорка задачи 1
-    снята, место такого файла — `tests/` кодовой ветки по правилу имени Р1."""
-    prefix = long_lived_path_prefix(task_id)
+    снята, место такого файла — каталог долгоживущих тестов кодовой ветки
+    по правилу имени Р1 (у артели — `tests/`)."""
+    prefix = long_lived_path_prefix(task_id, directory, template)
     return [f"{label}: «Группа: {GROUP_LONG_LIVED}» в каталоге приёмочных "
             f"тестов — перенеси файл в {prefix}<имя>.py кодовой ветки"
             for label, source in files
@@ -2653,6 +3117,126 @@ def spec_merge_after_errors(path: Path | str, meta: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Раздел SPEC «## Меняемое поведение» (SPEC 01M45FJD46BX45VHC36S4VS9QN,
+# требования 1-2): существующие тестовые методы, чьё ожидание меняется по
+# требованиям SPEC, с конкретными значениями «было → стало». Форма
+# проверяется здесь — и в CLI, и на переходе `spec_writing -> spec_gate`
+# (`fsm.guard_refuses` зовёт `check_content`); сверку с main делает
+# `approve` гейта SPEC, разбор тем же `behavior_change_items`.
+BEHAVIOR_CHANGE_SECTION = "Меняемое поведение"
+BEHAVIOR_CHANGE_ITEM_PREFIX = "- "
+_BEHAVIOR_CHANGE_HEAD = re.compile(r"^-\s+`([^`]*)`\s*:\s*(.*)$")
+_BEHAVIOR_CHANGE_TAIL = re.compile(r"^(.*?)\s*\(требование\s+([^)]*)\)\s*$")
+_BEHAVIOR_CHANGE_PAIR = re.compile(r"`([^`]*)`\s*→\s*`([^`]*)`")
+_REQUIREMENT_NUMBER = re.compile(r"^(\d+)\.\s+\S", re.M)
+
+
+class BehaviorChange(NamedTuple):
+    """Строка раздела «Меняемое поведение»: путь файла `tests/…py`,
+    квалифицированное имя метода (`Класс::метод`), пары «было → стало»
+    исходным текстом из обратных кавычек, номер требования и сама строка."""
+
+    path: str
+    name: str
+    pairs: tuple
+    requirement: int
+    line: str
+
+    @property
+    def address(self) -> str:
+        return f"{self.path}{TEST_NAME_SEP}{self.name}"
+
+
+def parse_behavior_change_line(line: str) -> tuple:
+    """(BehaviorChange | None, причина) одной строки раздела, начинающейся
+    с `- `. Номер требования здесь не сверяется с разделом «Требования» —
+    это делает `behavior_change_items`, у которого есть весь SPEC."""
+    head = _BEHAVIOR_CHANGE_HEAD.match(line.strip())
+    if head is None:
+        return None, ("нет имени метода в обратных кавычках вида "
+                      "`tests/<путь>.py::<Класс>::<метод>`")
+    address, rest = head.group(1).strip(), head.group(2)
+    path, _sep, name = address.partition(TEST_NAME_SEP)
+    if not path.startswith("tests/") or not path.endswith(".py"):
+        return None, f"путь {path!r} не под tests/ или не *.py"
+    parts = name.split(TEST_NAME_SEP) if name else []
+    if len(parts) < 2 or not all(parts):
+        return None, (f"имя {address!r} без класса — нужно "
+                      f"`путь::Класс::метод`")
+    tail = _BEHAVIOR_CHANGE_TAIL.match(rest)
+    if tail is None:
+        return None, "нет ссылки «(требование N)»"
+    if not tail.group(2).strip().isdigit():
+        return None, f"ссылка «(требование {tail.group(2)})» без номера"
+    # Пары ищутся по самим обратным кавычкам, а не делением строки по `; `:
+    # литерал вправе нести точку с запятой внутри.
+    text = tail.group(1).strip()
+    pairs, pos = [], 0
+    for pair in _BEHAVIOR_CHANGE_PAIR.finditer(text):
+        gap = text[pos:pair.start()].strip()
+        if gap != ("" if not pairs else ";"):
+            return None, (f"текст {gap!r} вне пар `<было>` → `<стало>` "
+                          f"(пары разделяются `; `)")
+        old, new = pair.group(1).strip(), pair.group(2).strip()
+        if not old:
+            return None, "пустое «было»"
+        if not new:
+            return None, "пустое «стало»"
+        pairs.append((old, new))
+        pos = pair.end()
+    if text[pos:].strip():
+        return None, (f"текст {text[pos:].strip()!r} вне пар "
+                      f"`<было>` → `<стало>`")
+    if not pairs:
+        return None, "нет ни одной пары `<было>` → `<стало>`"
+    return BehaviorChange(path, name, tuple(pairs),
+                          int(tail.group(2).strip()), line.strip()), ""
+
+
+def behavior_change_lines(text: str) -> list[str]:
+    """Строки-пункты раздела «Меняемое поведение» (начинаются с `- `);
+    раздела нет, он пуст или несёт одну шаблонную заглушку `<…>` — пусто.
+    Строки без `- ` — свободный текст раздела."""
+    body = section_body(text, BEHAVIOR_CHANGE_SECTION)
+    if not body.strip() or _is_template_placeholder(body):
+        return []
+    return [line.rstrip() for line in body.splitlines()
+            if line.startswith(BEHAVIOR_CHANGE_ITEM_PREFIX)]
+
+
+def behavior_change_items(text: str) -> tuple[list, list[str]]:
+    """(пункты раздела «Меняемое поведение» SPEC `text`, нарушения формы).
+    Нарушение называет строку раздела (требование 2): путь не под
+    `tests/` или не `*.py`, имя без класса, пустое «было»/«стало», нет
+    «(требование N)» либо пункта N нет в «Требования», повтор метода."""
+    requirements = {int(n) for n in _REQUIREMENT_NUMBER.findall(
+        section_body(text, "Требования"))}
+    items, errors, seen = [], [], set()
+    for line in behavior_change_lines(text):
+        item, reason = parse_behavior_change_line(line)
+        if item is not None and item.requirement not in requirements:
+            item, reason = None, (f"пункта {item.requirement} нет в разделе "
+                                  f"«Требования»")
+        if item is not None and item.address in seen:
+            item, reason = None, f"метод {item.address} назван повторно"
+        if item is None:
+            errors.append(f"раздел «{BEHAVIOR_CHANGE_SECTION}», строка "
+                          f"«{line.strip()}»: {reason}")
+            continue
+        seen.add(item.address)
+        items.append(item)
+    return items, errors
+
+
+def behavior_change_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Нарушения формы раздела «Меняемое поведение» SPEC; раздела нет —
+    ошибок нет. `path` — только для текста ошибок."""
+    if (meta.get("type") or "") != "spec":
+        return []
+    return [f"{path}: {e}" for e in behavior_change_items(text)[1]]
+
+
+# --------------------------------------------------------------------------
 # Заявка на деление секцией «## Деление» SPEC (01M1SHJZCE0Y4DXAAWQ2W585A7,
 # требование 1): роль не вправе звать команды пульта из worktree (T056) —
 # аналитик оформляет заявку текстом SPEC, заводит подзадачи сам пульт на
@@ -3101,6 +3685,7 @@ def _content_errors(label: str, text: str) -> list[str]:
         errors.extend(spec_budget_field_errors(label, meta))
         errors.extend(spec_merge_after_errors(label, meta))
         errors.extend(division_section_errors(label, text, meta))
+        errors.extend(behavior_change_errors(label, text, meta))
 
     if atype in ("spec", "plan"):
         errors.extend(role_budget_cap_errors(label, meta))

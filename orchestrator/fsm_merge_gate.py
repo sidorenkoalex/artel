@@ -23,9 +23,10 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_branch, artifact_source, ci, cleanup,
-              config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
-              merge_lock, merge_queue, repo_context, store, workspace)
+from . import (acceptance, appendix_tree, artifact_branch, artifact_source,
+              ci, cleanup, config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
+              merge_lock, merge_queue, project_profile, repo_context, store,
+              workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
 from .advance_gates.plan_appendix import git_apply
@@ -113,18 +114,26 @@ def _test_integrity_diff_gate(conn, task_id: str, state: str, branch: str,
     `verifying`), а ручная сверка удалённых и ослабленных тестов с этой
     задачи с Оператора снята.
 
-    Только артель (`repo_context.is_artel(ctx)`) — тот же довод, что у
-    соседа выше.
+    Любой проект с профилем тестов — область `weakening_scope` профиля,
+    дифф в клоне проекта `ctx` (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 5); у проекта без профиля шаг не выполняется и пишет об
+    этом запись в журнал. Отказ по контексту и профилю артели уже дан в
+    начале тела гейта (`_profile_refusal_exit`).
     Мандат Оператора читается с ветки-источника `tasks/<id>/`
     (`artifact_source.resolve`), дифф — с кодовой ветки.
 
     `True` — эскалировано, вызывающий код обязан остановиться.
     """
-    if not repo_context.is_artel(ctx):
+    decision = project_profile.decide(ctx.target)
+    if decision.profile is None:
+        if not decision.refusal:
+            project_profile.journal_skip(
+                conn, task_id, project_profile.CHECK_WEAKENING, decision)
         return False
     artifact_branch_name, _foreign = artifact_source.resolve(conn, task_id)
     return merge_gate_escalates(conn, task_id, state, branch,
-                                artifact_branch_name)
+                                artifact_branch_name,
+                                scope=decision.profile.in_weakening_scope)
 
 
 def _origin_main_sha(ctx: repo_context.RepoContext) -> str | None:
@@ -760,16 +769,12 @@ def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
     тем же принципом деградации, что `_overlay_artifact_snapshot` уже
     применяет к провалу материализации снимка. Ничего некорректного в
     main это не пропускает — не применяется ничего."""
-    branch, _foreign = artifact_source.resolve(conn, task_id)
-    text, reason = artifact_branch.show(task_id, branch,
-                                        f"tasks/{task_id}/PLAN.md")
-    if text is None:
+    appendices, errors, unread = appendix_tree.read_plan(conn, task_id)
+    if unread:
         store.journal(conn, task_id, "orchestrator",
                       "приложения PLAN не прочитаны",
-                      f"PLAN.md не читается с ветки {branch}: {reason} — "
-                      f"приложения не применяются")
+                      f"{unread} — приложения не применяются")
         return []
-    appendices, errors = guard.plan_appendices(text)
     if errors:
         detail = f"приложения PLAN не разобраны: {'; '.join(errors)}"
         store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
@@ -864,7 +869,13 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     итоговую строку pytest, имена упавших тестов и путь к файлу с полным
     выводом прогона — той же поверхностью, что и автогейт приёмки. До
     этой правки здесь лежал сырой хвост вывода, в котором имена упавших
-    тестов тонули."""
+    тестов тонули.
+
+    Отказ различает исход прогона (SPEC 01M46D5T8SZ9D6S34TZFX8S46V,
+    требование 5): поломкой приложений назван только красный прогон.
+    Таймаут и «прогон не начат» (замок полных прогонов машины не
+    освободился) о приложениях ничего не говорят — 05.10 прогон, оборванный
+    на 99% без единого падения, был назван поломкой приложением."""
     if not _appendix_needs_full_suite(paths):
         return
     run = acceptance.full_suite(scratch, task_id)
@@ -872,12 +883,23 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
         store.journal(conn, task_id, "orchestrator",
                       "полный прогон после приложений", run.detail)
         return
-    detail = f"приложения ломают тесты: {run.detail}"
+    if run.outcome == acceptance.FULL_SUITE_TIMEOUT:
+        detail = (f"прогон не уложился в {config.FULL_SUITE_TIMEOUT_SEC} с "
+                  f"(полный набор tests/ после приложений): {run.detail}")
+        advice = (f"прогон оборван по пределу времени, это не исход "
+                  f"тестов; повтори: artel.py approve {task_id}")
+    elif run.outcome == acceptance.FULL_SUITE_NOT_STARTED:
+        detail = f"полный набор tests/ после приложений — {run.detail}"
+        advice = (f"прогон не запускался; повтори, когда машина "
+                  f"освободится: artel.py approve {task_id}")
+    else:
+        detail = f"приложения ломают тесты: {run.detail}"
+        advice = (f"почини приложение к {', '.join(paths)} и повтори: "
+                  f"artel.py approve {task_id}")
     store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
     _drop_scratch_worktree(ctx, scratch)
     sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
-             f"  задача осталась на гейте merge; почини приложение к "
-             f"{', '.join(paths)} и повтори: artel.py approve {task_id}")
+             f"  задача осталась на гейте merge; {advice}")
 
 
 def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
@@ -911,17 +933,18 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     # многофайловый блок git применяет целиком, и `git add` ниже обязан
     # унести в коммит все его файлы, иначе правка Оператора уезжает в
     # никуда вместе со scratch-деревом.
-    paths: list[str] = []
-    for number, appendix in enumerate(appendices, 1):
-        answer = git_apply(scratch, appendix)
-        if answer and _appendix_already_in_main(conn, task_id, number,
-                                                appendix, scratch):
-            continue
-        if answer:
-            _return_inapplicable_appendix(conn, task_id, state, appendix,
-                                          answer, scratch, ctx)
-            return ("stopped", [])
-        paths.extend(p for p in appendix.paths if p not in paths)
+    # Наложение — общий узел `appendix_tree.apply_in_order` (SPEC
+    # 01M46C776SZEMYPBQGPNJN1TXY, требование 7): тем же порядком и тем же
+    # `git_apply` приложения ложатся на дерево полного прогона автогейта,
+    # approve и `suite-run`.
+    paths, failure = appendix_tree.apply_in_order(
+        scratch, appendices,
+        lambda number, appendix: _appendix_already_in_main(
+            conn, task_id, number, appendix, scratch))
+    if failure is not None:
+        _return_inapplicable_appendix(conn, task_id, state, failure.appendix,
+                                      failure.answer, scratch, ctx)
+        return ("stopped", [])
     if not paths:
         # Все приложения уже в main: коммитить нечего, `git commit` на
         # пустом индексе отказал бы и сорвал мерж.
@@ -1095,16 +1118,44 @@ def _acceptance_locks_refuse(conn, task_id: str) -> bool:
     после `in_dev -> verifying`, никто больше не ловил. Расхождение или сбой
     git — остановка тела без merge.
 
-    Только target `artel` (требование 11, AC-20): у внешнего target
-    поведение гейта мержа прежнее. Строка задачи — свежая: `t` вызывающего
-    прочитан до подтяжки."""
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+    Любой проект с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 5): у проекта без профиля сверка не выполняется и пишет об
+    этом запись в журнал; неразрешённый контекст и артель без профиля —
+    остановка (отказ уже напечатан и записан). Строка задачи — свежая: `t`
+    вызывающего прочитан до подтяжки."""
+    decision = project_profile.for_task(conn, task_id)
+    if decision.refusal:
+        store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
+                      decision.refusal)
+        print(f"[{task_id}] merge отклонён: {decision.refusal}")
+        return True
+    if decision.profile is None:
+        project_profile.journal_skip(conn, task_id,
+                                     project_profile.CHECK_MANIFEST, decision)
         return False
     t = store.get_task(conn, task_id)
     artifact_branch_name, foreign = artifact_source.resolve(conn, task_id)
     if _acceptance_lock_refuses(conn, task_id, t, artifact_branch_name, foreign):
         return True
     return _long_lived_manifest_refuses(conn, task_id)
+
+
+MERGE_PROFILE_REFUSAL_ACTION = "merge отклонён: профиль тестов проекта"
+
+
+def _profile_refusal_exit(conn, task_id: str, target: str) -> None:
+    """Профиль тестов артели не задан или не прочитан — `approve` гейта
+    мержа отказывает до первого шага тела, не дойдя до ожидания CI (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 4): гейты целостности тестов
+    пульта не отключаются и на мерже. Состояние не трогается."""
+    decision = project_profile.decide(target)
+    if not decision.refusal:
+        return
+    store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
+                  decision.refusal)
+    sys.exit(f"[{task_id}] merge отклонён: {decision.refusal}\n"
+             f"  задача осталась на гейте merge; почини targets.yaml и "
+             f"повтори: artel.py approve {task_id}")
 
 
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
@@ -1156,12 +1207,14 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     уборки — ожидание CI новой головы main (`_await_main_ci`); guard по
     дереву мержа — внутри `_publish_merge_artifacts`.
     """
-    ctx = repo_context.resolve(store.task_target(conn, task_id))
+    target = store.task_target(conn, task_id)
+    ctx = repo_context.resolve(target)
     if ctx is None:
-        sys.exit(f"[{task_id}] merge отклонён: репозиторный контекст "
-                 f"target'а не читается (targets.yaml)\n"
+        sys.exit(f"[{task_id}] merge отклонён: "
+                 f"{project_profile.unresolved_reason(target)}\n"
                  f"  задача осталась на гейте merge; почини targets.yaml "
                  f"и повтори: artel.py approve {task_id}")
+    _profile_refusal_exit(conn, task_id, target)
     branch = t["branch"]
     if _docs_ref_unsynced(conn, task_id):
         return ("stopped",)

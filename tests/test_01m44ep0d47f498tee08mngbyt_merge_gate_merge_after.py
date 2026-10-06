@@ -26,7 +26,8 @@ from unittest import mock
 
 from orchestrator import (acceptance, catalog, checkpoint, ci, config, fsm,
                           github_adapter, idgen, merge_lock, merge_queue, store)
-from tests.sandbox import RealGitSandbox, _alive_foreign_pid, capture
+from tests.sandbox import (ARTEL_TEST_PROFILE, RealGitSandbox,
+                           _alive_foreign_pid, capture)
 
 TARGETS_YAML = """targets:
   {name}:
@@ -109,9 +110,11 @@ class MergeGateDependencySandbox(RealGitSandbox):
         self.seed = random.randrange(1 << 30)
         print(f"зерно: {self.seed}")
         self.rng = random.Random(self.seed)
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4): без профиля гейт мержа задаче артели отказывает.
         config.TARGETS.write_text(TARGETS_YAML.format(
-            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH),
-            encoding="utf-8")
+            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
+            + ARTEL_TEST_PROFILE, encoding="utf-8")
         self.origin = self.add_synced_origin()
         capture(catalog.cmd_init)
         self.conn = store.db()

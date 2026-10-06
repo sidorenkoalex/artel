@@ -19,13 +19,25 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, agent_log, config, fsm,  # noqa: E402
-                          gitcmd, store)
+                          gitcmd, github_adapter, store)
 from tests.sandbox import LightTransitionSandbox  # noqa: E402
 
 
 class MapConflictAutoResolveTest(LightTransitionSandbox):
 
     MAP_REL = "docs/codebase-map.md"
+
+    def setUp(self):
+        super().setUp()
+        # Песочница сеет запись артели с профилем тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 4), а запись несёт
+        # `forge: github` — черновик запроса на слияние зовёт `gh` тем же
+        # `subprocess.run`, что подменён под регенератор карты; черновик —
+        # не предмет этого файла, и без записи его не было.
+        forge_patcher = mock.patch.object(github_adapter, "_is_github_target",
+                                          return_value=False)
+        forge_patcher.start()
+        self.addCleanup(forge_patcher.stop)
 
     # ------------------------------------------------------------ утилиты
 

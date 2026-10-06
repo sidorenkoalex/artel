@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
                           gitcmd, review, runner, stack, store)
-from tests.sandbox import seed_artel_clone_stub  # noqa: E402
+from tests.sandbox import (seed_artel_clone_stub,  # noqa: E402
+                           seed_artel_targets)
 from tests.sandbox import (SpyRun, _stub_check_stack, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
@@ -95,6 +96,18 @@ class FreshVerdictIterationTest(unittest.TestCase):
         self.assertEqual(artifacts.fresh_verdict_iteration({"iteration": " 3 "}, 2), 3)
 
 
+PRE_A4_SPEC_MD = """---
+task: {task}
+type: spec
+author_role: analyst
+status: approved
+schema_version: 1
+---
+
+# SPEC: свежесть вердикта
+"""
+
+
 class ReviewFreshnessScenarioTest(unittest.TestCase):
 
     def setUp(self):
@@ -132,6 +145,9 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         # живут в нём, `new` без клона отказывает — пустой настоящий
         # репозиторий песочницы.
         seed_artel_clone_stub()
+        # Запись артели с профилем тестов (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4): без профиля проверки тестов задачи артели отказывают.
+        seed_artel_targets()
 
         # Ревью-пакет (T011) собирается настоящим git. В песочнице его нет —
         # подменяем сам вызов: тестам этого модуля важен номер итерации в
@@ -186,6 +202,11 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         # `current_branch()` пустым), так что fsm читает их отсюда же.
         self.tdir = config.TASKS / self.TASK
         self.tdir.mkdir(parents=True, exist_ok=True)
+        # SPEC до A4 (`schema_version: 1`) — планки не требует: прогон
+        # приёмки в рабочей копии задачи читает SPEC, когда планки нет
+        # (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6).
+        (self.tdir / "SPEC.md").write_text(
+            PRE_A4_SPEC_MD.format(task=self.TASK), encoding="utf-8")
         self.set_state("review")
         self.write_plan_ready()
 

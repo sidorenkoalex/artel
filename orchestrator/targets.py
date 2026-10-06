@@ -30,6 +30,26 @@ FIELDS = {
     "merge_gate": "text",     # operator | target-human (ADR-0003 п.7)
 }
 
+# Профиль тестов проекта — необязательное поле записи (ADR-0021 пп. 8-9;
+# SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 1). Вид подполя: "list" —
+# непустой список строк, "list0" — список строк, возможно пустой, "dir" —
+# относительный путь каталога, "template" — шаблон имени с `<id>` и
+# `<name>`, "report" — одно из `PROFILE_REPORTS`.
+PROFILE_FIELD = "test_profile"
+PROFILE_FIELDS = {
+    "command": "list",               # начало команды прогона тестов
+    "long_lived_dir": "dir",         # каталог долгоживущих тестов
+    "long_lived_name": "template",   # шаблон имени долгоживущего файла
+    "weakening_scope": "list",       # маски области гейта неослабления
+    "mutation_claim_scope": "list",  # маски области заявки «Ловит мутацию»
+    "report": "report",              # формат отчёта прогона
+    "install": "list0",              # команда установки зависимостей
+}
+# `report` и `install` описываются и проверяются, но пультом не
+# исполняются — их отсутствие поведения пульта не меняет.
+PROFILE_OPTIONAL = ("report", "install")
+PROFILE_REPORTS = ("junit-xml",)
+
 
 class TargetsError(Exception):
     """Декларацию target'а взять неоткуда: файл, формат или сама запись."""
@@ -92,3 +112,55 @@ def check(name: str, entry: object) -> None:
         raise TargetsError(f"{where}: поле 'merge_gate' — "
                            f"'{entry['merge_gate']}', "
                            f"ожидается {' | '.join(MERGE_GATES)}")
+    if PROFILE_FIELD in entry:
+        _check_profile(where, entry[PROFILE_FIELD])
+
+
+def _check_profile(where: str, profile: object) -> None:
+    """Проверка поля `test_profile` записи: причина называет поле и
+    подполе (требование 1)."""
+    if not isinstance(profile, dict):
+        raise TargetsError(f"{where}: поле '{PROFILE_FIELD}' — не набор "
+                           f"подполей")
+    for sub in profile:
+        if sub not in PROFILE_FIELDS:
+            raise TargetsError(f"{where}: поле '{PROFILE_FIELD}': неизвестное "
+                               f"подполе '{sub}' (известны: "
+                               f"{', '.join(PROFILE_FIELDS)})")
+    for sub, kind in PROFILE_FIELDS.items():
+        name = f"'{PROFILE_FIELD}.{sub}'"
+        if sub not in profile:
+            if sub in PROFILE_OPTIONAL:
+                continue
+            raise TargetsError(f"{where}: нет подполя {name}")
+        reason = _profile_value_error(kind, profile[sub])
+        if reason:
+            raise TargetsError(f"{where}: подполе {name} — {reason}")
+
+
+def _profile_value_error(kind: str, value: object) -> str:
+    """Причина, по которой значение подполя профиля не годно; пусто —
+    годно."""
+    if kind in ("list", "list0"):
+        if not isinstance(value, list) or not all(
+                isinstance(item, str) and item for item in value):
+            return "не список непустых строк"
+        if kind == "list" and not value:
+            return "пустой список"
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        return "не непустая строка"
+    if kind == "dir":
+        parts = value.split("/")
+        if value.startswith("/") or ".." in parts or "" in parts:
+            return (f"'{value}' — не относительный путь каталога (без "
+                    f"ведущего '/', '..' и пустых сегментов)")
+    elif kind == "template":
+        missing = [mark for mark in ("<id>", "<name>") if mark not in value]
+        if missing:
+            return f"'{value}' — нет {' и '.join(missing)}"
+        if "/" in value:
+            return f"'{value}' — шаблон имени файла, не путь"
+    elif kind == "report" and value not in PROFILE_REPORTS:
+        return f"'{value}', ожидается {' | '.join(PROFILE_REPORTS)}"
+    return ""

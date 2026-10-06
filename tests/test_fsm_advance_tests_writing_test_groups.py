@@ -8,6 +8,7 @@
 (target, канарейка), один узел заявки мутации, сбор долгоживущего файла из
 `tests/`.
 """
+import contextlib
 import os
 import shutil
 import subprocess
@@ -21,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from orchestrator import acceptance, amend, config, fsm, store  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import LightTransitionSandbox  # noqa: E402
+from tests.sandbox import (LightTransitionSandbox,  # noqa: E402
+                           declared_artel_profile, declared_without_profile)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -207,8 +209,14 @@ class AmendGroupLineTest(unittest.TestCase):
 
     def errors(self, target: str, locked: dict | None, files: list) -> list:
         row = {"target": target, "tests_locked_sha": "abc"}
-        with mock.patch.object(amend, "_branch_tests_snapshot",
-                               return_value=locked):
+        # Задача артели — с её профилем тестов из временной декларации, не
+        # из боевого targets.yaml (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+        # требование 4); внешнему проекту декларацию даёт сам сценарий.
+        declared = (declared_artel_profile()
+                    if target == config.DEFAULT_TARGET
+                    else contextlib.nullcontext())
+        with declared, mock.patch.object(amend, "_branch_tests_snapshot",
+                                         return_value=locked):
             return amend._group_line_errors(row, self.TDIR, files)
 
     def test_post_rule_plank_is_checked(self):
@@ -238,7 +246,10 @@ class AmendGroupLineTest(unittest.TestCase):
         old = {f"{self.TDIR}/test_ac.py": plank(None)}
         new = {f"{self.TDIR}/test_ac.py": plank(guard.GROUP_ONE_OFF)}
         self.assertEqual(self.errors(config.DEFAULT_TARGET, old, edit), [])
-        self.assertEqual(self.errors("sled", new, edit), [])
+        # Внешний проект объявлен без профиля тестов (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требования 3, 5).
+        with declared_without_profile("sled"):
+            self.assertEqual(self.errors("sled", new, edit), [])
         self.assertEqual(self.errors(config.DEFAULT_TARGET, None, edit), [])
 
 

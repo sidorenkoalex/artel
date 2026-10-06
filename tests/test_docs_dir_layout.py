@@ -20,7 +20,7 @@ from orchestrator import (acceptance, agent_log, amend, artifact_branch,
                           workspace)
 from orchestrator.advance_gates import acceptance as acceptance_gate
 from orchestrator.advance_gates._base import GateRefusal
-from tests.sandbox import RealGitSandbox
+from tests.sandbox import RealGitSandbox, declare_target
 
 TASK = "01M409YKM3QE5KVRGV0G94F5ZC"
 BRANCH = f"task/{TASK.lower()}-docs"
@@ -433,6 +433,10 @@ class GatesDropPlankAfterRunTest(DocsDirSandbox):
         # Рабочая копия задачи в области проекта (ADR-0021 п.1, этап 2),
         # не общий `workspace/`.
         code_dir = config.PROJECTS / "ext-proj" / "worktrees" / TASK
+        # Проект объявлен в targets.yaml: без записи его контекст не
+        # разрешён, и автогейт не проводится вовсе (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 5).
+        declare_target("ext-proj")
         for name, outcome in (("штатно", None),
                               ("исключение", RuntimeError("сбой автогейта"))):
             with self.subTest(outcome=name):

@@ -1001,5 +1001,108 @@ class FailedCheckNamesTest(_HeadShaPatchedTest):
         self.assertIn(SHA[:8], why)
 
 
+class RunEventLabelTest(_HeadShaPatchedTest):
+    """Событие и номер прогона в тексте статуса (SPEC
+    01M46D5ZZQY7GBEW5TBVQ0P3ZV): свойства, не покрытые долгоживущим
+    `tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py` — запасной путь
+    сопоставления по ссылке на прогон, отсутствие лишнего запроса прогонов
+    и `skipped` вне фразы о расхождении."""
+
+    def serve(self, checks: list, workflow_runs: list) -> list:
+        """`gh` отвечает check-run'ами коммита и его прогонами; вызовы
+        пишутся в возвращаемый список."""
+        calls = []
+
+        def fake_gh(*args, **_kw):
+            joined = " ".join(args)
+            calls.append(joined)
+            if "check-runs" in joined:
+                body = {"total_count": len(checks), "check_runs": checks}
+            else:
+                body = {"total_count": len(workflow_runs),
+                        "workflow_runs": workflow_runs}
+            return subprocess.CompletedProcess(list(args), 0,
+                                               json.dumps(body), "")
+
+        patcher = mock.patch.object(ci, "gh", fake_gh)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    @staticmethod
+    def linked(name: str, conclusion: str, suite: int | None,
+               run_id: int) -> dict:
+        check = dict(run(name, conclusion=conclusion),
+                     details_url=f"http://127.0.0.1/o/r/actions/runs/"
+                                 f"{run_id}/job/7{run_id}")
+        if suite is not None:
+            check["check_suite"] = {"id": suite}
+        return check
+
+    def test_run_is_found_by_details_url_without_check_suite(self):
+        """Check-run без `check_suite` сопоставлен с прогоном по ссылке.
+
+        Ловит мутацию: сопоставление только по `check_suite.id` — проверка
+        без него подписана «событие не определено» вместо «(push, прогон
+        555)».
+        """
+        self.serve([self.linked("python", "failure", None, 555)],
+                   [{"id": 555, "event": "push", "check_suite_id": 9}])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RED)
+        self.assertIn("python=failure (push, прогон 555)", note)
+
+    def test_green_outcome_does_not_ask_workflow_runs(self):
+        """Зелёный исход не прибавляет запроса прогонов («Не входит» SPEC).
+
+        Ловит мутацию: прогоны коммита спрашиваются на любом исходе —
+        в вызовах `gh` зелёного статуса появляется `actions/runs`.
+        """
+        calls = self.serve([self.linked("python", "success", 1, 10),
+                            self.linked("guard", "skipped", 2, 20)],
+                           [{"id": 10, "event": "push", "check_suite_id": 1}])
+
+        self.assertEqual(ci.verifying_status("task/t001-x")[0],
+                         ci.VERIFYING_GREEN)
+        self.assertIs(ci.branch_status("task/t001-x")[0], True)
+        self.assertFalse([c for c in calls if "actions/runs" in c], calls)
+
+    def test_unlinked_check_runs_do_not_ask_workflow_runs(self):
+        """Check-run'ы без связки с прогоном — запроса прогонов нет, у
+        упавшей проверки «событие не определено», исход прежний.
+
+        Ловит мутацию: прогоны спрашиваются, даже когда сопоставлять не с
+        чем — в вызовах `gh` красного статуса появляется `actions/runs`.
+        """
+        calls = self.serve([run("python", conclusion="failure")],
+                           [{"id": 10, "event": "push", "check_suite_id": 1}])
+
+        green, note = ci.branch_status("task/t001-x")
+
+        self.assertIs(green, False)
+        self.assertIn("python=failure (событие не определено)", note)
+        self.assertFalse([c for c in calls if "actions/runs" in c], calls)
+
+    def test_skipped_is_not_the_green_side_of_divergence(self):
+        """`skipped` в прогоне push и провал в pull_request — не расхождение.
+
+        Ловит мутацию: зелёной стороной фразы считается любое заключение
+        из `ci.GREEN` — пропущенная на push проверка даёт фразу «зелёная в
+        push», хотя на push она не исполнялась.
+        """
+        self.serve([self.linked("protected-paths", "skipped", 1, 10),
+                    self.linked("protected-paths", "failure", 2, 20)],
+                   [{"id": 10, "event": "push", "check_suite_id": 1},
+                    {"id": 20, "event": "pull_request", "check_suite_id": 2}])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RED)
+        self.assertIn("protected-paths=failure (pull_request, прогон 20)", note)
+        self.assertNotIn("расходится", note)
+
+
 if __name__ == "__main__":
     unittest.main()

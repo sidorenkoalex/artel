@@ -9,9 +9,11 @@
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
 import contextlib
+import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -20,10 +22,10 @@ from typing import Iterator, NamedTuple
 
 from scripts import guard
 
-from . import agent_log, artifact_branch, ci, config, gitcmd, stack
+from . import agent_log, artifact_branch, ci, config, gitcmd, stack, suite_lock
 
 
-def _pytest_command(*args: str) -> list[str]:
+def _pytest_command(*args: str, command: list[str] | None = None) -> list[str]:
     """Общая часть команды pytest обоих раннеров: интерпретатор venv
     пульта (`stack.pytest_python_executable()` — не голый `"python3"`,
     резолвящийся по PATH ВЫЗЫВАЮЩЕГО процесса, а не роли: гейты/
@@ -39,8 +41,19 @@ def _pytest_command(*args: str) -> list[str]:
     загрузка по имени `timeout` — тот же плагин, что и так подключился бы
     автоматически (никакого эффекта, если он уже установлен), но при ЕГО
     ОТСУТСТВИИ в интерпретаторе даёт громкий `ImportError`/красный
-    returncode вместо тихого пропуска таймаута отдельного теста."""
-    return [stack.pytest_python_executable(), "-m", "pytest", *args,
+    returncode вместо тихого пропуска таймаута отдельного теста.
+
+    `command` — начало команды из профиля тестов проекта
+    (`project_profile.Profile.command`, SPEC 01M45FJVGQT1K0P8HDEXZX6HS7,
+    требование 1): первый элемент `python3` — тот же интерпретатор venv
+    пульта, пути тестов и флаги пульта добавляются к нему; не назван —
+    команда пульта. Интерпретатор резолвится здесь, при сборке команды
+    прогона, а не в гейте: гейт, чей прогон не состоится, venv не ищет."""
+    head = (list(command) if command
+            else [stack.pytest_python_executable(), "-m", "pytest"])
+    if head[0] == "python3":
+        head[0] = stack.pytest_python_executable()
+    return [*head, *args,
             "-p", "no:cacheprovider", "-p", "timeout",
             "-o", f"timeout={stack.PER_TEST_TIMEOUT_SEC}"]
 
@@ -192,7 +205,8 @@ def plank_present(tests_dir: Path) -> bool:
 
 
 def run(tdir: Path, cwd: Path | None = None,
-        extra: list[str] = ()) -> tuple[bool, str]:
+        extra: list[str] = (),
+        command: list[str] | None = None) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
     01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `cwd`, равным
     рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
@@ -236,6 +250,9 @@ def run(tdir: Path, cwd: Path | None = None,
 
     `extra` — долгоживущие файлы `tests/` задачи (`_run_targets`): они
     исполняются тем же вызовом pytest, и при пустой планке тоже.
+
+    `command` — начало команды из профиля тестов проекта
+    (`_pytest_command`).
     """
     tests_dir = tdir / "acceptance_tests"
     targets = _run_targets(tests_dir, extra)
@@ -248,7 +265,7 @@ def run(tdir: Path, cwd: Path | None = None,
     try:
         with _pytest_env() as env:
             res = subprocess.run(
-                _pytest_command(*targets),
+                _pytest_command(*targets, command=command),
                 cwd=run_cwd, env=env, capture_output=True, text=True,
                 timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
@@ -261,7 +278,8 @@ def run(tdir: Path, cwd: Path | None = None,
 
 
 def collect(tdir: Path, cwd: Path | None = None,
-            extra: list[str] = ()) -> tuple[bool, str]:
+            extra: list[str] = (),
+            command: list[str] | None = None) -> tuple[bool, str]:
     """(собралось, хвост вывода) — сухой сбор планки `pytest
     --collect-only -q` (SPEC 01M2ARQRDV4YY9TVPHXN2E7136, требование 1,
     AC-1/AC-2/AC-3): та же команда, тот же интерпретатор и те же флаги
@@ -290,7 +308,8 @@ def collect(tdir: Path, cwd: Path | None = None,
 
     `extra` — тот же контракт, что у `run()`: долгоживущие файлы `tests/`
     собираются тем же вызовом из `cwd` — рабочей копии кодовой ветки
-    (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 3).
+    (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 3). `command` — тот же
+    контракт, что у `run()`.
     """
     tests_dir = tdir / "acceptance_tests"
     targets = _run_targets(tests_dir, extra)
@@ -303,7 +322,8 @@ def collect(tdir: Path, cwd: Path | None = None,
     try:
         with _pytest_env() as env:
             res = subprocess.run(
-                _pytest_command(*targets, "--collect-only", "-q"),
+                _pytest_command(*targets, "--collect-only", "-q",
+                                command=command),
                 cwd=run_cwd, env=env, capture_output=True, text=True,
                 timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
@@ -552,6 +572,15 @@ FULL_SUITE_GREEN = "зелёный прогон"
 FULL_SUITE_RED = "красный прогон"
 FULL_SUITE_TIMEOUT = "таймаут прогона"
 FULL_SUITE_NO_TESTS = "tests/ нет в worktree"
+# Прогон не запускался: замок полных прогонов машины занят дольше
+# `config.FULL_SUITE_LOCK_WAIT_SEC` (SPEC 01M46D5T8SZ9D6S34TZFX8S46V,
+# требование 2) — ни красный прогон, ни таймаут прогона. Константа —
+# одновременно начало текста исхода (`_not_started_note`), по которому его
+# различает `_full_suite_outcome`.
+FULL_SUITE_NOT_STARTED = "прогон не начат"
+
+# Запись журнала задачи об ожидании замка прогоном гейта (требование 2).
+FULL_SUITE_LOCK_WAIT_ACTION = "полный прогон ждёт замок"
 
 # Текст вырожденного исхода «в рабочей копии нет каталога tests/» — одна
 # константа и для `run_full_suite` (производитель), и для
@@ -577,6 +606,15 @@ def _full_suite_timeout_note() -> str:
     return (f"прогон полного набора tests/ превысил "
             f"{config.FULL_SUITE_TIMEOUT_SEC}с — завис или ждёт сетевой "
             f"ответ")
+
+
+def _not_started_note(holder: dict) -> str:
+    """Текст исхода «прогон не начат» — функция по тому же доводу, что
+    `_full_suite_timeout_note`: предел ожидания подменяют тесты."""
+    return (f"{FULL_SUITE_NOT_STARTED}: машина занята прогоном "
+            f"{suite_lock.describe(holder)} — замок полных прогонов не "
+            f"освободился за {config.FULL_SUITE_LOCK_WAIT_SEC} с ожидания, "
+            f"pytest не запускался")
 
 
 class FullSuiteRun(NamedTuple):
@@ -608,6 +646,8 @@ def _full_suite_outcome(green: bool, output: str) -> str:
         return FULL_SUITE_GREEN
     if output.startswith(FULL_SUITE_NO_TESTS_NOTE):
         return FULL_SUITE_NO_TESTS
+    if output.startswith(f"{FULL_SUITE_NOT_STARTED}: "):
+        return FULL_SUITE_NOT_STARTED
     if output.startswith(_full_suite_timeout_note()):
         return FULL_SUITE_TIMEOUT
     return FULL_SUITE_RED
@@ -630,12 +670,15 @@ def _write_full_suite_log(task_id: str, output: str) -> Path | None:
 
 
 def _full_suite_detail(outcome: str, digest: str,
-                       log_path: Path | None) -> str:
+                       log_path: Path | None, note: str = "") -> str:
     """Строка журнала об исходе прогона: различимая причина, выжимка
-    разбора и путь к файлу лога (требования 4-6)."""
+    разбора и путь к файлу лога (требования 4-6). `note` — текст исхода
+    «прогон не начат» с держателем замка."""
     if outcome == FULL_SUITE_NO_TESTS:
         # Прогона не было — ни выжимки, ни лога не существует.
         return FULL_SUITE_NO_TESTS_NOTE
+    if outcome == FULL_SUITE_NOT_STARTED:
+        return note or FULL_SUITE_NOT_STARTED
     head = {
         FULL_SUITE_GREEN: "полный набор tests/ зелёный",
         FULL_SUITE_RED: "полный набор tests/ красный",
@@ -645,7 +688,9 @@ def _full_suite_detail(outcome: str, digest: str,
     return f"{head}: {digest}{log_note}"
 
 
-def run_full_suite(root: Path) -> tuple[bool, str]:
+def run_full_suite(root: Path, command: list[str] | None = None,
+                   targets: tuple = ("tests",), extra: tuple = (),
+                   log: Path | None = None) -> tuple[bool, str]:
     """(зелено, ПОЛНЫЙ вывод прогона) — прогон ПОЛНОГО пакета `tests/`
     каталога `root` через pytest (SPEC T066, требование 2в; переход раннера —
     SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
@@ -678,21 +723,237 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     лога (`full_suite` выше), а в журнал уходит уже не он, а выжимка
     `run_digest`, ограниченная `config.LOG_TAIL_*` — записи журнала от
     этого только короче, чем были со срезом.
+
+    Параметры команды `suite-run` (SPEC 01M462QACEH29RPRD2RZHGHQFM,
+    требования 1, 6, 10); гейты их не передают, и их прогон не меняется:
+    `command` — начало команды из профиля тестов проекта (как у `run()`);
+    `targets` — пути или id тестов вместо `tests` (повтор упавших);
+    `extra` — флаги pytest после флагов параллели; `log` — вывод идёт
+    прямо в этот файл по ходу прогона (ход прогона читается из него, пока
+    прогон идёт), а на пределе времени убивается вся группа процессов
+    pytest с рабочими xdist — фоновому прогону некому добить сирот.
+
+    Прогон идёт под замком полных прогонов машины (`suite_lock`, SPEC
+    01M46D5T8SZ9D6S34TZFX8S46V, требования 1-4), `_machine_lock`: прогон
+    без задачи (`notes`) пишет ожидание в вывод; процесс, уже держащий
+    замок (`full_suite` гейта, фоновый процесс `suite-run`), идёт без
+    второго взятия.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, FULL_SUITE_NO_TESTS_NOTE
+    argv = _pytest_command(*targets, command=command) + [
+        "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist", *extra]
+    with _machine_lock(None) as holder:
+        if holder is not None:
+            return False, _not_started_note(holder)
+        return _run_full_suite_now(argv, root, log)
+
+
+@contextlib.contextmanager
+def _machine_lock(task_id: str | None) -> Iterator[dict | None]:
+    """Замок полных прогонов машины на время прогона: даёт `None` — замок
+    за текущим процессом, иначе держатель, не отпустивший замок за
+    `config.FULL_SUITE_LOCK_WAIT_SEC` (прогон тогда не запускается).
+
+    Ожидание — до входа в прогон, поэтому в предел прогона
+    `config.FULL_SUITE_TIMEOUT_SEC` не входит (требование 2); взятый здесь
+    замок снимается на любом исходе тела — зелёном, красном, таймауте,
+    исключении (требование 4). Уже держащий замок процесс его не берёт и
+    не снимает: снимет тот, кто брал."""
+    if suite_lock.held_by_me():
+        yield None
+        return
+    holder = suite_lock.wait_acquire(
+        task_id, suite_lock.KIND_GATE if task_id else suite_lock.KIND_NOTES,
+        config.FULL_SUITE_LOCK_WAIT_SEC,
+        lambda busy: _journal_lock_wait(task_id, busy))
+    if holder is not None:
+        yield holder
+        return
+    try:
+        yield None
+    finally:
+        suite_lock.release()
+
+
+def _journal_lock_wait(task_id: str | None, holder: dict) -> None:
+    """Запись об ожидании замка: журнал задачи и вывод; без задачи —
+    только вывод. Сбой записи журнала прогон не роняет: ожидание и сам
+    прогон от неё не зависят."""
+    text = (f"машина занята прогоном {suite_lock.describe(holder)} — "
+            f"полный прогон tests/ ждёт замок не дольше "
+            f"{config.FULL_SUITE_LOCK_WAIT_SEC} с; ожидание в предел прогона "
+            f"{config.FULL_SUITE_TIMEOUT_SEC} с не входит")
+    if task_id:
+        from . import store  # store -> ... -> acceptance
+        try:
+            store.journal(store.db(), task_id, "orchestrator",
+                          FULL_SUITE_LOCK_WAIT_ACTION, text)
+        except Exception as exc:  # noqa: BLE001 — запись не условие прогона
+            text += f" (запись журнала не удалась: {type(exc).__name__})"
+    print(f"[{task_id}] {text}" if task_id else text, flush=True)
+
+
+def _run_full_suite_now(argv: list[str], root: Path,
+                        log: Path | None) -> tuple[bool, str]:
+    """Сам прогон `run_full_suite` — замок уже взят; предел
+    `config.FULL_SUITE_TIMEOUT_SEC` отсчитывается отсюда."""
+    if log is not None:
+        return _run_full_suite_to_log(argv, root, log)
     try:
         with _pytest_env() as env:
             res = subprocess.run(
-                _pytest_command("tests") + [
-                    "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"],
-                cwd=root, env=env, capture_output=True, text=True,
+                argv, cwd=root, env=env, capture_output=True, text=True,
                 timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
         return False, f"{_full_suite_timeout_note()}\n{output}"
     return res.returncode == 0, res.stdout + res.stderr
+
+
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _run_full_suite_to_log(argv: list[str], root: Path,
+                           log: Path) -> tuple[bool, str]:
+    """Прогон `run_full_suite` с выводом прямо в файл `log`. Вывод
+    читается из файла байтами с заменой не-UTF-8: чужой проект вправе
+    печатать что угодно, а разбор не имеет права уронить фоновый прогон.
+    `PYTHONUNBUFFERED` — иначе на пределе времени SIGKILL съел бы
+    неслитый буфер, и числа успевшей части пропали бы (требование 6)."""
+    timed_out = False
+    with _pytest_env() as env, open(log, "wb") as fh:
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(argv, cwd=root, env=env, stdout=fh,
+                                stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+        try:
+            code = proc.wait(timeout=config.FULL_SUITE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(proc.pid)
+            proc.wait()
+        except BaseException:
+            _kill_group(proc.pid)
+            proc.wait()
+            raise
+    output = log.read_bytes().decode("utf-8", errors="replace")
+    if timed_out:
+        return False, f"{_full_suite_timeout_note()}\n{output}"
+    return code == 0, output
+
+
+# ----------------------------------------- сохранённые итоги полного набора
+#
+# Перечень упавших тестов завершённого прогона полного набора по sha дерева,
+# на котором он шёл (SPEC 01M462QACEH29RPRD2RZHGHQFM, требования 7-8):
+# итог базы для `suite-run` любой задачи с этой базой — второй раз база не
+# прогоняется. Пишут его гейты (`full_suite`) и прогон базы `suite-run`.
+
+_FAILED_ENTRY = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - (.*))?$",
+                           re.MULTILINE)
+_SHORT_SUMMARY_HEADER = re.compile(r"^=+ short test summary info =+$",
+                                   re.MULTILINE)
+# Разделитель секции вывода pytest («==== FAILURES ====», итоговая строка
+# «==== 1 failed in 0.1s ====») — конец блока сводки.
+_SECTION_RULE = re.compile(r"^=+ .* =+$", re.MULTILINE)
+
+
+def short_summary_block(output: str) -> str:
+    """Текст блока «short test summary info» — от его заголовка до
+    следующего разделителя секции; блока нет — пустая строка. Заголовок —
+    последний в выводе: захваченный вывод упавшего теста печатается раньше
+    сводки и вправе содержать что угодно, в том числе строки `FAILED …`/
+    `ERROR …` (захваченный лог `ERROR    m:файл:строка …`)."""
+    headers = list(_SHORT_SUMMARY_HEADER.finditer(output))
+    if not headers:
+        return ""
+    start = headers[-1].end()
+    end = _SECTION_RULE.search(output, start)
+    return output[start:end.start() if end else len(output)]
+
+
+def failed_entries(output: str) -> list[tuple[str, str]]:
+    """(id теста, первая строка сообщения) из блока «short test summary
+    info» — по одной паре на упавший тест, без повторов; сообщения нет —
+    пустая строка. Строки вне блока не читаются (`short_summary_block`)."""
+    seen = {}
+    for node, message in _FAILED_ENTRY.findall(short_summary_block(output)):
+        seen.setdefault(node.strip(), (message or "").strip())
+    return list(seen.items())
+
+
+def suite_results_dir() -> Path:
+    """Каталог сохранённых итогов — в каталоге логов пульта; функция, а не
+    константа: `config.LOGS` подменяют тесты."""
+    return config.LOGS / "fullsuite-results"
+
+
+def saved_failures(sha: str) -> list[str] | None:
+    """Перечень упавших сохранённого итога по `sha`; `None` — итога нет
+    или файл не читается (прогон базы тогда идёт заново)."""
+    path = suite_results_dir() / f"{sha}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        failed = data["failed"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return [str(n) for n in failed] if isinstance(failed, list) else None
+
+
+def save_failures(sha: str, failed: list[str], source: str) -> None:
+    """Итог завершённого прогона по `sha`. Запись через временный файл и
+    `replace` — читатель не увидит половину файла; сбой записи не
+    поднимается: итог — ускорение `suite-run`, не условие гейта."""
+    folder = suite_results_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / f".{sha}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps({"sha": sha, "failed": sorted(failed),
+                                   "source": source}, ensure_ascii=False),
+                       encoding="utf-8")
+        tmp.replace(folder / f"{sha}.json")
+    except OSError:
+        pass
+
+
+def clean_tree_sha(root: Path) -> str | None:
+    """sha HEAD каталога `root`, если его дерево совпадает с коммитом
+    (без изменённых и неотслеживаемых файлов вне `tasks/` — туда пульт
+    выкладывает планку); иначе `None`: итог грязного дерева не итог sha."""
+    head = gitcmd.in_repo(root, "rev-parse", "HEAD")
+    if head is None or head.returncode != 0 or not head.stdout.strip():
+        return None
+    status = gitcmd.in_repo(root, "status", "--porcelain",
+                            "--untracked-files=all", "--", ".",
+                            ":(exclude)tasks")
+    if status is None or status.returncode != 0 or status.stdout.strip():
+        return None
+    return head.stdout.strip()
+
+
+def _remember_gate_failures(root: Path, outcome: str, output: str) -> None:
+    """Сохранение итога прогона гейта (требование 7): только завершённый
+    прогон с итоговой строкой pytest (требование 8) и только чистое
+    дерево. Сбой git здесь — молча без сохранения: исход гейта от этого
+    не зависит (требование 1)."""
+    if outcome not in (FULL_SUITE_GREEN, FULL_SUITE_RED):
+        return
+    if not run_summary_line(output):
+        return
+    try:
+        sha = clean_tree_sha(root)
+    except (OSError, ValueError, AttributeError):
+        return
+    if sha:
+        save_failures(sha, [node for node, _ in failed_entries(output)],
+                      "гейт")
 
 
 def full_suite(root: Path, task_id: str) -> FullSuiteRun:
@@ -709,8 +970,20 @@ def full_suite(root: Path, task_id: str) -> FullSuiteRun:
     лога не заводит: пустой файл в каталоге логов только мешает читать
     настоящие.
     """
-    green, output = run_full_suite(root)
+    # Замок берётся здесь, а не в `run_full_suite`: ожидание пишется в
+    # журнал задачи гейта (требование 2), а `run_full_suite` внутри взятого
+    # замка идёт без второго взятия.
+    with _machine_lock(task_id) as holder:
+        if holder is not None:
+            green, output = False, _not_started_note(holder)
+        else:
+            green, output = run_full_suite(root)
     outcome = _full_suite_outcome(green, output)
+    if outcome == FULL_SUITE_NOT_STARTED:
+        # Прогона не было: ни лога, ни выжимки, ни итога по sha.
+        return FullSuiteRun(green, outcome, "", None,
+                            _full_suite_detail(outcome, "", None, output))
+    _remember_gate_failures(root, outcome, output)
     log_path = (_write_full_suite_log(task_id, output)
                 if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
     digest = run_digest(output)

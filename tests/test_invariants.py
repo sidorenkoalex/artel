@@ -43,7 +43,7 @@ from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # 
                            capture, capture_new_task_id,
                            disk_backed_ls_tree_files, disk_backed_show,
                            patch_pult_sleep, patch_sleep,
-                           resilient_tmp_cleanup)
+                           resilient_tmp_cleanup, seed_artel_targets)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -172,10 +172,19 @@ class FsmTest(unittest.TestCase):
                             # 01M41M6KGWA9PJ6G1KPDC6XY70, требование 6):
                             # прерванный прогон не оставляет `tasks/<id>/`
                             # в рабочей копии, `addCleanup` до него не доходит.
-                            ("TASKS", root / "tasks")):
+                            ("TASKS", root / "tasks"),
+                            # Декларация проектов — своя (SPEC
+                            # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 7):
+                            # проверки тестов задачи артели читают её профиль
+                            # тестов из targets.yaml, а песочница не зависит
+                            # от боевого файла.
+                            ("TARGETS", root / "targets.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Запись артели с полем test_profile: без профиля проверки тестов
+        # задачи артели отказывают (требование 4).
+        seed_artel_targets()
 
         # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
         # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `ROOT` этого
@@ -338,6 +347,13 @@ class FsmTest(unittest.TestCase):
     def write_plan(self, status: str) -> None:
         (self.tdir / "PLAN.md").write_text(
             PLAN_MD.format(task=self.TASK, status=status), encoding="utf-8")
+        # SPEC на диске к выходу из `in_dev`: прогон приёмки идёт в рабочей
+        # копии задачи и для артели и без планки читает SPEC (SPEC
+        # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6); SPEC фикстуры — до A4
+        # (`schema_version: 1`) и планки не требует. Свой SPEC сценария не
+        # перетирается.
+        if not (self.tdir / "SPEC.md").exists():
+            self.write_spec("approved")
 
     def seed_worktree_plan(self) -> None:
         """Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
@@ -2493,6 +2509,59 @@ class TestWeakeningNeedsTheOperatorTest(TmpRootTest):
         self.assertTrue(escalated)
         self.assertEqual("escalated",
                          store.get_task(self.conn, self.TASK)["state"])
+
+    def test_an_undeclared_assertion_change_needs_the_operator(self):
+        """Смена утверждения метода вне раздела SPEC «Меняемое
+        поведение» отказывает переходу `in_dev → verifying`, а мандат
+        Оператора на этот метод снимает отказ (SPEC
+        01M45FJD46BX45VHC36S4VS9QN, требование 7).
+
+        Ловит мутацию: изменённые утверждения снова только наблюдаются —
+        смена ожидаемого значения в существующем тесте без записи approve
+        и без мандата проходит переход молча, как до этой задачи; либо
+        находка об утверждениях заведена мимо `Finding.mandate_elements`
+        — мандат Оператора на метод её не снимает."""
+        path = "tests/test_expectation.py"
+        base = ("import unittest\n\n\n"
+                "class ExpectTest(unittest.TestCase):\n\n"
+                "    def test_value(self):\n"
+                "        self.assertEqual(compute(), 1)\n")
+        sources = {(self.BASE, path): base,
+                   (self.BRANCH, path): base.replace("compute(), 1",
+                                                     "compute(), 2")}
+
+        def show(ref, rel, repo=None):
+            if (ref, rel) in sources:
+                return sources[(ref, rel)], ""
+            return self._show(ref, rel, repo)
+
+        def gate(answers):
+            with mock.patch.object(gitcmd, "diff_base",
+                                   return_value=self.BASE), \
+                 mock.patch.object(gitcmd, "diff_name_status",
+                                   return_value=[("M", path, None)]), \
+                 mock.patch.object(gitcmd, "show", show), \
+                 mock.patch.object(gitcmd, "ls_tree_files",
+                                   return_value=answers), \
+                 mock.patch.object(gitcmd, "git", self._git):
+                t = store.get_task(self.conn, self.TASK)
+                box = []
+                capture(lambda: box.append(
+                    fsm_advance._test_integrity_gate_refuses(
+                        self.conn, self.TASK, t, self.ARTIFACT)))
+                return box[0]
+
+        self.assertTrue(gate([]), "смена вне раздела SPEC обязана "
+                                  "остановить переход")
+        actions = [row["action"] for row in self.conn.execute(
+            "SELECT action FROM steps WHERE task_id=?", (self.TASK,))]
+        self.assertIn("переход отклонён: гейт неослабления тестов", actions)
+
+        self.answer_text = (f"# Ответ\n\nОслабление тестов разрешено: "
+                            f"{path}::ExpectTest::test_value\n"
+                            f"Основание: ADR-0002.\n")
+        self.assertFalse(gate([self.ANSWER]),
+                         "мандат Оператора обязан снимать отказ")
 
 
 class MainCopyGitUnchangedDuringTaskTest(unittest.TestCase):

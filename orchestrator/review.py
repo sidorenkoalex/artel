@@ -1,9 +1,10 @@
 """Ревью-пакет: вход ревьювера собирает оркестратор, а не сам агент."""
 import re
 import sqlite3
+import sys
 
 from . import (artifact_branch, artifact_source, brief, config, context_package, gitcmd,
-              repo_context, store, workspace)
+              project_profile, repo_context, store, workspace)
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -600,23 +601,44 @@ def _changed_assertions_part(conn, task_id: str, branch: str,
     """Раздел «Изменённые утверждения тестов» (SPEC
     01M3Y753QNG6TS5C7MTJS1MEV6, требование 5, AC-10): те же находки
     наблюдения гейта неослабления, что рубежи пишут в журнал, — ревьювер
-    сверяет их по Фазе B чек-листа. `None` — находок и неразобранных файлов
-    нет, раздел не добавляется. Канареечная задача и внешний target — без
-    раздела, тем же условием, что у самого гейта (AC-11): дифф в
-    `config.ROOT` не видит код внешнего target. Сбой git (и молчание, и
+    сверяет их по Фазе B чек-листа. К строке наблюдения каждого метода
+    добавлены исход рубежа, объявленная пара «было → стало (требование
+    N)» из записи approve и, для метода исхода 7а, итог двустороннего
+    прогона для текущей головы (SPEC 01M45FJD46BX45VHC36S4VS9QN,
+    требование 13). `None` — находок, объявленных методов и неразобранных
+    файлов нет, раздел не добавляется. Канареечная задача — без раздела,
+    тем же условием, что у самого гейта (AC-11). Сбой git (и молчание, и
     недекодируемый вывод) разделом не называется — его уже называет diff
     пакета.
+
+    Область — `weakening_scope` профиля тестов проекта (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5): у проекта без профиля
+    раздела нет — вместо него пометка о пропуске и запись в журнал;
+    контекст проекта не разрешён — раздел называет, что не собран, и
+    причину. Артель без профиля сюда не доходит: пакет не собирается
+    (`review_package`).
 
     `test_integrity` импортируется здесь: он тянет `advance_gates.zones` и
     дальше `fsm`-соседей, а `fsm` импортирует этот модуль на верхнем
     уровне."""
-    if target != config.DEFAULT_TARGET or not store.task_exists(conn, task_id) \
+    if not store.task_exists(conn, task_id) \
             or store.get_task(conn, task_id)["is_canary"]:
         return None
+    decision = project_profile.decide(target)
+    if decision.refusal:
+        return (f"### {CHANGED_ASSERTIONS_SECTION}\n\n"
+                f"Раздел не собран: {decision.refusal}.\n")
+    if decision.profile is None:
+        project_profile.journal_skip(
+            conn, task_id, project_profile.CHECK_ASSERTIONS_SECTION, decision)
+        return (f"Наблюдение гейта неослабления тестов в пакет не входит: "
+                f"{decision.skip} — проверки, зависящие от языка проекта, не "
+                f"выполняются.\n")
     from .advance_gates import test_integrity
     try:
-        lines, unobserved, _git_detail = test_integrity.assertion_observation(
-            task_id, branch, artifact_branch)
+        lines, unobserved, _git_detail = test_integrity.review_lines(
+            conn, task_id, branch, artifact_branch,
+            scope=decision.profile.in_weakening_scope)
     except UnicodeDecodeError:
         # Тот же сбой git, что `git_diff_part` превращает в «diff не
         # собран» (T011): наблюдение — не повод ронять сборку пакета.
@@ -628,8 +650,12 @@ def _changed_assertions_part(conn, task_id: str, branch: str,
     return (f"### {CHANGED_ASSERTIONS_SECTION}\n\n"
             f"Наблюдение гейта неослабления тестов: утверждения методов, "
             f"сохранивших имя, которых в голове ветки нет в той же "
-            f"нормальной форме. Переход и мерж от них не зависят — сверь "
-            f"каждое с base по Фазе B чек-листа.\n\n"
+            f"нормальной форме, с исходом рубежа по каждому методу: смена "
+            f"утверждений вне раздела «Меняемое поведение» SPEC и "
+            f"ослабление отказывают переходу `in_dev -> verifying` и "
+            f"эскалируют гейт мержа до мандата Оператора — сверь каждое "
+            f"изменённое ожидание с требованием SPEC и строкой «было → "
+            f"стало» по Фазе B чек-листа.\n\n"
             f"{brief.wrap_boundary(run_id, body)}\n")
 
 
@@ -665,6 +691,28 @@ def _increment_note(shown: dict, prev_sha: str, branch: str) -> str:
             f"только пути, которые тронули СОБСТВЕННЫЕ коммиты ветки с "
             f"базы вердикта — изменения main, пришедшие подтяжкой, в него "
             f"не входят.")
+
+
+PACKAGE_REFUSED_ACTION = "ревью-пакет не собран"
+
+
+def _exit_without_profile(conn, task_id: str, target: str) -> None:
+    """Пакет ревью задачи, чьему проекту профиль тестов обязателен и не
+    задан или не прочитан (артель), не собирается: шаг ревьювера
+    отказывает с той же причиной, что переходы (SPEC
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 4) — пакет без наблюдения
+    неослабления выдал бы ревьюверу непроверенный дифф за проверенный.
+    Неразрешённый контекст пакет не роняет: раздел сам называет, что не
+    собран (`_changed_assertions_part`)."""
+    if not store.task_exists(conn, task_id):
+        return
+    decision = project_profile.decide(target)
+    if not decision.refusal or decision.unresolved:
+        return
+    store.journal(conn, task_id, "fsm", PACKAGE_REFUSED_ACTION, decision.refusal)
+    sys.exit(f"[{task_id}] {PACKAGE_REFUSED_ACTION}: {decision.refusal}\n"
+             f"  дальше: почини {config.TARGETS.name} (поле test_profile "
+             f"записи проекта) и повтори шаг ревьювера")
 
 
 def review_package(conn, task_id: str, title: str, branch: str, *,
@@ -725,6 +773,7 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # только туда): один резолв тем же резолвером, что уже пользуется
     # `brief.py` для developer/analyst/test_author (SPEC T075).
     target = store.task_target(conn, task_id)
+    _exit_without_profile(conn, task_id, target)
     artifact_branch_name, _foreign = artifact_source.resolve(conn, task_id)
     step_dir = _step_workdir(task_id, target)
     task_rels = (spec_rel, plan_rel, review_rel)
