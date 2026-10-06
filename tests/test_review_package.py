@@ -1211,7 +1211,9 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # дерево ссылки, автор последнего коммита SPEC.md (кандидат на
         # удаление), сверка PLAN.md с головой, запись ссылки и её отправка
         # в `origin`, затем чтение головы ссылки и кодовой ветки
-        # перефиксацией.
+        # перефиксацией. Последний — голова ссылки документов для поля
+        # `артефакты=` записи «sha зафиксирован», общей для любого проекта
+        # (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 15).
         # С этапа 2 ADR-0021 (п.1) каждый git-вызов шага адресован явно:
         # ветка, рабочая копия и ссылка документов задачи — в клоне артели,
         # чекпоинт — в рабочей копии задачи `worktrees/<id>`, скилы,
@@ -1282,7 +1284,9 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["-C", clone, "push", "-q", "origin", f"{ref}:{ref}"],
                           ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
                           ["-C", clone, "rev-parse", "--verify", "--quiet",
-                           f"refs/heads/{code_branch}"]],
+                           f"refs/heads/{code_branch}"],
+                          ["-C", clone, "rev-parse", "--verify", "--quiet",
+                           ref]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):

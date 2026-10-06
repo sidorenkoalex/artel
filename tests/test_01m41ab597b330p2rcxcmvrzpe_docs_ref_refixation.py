@@ -768,8 +768,13 @@ class ApproveAfterIncidentTest(DocsRefSandbox):
             f"approve с живым sha не вывел из эскалации:\n{out}"))
         self.assertEqual(self.fixed(task_id), self.head(task_id), self.note(
             f"approve с явным sha не зафиксировал голову:\n{out}"))
-        self.assertEqual(self.head(task_id), moved, self.note(
-            f"голова после approve — не узаконенная Оператором:\n{out}"))
+        # Переход из эскалации дописывает строку паспорта поверх
+        # узаконенной головы и у артели (SPEC 01M484RNV3QBDY3B0M16J916ZP,
+        # строка 14): единственный родитель новой головы — `moved`.
+        parents = self.rgit(task_id, "rev-list", "--parents", "-n", "1",
+                            self.head(task_id)).split()[1:]
+        self.assertEqual(parents, [moved], self.note(
+            f"голова после approve — не над узаконенной Оператором:\n{out}"))
 
 
 class ExternalTargetTest(DocsRefSandbox):

@@ -157,7 +157,11 @@ class SendAfterCommitTest(RefOriginSandbox):
         store.set_state(store.db(), self.TASK, "verifying", "fsm",
                         expected_state="in_dev", detail="переход теста")
 
-        self.assertEqual(self.origin_head(), head)
+        # Переход дописывает строку паспорта поверх `head` и у артели (SPEC
+        # 01M484RNV3QBDY3B0M16J916ZP, строка 14): досланная ссылка несёт
+        # его, единственный родитель которого — недосланный `head`.
+        self.assertEqual(self.origin_head(), self.local_head())
+        self.assertEqual(self.parents(self.local_head()), [head])
 
 
 class OriginSyncRefusalTest(RefOriginSandbox):
@@ -283,7 +287,15 @@ class KillDocsRefTest(RefOriginSandbox):
         self.assertNotIn("SystemExit", out)
         self.assertEqual(self.state(), "killed")
         head = self.local_head()
-        self.assertEqual(self.parents(head), [self.head0])
+        # Между `head0` и коммитом закрытия — ровно коммит паспорта
+        # перехода в `killed` (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 14),
+        # меняющий только строку паспорта.
+        passport = self.parents(head)
+        self.assertEqual(len(passport), 1)
+        self.assertEqual(self.parents(passport[0]), [self.head0])
+        self.assertEqual(
+            self.git("diff", "--name-only", self.head0, passport[0]).split(),
+            [f"tasks/{self.TASK}/PASSPORT.md"])
         self.assertIsNotNone(self.file_at(head, "RETRO.md"))
         self.assertEqual(self.origin_head(), head)
 

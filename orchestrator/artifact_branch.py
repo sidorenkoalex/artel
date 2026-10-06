@@ -204,7 +204,10 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
                                     input=data, text=False)
             if blob.returncode != 0:
                 return ""
-            blob_sha = blob.stdout.decode().strip()
+            out = blob.stdout
+            blob_sha = (out.decode() if isinstance(out, bytes) else out or "").strip()
+            if not blob_sha:
+                return ""
             upd = gitcmd.carpentry(
                 repo, ["update-index", "--add", "--cacheinfo",
                       f"100644,{blob_sha},{rel}"], env)

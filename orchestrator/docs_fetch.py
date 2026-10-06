@@ -20,7 +20,8 @@ fetch_from_origin`/`fetch_all_from_origin`): локальная с коммит�
 """
 import sys
 
-from . import artifact_branch, config, gitcmd, store, targets, workspace
+from . import (artifact_branch, config, gitcmd, repo_context, store, targets,
+               workspace)
 
 USAGE = "Использование: artel.py docs <id> [файл] | artel.py docs --fetch-all"
 
@@ -39,9 +40,11 @@ def _main_copy_reader(task_id: str, ref: str):
     копии (238 ссылок до этапа 2 ADR-0021; SPEC 01M42PENCS26D0656X8FR7DFA7,
     требование 8, AC-13): только чтение по явному репозиторию — git главной
     копии не меняется. (голова, чтение файла, перечень) либо `None` —
-    ссылки нет и там, или задача не артели."""
+    ссылки нет и там, или задача не артели: у другого проекта этой истории
+    пульта нет (признак `repo_context.is_artel`; SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 21)."""
     conn = store.db()
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+    if not repo_context.is_artel(store.task_target(conn, task_id)):
         return None
     head = gitcmd.branch_head_sha(ref, repo=config.ROOT)
     if not head:
@@ -114,16 +117,17 @@ def _fetch_all() -> None:
     failed = False
     seen = set()
     for target in _target_names():
-        if target == config.DEFAULT_TARGET:
-            # Ссылки артели — в её клоне (SPEC 01M42PENCS26D0656X8FR7DFA7,
-            # требование 8), не в git главной копии.
-            workspace.ensure_clone(target)
+        # Ссылки любого проекта, включая артель, — в его клоне (SPEC
+        # 01M42PENCS26D0656X8FR7DFA7, требование 8): клона нет — заводится
+        # (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 22).
+        _clone, clone_error = workspace.ensure_clone(target)
         repo = artifact_branch.repo_for_target(target)
         if repo in seen:
             continue
         seen.add(repo)
         if repo == artifact_branch._NO_REPO:
-            print(f"{target}: пропущен — {artifact_branch.NO_REPO_REASON}")
+            why = clone_error or artifact_branch.NO_REPO_REASON
+            print(f"{target}: пропущен — {why}")
             continue
         if not artifact_branch._origin_configured(repo):
             print(f"{target}: пропущен — origin не настроен")

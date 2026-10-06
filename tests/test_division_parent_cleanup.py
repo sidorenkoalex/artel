@@ -195,8 +195,20 @@ class DivisionParentCleanupTest(RealGitSandbox):
 
         capture(fsm.cmd_approve, PARENT, self.sha)
 
-        self.assertEqual(head_before, gitcmd.branch_head_sha(artifact),
-                         "голова артефактной ветки родителя сдвинулась")
+        # Над `head_before` — ровно коммит паспорта перехода в `killed`
+        # (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 14): единственный
+        # родитель — `head_before`, тронут только PASSPORT.md (ни SPEC.md,
+        # ни RETRO.md снапшота закрытия); ссылка не удалена.
+        head_after = gitcmd.branch_head_sha(artifact)
+        self.assertTrue(head_after, "артефактная ветка родителя удалена")
+        parents = gitcmd.git("rev-list", "--parents", "-n", "1",
+                             head_after).stdout.split()[1:]
+        self.assertEqual(parents, [head_before],
+                         "над головой родителя не ровно один новый коммит")
+        changed = gitcmd.git("diff", "--name-only", head_before,
+                             head_after).stdout.split()
+        self.assertEqual(changed, [f"tasks/{PARENT}/PASSPORT.md"],
+                         "новый коммит родителя — не коммит паспорта")
         text, _ = gitcmd.show(artifact, f"tasks/{PARENT}/SPEC.md")
         self.assertIn("## Деление", text or "")
 

@@ -13,17 +13,18 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
 `kind`:
 - `incident` — целостность/гигиена (recovery-сверка, сироты, гряз. репо);
   сюда же — стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3):
-  `WAVE_BREAKER_TASKS` РАЗНЫХ задач target self отказали ОДНИМ классом
-  (`failure_classification.TRANSIENT_SYSTEM_CLASSES` плюс «таймаут
-  шага») в пределах `WAVE_BREAKER_WINDOW_SEC` — `target=config.
-  DEFAULT_TARGET`, `source=WAVE_BREAKER_SOURCE`. Заводится
+  `WAVE_BREAKER_TASKS` РАЗНЫХ задач любых проектов отказали ОДНИМ
+  классом (`failure_classification.TRANSIENT_SYSTEM_CLASSES` плюс
+  «таймаут шага» — сбои окружения пульта: CLI, вход, сеть) в пределах
+  `WAVE_BREAKER_WINDOW_SEC` — алерт на проект пульта (`target=config.
+  DEFAULT_TARGET`), `source=WAVE_BREAKER_SOURCE`. Заводится
   `check_wave_breaker_failure`/`check_wave_breaker_timeout`, зовущимися
   из ДВУХ точек `orchestrator/runner.py`, уже журналирующих
   классифицированный отказ и таймаут шага в `steps` — счётчик читает
   ТОЛЬКО этот журнал (не открытые алерты: сторож зависших прогонов
   тестов, `doctor.check_hung_test_runs`, заводит `kind=incident` своим,
   не пересекающимся источником и в счётчик не входит, требование 4).
-  Дедуп — по (target, kind, source, класс), не по буквальному тексту
+  Дедуп — по (kind, source, класс), не по буквальному тексту
   сообщения (число задач и минуты меняются от срабатывания к
   срабатыванию) — тем же приёмом, что `raise_token_rate_divergence_alert`
   ниже.
@@ -181,12 +182,14 @@ def _role_prefix(role: str) -> str:
 
 
 def _wave_breaker_task_count(conn, action: str, detail_contains: str | None) -> int:
-    """Число РАЗНЫХ задач target self с записью журнала `steps.action=
+    """Число РАЗНЫХ задач любых проектов с записью журнала `steps.action=
     action` (и, если задан, `detail_contains` подстрокой `detail`) не
     старше `config.WAVE_BREAKER_WINDOW_SEC` (01M1THKPNZ11DBZAQDMJ33EMJR,
     требования 2, 5): `set` схлопывает несколько отказов ОДНОЙ и той же
     задачи в одну запись (требование/AC-5) — считаются задачи, не строки
-    журнала.
+    журнала. Стоп-кран — механика пульта: сбои его окружения бьют по
+    задачам всех проектов, поэтому в счёт идут все (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 7).
 
     Читает `store.all_tasks`/`store.task_steps` (обе уже возвращают
     готовые строки) вместо нового SQL-запроса здесь: SQL живёт только в
@@ -195,8 +198,6 @@ def _wave_breaker_task_count(conn, action: str, detail_contains: str | None) -> 
         seconds=config.WAVE_BREAKER_WINDOW_SEC)
     task_ids = set()
     for t in store.all_tasks(conn):
-        if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
-            continue
         for row in store.task_steps(conn, t["id"]):
             if row["action"] != action:
                 continue
@@ -221,15 +222,17 @@ def _parse_step_ts(ts: str) -> datetime | None:
 def _raise_wave_breaker_alert(conn, class_label: str, task_count: int) -> bool:
     """Заводит `kind=incident` стоп-крана волны для `class_label`, если
     для него ещё нет открытого (требование 3, AC-8): дедуп по префиксу
-    сообщения (target+kind+source+класс), не по буквальному тексту — число
-    задач и минуты меняются от срабатывания к срабатыванию, тот же приём,
-    что `raise_token_rate_divergence_alert` выше."""
+    сообщения (kind+source+класс), не по буквальному тексту — число задач
+    и минуты меняются от срабатывания к срабатыванию, тот же приём, что
+    `raise_token_rate_divergence_alert` выше. Алерт волны опознаётся по
+    источнику `WAVE_BREAKER_SOURCE`, не по проекту (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 8); заводится он по-прежнему на
+    проект пульта."""
     window_min = config.WAVE_BREAKER_WINDOW_SEC // 60
     prefix = f"стоп-кран волны: {class_label} у "
     message = f"{prefix}{task_count} задач за {window_min} минут"
     for row in open_alerts(conn, "incident"):
-        if (row["target"] == config.DEFAULT_TARGET
-                and row["source"] == WAVE_BREAKER_SOURCE
+        if (row["source"] == WAVE_BREAKER_SOURCE
                 and row["message"].startswith(prefix)):
             return False
     return raise_alert(conn, config.DEFAULT_TARGET, "incident",

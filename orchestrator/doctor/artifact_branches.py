@@ -120,8 +120,9 @@ def _fix_unsent_closed_ref(task_id: str, target: str | None, repo,
     = коммиту закрытия — `artifact_branch.push`; голова другая (ссылку
     меняли после закрытия) — не досылается; локальной ссылки нет —
     досылается сам коммит из клона. Объекта в клоне нет — у задачи артели
-    он ищется в git главной копии пульта (переходный период этапа 2
-    ADR-0021: коммиты закрытия, сделанные до клона, жили только там).
+    (признак `repo_context.is_artel`) он ищется в git главной копии пульта
+    (переходный период этапа 2 ADR-0021: коммиты закрытия, сделанные до
+    клона, жили только там; SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 28).
     Не нашёлся — строка `[FIX]`, не молчание (SPEC
     01M446WV7S94FTZGJCGMPJ667F, требование 3)."""
     if doctor.gitcmd.commit_exists(closing, repo=repo):
@@ -134,7 +135,7 @@ def _fix_unsent_closed_ref(task_id: str, target: str | None, repo,
             _push_closing_sha(repo, repo, task_id, closing)
         return
     main_copy = doctor.config.ROOT
-    if ((target or doctor.config.DEFAULT_TARGET) == doctor.config.DEFAULT_TARGET
+    if (doctor.repo_context.is_artel(target or doctor.config.DEFAULT_TARGET)
             and doctor.gitcmd.commit_exists(closing, repo=main_copy)):
         _push_closing_sha(main_copy, repo, task_id, closing)
         return

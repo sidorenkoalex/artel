@@ -1,4 +1,6 @@
-"""Репозиторный контекст target'а: одно место, где живёт «куда клон, какой
+"""Контекст проекта: клон, база, защищённые пути проекта, признак артели.
+
+Репозиторный контекст target'а: одно место, где живёт «куда клон, какой
 форндж, какая базовая ветка» (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 1).
 
 До этой задачи каждая из 13 точек реестра SPEC (git/gh-слой fsm.py,
@@ -21,11 +23,16 @@ remote `origin`, поэтому git-уровневые команды (fetch/pus
 защищённые пути сверяются у любого проекта — по его перечню
 (`protected_paths`).
 
+Оставленные развилки «артель или нет» (SPEC 01M484RNV3QBDY3B0M16J916ZP,
+требование 2) узнают пульт одной функцией `is_artel` этого модуля.
+
 `None` — target не читается (неизвестное имя, сломанный targets.yaml):
 молчаливый откат на главную копию был бы ОПАСНЕЕ обычной деградации —
 вызывающий код обязан получить сигнал «конфигурация не читается».
 """
+import sqlite3
 from dataclasses import dataclass
+from os import PathLike
 from pathlib import Path
 
 from . import config, gitcmd, targets
@@ -73,7 +80,11 @@ def clone_path(target_name: str) -> Path:
 
 
 def resolve(target_name: str) -> "RepoContext | None":
-    if target_name == config.DEFAULT_TARGET:
+    """Контекст проекта `target_name`. Артель разрешается без чтения
+    `targets.yaml` (`remote="origin"`, база `config.MAIN_BRANCH`): пульт
+    обязан работать над собой и при сломанном файле, который сам чинится
+    задачей артели (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 16)."""
+    if is_artel(target_name):
         return RepoContext(path=clone_path(target_name), remote="origin",
                            base=config.MAIN_BRANCH, target=target_name)
     try:
@@ -140,11 +151,29 @@ def profile_of(target_name: str) -> ProfileAnswer:
     return ProfileAnswer(PROFILE_PRESENT, values=dict(values))
 
 
-def is_artel(ctx: "RepoContext | None") -> bool:
-    """Проект контекста — артель (`config.DEFAULT_TARGET`): признак шагов
-    гейта мержа, нужных только пульту (SPEC 01M42PENCS26D0656X8FR7DFA7,
-    требование 3). Не путь: путь артели — клон, как у любого проекта."""
-    return ctx is not None and ctx.target == config.DEFAULT_TARGET
+def is_artel(subject) -> bool:
+    """Проект — артель (`config.DEFAULT_TARGET`): единственный признак, по
+    которому оставленные развилки узнают пульт (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, требование 2; шаги гейта мержа, нужные
+    только пульту, — SPEC 01M42PENCS26D0656X8FR7DFA7, требование 3).
+
+    `subject` — контекст (`RepoContext`), имя проекта, строка задачи (её
+    колонка `target`; пустая — артель, умолчание колонки) или путь клона
+    (клон артели — `clone_path(config.DEFAULT_TARGET)`). `None` — не
+    артель: неразрешённый контекст признаком пульта не считается."""
+    if subject is None:
+        return False
+    if isinstance(subject, RepoContext):
+        name = subject.target
+    elif isinstance(subject, str):
+        name = subject
+    elif isinstance(subject, PathLike):
+        return Path(subject) == clone_path(config.DEFAULT_TARGET)
+    elif isinstance(subject, (dict, sqlite3.Row)):
+        name = subject["target"] or config.DEFAULT_TARGET
+    else:
+        name = getattr(subject, "target", None)
+    return name == config.DEFAULT_TARGET
 
 
 def path_or_none(ctx: "RepoContext | None") -> Path | None:

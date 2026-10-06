@@ -219,9 +219,7 @@ def git_diff_part(base: str, branch: str, *flags: str,
     в котором считается diff: внешний target живёт в своём клоне
     (`orchestrator/repo_context.py`), self — в клоне артели. `None` (по
     умолчанию) — клон артели (`workspace.repo(config.DEFAULT_TARGET)`),
-    не `config.ROOT`: прежние вызовы без `repo` всегда были self-target
-    (`fsm._snapshot_split_assessment` зовёт эту функцию только под
-    условием `target == config.DEFAULT_TARGET`).
+    не `config.ROOT`: прежние вызовы без `repo` всегда были self-target.
 
     git не ответил — это часть пакета с причиной, а не пустой diff:
     молча показать ревьюверу «изменений нет» значит выпросить аппрув

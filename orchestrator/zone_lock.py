@@ -281,11 +281,20 @@ def task_zone_paths(row) -> set[str]:
     return _own_paths(raw)
 
 
+def _project(row) -> str:
+    """Проект задачи по её строке; пустая колонка — артель (умолчание
+    колонки `target`)."""
+    return row["target"] or config.DEFAULT_TARGET
+
+
 def forecast_overlaps(conn, own: set[str], *, exclude_task_id: str | None = None,
-                      states=FORECAST_STATES) -> list[tuple[str, str, str]]:
+                      states=FORECAST_STATES,
+                      target: str | None = None) -> list[tuple[str, str, str]]:
     """Список `(общий путь, id задачи, её состояние)` — пересечения `own` с
-    зонами задач основного target'а, чьё состояние входит в `states`
-    (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9, требования 1 и 3). Отсортирован для
+    зонами задач проекта `target` (не назван — артель), чьё состояние
+    входит в `states` (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9, требования 1 и 3).
+    Задачи разных проектов зон не делят: у каждого проекта свой репозиторий
+    (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 1). Отсортирован для
     детерминизма вывода и журнала.
 
     Это ПРОГНОЗ очереди, не отказ: `_occupies` (старт шага разработчика,
@@ -304,11 +313,12 @@ def forecast_overlaps(conn, own: set[str], *, exclude_task_id: str | None = None
     покрытые `config.COMMON_ZONES`, из сверки выпадают вместе с ними."""
     if not own:
         return []
+    project = target or config.DEFAULT_TARGET
     matches = []
     for row in store.all_tasks(conn):
         if row["id"] == exclude_task_id:
             continue
-        if (row["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+        if _project(row) != project:
             continue
         if row["state"] not in states:
             continue
@@ -400,19 +410,21 @@ def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
     developer): `catalog`/`doctor` уже сами ограничивают вызов состоянием
     `in_dev`, эта проверка — второй рубеж на случай прямого вызова.
 
-    Зоны — механика только основного (dogfood) target'а (SPEC, «Не
-    входит»: «зоны для внешних target» — отдельная задача) — задача
-    другого target'а никогда не считается ни занявшей, ни заблокированной.
+    Замок зон действует для задачи любого проекта, а кандидаты-держатели —
+    только задачи того же проекта: у каждого проекта свой репозиторий, и
+    одинаковые пути зон разных проектов — разные файлы (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строки 2-3).
     """
-    if t["state"] != "in_dev" or t["target"] != config.DEFAULT_TARGET:
+    if t["state"] != "in_dev":
         return None
     own = _own_paths(t["zones"])
     if not own:
         return None
     if _occupies(conn, task_id):
         return None
+    project = _project(t)
     for row in store.all_tasks(conn):
-        if row["id"] == task_id or row["target"] != config.DEFAULT_TARGET:
+        if row["id"] == task_id or _project(row) != project:
             continue
         if row["state"] not in BLOCKING_STATES:
             continue
@@ -588,9 +600,10 @@ def queue_position(conn, task_id: str, path: str) -> tuple[int, int]:
     `doctor.check_zone_waits`), прежде чем он решит подождать, снять
     ожидание (`cmd_zone_release`) или переставить очередь
     (`cmd_zone_reorder`)."""
+    project = store.task_target(conn, task_id)
     competitors = []
     for row in store.all_tasks(conn):
-        if row["state"] != "in_dev" or row["target"] != config.DEFAULT_TARGET:
+        if row["state"] != "in_dev" or _project(row) != project:
             continue
         conflict = blocking_conflict(conn, row["id"], row)
         if conflict is not None and conflict[0] == path:
