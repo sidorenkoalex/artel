@@ -2,7 +2,7 @@
 task: 01M45FK56DWMNBRKA1VWM12H19
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -226,35 +226,32 @@ schema_version: 5
   (`main`/пин), а не кодом ветки. Ответ на эскалацию такого вида стоит
   сразу дополнять проводкой через гейт или правкой в `main` раньше кода.
 
-## Приложение 1: targets.yaml — зеркало `no_paths` записи artel
+## Приложение 1: targets.yaml — примечание к зеркалу `no_paths` записи artel
 
-Применимость проверена: `git apply --check` на чистом дереве ветки
-(`targets.yaml` в ветке равен `main`) проходит. После наложения
-`targets.load()` проходит, `no_paths` записи `artel` — 18 записей,
-множество равно `config.PROTECTED_PATHS`.
+Зеркало `no_paths` записи `artel` (18 записей `config.PROTECTED_PATHS`) и
+новый комментарий записи Оператор внёс в `main` вперёд кода задачи
+коммитом 09256315 (решение 06.10). После этого коммита приложение
+сводится к примечанию в комментарии записи `artel` о том, что зеркало
+внесено вперёд кода (ANSWER-6). Применимость — к `main` 09256315:
+`git apply --check` к `targets.yaml` проходит (ветка подтянута с
+09256315, `targets.yaml` в ней равен `main`). После наложения
+`no_paths` записи `artel` равно `config.PROTECTED_PATHS`, прочие поля и
+записи не меняются, слова «декларация» в файле нет.
 
 ```diff
 diff --git a/targets.yaml b/targets.yaml
-index 9de23282..f161d0cd 100644
+index f161d0c..ffc9cfd 100644
 --- a/targets.yaml
 +++ b/targets.yaml
-@@ -23,10 +23,12 @@ targets:
-     url: https://github.com/sidorenkoalex/artel
-     base: main
-     token_slot: artel-token
--    # Пути, которые меняет только Оператор (CLAUDE.md, ADR-0001). Пока это
--    # декларация: исполнитель no_paths — проверка до merge (A2/A3);
--    # действующий enforcement — job protected-paths в .github/workflows/ci.yml.
--    no_paths: [gates.yaml, roles.yaml, targets.yaml, CLAUDE.md, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py]
-+    # Пути, которые меняет только Оператор (CLAUDE.md, ADR-0001). У внешнего
-+    # проекта no_paths — перечень его защищённых путей, по нему сверяют
-+    # гейты пульта (orchestrator/repo_context.py::protected_paths). У artel
-+    # перечень пульта — config.PROTECTED_PATHS, а это поле — его зеркало:
-+    # совпадение держит сторож tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py.
-+    no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini]
+@@ -28,6 +28,8 @@ targets:
+     # гейты пульта (orchestrator/repo_context.py::protected_paths). У artel
+     # перечень пульта — config.PROTECTED_PATHS, а это поле — его зеркало:
+     # совпадение держит сторож tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py.
++    # Зеркало внесено в main вперёд кода задачи 01M45FK56DWMNBRKA1VWM12H19
++    # (решение Оператора 06.10, коммит 09256315).
+     no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini]
      project_skills: []
      merge_gate: operator
-     test_profile:
 ```
 
 ## Смена ожиданий существующих тестов (мандат ANSWER-2)
@@ -352,45 +349,14 @@ repo_context.is_artel(ctx): return False`). Оба метода покрасне
   (окружение роли, ANSWER-2). База не посчитана: её прогон тоже красный.
 - Карта `docs/codebase-map.md` регенерирована.
 
-## Эскалация
+## Сверка после ANSWER-6 (приложение 1 переписано под `main` 09256315)
 
-**Вопросы** (по блокирующести):
-
-1. **Правка по ANSWER-5 сделана, но гейт её не видит. Гейт выхода `in_dev`
-   исполняет код пульта, а не код ветки задачи.**
-   - Правка `_plan_appendix_gate` / `_appendix_already_in_base` закоммичена
-     пультом в ветку задачи: fd1c600a, журнал 07:27:12Z.
-   - Через 7 секунд, в 07:27:19Z, тот же гейт снова отказал: «приложение
-     PLAN targets.yaml не применяется к базе сравнения 09256315…: error:
-     patch failed: targets.yaml:23».
-   - Так и должно быть: на `main` (код пульта)
-     `orchestrator/advance_gates/plan_appendix.py` исхода «уже наложено» нет
-     (`git show main:… | grep -c already_in_base` → 0).
-   - Пока правка не в `main`, пульт будет отказывать при любой сдаче
-     `ready`. Мерж невозможен, пока задача стоит перед этим гейтом.
-     Выйти из круга кодом задачи нельзя.
-
-   Варианты:
-   - (а) Оператор проводит `in_dev -> review` в обход этого гейта своим
-     решением. Применимость приложения 1 доказана: оно наложено в `main`
-     коммитом 09256315, а планка AC-14 зелёная. Правка гейта остаётся в
-     ветке и приходит в пульт с мержем задачи.
-   - (б) Оператор вносит правку гейта (дифф fd1c600a по
-     `orchestrator/advance_gates/plan_appendix.py`) в `main` отдельным
-     коммитом раньше кода, как приложение 1, и обновляет пин. После этого
-     сдача `ready` проходит штатно.
-   - (в) Убрать приложение 1 из PLAN и поправить планку AC-14 через
-     `amend-tests` (вариант «в» прошлой эскалации). Не рекомендую.
-
-   Дефолт при молчании: (а).
-
-**Контекст.**
-- Код ветки после ANSWER-5 в этом шаге не менялся.
-- `tests/test_plan_appendix.py` — 31 passed. Новый метод
-  `SequentialApplyGateTest::test_appendix_already_in_base_passes_with_a_journal_record`
-  зелёный.
-- `artel.py plank-run` — 2 passed, код выхода 0.
-- Код пульта мне недоступен на чтение, поэтому сверка шла по `main`.
-
-**Блокирует.** Переход `in_dev -> review`: пульт с кодом `main` отказывает
-гейтом применимости при любой сдаче `ready`.
+- Дифф раздела «Приложение 1» заменён диффом из ANSWER-6: примечание в
+  комментарии записи `artel`. Код задачи (в том числе правка
+  `_plan_appendix_gate` и её тест) и планка не менялись.
+- `git apply --check` приложения 1 на чистом дереве ветки проходит;
+  `targets.yaml` ветки равен `main` (`git diff main -- targets.yaml` пуст).
+- `artel.py plank-run 01M45FK56DWMNBRKA1VWM12H19` — 2 passed, код выхода 0.
+- `tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py`,
+  `tests/test_plan_appendix.py` — 33 passed.
+- `scripts/guard.py` на PLAN.md — ок.
