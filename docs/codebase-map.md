@@ -1,5 +1,5 @@
 ---
-built_at_sha: b7e78781744f09e0837d8d1315da5f572b6c440a
+built_at_sha: 9b41485c3a2b501f15c56bebcb3c51ab45f1a0c1
 ---
 
 # Codebase-map пульта
@@ -1957,6 +1957,7 @@ built_at_sha: b7e78781744f09e0837d8d1315da5f572b6c440a
 - `is_extraneous_acceptance_test_file`
 - `is_extraneous_task_root_file`
 - `is_long_lived_test_path`
+- `is_task_passport`
 - `literal_pair_keys`
 - `long_lived_errors_from_files`
 - `long_lived_path_prefix`
@@ -3173,6 +3174,19 @@ built_at_sha: b7e78781744f09e0837d8d1315da5f572b6c440a
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_01m490tdwemdq700vxtkyanf7k_passport_guard.py
+
+**Назначение:** Паспорт задачи без frontmatter и `scripts/guard.py` — режим `--all` и
+
+**Публичные функции:**
+- `passport_text`
+- `random_task_id`
+- `valid_tz_text`
+
+**Импортирует:** —
 
 **Импортируется:** —
 

@@ -1580,6 +1580,21 @@ EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в ката
 ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
     r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
+# Паспорт живой задачи пишет пульт: заголовок и строки «<время> <состояние>
+# actor=<кто>», frontmatter у него нет — это не артефакт роли (SPEC
+# 01M490TDWEMDQ700VXTKYANF7K). С мержа ADR-0021 этапа 3 части 3 паспорт
+# ведётся и у задач артели, и проверка артефакта на нём отказывала мерж.
+TASK_PASSPORT_NAME = "PASSPORT.md"
+PASSPORT_SKIP_NOTE = "паспорт задачи, не артефакт роли — пропущен"
+
+
+def is_task_passport(path: Path) -> bool:
+    """`True` — `path` есть паспорт задачи: файл `PASSPORT.md`, чей каталог
+    лежит непосредственно в каталоге `tasks` (первый уровень каталога
+    задачи). `PASSPORT.md` в любом другом месте паспортом не считается и
+    проверяется как прежде (требование 2, AC-7)."""
+    return path.name == TASK_PASSPORT_NAME and path.parent.parent.name == "tasks"
+
 # Имя помощника пульта рядом с планкой (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
 # требования 3-5; источник — `orchestrator/plank_helper.py`, выкладка —
 # `acceptance.PLANK_HELPER_NAME`). Под `_*.py` подходит, но планке не
@@ -1599,6 +1614,12 @@ def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
     if "/" in rel_to_acceptance_tests:
         return True
     if rel_to_acceptance_tests == RESERVED_PLANK_HELPER_NAME:
+        return True
+    # Паспорт законен только первым уровнем каталога задачи (SPEC
+    # 01M490TDWEMDQ700VXTKYANF7K, AC-4): здесь `.+\.md` пустил бы его в
+    # проверку артефакта, и вместо именованной причины вышло бы «нет
+    # frontmatter».
+    if rel_to_acceptance_tests == TASK_PASSPORT_NAME:
         return True
     return not ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(rel_to_acceptance_tests)
 
@@ -3773,7 +3794,8 @@ def main() -> int:
         extraneous = scan_extraneous_acceptance_files(Path("tasks"))
         task_root_extraneous = scan_extraneous_task_root_files(Path("tasks"))
         extraneous_set = set(extraneous) | set(task_root_extraneous)
-        files = [f for f in files if f not in extraneous_set]
+        files = [f for f in files
+                 if f not in extraneous_set and not is_task_passport(f)]
         extraneous_errors = (
             [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}" for f in extraneous]
             + [f"{f}: {EXTRANEOUS_TASK_ROOT_FILE_REASON}"
@@ -3811,6 +3833,9 @@ def main() -> int:
     for f in files:
         if not f.exists():
             all_errors.append(f"{f}: файл не найден")
+            continue
+        if is_task_passport(f):
+            print(f"{f}: {PASSPORT_SKIP_NOTE}")
             continue
         all_errors.extend(check(f))
         if args != ["--all"]:
