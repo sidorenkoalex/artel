@@ -8,6 +8,22 @@ from tests.sandbox import RealGitSandbox
 
 
 class SuiteReuseBoundaryTest(RealGitSandbox):
+    def test_base_command_uses_resolved_pytest_head(self):
+        """Ловит мутацию: ключ базы сохраняет флаги прогона или сырой python3 и не узнаёт тот же pytest из профиля."""
+        tree = acceptance.suite_tree_hash(self.root, base=True)
+        default = acceptance.suite_result_key(tree, base=True)
+        profile = acceptance.suite_result_key(
+            tree, ["python3", "-m", "pytest"], base=True)
+        with_output_flags = acceptance.suite_result_key(
+            tree, ["python3", "-m", "pytest", "tests", "-vv", "-n", "2",
+                   "-p", "xdist"], base=True)
+        other = acceptance.suite_result_key(
+            tree, ["/different/python3", "-m", "pytest"], base=True)
+        self.assertIsNotNone(default)
+        self.assertEqual(default, profile)
+        self.assertEqual(default, with_output_flags)
+        self.assertNotEqual(default, other)
+
     def test_staged_new_file_enters_tree_key(self):
         """Ловит мутацию: временный индекс начинается с HEAD и теряет новый файл, уже добавленный в индекс."""
         before = acceptance.suite_tree_hash(self.root)

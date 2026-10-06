@@ -1139,18 +1139,22 @@ def suite_result_key(tree: str, command: list[str] | None = None,
     if not isinstance(tree, str) or not re.fullmatch(r"[0-9a-f]{40}", tree):
         return None
     try:
-        argv = _pytest_command("tests", command=command) + [
-            "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"]
+        argv = _pytest_command(command=command) if base else (
+            _pytest_command("tests", command=command) + [
+                "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"])
         if base:
             clean = []
-            skip = False
-            for arg in argv:
-                if skip:
-                    skip = False
-                elif arg == "-n":
-                    skip = True
-                elif arg != "-vv":
+            index = 0
+            while index < len(argv):
+                arg = argv[index]
+                if arg == "-n" or (arg == "-p" and
+                                   index + 1 < len(argv) and argv[index + 1] == "xdist"):
+                    index += 2
+                elif arg == "-vv" or arg == "tests" or arg.startswith("tests/"):
+                    index += 1
+                else:
                     clean.append(arg)
+                    index += 1
             argv = clean
         packages = sorted((d.metadata["Name"].lower(), d.version)
                           for d in importlib.metadata.distributions())
