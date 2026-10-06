@@ -1,5 +1,5 @@
 ---
-built_at_sha: 258b2c5ace186156fe74f9d243737c2a161f6c90
+built_at_sha: 2c72ad93ae6c3d285e11aee773ca05b4b732e434
 ---
 
 # Codebase-map пульта
@@ -486,7 +486,7 @@ built_at_sha: 258b2c5ace186156fe74f9d243737c2a161f6c90
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/repo_context.py`, `orchestrator/workspace.py`, `scripts/ci_push_class.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/ci_rerun.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/pin.py`, `orchestrator/watch.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`, `tests/test_01m3y75c9ty76083cg1pk00em4_stuck_check.py`, `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`, `tests/test_01m3yqb4kmady0bet5n8279n6b_start_precision.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py`, `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py`, `tests/test_01m46d5t8sz9d6s34tzfx8s46v_full_suite_lock.py`, `tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py`, `tests/test_01m48wre8bhfdy011q0hqgq91b_full_suite_limit_runs.py`, `tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`, `tests/test_acceptance.py`, `tests/test_auto_cycle.py`, `tests/test_ci_full_suite_once.py`, `tests/test_ci_rerun_command.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_ci_stuck_check_run.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_fetched_repo.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_pin.py`, `tests/test_plan_appendix.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_verifying_ceiling.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/ci_rerun.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/pin.py`, `orchestrator/watch.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`, `tests/test_01m3y75c9ty76083cg1pk00em4_stuck_check.py`, `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`, `tests/test_01m3yqb4kmady0bet5n8279n6b_start_precision.py`, `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`, `tests/test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py`, `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`, `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py`, `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py`, `tests/test_01m46d5t8sz9d6s34tzfx8s46v_full_suite_lock.py`, `tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py`, `tests/test_01m48wre8bhfdy011q0hqgq91b_full_suite_limit_runs.py`, `tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`, `tests/test_acceptance.py`, `tests/test_auto_cycle.py`, `tests/test_ci_rerun_command.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_ci_stuck_check_run.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_fetched_repo.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_pin.py`, `tests/test_plan_appendix.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_verifying_ceiling.py`
 
 ## orchestrator/ci_rerun.py
 
@@ -3900,18 +3900,6 @@ built_at_sha: 258b2c5ace186156fe74f9d243737c2a161f6c90
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/advance_gates/zones.py`, `orchestrator/artifact_source.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`
-
-**Импортируется:** —
-
-## tests/test_ci_full_suite_once.py
-
-**Назначение:** Полный набор CI исполняется один раз на голову ветки задачи.
-
-**Публичные функции:**
-- `check`
-- `workflow`
-
-**Импортирует:** `orchestrator/ci.py`
 
 **Импортируется:** —
 
