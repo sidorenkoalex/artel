@@ -25,7 +25,7 @@ from tests.sandbox import (seed_artel_clone_stub,  # noqa: E402
                            seed_artel_targets)
 from tests.sandbox import (SpyRun, _stub_check_stack, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git)
+                           disk_backed_show, fake_git, patch_retry_pause)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -162,6 +162,13 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
+        # Пауза повтора агента без сна — тот же приём, что умолчание
+        # `tests.sandbox.TmpRootTest.setUp` (SPEC 01M48WR0HKZW8KJCBWDZTFC4ZY):
+        # класс на голом `TestCase` его не наследует.
+        self.retry_pauses = []
+        pause_patcher = patch_retry_pause(self.retry_pauses)
+        pause_patcher.start()
+        self.addCleanup(pause_patcher.stop)
         # `artifact_source.resolve` теперь ВСЕГДА `foreign=True` — FSM
         # читает REVIEW.md/PLAN.md через `gitcmd.show`/`ls_tree_files`;
         # эта песочница без настоящего git ведёт диск `config.TASKS` как

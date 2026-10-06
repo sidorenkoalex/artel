@@ -23,7 +23,7 @@ from tests.sandbox import seed_artel_clone_stub, seed_artel_targets  # noqa: E40
 from tests.sandbox import (FakeProc, SANDBOX_ROLES_TEXT, SpyRun,  # noqa: E402
                            _stub_check_stack, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git,
+                           disk_backed_show, fake_git, patch_retry_pause,
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -100,6 +100,13 @@ class PromptChannelTest(unittest.TestCase):
         spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
+        # Пауза повтора агента без сна — тот же приём, что умолчание
+        # `tests.sandbox.TmpRootTest.setUp` (SPEC 01M48WR0HKZW8KJCBWDZTFC4ZY):
+        # класс на голом `TestCase` его не наследует.
+        self.retry_pauses = []
+        pause_patcher = patch_retry_pause(self.retry_pauses)
+        pause_patcher.start()
+        self.addCleanup(pause_patcher.stop)
         # `artifact_source.resolve` теперь ВСЕГДА возвращает `foreign=True`
         # — брифу/FSM читают SPEC через `gitcmd.show`/`ls_tree_files`, не
         # с диска напрямую; эта песочница без настоящего git ведёт один
