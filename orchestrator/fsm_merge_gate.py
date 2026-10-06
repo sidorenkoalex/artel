@@ -924,8 +924,10 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
                       "полный прогон после приложений", run.detail)
         return
     if run.outcome == acceptance.FULL_SUITE_TIMEOUT:
-        detail = (f"прогон не уложился в {config.FULL_SUITE_TIMEOUT_SEC} с "
-                  f"(полный набор tests/ после приложений): {run.detail}")
+        seconds, source = project_profile.full_suite_limit(ctx.target)
+        detail = (f"прогон не уложился в {seconds} с "
+                  f"(источник: {source}; "
+                  f"полный набор tests/ после приложений): {run.detail}")
         advice = (f"прогон оборван по пределу времени, это не исход "
                   f"тестов; повтори: artel.py approve {task_id}")
     elif run.outcome == acceptance.FULL_SUITE_NOT_STARTED:

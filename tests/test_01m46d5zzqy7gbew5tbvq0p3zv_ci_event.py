@@ -833,7 +833,11 @@ class CiStatusNamesRunEventTest(unittest.TestCase):
                 self.assertEqual(ci.red_status_sha(note), "", self.msg(note))
 
         with self.subTest(case="зелёный"):
-            build({x: "success"}, {x: "success", y: "skipped"})
+            green_y = self.rng.choice([
+                name for name in CHECK_NAMES
+                if name not in ci.FULL_SUITE_CHECKS and name != x
+            ])
+            build({x: "success"}, {x: "success", green_y: "skipped"})
             outcome, note = ci.verifying_status("task/x")
             self.assertEqual(outcome, ci.VERIFYING_GREEN, self.msg(note))
             self.assertFalse(ci.verifying_is_red(note), self.msg(note))

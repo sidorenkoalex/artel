@@ -10,6 +10,15 @@ from orchestrator import doctor
 
 # --- команда doctor -------------------------------------------------------
 
+def full_suite_timeout_check(name: str) -> doctor.Check:
+    """Действующий предел полного прогона проекта в строке doctor."""
+    from orchestrator import project_profile
+    seconds, source = project_profile.full_suite_limit(name)
+    return doctor.Check(
+        f"full-suite-timeout-{name}", "ok",
+        f"проект {name}: предел полного прогона tests/ {seconds} с "
+        f"(источник: {source})")
+
 def all_checks(conn) -> list[doctor.Check]:
     """Требование 1: прогон всех проверок doctor.
 
@@ -82,6 +91,7 @@ def all_checks(conn) -> list[doctor.Check]:
         checks.append(doctor.Check("targets-yaml", "fail", str(exc)))
         declared = {}
     for name, entry in declared.items():
+        checks.append(full_suite_timeout_check(name))
         checks.append(doctor.check_target_layout(name))
         checks.append(doctor.check_target_wrapper(name))
         checks.append(doctor.check_base_branch(name, entry))
