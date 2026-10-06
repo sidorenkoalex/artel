@@ -150,6 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.classify.outputs.code }}
+      open_pr: ${{ steps.open-pr.outputs.value }}
     steps:
       - name: дерево репозитория — классификатор читается из scripts/ci_push_class.py (01M28NWK5X10J139Z8TD69HFAC)
         uses: actions/checkout@v4
@@ -175,13 +176,40 @@ jobs:
           # уже несёт среда Actions, BEFORE — только что заданный env).
           python3 scripts/ci_push_class.py | tee /tmp/ci-push-class.out
           grep '^code=' /tmp/ci-push-class.out >> "$GITHUB_OUTPUT"
+      - id: open-pr
+        name: открытый PR ветки задачи для выбора одного полного прогона
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/task/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Только явно сливаемый открытый PR гарантирует прогон pull_request.
+          # При конфликте GitHub его не запускает: полный набор идёт на push.
+          owner=${GITHUB_REPOSITORY%%/*}
+          if ! numbers=$(timeout 30s gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&head=$owner:$GITHUB_REF_NAME" --jq '.[].number'); then
+            echo 'не удалось найти PR — полный набор идёт на push'
+            exit 0
+          fi
+          for number in $numbers; do
+            if [[ ! "$number" =~ ^[0-9]+$ ]]; then
+              echo 'некорректный номер PR — полный набор идёт на push'
+              exit 0
+            fi
+            if ! mergeable=$(timeout 30s gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq 'select(.state == "open" and .mergeable == true) | .number'); then
+              echo 'не удалось определить сливаемость PR — полный набор идёт на push'
+              exit 0
+            fi
+            if [[ "$mergeable" == "$number" ]]; then
+              echo 'value=true' >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
 
   python:
     name: Синтаксис и тесты оркестратора
     needs: changes
     # ADR-0016: `!= 'false'`, не `== 'true'` — упавший или отменённый
     # `changes` даёт пустой output, и тесты ИДУТ (fail-closed).
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && (github.event_name == 'pull_request' || needs.changes.outputs.open_pr != 'true') }}
     runs-on: ubuntu-latest
     # Страховка от зависшего раннера (01M29BANMM8X8JWJ5GDTJWKB0Z) — не
     # рабочий ориентир для длительности job, реальные прогоны много короче.
@@ -236,7 +264,7 @@ jobs:
     # на ~110 с. Условие запуска — то же, что у `python` (ADR-0016,
     # fail-closed на пустом output `changes`).
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && (github.event_name == 'pull_request' || needs.changes.outputs.open_pr != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

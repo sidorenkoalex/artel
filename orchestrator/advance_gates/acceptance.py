@@ -139,6 +139,48 @@ def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
     return True
 
 
+def _seed_repeats_escalate(conn, task_id: str, t, long_lived: list[str],
+                           run_cwd: Path, command: list[str] | None) -> bool:
+    """Повторы долгоживущих файлов задачи, несущих случайное зерно, после
+    ЗЕЛЁНОГО первого прогона (SPEC 01M48FRD9RJDBBVT2SN0FY5G2A, требование
+    2): каждый файл с импортом `random` гоняется ещё
+    `config.LONG_LIVED_SEED_REPEATS` раз — число читается здесь, в момент
+    рубежа. Повторы не останавливаются на первом красном: деталь называет
+    зёрна всех красных повторов.
+
+    Красный повтор — эскалация Оператору, не отказ разработчику:
+    долгоживущие файлы залочены, разработчик их не правит, чинит Оператор
+    командой `amend-tests` (решение Оператора 06.10 на гейте SPEC).
+
+    `True` — задача переведена в `escalated` (журнал и печать сделаны)."""
+    seeded = [rel for rel in long_lived
+              if acceptance.carries_random_seed(run_cwd / rel)]
+    if not seeded:
+        return False
+    repeats = config.LONG_LIVED_SEED_REPEATS
+    red: dict[str, list[str]] = {}
+    for number in range(1, repeats + 1):
+        for test in acceptance.run_repeat(seeded, run_cwd, command=command):
+            seeds = (", ".join(f"зерно: {s}" for s in test.seeds)
+                     if test.seeds else "зерно не напечатано")
+            note = f" ({test.note})" if test.note else ""
+            red.setdefault(test.node, []).append(
+                f"повтор {number}: {seeds}{note}")
+    if not red:
+        return False
+    tests = "; ".join(f"{node} — {', '.join(runs)}"
+                      for node, runs in red.items())
+    detail = (f"тест зависит от случайного зерна: зелёный в первом прогоне, "
+              f"красный в повторах ({repeats} повторов долгоживущих файлов "
+              f"с импортом random): {tests}")
+    store.update_task(conn, task_id, escalated_from="in_dev")
+    store.set_state(conn, task_id, "escalated", "fsm",
+                    expected_state=t["state"], detail=detail)
+    print(f"  дальше: тест чинит Оператор командой amend-tests по ответу "
+          f"на эскалацию задачи {task_id}")
+    return True
+
+
 def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
                              foreign: bool) -> bool:
     """Лок `acceptance_tests/` на `in_dev -> review` (требование 5,
@@ -242,7 +284,8 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     требование 5.2): «приёмочные тесты» остаётся за красной планкой,
     которую чинит developer.
 
-    `True` — переход отклонён (планка красная)."""
+    `True` — переход отклонён (планка красная) либо задача эскалирована
+    повторами долгоживущих файлов (`_seed_repeats_escalate`)."""
     def _missing_plank_refuses() -> bool:
         if acceptance.plank_present(acc_tdir / "acceptance_tests"):
             return False
@@ -339,6 +382,9 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
         print(tail)
         print(f"  дальше: почини код (не тест) и повтори "
               f"artel.py advance {task_id}")
+        return True
+    if long_lived and _seed_repeats_escalate(conn, task_id, t, long_lived,
+                                             run_cwd, command):
         return True
     if long_lived is None:
         card = acceptance.summary(acc_tdir, branch=t["branch"],
