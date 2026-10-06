@@ -3,7 +3,7 @@ task: 01M49B90T16AR81ETFEYY164H1
 type: review
 author_role: reviewer
 status: approved
-iteration: 2
+iteration: 3
 schema_version: 5
 ---
 
@@ -11,59 +11,92 @@ schema_version: 5
 
 ## Фаза A: план
 
-- Таблица покрытия PLAN полна (требования 1–8), шаги — проверяемые единицы.
-- Подход не изменился с итерации 1: вывод `open_pr` job `changes` и правило
-  исполненного близнеца в `orchestrator/ci.py`. ADR-0016 и инвариант 36 не задеты:
-  `paths`/`paths-ignore` не вводятся.
-- PLAN дополнен абзацем о закрытии R1-F1. «Влияние на систему» соответствует
-  фактическому diff: дублирующий тест удалён, карта пересобрана.
-- Замер требования 7 (2 → 1 на коммит по задаче 01M484RNV3) честно оговаривает,
-  что `gh run list` недоступен. Это принято ещё в итерации 1.
+- Таблица покрытия полна (требования 1–8), шаги проверяемые.
+- Изменение подхода после возврата приёмки 07.10: шаг `open-pr` ставит
+  `open_pr=true` только при явных `state=open` и `mergeable=true` в карточке PR.
+  Это закрывает дыру: у конфликтующего PR GitHub не запускает `pull_request`, а без
+  проверки полный набор пропал бы на обоих событиях, и коммит навсегда завис бы в
+  `verifying`. Обработка `null`, `false`, пустого ответа, сбоя и таймаута
+  fail-safe: набор остаётся на push. Это согласуется с требованием 2.
+- «Риски» честно называют цену: лишний прогон, пока `mergeable=null`, и при
+  одновременных первом push и открытии PR. Инвариант 36 не задет: `paths` нет.
+- «Влияние на систему» = diff: `orchestrator/ci.py` с итерации 2 не менялся.
+  Инкремент `27ccce74..6638bc26` — только новый `tests/test_ci_workflow_mergeable.py`.
+  `.github/` ветки не тронут.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | Приложение к `ci.yml` не менялось с итерации 1; планка AC-1 зелёная. |
-| 2 | OK | Без изменений с итерации 1: push без PR и ошибка API оставляют набор на push, `main` не затронут. |
-| 3 | OK | `orchestrator/ci.py` в инкременте не менялся. Правило держит долгоживущий файл задачи: в итерации 1 мутация `_unexecuted_full_suite → []` дала 28 failed. |
-| 4 | OK | `find_run_id`/`trigger_rerun` не менялись; AC-10 долгоживущего файла зелёный. |
-| 5 | OK | Планка `test_workflow_appendix.py` — 1 passed. |
-| 6 | OK | Все свойства AC-4…AC-14 держит `tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`. Дубль удалён (R1-F1). Изменение `test_ac8_parsers_keep_outcomes_on_the_new_text` остаётся в рамках ANSWER-1, вариант А. |
-| 7 | OK | См. Фазу A. |
-| 8 | OK | `ci.FULL_SUITE_CHECKS` — единственное объявление. Удалённый файл держал второй, литеральный список имён; теперь его нет. |
+| 1 | OK | Задания `python`/`python-min`: на `pull_request` идут всегда, на push с `open_pr=true` — `skipped`. Шаг ограничен `push` + `refs/heads/task/`. |
+| 2 | OK | Без PR, при несливаемом PR и при сбое API `open_pr` пуст, набор идёт на push. На `main` шаг не исполняется: условие задания то же, что раньше. |
+| 3 | OK | Код пульта не менялся с итерации 2. Долгоживущий файл задачи — 126 passed в составе затронутых модулей. |
+| 4 | OK | Без изменений, AC-10 зелёный. |
+| 5 | OK | Приложение из текущего PLAN: `git apply --check` — 0, `plan_appendix_ci.py --check-workflow` — 0. |
+| 6 | OK | Свойства AC-4…AC-14 держит долгоживущий файл. Новый тест сторожит условие workflow (сливаемость, ветка `task/`, условия заданий); заявки проверены мутациями, см. ниже. |
+| 7 | OK | Замер 2 → 1 на коммит (01M484RNV3) с оговоркой о недоступном `gh run list`; принят в итерации 1. |
+| 8 | OK | `ci.FULL_SUITE_CHECKS` — единственное объявление. |
 
 ## Замечания
 
-Новых замечаний нет. Инкремент `2c72ad93..27ccce74` содержит только удаление
-`tests/test_ci_full_suite_once.py` и пересборку `docs/codebase-map.md`. Удаление
-набор не ослабляет: этого файла нет в базе ветки (`main`), это новый файл задачи.
-Все его свойства перечислены в R1-F1 и сторожатся долгоживущим файлом.
+Блокирующих и major-замечаний нет.
+
+Наблюдения, не замечания:
+- `tests/test_ci_workflow_mergeable.py` читает `ci.yml` с наложенным приложением.
+  На голом дереве ветки он красный (`ValueError: '      - id: open-pr' is not in
+  list`). В CI зелёный, потому что шаг `plan_appendix_ci.py` накладывает приложение
+  до pytest (`ci.yml` ~199–206). После мержа зелёный, когда Оператор наложит
+  приложение. Это та же механика, что у остальных тестов задачи под приложение.
+  Разработчик описал локальный обход переменной `ARTEL_TEST_WORKFLOW`.
+- Мутация «убрать `.state == "open"` из jq карточки» тестом не ловится: фейковый
+  `timeout` проверяет состояние сам. Тест её и не заявляет. Последствий нет: список
+  уже запрошен с `state=open`.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | accepted | tests/test_ci_full_suite_once.py:53-164 | Файл повторял AC-4…AC-14 долгоживущего `tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py` (ADR-0020 п. 4); докстринги — только однострочная заявка | Двойная правка при смене механики; литералы имён расходились с `ci.yml` | Файл удалён целиком (коммит 27ccce74). Ссылок на него в дереве нет (`git grep` пуст). Карта пересобрана и свежа. Принято. |
+
+Открытых записей нет: R1-F1 принят (`accepted`) в итерации 2, новых замечаний нет.
 
 ## Вердикт
 
-approved. R1-F1 закрыт, код пульта и приложение к `ci.yml` по-прежнему
-соответствуют SPEC, блокирующих и major-замечаний нет.
+approved. Ужесточение шага `open-pr` по сливаемости PR корректно и fail-safe.
+Новый тест действительно ловит заявленные мутации. Код пульта и долгоживущие тесты
+не менялись и зелёные.
 
 ## Проверено исполнением
 
-- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M49B90T16AR81ETFEYY164H1` — `test_workflow_appendix.py`: 1 passed, код выхода pytest 0.
-- `python3 -m pytest -q tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py tests/test_ci_status.py tests/test_ci_rerun_command.py tests/test_ci_push_class.py` — 126 passed, 126 subtests passed. Это 134 из итерации 1 минус 8 методов удалённого дубля.
-- `git show --stat 27ccce74`: только `docs/codebase-map.md` и удаление `tests/test_ci_full_suite_once.py`. `orchestrator/ci.py` в инкременте не менялся.
-- `git grep -n test_ci_full_suite_once` — пусто: висячих ссылок нет.
-- `python3 scripts/codebase_map.py`, затем `git diff -- docs/codebase-map.md` без строки `built_at_sha` — расхождений нет, карта свежая. Регенерация откачена, `git status` чистый.
-- `git diff --stat main -- .github/workflows/ci.yml` — пусто: `ci.yml` ветки не тронут, правка едет только приложением PLAN.
-- CI коммита 27ccce74 зелёный (16 проверок) — по статусу из пакета.
+- `python3 -m pytest -q tests/test_ci_workflow_mergeable.py` на голом дереве ветки:
+  2 failed (`ValueError`, шага `open-pr` нет). Ожидаемо, без наложения приложения.
+- Приложение извлечено из текущего PLAN.md и наложено на копию `ci.yml` во
+  временном каталоге: `git apply --check` — 0, `git apply` — 0,
+  `python3 scripts/plan_appendix_ci.py --check-workflow <копия>` — 0
+  («шаг приложений PLAN есть в jobs python, python-min»).
+- `ARTEL_TEST_WORKFLOW=<копия> pytest tests/test_ci_workflow_mergeable.py`:
+  2 passed, 9 subtests.
+- Временные мутации копии `ci.yml` (код ветки не трогался):
+  - убрать `and .mergeable == true` — 3 failed (false/null/closed);
+  - заменить GET карточки на `mergeable=$number` — 5 failed;
+  - условие `python` без `open_pr` — 1 failed;
+  - шаг без `startsWith(github.ref, 'refs/heads/task/')` — 1 failed;
+  - убрать `.state == "open"` — зелёный (не заявлено, см. наблюдения).
+- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M49B90T16AR81ETFEYY164H1`:
+  1 passed, код выхода pytest 0.
+- `pytest -q tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py tests/test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py tests/test_ci_status.py tests/test_ci_rerun_command.py tests/test_ci_push_class.py`:
+  126 passed, 126 subtests passed.
+- `python3 scripts/codebase_map.py`, затем `git diff -- docs/codebase-map.md` без
+  `built_at_sha`: расхождений нет, карта свежая. Регенерация откачена, `git status`
+  чистый.
+- `git diff --stat main -- .github orchestrator/ci.py`: `.github/` не тронут,
+  изменён только `orchestrator/ci.py`.
+- CI коммита 6638bc26 зелёный (16 проверок) — по статусу из пакета. Он включает
+  новый тест на дереве с наложенным приложением.
 
 ## Предложения системе
 
-- Пакет итерации 2 не включает diff `docs/codebase-map.md` в инкремент, хотя коммит
-  27ccce74 его меняет. Свежесть карты ревьюверу приходится перепроверять вручную
-  при каждом удалении или добавлении теста. Можно печатать в пакете однострочный итог
-  «карта свежа / расходится» вместо исключения карты целиком.
+- Вспомогательный скрипт мутаций ревьювера (`.review_mut.py`) пришлось положить в
+  каталог документов задачи: однострочный bash с `$VAR` отклоняется песочницей,
+  а `rm` недоступен. Удалить его роль не смогла, и он попадёт в артефактную ветку.
+  Нужен временный каталог роли вне артефактов, либо разрешённая уборка
+  собственных файлов в каталоге документов.
