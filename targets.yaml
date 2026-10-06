@@ -23,10 +23,12 @@ targets:
     url: https://github.com/sidorenkoalex/artel
     base: main
     token_slot: artel-token
-    # Пути, которые меняет только Оператор (CLAUDE.md, ADR-0001). Пока это
-    # декларация: исполнитель no_paths — проверка до merge (A2/A3);
-    # действующий enforcement — job protected-paths в .github/workflows/ci.yml.
-    no_paths: [gates.yaml, roles.yaml, targets.yaml, CLAUDE.md, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py]
+    # Пути, которые меняет только Оператор (CLAUDE.md, ADR-0001). У внешнего
+    # проекта no_paths — перечень его защищённых путей, по нему сверяют
+    # гейты пульта (orchestrator/repo_context.py::protected_paths). У artel
+    # перечень пульта — config.PROTECTED_PATHS, а это поле — его зеркало:
+    # совпадение держит сторож tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py.
+    no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini]
     project_skills: []
     merge_gate: operator
     test_profile:
