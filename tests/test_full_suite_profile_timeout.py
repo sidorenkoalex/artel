@@ -87,6 +87,24 @@ class FullSuiteProfileTimeoutTest(unittest.TestCase):
         self.assertIn("превысил 1500с", result.detail)
         self.assertIn("профиль тестов проекта artel", result.detail)
 
+    def test_direct_gate_run_without_database_does_not_create_one(self):
+        """Ловит мутацию: прямой прогон открывает отсутствующий state.db,
+        оставляет пустой файл и ломает последующее чтение документов задачи
+        ошибкой `no such table: tasks`."""
+        db_path = self.root / "absent-state.db"
+        with mock.patch.object(config, "DB", db_path), \
+             mock.patch.object(store, "db", side_effect=AssertionError(
+                 "прямой прогон не должен открывать БД")), \
+             mock.patch.object(acceptance, "_machine_lock",
+                               return_value=contextlib.nullcontext(None)), \
+             mock.patch.object(acceptance, "run_full_suite",
+                               return_value=(True, "1 passed in 0.01s\n")), \
+             mock.patch.object(acceptance, "_write_full_suite_log",
+                               return_value=None):
+            result = acceptance.full_suite(self.root, "T1")
+        self.assertTrue(result.green)
+        self.assertFalse(db_path.exists())
+
     def test_suite_report_uses_effective_limit(self):
         """Ловит мутацию: suite-run печатает константу вместо действующего
         предела и скрывает источник таймаута."""

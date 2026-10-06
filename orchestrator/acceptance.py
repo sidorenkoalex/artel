@@ -1103,14 +1103,16 @@ def full_suite(root: Path, task_id: str,
     # журнал задачи гейта (требование 2), а `run_full_suite` внутри взятого
     # замка идёт без второго взятия.
     from . import project_profile, store  # store -> ... -> acceptance
-    try:
-        target = store.task_target(store.db(), task_id)
-    except sqlite3.OperationalError as exc:
-        if "no such table: tasks" not in str(exc):
-            raise
-        # Прямые вызовы узла без инициализированной БД (юнит-сценарии)
-        # исторически используют проект по умолчанию.
-        target = config.DEFAULT_TARGET
+    # Прямой вызов узла без БД (юнит-сценарии и временные деревья) не
+    # должен создавать пустой state.db: читатели ссылок документов считают
+    # наличие файла признаком готовой схемы и запрашивают таблицу tasks.
+    target = config.DEFAULT_TARGET
+    if config.DB.exists():
+        try:
+            target = store.task_target(store.db(), task_id)
+        except sqlite3.OperationalError as exc:
+            if "no such table: tasks" not in str(exc):
+                raise
     limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
     with _machine_lock(task_id, limit) as holder:
