@@ -2,7 +2,7 @@
 task: 01M45FK56DWMNBRKA1VWM12H19
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -108,7 +108,10 @@ schema_version: 5
    любого проекта, `_full_suite_command`, параметр `command` у
    `acceptance.full_suite`, `_map_step`.
 7. Тесты: `tests/test_project_protected_paths.py` (свойства, не покрытые
-   долгоживущими файлами). Карта `docs/codebase-map.md` регенерирована.
+   долгоживущими файлами). Смена ожиданий двух существующих тестов по
+   мандату ANSWER-2 (вариант «б», с переименованием) — раздел «Смена
+   ожиданий существующих тестов» ниже. Карта `docs/codebase-map.md`
+   регенерирована.
 8. Приложение 1 к `targets.yaml` (ниже): зеркало `no_paths` записи
    `artel` и новый комментарий.
 
@@ -123,7 +126,7 @@ schema_version: 5
 | 5 | 3 |
 | 6 | 6 |
 | 7 | 6 |
-| 8 | 7; смена ожиданий двух существующих тестов — «Эскалация» ниже |
+| 8 | 7; смена ожиданий двух существующих тестов — по мандату ANSWER-2 |
 
 Критерии приёмки:
 - AC-1..AC-11 и AC-13 — долгоживущие файлы
@@ -215,84 +218,45 @@ index 9de23282..f161d0cd 100644
      test_profile:
 ```
 
-## Эскалация
+## Смена ожиданий существующих тестов (мандат ANSWER-2)
 
-**Вопросы** (по блокирующести):
+Ответ Оператора ANSWER-2 на эскалацию: вопрос 1 — вариант «б» (обе
+правки с переименованием), вопрос 2 — вариант «а» (сверка защищённых зон
+на гейте SPEC у любого проекта, у артели — по `config.PROTECTED_PATHS`;
+реализация не менялась). Строки мандата «Ослабление тестов разрешено: …»
+называют оба прежних имени методов.
 
-1. **Мандат на смену ожиданий двух существующих тестов** (требование 8
-   SPEC). Они закрепляют пропуск проверки для внешнего проекта и на ветке
-   красны по построению: развилку сняли требования 3 и 1.
-   - `tests/test_plan_appendix.py::PlanAppendixGateTest::test_external_target_skips_the_gate`.
-     Задача проекта `other`: записи в `targets.yaml` нет, контекст не
-     разрешён. PLAN несёт приложение.
-     - Было: `self.assertFalse(refuses)` — гейт пропускает молча, git не
-       зовётся.
-     - Стало: `self.assertTrue(refuses)` и `self.assertEqual(self.actions(),
-       [plan_appendix.PLAN_APPENDIX_GATE_FAILURE_ACTION])`. Подмена
-       `gitcmd.diff_base` → `boom` остаётся: git по-прежнему не зовётся.
-     - Требования SPEC 3 (столбец «неразрешённый контекст» — отказ
-       перехода) и AC-12.
-   - `tests/test_protected_paths_gate.py::MergeGateProtectedPathDiffGateTest::test_external_target_never_calls_diff_base`.
-     Внешний `RepoContext` без `target` и без `no_paths`.
-     - Было: `diff_base.assert_not_called()` и `self.assertFalse(escalated)`.
-     - Стало: `diff_base.assert_called_once_with("task/t001-x",
-       repo=ext_ctx.path)` при подменённом `gitcmd.diff_names`, отдающем
-       путь пульта (например, `skills/x.md`). Утверждение
-       `self.assertFalse(escalated)` остаётся: пустой перечень проекта не
-       эскалирует путь, защищённый только у артели.
-     - Требования SPEC 1, 3 и AC-5.
+1. `tests/test_plan_appendix.py::PlanAppendixGateTest::test_external_target_skips_the_gate`
+   → `test_unresolved_external_target_refuses_without_git`.
+   - Было: `self.assertFalse(refuses)`.
+   - Стало: `self.assertTrue(refuses)` и `self.assertEqual(self.actions(),
+     [plan_appendix.PLAN_APPENDIX_GATE_FAILURE_ACTION])`. Подмена
+     `gitcmd.diff_base` → `boom` сохранена.
+   - Основание: требование 3 SPEC, AC-12.
+2. `tests/test_protected_paths_gate.py::MergeGateProtectedPathDiffGateTest::test_external_target_never_calls_diff_base`
+   → `test_external_target_checks_diff_by_project_perimeter`.
+   - Было: `diff_base.assert_not_called()`, `self.assertFalse(escalated)`.
+   - Стало: `diff_base` отвечает `"deadbeef"`, `gitcmd.diff_names` —
+     `["skills/x.md"]`; `diff_base.assert_called_once_with("task/t001-x",
+     repo=ext_ctx.path)`; `self.assertFalse(escalated)` сохранено.
+   - Основание: требования 1, 3 SPEC, AC-5.
 
-   Варианты:
-   - (а) мандат на обе правки как описано, имена методов сохраняются;
-   - (б) то же, но с переименованием методов: имена «skips»/«never_calls»
-     после правки лгут, например `test_unresolved_external_target_refuses_without_git`
-     и `test_external_target_checks_diff_by_project_perimeter`;
-   - (в) раздел SPEC «Меняемое поведение» — если Оператор сочтёт смену
-     выразимой парами литералов. Смена здесь не литеральная
-     (`assertFalse` → `assertTrue`, `assert_not_called` →
-     `assert_called_once_with`), поэтому раздел её, скорее всего, не
-     опишет.
+Докстринги обоих методов переписаны под новую проверку, заявки «Ловит
+мутацию» обновлены. Проверка мутацией: развилка возвращена временно
+(`plan_appendix.py` — пропуск при неразрешённом контексте;
+`fsm_merge_gate._protected_path_diff_gate` — `if not
+repo_context.is_artel(ctx): return False`). Оба метода покраснели, код
+возвращён без изменений.
 
-   Дефолт при молчании: (а).
+Прогоны в шаге после правки: `test_plan_appendix.py`,
+`test_protected_paths_gate.py`, `test_zones_gate.py`,
+`test_project_protected_paths.py` — 80 passed; `test_plan_appendix.py`,
+`test_protected_paths_gate.py`, `test_test_integrity_gate.py`,
+`test_mutation_claim_gate.py` — 109 passed.
 
-2. **Сверка защищённых зон на гейте SPEC у артели.** Сегодня гейт SPEC зоны
-   с защищёнными путями не сверяет ни у какого проекта. Сделано правило без
-   развилки: сверка у любого проекта, у артели — по `config.PROTECTED_PATHS`.
-   Варианты:
-   - (а) оставить для всех проектов;
-   - (б) только для внешних проектов: строгое прочтение AC-10 «для
-     артели — прежний перечень», а прежнего поведения на гейте SPEC у
-     артели не было.
-
-   Дефолт при молчании: (а).
-
-**Контекст.** Реализация готова целиком:
-- `merge_gate.py` — 6/6 зелёные;
-- `in_dev_gates.py`, `draft_mr.py`, `spec_zones.py` — зелёные;
-- сторож AC-13 зелёный с наложенным приложением 1;
-- `tests/test_project_protected_paths.py` — 4/4 зелёные.
-
-В тестах затронутых модулей красны только два метода из вопроса 1
-(прогон `test_zones_gate.py`, `test_plan_appendix.py`,
-`test_protected_paths_gate.py`, `test_protected_test_settings.py`,
-`test_github_adapter.py`, `test_catalog_tz_path_check.py`,
-`test_fsm_spec_gate_path_check.py`, `test_repo_context.py`,
-`test_project_profile*.py`, `test_fsm_map_regen.py`,
-`test_appendix_tree.py`, `test_multitarget.py` и др.: 2 failed, 255
-passed). `tests/test_zones_gate.py:210` из «Фактов» ТЗ остаётся зелёным
-без правки: у задачи нет заявленных зон, и гейт выходит до проверки
-проекта.
-
-Полный набор — `suite-run` №1: 4487 прошло, 4 упало, 2 пропущено. Прогон
-шёл без приложений PLAN: PLAN.md ещё не в ссылке документов. Повтор
-упавших (№2) — те же 4:
-- два метода вопроса 1;
-- сторож AC-13 — красен без приложения 1 по построению;
-- `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
-  («0 not greater than or equal to 1»). Ни `orchestrator/liveness.py`, ни
-  этот тест диффом задачи не тронуты. Вероятно, это окружение шага: в PATH
-  оболочки роли нет даже `ls`/`cat`. База посчитана не была (прогон базы
-  тоже красный), поэтому сравнить с ней не удалось.
-
-**Блокирует.** Сдачу `ready`: рубеж неослабления тестов откажет правке
-утверждений двух методов без мандата, а без правки они красны.
+Полный набор — `suite-run` №3 (прогон ветки с наложенным приложением 1 к
+`targets.yaml`): 4490 прошло, 1 упало, 2 пропущено. Сторож AC-13 зелёный.
+Единственный упавший —
+`tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`:
+по ANSWER-2 это окружение роли (в PATH роли нет `/bin`, `ps` недоступен),
+к задаче не относится. База не посчитана: прогон базы тоже красный.
