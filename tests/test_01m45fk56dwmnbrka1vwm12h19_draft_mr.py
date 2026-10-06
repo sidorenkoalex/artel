@@ -19,6 +19,7 @@
 Зерно печатается и входит в текст каждого провала.
 """
 import random
+import re
 import subprocess
 import unittest
 from unittest import mock
@@ -29,6 +30,9 @@ from tests.sandbox import RealGitSandbox, make_project_repo
 ARTEL = config.DEFAULT_TARGET
 EXT = "vnesh"
 ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+# Перечень путей в тексте подсветки `github_adapter.ensure_draft_mr`:
+# «… затрагивает защищённые пути: a, b (<источник перечня>).»
+HIGHLIGHT_PATHS = re.compile(r"затрагивает защищённые пути: (.+) \(")
 
 TARGET_ENTRY = """  {name}:
     forge: github
@@ -129,16 +133,29 @@ class DraftMrSandbox(RealGitSandbox):
 
 class DraftMrHighlightTest(DraftMrSandbox):
 
+    def highlighted(self, comments: list[str]) -> list[str]:
+        """Пути, которые назвали комментарии подсветки: перечень между
+        «защищённые пути: » и « (<источник перечня>)» — не весь текст, в
+        котором источник «no_paths проекта … в targets.yaml» назван всегда."""
+        named: list[str] = []
+        for comment in comments:
+            match = HIGHLIGHT_PATHS.search(comment)
+            self.assertIsNotNone(match, self.explain(
+                f"комментарий без перечня путей: {comment}"))
+            named.extend(match.group(1).split(", "))
+        return named
+
     def test_ac6_highlight_lists_no_paths_and_omits_artel_only_paths(self):
         """Комментарий черновика MR внешнего проекта называет пути диффа под его `no_paths` и не называет пути, защищённые только у артели.
 
         Сценарий: дифф задачи внешнего проекта — файл кода, один-два пути под
-        записями `no_paths` проекта и путь под случайной записью
-        `config.PROTECTED_PATHS` (её нет в `no_paths`). После
-        `ensure_draft_mr` есть комментарий `gh pr comment`, называющий каждый
-        путь `no_paths`, и ни один комментарий не называет путь пульта.
-        Вторая задача — файл кода и только путь пульта: ни один комментарий
-        его не называет.
+        записями `no_paths` проекта и по пути под КАЖДОЙ записью
+        `config.PROTECTED_PATHS` (их нет в `no_paths`). После
+        `ensure_draft_mr` перечень путей, названных комментариями
+        `gh pr comment`, содержит каждый путь `no_paths` и — подтестом на
+        каждую запись перечня пульта — не содержит её путь. Вторая задача —
+        файл кода и только пути под каждой записью перечня пульта: перечень
+        не содержит ни одного (подтест на запись).
 
         Ловит мутацию: подсветка сверяет дифф с `config.PROTECTED_PATHS` для
         любого проекта — пути `no_paths` выпадают из комментария (или
@@ -147,21 +164,26 @@ class DraftMrHighlightTest(DraftMrSandbox):
         """
         ext_paths = [self.under(e) for e in
                      self.rng.sample(self.no_paths, self.rng.randint(1, 2))]
-        artel_path = self.artel_only_path()
+        artel_paths = {e: self.under(e) for e in config.PROTECTED_PATHS}
         code = f"kod{self.word()}/{self.word()}.py"
-        comments = self.draft_for([code, artel_path] + ext_paths)
-        text = "\n".join(comments)
+        comments = self.draft_for([code, *artel_paths.values(), *ext_paths])
+        named = self.highlighted(comments)
         for rel in ext_paths:
-            self.assertTrue([c for c in comments if rel in c], self.explain(
+            self.assertIn(rel, named, self.explain(
                 f"путь no_paths {rel} не подсвечен: {comments}"))
-        self.assertNotIn(artel_path, text, self.explain(
-            f"путь пульта {artel_path} подсвечен: {comments}"))
+        for entry, artel_path in artel_paths.items():
+            with self.subTest(scenario="no_paths и пути пульта", entry=entry):
+                self.assertNotIn(artel_path, named, self.explain(
+                    f"путь пульта {artel_path} подсвечен: {comments}"))
 
-        artel_path = self.artel_only_path()
+        artel_paths = {e: self.under(e) for e in config.PROTECTED_PATHS}
         comments = self.draft_for([f"kod{self.word()}/{self.word()}.py",
-                                   artel_path])
-        self.assertNotIn(artel_path, "\n".join(comments), self.explain(
-            f"путь пульта {artel_path} подсвечен: {comments}"))
+                                   *artel_paths.values()])
+        named = self.highlighted(comments)
+        for entry, artel_path in artel_paths.items():
+            with self.subTest(scenario="только пути пульта", entry=entry):
+                self.assertNotIn(artel_path, named, self.explain(
+                    f"путь пульта {artel_path} подсвечен: {comments}"))
 
 
 if __name__ == "__main__":
