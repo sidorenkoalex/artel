@@ -877,7 +877,8 @@ class BaseComparisonTest(SuiteRunSandbox):
         target, _names = self.red_base_project(n_base)
         gate = self.gate_tree(target)
         with mock.patch.object(config, "FULL_SUITE_WORKERS", str(self.workers)):
-            result = acceptance.full_suite(gate, self.task_id())
+            result = acceptance.full_suite(
+                gate, self.task_id(), command=[str(self.python), "-m", "pytest"])
         self.assertFalse(result.green, result.detail)
         before = len(self.base_calls())
         new = self.new_failures(1)
