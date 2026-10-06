@@ -70,15 +70,32 @@ class TargetsAppendixTest(unittest.TestCase):
                          f"{[a.paths for a in appendices]}")
         return found[0]
 
-    def applied(self, appendix) -> tuple[str, Path]:
-        """(текст `targets.yaml` после наложения, его путь во временном
-        репозитории)."""
+    def reversed_text(self, appendix, text: str) -> str | None:
+        """Текст `targets.yaml` с обратно снятым приложением (`git apply -R`
+        во временном репозитории); `None` — git отказал."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
         subprocess.run(["git", "init", "-q", str(repo)], check=True,
                        capture_output=True)
-        (repo / TARGETS_REL).write_text(head_targets_text(), encoding="utf-8")
+        (repo / TARGETS_REL).write_text(text, encoding="utf-8")
+        patch = repo / "appendix.diff"
+        patch.write_text(appendix.diff, encoding="utf-8")
+        res = subprocess.run(["git", "-C", str(repo), "apply", "-R",
+                              str(patch)], capture_output=True, text=True)
+        if res.returncode != 0:
+            return None
+        return (repo / TARGETS_REL).read_text(encoding="utf-8")
+
+    def applied(self, appendix, base_text: str) -> tuple[str, Path]:
+        """(текст `targets.yaml` после наложения на `base_text`, его путь во
+        временном репозитории)."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True,
+                       capture_output=True)
+        (repo / TARGETS_REL).write_text(base_text, encoding="utf-8")
         patch = repo / "appendix.diff"
         patch.write_text(appendix.diff, encoding="utf-8")
         res = subprocess.run(["git", "-C", str(repo), "apply", str(patch)],
@@ -91,8 +108,12 @@ class TargetsAppendixTest(unittest.TestCase):
         """Приложение к `targets.yaml` применяется и делает `no_paths` записи `artel` зеркалом `config.PROTECTED_PATHS`.
 
         Сценарий: из PLAN.md ссылки документов берётся единственное
-        приложение к `targets.yaml`; `git apply --check` к HEAD проходит.
-        После наложения на копию `targets.yaml` HEAD: `targets.load`
+        приложение к `targets.yaml`; `git apply --check` к HEAD проходит —
+        либо приложение уже наложено в HEAD (операторский коммит вперёд кода
+        подтянут из main): обратная проверка к HEAD проходит, то же
+        признание, что у гейта мержа (`fsm_merge_gate.py::
+        _appendix_already_in_main`), и «до» — HEAD с обратно снятым
+        приложением. После наложения на «до»: `targets.load`
         проходит без ошибок (проверка `targets.check` всех записей);
         `no_paths` записи `artel` по множеству равно `config.PROTECTED_PATHS`
         (без повторов); ни один комментарий записи `artel` не называет поле
@@ -107,18 +128,28 @@ class TargetsAppendixTest(unittest.TestCase):
         прочие поля разошлись.
         """
         appendix = self.appendix()
+        head_text = head_targets_text()
         answer = apply_check(appendix.diff)
-        self.assertEqual(answer, "", f"приложение к {TARGETS_REL} не "
-                                     f"применяется к HEAD: {answer}")
+        if answer == "":
+            base_text = head_text
+        else:
+            reverse_answer = apply_check(appendix.diff, reverse=True)
+            self.assertEqual(reverse_answer, "",
+                             f"приложение к {TARGETS_REL} не применяется к "
+                             f"HEAD ({answer}) и не наложено в нём "
+                             f"({reverse_answer})")
+            base_text = self.reversed_text(appendix, head_text)
+            self.assertIsNotNone(base_text, "git apply -R приложения к "
+                                            "тексту HEAD отказал")
 
         before_dir = tempfile.TemporaryDirectory()
         self.addCleanup(before_dir.cleanup)
         before_path = Path(before_dir.name) / TARGETS_REL
-        before_path.write_text(head_targets_text(), encoding="utf-8")
+        before_path.write_text(base_text, encoding="utf-8")
         with mock.patch.object(config, "TARGETS", before_path):
             before = targets.load()
 
-        text, path = self.applied(appendix)
+        text, path = self.applied(appendix, base_text)
         with mock.patch.object(config, "TARGETS", path):
             try:
                 after = targets.load()
