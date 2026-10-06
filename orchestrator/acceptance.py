@@ -956,10 +956,16 @@ def _remember_gate_failures(root: Path, outcome: str, output: str) -> None:
                       "гейт")
 
 
-def full_suite(root: Path, task_id: str) -> FullSuiteRun:
+def full_suite(root: Path, task_id: str,
+               command: list[str] | None = None) -> FullSuiteRun:
     """Прогон полного набора `tests/` каталога `root` с разбором вывода и
     файлом лога (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-6) — узел
     для автогейта приёмки, гейта мержа и `approve` в `acceptance`.
+
+    `command` — начало команды прогона из профиля тестов проекта (как у
+    `run_full_suite`): гейт мержа внешнего проекта гоняет приложения его
+    командой (SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 6); `None` —
+    команда пульта, и `run_full_suite` зовётся без неё, как до задачи.
 
     Сам прогон идёт через `run_full_suite` выше, а не в обход неё: это
     единственный вход прогона полного набора во всём пульте (и
@@ -976,8 +982,10 @@ def full_suite(root: Path, task_id: str) -> FullSuiteRun:
     with _machine_lock(task_id) as holder:
         if holder is not None:
             green, output = False, _not_started_note(holder)
-        else:
+        elif command is None:
             green, output = run_full_suite(root)
+        else:
+            green, output = run_full_suite(root, command=command)
     outcome = _full_suite_outcome(green, output)
     if outcome == FULL_SUITE_NOT_STARTED:
         # Прогона не было: ни лога, ни выжимки, ни итога по sha.

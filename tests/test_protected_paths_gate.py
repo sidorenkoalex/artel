@@ -120,20 +120,29 @@ class MergeGateProtectedPathDiffGateTest(TmpRootTest):
             path=config.ROOT, remote="origin", base=config.MAIN_BRANCH,
             target=config.DEFAULT_TARGET)
 
-    def test_external_target_never_calls_diff_base(self):
-        """Ловит мутацию: проверка `ctx.path != config.ROOT` убрана —
-        гейт мержа звонил бы `gitcmd.diff_base` и на внешний target,
-        чей клон и защищённые пути этого списка (файлы пульта) не имеют
-        отношения друг к другу."""
+    def test_external_target_checks_diff_by_project_perimeter(self):
+        """Дифф ветки внешнего проекта сверяется на гейте мержа в клоне его
+        контекста и по ЕГО перечню (SPEC 01M45FK56DWMNBRKA1VWM12H19,
+        требования 1, 3, AC-5): путь, защищённый только у артели
+        (`skills/x.md`), при пустом `no_paths` проекта не эскалирует.
+
+        Ловит мутацию: развилка «не артель — не проверяется» возвращена
+        (`diff_base` не зовётся); вторая мутация — дифф снимается в
+        `config.ROOT` пульта вместо клона контекста; третья — внешний
+        проект сверяется по `config.PROTECTED_PATHS` и эскалирует
+        `skills/x.md`."""
         ext_ctx = repo_context.RepoContext(
             path=config.PROJECTS / "extproj" / "workspace",
             remote="origin", base="main")
-        with mock.patch.object(gitcmd, "diff_base") as diff_base:
+        with mock.patch.object(gitcmd, "diff_base",
+                               return_value="deadbeef") as diff_base, \
+             mock.patch.object(gitcmd, "diff_names",
+                               return_value=["skills/x.md"]):
             escalated = fsm_merge_gate._protected_path_diff_gate(
                 self.conn, self.task_id, "merge_gate", "task/t001-x",
                 ext_ctx)
         self.assertFalse(escalated)
-        diff_base.assert_not_called()
+        diff_base.assert_called_once_with("task/t001-x", repo=ext_ctx.path)
 
     def test_git_not_answering_diff_base_does_not_escalate_or_exit(self):
         """Fail-open здесь намеренно (докстринг `_protected_path_diff_gate`):

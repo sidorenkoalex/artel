@@ -10,7 +10,7 @@ from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, cycle_hint,
               gitcmd, idgen, liveness, merge_after, merge_queue, models,
-              providers, retro, runner,
+              providers, repo_context, retro, runner,
               store, targets, workspace, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
@@ -194,14 +194,18 @@ def _tz_sections(tz_raw: str, labels,
     return joiner.join(bodies), spans
 
 
-def _tz_path_check(tz_raw: str) -> tuple[list[str], list[str]]:
+def _tz_path_check(tz_raw: str,
+                   protected=None) -> tuple[list[str], list[str]]:
     """(неклассифицированные пути ТЗ, защищённые пути из «Зоны:») —
     требования 2-4. Путь классифицирован, если покрыт «Зоны:» (с
     вложенностью и `config.COMMON_ZONES`, `guard.unclassified_paths`)
     либо назван в «Не входит:»/«Только чтение…:»/«Приложением:»;
     проверяется текст ТЗ ЗА ВЫЧЕТОМ этих четырёх разделов. Защищённость
-    (`config.PROTECTED_PATHS`) сверяется только по элементам «Зоны:» —
-    защищённый путь, названный «Приложением:», проходит (требование 4)."""
+    сверяется только по элементам «Зоны:» — защищённый путь, названный
+    «Приложением:», проходит (требование 4). `protected` — перечень
+    защищённых путей проекта задачи (`repo_context.protected_paths`, SPEC
+    01M45FK56DWMNBRKA1VWM12H19, требование 2); `None` —
+    `config.PROTECTED_PATHS`."""
     zones_text, zone_spans = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,))
     declared_text, declared_spans = _tz_sections(tz_raw, _TZ_DECLARING_LABELS)
     checked = list(tz_raw)
@@ -210,14 +214,25 @@ def _tz_path_check(tz_raw: str) -> tuple[list[str], list[str]]:
     zones = guard.zone_items(zones_text)
     unclassified = guard.unclassified_paths("".join(checked), zones,
                                             declared_text)
-    return unclassified, guard.protected_zones(zones)
+    return unclassified, guard.protected_zones(zones, protected)
 
 
-def _tz_path_refusal(tz_path: str, tz_raw: str) -> str | None:
+def _tz_path_refusal(tz_path: str, tz_raw: str,
+                     target: str | None = None) -> str | None:
     """Текст отказа `new` по путям ТЗ (требования 3-4) либо `None`, если
     ТЗ сверку прошло — обе причины разом, чтобы Оператор чинил ТЗ за
-    один заход."""
-    unclassified, protected = _tz_path_check(tz_raw)
+    один заход.
+
+    Защищённые зоны — по перечню проекта `target` (`None` — артель).
+    Контекст проекта не разрешён — отказ, называющий проект: сверить
+    зоны не с чем (SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 3)."""
+    target = target or config.DEFAULT_TARGET
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        return (f"ТЗ {tz_path}: {repo_context.unresolved_reason(target)} — "
+                f"зоны ТЗ не сверить с защищёнными путями проекта")
+    unclassified, protected = _tz_path_check(
+        tz_raw, repo_context.protected_paths(ctx))
     lines = []
     if unclassified:
         lines.append(f"ТЗ {tz_path}: "
@@ -505,7 +520,7 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         # Сверка путей ТЗ с зонами (01M2XJKQNFTWHYAY4KBBQ1NVY7, требования
         # 2-4) — здесь же, ДО id/ветки/строки БД (требование 3, AC-3):
         # отказ не оставляет ни артефактной ветки, ни строки задачи.
-        refusal = _tz_path_refusal(tz_path, tz_raw)
+        refusal = _tz_path_refusal(tz_path, tz_raw, target)
         # Зависимости мержа строки «Порядок: после …» (SPEC
         # 01M45D29BQJE8FJYJA4JQWSYFZ, требования 1-2) — тем же рубежом;
         # обе причины печатаются одним заходом. Канарейка строку не

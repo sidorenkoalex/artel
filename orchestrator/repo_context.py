@@ -16,9 +16,10 @@ self/внешний-target развилку по-своему — большин
 `gh --repo <url>`, НЕ имя локального git remote — клон несёт свой git
 remote `origin`, поэтому git-уровневые команды (fetch/push) идут на
 литеральное имя `"origin"`), базовая ветка — `targets.yaml[target]["base"]`.
-Шаги, нужные только артели (гейт мержа: защищённые пути, guard, карта,
-RETRO), включаются признаком проекта `is_artel(ctx)`, не сравнением пути
-с `config.ROOT`.
+Шаги, нужные только артели (гейт мержа: guard, RETRO), включаются
+признаком проекта `is_artel(ctx)`, не сравнением пути с `config.ROOT`;
+защищённые пути сверяются у любого проекта — по его перечню
+(`protected_paths`).
 
 `None` — target не читается (неизвестное имя, сломанный targets.yaml):
 молчаливый откат на главную копию был бы ОПАСНЕЕ обычной деградации —
@@ -36,6 +37,9 @@ class RepoContext:
     remote: str
     base: str
     target: str = ""
+    # Поле `no_paths` записи внешнего проекта; у артели не читается
+    # (`protected_paths`).
+    no_paths: tuple = ()
 
 
 # Адрес области проектов при рассогласованных путях пульта: каталога нет и
@@ -77,7 +81,32 @@ def resolve(target_name: str) -> "RepoContext | None":
     except targets.TargetsError:
         return None
     return RepoContext(path=clone_path(target_name), remote=entry["url"],
-                       base=entry["base"], target=target_name)
+                       base=entry["base"], target=target_name,
+                       no_paths=tuple(entry["no_paths"]))
+
+
+def unresolved_reason(target_name: str) -> str:
+    """Причина отказа проверки, которой нужен контекст проекта, а он не
+    разрешён (`resolve` вернул `None`) — называет проект."""
+    return (f"контекст проекта «{target_name}» не разрешён: записи проекта "
+            f"нет в targets.yaml или файл не читается")
+
+
+def protected_paths(ctx: RepoContext) -> tuple:
+    """Перечень защищённых путей проекта контекста — один на все места
+    сверки (ADR-0021 п.8; SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 1),
+    формула сверки — `config.is_protected_path(путь, перечень)`.
+
+    Внешний проект — поле `no_paths` его записи `targets.yaml`. Артель —
+    `config.PROTECTED_PATHS`, прочитанный в момент вызова: его
+    `docs/invariants.md` называет единым источником защищённых путей, а
+    поле `no_paths` записи `artel` — лишь его зеркало под сторожем, на
+    результат оно не влияет. Контекст артели разрешается без чтения
+    `targets.yaml`, поэтому защита путей пульта от этого файла не
+    зависит."""
+    if is_artel(ctx):
+        return tuple(config.PROTECTED_PATHS)
+    return tuple(ctx.no_paths)
 
 
 PROFILE_PRESENT = "есть"
