@@ -149,10 +149,13 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
         self.assertFalse(opened)
 
     def test_foreign_target_is_not_counted(self):
-        """Задачи внешнего target не учитываются счётчиком стоп-крана self.
+        """Задачи внешнего target идут в счёт стоп-крана наравне с задачами
+        артели: стоп-кран волны — механика пульта (SPEC
+        01M484RNV3QBDY3B0M16J916ZP, строка 7, AC-3).
 
-        Ловит мутацию: фильтр по `target=config.DEFAULT_TARGET` убран —
-        тогда три задачи внешнего target подняли бы алерт self."""
+        Ловит мутацию: счёт волны снова только по задачам проекта артели
+        (фильтр `target=config.DEFAULT_TARGET` возвращён) — тогда три
+        задачи внешнего target алерт не подняли бы."""
         for i in range(3):
             task = f"T00{i}"
             self.make_task(task, target=FOREIGN_TARGET)
@@ -160,8 +163,8 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
 
         opened = alerts.check_wave_breaker_failure(store.db(), "1b")
 
-        self.assertFalse(opened)
-        self.assertEqual(self.wave_breaker_alerts(), [])
+        self.assertTrue(opened)
+        self.assertEqual(len(self.wave_breaker_alerts()), 1)
 
     def test_non_transient_class_is_ignored(self):
         """«Обрыв потока»/session_limit не входят в связку

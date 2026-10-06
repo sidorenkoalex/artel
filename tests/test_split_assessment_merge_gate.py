@@ -125,22 +125,26 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
         self.assertIsNone(row["split_assessment"])
 
     def test_external_target_skips_diff_but_still_reads_split_assessment(self):
-        """Ловит мутацию: диф внешнего target'а считается наравне с self
-        (пропуск `_capacity_gate_refuses`-довода потерян) — `diff_bytes`
-        внешней задачи заполнился бы по коду `config.ROOT`, который её не
-        видит, и нёс бы неверное (нулевое или чужое) число."""
+        """`diff_bytes` у задачи внешнего target считается так же, как у
+        артели, — в клоне её проекта (SPEC 01M484RNV3QBDY3B0M16J916ZP,
+        строка 23, AC-10).
+
+        Ловит мутацию: diff снова считается только у артели (развилка по
+        target возвращена) — `diff_bytes` внешней задачи остался бы
+        `NULL`."""
         store.update_task(self.conn, self.task_id, target="sled")
         make_project_repo("sled")
+        diff_text = "diff --git a b"
         with mock.patch.object(
                 gitcmd, "git",
-                self._fake_git((0, "diff --git a b", ""), SPEC_WITH_SECTION)):
+                self._fake_git((0, diff_text, ""), SPEC_WITH_SECTION)):
             fsm._snapshot_split_assessment(self.conn, self.task_id, self.t)
 
         row = store.get_task(self.conn, self.task_id)
-        self.assertIsNone(
-            row["diff_bytes"],
-            "diff в config.ROOT не видит код внешнего target — тот же "
-            "довод, что и fsm_advance._capacity_gate_refuses")
+        self.assertEqual(
+            row["diff_bytes"], len(diff_text.encode("utf-8")),
+            "diff внешнего target считается в клоне его проекта наравне "
+            "с артелью")
         self.assertEqual(row["split_assessment"], "Деление на 2 части.")
 
 

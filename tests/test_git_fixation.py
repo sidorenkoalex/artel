@@ -1112,7 +1112,6 @@ class AutogateMergeGateHintIncludesShaTest(RealPultGitTest):
         store.set_state(conn, self.TASK, "acceptance", "operator",
                         expected_state="in_dev", detail="тест: подготовка")
         t = store.get_task(conn, self.TASK)
-        fixed_sha = t["fixed_sha"]
 
         with mock.patch.object(gates, "policy", return_value=gates.AUTO), \
              mock.patch.object(fsm_autogate, "_autogate_conditions",
@@ -1121,6 +1120,10 @@ class AutogateMergeGateHintIncludesShaTest(RealPultGitTest):
                                conn, self.TASK, t, self.task_dir(), 1)
 
         self.assertEqual(store.get_task(conn, self.TASK)["state"], "merge_gate")
+        # Фиксация — ПОСЛЕ перехода в merge_gate: переход дописал строку
+        # паспорта и у артели (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 14),
+        # подсказка называет зафиксированный им sha.
+        fixed_sha = store.get_task(conn, self.TASK)["fixed_sha"]
         hint_lines = [line for line in out.splitlines()
                      if "artel.py approve" in line]
         self.assertTrue(hint_lines,
@@ -1182,7 +1185,7 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
         целостности, а этот сайт (провал агента) забудут завести на тот
         же `approve_sha_hint`, подсказка здесь останется без sha.
         """
-        sha = self.enter_in_dev()
+        self.enter_in_dev()
 
         with mock.patch.object(
                 runner, "run_agent_once",
@@ -1191,6 +1194,10 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
 
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "escalated")
+        # sha — ПОСЛЕ эскалации, как в соседнем тесте инцидента: переход в
+        # escalated дописал строку паспорта и у артели (SPEC
+        # 01M484RNV3QBDY3B0M16J916ZP, строка 14) и зафиксировал её коммит.
+        sha = self.head()
         hint_lines = [line for line in out.splitlines()
                      if "artel.py approve" in line]
         self.assertTrue(hint_lines,
