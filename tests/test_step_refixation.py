@@ -161,6 +161,12 @@ class OwnStepCommitRefixesWithoutIncidentTest(_RefixationTest):
         self.assertEqual(store.get_task(conn, self.TASK)["fixed_sha"], new_head)
 
     def test_refixation_is_journaled_with_both_shas(self):
+        """Перефиксация после отклонённого перехода пишет в журнал обе
+        головы: зафиксированную на входе и новую голову шага.
+
+        Ловит мутацию: запись «sha перефиксирован после отклонённого
+        перехода» перестала называть прежний или новый sha (или не
+        пишется вовсе) — тест покраснеет."""
         self.enter_tests_writing()
         # Голова ссылки ПОСЛЕ approve: переход дописал строку паспорта поверх
         # SPEC (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 14), её и
@@ -211,6 +217,11 @@ class ForeignCommitKeepsIncidentTest(_RefixationTest):
     started»/«agent run finished») по-прежнему эскалирует инцидент."""
 
     def test_fixed_sha_is_not_touched(self):
+        """Коммит вне окна шага не перефиксирует sha.
+
+        Ловит мутацию: перефиксация перестала требовать закрытого окна
+        шага роли и подтягивает `fixed_sha` к постороннему коммиту — тест
+        покраснеет."""
         self.enter_tests_writing()
         # Голова после approve — с коммитом паспорта (строка 14 SPEC).
         entry_sha = self.head()
@@ -228,6 +239,12 @@ class ForeignCommitKeepsIncidentTest(_RefixationTest):
             [])
 
     def test_integrity_incident_still_raised(self):
+        """Коммит вне окна шага поднимает инцидент целостности с обоими
+        sha, и следующий `run` эскалирует задачу без запуска агента.
+
+        Ловит мутацию: `fixation.check_integrity` молчит о постороннем
+        коммите или не называет зафиксированный/текущий sha, либо `run`
+        запускает агента при инциденте — тест покраснеет."""
         self.enter_tests_writing()
         # Голова после approve — с коммитом паспорта (строка 14 SPEC).
         entry_sha = self.head()
@@ -255,6 +272,12 @@ class UnclosedRunWindowNotCountedTest(_RefixationTest):
     сверка обязана трактовать как непроверенный (fail-closed)."""
 
     def test_commit_inside_unfinished_run_still_escalates(self):
+        """Коммит внутри незакрытого окна шага (нет «agent run finished»)
+        не перефиксирует sha и оставляет инцидент.
+
+        Ловит мутацию: окно шага считается закрытым по одной записи
+        «agent run started» — `fixed_sha` подтягивается к коммиту и
+        инцидент пропадает, тест покраснеет."""
         self.enter_tests_writing()
         # Голова после approve — с коммитом паспорта (строка 14 SPEC).
         entry_sha = self.head()
