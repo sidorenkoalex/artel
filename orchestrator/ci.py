@@ -24,6 +24,12 @@ from . import config, gitcmd, repo_context, workspace
 # `protected-paths` идёт только на pull_request и на push репозитория
 # пропускается — без него зелёного CI не бывало бы вовсе.
 GREEN = {"success", "skipped", "neutral"}
+# Проверки полного набора собственного workflow. У внешних проектов нет
+# объявленного здесь набора, поэтому их `skipped` сохраняет прежний смысл.
+FULL_SUITE_CHECKS = frozenset({
+    "Синтаксис и тесты оркестратора",
+    "Инварианты на минимальной версии Python",
+})
 
 
 def gh(*args: str, timeout: int | None = None,
@@ -443,6 +449,34 @@ def _event_divergence(checks: list, index: _RunIndex | None,
     return items
 
 
+def _unexecuted_full_suite(checks: list, repo: Path | None,
+                           index: _RunIndex | None) -> list[str]:
+    """Имена пропущенных заданий полного набора без завершённого близнеца.
+
+    При неизвестном событии пропущенного задания решение остаётся закрытым:
+    без индекса нельзя подтвердить исполненного близнеца на этом коммите.
+    Прочие `skipped` сюда не входят.
+    """
+    if repo is not None and not repo_context.is_artel(repo):
+        return []
+    pending = []
+    for name in FULL_SUITE_CHECKS:
+        siblings = [check for check in checks if check.get("name") == name]
+        if not any(check.get("conclusion") == "skipped" for check in siblings):
+            continue
+        skipped_events = {_run_event(check, index) for check in siblings
+                          if check.get("conclusion") == "skipped"}
+        executed = any(
+            check_finished(check)[0]
+            and check.get("conclusion") == "success"
+            and _run_event(check, index) in {"push", "pull_request"}
+            for check in siblings)
+        if (not skipped_events.issubset({"push", "pull_request"})
+                or not executed):
+            pending.append(name)
+    return sorted(pending)
+
+
 def _divergence_phrase(items: list[str]) -> str:
     """Отдельная фраза о расхождении исхода по событиям, "" — его нет."""
     return (f"; исход по событиям расходится: {'; '.join(items)}"
@@ -524,10 +558,13 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
 
     unfinished, reread = _unfinished_checks(runs)
     failed = [r for r in runs if r.get("conclusion") not in GREEN]
-    # Прогоны спрашиваются только на не-зелёном исходе: зелёный текст и
-    # число запросов на нём задача не трогает.
+    skipped_full_suite = (repo is None or repo_context.is_artel(repo)) and any(
+        r.get("name") in FULL_SUITE_CHECKS
+        and r.get("conclusion") == "skipped" for r in runs)
     index = (_commit_workflow_runs(sha, runs) if unfinished or failed
+             or skipped_full_suite
              else None)
+    unexecuted = _unexecuted_full_suite(runs, repo, index)
     divergence = _divergence_phrase(_event_divergence(runs, index))
     stuck = _stuck_checks(unfinished, index)
     if stuck:
@@ -545,6 +582,10 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         return VERIFYING_RED, _with_reread(
             f"CI коммита {short} не зелёный: "
             f"{_failed_listing(failed, index)}{divergence}", reread)
+    if unexecuted:
+        return VERIFYING_RUNNING, _with_reread(
+            f"CI коммита {short} ещё идёт: полный набор не исполнен — "
+            f"{', '.join(unexecuted)}", reread)
     return VERIFYING_GREEN, _with_reread(
         f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
 
@@ -652,8 +693,13 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     # «Не входит»): на гейте мержа проверка без исхода — просто не зелёная.
     unfinished, reread = _unfinished_checks(runs)
     failed = [r for r in runs if r.get("conclusion") not in GREEN]
+    skipped_full_suite = (repo is None or repo_context.is_artel(repo)) and any(
+        r.get("name") in FULL_SUITE_CHECKS
+        and r.get("conclusion") == "skipped" for r in runs)
     index = (_commit_workflow_runs(sha, runs) if unfinished or failed
+             or skipped_full_suite
              else None)
+    unexecuted = _unexecuted_full_suite(runs, repo, index)
     divergence = _divergence_phrase(_event_divergence(runs, index))
     if unfinished:
         return False, _with_reread(
@@ -663,6 +709,10 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
         return False, _with_reread(
             f"CI коммита {short} не зелёный: "
             f"{_failed_listing(failed, index)}{divergence}", reread)
+    if unexecuted:
+        return False, _with_reread(
+            f"CI коммита {short} ещё идёт: полный набор не исполнен — "
+            f"{', '.join(unexecuted)}", reread)
     return True, _with_reread(
         f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
 
@@ -988,7 +1038,34 @@ def find_run_id(sha: str) -> tuple[str, str]:
         return "", f"для коммита {sha[:8]} нет workflow-прогонов"
     failed = [r for r in runs if r.get("status") == "completed"
              and r.get("conclusion") not in GREEN]
-    run = (failed or runs)[0]
+    # Когда красных прогонов несколько, выбираем тот, где задание полного
+    # набора действительно шло: порядок выдачи не доказывает исполнение.
+    executed_runs: set[int] = set()
+    if len(failed) > 1:
+        checks, _ = check_runs(sha)
+        if checks is not None:
+            index = _RunIndex({}, {})
+            for item in runs:
+                item_id = _int_or_none(item.get("id", item.get("databaseId")))
+                suite_id = _int_or_none(item.get("check_suite_id"))
+                if item_id is not None:
+                    index.by_id[item_id] = item
+                    if suite_id is not None:
+                        index.by_suite[suite_id] = item
+            for check in checks:
+                if (check.get("name") not in FULL_SUITE_CHECKS
+                        or check.get("conclusion") == "skipped"):
+                    continue
+                owner = _run_of(check, index)
+                if owner is not None:
+                    owner_id = _int_or_none(owner.get(
+                        "id", owner.get("databaseId")))
+                    if owner_id is not None:
+                        executed_runs.add(owner_id)
+    preferred = [r for r in failed
+                 if _int_or_none(r.get("id", r.get("databaseId")))
+                 in executed_runs]
+    run = (preferred or failed or runs)[0]
     run_id = run.get("databaseId", run.get("id"))
     if not isinstance(run_id, int) or isinstance(run_id, bool):
         return "", "у прогона нет числового id"
