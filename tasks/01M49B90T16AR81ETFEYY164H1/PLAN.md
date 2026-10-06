@@ -21,12 +21,14 @@ schema_version: 5
 ## Шаги
 
 1. Внести в `orchestrator/ci.py` перечень заданий, правило исполненного близнеца для обоих статусов и выбор прогона ре-рана.
-2. Добавить юнит-тесты на пропуск полного набора, завершение PR, push без PR, прочие пропуски, внешний target, выбор ре-рана и соответствие имён `ci.yml`.
+2. Проверить пропуск полного набора, завершение PR, push без PR, прочие пропуски, внешний target, выбор ре-рана и соответствие имён `ci.yml` долгоживущими тестами задачи и тестами затронутых модулей.
 3. Приложить точный diff `.github/workflows/ci.yml`, проверить `git apply --check` и `scripts/plan_appendix_ci.py --check-workflow`; прогнать планку, тесты затронутых модулей, обновить карту и запустить полный набор командой пульта.
 
-Затронутые тесты (`test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`, `test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`, `test_ci_full_suite_once.py`, `test_ci_status.py`, `test_ci_rerun_command.py`) — 117 passed. Метод AC-8 отдельно прошёл с ранее падавшим зерном 196307456. `plank-run` — 1 passed. `python3 scripts/codebase_map.py` выполнен. На предыдущей итерации полный набор `suite-run` не стартовал: замок удерживал прогон задачи 01M48WRE8BHFDY011Q0HQGQ91B.
+На первой итерации затронутые тесты — 117 passed. Метод AC-8 отдельно прошёл с ранее падавшим зерном 196307456. `plank-run` — 1 passed. `python3 scripts/codebase_map.py` выполнен. Тогда полный набор `suite-run` не стартовал: замок удерживал прогон задачи 01M48WRE8BHFDY011Q0HQGQ91B.
 
-После возврата из `verifying` адрес `details_url` в `tests/test_ci_full_suite_once.py:21` заменён на `http://127.0.0.1/o/r/actions/runs/{run_id}/job/1`. Проверка `tests/test_invariants.py` вместе с обоими файлами тестов задачи: 92 passed. Карта пересобрана командой `python3 scripts/codebase_map.py`. Повторный `suite-run` из роли отказал с `PermissionError` на `/Users/al.sidorenko/projects/artel/.artel/logs/suite-run/lock.json` (тот же ранее записанный системный пробел).
+После возврата из `verifying` прежний дополнительный тест исправлял адрес `details_url`; тогда `tests/test_invariants.py` вместе с обоими файлами тестов задачи дали 92 passed. Повторный `suite-run` из роли отказал с `PermissionError` на `/Users/al.sidorenko/projects/artel/.artel/logs/suite-run/lock.json` (тот же ранее записанный системный пробел).
+
+По R1-F1 ревью итерации 1 файл `tests/test_ci_full_suite_once.py` удалён: все восемь его методов дублировали свойства AC-4…AC-14 зафиксированного `tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`; новых свойств он не держал. Статус R1-F1 размечен `fixed` в REVIEW.md. Карта пересобрана `python3 scripts/codebase_map.py`. Тесты затронутых модулей (`test_01m49b90t16ar81etfeyy164h1_full_suite_once.py`, `test_01m46d5zzqy7gbew5tbvq0p3zv_ci_event.py`, `test_ci_status.py`, `test_ci_rerun_command.py`, `test_ci_push_class.py`) — 126 passed, 126 subtests passed. `plank-run` — 1 passed. Патч текущего PLAN прошёл `git apply --check` (код 0). Повторный `suite-run` завершился до старта тестов с `PermissionError` при создании того же `/Users/al.sidorenko/projects/artel/.artel/logs/suite-run/lock.json`.
 
 ## Покрытие требований
 
