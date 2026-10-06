@@ -77,8 +77,8 @@ from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (catalog, config, fsm, gitcmd, models, stack, store,
-                          workspace)
+from orchestrator import (catalog, config, fsm, gitcmd, models, runner, stack,
+                          store, workspace)
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -467,6 +467,19 @@ def patch_sleep(module, sleep):
     return mock.patch.object(module, "time", TimeWithSleep(sleep))
 
 
+def patch_retry_pause(pauses: list):
+    """Пауза повтора агента (`runner._run_attempts`) без сна (SPEC
+    01M48WR0HKZW8KJCBWDZTFC4ZY, ревизия тестов TR-1): длительность каждой
+    паузы дописывается в `pauses`, настоящий `time.sleep` не зовётся.
+
+    Неуспешная попытка агента в песочнице иначе ждёт
+    `RETRY_BACKOFF_SEC * 2 ** (attempt - 1)` или
+    `TRANSIENT_SYSTEM_BACKOFF_SEC` — двенадцать самых медленных тестов
+    набора почти целиком спали в этой паузе. Значения `config` не
+    трогаются: тест, подменивший сон `runner` сам, видит прежние паузы."""
+    return patch_sleep(runner, pauses.append)
+
+
 # Модули пульта с паузой `time.sleep` — импортируются до обхода
 # `sys.modules`, чтобы ленивый импорт внутри команды не оставил модуль с
 # настоящей паузой.
@@ -484,13 +497,19 @@ def patch_pult_sleep(sleep) -> ExitStack:
 
     Подмены наложены уже при вызове; снимает их `close()` возвращённого
     `ExitStack` — `with patch_pult_sleep(f):` или
-    `self.addCleanup(patch_pult_sleep(f).close)`."""
+    `self.addCleanup(patch_pult_sleep(f).close)`.
+
+    Модуль, чья ссылка `time` уже заместитель (умолчание `TmpRootTest` —
+    `patch_retry_pause`), подменяется поверх: иначе пауза `runner`
+    прошла бы мимо `f`."""
     for name in _PULT_SLEEP_MODULES:
         importlib.import_module(name)
     stack = ExitStack()
     for name, module in sorted(sys.modules.items()):
+        module_time = getattr(module, "time", None)
         if ((name == "orchestrator" or name.startswith("orchestrator."))
-                and getattr(module, "time", None) is time):
+                and (module_time is time
+                     or isinstance(module_time, TimeWithSleep))):
             stack.enter_context(patch_sleep(module, sleep))
     return stack
 
@@ -1304,14 +1323,28 @@ class TmpRootTest(unittest.TestCase):
 
     `PATCHED_ATTRS` — параметризуемый набор патчей (SPEC T037,
     требование 1); по умолчанию — все десять путей `config` (AC-2).
+
+    Пауза повтора агента по умолчанию не спит (`patch_retry_pause`):
+    длительности пауз — в `self.retry_pauses`. `REAL_RETRY_PAUSE = True` —
+    явный отказ от подмены для теста, которому нужна настоящая пауза
+    (SPEC 01M48WR0HKZW8KJCBWDZTFC4ZY, требование 2); своя подмена сна
+    `runner` в теле теста ложится поверх умолчания и тоже видит прежние
+    длительности.
     """
 
     PATCHED_ATTRS = ALL_CONFIG_ATTRS
+    REAL_RETRY_PAUSE = False
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name)
+
+        self.retry_pauses = []
+        if not self.REAL_RETRY_PAUSE:
+            pause_patcher = patch_retry_pause(self.retry_pauses)
+            pause_patcher.start()
+            self.addCleanup(pause_patcher.stop)
 
         for attr in self.PATCHED_ATTRS:
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
