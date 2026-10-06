@@ -47,11 +47,15 @@ class WaveBreakerAlertsOpenTest(SchemaTmpRootTest):
         self.assertIn("стоп-кран", found[0]["message"])
 
     def test_foreign_target_alert_is_not_returned(self):
-        """Ловит мутацию: если фильтр по `target` уберут, алерт другого
-        target ошибочно заблокировал бы self."""
+        """Алерт волны опознаётся по источнику, не по проекту: стоп-кран —
+        механика пульта (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 9).
+
+        Ловит мутацию: отбор алерта волны снова по проекту артели (фильтр
+        по `target`) — тогда алерт с другим target не вернулся бы и не
+        остановил бы шаги."""
         self.raise_wave_breaker(target=OTHER_TARGET)
 
-        self.assertEqual(runner.wave_breaker_alerts_open(store.db()), [])
+        self.assertEqual(len(runner.wave_breaker_alerts_open(store.db())), 1)
 
     def test_other_incident_source_is_not_returned(self):
         """Ловит мутацию: если фильтр по `source` уберут, ЛЮБОЙ

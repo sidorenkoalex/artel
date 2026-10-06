@@ -727,22 +727,19 @@ def _record_review_verdict(conn, task_id: str, expected_state: str,
 def _append_passport_line(conn, task_id: str, state: str, actor: str) -> None:
     """Паспорт живой задачи (SPEC T094, требование 11, AC-12): на каждом
     переходе FSM — строка в ссылку документов `refs/artifacts/<id>`,
-    «только для глаз» (не входит в автоматические решения). Только
-    внешний target — у артели паспорта нет (требование 16/AC-18).
+    «только для глаз» (не входит в автоматические решения). Паспорт
+    ведётся у задачи любого проекта, включая артель (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 14).
 
     Тот же хук — повтор отправки ссылки в `origin` (ADR-0021 п.3: отказ
     push досылается на следующем переходе): коммит паспорта отправляет
-    ссылку сам, у артели без паспорта её досылает `send_pending`.
+    ссылку сам.
 
     Отложенный импорт: `artifact_branch` не читает `store` на уровне
     модуля, но `store.py` остаётся листом графа импортов при загрузке
     (тот же приём, что `record_fixation` уже применяет к `fixation`).
     """
-    target = task_target(conn, task_id)
     from . import artifact_branch
-    if target == config.DEFAULT_TARGET:
-        artifact_branch.send_pending(task_id)
-        return
     artifact_branch.append_passport_line(task_id, state, actor)
 
 
@@ -788,27 +785,15 @@ def record_fixation(conn, task_id: str) -> None:
     target = task_target(conn, task_id)
     sha, clean = fixation.fix(task_id, target)
     update_task(conn, task_id, fixed_sha=sha or None)
-    if target == config.DEFAULT_TARGET:
-        # Поле `код=` — sha кодовой ветки, заводится для default target
-        # тем же именем, что и НЕ-default (ветка ниже) — tasks/
-        # 01M1P9RJVYHTAC087J4B2CAR44, требование 1: `sha=` выше — sha
-        # артефактного/фиксационного репо (`config.PROJECTS/<target>`),
-        # НЕ база инкрементального diff (`review.previous_verdict_sha`
-        # читает именно `код=`); `sha=` остаётся как есть — эта задача
-        # не убирает поле, только перестаёт быть базой diff.
-        code_sha = fixation.default_code_sha(conn, task_id)
-        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
-                  f"код={code_sha or '—'}")
-    else:
-        # Два sha (SPEC T094, требование 9, AC-10): голова кодовой ветки
-        # ЦЕЛЕВОГО и голова артефактной ветки ПУЛЬТА — `sha`/`clean` выше
-        # (легаси-фиксация `.artel/projects/<target>/`, требование 2 в
-        # процессе перевода на артефактную ветку) остаются в detail без
-        # изменений — этот блок ДОБАВЛЯЕТ, не заменяет.
-        code_sha = fixation.external_code_sha(target, task_id)
-        artifact_sha = fixation.external_artifact_sha(task_id)
-        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
-                  f"код={code_sha or '—'}, артефакты={artifact_sha or '—'}")
+    # Одна запись для задачи любого проекта (SPEC
+    # 01M484RNV3QBDY3B0M16J916ZP, строка 15): `код=` — голова кодовой ветки
+    # задачи в клоне её проекта, база инкрементального diff
+    # (`review.previous_verdict_sha` читает именно его); `артефакты=` —
+    # голова ссылки документов `refs/artifacts/<id>`.
+    code_sha = fixation.default_code_sha(conn, task_id)
+    artifact_sha = fixation.external_artifact_sha(task_id)
+    detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
+              f"код={code_sha or '—'}, артефакты={artifact_sha or '—'}")
     journal(conn, task_id, "fsm", "sha зафиксирован", detail)
 
 

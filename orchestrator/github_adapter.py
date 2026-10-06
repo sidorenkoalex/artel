@@ -103,8 +103,10 @@ def _protected_paths_source(ctx) -> str:
 def _gh_repo_kwargs(target_name: str, ctx) -> dict:
     """`--repo` для `gh`: форндж внешнего target'а — его `remote`; артель —
     без `--repo` (её `ctx.remote` — имя `origin`, не адрес форнджа). Признак
-    — проект, не путь клона: путь у артели с этапа 2 ADR-0021 тоже клон."""
-    if target_name == config.DEFAULT_TARGET or ctx is None:
+    — проект (`repo_context.is_artel`), не путь клона: путь у артели с
+    этапа 2 ADR-0021 тоже клон. Адреса форджа артели взять неоткуда, не
+    читая `targets.yaml` (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 18)."""
+    if repo_context.is_artel(target_name) or ctx is None:
         return {}
     return {"repo": ctx.remote}
 

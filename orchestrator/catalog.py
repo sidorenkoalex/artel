@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (alerts, artifact_branch, artifacts, budget, config, cycle_hint,
+from . import (alerts, artifact_branch, budget, config, cycle_hint,
               gitcmd, idgen, liveness, merge_after, merge_queue, models,
               providers, repo_context, retro, runner,
               store, targets, workspace, zone_lock)
@@ -391,16 +391,14 @@ def _warn_zone_overlap(conn, task_id: str, tz_raw: str,
     займут зону позже); признак «занимает зону» (`zone_lock._occupies`) не
     применяется: это прогноз будущей очереди, а не отказ входа в `in_dev`.
 
-    Задача ЧУЖОГО target'а предупреждения не получает (ответ Оператора
-    ANSWER-1 п.3 по замечанию R1-F3): замок зон — механика только
-    основного target'а (`zone_lock.blocking_conflict` отдаёт `None` любой
-    задаче не-`DEFAULT_TARGET`), очереди для такой задачи не будет
-    никогда, и обещать её в журнале нечем. Тот же фильтр, что у парной
-    добавки `status` (`_zone_forecast_suffix`)."""
-    if (target or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
-        return
+    Предупреждение получает задача любого проекта, а пересечения ищутся
+    только с задачами её проекта (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка
+    5): замок зон действует внутри проекта, у разных проектов разные
+    репозитории. Тот же отбор, что у парной добавки `status`
+    (`_zone_forecast_suffix`)."""
     matches = zone_lock.forecast_overlaps(conn, _tz_zone_paths(tz_raw),
-                                          exclude_task_id=task_id)
+                                          exclude_task_id=task_id,
+                                          target=target)
     if not matches:
         return
     warning = _zone_overlap_warning_text(matches)
@@ -779,14 +777,14 @@ def _zone_forecast_suffix(conn, t) -> str:
     по `zone_lock.blocking_conflict` (держатель, очередь, минуты), и
     поведение того суффикса не меняется. Кандидаты — только
     `zone_lock.BLOCKING_STATES`: «занята» обещает занявшего зону, не
-    будущего конкурента из того же набора `LATER_STATES`."""
+    будущего конкурента из того же набора `LATER_STATES`. Добавку получает
+    задача любого проекта, держатели — задачи её проекта (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 6)."""
     if t["state"] not in zone_lock.LATER_STATES:
-        return ""
-    if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
         return ""
     matches = zone_lock.forecast_overlaps(
         conn, zone_lock.task_zone_paths(t), exclude_task_id=t["id"],
-        states=zone_lock.BLOCKING_STATES)
+        states=zone_lock.BLOCKING_STATES, target=t["target"])
     if not matches:
         return ""
     holders = sorted({task_id for _, task_id, _ in matches})
@@ -796,14 +794,12 @@ def _zone_forecast_suffix(conn, t) -> str:
 def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
     """Пометка стоп-крана волны (01M1THKRK8HPXA7Y2SRB0RFTN2, требование
     4): ДОБАВКОЙ в конец строки, тем же приёмом, что и `_lease_holder_
-    suffix`/`_zone_wait_suffix`. У КАЖДОЙ задачи target self, пока хоть
-    один алерт открыт (требование 4: «блокирует весь target, не только
-    задачи, вызвавшие срабатывание») — не только у задач, чей класс
-    отказа поднял алерт. Задачи любого другого target не помечаются
-    (требование 5)."""
+    suffix`/`_zone_wait_suffix`. У КАЖДОЙ задачи, пока хоть один алерт
+    открыт (требование 4: «блокирует, не только задачи, вызвавшие
+    срабатывание»): стоп-кран — механика пульта, и задача любого проекта
+    помечается наравне с задачами артели (SPEC 01M484RNV3QBDY3B0M16J916ZP,
+    строка 11)."""
     if not wave_breaker_open:
-        return ""
-    if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
         return ""
     return "  [СТОП-КРАН ВОЛНЫ: run/auto не начинают новый шаг]"
 
@@ -936,12 +932,10 @@ def cmd_show(task_id: str) -> None:
 
 
 def _artifact_frontmatter(target: str, task_id: str, name: str) -> dict:
-    """Frontmatter артефакта задачи для `cmd_show` — с диска для self
-    (прежнее поведение), из артефактной ветки пульта для любого другого
-    target (SPEC T094, требование 10, AC-11 — реестр AC-1: `tasks/<id>/`
-    внешнего target на диске `config.TASKS` не существует вовсе)."""
-    if target == config.DEFAULT_TARGET:
-        return artifacts.frontmatter(config.TASKS / task_id / name)
+    """Frontmatter артефакта задачи для `cmd_show` — из ссылки документов
+    `refs/artifacts/<id>` у задачи любого проекта, включая артель (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 20): файл `config.TASKS/<id>/` на
+    диске — копия, а не первичка документов задачи."""
     from . import yamlmini
     text, _ = artifact_branch.show(task_id,
                                    artifact_branch.branch_name(task_id),

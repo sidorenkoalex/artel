@@ -43,11 +43,16 @@ class WaveBreakerSuffixTest(unittest.TestCase):
         self.assertIn("СТОП-КРАН", suffix)
 
     def test_empty_for_foreign_target_even_if_alert_open(self):
-        """Ловит мутацию: если сверку `target` уберут, задача внешнего
-        target получила бы ту же пометку, что и self (требование 5)."""
+        """Задача внешнего target получает ту же пометку, что и задача
+        артели (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 11).
+
+        Ловит мутацию: пометка снова только у задач проекта артели
+        (сверка `target` возвращена) — тогда суффикс внешней задачи был
+        бы пустым."""
         suffix = catalog._wave_breaker_suffix(self.row(target=OTHER_TARGET), True)
 
-        self.assertEqual(suffix, "")
+        self.assertEqual(suffix,
+                         "  [СТОП-КРАН ВОЛНЫ: run/auto не начинают новый шаг]")
 
 
 class CmdStatusWaveBreakerMarkTest(BudgetSeededTmpRootTest):

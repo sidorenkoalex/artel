@@ -44,8 +44,9 @@ PREFLIGHT_WARNING_ACTION = "pre-flight WARNING"
 
 
 def wave_breaker_alerts_open(conn) -> list:
-    """Открытые алерты `kind=incident` стоп-крана волны target self
-    (`alerts.WAVE_BREAKER_SOURCE`, `target=config.DEFAULT_TARGET`) —
+    """Открытые алерты `kind=incident` стоп-крана волны — по источнику
+    `alerts.WAVE_BREAKER_SOURCE`, не по проекту алерта (SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 9) —
     заводит часть 1 (`alerts.check_wave_breaker_failure`/
     `check_wave_breaker_timeout`), читает часть 2 (это SPEC): отказ
     старта шага здесь (требование 1), первая строка вывода `doctor`
@@ -53,8 +54,7 @@ def wave_breaker_alerts_open(conn) -> list:
     критерий «алерт открыт» в трёх разных командах, поэтому общая
     функция вместо трёх копий фильтра."""
     return [row for row in alerts.open_alerts(conn, "incident")
-           if row["target"] == config.DEFAULT_TARGET
-           and row["source"] == alerts.WAVE_BREAKER_SOURCE]
+           if row["source"] == alerts.WAVE_BREAKER_SOURCE]
 
 
 def _attempts_word(n: int) -> str:
@@ -348,22 +348,20 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
 
     # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования 1,
     # 5): тем же приёмом, что и штатная пауза выше — стоит строго до
-    # workspace/pre-flight/spawn, уже идущий шаг не трогает (AC-1). Только
-    # target self — задачи любого другого target не блокируются вовсе
-    # (требование 5, AC-7): `wave_breaker_alerts_open` уже фильтрует по
-    # `target=config.DEFAULT_TARGET` со стороны алерта, здесь проверяем
-    # ЭТУ задачу тем же критерием, чтобы внешний target не заходил в блок.
-    if (t["target"] or config.DEFAULT_TARGET) == config.DEFAULT_TARGET:
-        wave_breaker_alerts = wave_breaker_alerts_open(conn)
-        if wave_breaker_alerts:
-            names = "; ".join(f"#{a['id']} {a['message']}"
-                              for a in wave_breaker_alerts)
-            detail = (f"открыт алерт(ы) стоп-крана волны ({names}) — новый "
-                      f"агентный шаг не начинается; "
-                      f"`artel.py alert-ack <id> \"...\"` снимет блокировку")
-            store.journal(conn, task_id, role,
-                          WAVE_BREAKER_REFUSAL_ACTION, detail)
-            return "exit", f"[{task_id}] run отклонён: {detail}"
+    # workspace/pre-flight/spawn, уже идущий шаг не трогает (AC-1).
+    # Блокирует задачу любого проекта: стоп-кран — механика пульта, сбой
+    # его окружения бьёт по шагам всех проектов (SPEC
+    # 01M484RNV3QBDY3B0M16J916ZP, строка 10).
+    wave_breaker_alerts = wave_breaker_alerts_open(conn)
+    if wave_breaker_alerts:
+        names = "; ".join(f"#{a['id']} {a['message']}"
+                          for a in wave_breaker_alerts)
+        detail = (f"открыт алерт(ы) стоп-крана волны ({names}) — новый "
+                  f"агентный шаг не начинается; "
+                  f"`artel.py alert-ack <id> \"...\"` снимет блокировку")
+        store.journal(conn, task_id, role,
+                      WAVE_BREAKER_REFUSAL_ACTION, detail)
+        return "exit", f"[{task_id}] run отклонён: {detail}"
 
     target = t["target"] or config.DEFAULT_TARGET
 

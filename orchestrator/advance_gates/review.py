@@ -328,9 +328,9 @@ def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | Non
     общего родителя у них нет — единственный осмысленный признак «после»
     здесь время, не sha.
 
-    Внешний (не self) target — гейт не проверяется: тот же довод, что
-    `_capacity_gate_refuses`/`_zones_gate_refuses` выше — `git log`/`show`
-    в `config.ROOT` не видит код внешнего target.
+    Гейт действует у задачи любого проекта: ветки и REVIEW.md читаются в
+    репозитории задачи (`workspace.task_repo`; SPEC
+    01M484RNV3QBDY3B0M16J916ZP, строка 26).
 
     Git не ответил, дата не разобрана, REVIEW.md вовсе не существует, или
     на кодовой ветке нет ни одного коммита developer (легковесные
@@ -352,8 +352,6 @@ def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | Non
     по-прежнему приоритетна — этот fallback работает только на её
     `(None, None)`.
     """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return None
     repo = workspace.task_repo(task_id)
     review_text, _ = gitcmd.show(branch, f"tasks/{task_id}/REVIEW.md", repo=repo)
     if review_text is None:
