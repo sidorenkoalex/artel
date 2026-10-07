@@ -159,6 +159,166 @@ def run_summary_line(output: str) -> str:
     return match.group(0).strip() if match else ""
 
 
+SUITE_DURATION_ACTION = "прогон: время"
+_last_full_suite_metrics: dict | None = None
+_last_process_snapshot: list[dict] | None = None
+_last_run_completed_at: float | None = None
+_observe_full_suite = False
+
+
+@contextlib.contextmanager
+def observed_full_suite() -> Iterator[None]:
+    global _observe_full_suite
+    previous = _observe_full_suite
+    _observe_full_suite = True
+    try:
+        yield
+    finally:
+        _observe_full_suite = previous
+
+
+def _process_snapshot(excluded_pid: int | None = None) -> list[dict]:
+    """CPU snapshot with the running pytest process tree removed."""
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-axww", "-o", "pid=,ppid=,%cpu=,etime=,command="],
+            capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return _native_process_snapshot(excluded_pid)
+        rows = []
+        for line in result.stdout.splitlines():
+            parts = line.strip().split(None, 4)
+            if len(parts) != 5:
+                continue
+            pid, ppid, cpu, age, command = parts
+            rows.append({"pid": int(pid), "ppid": int(ppid),
+                         "cpu_percent": float(cpu.replace(",", ".")),
+                         "age": age, "name": Path(command.split()[0]).name,
+                         "command": command})
+        if not rows:
+            return _native_process_snapshot(excluded_pid)
+        excluded = {excluded_pid} if excluded_pid else set()
+        while True:
+            children = {row["pid"] for row in rows if row["ppid"] in excluded}
+            if children <= excluded:
+                break
+            excluded.update(children)
+        return [{"pid": row["pid"], "cpu_percent": row["cpu_percent"],
+                 "name": row["name"], "age": row["age"]}
+                for row in sorted(rows, key=lambda item: -item["cpu_percent"])
+                if row["pid"] not in excluded][:3]
+    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+        return _native_process_snapshot(excluded_pid)
+
+
+def _native_process_snapshot(excluded_pid: int | None) -> list[dict]:
+    """macOS libproc fallback when sandbox policy denies ps."""
+    import ctypes
+    try:
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        size = 8192
+        buffer = (ctypes.c_int * size)()
+        count = lib.proc_listpids(1, 0, buffer, ctypes.sizeof(buffer)) // 4
+        pids = [pid for pid in buffer[:count] if pid > 0]
+
+        def sample(pid: int) -> tuple[int, int] | None:
+            raw = ctypes.create_string_buffer(96)
+            if lib.proc_pidinfo(pid, 4, 0, raw, 96) != 96:
+                return None
+            return (int.from_bytes(raw.raw[16:24], "little"),
+                    int.from_bytes(raw.raw[24:32], "little"))
+
+        before = {pid: sample(pid) for pid in pids}
+        sample_started = time.monotonic()
+        time.sleep(0.05)
+        elapsed = time.monotonic() - sample_started
+        rows = []
+        for pid in pids:
+            earlier = before[pid]
+            later = sample(pid)
+            if earlier is None or later is None:
+                continue
+            name_buffer = ctypes.create_string_buffer(256)
+            if lib.proc_name(pid, name_buffer, 256) <= 0:
+                continue
+            bsd = ctypes.create_string_buffer(136)
+            if lib.proc_pidinfo(pid, 3, 0, bsd, 136) != 136:
+                continue
+            ppid = int.from_bytes(bsd.raw[16:20], "little")
+            cpu = max(0, sum(later) - sum(earlier)) / (elapsed * 1e7)
+            started = int.from_bytes(bsd.raw[120:128], "little")
+            age_seconds = max(0, int(time.time() - started)) if started else 0
+            age = (f"{age_seconds // 3600:02d}:"
+                   f"{age_seconds // 60 % 60:02d}:{age_seconds % 60:02d}")
+            rows.append({"pid": pid, "ppid": ppid, "cpu_percent": round(cpu, 1),
+                         "name": name_buffer.value.decode(errors="replace"),
+                         "age": age})
+        excluded = {excluded_pid} if excluded_pid else set()
+        while True:
+            children = {row["pid"] for row in rows if row["ppid"] in excluded}
+            if children <= excluded:
+                break
+            excluded.update(children)
+        return [{key: value for key, value in row.items() if key != "ppid"}
+                for row in sorted(rows, key=lambda item: -item["cpu_percent"])
+                if row["pid"] not in excluded][:3]
+    except (OSError, ValueError):
+        return []
+
+
+def _workers(argv: list[str], output: str) -> int:
+    found = re.findall(r"(\d+) workers \[|created: (\d+)/(\d+) workers", output)
+    if found:
+        return int(next(value for value in found[-1] if value))
+    options = [argv[index + 1] for index in range(len(argv) - 1)
+               if argv[index] == "-n"]
+    value = options[-1] if options else str(config.FULL_SUITE_WORKERS)
+    return int(value) if value.isdigit() else (os.cpu_count() or 1)
+
+
+def _suite_metrics(start: float, load_start: tuple[float, float],
+                   argv: list[str], output: str, timeout: bool,
+                   processes: list[dict] | None = None,
+                   completed_at: float | None = None) -> dict:
+    duration = (completed_at or time.monotonic()) - start
+    load_end = os.getloadavg()
+    summary = run_summary_line(output) if not timeout else ""
+    count = sum(int(n) for n in re.findall(r"(\d+) (?:passed|failed|skipped)\b",
+                                         summary)) if summary else None
+    return {"duration_seconds": duration, "tests": count,
+            "seconds_per_test": duration / count if count else None,
+            "xdist_workers": _workers(argv, output),
+            "load_start_1": load_start[0], "load_start_5": load_start[1],
+            "load_end_1": load_end[0], "load_end_5": load_end[1],
+            "cpu_cores": os.cpu_count() or 1,
+            "top_processes": processes if processes is not None
+            else _process_snapshot()}
+
+
+def suite_load_line(metrics: dict) -> str:
+    processes = ", ".join(
+        f"pid {row['pid']} {row['cpu_percent']}% {row['name']}"
+        for row in metrics["top_processes"])
+    return (f"нагрузка: load average 1/5 мин "
+            f"{metrics['load_end_1']}/{metrics['load_end_5']}; "
+            f"процессы: {processes or 'нет'}")
+
+
+def journal_suite_metrics(task_id: str, metrics: dict | None) -> None:
+    if metrics is None or not config.DB.exists():
+        return
+    from . import store
+    conn = store.db()
+    if conn is None:
+        return
+    try:
+        store.journal(conn, task_id, "orchestrator", SUITE_DURATION_ACTION,
+                      json.dumps(metrics, ensure_ascii=False))
+    except sqlite3.Error as exc:
+        print(f"[{task_id}] запись измерения прогона не удалась: {exc}",
+              file=sys.stderr)
+
+
 def failed_test_lines(output: str) -> list[str]:
     """Строки `FAILED <nodeid>`/`ERROR <nodeid>` блока «short test summary
     info» — имена упавших тестов вместе с коротким сообщением, которым
@@ -915,6 +1075,11 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     замок (`full_suite` гейта, фоновый процесс `suite-run`), идёт без
     второго взятия.
     """
+    global _last_full_suite_metrics, _last_process_snapshot, _last_run_completed_at
+    observe = _observe_full_suite
+    _last_full_suite_metrics = None
+    _last_process_snapshot = None
+    _last_run_completed_at = None
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, FULL_SUITE_NO_TESTS_NOTE
@@ -924,7 +1089,19 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     with _machine_lock(None, limit) as holder:
         if holder is not None:
             return False, _not_started_note(holder)
-        return _run_full_suite_now(argv, root, log, limit)
+        start = time.monotonic() if observe else 0.0
+        load_start = os.getloadavg() if observe else (0.0, 0.0)
+        green, output = _run_full_suite_now(argv, root, log, limit, observe)
+        if not observe:
+            return green, output
+        timed_out = output.startswith("прогон полного набора tests/ превысил ")
+        _last_full_suite_metrics = _suite_metrics(
+            start, load_start, argv, output, timed_out, _last_process_snapshot,
+            _last_run_completed_at)
+        if timed_out:
+            head, newline, rest = output.partition("\n")
+            output = f"{head}\n{suite_load_line(_last_full_suite_metrics)}\n{rest}"
+        return green, output
 
 
 @contextlib.contextmanager
@@ -977,11 +1154,34 @@ def _journal_lock_wait(task_id: str | None, holder: dict,
 
 def _run_full_suite_now(argv: list[str], root: Path,
                         log: Path | None,
-                        limit: tuple[int, str]) -> tuple[bool, str]:
+                        limit: tuple[int, str],
+                        observe: bool = False) -> tuple[bool, str]:
     """Сам прогон `run_full_suite` — замок уже взят; предел
     `config.FULL_SUITE_TIMEOUT_SEC` отсчитывается отсюда."""
     if log is not None:
-        return _run_full_suite_to_log(argv, root, log, limit)
+        return _run_full_suite_to_log(argv, root, log, limit, observe)
+    if observe:
+        global _last_process_snapshot, _last_run_completed_at
+        with _pytest_env() as env:
+            proc = subprocess.Popen(
+                argv, cwd=root, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                stdout, stderr = proc.communicate(timeout=limit[0])
+            except subprocess.TimeoutExpired as exc:
+                _last_run_completed_at = time.monotonic()
+                _last_process_snapshot = _process_snapshot(proc.pid)
+                _kill_group(proc.pid)
+                proc.communicate()
+                output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
+                return False, f"{_full_suite_timeout_note(limit)}\n{output}"
+            except BaseException:
+                _kill_group(proc.pid)
+                proc.communicate()
+                raise
+        _last_run_completed_at = time.monotonic()
+        _last_process_snapshot = _process_snapshot(proc.pid)
+        return proc.returncode == 0, stdout + stderr
     try:
         with _pytest_env() as env:
             res = subprocess.run(
@@ -1002,7 +1202,8 @@ def _kill_group(pgid: int) -> None:
 
 def _run_full_suite_to_log(argv: list[str], root: Path,
                            log: Path,
-                           limit: tuple[int, str]) -> tuple[bool, str]:
+                           limit: tuple[int, str],
+                           observe: bool = False) -> tuple[bool, str]:
     """Прогон `run_full_suite` с выводом прямо в файл `log`. Вывод
     читается из файла байтами с заменой не-UTF-8: чужой проект вправе
     печатать что угодно, а разбор не имеет права уронить фоновый прогон.
@@ -1019,12 +1220,19 @@ def _run_full_suite_to_log(argv: list[str], root: Path,
             code = proc.wait(timeout=limit[0])
         except subprocess.TimeoutExpired:
             timed_out = True
+            if observe:
+                global _last_process_snapshot, _last_run_completed_at
+                _last_run_completed_at = time.monotonic()
+                _last_process_snapshot = _process_snapshot(proc.pid)
             _kill_group(proc.pid)
             proc.wait()
         except BaseException:
             _kill_group(proc.pid)
             proc.wait()
             raise
+        if observe and not timed_out:
+            _last_run_completed_at = time.monotonic()
+            _last_process_snapshot = _process_snapshot(proc.pid)
     output = log.read_bytes().decode("utf-8", errors="replace")
     if timed_out:
         return False, f"{_full_suite_timeout_note(limit)}\n{output}"
@@ -1300,6 +1508,8 @@ def full_suite(root: Path, task_id: str,
     # Замок берётся здесь, а не в `run_full_suite`: ожидание пишется в
     # журнал задачи гейта (требование 2), а `run_full_suite` внутри взятого
     # замка идёт без второго взятия.
+    global _last_full_suite_metrics
+    _last_full_suite_metrics = None
     from . import project_profile, store  # store -> ... -> acceptance
     # Прямой вызов узла без БД (юнит-сценарии и временные деревья) не
     # должен создавать пустой state.db: читатели ссылок документов считают
@@ -1313,6 +1523,8 @@ def full_suite(root: Path, task_id: str,
                 raise
     limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
+    # Direct unit calls without a usable task database cannot journal.
+    recordable = bool(config.DB.exists() and store.db() is not None)
     try:
         tree = suite_tree_hash(root)
         key = suite_result_key(tree, command) if tree else None
@@ -1337,6 +1549,13 @@ def full_suite(root: Path, task_id: str,
     with _machine_lock(task_id, limit) as holder:
         if holder is not None:
             green, output = False, _not_started_note(holder)
+        elif recordable:
+            with observed_full_suite():
+                if command is None:
+                    green, output = run_full_suite(root, **run_kwargs)
+                else:
+                    green, output = run_full_suite(root, command=command,
+                                                   **run_kwargs)
         elif command is None:
             green, output = run_full_suite(root, **run_kwargs)
         else:
@@ -1346,6 +1565,8 @@ def full_suite(root: Path, task_id: str,
         # Прогона не было: ни лога, ни выжимки, ни итога по sha.
         return FullSuiteRun(green, outcome, "", None,
                             _full_suite_detail(outcome, "", None, output))
+    if outcome != FULL_SUITE_NO_TESTS:
+        journal_suite_metrics(task_id, _last_full_suite_metrics)
     _remember_gate_failures(root, outcome, output)
     log_path = (_write_full_suite_log(task_id, output)
                  if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
@@ -1360,10 +1581,14 @@ def full_suite(root: Path, task_id: str,
         except (OSError, ValueError, TypeError, AttributeError,
                 subprocess.TimeoutExpired):
             pass
-    digest = run_digest(output)
-    return FullSuiteRun(green, outcome, digest, log_path,
-                        _full_suite_detail(outcome, digest, log_path,
-                                           output.splitlines()[0] if output else ""))
+    digest_output = "\n".join(line for line in output.splitlines()
+                              if not line.startswith("нагрузка: load average"))
+    digest = run_digest(digest_output)
+    detail = _full_suite_detail(outcome, digest, log_path,
+                                output.splitlines()[0] if output else "")
+    if outcome == FULL_SUITE_TIMEOUT and _last_full_suite_metrics is not None:
+        detail += "\n" + suite_load_line(_last_full_suite_metrics)
+    return FullSuiteRun(green, outcome, digest, log_path, detail)
 
 
 def summary(tdir: Path, branch: str | None = None,

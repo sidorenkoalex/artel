@@ -215,6 +215,9 @@ FULL_SUITE_TIMEOUT_SEC = 900
 # приёмочных тестов задачи (`acceptance.run`) эту константу не читает —
 # она остаётся последовательной (SPEC, «Не входит»).
 FULL_SUITE_WORKERS = "auto"
+MACHINE_LOAD_PROCESS_CORES = 4
+SUITE_DURATION_CALIBRATION_RUNS = 8
+SUITE_DURATION_RATIO = 0.6
 # Предел ожидания замка полных прогонов машины прогоном гейта пульта (SPEC
 # 01M46D5T8SZ9D6S34TZFX8S46V, требование 2): два полных прогона на пределе
 # FULL_SUITE_TIMEOUT_SEC. Ожидание в предел самого прогона не входит;
