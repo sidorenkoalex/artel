@@ -1174,6 +1174,8 @@ def _ephemeral_clone(target_sha: str | None = None,
     origin_dir = Path(tempfile.mkdtemp(prefix="artel-canary-origin-"))
     saved = {attr: getattr(config, attr) for attr in _CLONE_CONFIG_ATTRS}
     saved_codex_home = codex_provider.codex_home_override()
+    saved_skip_full_suite = config.CANARY_SKIP_FULL_SUITE
+    config.CANARY_SKIP_FULL_SUITE = True
     try:
         clone = subprocess.run(
             ["git", "clone", "-q", str(outer_root), str(dest)],
@@ -1233,6 +1235,7 @@ def _ephemeral_clone(target_sha: str | None = None,
                              f"восстановлен: {codex_auth.profile}: {exc}")
         yield dest
     finally:
+        config.CANARY_SKIP_FULL_SUITE = saved_skip_full_suite
         codex_provider.set_codex_home_override(saved_codex_home)
         for attr, value in saved.items():
             setattr(config, attr, value)
@@ -2222,7 +2225,9 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
     # Без буферизации: вывод в файл у Python блочно буферизован, а снятие
     # по таймауту сигналом буфер не сбрасывает — диагностика зависания
     # осталась бы без последних строк ведения.
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1",
+           config.CANARY_SKIP_FULL_SUITE_ENV:
+               "1" if config.CANARY_SKIP_FULL_SUITE else "0"}
     with open(log_path, "w", encoding="utf-8") as log:
         try:
             proc = subprocess.Popen(argv, cwd=dest, stdin=subprocess.DEVNULL,

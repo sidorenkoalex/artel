@@ -5,6 +5,7 @@
 сводки, признак pytest по исполняемому файлу, свежий пустой замок, итог гейта
 на грязном дереве, неделимость «новые/на базе» без итога базы.
 """
+import contextlib
 import json
 import os
 import subprocess
@@ -12,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import acceptance, config, suite_run
+from orchestrator import acceptance, appendix_tree, config, store, suite_run
 from tests.sandbox import RealGitSandbox, TmpRootTest
 
 XDIST_PARTIAL = """\
@@ -323,6 +324,60 @@ class GateArgvTest(TmpRootTest):
         argv = run.call_args.args[0]
         self.assertEqual(argv, acceptance._pytest_command("tests") + [
             "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"])
+
+
+class SuiteRunJournalTest(TmpRootTest):
+
+    def test_suite_run_preserves_task_steps_on_every_outcome(self):
+        """Команда не меняет журнал задачи; таймаут называет нагрузку.
+
+        Ловит мутацию: полный `suite-run` снова пишет измерение в журнал
+        задачи, хотя у гейта запись остаётся; при удалении снимка нагрузки
+        отчёт о таймауте теряет строку с load average и процессом.
+        """
+        store.create_schema(store.db())
+        task_id = "T001"
+        store.insert_task(store.db(), task_id, "Прогон", "in_dev",
+                          "task/t001-progon", config.DEFAULT_TARGET, 25.0)
+        steps_before = [dict(row) for row in store.task_steps(store.db(), task_id)]
+        metrics = {"load_end_1": 8.0, "load_end_5": 6.0,
+                   "top_processes": [{"pid": 42, "cpu_percent": 410.0,
+                                      "name": "foreign"}]}
+        tree = appendix_tree.SuiteTree(self.root, "", "", "")
+        cases = (
+            (suite_run.MODE_FULL, True, "1 passed in 0.1s", False),
+            (suite_run.MODE_FULL, False, "1 failed in 0.1s", False),
+            (suite_run.MODE_FULL, False,
+             acceptance._full_suite_timeout_note(), True),
+            (suite_run.MODE_FAILED, False,
+             acceptance._full_suite_timeout_note(), True),
+        )
+        for number, (mode, green, output, timeout) in enumerate(cases, 1):
+            with self.subTest(mode=mode, output=output):
+                def run(*args, **kwargs):
+                    acceptance._last_full_suite_metrics = metrics
+                    return green, output
+
+                with mock.patch.object(suite_run, "_profile_command",
+                                       return_value=(["pytest"], "")), \
+                        mock.patch.object(suite_run.project_profile,
+                                          "full_suite_limit",
+                                          return_value=(10, "config")), \
+                        mock.patch.object(suite_run.appendix_tree, "suite_tree",
+                                          return_value=contextlib.nullcontext(tree)), \
+                        mock.patch.object(acceptance, "run_full_suite",
+                                          side_effect=run), \
+                        mock.patch.object(suite_run, "_base",
+                                          return_value=(None, "base unavailable")), \
+                        mock.patch.object(suite_run, "_read_failed",
+                                          return_value=["tests/test_x.py::test_x"]):
+                    report, _ = suite_run._run(
+                        task_id, number, mode, self.root / f"run-{number}.log")
+                self.assertEqual([dict(row) for row in store.task_steps(
+                    store.db(), task_id)], steps_before)
+                self.assertEqual("нагрузка: load average" in report, timeout)
+                if timeout:
+                    self.assertIn("pid 42 410.0% foreign", report)
 
 
 if __name__ == "__main__":
