@@ -14,18 +14,21 @@ schema_version: 5
 
 Правило роли меняется приложением ниже. `git apply --check /private/tmp/01m4begqavvwchfcw6bebb0xvt-skill.patch` завершился с кодом 0 на текущем дереве; защищённый файл в ветке не менялся. Замечания к зафиксированным тестам закрыты решением Оператора в `ANSWER-1.md` и правкой через `amend-tests` (лок `5c367926`, коммит `0e1ee6fb`): автогейт получает действительный ID прогона из `details_url`, а AC-4 считает причины только среди записей действия `полный набор локально`.
 
+После ревью R1-F1 обработчик сбоя чтения дерева задаёт оба результата как непрочитанные. Это сохраняет одну причину в журнале и запускает локальный набор при ошибке как первого, так и второго чтения. Новый тест находится в `tests/test_acceptance.py`; зафиксированный файл задачи не изменён.
+
 ## Шаги
 
 1. Добавить проверку CI и дерева в `orchestrator/ci.py` и `orchestrator/acceptance.py`, подключить к `orchestrator/fsm_autogate.py` и `orchestrator/fsm.py`; покрыть условия переключения имеющимися зафиксированными тестами и регенерировать `docs/codebase-map.md`.
 2. Подготовить проверенный unified diff для `skills/coding-standards.md` и прогнать планку и тесты затронутых модулей.
+3. Закрыть R1-F1: при ошибке чтения любого дерева перейти на локальный набор; добавить юнит-тест сбоя каждого чтения, проверить его красноту на исходном дефекте и повторить затронутые прогоны.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1–3 | 1 |
+| 1–3 | 1, 3 |
 | 4 | 2 |
-| 5 | 1, 2 |
+| 5 | 1–3 |
 
 ## Влияние на систему
 
@@ -37,9 +40,10 @@ schema_version: 5
 
 ## Проверки
 
-- `python3 -m pytest tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py tests/test_fsm_autogate.py tests/test_acceptance.py tests/test_ci_status.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 126 passed, 37 subtests passed.
+- `python3 -m pytest tests/test_acceptance.py::AcceptanceSuiteTreeFailureTest -p no:cacheprovider -p timeout -o timeout=120 -q` до исправления — 2 subtests failed: оба чтения завершались `UnboundLocalError`.
+- `python3 -m pytest tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py tests/test_fsm_autogate.py tests/test_acceptance.py tests/test_ci_status.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 127 passed, 39 subtests passed после исправления.
 - `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4BEGQAVVWCHFCW6BEBB0XVT` — 1 passed.
-- `python3 scripts/codebase_map.py` обновил `docs/codebase-map.md` после операторской правки теста; `git apply --check /private/tmp/01m4begqavvwchfcw6bebb0xvt-skill.patch` — код выхода 0.
+- `python3 scripts/codebase_map.py` обновил `docs/codebase-map.md` после нового теста; `git apply --check /private/tmp/01m4begqavvwchfcw6bebb0xvt-skill.patch` — код выхода 0; `git diff --check` — без ошибок.
 
 ## Приложение: правило разработчика
 
