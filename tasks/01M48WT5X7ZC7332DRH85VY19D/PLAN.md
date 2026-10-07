@@ -18,14 +18,21 @@ schema_version: 5
 
 ANSWER-2 разрешил точечную правку зафиксированного `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py::BaseComparisonTest::test_ac13_gate_full_suite_result_is_reused_as_base`: гейт в тесте теперь получает `command=[str(self.python), "-m", "pytest"]`, как настоящий гейт мержа. Утверждения и заявку мутации метода не меняли. Строгое различение собранных команд в ключе осталось.
 
+Возврат из verifying по CI 7e2d08b7: внешний цикл `fsm_merge_gate.py` стал передавать `fresh_suite` телу гейта новым именованным аргументом и сломал прежний контракт вызова тела, который используют тестовые подмены. Флаг теперь живёт в `ContextVar` на время цикла; тело считывает его при прогоне приложений, а вызов тела и его подмены сохраняют прежнюю сигнатуру. Контекст сбрасывается в `finally` после любого исхода. Проекцию карты сократил через первую строку докстринга собственного `tests/test_full_suite_reuse.py`, без изменения генератора или лимита.
+
 ## Шаги
 
 1. Реализовать снимок дерева, отпечаток окружения, записи и повторное использование в `acceptance.py`; константы в `config.py`.
 2. Провести `--fresh-suite` через CLI, приёмку и гейт мержа; показать происхождение повторного итога в журнале автогейта и approve.
 3. Перевести базу `suite-run` на ключ дерева; исправить тест профиля; добавить юнит-тесты непокрытых свойств и обновить карту.
 4. Прогнать затронутые тесты, планку, guard и штатный полный набор через `suite-run`.
+5. По возврату CI сохранить контракт вызова тела внешним циклом, проверить прохождение `--fresh-suite` в прогон приложений и размер проекции карты.
 
 Проверка после ANSWER-2: `python3 -m pytest tests/test_full_suite_reuse.py tests/test_01m48wt5x7zc7332drh85vy19d_base_reuse.py tests/test_01m48wt5x7zc7332drh85vy19d_suite_reuse.py tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py -p no:cacheprovider -p timeout -o timeout=120` — 46 passed. Отдельно `test_ac13_gate_full_suite_result_is_reused_as_base` — 1 passed. `plank-run` не запустил pytest: в зафиксированном источнике нет файлов `test_*.py`. Полный набор из роли не запускался по ANSWER-1: песочница не даёт создать замок `suite-run`; полный набор проверят гейты и CI.
+
+Проверка возврата CI: `python3 -m pytest tests/test_full_suite_reuse.py tests/test_merge_gate_ci_wait.py tests/test_codebase_map.py tests/test_plan_appendix.py tests/test_fsm_merge_gate_done_snapshot.py -p no:cacheprovider -p timeout -o timeout=120` — 94 passed. Новый `test_fresh_flag_reaches_appendix_suite_through_cycle` краснел при временной мутации `ContextVar.set(False)` (`[False, False]` вместо `[True, False]`); мутация убрана. После регенерации `docs/codebase-map.md` проекция — 131027 байт при лимите 131072.
+
+Финальный локальный прогон `tests/test_merge_gate_ci_wait.py`, `tests/test_codebase_map.py`, `tests/test_full_suite_reuse.py`, двух долгоживущих файлов этой задачи и `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py` — 102 passed за 234.24 с. `plank-run 01M48WT5X7ZC7332DRH85VY19D` сообщил, что в зафиксированном источнике нет `test_*.py`; pytest не запускался. `suite-run` вновь отказал до запуска набора: `PermissionError` при создании `.artel/logs/suite-run/lock.json`, как уже отмечено ниже. `python3 scripts/guard.py <каталог документов>/PLAN.md` — `GUARD: ок`.
 
 ## Покрытие требований
 
@@ -35,6 +42,7 @@ ANSWER-2 разрешил точечную правку зафиксирован
 | 4–6, 10–11, 14 | 1–2 |
 | 12–13, 15 | 1, 3 |
 | 16–17 | 3 |
+| Возврат verifying: три падения CI | 5 |
 
 ## Влияние на систему
 
