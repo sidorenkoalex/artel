@@ -29,7 +29,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, notes, store  # noqa: E402
-from tests.sandbox import (RealGitSandbox, capture,  # noqa: E402
+from tests.sandbox import (RealGitSandbox, capture, init_bare_origin,  # noqa: E402
                            clone_artel_from_origin)
 
 KOPILKA_HEADER = "| П | Дата | Наблюдение | Где | Состояние |"
@@ -92,7 +92,7 @@ class ApplySandbox(RealGitSandbox):
         self.addCleanup(role_patcher.stop)
         self.origin = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", self.origin)
+        init_bare_origin(self.origin, self.git)
         self.git("remote", "add", "origin", self.origin)
         path = self.root / notes.BACKLOG_REL
         path.parent.mkdir(parents=True, exist_ok=True)

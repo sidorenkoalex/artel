@@ -1,5 +1,7 @@
-"""Общая тестовая песочница (SPEC T037, требование 1; SPEC T061 —
-второй заход: `FakeProc` и claude-only side_effect).
+"""Общая тестовая песочница.
+
+SPEC T037, требование 1; SPEC T061 — второй заход: `FakeProc` и
+claude-only side_effect.
 
 `TmpRootTest`, `capture` и `fake_git` копировались по 9/17/8 тестовым
 файлам с расхождениями в наборе подменяемых путей `config` —
@@ -62,6 +64,7 @@ _RoleHomeReferenceTmpRootTest` — единственный, где сужени
 import atexit
 import contextlib
 import errno
+import functools
 import importlib
 import io
 import json
@@ -940,9 +943,26 @@ def seed_artel_targets() -> None:
         return
     config.TARGETS.parent.mkdir(parents=True, exist_ok=True)
     config.TARGETS.write_text(
-        "targets:\n" + _PROJECT_TARGET_ENTRY.format(
-            name=config.DEFAULT_TARGET, base=config.MAIN_BRANCH)
-        + ARTEL_TEST_PROFILE, encoding="utf-8")
+        "targets:\n" + artel_target_entry(), encoding="utf-8")
+
+
+def artel_target_entry(name: str = config.DEFAULT_TARGET,
+                       base: str = config.MAIN_BRANCH,
+                       url: str | None = None) -> str:
+    """Запись артели с `test_profile` для `targets.yaml` песочницы."""
+    entry = _PROJECT_TARGET_ENTRY.format(name=name, base=base)
+    if url is not None:
+        entry = entry.replace(_ARTEL_PLACEHOLDER_URL.format(name=name), url)
+    return entry + ARTEL_TEST_PROFILE
+
+
+def init_bare_origin(path: str | Path, git=None) -> None:
+    """Создать bare-origin с HEAD на ветке артели, независимо от git config."""
+    args = ("init", "-q", "--bare", "-b", config.MAIN_BRANCH, str(path))
+    if git is None:
+        _REAL_RUN(["git", *args], check=True, capture_output=True)
+    else:
+        git(*args)
 
 
 @contextlib.contextmanager
@@ -1028,7 +1048,7 @@ def make_project_repo(target: str, origin: bool = True) -> Path:
     git("commit", "-q", "--allow-empty", "-m", "init")
     if origin:
         bare = config.PROJECTS / target / "origin.git"
-        git("init", "-q", "--bare", str(bare))
+        init_bare_origin(bare, git)
         git("remote", "add", "origin", str(bare))
         # База ветки задачи — `origin/<база>` клона (ADR-0021 п.1, этап 2:
         # рабочая копия задачи заводится от свежего origin).
@@ -1249,10 +1269,44 @@ def seed_artel_clone_stub() -> Path:
     (`config.PROJECTS/artel/repo`) — настоящим `git init`, мимо подмен
     `subprocess.run` (`_REAL_RUN`)."""
     clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
-    clone.mkdir(parents=True, exist_ok=True)
-    _REAL_RUN(["git", "init", "-q", "-b", config.MAIN_BRANCH, str(clone)],
-              capture_output=True, text=True)
+    clone.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(_clone_stub_template(), clone,
+                    ignore=shutil.ignore_patterns("*.lock"))
     return clone
+
+
+@functools.cache
+def _clone_stub_template() -> Path:
+    template = _SANDBOX_CONFIG_DIR / "clone-stub-template"
+    template.mkdir()
+    _REAL_RUN(["git", "init", "-q", "-b", config.MAIN_BRANCH, str(template)],
+              check=True, capture_output=True)
+    for key, value in (("gc.auto", "0"), ("maintenance.auto", "false")):
+        _REAL_RUN(["git", "config", "--local", key, value], cwd=template,
+                  check=True, capture_output=True)
+    return template
+
+
+@functools.cache
+def _real_git_template() -> Path:
+    template = _SANDBOX_CONFIG_DIR / "real-git-template"
+    template.mkdir()
+
+    def git(*args: str) -> None:
+        _REAL_RUN(["git", *args], cwd=template, check=True,
+                  capture_output=True)
+
+    git("init", "-q", "-b", config.MAIN_BRANCH)
+    git("config", "--local", "gc.auto", "0")
+    git("config", "--local", "maintenance.auto", "false")
+    git("config", "user.email", "artel@example.invalid")
+    git("config", "user.name", "artel tests")
+    # БД/WAL подклассов не должны попадать в их последующие `git add -A`.
+    (template / ".gitignore").write_text(".artel/\n", encoding="utf-8")
+    (template / "marker.txt").write_text("main\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+    return template
 
 
 def link_artel_clone_to_root(root: Path) -> Path:
@@ -1654,22 +1708,8 @@ class RealGitSandbox(TmpRootTest):
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
 
-        self.git("init", "-q", "-b", config.MAIN_BRANCH)
-        self.git("config", "user.email", "artel@example.invalid")
-        self.git("config", "user.name", "artel tests")
-        # `.artel/` в `.gitignore` ДО первого коммита (tasks/
-        # 01M1NGFK3N6MRMYGCC09H975V3, ANSWER-2): `store.create_schema`
-        # ниже кладёт настоящую sqlite-БД (WAL/SHM в комплекте) ВНУТРЬ
-        # `self.root` — того же дерева, которое подклассы коммитят через
-        # `git add -A`. Без этой строки любой подкласс, делающий больше
-        # одного коммита и сверяющий их разницу (`gitcmd.diff_names`),
-        # рискует поймать в диф WAL-файл БД — тот же приём, что уже несёт
-        # реальный `.gitignore` пульта (`.artel/` в корне репозитория).
-        (self.root / ".gitignore").write_text(".artel/\n", encoding="utf-8")
-        (self.root / "marker.txt").write_text("main\n", encoding="utf-8")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "init")
-
+        shutil.copytree(_real_git_template(), self.root, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("*.lock"))
         for attr in ALL_CONFIG_ATTRS:
             path = self._patched_path(attr)
             if attr == "TARGETS":
@@ -1725,7 +1765,7 @@ class RealGitSandbox(TmpRootTest):
         `remote add origin` на тот же репозиторий отказал бы."""
         origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(origin))
+        init_bare_origin(origin, self.git)
         self.git("remote", "add", "origin", str(origin))
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
@@ -1766,7 +1806,7 @@ class OriginRealGitSandbox(RealGitSandbox):
     def add_origin(self) -> str:
         self.bare = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.bare, ignore_errors=True)
-        self.git("init", "-q", "--bare", self.bare)
+        init_bare_origin(self.bare, self.git)
         self.git("remote", "add", "origin", self.bare)
         return self.bare
 

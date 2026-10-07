@@ -1,5 +1,7 @@
-"""Юнит-тесты `orchestrator/pin.py` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
-SPEC.md) — срез, который приёмочные тесты `tasks/
+"""Тесты команды pin.
+
+tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md — срез, который приёмочные
+тесты `tasks/
 01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests/` не покрывают дословно:
 факт, что гейт AC-1 отказывает ДО `merge` (после `fetch` — REVIEW.md
 итерации 1, R1-F1: возраст считается `merge-base`/`rev-list`, которым
@@ -24,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import ci, config, gitcmd, pin, store  # noqa: E402
 from tests.sandbox import (ConnRealGitSandbox, RealGitSandbox,  # noqa: E402
-                           SyncedOriginConnSandbox)
+                           SyncedOriginConnSandbox, init_bare_origin)
 
 
 class PinUpdateGateOrderTest(ConnRealGitSandbox):
@@ -94,9 +96,7 @@ class PinUpdateGateAfterFetchTest(RealGitSandbox):
         bare_tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, bare_tmp, ignore_errors=True)
         self.origin = Path(bare_tmp) / "origin.git"
-        subprocess.run(
-            ["git", "init", "-q", "--bare", "-b", config.MAIN_BRANCH,
-             str(self.origin)], check=True, capture_output=True, text=True)
+        init_bare_origin(self.origin)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin", config.MAIN_BRANCH)
 

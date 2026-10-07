@@ -23,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, gitcmd, store  # noqa: E402
-from tests.sandbox import RealGitSandbox, TmpRootTest  # noqa: E402
+from tests.sandbox import RealGitSandbox, TmpRootTest, init_bare_origin  # noqa: E402
 
 
 class _GitcmdRealGitSandbox(RealGitSandbox):
@@ -283,7 +283,7 @@ class RemoteBranchShaTest(_GitcmdRealGitSandbox):
         super().setUp()
         bare = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, bare, ignore_errors=True)
-        self.git("init", "-q", "--bare", bare)
+        init_bare_origin(bare, self.git)
         self.git("remote", "add", "origin", bare)
 
     def test_branch_never_pushed_is_empty(self):

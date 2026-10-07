@@ -28,7 +28,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm, fsm_merge_gate, gitcmd, repo_context  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import RealGitSandbox, init_bare_origin  # noqa: E402
 
 
 def _run(*args: str, cwd: Path) -> subprocess.CompletedProcess:
@@ -172,8 +172,7 @@ class FetchRefShaTest(_PrivateRefRealGitSandbox):
 
         origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
-        subprocess.run(["git", "init", "-q", "--bare", str(origin)],
-                       check=True, capture_output=True)
+        init_bare_origin(origin)
         _run("remote", "add", "origin", str(origin), cwd=target_repo)
         _run("push", "-q", "origin",
              f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}", cwd=target_repo)

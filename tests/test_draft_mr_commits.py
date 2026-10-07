@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, github_adapter, gitcmd, store  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import RealGitSandbox, init_bare_origin  # noqa: E402
 
 # Адреса фикстур — loopback: инвариант 35 (docs/invariants.md) держит
 # `tests/**/*.py` без DNS-имён, а проверяемое свойство (черновик заводится
@@ -54,7 +54,7 @@ class _DraftMrSandbox(RealGitSandbox):
         # (иначе push `main` перехватила бы она же).
         origin = tempfile.TemporaryDirectory()
         self.addCleanup(origin.cleanup)
-        self.git("init", "-q", "--bare", origin.name)
+        init_bare_origin(origin.name, self.git)
         self.git("remote", "add", "origin", origin.name)
         self.git("push", "-q", "origin",
                  f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

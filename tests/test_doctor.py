@@ -34,7 +34,7 @@ from orchestrator import (alerts, artifact_branch, budget, canary,  # noqa: E402
                           catalog, config, doctor, gitcmd, liveness, projects, runner, spend,
                           store)
 from tests import sandbox as sandbox_module  # noqa: E402
-from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
+from tests.sandbox import (FakeStream, InitializedTmpRootTest, init_bare_origin,  # noqa: E402
                            RealGitSandbox, SyncedOriginConnSandbox, strip_dash_c,
                            TaskSeededTmpRootTest, TmpRootTest, _ts_ago,
                            capture, capture_new_task_id, claude_only_popen,
@@ -810,7 +810,7 @@ class PinUnpushedCheckTest(RealGitSandbox):
         super().setUp()
         self.origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(self.origin))
+        init_bare_origin(self.origin, self.git)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

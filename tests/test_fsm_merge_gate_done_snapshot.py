@@ -37,7 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, catalog, ci, config,  # noqa: E402
                           fsm_merge_gate, gitcmd, store, yamlmini)
-from tests.sandbox import RealGitSandbox, capture, resilient_tmp_cleanup  # noqa: E402
+from tests.sandbox import (RealGitSandbox, capture, init_bare_origin,  # noqa: E402
+                           resilient_tmp_cleanup)
 
 TARGET = "extproj"
 TASK = "01DONESNAPSHOTTASK0001"
@@ -84,7 +85,7 @@ class DonePathSnapshotTest(RealGitSandbox):
         # проверить снапшот.
         pult_origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, pult_origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(pult_origin))
+        init_bare_origin(pult_origin, self.git)
         self.git("remote", "add", "origin", str(pult_origin))
         self.git("push", "-q", "-u", "origin", config.MAIN_BRANCH)
         self.pult_origin = pult_origin
@@ -118,9 +119,7 @@ class DonePathSnapshotTest(RealGitSandbox):
         bare_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, bare_tmp)
         self.target_origin = Path(bare_tmp.name) / "origin.git"
-        subprocess.run(["git", "init", "-q", "--bare", "-b", config.MAIN_BRANCH,
-                        str(self.target_origin)], check=True,
-                       capture_output=True, text=True)
+        init_bare_origin(self.target_origin)
         # Клон проекта — `repo/` области проекта (ADR-0021 п.1, этап 2; до
         # него — общий `workspace/`).
         self.target_workspace = config.PROJECTS / TARGET / "repo"
