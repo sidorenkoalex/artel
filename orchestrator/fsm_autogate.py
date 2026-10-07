@@ -309,7 +309,9 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     ok.append(tree.mark("полный набор tests/ в worktree ветки зелёный"
                         + (f" — {run.digest}" if run.digest else "")
                         + (f" (лог прогона: {run.log_path})"
-                           if run.log_path is not None else "")))
+                           if run.log_path is not None else "")
+                        + (f" — {run.detail}" if "использован повторно" in
+                           run.detail else "")))
 
     if budget.budget_block(t) is not None:
         return ok, "автогейт: бюджет задачи исчерпан"

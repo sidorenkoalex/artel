@@ -119,6 +119,8 @@ REQUIREMENTS_LOCK = ROOT / "requirements.lock"
 # `REQUIREMENTS_LOCK` выше, `runner.role_env` отказывает без согласованного
 # venv (требование 4).
 VENV_DIR = ROOT / ".artel" / "venv"
+FULL_SUITE_REUSE_MAX_AGE_SEC = 86400
+FULL_SUITE_BASE_EXCLUDED_PATHS = ("tasks", "docs/retro", "docs/backlog.md")
 
 # 30 минут; временный подъём до 2700 на стройку M1 (02.09) возвращён
 # после мержа T094 тем же днём (класс «лимит», ADR-0002). Повторный
