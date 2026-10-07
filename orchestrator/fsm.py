@@ -1140,8 +1140,9 @@ def _acceptance_full_suite_ok(conn, task_id: str, t,
             print(f"  почини приложения PLAN и повтори: artel.py approve "
                   f"{task_id}")
             return False
-        run = (acceptance.full_suite(tree.root, task_id, fresh=True)
-               if fresh_suite else acceptance.full_suite(tree.root, task_id))
+        run = acceptance.acceptance_suite(
+            conn, tree.root, task_id, t["branch"],
+            workspace.task_repo(task_id), actor="operator", fresh=fresh_suite)
     run_detail = tree.mark(run.detail)
     if run.green:
         store.journal(conn, task_id, "operator", ACCEPTANCE_SUITE_GREEN_ACTION,

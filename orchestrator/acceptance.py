@@ -1591,6 +1591,50 @@ def full_suite(root: Path, task_id: str,
     return FullSuiteRun(green, outcome, digest, log_path, detail)
 
 
+def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
+                     *, actor: str, fresh: bool = False) -> FullSuiteRun:
+    """Результат полного набора для приёмки с локальным откатом при сомнении.
+
+    Гейт мержа продолжает вызывать `full_suite` напрямую. Сравнивается
+    фактическое дерево прогона, включая приложения PLAN и рабочие правки.
+    """
+    from . import store
+
+    reason = "запрошен свежий локальный прогон" if fresh else ""
+    if not reason:
+        sha, _ = ci.head_sha(branch, repo=repo)
+        if not sha:
+            reason = "голова ветки не прочитана"
+        else:
+            try:
+                gate_tree = suite_tree_hash(root)
+                head_tree = suite_tree_hash(root, ref=sha, worktree=False)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                gate_tree = head_tree = None
+            if not head_tree or not gate_tree:
+                reason = "дерево гейта или головного коммита не прочитано"
+            elif gate_tree != head_tree:
+                reason = "дерево гейта отличается от дерева головного коммита"
+            elif not gitcmd.is_ancestor(
+                    f"refs/remotes/origin/{config.MAIN_BRANCH}", sha,
+                    repo=repo):
+                reason = f"ветка не свежа относительно origin/{config.MAIN_BRANCH}"
+            else:
+                run_id, reason = ci.accepted_full_suite(sha, repo=repo)
+                if run_id:
+                    detail = f"полный набор: принят итог CI {sha}, прогон {run_id}"
+                    if isinstance(conn, sqlite3.Connection):
+                        store.journal(conn, task_id, actor,
+                                      "приёмка: полный набор принят из CI", detail)
+                    return FullSuiteRun(True, FULL_SUITE_GREEN, detail, None,
+                                        detail)
+    if isinstance(conn, sqlite3.Connection):
+        store.journal(conn, task_id, actor, "полный набор локально",
+                      " ".join(reason.splitlines()))
+    return (full_suite(root, task_id, fresh=True) if fresh
+            else full_suite(root, task_id))
+
+
 def summary(tdir: Path, branch: str | None = None,
             long_lived: list[Path] | None = None,
             repo: Path | None = None) -> str:

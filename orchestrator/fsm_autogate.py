@@ -323,10 +323,13 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
                                       branch=t["branch"]) as tree:
             if tree.root is None:
                 return ok, f"автогейт: {tree.refusal}"
-            run = acceptance.full_suite(tree.root, task_id)
+            run = acceptance.acceptance_suite(
+                conn, tree.root, task_id, t["branch"],
+                workspace.task_repo(task_id), actor="fsm")
         if not run.green:
             return ok, f"автогейт: {tree.mark(run.detail)}"
-        ok.append(tree.mark("полный набор tests/ в worktree ветки зелёный"
+        ok.append(tree.mark((run.detail if "принят итог CI" in run.detail
+                            else "полный набор tests/ в worktree ветки зелёный")
                             + (f" — {run.digest}" if run.digest else "")
                             + (f" (лог прогона: {run.log_path})"
                                if run.log_path is not None else "")

@@ -30,6 +30,9 @@ FULL_SUITE_CHECKS = frozenset({
     "Синтаксис и тесты оркестратора",
     "Инварианты на минимальной версии Python",
 })
+# Только это задание запускает весь каталог tests/; python-min исполняет
+# лишь tests.test_invariants и само по себе не доказывает полный набор.
+FULL_SUITE_JOB = "Синтаксис и тесты оркестратора"
 
 
 def gh(*args: str, timeout: int | None = None,
@@ -715,6 +718,39 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
             f"{', '.join(unexecuted)}", reread)
     return True, _with_reread(
         f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
+
+
+def accepted_full_suite(sha: str, repo: Path | None = None) -> tuple[str, str]:
+    """(ID прогона, причина отказа): зелёный CI с исполненным полным набором.
+
+    При отсутствии доказуемой связи задания с прогоном результат не
+    переиспользуется: локальный гейт остаётся источником истины.
+    """
+    if repo is not None and not repo_context.is_artel(repo):
+        return "", "полный набор CI проекта не идентифицирован"
+    runs, why = check_runs(sha)
+    if runs is None:
+        return "", f"CI не ответил: {why}"
+    if not runs:
+        return "", "CI не ответил: у коммита нет проверок"
+    unfinished, _ = _unfinished_checks(runs)
+    if unfinished:
+        return "", "CI головного коммита не завершён"
+    if any(run.get("conclusion") not in GREEN for run in runs):
+        return "", "CI головного коммита не зелёный"
+    index = _commit_workflow_runs(sha, runs)
+    suite_checks = [run for run in runs
+                    if run.get("name") == FULL_SUITE_JOB
+                    and run.get("conclusion") == "success"]
+    if not suite_checks or _unexecuted_full_suite(runs, repo, index):
+        return "", "CI не выполнил полный набор"
+    for check in suite_checks:
+        run = _run_of(check, index)
+        run_id = (_int_or_none(run.get("id", run.get("databaseId")))
+                  if run is not None else None) or _url_run_id(check)
+        if run_id is not None:
+            return str(run_id), ""
+    return "", "CI не сообщил ID прогона полного набора"
 
 
 def status_kind(note: str) -> str:
