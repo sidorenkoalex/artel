@@ -7,3 +7,4 @@
 2026-10-07 09:06:00Z  in_dev  actor=fsm
 2026-10-07 10:49:21Z  verifying  actor=fsm
 2026-10-07 14:48:38Z  in_dev  actor=operator
+2026-10-07 14:55:39Z  escalated  actor=fsm
