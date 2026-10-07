@@ -1,5 +1,5 @@
 ---
-built_at_sha: 4fd2cadf24bb8127459d49b40e53d11fc0606767
+built_at_sha: 96c9ce5df26c9f4a1968dcfbb68e6d0728585077
 ---
 
 # Codebase-map пульта
@@ -1512,7 +1512,7 @@ built_at_sha: 4fd2cadf24bb8127459d49b40e53d11fc0606767
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/project_profile.py`, `orchestrator/repo_context.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `orchestrator/advance_gates/capacity.py`, `orchestrator/fsm.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_01m3vfyp4rxby0bg8d3a0b18hd_role_missions.py`, `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py`, `tests/test_01m443bpqea9zmj3r50thnb1mf_operator_instruction.py`, `tests/test_01m45fjd46bx45vhc36s4vs9qn_declared_change.py`, `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_profile_refusals.py`, `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_docs_ref.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py`, `tests/test_01m4ag3qyv3e7mn7fava10vdjg_file_time_report.py`, `tests/test_artifact_branch_read_node.py`, `tests/test_capacity_gate.py`, `tests/test_capacity_gate_map.py`, `tests/test_project_profile_gates.py`, `tests/test_review_freshness.py`, `tests/test_review_long_lived_exclude.py`, `tests/test_review_package.py`, `tests/test_review_package_map.py`, `tests/test_test_integrity_gate.py`
+**Импортируется:** `orchestrator/advance_gates/capacity.py`, `orchestrator/fsm.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_01m3vfyp4rxby0bg8d3a0b18hd_role_missions.py`, `tests/test_01m3y753qng6ts5c7mtjs1mev6_assertion_observation.py`, `tests/test_01m443bpqea9zmj3r50thnb1mf_operator_instruction.py`, `tests/test_01m45fjd46bx45vhc36s4vs9qn_declared_change.py`, `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_profile_refusals.py`, `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_docs_ref.py`, `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py`, `tests/test_01m4ag3qyv3e7mn7fava10vdjg_file_time_report.py`, `tests/test_acceptance_file_time.py`, `tests/test_artifact_branch_read_node.py`, `tests/test_capacity_gate.py`, `tests/test_capacity_gate_map.py`, `tests/test_project_profile_gates.py`, `tests/test_review_freshness.py`, `tests/test_review_long_lived_exclude.py`, `tests/test_review_package.py`, `tests/test_review_package_map.py`, `tests/test_test_integrity_gate.py`
 
 ## orchestrator/role_prompt.py
 
@@ -3372,7 +3372,7 @@ built_at_sha: 4fd2cadf24bb8127459d49b40e53d11fc0606767
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/review.py`, `orchestrator/store.py`
 
 **Импортируется:** —
 

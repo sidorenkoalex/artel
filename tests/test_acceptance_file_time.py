@@ -2,10 +2,11 @@
 
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import acceptance, fsm_autogate, store
+from orchestrator import acceptance, fsm_autogate, review, store
 
 
 class FileTimeCollectionTest(unittest.TestCase):
@@ -55,6 +56,51 @@ class FileTimeCollectionTest(unittest.TestCase):
         self.assertIn("предупреждение: порог 60 с", saved)
         self.assertNotIn("tests/test_old.py", saved)
         self.assertTrue(saved.endswith("автогейт пройдёт сам"))
+
+    def test_review_package_contains_latest_measurement(self):
+        """Пакет ревьювера показывает последний замер из журнала.
+
+        Ловит мутацию: сборщик пакета пропускает замер — путь и
+        предупреждение исчезают; берёт первый — остаётся старый путь.
+        """
+        rows = [
+            {"action": acceptance.LONG_LIVED_FILE_REPORT_ACTION,
+             "detail": "tests/test_old.py — 2.000 с"},
+            {"action": acceptance.LONG_LIVED_FILE_REPORT_ACTION,
+             "detail": ("tests/test_new.py — 61.000 с\n"
+                        "предупреждение: tests/test_new.py — 61.000 с "
+                        "превышает порог 60 с")},
+        ]
+        shown = {"stat": "", "diff": "", "lines": 0, "failed": "",
+                 "fallback": ""}
+        with ExitStack() as patches:
+            for target, name, result in (
+                (store, "task_target", "artel"),
+                (store, "task_steps", rows),
+                (review, "_exit_without_profile", None),
+                (review.artifact_source, "resolve", ("refs/artifacts/T001", True)),
+                (review, "_step_workdir", Path("/tmp/unused-review-test")),
+                (review, "artifact_text", ("текст", "")),
+                (review, "_answer_rels", []),
+                (review.repo_context, "resolve", None),
+                (review.repo_context, "path_or_none", None),
+                (review.gitcmd, "diff_base", "main"),
+                (review, "snapshot_exclude", ("--", ".")),
+                (review, "_shown_diff", shown),
+                (review, "_changed_assertions_part", None),
+                (review, "excluded_note", "0 байт"),
+            ):
+                patches.enter_context(mock.patch.object(target, name,
+                                                        return_value=result))
+            package = review.review_package(
+                object(), "T001", "Замер файлов", "task/T001")
+
+        text = package["text"]
+        self.assertIn("### Время долгоживущих файлов последнего прогона", text)
+        self.assertIn("tests/test_new.py — 61.000 с", text)
+        self.assertIn("предупреждение: tests/test_new.py", text)
+        self.assertIn("превышает порог 60 с", text)
+        self.assertNotIn("tests/test_old.py", text)
 
     def test_missing_pytest_case_does_not_claim_zero_seconds(self):
         """При прерванном отчёте файл назван без выдуманной длительности.
