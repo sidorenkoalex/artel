@@ -1,5 +1,5 @@
 ---
-built_at_sha: fd4dd44e3b45e195b5cd4595fa846225ad8680ef
+built_at_sha: c73f243f6aa5d258f68f155d94c760d4618b52f0
 ---
 
 # Codebase-map пульта
@@ -3900,7 +3900,9 @@ built_at_sha: fd4dd44e3b45e195b5cd4595fa846225ad8680ef
 **Назначение:** Живой прогон пульта защищает временную копию базы.
 
 **Публичные функции:**
+- `test_live_origin_marker_protects_before_remote_link`
 - `test_live_pult_suite_base_is_not_a_hung_canary_run`
+- `test_unrelated_live_suite_run_does_not_protect_orphan_base`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`
 

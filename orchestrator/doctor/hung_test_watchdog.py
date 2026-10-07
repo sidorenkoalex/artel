@@ -65,11 +65,11 @@ def _running_processes() -> list[tuple[int, float, str]]:
     return rows
 
 
-def _process_cwd(pid: int) -> str | None:
+def _process_cwd(pid: int, executable: str = "lsof") -> str | None:
     """cwd процесса `pid` по `lsof` (`ps` его не несёт вовсе) — `None`,
     если `lsof` не ответил или процесс уже исчез."""
     try:
-        res = doctor.subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+        res = doctor.subprocess.run([executable, "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
                              capture_output=True, text=True, timeout=10)
     except (OSError, doctor.subprocess.TimeoutExpired):
         return None

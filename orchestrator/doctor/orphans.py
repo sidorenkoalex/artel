@@ -55,23 +55,35 @@ def _canary_temp_directory(cwd: str) -> Path | None:
     return None
 
 
-def _live_suite_run() -> bool:
-    # Старые копии базы не несут собственного маркера; живой run.json
-    # консервативно защищает их, пока такой прогон не завершится.
-    for path in (doctor.config.LOGS / "suite-run").glob("*/run.json"):
+def _live_suite_run_in(path: Path) -> bool:
+    # У старого holder нет маркера. Его защищает только прогон, чей pid
+    # живёт именно в этом каталоге; чужой run.json не устанавливает связь.
+    for run_path in (doctor.config.LOGS / "suite-run").glob("*/run.json"):
         try:
-            pid = int(doctor.json.loads(path.read_text(encoding="utf-8"))["pid"])
+            pid = int(doctor.json.loads(run_path.read_text(encoding="utf-8"))["pid"])
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        if pid > 0 and doctor.liveness._pid_alive(pid):
-            return True
+        if pid <= 0 or not doctor.liveness._pid_alive(pid):
+            continue
+        # PATH роли урезан до объявленных инструментов; системный lsof
+        # macOS остаётся доступен по абсолютному пути.
+        lsof = "/usr/sbin/lsof" if Path("/usr/sbin/lsof").is_file() else "lsof"
+        cwd = doctor._process_cwd(pid, executable=lsof)
+        if cwd is None:
+            continue
+        try:
+            if Path(cwd).resolve().is_relative_to(path.resolve()):
+                return True
+        except OSError:
+            continue
     return False
 
 
 def _temp_owner_alive(path: Path) -> bool:
     if path.name.startswith("artel-canary-origin-"):
-        # Origin принадлежит клону, который указывает на него remote URL.
-        # Маркер самого bare-клона мог остаться прежним после копирования.
+        marker_alive = doctor.liveness.owner_alive(path)
+        # До записи remote URL origin защищает собственный маркер. После
+        # появления связи владельцем считается клон, указавший этот origin.
         for candidate in path.parent.glob("artel-canary-*"):
             if candidate.name.startswith("artel-canary-origin-"):
                 continue
@@ -82,13 +94,12 @@ def _temp_owner_alive(path: Path) -> bool:
                 continue
             if str(path) in config_text:
                 return doctor.liveness.owner_alive(candidate)
-        return False
+        return marker_alive
     if doctor.liveness.owner_alive(path):
         return True
     if path.name.startswith("artel-suite-base-"):
-        return (doctor.liveness.owner_alive(
-                    path, doctor.liveness.SUITE_OWNER_MARKER)
-                or _live_suite_run())
+        return (doctor.liveness.owner_alive(path, doctor.liveness.SUITE_OWNER_MARKER)
+                or _live_suite_run_in(path))
     return False
 
 
@@ -105,7 +116,12 @@ def _orphan_temp_dirs() -> list[Path]:
 
 
 def _fix_orphan_temp_dirs() -> None:
-    for entry in _orphan_temp_dirs():
+    # Origin проверяется до удаления связанного клона: после удаления
+    # config клона исчезнет, а устаревший маркер origin скроет сироту.
+    entries = sorted(_orphan_temp_dirs(),
+                     key=lambda p: (not p.name.startswith("artel-canary-origin-"),
+                                    str(p)))
+    for entry in entries:
         # Повторная проверка сужает окно между наблюдением и удалением.
         if not _temp_owner_alive(entry):
             doctor.shutil.rmtree(entry, ignore_errors=True)
