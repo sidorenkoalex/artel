@@ -176,8 +176,10 @@ class CiAcceptanceTest(RealGitSandbox):
                              ("ci", "заверш") if condition == "running" else
                              ("набор", "исполн") if condition == "suite_skipped"
                              else ("ветк", "свеж"))
-                    reasons = [r["detail"] or "" for r in added if any(
-                        term in (r["detail"] or "").lower() for term in terms)]
+                    reasons = [r["detail"] or "" for r in added
+                               if r["action"] == "полный набор локально"
+                               and any(term in (r["detail"] or "").lower()
+                                       for term in terms)]
                     self.assertEqual(len(reasons), 1,
                                      f"зерно: {self.seed}; {condition}; {added}")
                     self.assertNotIn("\n", reasons[0])
@@ -223,7 +225,9 @@ class CiAutogateTest(LightTransitionSandbox):
         self.local = mock.Mock(return_value=acceptance.FullSuiteRun(
             True, acceptance.FULL_SUITE_GREEN, "зелёный", None, "зелёный"))
         checks = [{"name": name, "status": "completed",
-                   "conclusion": "success", "check_suite": {"id": run_id}}
+                   "conclusion": "success",
+                   "details_url": f"https://example.test/actions/runs/{run_id}/job/1",
+                   "check_suite": {"id": run_id}}
                   for name in sorted(ci.FULL_SUITE_CHECKS)]
         response = {"total_count": len(checks), "check_runs": checks}
         gh = mock.Mock(return_value=subprocess.CompletedProcess(
