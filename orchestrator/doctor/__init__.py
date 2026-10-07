@@ -93,7 +93,7 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
+from .. import (acceptance, alerts, artifact_branch, canary, ci, coldstart, config,
                 cycle_hint,
                 fixation, gitcmd, keychain, liveness, merge_lock, models,
                 notes, pool_seal, projects, providers, repo_context, roles,
@@ -194,4 +194,6 @@ from .map_growth import (MAP_SIZE_ACTION, MAP_GROWTH_SOURCE, _FAR_FUTURE_TS,
                          _all_map_size_steps, _map_growth_reference_point,
                          _map_growth_series, _map_growth_message,
                          _map_growth_check, check_map_growth)
+from .machine_load import check_machine_load
+from .suite_duration import check_suite_duration
 from .cli import all_checks, LABELS, cmd_doctor, cmd_alert_ack

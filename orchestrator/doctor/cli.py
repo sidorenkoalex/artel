@@ -128,6 +128,8 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_token_repo_scope())
     checks.extend(doctor.stack.check_stack())
     checks.extend(doctor.check_map_growth(conn))
+    checks.append(doctor.check_machine_load())
+    checks.extend(doctor.check_suite_duration(conn))
     return checks
 
 
