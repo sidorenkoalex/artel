@@ -77,7 +77,7 @@ class PlanContractTest(unittest.TestCase):
         rule = self.patched_rule().lower()
         self.assertIn("subtest", rule)
         self.assertRegex(rule, r"коротк\w*|конечн\w*")
-        self.assertRegex(rule, r"одн\w* тест|одн\w* метод")
+        self.assertRegex(rule, r"один тест|одном тесте|одн\w* метод")
         self.assertRegex(rule, r"не\s+(?:отдельн\w*|метод\w* на вариант)|вместо отдельн")
 
     def test_ac3_clock_is_replaced_and_timeout_is_only_guard(self):
