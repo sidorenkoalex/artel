@@ -10,13 +10,17 @@
 """
 import ast
 import contextlib
+import hashlib
+import importlib.metadata
 import json
+import math
 import os
 import re
 import sqlite3
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -133,10 +137,10 @@ def _timeout_text(value: bytes | str | None) -> str:
 # xfailed/xpassed/warning) через запятую, завершается «in <секунды>s» — тем
 # же местом, где pytest печатает сводку независимо от порядка
 # category-групп в конкретном прогоне.
+_RUN_CATEGORY = (r"(?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|"
+                 r"warnings?|subtests? (?:passed|failed))")
 _RUN_SUMMARY = re.compile(
-    r"\d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?)"
-    r"(?:, \d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?))*"
-    r" in [\d.]+s")
+    rf"\d+ {_RUN_CATEGORY}(?:, \d+ {_RUN_CATEGORY})* in [\d.]+s")
 
 # Строка блока «short test summary info»: имя упавшего теста. `ERROR` —
 # та же категория (требование 1): тест не запустился вовсе (сбой setUp/
@@ -1079,8 +1083,147 @@ def _remember_gate_failures(root: Path, outcome: str, output: str) -> None:
                       "гейт")
 
 
+def suite_tree_hash(root: Path, *, ref: str = "HEAD", base: bool = False,
+                    worktree: bool = True) -> str | None:
+    """Снимок git-дерева через отдельный индекс; исходный индекс не меняется."""
+    root = Path(root)
+    top = gitcmd.in_repo(root, "rev-parse", "--show-toplevel")
+    if (top is None or top.returncode != 0 or
+            Path(top.stdout.strip()).resolve() != root.resolve()):
+        return None
+    if worktree:
+        untracked = gitcmd.in_repo(root, "ls-files", "--others",
+                                   "--exclude-standard", "-z")
+        if untracked is None or untracked.returncode != 0:
+            return None
+        if any(p and not p.startswith("tasks/") for p in
+               untracked.stdout.split("\0")):
+            return None
+    with tempfile.TemporaryDirectory(prefix="artel-suite-index-") as holder:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(holder) / "index")}
+        if worktree:
+            original = gitcmd.in_repo(root, "rev-parse", "--path-format=absolute",
+                                      "--git-path", "index")
+            if original is None or original.returncode != 0:
+                return None
+            try:
+                shutil.copyfile(original.stdout.strip(), env["GIT_INDEX_FILE"])
+            except (OSError, ValueError):
+                return None
+        def git(*args):
+            process = subprocess.Popen(["git", "-C", str(root), *args],
+                                       cwd=config.ROOT, env=gitcmd.pult_env(env),
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True)
+            try:
+                stdout, _ = process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                return None
+            return stdout.strip() if process.returncode == 0 else None
+        if not worktree and git("read-tree", ref) is None:
+            return None
+        if worktree and git("add", "-u", "--", ".") is None:
+            return None
+        if base and git("rm", "-q", "--cached", "-r", "--ignore-unmatch",
+                        "--", *config.FULL_SUITE_BASE_EXCLUDED_PATHS) is None:
+            return None
+        tree = git("write-tree")
+        return tree if tree and re.fullmatch(r"[0-9a-f]{40}", tree) else None
+
+
+def suite_result_key(tree: str, command: list[str] | None = None,
+                     *, base: bool = False) -> str | None:
+    """Дерево плюс Python, установленные пакеты и команда pytest."""
+    if not isinstance(tree, str) or not re.fullmatch(r"[0-9a-f]{40}", tree):
+        return None
+    try:
+        argv = _pytest_command(command=command) if base else (
+            _pytest_command("tests", command=command) + [
+                "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"])
+        if base:
+            clean = []
+            index = 0
+            while index < len(argv):
+                arg = argv[index]
+                if arg == "-n" or (arg == "-p" and
+                                   index + 1 < len(argv) and argv[index + 1] == "xdist"):
+                    index += 2
+                elif arg == "-vv" or arg == "tests" or arg.startswith("tests/"):
+                    index += 1
+                else:
+                    clean.append(arg)
+                    index += 1
+            argv = clean
+        packages = sorted((d.metadata["Name"].lower(), d.version)
+                          for d in importlib.metadata.distributions())
+        data = {"tree": tree, "python": sys.version, "packages": packages,
+                "command": argv}
+        return hashlib.sha256(json.dumps(data, sort_keys=True,
+                                         ensure_ascii=False).encode()).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _suite_result_path(kind: str, key: str) -> Path:
+    return suite_results_dir() / f"{kind}-{key}.json"
+
+
+def saved_suite_result(kind: str, key: str, *, tree: str | None = None,
+                       max_age: int | None = None) -> dict | None:
+    """Нечитаемая, неполная и просроченная запись равнозначна отсутствующей."""
+    try:
+        data = json.loads(_suite_result_path(kind, key).read_text(encoding="utf-8"))
+        if (not isinstance(data, dict) or data.get("key") != key or
+                data.get("source") not in ("gate", "base") or
+                data["source"] != kind or
+                data.get("outcome") not in (FULL_SUITE_GREEN, FULL_SUITE_RED) or
+                not isinstance(data.get("finished_at"), (int, float)) or
+                isinstance(data["finished_at"], bool) or
+                not math.isfinite(data["finished_at"]) or
+                not isinstance(data.get("summary"), str) or not data["summary"] or
+                not isinstance(data.get("digest"), str) or not data["digest"] or
+                not isinstance(data.get("failed"), list) or
+                not all(isinstance(n, str) for n in data["failed"]) or
+                not isinstance(data.get("log_path"), str) or not data["log_path"] or
+                not isinstance(data.get("tree"), str) or
+                not re.fullmatch(r"[0-9a-f]{40}", data["tree"]) or
+                (tree is not None and data["tree"] != tree)):
+            return None
+        age = time.time() - data["finished_at"]
+        if age < 0 or (max_age is not None and age > max_age):
+            return None
+        return data
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return None
+
+
+def save_suite_result(kind: str, key: str, tree: str, outcome: str,
+                      output: str, log_path: Path | None) -> None:
+    if (not key or not tree or log_path is None or
+            outcome not in (FULL_SUITE_GREEN, FULL_SUITE_RED)):
+        return
+    summary = run_summary_line(output)
+    if not summary:
+        return
+    data = {"key": key, "tree": tree, "source": kind,
+            "finished_at": time.time(), "outcome": outcome,
+            "summary": summary, "failed": [n for n, _ in failed_entries(output)],
+            "digest": run_digest(output), "log_path": str(log_path)}
+    path = _suite_result_path(kind, key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
 def full_suite(root: Path, task_id: str,
-               command: list[str] | None = None) -> FullSuiteRun:
+               command: list[str] | None = None,
+               fresh: bool = False) -> FullSuiteRun:
     """Прогон полного набора `tests/` каталога `root` с разбором вывода и
     файлом лога (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-6) — узел
     для автогейта приёмки, гейта мержа и `approve` в `acceptance`.
@@ -1115,6 +1258,27 @@ def full_suite(root: Path, task_id: str,
                 raise
     limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
+    try:
+        tree = suite_tree_hash(root)
+        key = suite_result_key(tree, command) if tree else None
+        if key and not fresh:
+            saved = saved_suite_result("gate", key, tree=tree,
+                                       max_age=config.FULL_SUITE_REUSE_MAX_AGE_SEC)
+            if saved is not None:
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S UTC",
+                                      time.gmtime(saved["finished_at"]))
+                note = (f"итог прогона {stamp}, дерево {tree}, лог "
+                        f"{saved['log_path']} — использован повторно")
+                detail = _full_suite_detail(saved["outcome"],
+                                            saved.get("digest") or saved["summary"],
+                                            Path(saved["log_path"]))
+                return FullSuiteRun(saved["outcome"] == FULL_SUITE_GREEN,
+                                    saved["outcome"],
+                                    saved.get("digest") or saved["summary"],
+                                    Path(saved["log_path"]), f"{detail}; {note}")
+    except (OSError, ValueError, TypeError, AttributeError,
+            subprocess.TimeoutExpired):
+        tree = key = None
     with _machine_lock(task_id, limit) as holder:
         if holder is not None:
             green, output = False, _not_started_note(holder)
@@ -1129,7 +1293,18 @@ def full_suite(root: Path, task_id: str,
                             _full_suite_detail(outcome, "", None, output))
     _remember_gate_failures(root, outcome, output)
     log_path = (_write_full_suite_log(task_id, output)
-                if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
+                 if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
+    if key and tree:
+        save_suite_result("gate", key, tree, outcome, output, log_path)
+        try:
+            base_tree = suite_tree_hash(root, base=True)
+            base_key = suite_result_key(base_tree, command, base=True) if base_tree else None
+            if base_key and base_tree:
+                save_suite_result("base", base_key, base_tree, outcome,
+                                  output, log_path)
+        except (OSError, ValueError, TypeError, AttributeError,
+                subprocess.TimeoutExpired):
+            pass
     digest = run_digest(output)
     return FullSuiteRun(green, outcome, digest, log_path,
                         _full_suite_detail(outcome, digest, log_path,

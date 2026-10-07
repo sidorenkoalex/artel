@@ -786,7 +786,8 @@ def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None,
                accept_red: str | None = None,
                fixes_main: str | None = None,
-               no_answer: bool = False) -> None:
+               no_answer: bool = False,
+               fresh_suite: bool = False) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -812,7 +813,7 @@ def cmd_approve(task_id: str, sha: str | None = None,
     lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
-                                 fixes_main, no_answer))
+                                 fixes_main, no_answer, fresh_suite))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -1085,7 +1086,8 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
 
 
 def _acceptance_full_suite_ok(conn, task_id: str, t,
-                              accept_red: str | None) -> bool:
+                              accept_red: str | None,
+                              fresh_suite: bool = False) -> bool:
     """Прогон полного набора tests/ в worktree ветки задачи на `approve`
     из `acceptance` (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 6-8);
     `True` — приёмку можно проводить дальше.
@@ -1138,7 +1140,8 @@ def _acceptance_full_suite_ok(conn, task_id: str, t,
             print(f"  почини приложения PLAN и повтори: artel.py approve "
                   f"{task_id}")
             return False
-        run = acceptance.full_suite(tree.root, task_id)
+        run = (acceptance.full_suite(tree.root, task_id, fresh=True)
+               if fresh_suite else acceptance.full_suite(tree.root, task_id))
     run_detail = tree.mark(run.detail)
     if run.green:
         store.journal(conn, task_id, "operator", ACCEPTANCE_SUITE_GREEN_ACTION,
@@ -1172,7 +1175,8 @@ def _acceptance_full_suite_ok(conn, task_id: str, t,
 
 
 def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
-                        accept_red: str | None = None) -> None:
+                        accept_red: str | None = None,
+                        fresh_suite: bool = False) -> None:
     # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
     # тот же узел, что и на входе в review — approve не выносит на
     # merge_gate срез, который мог устареть, пока задача ждала приёмки.
@@ -1188,7 +1192,7 @@ def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
     # Полный набор tests/ — ПОСЛЕ подтяжки main (SPEC
     # 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 6): гонять его до неё значило
     # бы проверять срез, которого на merge_gate уже не будет.
-    if not _acceptance_full_suite_ok(conn, task_id, t, accept_red):
+    if not _acceptance_full_suite_ok(conn, task_id, t, accept_red, fresh_suite):
         return
     store.set_state(conn, task_id, "merge_gate", "operator",
                     expected_state=state, detail="приёмка пройдена")
@@ -1211,7 +1215,8 @@ def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
 
 
 def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
-                        fixes_main: str | None = None) -> None:
+                        fixes_main: str | None = None,
+                        fresh_suite: bool = False) -> None:
     # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
     # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
     # из merge_gate, пока мьютекс занят, получает немедленный
@@ -1229,7 +1234,8 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
         return
     from . import fsm_merge_gate
     fsm_merge_gate._cmd_approve_merge_gate_cycle(
-        conn, task_id, sid, t, state, fixes_main=fixes_main)
+        conn, task_id, sid, t, state, fixes_main=fixes_main,
+        fresh_suite=fresh_suite)
 
 
 def unanswered_role_step_escalation(conn, task_id: str) -> str | None:
@@ -1329,7 +1335,8 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str,
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                 accept_red: str | None = None,
                 fixes_main: str | None = None,
-                no_answer: bool = False) -> None:
+                no_answer: bool = False,
+                 fresh_suite: bool = False) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if no_answer and state != "escalated":
@@ -1356,8 +1363,10 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) — только для `escalated`.
     handler = {
         "spec_gate": _approve_spec_gate,
-        "acceptance": partial(_approve_acceptance, accept_red=accept_red),
-        "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main),
+        "acceptance": partial(_approve_acceptance, accept_red=accept_red,
+                              fresh_suite=fresh_suite),
+        "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main,
+                              fresh_suite=fresh_suite),
         "escalated": partial(_approve_escalated, no_answer=no_answer),
     }.get(state)
     if handler is None:

@@ -141,7 +141,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   hook-migrate inspect|apply|restore --client codex|claude --config <path>
                [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
-          [--no-answer] |
+           [--fresh-suite] [--no-answer] |
   reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
   kill <id> | release <id> |
@@ -1396,6 +1396,7 @@ def _reason_arg(rest: list) -> str | None:
 
 
 ACCEPT_RED_FLAG = "--accept-red"
+FRESH_SUITE_FLAG = "--fresh-suite"
 
 
 def _accept_red_arg(rest: list) -> str | None:
@@ -1467,7 +1468,7 @@ def _approve_sha_arg(rest: list) -> str | None:
     01M44ENW1B73Z80PR73HP1C9CG, требование 5); `None` — sha не передан."""
     skipped = _approve_reason_indices(rest)
     for i, arg in enumerate(rest[1:], start=1):
-        if i in skipped or arg == NO_ANSWER_FLAG:
+        if i in skipped or arg in (NO_ANSWER_FLAG, FRESH_SUITE_FLAG):
             continue
         return arg
     return None
@@ -1617,6 +1618,7 @@ def main() -> None:
             rest[0], _approve_sha_arg(rest),
             accept_red=_accept_red_arg(rest),
             fixes_main=_fixes_main_arg(rest),
+            fresh_suite=FRESH_SUITE_FLAG in rest[1:],
             no_answer=_approve_no_answer_arg(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),

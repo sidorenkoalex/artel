@@ -386,9 +386,15 @@ def _base(task_id: str, target: str, branch: str, command: list[str],
     sha = gitcmd.diff_base(branch, repo=clone)
     if not sha:
         return None, "git не назвал базу ветки задачи"
-    saved = acceptance.saved_failures(sha)
+    try:
+        tree = acceptance.suite_tree_hash(clone, ref=sha, base=True,
+                                          worktree=False)
+        key = acceptance.suite_result_key(tree, command, base=True) if tree else None
+        saved = acceptance.saved_suite_result("base", key, tree=tree) if key else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        tree = key = saved = None
     if saved is not None:
-        return set(saved), f"база {sha[:12]} — сохранённый итог"
+        return set(saved["failed"]), f"база {sha[:12]} — сохранённый итог"
     if mode == MODE_FAILED:
         return None, (f"сохранённого итога базы {sha[:12]} нет, а повтор "
                       f"упавших базу не прогоняет")
@@ -404,7 +410,9 @@ def _base(task_id: str, target: str, branch: str, command: list[str],
         return None, (f"прогон базы {sha[:12]} не завершён "
                       f"({parsed.outcome}); лог базы: {base_log}")
     failed = [node for node, _ in parsed.failures]
-    acceptance.save_failures(sha, failed, "suite-run")
+    if key and tree:
+        acceptance.save_suite_result("base", key, tree, parsed.outcome,
+                                     output, base_log)
     return set(failed), f"база {sha[:12]} — прогон базы, лог базы: {base_log}"
 
 
