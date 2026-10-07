@@ -155,20 +155,11 @@ class SuiteObservationTest(TmpRootTest):
             self.assertEqual(len(after), before + 1, outcome)
             self.assert_record_fields(after[-1], count, timeout)
 
-    def test_ac2_suite_run_writes_each_outcome_with_same_fields(self):
-        """Команда полного прогона журналирует зелёный, красный и таймаут.
-
-        Ловит мутацию: журналирование остаётся только в гейте, а отдельный
-        запуск suite-run возвращает отчёт без измерения времени и нагрузки.
-        """
-        for outcome, count, timeout in (
-                ("green", 3, False), ("red", 3, False),
-                ("timeout", None, True)):
-            before = len(self.records())
-            self.run_suite_command(outcome)
-            after = self.records()
-            self.assertEqual(len(after), before + 1, outcome)
-            self.assert_record_fields(after[-1], count, timeout)
+    # AC-2: skip — решение Оператора 07.10 (вариант В): suite-run не пишет
+    # запись в журнал задачи — это запрещает долгоживущий тест
+    # tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py::FootprintTest::
+    # test_ac23_task_state_untouched_and_no_files_outside_state; строку
+    # нагрузки в отчёте о таймауте suite-run держит AC-5.
 
     def test_ac3_pytest_tree_is_excluded_from_top_processes(self):
         """Нагрузка работающего pytest не вытесняет внешние процессы.
