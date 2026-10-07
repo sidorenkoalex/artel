@@ -41,3 +41,4 @@ targets:
       mutation_claim_scope: [tests/test_*.py]
       report: junit-xml
       install: []
+      full_suite_timeout_sec: 1500
