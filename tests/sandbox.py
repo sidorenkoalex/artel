@@ -1,5 +1,7 @@
-"""Общая тестовая песочница (SPEC T037, требование 1; SPEC T061 —
-второй заход: `FakeProc` и claude-only side_effect).
+"""Общая тестовая песочница.
+
+SPEC T037, требование 1; SPEC T061 — второй заход: `FakeProc` и
+claude-only side_effect.
 
 `TmpRootTest`, `capture` и `fake_git` копировались по 9/17/8 тестовым
 файлам с расхождениями в наборе подменяемых путей `config` —

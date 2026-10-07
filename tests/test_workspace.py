@@ -1,5 +1,7 @@
-"""Юнит-тесты orchestrator/workspace.py: git worktree задачи в
-стандартном месте (SPEC T045; с этапа 2 ADR-0021 — `.artel/projects/<имя>/
+"""Тесты рабочих копий задач.
+
+Git worktree задачи в стандартном месте (SPEC T045; с этапа 2 ADR-0021 —
+`.artel/projects/<имя>/
 worktrees/<id>` клона проекта, SPEC 01M42PENCS26D0656X8FR7DFA7).
 
 Git тут настоящий (по образцу tests/test_git_fixation.py RealPultGitTest):

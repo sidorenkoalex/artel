@@ -1,5 +1,5 @@
 ---
-built_at_sha: da7c480fe2681dd52126a0d0c08728c58442bb62
+built_at_sha: 960be3ceb5a282a869397b0b90db4dc2dd655846
 ---
 
 # Codebase-map пульта
@@ -2093,7 +2093,7 @@ built_at_sha: da7c480fe2681dd52126a0d0c08728c58442bb62
 
 ## tests/sandbox.py
 
-**Назначение:** Общая тестовая песочница (SPEC T037, требование 1; SPEC T061 —
+**Назначение:** Общая тестовая песочница.
 
 **Публичные функции:**
 - `alias_docs_ref_to_branch`
@@ -5161,7 +5161,7 @@ built_at_sha: da7c480fe2681dd52126a0d0c08728c58442bb62
 
 ## tests/test_pin.py
 
-**Назначение:** Юнит-тесты `orchestrator/pin.py` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
+**Назначение:** Тесты команды pin.
 
 **Публичные функции:** (нет)
 
@@ -5591,7 +5591,7 @@ built_at_sha: da7c480fe2681dd52126a0d0c08728c58442bb62
 
 ## tests/test_sandbox.py
 
-**Назначение:** Юнит-тесты перехвата сетевых git-команд `tests/sandbox.py` (SPEC
+**Назначение:** Тесты перехвата git в песочнице.
 
 **Публичные функции:** (нет)
 
@@ -5994,7 +5994,7 @@ built_at_sha: da7c480fe2681dd52126a0d0c08728c58442bb62
 
 ## tests/test_workspace.py
 
-**Назначение:** Юнит-тесты orchestrator/workspace.py: git worktree задачи в
+**Назначение:** Тесты рабочих копий задач.
 
 **Публичные функции:** (нет)
 

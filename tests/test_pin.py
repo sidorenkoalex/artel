@@ -1,5 +1,7 @@
-"""Юнит-тесты `orchestrator/pin.py` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
-SPEC.md) — срез, который приёмочные тесты `tasks/
+"""Тесты команды pin.
+
+tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md — срез, который приёмочные
+тесты `tasks/
 01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests/` не покрывают дословно:
 факт, что гейт AC-1 отказывает ДО `merge` (после `fetch` — REVIEW.md
 итерации 1, R1-F1: возраст считается `merge-base`/`rev-list`, которым
