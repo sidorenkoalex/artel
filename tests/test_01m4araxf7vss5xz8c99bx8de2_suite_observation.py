@@ -247,8 +247,20 @@ class SuiteObservationTest(TmpRootTest):
     def test_ac5_suite_timeout_repeats_recorded_load_on_one_line(self):
         """Отчёт suite-run по таймауту показывает тот же снимок нагрузки.
 
-        Ловит мутацию: фоновой прогон записывает нагрузку, но короткий
+        Ловит мутацию: фоновой прогон снимает нагрузку, но короткий
         отчёт команды по таймауту не переносит её в строку для роли.
+
+        Правка Оператора 07.10 (вариант В): suite-run не пишет журнал
+        задачи, поэтому эталон строки — подставленный снимок load average,
+        а не запись журнала.
         """
-        report = self.run_suite_command("timeout")
-        self.assert_load_line(report, self.records()[-1])
+        with mock.patch.object(acceptance.os, "getloadavg",
+                               return_value=(7.25, 6.5, 5.75)):
+            report = self.run_suite_command("timeout")
+        candidates = [line for line in report.splitlines()
+                      if re.search(r"(?i)(load average|нагрузк)", line)]
+        self.assertEqual(len(candidates), 1, report)
+        line = candidates[0]
+        self.assertIn("7.25", line)
+        self.assertIn("6.5", line)
+        self.assertRegex(line, r"(?i)(pid|процесс)")
