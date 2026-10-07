@@ -54,7 +54,9 @@ budget_usd: 70
    даёт именованный отказ с добавленной командой принудительного перехвата.
    PID очищается в `finally`. `observe stop` завершает процесс с кодом 0 не
    позже следующего опроса. `observe show` и `doctor` различают живой
-   процесс, мёртвый PID и свежую связь без PID.
+   процесс, мёртвый PID и свежую связь без PID. Помощник очистки
+   `tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py::WatchProgressSandbox::force_stop`
+   останавливает дозор через `observe stop`, не меняя состояние задач.
 7. `run` и `auto` из песочницы Codex без сети и записи вне каталога
    распознают это обоснованным способом и отказывают с объяснением. Дозор
    запоминает HEAD главной копии и при смене пина предупреждает о
@@ -125,7 +127,6 @@ AC-16. `docs/operator-session.md` явно говорит, что позиция
 - `tests/test_watch.py::EmitStepsFiltersInSqlTest::test_only_the_single_new_row_comes_from_sql`: `_emit_steps вызывается для одной задачи` → `_emit_steps читает все задачи наблюдения одним упорядоченным запросом` (требование 2)
 - `tests/test_watch.py::EmitStepsFiltersInSqlTest::test_prints_the_new_rows_of_the_asked_classes_and_moves_the_cursor`: `курсор одной задачи передаётся в _emit_steps` → `позиция наблюдения продвигается по общему набору` (требование 2)
 - `tests/test_watch.py::EmitStepsFiltersInSqlTest::test_the_already_shown_row_is_not_printed_a_second_time`: `граница повторного чтения хранится для одной задачи` → `граница следует сохранённой позиции наблюдения` (требование 2)
-- `tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py::WatchProgressSandbox::force_stop`: `очистка переводит задачи в killed` → `очистка останавливает живой дозор через observe stop, не изменяя состояние задач` (требование 6)
 
 ## Оценка объёма и деление
 
