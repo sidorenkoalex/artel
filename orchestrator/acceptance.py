@@ -195,7 +195,7 @@ def _process_snapshot(excluded_pid: int | None = None) -> list[dict]:
                          "cpu_percent": float(cpu.replace(",", ".")),
                          "age": age, "name": Path(command.split()[0]).name,
                          "command": command})
-        if len(rows) < 3:
+        if not rows:
             return _native_process_snapshot(excluded_pid)
         excluded = {excluded_pid} if excluded_pid else set()
         while True:
