@@ -243,7 +243,7 @@ _SECTION_FIELDS = ("purpose", "functions", "imports", "imported_by")
 _KEPT_FIELDS_BY_KIND = {
     "orchestrator": ("purpose", "functions", "imports"),
     "scripts": ("purpose", "functions", "imports"),
-    "tests": ("purpose",),
+    "tests": (),
 }
 
 
@@ -266,6 +266,8 @@ def _project_section(section: str) -> str:
     heading, field_blocks = parts[0], parts[1:1 + len(_SECTION_FIELDS)]
     rel = heading[len("## "):].strip()
     kind = _section_kind(rel)
+    if kind == "tests":
+        return ""
     if kind is None or len(field_blocks) < len(_SECTION_FIELDS):
         return section
     fields = dict(zip(_SECTION_FIELDS, field_blocks))
@@ -280,12 +282,13 @@ def project_for_brief(map_text: str) -> str:
     (`orchestrator/brief.py`) сам решает, какой текст ей передать (уже
     сверенный на свежесть/регенерированный).
 
-    Шапка и порядок/заголовки секций не меняются (AC-4/AC-5). Для секций
+    Шапка и порядок/заголовки оставшихся секций не меняются (AC-4/AC-5).
+    Для секций
     `orchestrator/*`/`scripts/*` остаются блоки «Назначение»/«Публичные
     функции»/«Импортирует», блок «Импортируется» удаляется (AC-2). Для
-    секций `tests/*` остаются только заголовок секции и «Назначение»
-    (AC-3). Идемпотентна (AC-7): секция короче четырёх полей (уже
-    спроецированная) возвращается как есть, а не режется повторно."""
+    секций `tests/*` удаляются и заголовок, и поля. Идемпотентна (AC-7):
+    секция короче четырёх полей (уже спроецированная) возвращается как
+    есть, а не режется повторно."""
     chunks = _SECTION_START_RE.split(map_text)
     header, sections = chunks[0], chunks[1:]
     return header + "".join(_project_section(s) for s in sections)
