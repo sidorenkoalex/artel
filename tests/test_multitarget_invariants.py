@@ -38,7 +38,7 @@ from orchestrator import (artifact_branch, budget, catalog, cleanup,  # noqa: E4
                           workspace)
 from tests.sandbox import (_REAL_RUN, FakeProc, TmpRootTest,  # noqa: E402
                            alias_docs_ref_to_branch, capture,
-                           capture_new_task_id, fake_git,
+                           capture_new_task_id, fake_git, init_bare_origin,
                            link_artel_clone_to_root, make_project_repo,
                            resilient_tmp_cleanup)
 
@@ -200,9 +200,7 @@ class PultArtifactIsolationTest(unittest.TestCase):
         origin_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, origin_tmp)
         self.origin = Path(origin_tmp.name).resolve()
-        subprocess.run(["git", "init", "-q", "--bare", "-b",
-                        config.MAIN_BRANCH, str(self.origin)],
-                       check=True, capture_output=True, text=True)
+        init_bare_origin(self.origin)
         self.git("remote", "add", "origin", str(self.origin))
 
         self.patches = contextlib.ExitStack()

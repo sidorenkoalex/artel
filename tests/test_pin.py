@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import ci, config, gitcmd, pin, store  # noqa: E402
 from tests.sandbox import (ConnRealGitSandbox, RealGitSandbox,  # noqa: E402
-                           SyncedOriginConnSandbox)
+                           SyncedOriginConnSandbox, init_bare_origin)
 
 
 class PinUpdateGateOrderTest(ConnRealGitSandbox):
@@ -94,9 +94,7 @@ class PinUpdateGateAfterFetchTest(RealGitSandbox):
         bare_tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, bare_tmp, ignore_errors=True)
         self.origin = Path(bare_tmp) / "origin.git"
-        subprocess.run(
-            ["git", "init", "-q", "--bare", "-b", config.MAIN_BRANCH,
-             str(self.origin)], check=True, capture_output=True, text=True)
+        init_bare_origin(self.origin)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin", config.MAIN_BRANCH)
 

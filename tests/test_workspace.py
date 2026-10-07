@@ -20,8 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store, workspace  # noqa: E402
 from tests.sandbox import (_PROJECT_TARGET_ENTRY,  # noqa: E402
-                           RealGitSandbox, capture, link_artel_clone_to_root,
-                           resilient_tmp_cleanup, strip_dash_c)
+                           RealGitSandbox, capture, init_bare_origin,
+                           link_artel_clone_to_root, resilient_tmp_cleanup,
+                           strip_dash_c)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,8 +55,7 @@ class RealGitWorkspaceTest(unittest.TestCase):
         # ни одна ветка не заводится вовсе.
         self.origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", "-b", config.MAIN_BRANCH,
-                str(self.origin))
+        init_bare_origin(self.origin, self.git)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")

@@ -110,7 +110,9 @@ class NetworkGuardedRealRunTest(unittest.TestCase):
 class SandboxFixtureBuildersTest(unittest.TestCase):
 
     def test_git_templates_and_copies_disable_background_maintenance(self):
-        """Ловит мутацию: снятие gc.auto=0 или maintenance.auto=false
+        """Шаблоны и их копии сохраняют настройки в локальном .git/config.
+
+        Ловит мутацию: снятие gc.auto=0 или maintenance.auto=false
         разрешает фоновое обслуживание git при копировании шаблона.
         """
         for template in (_clone_stub_template(), _real_git_template()):
@@ -127,7 +129,10 @@ class SandboxFixtureBuildersTest(unittest.TestCase):
                                          git_config["maintenance"]["auto"])
 
     def test_artel_entry_keeps_profile_when_url_is_replaced(self):
-        """Ловит мутацию: подстановка URL выбрасывает test_profile из записи артели."""
+        """Подстановка URL сохраняет тестовый профиль записи артели.
+
+        Ловит мутацию: подстановка URL выбрасывает test_profile из записи артели.
+        """
         entry = artel_target_entry(url="file:///tmp/artel-origin.git")
         self.assertIn("url: file:///tmp/artel-origin.git\n", entry)
         self.assertIn("    test_profile:\n", entry)
