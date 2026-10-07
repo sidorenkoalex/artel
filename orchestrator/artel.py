@@ -151,7 +151,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   version | models |
   admit [--revoke] <роль> <модель> --basis "<основание>" |
   pair-resume <роль> <модель> "<решение>" |
-  canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] |
+  canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] [--detach] |
+           --detach: отвязанный запуск штатный для сессии Оператора |
   canary pool-seal |
   prune [--execute] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
@@ -599,6 +600,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1298,9 +1300,56 @@ def _cmd_canary(rest: list) -> None:
     if rest and rest[0] == "pool-seal":
         pool_seal.cmd_pool_seal()
         return
-    canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest),
-                      set_name=_set_arg(rest),
-                      templates=_template_arg(rest))
+    if "--detach" in rest:
+        if rest.count("--detach") != 1 or "--result-file" in rest:
+            sys.exit("canary: повторный или несовместимый --detach")
+        _detach_canary([arg for arg in rest if arg != "--detach"])
+        return
+    result_path = None
+    if "--result-file" in rest:
+        index = rest.index("--result-file")
+        if index + 1 >= len(rest):
+            sys.exit("canary: --result-file требует путь")
+        result_path = Path(rest[index + 1])
+        rest = rest[:index] + rest[index + 2:]
+    previous_id = (max((row["id"] for row in store.all_canary_runs(store.db())),
+                       default=0) if result_path is not None else 0)
+    result = {"status": "complete"}
+    try:
+        canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest),
+                          set_name=_set_arg(rest),
+                          templates=_template_arg(rest))
+    except BaseException as exc:
+        result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        raise
+    finally:
+        if result_path is not None:
+            result["runs"] = [
+                {"id": row["id"], "title": row["title"],
+                 "task_id": row["task_id"], "verdict": row["verdict"],
+                 "outcome": row["outcome"]}
+                for row in store.all_canary_runs(store.db())
+                if row["id"] > previous_id]
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps(result, ensure_ascii=False),
+                                   encoding="utf-8")
+
+
+def _detach_canary(rest: list) -> None:
+    directory = config.LOGS / "canary"
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex}"
+    log_path = directory / f"{stem}.log"
+    result_path = directory / f"{stem}.json"
+    with open(log_path, "ab", buffering=0) as log:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(Path(__file__).resolve()), "canary",
+             *rest, "--result-file", str(result_path)],
+            cwd=config.ROOT, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    print(f"canary: отвязанный запуск, pid {proc.pid}")
+    print(f"  лог: {log_path}")
+    print(f"  результат: {result_path}")
 
 
 def _new_set_arg(rest: list) -> tuple[list, str | None]:

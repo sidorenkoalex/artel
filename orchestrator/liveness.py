@@ -21,6 +21,23 @@ import signal
 import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+CANARY_OWNER_MARKER = ".artel-canary-owner"
+SUITE_OWNER_MARKER = ".artel-suite-owner"
+
+
+def owner_pid(directory: Path, marker: str = CANARY_OWNER_MARKER) -> int | None:
+    try:
+        pid = int((directory / marker).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def owner_alive(directory: Path, marker: str = CANARY_OWNER_MARKER) -> bool:
+    pid = owner_pid(directory, marker)
+    return pid is not None and _pid_alive(pid)
 
 # Грейс между SIGTERM и эскалацией до SIGKILL для группы процессов —
 # тот же порядок величины, что `pause.TERMINATE_GRACE_SEC`/
