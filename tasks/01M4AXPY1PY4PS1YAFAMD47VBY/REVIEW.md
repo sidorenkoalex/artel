@@ -37,8 +37,8 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/doctor/orphans.py:58-91 | Глобальный признак живого `suite-run` защищает все `artel-suite-base-*`, а не каталог конкретного прогона. | `doctor --fix` не удаляет сироты при любом несвязанном живом suite-run. | Связать run с конкретной базой или опираться на её marker; покрыть несвязанный живой run тестом. |
-| R1-F2 | open | orchestrator/doctor/orphans.py:71-85; orchestrator/canary.py:1205-1208 | Проверка origin обходит его живой marker до появления remote-связи. | `doctor --fix` способен удалить origin активной канарейки. | Проверять marker origin первым и покрыть промежуток до `git remote set-url` тестом. |
+| R1-F1 | fixed | orchestrator/doctor/orphans.py:58-91 | Глобальный признак живого `suite-run` защищает все `artel-suite-base-*`, а не каталог конкретного прогона. | `doctor --fix` не удаляет сироты при любом несвязанном живом suite-run. | Удалён глобальный признак: собственный marker защищает новую базу, cwd pid из `run.json` связывает старую базу с конкретным прогоном. Добавлен `test_unrelated_live_suite_run_does_not_protect_orphan_base`. |
+| R1-F2 | fixed | orchestrator/doctor/orphans.py:71-85; orchestrator/canary.py:1205-1208 | Проверка origin обходит его живой marker до появления remote-связи. | `doctor --fix` способен удалить origin активной канарейки. | До remote-связи учитывается marker origin; после связи владелец определяется по связанному клону. Origin удаляется раньше клона. Добавлен `test_live_origin_marker_protects_before_remote_link`. |
 
 ## Вердикт
 
@@ -51,4 +51,3 @@ changes_requested: исправить R1-F1 и R1-F2, включая указа�
 - Изолированная проверка `_orphan_temp_dirs()` с двумя мёртвыми базами и несвязанным живым `run.json` вернула `found=[]`; отдельная проверка origin с marker текущего pid вернула `_temp_owner_alive=False` и включила origin в сироты.
 
 ## Предложения системе
-
