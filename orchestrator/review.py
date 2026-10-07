@@ -3,8 +3,13 @@ import re
 import sqlite3
 import sys
 
-from . import (artifact_branch, artifact_source, brief, config, context_package, gitcmd,
+from . import (acceptance, artifact_branch, artifact_source, brief, config, context_package, gitcmd,
               project_profile, repo_context, store, workspace)
+
+
+def review_package_measurement(reports: list[str]) -> str:
+    """Последний замер для ревью-пакета."""
+    return reports[-1] if reports else ""
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -877,6 +882,11 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     ]
     if ci_note:
         parts.append(f"### Статус CI (verifying)\n\n{ci_note}\n")
+    measurement = review_package_measurement(
+        acceptance.long_lived_file_reports(store.task_steps(conn, task_id)))
+    if measurement:
+        parts.append(f"### Время долгоживущих файлов последнего прогона\n\n"
+                     f"{brief.wrap_boundary(run_id, measurement)}\n")
     parts += [
         artifact_part(spec_rel, *found[spec_rel], run_id),
         artifact_part(plan_rel, *found[plan_rel], run_id),
