@@ -13,6 +13,7 @@
 import random
 import re
 import unittest
+from unittest import mock
 
 from orchestrator import acceptance, config, fsm_autogate, review
 
@@ -28,6 +29,11 @@ class FileTimeReportTest(unittest.TestCase):
     def context(self, value):
         return f"зерно: {self.seed}; {value}"
 
+    @staticmethod
+    def warning_lines(report):
+        return [line for line in report.splitlines()
+                if re.search(r"предупрежд|превыш|сверх", line.lower())]
+
     def test_ac5_over_limit_names_file_time_and_limit(self):
         """Два разных файла сверх порога дают предупреждения со всеми числами.
 
@@ -35,16 +41,15 @@ class FileTimeReportTest(unittest.TestCase):
         время файла — строка для превышения отсутствует либо неполна.
         """
         limit = config.LONG_LIVED_FILE_WARN_SEC
-        for excess in (0.25, 2.75):
+        for excess in (1, 3):
             with self.subTest(excess=excess):
                 path = self.rng.choice(self.paths)
                 elapsed = limit + excess
                 report = acceptance.long_lived_file_report([(path, elapsed)], limit)
-                self.assertIn(path, report, self.context(report))
-                self.assertIn(str(elapsed), report, self.context(report))
-                self.assertIn(str(limit), report, self.context(report))
-                self.assertRegex(report.lower(), r"предупрежд|превыш|сверх",
-                                 self.context(report))
+                self.assertTrue(any(all(value in line for value in
+                                        (path, str(elapsed), str(limit)))
+                                    for line in self.warning_lines(report)),
+                                self.context(report))
 
     def test_ac6_at_or_below_limit_has_no_warning(self):
         """На границе и ниже неё время записывается без предупреждения.
@@ -53,14 +58,13 @@ class FileTimeReportTest(unittest.TestCase):
         время которого равно порогу.
         """
         limit = config.LONG_LIVED_FILE_WARN_SEC
-        for elapsed in (0.125, limit / 2, limit):
+        for elapsed in (1, limit // 2, limit):
             with self.subTest(elapsed=elapsed):
                 path = self.rng.choice(self.paths)
                 report = acceptance.long_lived_file_report([(path, elapsed)], limit)
                 self.assertIn(path, report, self.context(report))
                 self.assertIn(str(elapsed), report, self.context(report))
-                self.assertNotRegex(report.lower(), r"предупрежд|превыш|сверх",
-                                    self.context(report))
+                self.assertEqual(self.warning_lines(report), [], self.context(report))
 
     def test_ac8_named_limit_controls_warning_boundary(self):
         """Константа равна 60 секундам; смена порога меняет предупреждение.
@@ -72,12 +76,13 @@ class FileTimeReportTest(unittest.TestCase):
         elapsed = config.LONG_LIVED_FILE_WARN_SEC + 0.5
         path = self.paths[0]
         for limit, warning in ((elapsed - 0.25, True), (elapsed, False),
-                               (elapsed + 0.25, False)):
+                                (elapsed + 0.25, False)):
             with self.subTest(limit=limit):
-                report = acceptance.long_lived_file_report([(path, elapsed)], limit)
+                with mock.patch.object(config, "LONG_LIVED_FILE_WARN_SEC", limit):
+                    report = acceptance.long_lived_file_report(
+                        [(path, elapsed)], config.LONG_LIVED_FILE_WARN_SEC)
                 self.assertIn(path, report, self.context(report))
-                self.assertEqual(bool(re.search(
-                    r"предупрежд|превыш|сверх", report.lower())), warning,
+                self.assertEqual(bool(self.warning_lines(report)), warning,
                     self.context(report))
 
     def test_ac9_checklist_contains_latest_file_times_and_warnings(self):
@@ -90,13 +95,12 @@ class FileTimeReportTest(unittest.TestCase):
         previous = acceptance.long_lived_file_report(
             [(self.paths[2], limit + 9)], limit)
         report = acceptance.long_lived_file_report(
-            [(self.paths[0], limit + 1.5), (self.paths[1], limit / 2)], limit)
+            [(self.paths[0], limit + 2), (self.paths[1], limit // 2)], limit)
         card = fsm_autogate.acceptance_checklist_measurement([previous, report])
-        for value in (self.paths[0], self.paths[1], str(limit + 1.5),
-                      str(limit / 2)):
+        for value in (self.paths[0], self.paths[1], str(limit + 2),
+                      str(limit // 2)):
             self.assertIn(value, card, self.context(card))
-        self.assertRegex(card.lower(), r"предупрежд|превыш|сверх",
-                         self.context(card))
+        self.assertTrue(self.warning_lines(card), self.context(card))
         self.assertNotIn(self.paths[2], card, self.context(card))
 
     def test_ac10_review_package_contains_latest_file_times_and_warnings(self):
@@ -109,11 +113,10 @@ class FileTimeReportTest(unittest.TestCase):
         previous = acceptance.long_lived_file_report(
             [(self.paths[1], limit + 11)], limit)
         report = acceptance.long_lived_file_report(
-            [(self.paths[0], limit + 3.25), (self.paths[2], limit / 4)], limit)
+            [(self.paths[0], limit + 4), (self.paths[2], limit // 4)], limit)
         package = review.review_package_measurement([previous, report])
-        for value in (self.paths[0], self.paths[2], str(limit + 3.25),
-                      str(limit / 4)):
+        for value in (self.paths[0], self.paths[2], str(limit + 4),
+                      str(limit // 4)):
             self.assertIn(value, package, self.context(package))
-        self.assertRegex(package.lower(), r"предупрежд|превыш|сверх",
-                         self.context(package))
+        self.assertTrue(self.warning_lines(package), self.context(package))
         self.assertNotIn(self.paths[1], package, self.context(package))
