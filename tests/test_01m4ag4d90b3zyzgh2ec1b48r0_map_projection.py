@@ -11,10 +11,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import brief, config, gitcmd, store
+from orchestrator import brief, config, store
 from scripts import codebase_map
 from tests.sandbox import (TmpRootTest, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
+
+OMISSION_RE = re.compile(
+    r"(?s)(?:нет|отсутств|без|исключ|опущ|пропущ|удал|не вход|не содерж)"
+    r".{0,80}tests/|tests/.{0,80}"
+    r"(?:нет|отсутств|исключ|опущ|пропущ|удал|не вход|не содерж)")
 
 
 class ProjectionTest(unittest.TestCase):
@@ -85,24 +90,26 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual(once, twice)
 
     def test_ac4_render_keeps_full_tests_sections(self):
-        """Полная карта для одного и нескольких модулей tests/ сохраняет четыре поля.
+        """Полная карта для одного и нескольких модулей tests/ сохраняет прежние байты.
 
         Ловит мутацию: фильтрацию tests/ переносят в render, и в полной
         карте пропадают заголовок или блок «Импортируется».
         """
+        header = ("---\nbuilt_at_sha: abc\n---\n\n# Codebase-map пульта\n\n"
+                  "Автосгенерировано `scripts/codebase_map.py` — правки руками "
+                  "теряются при следующем запуске.\n\n")
         for names in (("tests/a.py",), ("tests/a.py", "tests/sub/b.py")):
             modules = [codebase_map.ModuleInfo(Path(name), name, ["check"], [])
                        for name in names]
             imports = {name: [] for name in names}
             imported_by = {name: [] for name in names}
             rendered = codebase_map.render(modules, imports, imported_by, "abc")
-            for name in names:
-                pattern = (rf"(?s)## {re.escape(name)}\n\n"
-                           rf"\*\*Назначение:\*\* {re.escape(name)}\n\n"
-                           r"\*\*Публичные функции:\*\*\n- `check`\n\n"
-                           r"\*\*Импортирует:\*\* —\n\n"
-                           r"\*\*Импортируется:\*\* —")
-                self.assertRegex(rendered, pattern)
+            sections = "".join(
+                f"## {name}\n\n**Назначение:** {name}\n\n"
+                "**Публичные функции:**\n- `check`\n\n"
+                "**Импортирует:** —\n\n**Импортируется:** —\n\n"
+                for name in names)
+            self.assertEqual(header + sections.rstrip("\n") + "\n", rendered)
 
     def test_ac5_projection_note_names_omission_and_full_map(self):
         """Указатель при проекции говорит о пропуске tests/ и полной карте.
@@ -115,7 +122,7 @@ class ProjectionTest(unittest.TestCase):
         self.assertTrue(any(
             "docs/codebase-map.md" in message
             and "рабочего каталога" in message
-            and re.search(r"(?s)(?:нет|отсутств).{0,80}tests/|tests/.{0,80}(?:нет|отсутств)", message)
+            and OMISSION_RE.search(message)
             for message in candidates), "ни шапка, ни указатель не объясняют пропуск tests/")
 
 
@@ -148,15 +155,15 @@ class BriefProjectionTest(TmpRootTest):
         for name in ("tests/sub/b.py", "tests/b.py"):
             (self.root / "docs" / "codebase-map.md").write_text(
                 self.map_text.replace("tests/sub/b.py", name), encoding="utf-8")
-            with mock.patch.object(gitcmd, "show", disk_backed_show), \
-                    mock.patch.object(gitcmd, "ls_tree_files", disk_backed_ls_tree_files), \
-                    mock.patch.object(gitcmd, "git", fake_git):
+            with mock.patch.object(brief.gitcmd, "show", disk_backed_show), \
+                    mock.patch.object(brief.gitcmd, "ls_tree_files", disk_backed_ls_tree_files), \
+                    mock.patch.object(brief.gitcmd, "git", fake_git):
                 result = brief.developer_brief(store.db(), "T001")
             self.assertIn("## orchestrator/a.py", result)
             self.assertNotIn(f"## {name}", result)
             self.assertNotIn("УДАЛЁННЫЙ-МАРКЕР", result)
             self.assertIn("docs/codebase-map.md", result)
-            self.assertRegex(result.lower(), r"(?s)(?:нет|отсутств).{0,80}tests/|tests/.{0,80}(?:нет|отсутств)")
+            self.assertRegex(result.lower(), OMISSION_RE)
 
     def test_ac7_analyst_brief_carries_projection_and_note(self):
         """Бриф аналитика несёт секцию пульта и поясняет пропуск tests/.
@@ -167,12 +174,12 @@ class BriefProjectionTest(TmpRootTest):
         for name in ("tests/sub/b.py", "tests/b.py"):
             (self.root / "docs" / "codebase-map.md").write_text(
                 self.map_text.replace("tests/sub/b.py", name), encoding="utf-8")
-            with mock.patch.object(gitcmd, "show", disk_backed_show), \
-                    mock.patch.object(gitcmd, "ls_tree_files", disk_backed_ls_tree_files), \
-                    mock.patch.object(gitcmd, "git", fake_git):
+            with mock.patch.object(brief.gitcmd, "show", disk_backed_show), \
+                    mock.patch.object(brief.gitcmd, "ls_tree_files", disk_backed_ls_tree_files), \
+                    mock.patch.object(brief.gitcmd, "git", fake_git):
                 result = brief.analyst_map_component(store.db(), "T001")
             self.assertIn("## orchestrator/a.py", result)
             self.assertNotIn(f"## {name}", result)
             self.assertNotIn("УДАЛЁННЫЙ-МАРКЕР", result)
             self.assertIn("docs/codebase-map.md", result)
-            self.assertRegex(result.lower(), r"(?s)(?:нет|отсутств).{0,80}tests/|tests/.{0,80}(?:нет|отсутств)")
+            self.assertRegex(result.lower(), OMISSION_RE)
