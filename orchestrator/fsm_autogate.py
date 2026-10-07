@@ -296,36 +296,42 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     ok.append("приёмочные тесты задачи зелёные")
     ok.append(source_note)
 
-    wt_root = (workspace.path(task_id)
-              if workspace.on_task_branch(task_id, t["branch"]) is True
-              else None)
-    if wt_root is None:
-        return ok, ("автогейт: полный набор tests/ не проверен — worktree "
-                    "задачи не заведён")
-    # Разбор вывода прогона — общий узел `acceptance.full_suite` (SPEC
-    # 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-4): причина отказа
-    # различает красный прогон, таймаут и отсутствие tests/ в worktree,
-    # несёт имена упавших тестов с итоговой строкой pytest и путь к файлу
-    # с полным выводом прогона. До этой задачи все три исхода писались
-    # одной фразой «полный набор tests/ красный», а вывод отбрасывался —
-    # 26.09 причину красноты восстанавливали по времени событий.
-    #
-    # Набор идёт на голове ветки с наложенными приложениями PLAN (SPEC
-    # 01M46C776SZEMYPBQGPNJN1TXY): код задачи вправе краснеть без них, и
-    # прогон рабочей копии судил бы не то дерево, что ляжет в main.
-    with appendix_tree.suite_tree(conn, task_id, wt_root,
-                                  branch=t["branch"]) as tree:
-        if tree.root is None:
-            return ok, f"автогейт: {tree.refusal}"
-        run = acceptance.full_suite(tree.root, task_id)
-    if not run.green:
-        return ok, f"автогейт: {tree.mark(run.detail)}"
-    ok.append(tree.mark("полный набор tests/ в worktree ветки зелёный"
-                        + (f" — {run.digest}" if run.digest else "")
-                        + (f" (лог прогона: {run.log_path})"
-                           if run.log_path is not None else "")
-                        + (f" — {run.detail}" if "использован повторно" in
-                           run.detail else "")))
+    if config.CANARY_SKIP_FULL_SUITE:
+        skip_reason = ("полный набор пропущен: канарейка проверяет конвейер, "
+                       "код целевого sha проверяет CI main")
+        store.journal(conn, task_id, "fsm", "полный набор пропущен", skip_reason)
+        ok.append(skip_reason)
+    else:
+        wt_root = (workspace.path(task_id)
+                  if workspace.on_task_branch(task_id, t["branch"]) is True
+                  else None)
+        if wt_root is None:
+            return ok, ("автогейт: полный набор tests/ не проверен — worktree "
+                        "задачи не заведён")
+        # Разбор вывода прогона — общий узел `acceptance.full_suite` (SPEC
+        # 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-4): причина отказа
+        # различает красный прогон, таймаут и отсутствие tests/ в worktree,
+        # несёт имена упавших тестов с итоговой строкой pytest и путь к файлу
+        # с полным выводом прогона. До этой задачи все три исхода писались
+        # одной фразой «полный набор tests/ красный», а вывод отбрасывался —
+        # 26.09 причину красноты восстанавливали по времени событий.
+        #
+        # Набор идёт на голове ветки с наложенными приложениями PLAN (SPEC
+        # 01M46C776SZEMYPBQGPNJN1TXY): код задачи вправе краснеть без них, и
+        # прогон рабочей копии судил бы не то дерево, что ляжет в main.
+        with appendix_tree.suite_tree(conn, task_id, wt_root,
+                                      branch=t["branch"]) as tree:
+            if tree.root is None:
+                return ok, f"автогейт: {tree.refusal}"
+            run = acceptance.full_suite(tree.root, task_id)
+        if not run.green:
+            return ok, f"автогейт: {tree.mark(run.detail)}"
+        ok.append(tree.mark("полный набор tests/ в worktree ветки зелёный"
+                            + (f" — {run.digest}" if run.digest else "")
+                            + (f" (лог прогона: {run.log_path})"
+                               if run.log_path is not None else "")
+                            + (f" — {run.detail}" if "использован повторно" in
+                               run.detail else "")))
 
     if budget.budget_block(t) is not None:
         return ok, "автогейт: бюджет задачи исчерпан"
