@@ -177,6 +177,7 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         doctor._fix_unsent_closed_refs(conn)
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
+        doctor._fix_orphan_temp_dirs()
         # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
         # требование 7) — до `all_checks` ниже, чтобы проверка
         # «models-local» в том же прогоне уже видела положенный шаблон

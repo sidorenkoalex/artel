@@ -4,6 +4,7 @@
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
 from pathlib import Path
+import tempfile
 
 from orchestrator import doctor
 
@@ -37,6 +38,78 @@ def _orphan_worktrees(known_ids: set) -> list[str]:
     paths = [p for clone in _project_clones()
              for p in doctor.workspace.registered_paths(clone)[1:]]
     return [p for p in paths if not doctor._is_legit_task_worktree(p, known_ids)]
+
+
+def _canary_temp_directory(cwd: str) -> Path | None:
+    """Верхний временный каталог известного вида для cwd процесса."""
+    root = Path(tempfile.gettempdir()).resolve()
+    try:
+        relative = Path(cwd).resolve().relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if not relative.parts:
+        return None
+    name = relative.parts[0]
+    if name.startswith(("artel-canary-", "artel-suite-base-")):
+        return root / name
+    return None
+
+
+def _live_suite_run() -> bool:
+    # Старые копии базы не несут собственного маркера; живой run.json
+    # консервативно защищает их, пока такой прогон не завершится.
+    for path in (doctor.config.LOGS / "suite-run").glob("*/run.json"):
+        try:
+            pid = int(doctor.json.loads(path.read_text(encoding="utf-8"))["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if pid > 0 and doctor.liveness._pid_alive(pid):
+            return True
+    return False
+
+
+def _temp_owner_alive(path: Path) -> bool:
+    if path.name.startswith("artel-canary-origin-"):
+        # Origin принадлежит клону, который указывает на него remote URL.
+        # Маркер самого bare-клона мог остаться прежним после копирования.
+        for candidate in path.parent.glob("artel-canary-*"):
+            if candidate.name.startswith("artel-canary-origin-"):
+                continue
+            try:
+                config_text = (candidate / ".git" / "config").read_text(
+                    encoding="utf-8")
+            except OSError:
+                continue
+            if str(path) in config_text:
+                return doctor.liveness.owner_alive(candidate)
+        return False
+    if doctor.liveness.owner_alive(path):
+        return True
+    if path.name.startswith("artel-suite-base-"):
+        return (doctor.liveness.owner_alive(
+                    path, doctor.liveness.SUITE_OWNER_MARKER)
+                or _live_suite_run())
+    return False
+
+
+def _orphan_temp_dirs() -> list[Path]:
+    root = Path(tempfile.gettempdir())
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return []
+    return [entry for entry in entries
+            if entry.is_dir() and not entry.is_symlink()
+            and entry.name.startswith(("artel-canary-", "artel-suite-base-"))
+            and not _temp_owner_alive(entry)]
+
+
+def _fix_orphan_temp_dirs() -> None:
+    for entry in _orphan_temp_dirs():
+        # Повторная проверка сужает окно между наблюдением и удалением.
+        if not _temp_owner_alive(entry):
+            doctor.shutil.rmtree(entry, ignore_errors=True)
+            print(f"  [FIX] временный каталог-сирота удалён: {entry}")
 
 
 def check_orphans(conn) -> list[doctor.Check]:
@@ -103,6 +176,18 @@ def check_orphans(conn) -> list[doctor.Check]:
     doctor._auto_ack_gone(conn, "doctor.orphans.worktree",
                   lambda msg: doctor._worktree_alert_live(msg, current_worktree_paths))
 
+    temporary = _orphan_temp_dirs()
+    if temporary:
+        for entry in temporary:
+            doctor.alerts.raise_alert(conn, None, "incident", "doctor.orphans.temp",
+                                      f"{entry} без живого владельца")
+        results.append(doctor.Check("orphans-temp", "fail",
+                                    "; ".join(str(p) for p in temporary)))
+    else:
+        results.append(doctor.Check("orphans-temp", "ok",
+                                    "временных каталогов-сирот нет"))
+    current = {str(p) for p in temporary}
+    doctor._auto_ack_gone(conn, "doctor.orphans.temp",
+                          lambda msg: msg.removesuffix(" без живого владельца")
+                          in current)
     return results
-
-

@@ -133,6 +133,15 @@ def _find_hung_test_runs(conn) -> list[dict]:
         cwd = doctor._process_cwd(pid)
         if cwd is None:
             continue
+        temporary = doctor._canary_temp_directory(cwd)
+        if temporary is not None:
+            has_canary = (temporary / doctor.liveness.CANARY_OWNER_MARKER).is_file()
+            live = (doctor.liveness.owner_alive(temporary) if has_canary
+                    else doctor._temp_owner_alive(temporary))
+            if not live:
+                found.append({"pid": pid, "age": age, "cwd": cwd,
+                              "task_id": temporary.name})
+            continue
         task_id = doctor._hung_test_run_task_id(cwd)
         if task_id is None:
             continue
@@ -167,7 +176,10 @@ def check_hung_test_runs(conn) -> list[doctor.Check]:
         for c in candidates:
             message = (f"зависший прогон тестов: pid {c['pid']}, worktree "
                       f"{c['cwd']}, возраст {int(c['age'])} сек")
-            doctor.alerts.raise_alert(conn, doctor.store.task_target(conn, c["task_id"]),
+            target = (None if c["task_id"].startswith(
+                ("artel-canary-", "artel-suite-base-"))
+                else doctor.store.task_target(conn, c["task_id"]))
+            doctor.alerts.raise_alert(conn, target,
                                "incident", "doctor.hung_test_runs", message)
             results.append(doctor.Check("hung-test-runs", "fail", message))
     doctor._auto_ack_gone(conn, "doctor.hung_test_runs", doctor._hung_test_run_alert_live)
@@ -250,5 +262,3 @@ def check_zone_waits(conn) -> list[doctor.Check]:
     if not blocked:
         return [doctor.Check("zone-waits", "ok", "нет задач, ожидающих зоны")]
     return blocked
-
-

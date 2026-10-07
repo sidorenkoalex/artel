@@ -360,6 +360,13 @@ def _base_copy(clone: Path, sha: str):
     в системном временном каталоге; убирается и снимается с учёта клона на
     любом исходе (требование 15)."""
     holder = Path(tempfile.mkdtemp(prefix="artel-suite-base-"))
+    (holder / liveness.SUITE_OWNER_MARKER).write_text(
+        str(os.getpid()), encoding="utf-8")
+    for parent in (clone, *clone.parents):
+        marker = parent / liveness.CANARY_OWNER_MARKER
+        if parent.name.startswith("artel-canary-") and marker.is_file():
+            shutil.copyfile(marker, holder / marker.name)
+            break
     copy = holder / "base"
     try:
         gitcmd.in_repo(clone, "worktree", "prune")

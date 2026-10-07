@@ -147,6 +147,7 @@ import fcntl
 import json
 import os
 import random
+import signal
 import shutil
 import subprocess
 import sys
@@ -1183,6 +1184,8 @@ def _ephemeral_clone(target_sha: str | None = None,
         if clone.returncode != 0:
             raise RuntimeError(
                 f"canary: эфемерный клон не создан: {clone.stderr.strip()}")
+        (dest / liveness.CANARY_OWNER_MARKER).write_text(
+            str(os.getpid()), encoding="utf-8")
         if target_sha is not None:
             checkout = subprocess.run(
                 ["git", "checkout", "-q", "-B", config.MAIN_BRANCH, target_sha],
@@ -1199,6 +1202,8 @@ def _ephemeral_clone(target_sha: str | None = None,
             raise RuntimeError(
                 f"canary: origin-заглушка не создана: "
                 f"{mirror.stderr.strip()}")
+        (origin_dir / liveness.CANARY_OWNER_MARKER).write_text(
+            str(os.getpid()), encoding="utf-8")
         origin = subprocess.run(
             ["git", "remote", "set-url", "origin", str(origin_dir)],
             cwd=dest, capture_output=True, text=True)
@@ -1235,6 +1240,15 @@ def _ephemeral_clone(target_sha: str | None = None,
                              f"восстановлен: {codex_auth.profile}: {exc}")
         yield dest
     finally:
+        # suite-run создаёт собственную сессию и не входит в группу ведения.
+        # Его pid сохраняется в хозяйстве именно этого клона.
+        for run_path in (dest / ".artel" / "logs" / "suite-run").glob("*/run.json"):
+            try:
+                pid = int(json.loads(run_path.read_text(encoding="utf-8"))["pid"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if pid > 0:
+                liveness.terminate_process_group(pid)
         config.CANARY_SKIP_FULL_SUITE = saved_skip_full_suite
         codex_provider.set_codex_home_override(saved_codex_home)
         for attr, value in saved.items():
@@ -2620,6 +2634,30 @@ def _target_origin_note(explicit_sha: str | None, target_sha: str,
     return "HEAD главной копии — origin не ответил"
 
 
+class CanaryInterrupted(BaseException):
+    def __init__(self, signum: int):
+        self.signum = signum
+
+
+@contextmanager
+def _interrupt_on_signal():
+    previous = {signum: signal.getsignal(signum)
+                for signum in (signal.SIGTERM, signal.SIGHUP)}
+
+    def interrupt(signum, _frame):
+        # Повторный сигнал не должен прервать finally посреди уборки.
+        signal.signal(signum, signal.SIG_IGN)
+        raise CanaryInterrupted(signum)
+
+    try:
+        for signum in previous:
+            signal.signal(signum, interrupt)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
 def cmd_canary(*, k: int, sha: str | None = None,
                set_name: str = config.CANARY_DEFAULT_SET,
                templates: list | None = None) -> None:
@@ -2671,7 +2709,18 @@ def cmd_canary(*, k: int, sha: str | None = None,
              f"{pool_dir} в порядке прогона: "
              f"{', '.join(p.stem for p in templates)}; целевой sha {target_sha} "
              f"({sha_label}), набор {plan.name}{_summary_note(plan)}")
-        for template_path in templates:
-            _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
-                          target_sha, sha_label, plan, codex_auth)
+        with _interrupt_on_signal():
+            for template_path in templates:
+                try:
+                    _run_one_task(template_path, run_stamp,
+                                  config.CANARY_DEVIATION_RATIO,
+                                  target_sha, sha_label, plan, codex_auth)
+                except CanaryInterrupted as exc:
+                    note = f"оборвана сигналом {signal.Signals(exc.signum).name}"
+                    store.insert_canary_run(
+                        store.db(), run_stamp, template_path.stem, None,
+                        0, 0.0, 0, 0, note, None, False, False,
+                        main_sha=target_sha, verdict="red",
+                        set_name=plan.name, models_summary=plan.summary or None)
+                    raise SystemExit(128 + exc.signum) from None
         print(f"[canary] прогон {run_stamp} завершён")
