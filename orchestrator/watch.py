@@ -17,8 +17,12 @@ lease, без записи в `steps`/`alerts`, без мутации `tasks.sta
 и остальные команды `artel.py` (`_tz_arg`/`_k_arg`/`_reason_arg`).
 """
 import re
+import os
+import socket
+import subprocess
 import sys
 import time
+import unicodedata
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,7 +125,7 @@ def _parse_args(argv: list) -> dict:
 
     events_raw = _flag_value(argv, "--events")
     events = _parse_event_set(events_raw, "--events") if events_raw is not None \
-        else set(_DEFAULT_EVENTS)
+        else set(_DEFAULT_EVENTS) | ({"alerts"} if "--observation" in argv else set())
 
     interval_raw = _flag_value(argv, "--interval")
     if interval_raw is None:
@@ -156,6 +160,8 @@ def _parse_args(argv: list) -> dict:
         "interval": interval,
         "until": _flag_value(argv, "--until"),
         "exit_on": exit_on,
+        "notify": "--notify" in argv,
+        "takeover": "--takeover" in argv,
     }
 
 
@@ -215,10 +221,150 @@ def _print_line(ts: str, task_id: str, actor: str, action: str,
     идентификатор задачи (AC-2) — общий вид для строк `steps` и `alerts`
     (для алертов `task_id`=`target`, `actor`=`source`, `action`=
     `alert:<kind>`, `detail`=`message`)."""
-    line = f"{ts}  {task_id}  {actor}  {action}"
+    line = f"{safe_text(ts)}  {safe_text(task_id)}  {safe_text(actor)}  {safe_text(action)}"
     if detail:
-        line += f"  | {detail}"
+        line += f"  | {safe_text(detail)}"
     print(line, flush=True)
+
+
+def safe_text(value: str) -> str:
+    """Make untrusted event fields inert in a terminal and one line long."""
+    return "".join((f"\\x{ord(ch):02x}" if ord(ch) <= 255
+                    else f"\\u{ord(ch):04x}")
+                   if unicodedata.category(ch) in {"Cc", "Cf", "Zl", "Zp"}
+                   else ch for ch in str(value))
+
+
+def _notify(message: str) -> None:
+    message = message.replace("\x00", "\\0")
+    if sys.platform != "darwin":
+        print(f"уведомление: {safe_text(message)}", flush=True)
+        return
+    script = ('on run argv\n'
+              'set noticeText to item 1 of argv\n'
+              'set noticeText to text 2 thru -1 of noticeText\n'
+              'display notification noticeText with title "Артель"\nend run')
+    try:
+        subprocess.run(["osascript", "-e", script, "x" + message],
+                       capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"уведомление недоступно: {safe_text(str(exc))}", flush=True)
+
+
+def _significant(action: str) -> bool:
+    return (action in _GATE_ACTIONS or action == _AUTO_STOP_ACTION or
+            (action.startswith(store.REFUSAL_ACTION_PREFIX) and
+             action not in _PRE_ADVANCE_REFUSAL_ACTIONS))
+
+
+def _observation_events(conn, row, start_step: int, start_alert: int,
+                        events: set, notify: bool = False) -> tuple[int, int]:
+    """Read one globally ordered step stream and advance past filtered rows."""
+    steps = store.observation_steps_since(conn, row["id"], start_step)
+    task_ids = set(store.observation_tasks(conn, row["id"]))
+    next_step = steps[-1]["id"] if steps else start_step
+    for item in steps:
+        action, detail = item["action"], item["detail"] or ""
+        if _matches_class(action, detail, events):
+            _print_line(item["ts"], item["task_id"], item["actor"],
+                        action, detail)
+            if notify and _significant(action):
+                _notify(f"{item['task_id']}: {action} {detail}")
+    alerts = store.alerts_since(conn, start_alert)
+    next_alert = alerts[-1]["id"] if alerts else start_alert
+    if "alerts" in events:
+        for item in alerts:
+            if item["target"] in task_ids or item["target"] == row["target"]:
+                _print_line(item["ts"], item["target"], item["source"],
+                            f"alert:{item['kind']}", item["message"])
+    return next_step, next_alert
+
+
+def observation_process_state(row) -> str:
+    if row["pid"] is None:
+        if not row["last_seen_at"]:
+            return "unstarted"
+        age = (datetime.now(timezone.utc) -
+               datetime.fromisoformat(row["last_seen_at"])).total_seconds()
+        return "fresh" if age <= config.OBSERVATION_STALE_SECONDS else "stale"
+    if row["hostname"] != socket.gethostname():
+        return "remote"
+    try:
+        os.kill(row["pid"], 0)
+    except ProcessLookupError:
+        return "dead"
+    except PermissionError:
+        return "alive"
+    return "alive"
+
+
+def _pin_head() -> str | None:
+    try:
+        git_dir = config.ROOT / ".git"
+        if git_dir.is_file():
+            marker = git_dir.read_text(encoding="utf-8").strip()
+            git_dir = (config.ROOT / marker.removeprefix("gitdir: ")).resolve()
+        common_file = git_dir / "commondir"
+        common_dir = ((git_dir / common_file.read_text(encoding="utf-8").strip()).resolve()
+                      if common_file.is_file() else git_dir)
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            ref = head[5:]
+            for root in (git_dir, common_dir):
+                loose = root / ref
+                if loose.is_file():
+                    return loose.read_text(encoding="utf-8").strip()
+            packed = common_dir / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + ref):
+                        return line.split(" ", 1)[0]
+            return None
+        return head
+    except OSError:
+        return None
+
+
+def _watch_observation(opts: dict, conn, observed) -> None:
+    observation_id = observed["id"]
+    pid, host = os.getpid(), socket.gethostname()
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        previous = store.claim_observation(conn, observation_id, pid, host,
+                                           started_at, opts["takeover"],
+                                           opts["notify"])
+    except ValueError as exc:
+        sys.exit(f"watch: {exc}")
+    if previous[0] is not None:
+        print(f"дозор перехватил {previous[0]}@{safe_text(previous[1])}", flush=True)
+    if not opts["notify"]:
+        print("предупреждение: дозор запущен без уведомлений", flush=True)
+    pin = _pin_head()
+    try:
+        while True:
+            conn = store.db()
+            row = store.observation(conn, observation_id)
+            if row["state"] != "active":
+                return
+            if row["pid"] != pid or row["started_at"] != started_at:
+                print(f"дозор перехвачен: {row['pid']}@{safe_text(row['hostname'])}", flush=True)
+                return
+            current_pin = _pin_head()
+            if pin and current_pin and current_pin != pin:
+                print("предупреждение: пин главной копии сменился; перезапустите дозор", flush=True)
+                pin = current_pin
+            step_id, alert_id = _observation_events(
+                conn, row, row["notified_step_id"], row["notified_alert_id"],
+                opts["events"], opts["notify"])
+            if not store.advance_notified(conn, observation_id, step_id,
+                                          alert_id, pid, started_at):
+                return
+            if not store.touch_claimed_observation(conn, observation_id,
+                                                    pid, started_at):
+                return
+            time.sleep(opts["interval"])
+    finally:
+        store.release_observation(store.db(), observation_id, pid, started_at)
 
 
 def _emit_steps(conn, task_id: str, events: set, known_step_id: dict,
@@ -515,6 +661,8 @@ def cmd_watch(argv: list) -> None:
             sys.exit("watch: наблюдение не найдено или прекращено")
         if observed["session_id"] != session_id:
             sys.exit("watch: наблюдение принадлежит другой сессии")
+        _watch_observation(opts, conn, observed)
+        return
     selection = _select_tasks(conn, opts, session_id)
 
     if opts["until"] is not None and len(selection) != 1:

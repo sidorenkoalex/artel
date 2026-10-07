@@ -115,6 +115,8 @@ def all_checks(conn) -> list[doctor.Check]:
     # цикл на прежнем коде читаются вместе.
     checks.append(doctor.check_stale_cycles(conn))
     checks.append(doctor.check_git_hooks())
+    checks.append(doctor.check_codex_background_hooks())
+    checks.append(doctor.check_observations(conn))
     checks.extend(doctor.check_clone_hooks())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())

@@ -38,8 +38,17 @@ def register_observation(conn, target: str, client: str, chat: str,
                          session_id: str, task_ids: list[str]) -> str:
     observation_id = uuid.uuid4().hex
     with conn:
-        conn.execute("INSERT INTO observations VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)",
-                     (observation_id, target, client, chat, session_id, now()))
+        conn.execute(
+            "INSERT INTO observations(id, target, client, chat, session_id, state, "
+            "last_seen_at, created_at, notified_step_id, notified_alert_id, "
+            "acknowledged_step_id, acknowledged_alert_id, acknowledged_at) VALUES "
+            "(?, ?, ?, ?, ?, 'active', NULL, ?, "
+            "(SELECT COALESCE(MAX(id), 0) FROM steps), "
+            "(SELECT COALESCE(MAX(id), 0) FROM alerts), "
+            "(SELECT COALESCE(MAX(id), 0) FROM steps), "
+            "(SELECT COALESCE(MAX(id), 0) FROM alerts), ?)",
+            (observation_id, target, client, chat, session_id, now(),
+             datetime.now(timezone.utc).isoformat()))
         conn.executemany("INSERT INTO observation_tasks(observation_id, task_id) VALUES (?, ?)",
                          [(observation_id, task_id) for task_id in task_ids])
     return observation_id
@@ -95,6 +104,110 @@ def touch_observation(conn, observation_id: str) -> bool:
             "UPDATE observations SET last_seen_at=? WHERE id=? AND state='active'",
             (timestamp, observation_id))
     return cursor.rowcount == 1
+
+
+def observation_steps_since(conn, observation_id: str, since_id: int) -> list:
+    """One ordered journal query for the complete enabled task set."""
+    return conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE id>? AND task_id IN "
+        "(SELECT task_id FROM observation_tasks WHERE observation_id=? AND enabled=1) "
+        "ORDER BY id", (since_id, observation_id)).fetchall()
+
+
+def advance_notified(conn, observation_id: str, step_id: int, alert_id: int,
+                     pid: int, started_at: str) -> bool:
+    with conn:
+        changed = conn.execute(
+            "UPDATE observations SET notified_step_id=MAX(notified_step_id, ?), "
+            "notified_alert_id=MAX(notified_alert_id, ?) WHERE id=? AND "
+            "state='active' AND pid=? AND started_at=?",
+            (step_id, alert_id, observation_id, pid, started_at))
+    return changed.rowcount == 1
+
+
+def touch_claimed_observation(conn, observation_id: str, pid: int,
+                              started_at: str) -> bool:
+    with conn:
+        changed = conn.execute(
+            "UPDATE observations SET last_seen_at=? WHERE id=? AND "
+            "state='active' AND pid=? AND started_at=?",
+            (datetime.now(timezone.utc).isoformat(), observation_id,
+             pid, started_at))
+    return changed.rowcount == 1
+
+
+def acknowledge_observation(conn, observation_id: str, step_id: int,
+                            alert_id: int, client: str | None,
+                            chat: str | None):
+    """Confirm both positions under one SQLite write lock."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = observation(conn, observation_id)
+        if row is None:
+            raise ValueError("наблюдение не найдено")
+        top_step = conn.execute("SELECT COALESCE(MAX(id), 0) FROM steps").fetchone()[0]
+        top_alert = max_alert_id(conn)
+        if step_id > top_step or alert_id > top_alert:
+            raise ValueError(f"пара выше текущих максимумов {top_step},{top_alert}")
+        new_step = max(row["acknowledged_step_id"], step_id)
+        new_alert = max(row["acknowledged_alert_id"], alert_id)
+        advanced = (new_step, new_alert) != (row["acknowledged_step_id"],
+                                               row["acknowledged_alert_id"])
+        if advanced:
+            conn.execute(
+                "UPDATE observations SET acknowledged_step_id=?, "
+                "acknowledged_alert_id=?, acknowledged_at=?, "
+                "acknowledged_client=?, acknowledged_chat=? WHERE id=?",
+                (new_step, new_alert, datetime.now(timezone.utc).isoformat(),
+                 client, chat, observation_id))
+        conn.commit()
+        return advanced, observation(conn, observation_id)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def claim_observation(conn, observation_id: str, pid: int, host: str,
+                      started_at: str, takeover: bool,
+                      notify: bool = False) -> tuple:
+    """Atomically take an observation after checking the previous owner."""
+    import os
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = observation(conn, observation_id)
+        if row is None or row["state"] != "active":
+            raise ValueError("наблюдение не найдено или прекращено")
+        previous = (row["pid"], row["hostname"])
+        if row["pid"] and not takeover and row["pid"] != pid:
+            if row["hostname"] != host:
+                raise ValueError(f"дозор {row['pid']}@{row['hostname']} на другом хосте; используйте --takeover")
+            try:
+                os.kill(row["pid"], 0)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                raise ValueError(f"дозор {row['pid']}@{host} уже работает; используйте --takeover")
+            else:
+                raise ValueError(f"дозор {row['pid']}@{host} уже работает; используйте --takeover")
+        changed = conn.execute(
+            "UPDATE observations SET pid=?, hostname=?, started_at=?, "
+            "last_seen_at=?, notify=? WHERE id=? AND pid IS ?",
+            (pid, host, started_at, started_at, int(notify),
+             observation_id, previous[0]))
+        if changed.rowcount != 1:
+            raise ValueError("владелец наблюдения изменился при захвате")
+        conn.commit()
+        return previous
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def release_observation(conn, observation_id: str, pid: int,
+                        started_at: str) -> None:
+    with conn:
+        conn.execute("UPDATE observations SET pid=NULL WHERE id=? AND pid=? "
+                     "AND started_at=?", (observation_id, pid, started_at))
 
 
 def matching_observation(conn, task_id: str, target: str, session_id: str,

@@ -137,7 +137,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   stop <id> |
   observe register --client codex|claude --chat <id> --tasks <id[,id...]> |
   observe add|remove <observation-id> --tasks <id[,id...]> |
-  observe show|stop <observation-id> [--json] |
+  observe show|stop|events <observation-id> [--json] |
+  observe acknowledge <observation-id> --through <step_id>,<alert_id> |
   hook-migrate inspect|apply|restore --client codex|claude --config <path>
                [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
@@ -167,6 +168,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
              [--accept-red "<основание>"] |
   doc-commit --flush |
   watch [--tasks <id>[,<id>...]] [--mine] [--all] [--observation <id>]
+        [--notify] [--takeover]
         [--events <класс>[,...]]
         [--interval SEC] [--until <state>]
 
@@ -820,6 +822,7 @@ def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
 
 
 def _cmd_run_or_detach(rest: list) -> None:
+    _refuse_sandbox_cycle()
     task_id, attach, client, chat = _cycle_args(
         rest, "run <id> [--attach | --client codex|claude --chat <id>]",
         _CYCLE_FLAGS_RUN)
@@ -830,6 +833,7 @@ def _cmd_run_or_detach(rest: list) -> None:
 
 
 def _cmd_auto_or_detach(rest: list) -> None:
+    _refuse_sandbox_cycle()
     task_id, attach, client, chat = _cycle_args(
         rest, "auto <id> [--attach | --client codex|claude --chat <id>] [--wait-zone]",
         _CYCLE_FLAGS_AUTO)
@@ -839,6 +843,13 @@ def _cmd_auto_or_detach(rest: list) -> None:
         return
     _launch_detached("auto", task_id, client, chat,
                      extra=("--wait-zone",) if wait_zone else ())
+
+
+def _refuse_sandbox_cycle() -> None:
+    if (os.environ.get("CODEX_SANDBOX") == "workspace-write" and
+            os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1"):
+        sys.exit("run/auto: песочница Codex без сети и записи вне каталога "
+                 "не позволяет вести цикл; запустите из терминала Оператора")
 
 
 def _observe_flag(rest: list, flag: str) -> str:
@@ -862,6 +873,12 @@ def _observation_fresh(row) -> bool:
     return age <= config.OBSERVATION_STALE_SECONDS
 
 
+def _observation_pair(raw: str, flag: str) -> tuple[int, int]:
+    if not re.fullmatch(r"[0-9]+,[0-9]+", raw):
+        sys.exit(f"observe: {flag} требует пару <step_id>,<alert_id> без пробелов")
+    return tuple(map(int, raw.split(",")))
+
+
 def _cmd_observe(rest: list) -> None:
     if not rest:
         sys.exit("observe: требуется register|add|remove|show|stop")
@@ -882,8 +899,8 @@ def _cmd_observe(rest: list) -> None:
             conn, target, client, chat, session.resolve_session_id(None), task_ids)
         print(json.dumps({"id": observation_id}))
         return
-    if action not in ("add", "remove", "show", "stop") or len(rest) < 2:
-        sys.exit("observe: требуется register|add|remove|show|stop <ID>")
+    if action not in ("add", "remove", "show", "stop", "events", "acknowledge") or len(rest) < 2:
+        sys.exit("observe: требуется register|add|remove|show|stop|events|acknowledge <ID>")
     if action in ("add", "remove"):
         _refuse_extra_observe_args(action, rest)
     row = _observation_or_exit(conn, rest[1])
@@ -893,12 +910,51 @@ def _cmd_observe(rest: list) -> None:
                   "tasks": store.observation_tasks(conn, row["id"]),
                   "state": row["state"], "last_seen_at": row["last_seen_at"],
                   "fresh": _observation_fresh(row),
+                  "notify": bool(row["notify"]), "pid": row["pid"],
+                  "hostname": row["hostname"], "started_at": row["started_at"],
+                  "process": watch.observation_process_state(row),
+                  "notified": {"step_id": row["notified_step_id"],
+                               "alert_id": row["notified_alert_id"]},
+                  "acknowledged": {"step_id": row["acknowledged_step_id"],
+                                   "alert_id": row["acknowledged_alert_id"],
+                                   "at": row["acknowledged_at"],
+                                   "client": row["acknowledged_client"],
+                                   "chat": row["acknowledged_chat"]},
                   "runs": [dict(task=r["task_id"], pid=r["pid"], log=r["log"])
                            for r in store.observed_runs(conn, row["id"])]}
         print(json.dumps(result, ensure_ascii=False))
         return
     if row["session_id"] != session.resolve_session_id(None):
         sys.exit("observe: наблюдение принадлежит другой сессии")
+    if action == "events":
+        start = (_observation_pair(_observe_flag(rest, "--from"), "--from")
+                 if "--from" in rest else
+                 (row["acknowledged_step_id"], row["acknowledged_alert_id"]))
+        events = (watch._parse_event_set(_observe_flag(rest, "--events"), "--events")
+                  if "--events" in rest else set(watch._DEFAULT_EVENTS) | {"alerts"})
+        step_id, alert_id = watch._observation_events(
+            conn, row, start[0], start[1], events)
+        print(f"POSITION={step_id},{alert_id}")
+        return
+    if action == "acknowledge":
+        if "--through" not in rest:
+            sys.exit("observe acknowledge: требуется --through <step_id>,<alert_id>")
+        step_id, alert_id = _observation_pair(_observe_flag(rest, "--through"), "--through")
+        client = _observe_flag(rest, "--client") if "--client" in rest else None
+        chat = _observe_flag(rest, "--chat") if "--chat" in rest else None
+        try:
+            advanced, latest = store.acknowledge_observation(
+                conn, row["id"], step_id, alert_id, client, chat)
+        except ValueError as exc:
+            sys.exit(f"observe acknowledge: {exc}")
+        pair = f"{latest['acknowledged_step_id']},{latest['acknowledged_alert_id']}"
+        if advanced:
+            print(f"разобрано до {pair}")
+        else:
+            print(f"уже разобрано до {pair}: {watch.safe_text(latest['acknowledged_at'])}, "
+                  f"client={watch.safe_text(latest['acknowledged_client'])}, "
+                  f"chat={watch.safe_text(latest['acknowledged_chat'])}")
+        return
     if action == "stop":
         store.stop_observation(conn, row["id"])
         print(f"наблюдение {row['id']} прекращено")
@@ -1594,7 +1650,7 @@ _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
                        "watch": ("--observation",)}
 
 #: Единственная читающая подкоманда составных команд.
-_ROLE_ALLOWED_SUBCOMMANDS = {"observe": "show", "hook-migrate": "inspect"}
+_ROLE_ALLOWED_SUBCOMMANDS = {"observe": ("show", "events"), "hook-migrate": ("inspect",)}
 
 
 def _role_allowed_command(cmd: str, rest: list) -> bool:
@@ -1607,7 +1663,7 @@ def _role_allowed_command(cmd: str, rest: list) -> bool:
     if cmd in _ROLE_REFUSED_FLAGS:
         return not any(flag in rest for flag in _ROLE_REFUSED_FLAGS[cmd])
     if cmd in _ROLE_ALLOWED_SUBCOMMANDS:
-        return rest[:1] == [_ROLE_ALLOWED_SUBCOMMANDS[cmd]]
+        return bool(rest) and rest[0] in _ROLE_ALLOWED_SUBCOMMANDS[cmd]
     # Ребёнок отвязанного запуска наследует окружение родителя и несёт
     # `--attach` — его отказ сломал бы штатный `run`/`auto` (требование 6).
     if cmd in ("run", "auto"):

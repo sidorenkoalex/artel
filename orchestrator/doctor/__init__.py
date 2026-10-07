@@ -184,6 +184,7 @@ from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
                         CLONE_HOOKS_CHECK, PROJECT_CLONES_CHECK,
                         check_git_hooks, check_clone_hooks, _fix_git_hooks,
                         _fix_project_clones)
+from .observations import check_observations, check_codex_background_hooks
 from .model_catalog import (ROLE_MODELS_CHECK, check_models_catalog,
                             check_models_local, check_role_models,
                             fix_models_local)
