@@ -2,9 +2,8 @@
 task: 01M4BEGQAVVWCHFCW6BEBB0XVT
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
-question: Зафиксированный тест требует принятия CI без ID прогона и неверно считает строки причины локального запуска; нужен amend-tests.
 ---
 
 # PLAN: Приёмка результата CI полного набора
@@ -13,7 +12,7 @@ question: Зафиксированный тест требует приняти�
 
 Оба пути приёмки после построения дерева `appendix_tree.suite_tree` вызывают общий `acceptance.acceptance_suite`. Узел сравнивает фактический hash дерева с деревом головного коммита, проверяет предковость `origin/main`, затем получает зелёные завершённые проверки CI и ID прогона выполненного задания полного набора. Недоказанное условие записывается одной строкой журнала и ведёт к прежнему локальному `full_suite`. Гейт мержа вызывает прежний узел напрямую.
 
-Правило роли меняется приложением ниже. `git apply --check /private/tmp/01m4begqavvwchfcw6bebb0xvt-skill.patch` завершился с кодом 0 на текущем дереве; защищённый файл в ветке не менялся.
+Правило роли меняется приложением ниже. `git apply --check /private/tmp/01m4begqavvwchfcw6bebb0xvt-skill.patch` завершился с кодом 0 на текущем дереве; защищённый файл в ветке не менялся. Замечания к зафиксированным тестам закрыты решением Оператора в `ANSWER-1.md` и правкой через `amend-tests` (лок `5c367926`, коммит `0e1ee6fb`): автогейт получает действительный ID прогона из `details_url`, а AC-4 считает причины только среди записей действия `полный набор локально`.
 
 ## Шаги
 
@@ -34,7 +33,13 @@ question: Зафиксированный тест требует приняти�
 
 ## Риски
 
-Зафиксированный тест `tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py` не позволяет подтвердить безопасную реализацию без правки теста через `amend-tests`; причины ниже.
+При недоступности CI или отсутствии подтверждённого ID прогона выполняется локальный полный набор. Риск ложного принятия `check_suite.id` снят операторской правкой теста; код по-прежнему требует ID workflow run.
+
+## Проверки
+
+- `python3 -m pytest tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py tests/test_fsm_autogate.py tests/test_acceptance.py tests/test_ci_status.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 126 passed, 37 subtests passed.
+- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4BEGQAVVWCHFCW6BEBB0XVT` — 1 passed.
+- `python3 scripts/codebase_map.py` обновил `docs/codebase-map.md` после операторской правки теста; `git apply --check /private/tmp/01m4begqavvwchfcw6bebb0xvt-skill.patch` — код выхода 0.
 
 ## Приложение: правило разработчика
 
@@ -89,20 +94,3 @@ diff --git a/skills/coding-standards.md b/skills/coding-standards.md
 - `tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py`: фикстура автогейта считает `check_suite.id` достаточным свидетельством ID workflow run, хотя это разные идентификаторы; для CI приёмки нужен отдельный ID прогона.
 - Тот же файл, `test_ac4_bad_ci_or_stale_branch_runs_local_suite`: поиск причины по `any()` и общим подстрокам захватывает отдельную запись об успешном локальном наборе; тесту нужен фильтр действия журнала.
 - `orchestrator/plank_run.py`/`orchestrator/plank_helper.py`: `plank-run` во время шага разработчика не видит новый PLAN.md в каталоге документов до автокоммита и отвечает «разработчик ещё не подготовил PLAN»; нужна команда прогона планки с текущим локальным артефактом.
-
-## Эскалация
-
-**Вопросы**
-
-1. Код причины `тест-навязывает-устройство`: можно ли через `amend-tests` добавить в `CiAutogateTest` ответ `gh` со связанным workflow run ID (`details_url` или `workflow_runs`) и сохранить ожидание принятого CI? Варианты: добавить достоверный ID прогона (предпочтительно); явно объявить в SPEC, что приёмка вправе записывать `check_suite.id` как ID прогона. По умолчанию — локальный прогон при отсутствии ID.
-2. Можно ли через `amend-tests` ограничить поиск причины в `CiAcceptanceTest.test_ac4_bad_ci_or_stale_branch_runs_local_suite` записью действия `полный набор локально`? Варианты: фильтровать действие (предпочтительно); указать иной однозначный фильтр. По умолчанию — сохранить отдельную строку причины и прежнюю информативную запись об успешном локальном прогоне.
-
-**Контекст**
-
-`python3 -m pytest tests/test_fsm_autogate.py tests/test_acceptance.py tests/test_ci_status.py -p no:cacheprovider -p timeout -o timeout=120 -q`: 119 passed, 33 subtests passed. `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4BEGQAVVWCHFCW6BEBB0XVT`: 1 failed, поскольку `artifact_text("PLAN.md")` вернул None до автокоммита PLAN; приложение независимо проверено `git apply --check`.
-
-`python3 -m pytest tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py -p no:cacheprovider -p timeout -o timeout=120`: 6 сценариев прошли, 3 отказа: автогейт без ID и два подсчёта лишней строки в AC-4. `CiAutogateTest` возвращает check-run с `check_suite.id`, но без `details_url` и без `workflow_runs`; `ci.accepted_full_suite` верно выбирает локальный запуск с причиной «CI не сообщил ID прогона полного набора». В AC-4 фильтр `any(term in detail for term in terms)` совпадает с текстом второго события «локальный полный набор зелёный» и упоминанием ветки в пометке PLAN.
-
-**Блокирует**
-
-Сдачу PLAN со статусом `ready` и зелёную проверку зафиксированных тестов без ложного ID прогона либо потери записи об исходе локального набора.
