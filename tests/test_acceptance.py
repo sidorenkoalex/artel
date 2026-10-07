@@ -4,6 +4,7 @@ worktree ветки зелёный" автогейта acceptance) и узла �
 прогона pytest (`run_digest`/`full_suite`, SPEC
 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 1-3).
 """
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -13,7 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import acceptance, ci, config  # noqa: E402
+from orchestrator import acceptance, ci, config, store  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
 
 PASSING_TEST = """import unittest
@@ -424,6 +425,42 @@ class MaterializeFromBranchGitFailureTest(unittest.TestCase):
         self.assertEqual(tdir, self.code_dir / "tasks" / task_id)
         self.assertEqual(existing.read_text(encoding="utf-8"),
                          "реальный тест\n")
+
+
+class AcceptanceSuiteTreeFailureTest(unittest.TestCase):
+    """Сбой чтения любого дерева требует локального полного набора."""
+
+    def test_unreadable_gate_or_head_tree_falls_back_to_local_suite(self):
+        """Ловит мутацию: сбой первого чтения оставляет дерево головы без
+        значения и роняет приёмку до вызова локального полного набора.
+        """
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        local_result = acceptance.FullSuiteRun(
+            True, acceptance.FULL_SUITE_GREEN, "зелёный", None, "зелёный")
+        for failed_tree in ("gate", "head"):
+            with self.subTest(failed_tree=failed_tree):
+                values = ([OSError("дерево гейта не прочитано")]
+                          if failed_tree == "gate" else
+                          ["a" * 40, OSError("дерево головы не прочитано")])
+                with mock.patch.object(ci, "head_sha", return_value=("b" * 40, "")), \
+                     mock.patch.object(acceptance, "suite_tree_hash",
+                                       side_effect=values), \
+                     mock.patch.object(acceptance, "full_suite",
+                                       return_value=local_result) as local, \
+                     mock.patch.object(store, "journal") as journal:
+                    result = acceptance.acceptance_suite(
+                        conn, Path("/tmp"), "T001", "task/t001", Path("/tmp"),
+                        actor="approve")
+
+                self.assertIs(result, local_result)
+                local.assert_called_once_with(Path("/tmp"), "T001")
+                journal.assert_called_once()
+                self.assertEqual(journal.call_args.args[3], "полный набор локально")
+                reason = journal.call_args.args[4]
+                self.assertIn("дерево гейта или головного коммита не прочитано",
+                              reason)
+                self.assertNotIn("\n", reason)
 
 
 class SummaryCiCriteriaTest(unittest.TestCase):

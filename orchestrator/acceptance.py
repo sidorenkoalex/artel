@@ -1610,7 +1610,7 @@ def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
                 gate_tree = suite_tree_hash(root)
                 head_tree = suite_tree_hash(root, ref=sha, worktree=False)
             except (OSError, ValueError, subprocess.TimeoutExpired):
-                gate_tree = None
+                gate_tree = head_tree = None
             if not head_tree or not gate_tree:
                 reason = "дерево гейта или головного коммита не прочитано"
             elif gate_tree != head_tree:
