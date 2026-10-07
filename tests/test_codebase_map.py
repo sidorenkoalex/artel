@@ -444,12 +444,10 @@ class SubpackageProjectionTest(unittest.TestCase):
             self._labels(self.projected, "orchestrator/doctor/preflight.py"))
 
     def test_tests_sections_still_keep_only_purpose(self):
-        """Ловит мутацию: правило подпакетов заведено расширением
-        `_KEPT_FIELDS_BY_KIND` с сохранением всех полей по умолчанию —
-        секции `tests/*` начнут носить «Публичные функции»/«Импортирует»
-        и проекция раздуется."""
-        self.assertEqual(["Назначение"],
-                         self._labels(self.projected, "tests/test_x.py"))
+        """Ловит мутацию: правило проекции оставляет заголовок или поля
+        `tests/*` вместо удаления секции целиком — тестовый модуль
+        вновь попадёт в бриф."""
+        self.assertNotIn("## tests/test_x.py\n", self.projected)
 
 
 class RealMapProjectionSizeTest(unittest.TestCase):
