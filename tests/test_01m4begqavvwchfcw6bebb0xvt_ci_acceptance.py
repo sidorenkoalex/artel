@@ -47,7 +47,7 @@ class CiAcceptanceTest(RealGitSandbox):
                 checks = [{"name": name, "status": "completed",
                            "conclusion": ("success" if self.full_suite_done
                                           else "skipped"),
-                           "details_url": f"https://example.test/actions/runs/{self.run_id}/job/1",
+                           "details_url": f"http://localhost/actions/runs/{self.run_id}/job/1",
                            "check_suite": {"id": self.run_id}}
                           for name in sorted(ci.FULL_SUITE_CHECKS)]
                 if self.ci_answer != "success":
@@ -226,7 +226,7 @@ class CiAutogateTest(LightTransitionSandbox):
             True, acceptance.FULL_SUITE_GREEN, "зелёный", None, "зелёный"))
         checks = [{"name": name, "status": "completed",
                    "conclusion": "success",
-                   "details_url": f"https://example.test/actions/runs/{run_id}/job/1",
+                   "details_url": f"http://localhost/actions/runs/{run_id}/job/1",
                    "check_suite": {"id": run_id}}
                   for name in sorted(ci.FULL_SUITE_CHECKS)]
         response = {"total_count": len(checks), "check_runs": checks}
