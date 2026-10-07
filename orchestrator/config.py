@@ -4,6 +4,8 @@
 (`from .config import TASKS`): импорт по имени копирует значение, и подмена
 пути или лимита в тесте до такого модуля уже не доходит.
 """
+import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -407,6 +409,14 @@ CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
 # имя отделяет прогоны, годные для сдвига пина, от прогонов по требованию
 # (`store.green_canary_runs`, docs/operator-session.md).
 CANARY_DEFAULT_SET = "default"
+# Маркер учитывается при импорте только процессом `python -m
+# orchestrator.canary_drive`; обычный пульт не может наследовать обход.
+CANARY_SKIP_FULL_SUITE_ENV = "ARTEL_CANARY_SKIP_FULL_SUITE"
+_main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+CANARY_SKIP_FULL_SUITE = (
+    getattr(_main_spec, "name", None) == "orchestrator.canary_drive"
+    and os.environ.get(CANARY_SKIP_FULL_SUITE_ENV) == "1")
+del _main_spec
 # Потолок ПОДРЯД идущих циклов возврата из `escalated` ОДНОЙ канареечной
 # задачи (REVIEW.md 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1):
 # `review_iters` не сбрасывается при возврате из `escalated` (общее
