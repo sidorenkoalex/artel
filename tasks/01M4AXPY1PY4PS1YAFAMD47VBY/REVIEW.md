@@ -2,8 +2,8 @@
 task: 01M4AXPY1PY4PS1YAFAMD47VBY
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,43 +11,42 @@ schema_version: 5
 
 ## Гейт плана (фаза A)
 
-Покрытие требований в таблице плана полное: 1–4, 5–6, 7–9 и 10 имеют отдельные проверяемые шаги. Шаги соразмерны MR и не конфликтуют с заявленной архитектурой. Влияние и откат описаны. Замечания ниже относятся к реализации и к неполному тестовому сторожу двух сценариев ownership.
+Таблица покрытия плана полна: требования 1–4, 5–6, 7–9 и 10 покрыты отдельными шагами. Шаги соразмерны MR, проверяемы и согласованы с существующей архитектурой: единый marker владельца читают жизненный цикл канарейки и `doctor`, а отвязанный запуск остаётся в публичном CLI. Влияние на систему и обратимый откат описаны и соответствуют фактическому diff.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | Обработчик SIGTERM/SIGHUP прерывает ведение; существующие `finally` снимают группы и удаляют оба каталога. |
-| 2 | OK | При сигнале записывается красная строка с именем сигнала и без нового `verdict`. |
-| 3 | OK | `run.json` клона читается в `finally`, группа сохранённого pid снимается для штатного, ошибочного и сигнального выхода. |
-| 4 | Не полностью | Маркеры пишутся, но marker origin не участвует в определении его живого владельца (R1-F2). |
-| 5 | OK | Watchdog распознаёт временные каталоги и исключает их при живом владельце. |
-| 6 | Не реализовано полностью | Живой произвольный `suite-run` защищает все временные базы, в том числе сироты (R1-F1); живой origin также может быть удалён (R1-F2). |
-| 7 | OK | `--detach` создаёт новую сессию, лог и файл результата и сразу печатает их пути с pid. |
-| 8 | OK | Справка называет `--detach` и штатность для сессии Оператора. |
-| 9 | OK | В `docs/operator-session.md` добавлены оба требуемых правила. |
-| 10 | Не полностью | Профильные тесты и заявки на мутации есть, но не сторожат сценарии R1-F1 и R1-F2. |
+| 1 | OK | Обработчик SIGTERM/SIGHUP прерывает ведение; `finally` снимает группы и удаляет клон с origin. |
+| 2 | OK | Сигнальный исход записывается красной строкой с именем сигнала и без нового значения `verdict`. |
+| 3 | OK | `run.json` клона читается при уборке, а группа сохранённого pid снимается при штатном, ошибочном, таймаутном и сигнальном выходе. |
+| 4 | OK | Marker владельца записывается в клон; marker origin защищает окно до связи remote, а копия базы несёт marker процесса `suite-run`. |
+| 5 | OK | Watchdog распознаёт временные каталоги и не трогает процессы живого владельца. |
+| 6 | OK | Сироты канарейки, origin и базы находятся и удаляются; живые владельцы и конкретно связанный живой legacy-прогон защищены. |
+| 7 | OK | `--detach` создаёт отдельную сессию, лог и файл результата, сразу печатая pid и пути. |
+| 8 | OK | Справка называет `--detach` штатным запуском для сессии Оператора. |
+| 9 | OK | `docs/operator-session.md` содержит отвязанный запуск и правило предварительной проверки нагрузки. |
+| 10 | OK | Долгоживущие тесты покрывают критерии; новые тесты ownership содержат проверяемые заявки «Ловит мутацию». |
 
 ## Замечания
 
-- major — orchestrator/doctor/orphans.py:58-91 — `_live_suite_run()` возвращает один глобальный bool: любой живой pid из любого `logs/suite-run/*/run.json` делает живым каждый `artel-suite-base-*` без маркера. Воспроизведение с двумя мёртвыми `artel-suite-base-*` и одним несвязанным `run.json` с pid текущего процесса дало `found=[]` вместо обоих каталогов. Поэтому `doctor --fix` систематически оставит сироты, пока идёт хотя бы один обычный suite-run, вопреки требованию 6. Связать живой прогон с конкретным holder (либо пользоваться его собственным маркером; legacy-связь должна сопоставлять именно этот каталог) и добавить тест: несвязанный живой прогон не защищает мёртвую базу.
-- major — orchestrator/doctor/orphans.py:71-85; orchestrator/canary.py:1205-1208 — особая ветка для `artel-canary-origin-*` игнорирует собственный `.artel-canary-owner` и считает origin живым только после появления ссылки на него в `.git/config` клона. Между записью живого маркера и `git remote set-url`, а также при временной недоступности config, `doctor --fix` назовёт и удалит origin активной канарейки. Изолированно: `liveness.owner_alive(origin) == True`, но `_temp_owner_alive(origin) == False` и origin попадает в `_orphan_temp_dirs()`. Сначала проверять marker самого origin тем же способом, что и для клона; связь через remote оставить только как совместимый fallback, и добавить тест окна до `set-url`.
+Нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/doctor/orphans.py:58-91 | Глобальный признак живого `suite-run` защищает все `artel-suite-base-*`, а не каталог конкретного прогона. | `doctor --fix` не удаляет сироты при любом несвязанном живом suite-run. | Удалён глобальный признак: собственный marker защищает новую базу, cwd pid из `run.json` связывает старую базу с конкретным прогоном. Добавлен `test_unrelated_live_suite_run_does_not_protect_orphan_base`. |
-| R1-F2 | fixed | orchestrator/doctor/orphans.py:71-85; orchestrator/canary.py:1205-1208 | Проверка origin обходит его живой marker до появления remote-связи. | `doctor --fix` способен удалить origin активной канарейки. | До remote-связи учитывается marker origin; после связи владелец определяется по связанному клону. Origin удаляется раньше клона. Добавлен `test_live_origin_marker_protects_before_remote_link`. |
+| R1-F1 | accepted | orchestrator/doctor/orphans.py:58-102 | Глобальный признак живого `suite-run` защищал все `artel-suite-base-*`, а не каталог конкретного прогона. | `doctor --fix` оставлял сироты при несвязанном живом `suite-run`. | Принято: `_live_suite_run_in(path)` сопоставляет cwd живого pid с конкретной базой; собственный marker новой базы остаётся приоритетным. Тест `test_unrelated_live_suite_run_does_not_protect_orphan_base` подтверждает, что чужой `run.json` не защищает сироту. |
+| R1-F2 | accepted | orchestrator/doctor/orphans.py:82-97; orchestrator/canary.py:1205-1208 | Проверка origin обходила его живой marker до появления remote-связи. | `doctor --fix` мог удалить origin активной канарейки. | Принято: до remote-связи учитывается marker origin; после связи владельцем служит связанный клон. Origin проверяется и удаляется раньше клона. Тест `test_live_origin_marker_protects_before_remote_link` подтверждает защищённое окно. |
 
 ## Вердикт
 
-changes_requested: исправить R1-F1 и R1-F2, включая указанные сторожа регрессии.
+approved
 
 ## Проверено исполнением
 
-- `python3 -m pytest tests/test_01m4axpy1py4ps1yafamd47vby_canary_detach.py tests/test_01m4axpy1py4ps1yafamd47vby_canary_doctor.py tests/test_01m4axpy1py4ps1yafamd47vby_canary_lifecycle.py tests/test_canary_detach_result.py tests/test_canary_doctor_owner.py` — 15 passed за 48.53 с.
-- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4AXPY1PY4PS1YAFAMD47VBY` — зафиксированная планка: 1 passed.
-- Изолированная проверка `_orphan_temp_dirs()` с двумя мёртвыми базами и несвязанным живым `run.json` вернула `found=[]`; отдельная проверка origin с marker текущего pid вернула `_temp_owner_alive=False` и включила origin в сироты.
+- `python3 -m pytest tests/test_01m4axpy1py4ps1yafamd47vby_canary_detach.py tests/test_01m4axpy1py4ps1yafamd47vby_canary_doctor.py tests/test_01m4axpy1py4ps1yafamd47vby_canary_lifecycle.py tests/test_canary_doctor_owner.py` — 16 passed.
+- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4AXPY1PY4PS1YAFAMD47VBY` — зафиксированная планка: 1 passed, код pytest 0.
+- `git diff --check c73f243f6aa5d258f68f155d94c760d4618b52f0...HEAD` — замечаний формата diff нет.
 
 ## Предложения системе
