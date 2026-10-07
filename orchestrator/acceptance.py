@@ -213,7 +213,8 @@ def plank_present(tests_dir: Path) -> bool:
 
 def run(tdir: Path, cwd: Path | None = None,
         extra: list[str] = (),
-        command: list[str] | None = None) -> tuple[bool, str]:
+        command: list[str] | None = None,
+        file_times: dict[str, float] | None = None) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
     01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `cwd`, равным
     рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
@@ -269,19 +270,73 @@ def run(tdir: Path, cwd: Path | None = None,
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
+    with tempfile.TemporaryDirectory(prefix="artel-file-times-") as tmp:
+        report = Path(tmp) / "junit.xml"
+        report_args = [f"--junitxml={report}"] if file_times is not None else []
+        try:
+            with _pytest_env() as env:
+                res = subprocess.run(
+                    _pytest_command(*targets, *report_args, command=command),
+                    cwd=run_cwd, env=env, capture_output=True, text=True,
+                    timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired as exc:
+            if file_times is not None:
+                file_times.update(_junit_file_times(report, extra))
+            tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
+            return False, (f"{location_note}\nпрогон превысил "
+                           f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
+                           f"сетевой ответ\n{tail}")
+        if file_times is not None:
+            file_times.update(_junit_file_times(report, extra))
+        tail = (res.stdout + res.stderr)[-2000:]
+        return res.returncode == 0, f"{location_note}\n{tail}"
+
+
+def _junit_file_times(report: Path, files: list[str]) -> dict[str, float]:
+    """Сумма времени testcases каждого файла общего прогона pytest."""
+    times: dict[str, float] = {}
     try:
-        with _pytest_env() as env:
-            res = subprocess.run(
-                _pytest_command(*targets, command=command),
-                cwd=run_cwd, env=env, capture_output=True, text=True,
-                timeout=config.ACCEPTANCE_TIMEOUT_SEC)
-    except subprocess.TimeoutExpired as exc:
-        tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
-        return False, (f"{location_note}\nпрогон превысил "
-                       f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
-                       f"сетевой ответ\n{tail}")
-    tail = (res.stdout + res.stderr)[-2000:]
-    return res.returncode == 0, f"{location_note}\n{tail}"
+        suite = ElementTree.parse(report)
+    except (OSError, ElementTree.ParseError):
+        return times
+    by_stem = {Path(rel).stem: rel for rel in files}
+    for case in suite.iter("testcase"):
+        module_parts = (case.get("classname") or "").split(".")
+        for stem in module_parts:
+            if stem in by_stem:
+                try:
+                    seconds = float(case.get("time") or "0")
+                except ValueError:
+                    break
+                if math.isfinite(seconds) and seconds >= 0:
+                    rel = by_stem[stem]
+                    times[rel] = times.get(rel, 0.0) + seconds
+                break
+    return times
+
+
+LONG_LIVED_FILE_REPORT_ACTION = "приёмка: время долгоживущих файлов"
+
+
+def long_lived_file_report(file_times: list[tuple[str, float | None]],
+                           limit: float) -> str:
+    """Время файлов и предупреждения, не влияющие на исход прогона."""
+    lines = []
+    for rel, seconds in file_times:
+        if seconds is None:
+            lines.append(f"{rel} — время не измерено (нет результата pytest)")
+            continue
+        lines.append(f"{rel} — {seconds:.3f} с")
+        if seconds > limit:
+            lines.append(f"предупреждение: {rel} — {seconds:.3f} с "
+                         f"превышает порог {limit:g} с")
+    return "\n".join(lines)
+
+
+def long_lived_file_reports(rows) -> list[str]:
+    """Замеры рубежа из журнала задачи по порядку записи."""
+    return [row["detail"] for row in rows
+            if row["action"] == LONG_LIVED_FILE_REPORT_ACTION]
 
 
 def collect(tdir: Path, cwd: Path | None = None,

@@ -39,6 +39,11 @@ _ACCEPTANCE_AUTOPASS_NOTE = "автогейт пройдёт сам"
 _ZONES_ALREADY_CHECKED_FACT = "дифф сверен с зонами — уже сделано гейтом"
 
 
+def acceptance_checklist_measurement(reports: list[str]) -> str:
+    """Последний замер для записи о приёмке."""
+    return reports[-1] if reports else ""
+
+
 def _acceptance_pull_merge_commits(branch: str, repo: Path) -> list[str]:
     """Требование 3/AC-3: «родители подтяжек» — merge-коммиты main в
     кодовую ветку задачи за её жизнь. В этой системе единственный вид
@@ -195,6 +200,15 @@ def _log_acceptance_checklist(conn, task_id: str, t, iteration: int) -> None:
     (эта задача не меняет, что и как автогейт проверяет — только
     сообщает об этом заранее)."""
     detail = _acceptance_checklist_detail(conn, task_id, t, iteration)
+    measurement = ""
+    if "tests_locked_sha" in t.keys() and t["tests_locked_sha"]:
+        measurement = acceptance_checklist_measurement(
+            acceptance.long_lived_file_reports(store.task_steps(conn, task_id)))
+    if measurement:
+        before_last, separator, last = detail.rpartition(" | ")
+        summary = measurement.replace("\n", "; ")
+        detail = (f"{before_last}{separator}время долгоживущих файлов "
+                  f"последнего прогона: {summary} | {last}")
     store.journal(conn, task_id, "fsm", ACCEPTANCE_CHECKLIST_ACTION, detail)
     print(f"[{task_id}] {ACCEPTANCE_CHECKLIST_ACTION}")
     print(f"  {detail}")
