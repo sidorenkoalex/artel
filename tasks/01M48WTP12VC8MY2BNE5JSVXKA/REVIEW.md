@@ -36,8 +36,8 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tests/test_pin.py:97; tests/test_workspace.py:57; tests/test_multitarget_invariants.py:203 | дословные копии заведения bare-origin не переведены на `init_bare_origin` (AC-7 неполон) | TR-24 закрыт частично, копии снова разойдутся | перевести три места на `init_bare_origin` |
-| R1-F2 | open | tests/test_sandbox.py:113; tests/test_sandbox.py:129 | докстринг — только заявка мутации, без сценария и свойства | неясно, что проверяет тест | добавить строку сценария и свойства |
+| R1-F1 | fixed | tests/test_pin.py:97; tests/test_workspace.py:57; tests/test_multitarget_invariants.py:203 | дословные копии заведения bare-origin не переведены на `init_bare_origin` (AC-7 неполон) | TR-24 закрыт частично, копии снова разойдутся | три места переведены на `init_bare_origin`; защищённый `tests/test_invariants.py` оставлен кандидатом для Оператора |
+| R1-F2 | fixed | tests/test_sandbox.py:113; tests/test_sandbox.py:129 | докстринг — только заявка мутации, без сценария и свойства | неясно, что проверяет тест | в оба докстринга добавлены сценарий и наблюдаемое свойство при сохранении заявки мутации |
 
 ## Вердикт
 
