@@ -118,8 +118,13 @@ tests/test_long_lived_step_end_to_end.py — 37.1 с
 - `python3 -m pytest tests/test_acceptance_tests_flow.py tests/test_acceptance.py tests/test_review_package.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 242 passed, 2 subtests passed.
 - После `ANSWER-2.md`: `python3 -m pytest tests/test_acceptance_file_time.py tests/test_01m4ag3qyv3e7mn7fava10vdjg_file_time_report.py tests/test_01m4ag3qyv3e7mn7fava10vdjg_transition_time.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 10 passed, 12 subtests passed.
 - После отказа AC-11: та же команда — 10 passed, 12 subtests passed; проверка пар «файл — время» регулярным выражением залоченной планки — 20 строк, значения убывают от 286.7 до 37.1 с. `python3 scripts/guard.py <каталог документов>/PLAN.md` — `GUARD: ок (1 файлов)`; `git apply --check /tmp/artel-01m4ag3q-plan-rule.patch` — успешно.
-- Три новых сторожа `tests/test_acceptance_file_time.py` покраснели на заявленных временных мутациях; после возврата кода зелёные.
+- После замечания R1-F1: `python3 -m pytest tests/test_acceptance_file_time.py tests/test_review_package.py tests/test_01m4ag3qyv3e7mn7fava10vdjg_file_time_report.py tests/test_fsm_autogate.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 176 passed, 8 subtests passed. Новый `test_review_package_contains_latest_measurement` проверяет проводку замера в полном тексте пакета. Временная мутация `review.py` `if measurement:` → `if False:` дала 1 failed именно на этом тесте; код восстановлен. `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4AG3QYV3E7MN7FAVA10VDJG` — 4 passed, код выхода 0.
+- Три сторожа первой итерации в `tests/test_acceptance_file_time.py` покраснели на заявленных временных мутациях; после возврата кода зелёные. Четвёртый сторож R1-F1 проверен мутацией выше.
 - `python3 scripts/codebase_map.py`, `python3 scripts/guard.py <каталог документов>/PLAN.md`, `git diff --check`, `git apply --check /tmp/artel-01m4ag3q-plan-rule.patch` — без ошибок. Локальный `main` — `37b20d5cc5b49419b33e87d980afda20a626d4f4`; `skills/test-authoring.md` в ветке совпадает с ним.
+
+## Закрытие замечаний ревью
+
+R1-F1 — `fixed`: в `tests/test_acceptance_file_time.py` добавлен модульный тест самого `review.review_package` с двумя записями замера. Он проверяет путь, время и предупреждение последнего прогона в итоговом тексте и отсутствие старого пути. Реестр REVIEW.md размечен `fixed`; принятие замечания остаётся за ревьювером.
 
 ## Предложения системе
 
