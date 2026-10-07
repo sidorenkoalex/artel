@@ -5,16 +5,20 @@ acceptance_tests/`) проверяют то же поведение сквозн
 `TmpRootTest`/`gitcmd.git`; здесь — сами модульные функции, отдельно от
 конкретной песочницы, которая их использует.
 """
+import configparser
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from shutil import copytree
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tests.sandbox import (_is_local_git_address, artel_target_entry,  # noqa: E402
-                           _network_git_command_denial, network_guarded_real_run)
+from tests.sandbox import (_clone_stub_template, _is_local_git_address,  # noqa: E402
+                           _network_git_command_denial, _real_git_template,
+                           artel_target_entry, network_guarded_real_run)
 
 
 class IsLocalGitAddressTest(unittest.TestCase):
@@ -104,6 +108,23 @@ class NetworkGuardedRealRunTest(unittest.TestCase):
 
 
 class SandboxFixtureBuildersTest(unittest.TestCase):
+
+    def test_git_templates_and_copies_disable_background_maintenance(self):
+        """Ловит мутацию: снятие gc.auto=0 или maintenance.auto=false
+        разрешает фоновое обслуживание git при копировании шаблона.
+        """
+        for template in (_clone_stub_template(), _real_git_template()):
+            with self.subTest(template=template.name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    copied = copytree(template, Path(tmp) / "copied")
+                    for repo in (template, copied):
+                        config_file = repo / ".git" / "config"
+                        git_config = configparser.ConfigParser()
+                        self.assertEqual([str(config_file)],
+                                         git_config.read(config_file))
+                        self.assertEqual("0", git_config["gc"]["auto"])
+                        self.assertEqual("false",
+                                         git_config["maintenance"]["auto"])
 
     def test_artel_entry_keeps_profile_when_url_is_replaced(self):
         """Ловит мутацию: подстановка URL выбрасывает test_profile из записи артели."""

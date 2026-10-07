@@ -1268,7 +1268,8 @@ def seed_artel_clone_stub() -> Path:
     `subprocess.run` (`_REAL_RUN`)."""
     clone = config.PROJECTS / config.DEFAULT_TARGET / "repo"
     clone.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(_clone_stub_template(), clone)
+    shutil.copytree(_clone_stub_template(), clone,
+                    ignore=shutil.ignore_patterns("*.lock"))
     return clone
 
 
@@ -1278,6 +1279,9 @@ def _clone_stub_template() -> Path:
     template.mkdir()
     _REAL_RUN(["git", "init", "-q", "-b", config.MAIN_BRANCH, str(template)],
               check=True, capture_output=True)
+    for key, value in (("gc.auto", "0"), ("maintenance.auto", "false")):
+        _REAL_RUN(["git", "config", "--local", key, value], cwd=template,
+                  check=True, capture_output=True)
     return template
 
 
@@ -1291,6 +1295,8 @@ def _real_git_template() -> Path:
                   capture_output=True)
 
     git("init", "-q", "-b", config.MAIN_BRANCH)
+    git("config", "--local", "gc.auto", "0")
+    git("config", "--local", "maintenance.auto", "false")
     git("config", "user.email", "artel@example.invalid")
     git("config", "user.name", "artel tests")
     # БД/WAL подклассов не должны попадать в их последующие `git add -A`.
@@ -1700,7 +1706,8 @@ class RealGitSandbox(TmpRootTest):
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
 
-        shutil.copytree(_real_git_template(), self.root, dirs_exist_ok=True)
+        shutil.copytree(_real_git_template(), self.root, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("*.lock"))
         for attr in ALL_CONFIG_ATTRS:
             path = self._patched_path(attr)
             if attr == "TARGETS":
