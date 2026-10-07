@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 from scripts import guard
@@ -31,6 +32,9 @@ from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
 from .advance_gates.plan_appendix import git_apply
 from .advance_gates.test_integrity import merge_gate_escalates
+
+_fresh_suite_for_cycle: ContextVar[bool] = ContextVar(
+    "fresh_suite_for_merge_gate_cycle", default=False)
 
 # Предел ожидания CI новой головы main после push мержа (SPEC
 # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-4): полный прогон CI main идёт 3–4
@@ -1306,8 +1310,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                                                     branch, ctx)
     if merge_kind != "ok":
         return ("stopped",)
-    appendix_kind, applied = _apply_plan_appendices(conn, task_id, state,
-                                                     scratch, ctx, fresh_suite)
+    appendix_kind, applied = _apply_plan_appendices(
+        conn, task_id, state, scratch, ctx,
+        fresh_suite or _fresh_suite_for_cycle.get())
     if appendix_kind != "ok":
         return ("stopped",)
     final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx,
@@ -1386,11 +1391,12 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
     refusal = merge_lock.acquire(conn, task_id, sid)
     if refusal is not None:
         merge_queue.wait_for_window(conn, task_id, sid)
+    token = _fresh_suite_for_cycle.set(fresh_suite)
     try:
         while True:
             outcome = _cmd_approve_merge_gate(
                 conn, task_id, state, t, confirmed_ci_note,
-                fixes_main=fixes_main, fresh_suite=fresh_suite)
+                fixes_main=fixes_main)
             confirmed_ci_note = None
             if outcome[0] not in ("wait", "moved"):
                 return
@@ -1408,6 +1414,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
             confirmed_ci_note = _wait_for_branch_ci_green(
                 conn, task_id, branch, start, deadline)
     finally:
+        _fresh_suite_for_cycle.reset(token)
         merge_lock.release(conn, sid)
 
 

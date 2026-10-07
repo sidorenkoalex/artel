@@ -1,9 +1,11 @@
-"""Границы ключа и разбора полного прогона, не покрытые планкой задачи."""
+"""Границы ключа и разбора полного прогона."""
 
 import unittest
+from contextlib import ExitStack
+from pathlib import Path
 from unittest import mock
 
-from orchestrator import acceptance, suite_run
+from orchestrator import acceptance, fsm_merge_gate, suite_run
 from tests.sandbox import RealGitSandbox
 
 
@@ -53,3 +55,37 @@ class SuiteSummaryTest(unittest.TestCase):
                   "1624 subtests passed in 753.22s (0:12:33) ==\n")
         self.assertIn("subtests passed", acceptance.run_summary_line(output))
         self.assertTrue(suite_run.parse(False, output).finished)
+
+
+class MergeGateFreshSuiteTest(unittest.TestCase):
+    def test_fresh_flag_reaches_appendix_suite_through_cycle(self):
+        """Ловит мутацию: внешний цикл теряет --fresh-suite до прогона приложений или оставляет флаг следующему approve."""
+        ctx = object()
+        appendices = mock.Mock(return_value=("stopped", []))
+        patches = (
+            (fsm_merge_gate.merge_lock, "acquire", None),
+            (fsm_merge_gate.merge_lock, "release", None),
+            (fsm_merge_gate.store, "task_target", "artel"),
+            (fsm_merge_gate.repo_context, "resolve", ctx),
+            (fsm_merge_gate, "_profile_refusal_exit", None),
+            (fsm_merge_gate, "_docs_ref_unsynced", False),
+            (fsm_merge_gate, "_protected_path_diff_gate", False),
+            (fsm_merge_gate, "_test_integrity_diff_gate", False),
+            (fsm_merge_gate, "_ensure_branch_head_published", "ok"),
+            (fsm_merge_gate, "_sync_main_or_wait", "fresh"),
+            (fsm_merge_gate, "_acceptance_locks_refuse", False),
+            (fsm_merge_gate, "_ci_ready_or_wait", "ok"),
+            (fsm_merge_gate, "_refuse_if_main_red", None),
+            (fsm_merge_gate, "_perform_carpentry_merge", ("ok", Path("/scratch"))),
+        )
+        with ExitStack() as stack:
+            for module, name, result in patches:
+                stack.enter_context(mock.patch.object(module, name, return_value=result))
+            stack.enter_context(mock.patch.object(
+                fsm_merge_gate, "_apply_plan_appendices", appendices))
+            for fresh in (True, False):
+                fsm_merge_gate._cmd_approve_merge_gate_cycle(
+                    object(), "TASK", "session", {"branch": "task/branch"},
+                    "merge_gate", fresh_suite=fresh)
+        self.assertEqual([call.args[-1] for call in appendices.call_args_list],
+                         [True, False])

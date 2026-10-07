@@ -1,5 +1,5 @@
 ---
-built_at_sha: e4cb175e0076a4015a9620e52cebe601d7fb975a
+built_at_sha: 7e2d08b7ce2264763be1d262fc81b3f69572e735
 ---
 
 # Codebase-map пульта
@@ -986,7 +986,7 @@ built_at_sha: e4cb175e0076a4015a9620e52cebe601d7fb975a
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/plan_appendix.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/appendix_tree.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/merge_queue.py`, `orchestrator/project_profile.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py`, `tests/test_artifact_ref_sync.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_invariants.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_gate_clock_isolation.py`, `tests/test_plan_appendix.py`, `tests/test_protected_paths_gate.py`, `tests/test_protected_test_settings.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_test_integrity_gate.py`
+**Импортируется:** `orchestrator/fsm.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py`, `tests/test_artifact_ref_sync.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_full_suite_reuse.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_invariants.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_gate_clock_isolation.py`, `tests/test_plan_appendix.py`, `tests/test_protected_paths_gate.py`, `tests/test_protected_test_settings.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_test_integrity_gate.py`
 
 ## orchestrator/fsm_postmerge.py
 
@@ -4533,11 +4533,11 @@ built_at_sha: e4cb175e0076a4015a9620e52cebe601d7fb975a
 
 ## tests/test_full_suite_reuse.py
 
-**Назначение:** Границы ключа и разбора полного прогона, не покрытые планкой задачи.
+**Назначение:** Границы ключа и разбора полного прогона.
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/suite_run.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/suite_run.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
