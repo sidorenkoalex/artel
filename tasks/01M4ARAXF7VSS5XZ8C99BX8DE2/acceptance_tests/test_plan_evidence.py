@@ -4,6 +4,8 @@
 Красен до реализации: PLAN ещё не написан разработчиком.
 """
 
+# AC-2: skip — решение Оператора 07.10 (вариант В): suite-run не пишет запись «прогон: время» в журнал задачи, это запрещает tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py::FootprintTest::test_ac23_task_state_untouched_and_no_files_outside_state
+
 import sys
 import unittest
 from pathlib import Path
