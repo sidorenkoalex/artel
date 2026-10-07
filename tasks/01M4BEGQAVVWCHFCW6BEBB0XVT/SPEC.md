@@ -4,7 +4,7 @@ type: spec
 author_role: analyst
 status: ready
 schema_version: 5
-zones: orchestrator/acceptance.py, orchestrator/fsm_autogate.py, orchestrator/fsm.py, orchestrator/ci.py, orchestrator/config.py, tests/, docs/codebase-map.md, skills/coding-standards.md
+zones: orchestrator/acceptance.py, orchestrator/fsm_autogate.py, orchestrator/fsm.py, orchestrator/ci.py, orchestrator/config.py, tests/, docs/codebase-map.md
 budget_usd: 40
 ---
 
@@ -100,3 +100,4 @@ AC-9. Приёмочные тесты без обращения к сети (с 
 ## Материалы
 
 - ТЗ Оператора: `tasks/01M4BEGQAVVWCHFCW6BEBB0XVT/TZ.md`.
+- Приложение к PLAN: `skills/coding-standards.md`.
