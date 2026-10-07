@@ -1,7 +1,7 @@
 """Разовые проверки сохранённого теста, заявок мутаций и PLAN.md.
 
 Группа: разовый
-Красен до реализации: PLAN.md ещё не создан, поэтому AC-10 пока не выполнен.
+Красен до реализации: проекция сохраняет tests/, указатель молчит об их пропуске, PLAN.md ещё не создан.
 """
 
 import ast
@@ -12,9 +12,73 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _pult import CODE_ROOT, TASK_ID, artifact_text  # noqa: E402
+from tests import test_01m4ag4d90b3zyzgh2ec1b48r0_map_projection as durable  # noqa: E402
 
 
 class TaskContractTest(unittest.TestCase):
+    def _run_durable(self, cls, method):
+        case = cls(methodName=method)
+        result = unittest.TestResult()
+        case.run(result)
+        details = "\n".join(message for _, message in result.failures + result.errors)
+        self.assertTrue(result.wasSuccessful(), details)
+
+    def test_ac1_tests_sections_and_fields_disappear(self):
+        """Проверка вложенных и обычных тестовых секций выполняется в постоянной планке.
+
+        Ловит мутацию: фильтр сохраняет вложенный tests/ модуль, и
+        постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.ProjectionTest, "test_ac1_tests_sections_and_their_fields_disappear")
+
+    def test_ac2_other_sections_preserve_previous_bytes(self):
+        """Проверка шапки и байтов секций пульта и сценариев выполняется в постоянной планке.
+
+        Ловит мутацию: проекция обрезает «Импортирует» у scripts/,
+        и постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.ProjectionTest, "test_ac2_other_sections_and_header_keep_previous_projection")
+
+    def test_ac3_projection_is_pure_and_idempotent(self):
+        """Повторная проекция карты трёх видов проходит проверку без ввода и вывода.
+
+        Ловит мутацию: второй проход меняет scripts/ или читает диск,
+        и постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.ProjectionTest, "test_ac3_projection_is_idempotent_and_does_not_access_io")
+
+    def test_ac4_full_map_preserves_tests_sections(self):
+        """Полная карта с одним и несколькими tests/ модулями проверяется постоянной планкой.
+
+        Ловит мутацию: render удаляет «Импортируется» у tests/,
+        и постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.ProjectionTest, "test_ac4_render_keeps_full_tests_sections")
+
+    def test_ac5_note_explains_omission_and_full_map(self):
+        """Указание о пропуске и пути полной карты проверяется постоянной планкой.
+
+        Ловит мутацию: из указателя убирают факт отсутствия tests/,
+        и постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.ProjectionTest, "test_ac5_projection_note_names_omission_and_full_map")
+
+    def test_ac6_developer_receives_projection_and_note(self):
+        """Бриф разработчика с тестовой картой проверяется постоянной планкой.
+
+        Ловит мутацию: бриф включает полную карту с tests/,
+        и постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.BriefProjectionTest, "test_ac6_developer_brief_carries_projection_and_note")
+
+    def test_ac7_analyst_receives_projection_and_note(self):
+        """Бриф аналитика с тестовой картой проверяется постоянной планкой.
+
+        Ловит мутацию: бриф включает полную карту с tests/,
+        и постоянный сценарий возвращает провал этому методу.
+        """
+        self._run_durable(durable.BriefProjectionTest, "test_ac7_analyst_brief_carries_projection_and_note")
+
     def test_ac8_existing_size_test_and_threshold_remain(self):
         """Размер реальной карты по-прежнему сравнивается с прежним порогом.
 
