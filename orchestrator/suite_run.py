@@ -440,9 +440,12 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         if tree.root is None:
             return (f"[{task_id}] suite-run №{run_no}: отказ — "
                     f"{tree.refusal}"), False
-        green, output = acceptance.run_full_suite(
-            tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
-            log=log, limit=limit)
+        acceptance._last_full_suite_metrics = None
+        with acceptance.observed_full_suite():
+            green, output = acceptance.run_full_suite(
+                tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
+                log=log, limit=limit)
+    metrics = acceptance._last_full_suite_metrics
     parsed = parse(green, output)
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": [n for n, _ in parsed.failures]})
@@ -452,6 +455,8 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         fh.write(_log_appendix(parsed, base_failed))
     report = render(task_id, run_no, mode, parsed, base_failed, base_note,
                     log, limit)
+    if parsed.outcome == acceptance.FULL_SUITE_TIMEOUT and metrics is not None:
+        report += "\n" + acceptance.suite_load_line(metrics)
     if tree.note or tree.warning:
         head, _, rest = report.partition("\n")
         report = "\n".join([head, tree.mark("прогон ветки"), rest])
