@@ -365,11 +365,18 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     if _missing_plank_refuses():
         return True
     kwargs = {"command": command} if command else {}
+    file_times: dict[str, float] = {}
     if long_lived:
         green, tail = acceptance.run(acc_tdir, cwd=run_cwd, extra=long_lived,
-                                     **kwargs)
+                                     file_times=file_times, **kwargs)
     else:
         green, tail = acceptance.run(acc_tdir, cwd=run_cwd, **kwargs)
+    if long_lived:
+        report = acceptance.long_lived_file_report(
+            [(path, file_times.get(path)) for path in long_lived],
+            config.LONG_LIVED_FILE_WARN_SEC)
+        store.journal(conn, task_id, "fsm",
+                      acceptance.LONG_LIVED_FILE_REPORT_ACTION, report)
     # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
     # исхода прогона приёмочных тестов, значение поля `detail`
     # существующего журнального события, без новой таблицы/колонки.
