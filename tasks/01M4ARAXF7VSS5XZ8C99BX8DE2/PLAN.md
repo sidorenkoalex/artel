@@ -2,8 +2,9 @@
 task: 01M4ARAXF7VSS5XZ8C99BX8DE2
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
+question: Как согласовать залоченный тест AC-5 с решением Оператора 07.10, запрещающим suite-run писать в журнал задачи?
 ---
 
 # PLAN: Нагрузка машины в записи полного прогона и сигнал роста времени
@@ -122,7 +123,7 @@ schema_version: 5
 
 ## Влияние на систему
 
-Добавляются записи гейта в журнал и строки `doctor`; `suite-run` сохраняет свой инвариант неизменности журнала шагов задачи. Предел времени, замок полного прогона, исходы гейтов и существующие проверки не меняются. Чтение `ps` ограничено снимком на конце прогона и проверкой doctor. Откат — revert единственного коммита задачи и удаление новых журнальных записей не требуется: неизвестные действия прежний код игнорирует.
+Добавляются записи гейта в журнал и строки `doctor`; `suite-run` сохраняет свой инвариант неизменности журнала шагов задачи. Предел времени, замок полного прогона, исходы гейтов и существующие проверки не меняются. Чтение `ps` ограничено снимком на конце прогона и проверкой doctor. Откат — revert коммитов задачи; удаление новых журнальных записей не требуется: неизвестные действия прежний код игнорирует.
 
 ## Риски
 
@@ -136,6 +137,9 @@ schema_version: 5
 - После отказа перехода исправлено чтение короткого, но корректного снимка `ps` в `orchestrator/acceptance.py::_process_snapshot`: один процесс больше не отбрасывается из-за ограничения списка тремя элементами. AC-6 (`test_ac6_machine_load_is_ok_or_warn_never_fail`) проходит. Совместный прогон `tests/test_acceptance.py`, `tests/test_suite_run.py`, `tests/test_doctor.py`, `tests/test_suite_duration.py` и двух зафиксированных файлов задачи: 157 passed, тот же один отказ теста материализации планки с `sqlite3.OperationalError: no such table: tasks`; трассировка не проходит через изменённую функцию.
 - `python3 scripts/guard.py <каталог документов>/PLAN.md`: GUARD: ок; `git diff --check` и `py_compile` проходят. Карта обновлена `python3 scripts/codebase_map.py`.
 - После исправления `plank-run` проходит: 1 passed. `suite-run` повторно не стартовал из песочницы роли из-за `PermissionError` при создании `.artel/logs/suite-run/lock.json`; ограничение записано ниже.
+- После решения Оператора 07.10 `orchestrator/suite_run.py::_run` больше не зовёт `journal_suite_metrics`; эта правка сохранена чекпоинтом c0558cc2. `tests/test_suite_run.py::SuiteRunJournalTest::test_suite_run_preserves_task_steps_on_every_outcome` проверяет неизменность журнала на зелёном, красном и таймаутном исходах и сохранение строки нагрузки при таймауте: `tests/test_suite_run.py` — 15 passed, 4 subtests passed. Временное возвращение вызова `journal_suite_metrics` делает сторожа красным (4 subtests failed); после восстановления кода `git status --short` чист. Долгоживущий `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py::FootprintTest::test_ac23_task_state_untouched_and_no_files_outside_state` — 1 passed.
+- Совместный прогон затронутых модулей: 42 passed, 11 subtests passed, 2 failed. `tests/test_acceptance.py::MaterializeFromBranchGitFailureTest::test_none_from_ls_tree_files_leaves_existing_plank_untouched` — прежний независимый сбой с `no such table: tasks`, описанный ниже. Новый блокер: залоченный `tests/test_01m4araxf7vss5xz8c99bx8de2_suite_observation.py::SuiteObservationTest::test_ac5_suite_timeout_repeats_recorded_load_on_one_line` делает `self.records()[-1]` после `suite-run` и падает `IndexError`, потому что по решению Оператора запись в журнал не создаётся. `plank-run` — 1 passed.
+- После чекпоинта с новым тестом карта обновлена `python3 scripts/codebase_map.py`; `python3 scripts/guard.py <каталог документов>/PLAN.md` — `GUARD: ок (1 файлов)`; `git diff --check` — без ошибок. Полный набор не запускался после обнаружения блокирующего противоречия в залоченном тесте.
 
 ## Приложение: строка `docs/triggers.md`
 
@@ -148,3 +152,10 @@ schema_version: 5
 - Для анализа исторического ряда `.artel/logs/*-fullsuite-*.log` нет команды пульта; понадобился разовый сценарий разбора итоговых строк. Нужна команда экспорта метрик полного прогона.
 - `suite-run` из шага роли падает `PermissionError` при создании `.artel/logs/suite-run/lock.json`: каталог вне разрешённых корней записи роли. Нужна совместимая с песочницей точка записи замка и отчёта либо штатное посредничество пульта.
 - `tests/test_acceptance.py::MaterializeFromBranchGitFailureTest::test_none_from_ls_tree_files_leaves_existing_plank_untouched` падает вне изменённого пути: `artifact_branch.task_repo` ищет target вымышленной задачи в БД без таблицы `tasks`. Нужна изоляция теста от БД пульта либо подготовка схемы в фикстуре.
+- `tests/test_01m4araxf7vss5xz8c99bx8de2_suite_observation.py::SuiteObservationTest::test_ac5_suite_timeout_repeats_recorded_load_on_one_line` после отмены AC-2 всё ещё требует запись `suite-run` в журнал ради сравнения нагрузки AC-5. `amend-tests` должен перенести сравнение на известный снимок нагрузки без обращения к журналу; код под противоречащий тест менять нельзя.
+
+## Эскалация
+
+- **Вопросы** — Залоченный долгоживущий тест AC-5 требует запись `suite-run` в журнал, которую запретило решение Оператора 07.10 (вариант В). Вариант А (предлагаемый, дефолт при молчании): через `amend-tests` изменить `SuiteObservationTest::test_ac5_suite_timeout_repeats_recorded_load_on_one_line`, чтобы он сверял строку отчёта с заранее известным снимком нагрузки и не обращался к `self.records()[-1]`; решение о неизменности журнала сохранить. Вариант Б: отменить решение 07.10 и согласованно изменить также тест `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py::FootprintTest::test_ac23_task_state_untouched_and_no_files_outside_state` — это вернёт конфликт с исходным CI 8baf5a00.
+- **Контекст** — `orchestrator/suite_run.py::_run` уже не вызывает `journal_suite_metrics` (коммит c0558cc2), нагрузка остаётся в отчёте о таймауте. `tests/test_suite_run.py` — 15 passed и 4 subtests passed; сторож краснеет при временном возврате вызова. Залоченный AC-5 падает `IndexError` на `self.records()[-1]` (строка 254); залоченный тест неизменности состояния задачи проходит. Планка — 1 passed. Тестовый файл задачи не менялся.
+- **Блокирует** — зелёный прогон затронутых тестов и сдачу PLAN со статусом `ready`: выполнить решение Оператора и текущее ожидание AC-5 одновременно нельзя.
