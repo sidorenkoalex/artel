@@ -446,8 +446,6 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
                 tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
                 log=log, limit=limit)
     metrics = acceptance._last_full_suite_metrics
-    if mode == MODE_FULL:
-        acceptance.journal_suite_metrics(task_id, metrics)
     parsed = parse(green, output)
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": [n for n, _ in parsed.failures]})
