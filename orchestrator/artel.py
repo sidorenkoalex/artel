@@ -846,7 +846,7 @@ def _cmd_auto_or_detach(rest: list) -> None:
 
 
 def _refuse_sandbox_cycle() -> None:
-    if (os.environ.get("CODEX_SANDBOX") == "workspace-write" and
+    if (os.environ.get("CODEX_SANDBOX") and
             os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1"):
         sys.exit("run/auto: песочница Codex без сети и записи вне каталога "
                  "не позволяет вести цикл; запустите из терминала Оператора")

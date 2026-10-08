@@ -122,6 +122,12 @@ def _parse_args(argv: list) -> dict:
         sys.exit(
             "watch: нужен ровно один селектор — --tasks <id>[,<id>...], "
             "--mine, --all либо --observation <ID>")
+    if "--observation" in argv:
+        incompatible = [flag for flag in ("--once", "--exit-on", "--until")
+                        if flag in argv]
+        if incompatible:
+            sys.exit("watch --observation: несовместимые флаги "
+                     f"{', '.join(incompatible)}; завершайте дозор через observe stop")
 
     events_raw = _flag_value(argv, "--events")
     events = _parse_event_set(events_raw, "--events") if events_raw is not None \
