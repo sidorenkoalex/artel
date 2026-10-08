@@ -237,7 +237,8 @@ class WatchProgressSandbox(RealGitSandbox):
                 del self.stop_patch
             return
         owner = store.observation(store.db(), self.stop_observation_id)
-        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": owner["session_id"]}), \
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": owner["session_id"],
+                                              config.ARTEL_ROLE_ENV: ""}), \
              mock.patch.object(sys, "argv", ["artel.py", "observe", "stop",
                                              self.stop_observation_id]):
             artel.main()
