@@ -12,12 +12,21 @@ import random
 import sys
 import threading
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from unittest import mock
 
 from orchestrator import artel, config, store, watch
 from tests.sandbox import TaskSeededTmpRootTest, capture
+
+
+def watch_time_stand_in(side_effect):
+    """Заместитель модуля `time` только внутри `watch`: подменена лишь пауза
+    (сторож tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py запрещает
+    глобальную подмену `time.sleep`)."""
+    return types.SimpleNamespace(sleep=mock.Mock(side_effect=side_effect),
+                                 monotonic=time.monotonic)
 
 
 class ObservationContractTest(TaskSeededTmpRootTest):
@@ -89,7 +98,7 @@ class ObservationContractTest(TaskSeededTmpRootTest):
         def stop_process(_):
             raise SystemExit(0)
 
-        with mock.patch.object(watch.time, "sleep", side_effect=stop_process):
+        with mock.patch.object(watch, "time", watch_time_stand_in(stop_process)):
             first_output = self.run_watch("--observation", observation_id,
                                           "--interval", "0.01")
         self.assertNotIn(old_step, first_output, self.seed)
@@ -97,7 +106,7 @@ class ObservationContractTest(TaskSeededTmpRootTest):
         self.assertIn(first_step, first_output, self.seed)
         self.assertIn(first_alert, first_output, self.seed)
         second_step, second_alert = self.event(), self.alert()
-        with mock.patch.object(watch.time, "sleep", side_effect=stop_process):
+        with mock.patch.object(watch, "time", watch_time_stand_in(stop_process)):
             second_output = self.run_watch("--observation", observation_id,
                                            "--interval", "0.01")
         for token in (first_step, first_alert):
@@ -151,7 +160,7 @@ class ObservationContractTest(TaskSeededTmpRootTest):
             return conn
 
         with mock.patch.object(store, "db", side_effect=traced_db), \
-             mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+             mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch("--observation", observation_id,
                                     "--interval", "0.01")
         self.assertLess(output.index(earlier), output.index(later), self.seed)
@@ -247,10 +256,10 @@ class ObservationContractTest(TaskSeededTmpRootTest):
         """
         observation_id = self.register()
         hidden = self.event()
-        with mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+        with mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             self.run_watch("--observation", observation_id,
                            "--events", "alerts", "--interval", "0.01")
-        with mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+        with mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch("--observation", observation_id,
                                     "--events", "steps", "--interval", "0.01")
         self.assertNotIn(hidden, output, self.seed)

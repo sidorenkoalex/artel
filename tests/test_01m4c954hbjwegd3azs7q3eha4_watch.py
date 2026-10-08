@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -22,6 +23,14 @@ from unittest import mock
 
 from orchestrator import artel, auto, config, runner, session, store, watch
 from tests.sandbox import RealGitSandbox, TaskSeededTmpRootTest, capture
+
+
+def watch_time_stand_in(side_effect):
+    """Заместитель модуля `time` только внутри `watch`: подменена лишь пауза
+    (сторож tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py запрещает
+    глобальную подмену `time.sleep`)."""
+    return types.SimpleNamespace(sleep=mock.Mock(side_effect=side_effect),
+                                 monotonic=time.monotonic)
 
 
 class WatchContractTest(TaskSeededTmpRootTest):
@@ -92,7 +101,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
 
         with mock.patch.object(sys, "platform", "darwin"), \
              mock.patch("subprocess.run", side_effect=failed_notice), \
-             mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+             mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch(observation_id, "--notify")
         self.assertIn(significant, output, self.seed)
         self.assertTrue(calls, f"зерно {self.seed}: уведомление не вызвано")
@@ -119,7 +128,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
 
         with mock.patch.object(sys, "platform", "darwin"), \
              mock.patch("subprocess.run", side_effect=record), \
-             mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+             mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch(observation_id, "--notify")
         self.assertNotIn("\x1b", output, self.seed)
         self.assertNotIn("\x07", output, self.seed)
@@ -139,7 +148,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
         marker = self.event("state -> merge_gate")
         with mock.patch.object(sys, "platform", "linux"), \
              mock.patch("subprocess.run") as process, \
-             mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+             mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch(observation_id, "--notify")
         notice_lines = [line for line in output.splitlines()
                         if "уведом" in line.lower()]
@@ -213,7 +222,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
             elif ticks > 2:
                 raise AssertionError("дозор не остановлен к следующему опросу")
 
-        with mock.patch.object(watch.time, "sleep", side_effect=on_sleep):
+        with mock.patch.object(watch, "time", watch_time_stand_in(on_sleep)):
             self.run_watch(observation_id)
         self.assertEqual(ticks, 1, self.seed)
         self.assertIsNone(self.show(observation_id).get("pid"), self.seed)
@@ -238,7 +247,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
             run.assert_not_called()
             auto_call.assert_not_called()
         observation_id = self.register()
-        with mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+        with mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch(observation_id)
         self.assertIn("уведомлен", output.lower(), self.seed)
 
@@ -284,7 +293,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
                 return exc.code
 
         with mock.patch("os.getpid", side_effect=process_pid), \
-             mock.patch.object(watch.time, "sleep", side_effect=no_real_sleep), \
+             mock.patch.object(watch, "time", watch_time_stand_in(no_real_sleep)), \
              redirect_stdout(output), ThreadPoolExecutor(max_workers=2) as pool:
             old = pool.submit(worker, False, real_pid)
             self.assertTrue(old_waiting.wait(5), f"зерно {self.seed}: первый дозор не начал опрос")
@@ -337,8 +346,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
                     ticks.append(1)
                     raise SystemExit(0)
 
-                with mock.patch.object(watch.time, "sleep",
-                                       side_effect=mark_poll):
+                with mock.patch.object(watch, "time", watch_time_stand_in(mark_poll)):
                     self.run_watch(observation_id)
                 self.assertEqual(len(ticks), 1, self.seed)
 
@@ -348,7 +356,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
         with self.assertRaises(SystemExit) as refusal:
             self.run_watch(observation_id)
         self.assertIn("--takeover", str(refusal.exception), self.seed)
-        with mock.patch.object(watch.time, "sleep", side_effect=SystemExit(0)):
+        with mock.patch.object(watch, "time", watch_time_stand_in(SystemExit(0))):
             output = self.run_watch(observation_id, "--takeover")
         self.assertIn(str(foreign_pid), output, self.seed)
         self.assertIn(foreign_host, output, self.seed)
@@ -376,7 +384,7 @@ class WatchContractTest(TaskSeededTmpRootTest):
                     ticks += 1
                     self.command("observe", "stop", observation_id)
 
-                with mock.patch.object(watch.time, "sleep", side_effect=stop_after_first_poll):
+                with mock.patch.object(watch, "time", watch_time_stand_in(stop_after_first_poll)):
                     self.run_watch(observation_id)
                 self.assertEqual(ticks, 1, self.seed)
                 if state == "empty":
@@ -410,7 +418,7 @@ class PinChangeContractTest(RealGitSandbox):
             else:
                 store.stop_observation(store.db(), observation_id)
 
-        with mock.patch.object(watch.time, "sleep", side_effect=move_head):
+        with mock.patch.object(watch, "time", watch_time_stand_in(move_head)):
             output = capture(watch.cmd_watch, ["--observation", observation_id,
                                                "--interval", "0.01"])
         self.assertEqual(ticks, 2, f"зерно {seed}")
