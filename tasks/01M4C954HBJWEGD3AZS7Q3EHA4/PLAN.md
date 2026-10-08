@@ -20,17 +20,20 @@ schema_version: 5
 2. Реализовать `watch --observation`, просмотр, подтверждение, уведомления и безопасный вывод в `watch.py`/`artel.py`.
 3. Добавить проверки окружения и `doctor`, обновить документацию и тесты, прогнать затронутые модули, планку и guard.
 4. Закрыть красный CI: условная миграция и совместимость `observe show` со старой записью; закрепить обе регрессии тестами и повторить названные в возврате проверки.
+5. Закрыть R1-F1: временно снять маркер роли в тестовом помощнике `force_stop` только для публичного `observe stop`, сохранив подстановку сессии и запрет команды для настоящего процесса роли.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
 | 1–3 | 1, 2 |
-| 4–6 | 1, 2 |
+| 4–5 | 1, 2 |
+| 6 | 1, 2, 5 |
 | 7–8 | 2, 3 |
 | 9 | 3 |
 | 10–15 | 1–3 |
 | Возврат из verifying: старая БД, блокировка записи, show под ролью | 4 |
+| R1-F1 | 5 |
 
 ## Влияние на систему
 
@@ -50,6 +53,8 @@ schema_version: 5
 - Возврат из verifying: 190 адресных тестов затронутых модулей и названных CI-регрессий прошли. Два новых теста `test_observation_migration_regression.py` покраснели на временных мутациях (безусловный `UPDATE`, чтение `steps` при отсутствии таблицы) и прошли после восстановления. `plank-run 01M4C954HBJWEGD3AZS7Q3EHA4`: 1 passed. `watch` продолжает вызывать `time.sleep` и `time.monotonic` через атрибут модуля; сторож сна: 4 passed.
 - Повтор `suite-run` в этом шаге снова завершился `PermissionError` на том же `lock.json`; полный набор остаётся за CI и гейтом приёмки.
 - После возврата: `python3 scripts/codebase_map.py` обновил карту; `python3 scripts/guard.py <путь к PLAN.md>`: `GUARD: ок (1 файлов)`; `git diff --check`: без замечаний.
+- Ревью R1-F1: `python3 -m pytest tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py -p no:cacheprovider -p timeout -o timeout=120` — 13 passed в окружении роли; `ARTEL_ROLE=reviewer python3 -m pytest tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py tests/test_artel_role_restricted_commands.py -p no:cacheprovider -p timeout -o timeout=120` — 20 passed, включая проверку запрета команд роли.
+- После R1-F1: `python3 scripts/codebase_map.py` обновил карту; `plank-run 01M4C954HBJWEGD3AZS7Q3EHA4` — 1 passed; `python3 scripts/guard.py <PLAN.md> <REVIEW.md>` — `GUARD: ок (2 файлов)`; `git diff --check` — без замечаний. `suite-run 01M4C954HBJWEGD3AZS7Q3EHA4` снова отказал на создании `.artel/logs/suite-run/lock.json` (`PermissionError: Operation not permitted`); полный набор в шаге не стартовал.
 
 ## Предложения системе
 
