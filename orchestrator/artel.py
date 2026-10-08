@@ -905,21 +905,29 @@ def _cmd_observe(rest: list) -> None:
         _refuse_extra_observe_args(action, rest)
     row = _observation_or_exit(conn, rest[1])
     if action == "show":
+        # Старые подмены наблюдения могут не содержать колонок, добавленных
+        # после появления show; в настоящей БД их обеспечивает миграция.
+        shown = {"notify": 0, "pid": None, "hostname": None,
+                 "started_at": None, "notified_step_id": 0,
+                 "notified_alert_id": 0, "acknowledged_step_id": 0,
+                 "acknowledged_alert_id": 0, "acknowledged_at": None,
+                 "acknowledged_client": None, "acknowledged_chat": None}
+        shown.update(dict(row))
         result = {"id": row["id"], "project": row["target"],
                   "client": row["client"], "chat": row["chat"],
                   "tasks": store.observation_tasks(conn, row["id"]),
                   "state": row["state"], "last_seen_at": row["last_seen_at"],
                   "fresh": _observation_fresh(row),
-                  "notify": bool(row["notify"]), "pid": row["pid"],
-                  "hostname": row["hostname"], "started_at": row["started_at"],
-                  "process": watch.observation_process_state(row),
-                  "notified": {"step_id": row["notified_step_id"],
-                               "alert_id": row["notified_alert_id"]},
-                  "acknowledged": {"step_id": row["acknowledged_step_id"],
-                                   "alert_id": row["acknowledged_alert_id"],
-                                   "at": row["acknowledged_at"],
-                                   "client": row["acknowledged_client"],
-                                   "chat": row["acknowledged_chat"]},
+                  "notify": bool(shown["notify"]), "pid": shown["pid"],
+                  "hostname": shown["hostname"], "started_at": shown["started_at"],
+                  "process": watch.observation_process_state(shown),
+                  "notified": {"step_id": shown["notified_step_id"],
+                               "alert_id": shown["notified_alert_id"]},
+                  "acknowledged": {"step_id": shown["acknowledged_step_id"],
+                                   "alert_id": shown["acknowledged_alert_id"],
+                                   "at": shown["acknowledged_at"],
+                                   "client": shown["acknowledged_client"],
+                                   "chat": shown["acknowledged_chat"]},
                   "runs": [dict(task=r["task_id"], pid=r["pid"], log=r["log"])
                            for r in store.observed_runs(conn, row["id"])]}
         print(json.dumps(result, ensure_ascii=False))

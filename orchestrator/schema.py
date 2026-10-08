@@ -361,19 +361,26 @@ def migrate(conn: sqlite3.Connection) -> None:
                        ("pid", "INTEGER"), ("hostname", "TEXT"),
                        ("started_at", "TEXT")):
         add_column(conn, "observations", name, kind)
-    conn.execute(
-        "UPDATE observations SET notified_step_id=COALESCE(notified_step_id, "
-        "(SELECT COALESCE(MAX(id), 0) FROM steps)), "
-        "acknowledged_step_id=COALESCE(acknowledged_step_id, "
-        "(SELECT COALESCE(MAX(id), 0) FROM steps)), "
-        "notified_alert_id=COALESCE(notified_alert_id, "
-        "(SELECT COALESCE(MAX(id), 0) FROM alerts)), "
-        "acknowledged_alert_id=COALESCE(acknowledged_alert_id, "
-        "(SELECT COALESCE(MAX(id), 0) FROM alerts)), "
-        "acknowledged_at=COALESCE(acknowledged_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) "
-        "WHERE notified_step_id IS NULL OR acknowledged_step_id IS NULL "
-        "OR notified_alert_id IS NULL OR acknowledged_alert_id IS NULL "
-        "OR acknowledged_at IS NULL")
+    missing_position = conn.execute(
+        "SELECT 1 FROM observations WHERE notified_step_id IS NULL "
+        "OR acknowledged_step_id IS NULL OR notified_alert_id IS NULL "
+        "OR acknowledged_alert_id IS NULL "
+        "LIMIT 1").fetchone()
+    if missing_position and all(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,)).fetchone() for name in ("steps", "alerts")):
+        conn.execute(
+            "UPDATE observations SET notified_step_id=COALESCE(notified_step_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM steps)), "
+            "acknowledged_step_id=COALESCE(acknowledged_step_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM steps)), "
+            "notified_alert_id=COALESCE(notified_alert_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM alerts)), "
+            "acknowledged_alert_id=COALESCE(acknowledged_alert_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM alerts)), "
+            "acknowledged_at=COALESCE(acknowledged_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) "
+            "WHERE notified_step_id IS NULL OR acknowledged_step_id IS NULL "
+            "OR notified_alert_id IS NULL OR acknowledged_alert_id IS NULL")
     conn.executescript(PAIR_SUSPENSION_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
