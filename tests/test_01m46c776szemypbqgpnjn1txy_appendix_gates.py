@@ -757,9 +757,16 @@ class GitFailureTest(AppendixRunSandbox):
 
 
 class TempTreeRemovedTest(AppendixRunSandbox):
+    """Сценарий метода — один из десяти (`CASE`: вход и исход); остальные
+    девять — подклассы ниже с тем же методом. Десять настоящих прогонов
+    гейта с полным набором в одном методе шли две-три минуты при лимите
+    pytest-timeout 120 с (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX, требование 8);
+    по одному на класс — каждый прогон укладывается в треть лимита, а
+    вместе они покрывают те же десять сценариев с теми же утверждениями."""
 
     OUTCOMES = ("зелёный", "красный", "неприменимое приложение",
                 "сбой git", "исключение")
+    CASE = ("review", "зелёный")
 
     def prepare(self, outcome: str, state: str) -> None:
         if outcome == "неприменимое приложение":
@@ -779,7 +786,8 @@ class TempTreeRemovedTest(AppendixRunSandbox):
         приложении), неприменимое приложение, сбой `git apply`, исключение
         в ходе прогона (`run_full_suite` бросает). После каждого: корень
         прогона (если был) удалён, временный каталог процесса — как до
-        прогона, `git worktree list` клона прежний.
+        прогона, `git worktree list` клона прежний. Класс исполняет свой
+        сценарий `CASE`, десять классов семейства — все десять.
 
         Ловит мутацию: уборка дерева стоит после разбора исхода, а не в
         `finally` — на исключении каталог и запись worktree остаются;
@@ -789,6 +797,8 @@ class TempTreeRemovedTest(AppendixRunSandbox):
         for state, enter in (("review", self.advance_from_review),
                              ("acceptance", self.approve)):
             for outcome in self.OUTCOMES:
+                if (state, outcome) != self.CASE:
+                    continue
                 self.case = f"исход «{outcome}», вход из {state}"
                 self.runs.clear()
                 self.journal_file.unlink(missing_ok=True)
@@ -807,6 +817,60 @@ class TempTreeRemovedTest(AppendixRunSandbox):
                     self.assertTrue(self.runs, self.context(out))
                     self.assertNotIn(self.wt, self.runs, self.context(out))
                 self.assert_no_temp_tree(before, tmp_before, out)
+
+
+class TempTreeRemovedReviewRedTest(TempTreeRemovedTest):
+    CASE = ("review", "красный")
+
+
+class TempTreeRemovedReviewInapplicableTest(TempTreeRemovedTest):
+    CASE = ("review", "неприменимое приложение")
+
+
+class TempTreeRemovedReviewGitFailureTest(TempTreeRemovedTest):
+    CASE = ("review", "сбой git")
+
+
+class TempTreeRemovedReviewExceptionTest(TempTreeRemovedTest):
+    CASE = ("review", "исключение")
+
+
+class TempTreeRemovedApproveGreenTest(TempTreeRemovedTest):
+    CASE = ("acceptance", "зелёный")
+
+
+class TempTreeRemovedApproveRedTest(TempTreeRemovedTest):
+    CASE = ("acceptance", "красный")
+
+
+class TempTreeRemovedApproveInapplicableTest(TempTreeRemovedTest):
+    CASE = ("acceptance", "неприменимое приложение")
+
+
+class TempTreeRemovedApproveGitFailureTest(TempTreeRemovedTest):
+    CASE = ("acceptance", "сбой git")
+
+
+class TempTreeRemovedApproveExceptionTest(TempTreeRemovedTest):
+    CASE = ("acceptance", "исключение")
+
+
+class TempTreeCasesCoverEveryOutcomeTest(unittest.TestCase):
+
+    def test_family_runs_each_entry_and_outcome_exactly_once(self):
+        """Классы семейства `TempTreeRemovedTest` вместе исполняют все десять
+        сценариев «вход × исход», каждый ровно один раз.
+
+        Ловит мутацию: подкласс сценария удалён или два класса несут один
+        `CASE` — сценарий выпадает из прогона молча, тест называет его.
+        """
+        family = [cls for cls in globals().values()
+                  if isinstance(cls, type) and issubclass(cls, TempTreeRemovedTest)]
+        cases = sorted(cls.CASE for cls in family)
+        expected = sorted((state, outcome)
+                          for state in ("review", "acceptance")
+                          for outcome in TempTreeRemovedTest.OUTCOMES)
+        self.assertEqual(cases, expected)
 
 
 class NoAppendixTest(AppendixRunSandbox):

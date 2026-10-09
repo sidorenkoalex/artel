@@ -4,8 +4,11 @@
 Красен до реализации: у `watch` нет класса `pytest` (`--events pytest` — отказ «неизвестные классы событий», записи «прогон pytest» не печатаются), нет строк «ход шага»/«предупреждение» и констант `config.WATCH_*` — сценарии падают на отказе, на `AttributeError` констант или не дожидаются строки; сценарии «строки нет» без контрольной задачи были бы зелены, поэтому каждый из них ждёт контрольную строку живого шага.
 
 Дозор гоняется публичным `watch.cmd_watch(argv)` в фоновом потоке (тем же
-приёмом, что `tests/test_watch.py`), stdout потока перехвачен; настоящий
-`time.sleep` с интервалом опроса 0.2 с. Песочница — `tests.sandbox.
+приёмом, что `tests/test_watch.py`), stdout потока перехвачен; пауза
+опроса дозора (интервал 0.2 с) — `tests.sandbox.PollGate`: после каждой
+итерации дозор ждёт разрешения теста, и тест ждёт не секунды по часам, а
+итерации опроса (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX, требование 3) — сколько
+бы ни длилась итерация под нагрузкой. Песочница — `tests.sandbox.
 RealGitSandbox`: у задачи настоящая ветка и рабочая копия по адресу
 `workspace.path(<id>)` (`git worktree add` в клоне песочницы), коммиты
 ветки датированы сутками раньше начала шага, если сценарий не говорит
@@ -34,7 +37,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import artel, config, providers, session, spend, store, watch, workspace
-from tests.sandbox import RealGitSandbox
+from tests.sandbox import PollGate, RealGitSandbox, patch_sleep
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 LETTERS = "abcdefghijkmnpqrstuvwxyz"
@@ -58,6 +61,12 @@ def marker(rng: random.Random, size: int = 10) -> str:
     """Маркер без цифр: число изменённых файлов в строке сводки ищется
     как отдельное число, маркеры не должны его подделать."""
     return "".join(rng.choice(LETTERS) for _ in range(size))
+
+
+def polls_in(seconds: float) -> int:
+    """Число итераций опроса, укладывающихся в `seconds` при интервале
+    `INTERVAL`."""
+    return max(1, round(seconds / float(INTERVAL)))
 
 
 def ts_ago(seconds: float) -> str:
@@ -127,9 +136,31 @@ class WatchProgressSandbox(RealGitSandbox):
         self.stream = WatchStream()
         self.thread = None
         self.outcome = {}
+        self.gate = PollGate()
+        sleep_patch = patch_sleep(watch, self.gate.sleep)
+        sleep_patch.start()
+        self.addCleanup(sleep_patch.stop)
         self.addCleanup(self.force_stop)
 
     # ------------------------------------------------------------ фикстуры
+
+    def freeze_watch_clock(self) -> None:
+        """Часы дозора стоят: возраст шага для дозора растёт только
+        `advance_watch_clock`, а не со временем прогона."""
+        clock = {"now": datetime.now(timezone.utc)}
+
+        class WatchNow(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"] if tz else clock["now"].replace(tzinfo=None)
+
+        patcher = mock.patch.object(watch, "datetime", WatchNow)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.watch_clock = clock
+
+    def advance_watch_clock(self, seconds: float) -> None:
+        self.watch_clock["now"] += timedelta(seconds=seconds)
 
     def dated(self, stamp: str):
         return mock.patch.dict(os.environ, {"GIT_AUTHOR_DATE": stamp,
@@ -226,6 +257,7 @@ class WatchProgressSandbox(RealGitSandbox):
                 self.outcome["exception"] = exc
             finally:
                 sys.stdout = old
+                self.gate.finish()
 
         self.thread = threading.Thread(target=worker, daemon=True)
         self.thread.start()
@@ -242,6 +274,7 @@ class WatchProgressSandbox(RealGitSandbox):
              mock.patch.object(sys, "argv", ["artel.py", "observe", "stop",
                                              self.stop_observation_id]):
             artel.main()
+        self.gate.release()
         self.thread.join(timeout=5.0)
         if hasattr(self, "stop_patch"):
             self.stop_patch.stop()
@@ -257,17 +290,22 @@ class WatchProgressSandbox(RealGitSandbox):
             self.fail(self.note(f"watch завершился: {self.outcome['exit']!r}"))
 
     def wait_until(self, predicate, what: str, timeout: float = 12.0) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        """`predicate` — не позже итераций опроса, укладывающихся в
+        `timeout` секунд при интервале `INTERVAL`: счёт итераций, не часы."""
+        for _ in range(polls_in(timeout)):
             self.check_alive()
             if predicate():
                 return
-            time.sleep(0.05)
+            self.gate.step()
+        self.check_alive()
+        if predicate():
+            return
         self.fail(self.note(f"не дождались: {what}"))
 
     def hold(self, seconds: float) -> None:
-        """Несколько итераций опроса подряд."""
-        time.sleep(seconds)
+        """Несколько итераций опроса подряд — столько, сколько их
+        укладывается в `seconds` при интервале `INTERVAL`."""
+        self.gate.step(polls_in(seconds))
         self.check_alive()
 
     def lines(self, task_id: str, actor: str, action: str) -> list:
@@ -477,16 +515,18 @@ class Ac4ProgressSummaryTest(WatchProgressSandbox):
         """
         task_id = self.new_task()
         lead = self.rng.uniform(4.0, 6.0)
-        began = time.monotonic()
+        # Часы дозора стоят, пока тест их не сдвинет за отметку 2·N: до неё
+        # проверяется столько итераций опроса, сколько нужно, а не сколько
+        # успеет пройти до отметки по настоящим часам.
+        self.freeze_watch_clock()
         self.start_step(task_id, 2 * period_sec() - lead,
                         claude_call_line("Bash", "command", "ls"))
         self.watch_tasks(task_id)
         self.wait_until(lambda: self.summaries(task_id), "первая сводка")
-        remaining = lead - (time.monotonic() - began) - 1.5
-        if remaining > 0.4:
-            self.hold(remaining)
-            self.assertEqual(len(self.summaries(task_id)), 1, self.note(
-                "вторая сводка до отметки 2·N"))
+        self.hold(1.2)
+        self.assertEqual(len(self.summaries(task_id)), 1, self.note(
+            "вторая сводка до отметки 2·N"))
+        self.advance_watch_clock(lead + 1)
         self.wait_until(lambda: len(self.summaries(task_id)) >= 2,
                         "вторая сводка после отметки 2·N", timeout=15.0)
         self.hold(1.2)
