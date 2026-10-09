@@ -92,19 +92,20 @@ class CycleCommandTest(unittest.TestCase):
 
         Ловит мутацию: `stale_cycle_lines` снова собирает `artel.py auto`
         сам, мимо `cycle_hint` (подменённый `cycle_command` в строку не
-        попадает), либо `cycle_command` теряет `--client`/`--chat`
-        наблюдения или подставляет их без наблюдения.
+        попадает), либо `cycle_command` теряет `--observation <ID>`
+        наблюдения или подставляет его без наблюдения.
         """
         from orchestrator import cycle_hint
+        obs = "obs-5f3a"
         self.assertEqual(cycle_hint.cycle_command("auto", "T1"), "artel.py auto T1")
-        self.assertEqual(cycle_hint.cycle_command("auto", "T1", "codex", "c-9"),
-                         "artel.py auto T1 --client codex --chat c-9")
+        self.assertEqual(cycle_hint.cycle_command("auto", "T1", obs),
+                         f"artel.py auto T1 --observation {obs}")
         cycle = {"task_id": "T1", "pid": 7, "started": None, "state": "in_dev",
-                 "observation_args": ("codex", "c-9")}
+                 "observation_args": (obs,)}
         with mock.patch.object(cycle_hint, "cycle_command",
                                return_value="<из cycle_hint>") as built:
             line, = doctor.stale_cycle_lines([cycle])
-        built.assert_called_once_with("auto", "T1", "codex", "c-9")
+        built.assert_called_once_with("auto", "T1", obs)
         self.assertTrue(line.endswith("затем <из cycle_hint>"), line)
 
 

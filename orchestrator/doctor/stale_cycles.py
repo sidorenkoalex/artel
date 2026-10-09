@@ -107,17 +107,17 @@ def start_interval(pid: int) -> tuple | None:
 
 
 def _observation_args(conn, task_id: str, pid: int) -> tuple:
-    """`(client, chat)` наблюдения ЭТОГО запуска — строка `observed_runs`
-    и по задаче, и по pid (у задачи могли наблюдаться прежние запуски с
-    другим pid); `(None, None)` — цикл не под наблюдением."""
+    """`(ID наблюдения,)` ЭТОГО запуска — строка `observed_runs` и по
+    задаче, и по pid (у задачи могли наблюдаться прежние запуски с другим
+    pid); `()` — цикл не под наблюдением."""
     row = conn.execute(
-        "SELECT o.client, o.chat FROM observed_runs r "
+        "SELECT o.id AS observation_id FROM observed_runs r "
         "JOIN observations o ON o.id = r.observation_id "
         "WHERE r.task_id=? AND r.pid=? ORDER BY r.id DESC LIMIT 1",
         (task_id, pid)).fetchone()
     if row is None:
-        return None, None
-    return row["client"], row["chat"]
+        return ()
+    return (row["observation_id"],)
 
 
 def stale_cycles(conn, pin_moment: datetime) -> list[dict]:

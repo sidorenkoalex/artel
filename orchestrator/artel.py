@@ -101,9 +101,11 @@ AUTO_MAX_STEPS шагов за вызов. Решений auto не приним
 команда сама порождает себя отдельным процессом ОС и сразу возвращает
 управление, напечатав pid, путь лога (`.artel/logs/<id>-<cmd>-<n>.log`)
 и подсказку `artel.py log <id>`; цикл переживает обрыв породившей его
-сессии. Отсоединение требует `--client codex|claude --chat <id>` и
-свежего наблюдения той же сессии, проекта, клиента и чата с назначенной
-задачей. `--attach` — прежнее (до этой задачи) поведение: передний план
+сессии. Отсоединение требует активного наблюдения со свежей связью:
+названного `--observation <ID>` либо самого свежего наблюдения той же
+сессии и проекта с задачей в наборе; пара `--client`/`--chat` —
+необязательные метаданные аудита, пишется в журнал задачи и в выборе
+наблюдения не участвует. `--attach` — прежнее (до этой задачи) поведение: передний план
 вызывающего процесса, без отвязки. `stop <id>` шлёт отвязанному циклу
 SIGTERM; гарантия «доигрывает уже начатый шаг и завершается сам между
 шагами» — про `auto` (у него есть граница между шагами, на которой
@@ -132,10 +134,11 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] [--set <набор>] | status | show <id> |
   advance <id> | set-models <id> <набор>|--default |
-  run <id> [--attach | --client codex|claude --chat <id>] |
-  auto <id> [--wait-zone] [--attach | --client codex|claude --chat <id>] |
+  run <id> [--attach | [--observation <ID>] [--client codex|claude --chat <id>]] |
+  auto <id> [--wait-zone] [--attach | [--observation <ID>]
+            [--client codex|claude --chat <id>]] |
   stop <id> |
-  observe register --client codex|claude --chat <id> --tasks <id[,id...]> |
+  observe register [--client codex|claude --chat <id>] --tasks <id[,id...]> |
   observe add|remove <observation-id> --tasks <id[,id...]> |
   observe show|stop|events <observation-id> [--json] |
   observe acknowledge <observation-id> --through <step_id>,<alert_id> |
@@ -708,6 +711,11 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
 _CYCLE_FLAGS_RUN = ("--attach",)
 _CYCLE_FLAGS_AUTO = ("--attach", "--wait-zone")
 _CYCLE_CLIENTS = ("codex", "claude")
+# Действие вне классов событий `watch` (`watch._matches_class`): запись
+# аудита запуска не будит дозор.
+_DETACHED_LAUNCH_ACTION = "отвязанный запуск"
+_DETACHED_FLAGS_USAGE = ("[--observation <ID>] "
+                         "[--client codex|claude --chat <id>]")
 
 
 def _task_id_and_attach(rest: list, usage: str,
@@ -726,13 +734,17 @@ def _task_id_and_attach(rest: list, usage: str,
 
 
 def _cycle_args(rest: list, usage: str, known: tuple) -> tuple:
+    """`(task_id, attach, client, chat, observation_id)`. Пара
+    `--client`/`--chat` необязательна — метаданные аудита (SPEC
+    01M4FZ6QYPPKYQZFEX14QH8XT6, требование 2); переданная — только целиком
+    и по форме, как до задачи."""
     positional = []
     flags = set()
     values = {}
     index = 0
     while index < len(rest):
         arg = rest[index]
-        if arg in ("--client", "--chat"):
+        if arg in ("--client", "--chat", "--observation"):
             if arg in values or index + 1 >= len(rest) or rest[index + 1].startswith("--"):
                 sys.exit(f"{usage}: требуется одно значение {arg}")
             values[arg] = rest[index + 1]
@@ -751,14 +763,80 @@ def _cycle_args(rest: list, usage: str, known: tuple) -> tuple:
         sys.exit(usage)
     attach = "--attach" in flags
     client, chat = values.get("--client"), values.get("--chat")
-    if not attach and (client not in _CYCLE_CLIENTS or not chat or not chat.strip()):
-        sys.exit(f"{usage}: для отсоединённого запуска нужны "
-                 "--client codex|claude и --chat <непустой ID>")
-    return positional[0], attach, client, chat
+    observation_id = values.get("--observation")
+    if not attach:
+        _refuse_malformed_pair(client, chat, usage)
+        if observation_id is not None and not observation_id.strip():
+            sys.exit(f"{usage}: --observation требует непустой ID наблюдения")
+    return positional[0], attach, client, chat, observation_id
 
 
-def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
-                     extra: tuple = ()) -> None:
+def _refuse_malformed_pair(client: str | None, chat: str | None,
+                           prefix: str) -> None:
+    """Пара не передана — норма; переданная — оба флага, клиент
+    `codex|claude`, непустой чат."""
+    if client is None and chat is None:
+        return
+    if client not in _CYCLE_CLIENTS or not chat or not chat.strip():
+        sys.exit(f"{prefix}: пара --client/--chat необязательна, но переданная "
+                 "должна быть целиком: --client codex|claude и --chat <непустой ID>")
+
+
+def _register_and_watch(task_id: str) -> str:
+    return (f"`artel.py observe register --tasks {task_id}`, затем "
+            "`artel.py watch --observation <ID из её вывода>`")
+
+
+def _launch_observation(conn, task_id: str, target: str,
+                        observation_id: str | None):
+    """Наблюдение запуска (SPEC 01M4FZ6QYPPKYQZFEX14QH8XT6, требования 1,
+    5): названное `--observation` — только оно, без отката на другое;
+    без флага — `store.matching_observation`. Гейт свежести связи —
+    одинаково к выбранному и к названному. Отказ называет наблюдение,
+    что с ним не так и что (пере)запустить."""
+    session_id = session.resolve_session_id(None)
+    if observation_id is None:
+        observer = store.matching_observation(conn, task_id, target, session_id)
+        if observer is None:
+            sys.exit(f"[{task_id}] нет активного наблюдения текущей сессии и "
+                     f"проекта с задачей в наборе — {_register_and_watch(task_id)}; "
+                     f"либо `artel.py observe add <ID> --tasks {task_id}` к "
+                     "существующему наблюдению")
+    else:
+        observer = store.observation(conn, observation_id)
+        if observer is None:
+            sys.exit(f"[{task_id}] наблюдение {observation_id} не найдено — "
+                     f"{_register_and_watch(task_id)}")
+        if observer["session_id"] != session_id or observer["target"] != target:
+            sys.exit(f"[{task_id}] наблюдение {observation_id} принадлежит "
+                     "другой сессии или проекту — "
+                     f"{_register_and_watch(task_id)}")
+        if observer["state"] != "active":
+            sys.exit(f"[{task_id}] наблюдение {observation_id} не активно "
+                     f"(состояние {observer['state']}) — "
+                     f"{_register_and_watch(task_id)}")
+        if task_id not in store.observation_tasks(conn, observation_id):
+            sys.exit(f"[{task_id}] задачи нет в наборе наблюдения "
+                     f"{observation_id} — `artel.py observe add "
+                     f"{observation_id} --tasks {task_id}`, затем "
+                     f"`artel.py watch --observation {observation_id}`, "
+                     "если ещё не идёт")
+    chosen = observer["id"]
+    if observer["last_seen_at"] is None:
+        sys.exit(f"[{task_id}] наблюдение {chosen}: связи с watch ещё нет — "
+                 f"запусти `artel.py watch --observation {chosen}`")
+    age = (datetime.now(timezone.utc) -
+           datetime.fromisoformat(observer["last_seen_at"])).total_seconds()
+    if age > config.OBSERVATION_STALE_SECONDS:
+        sys.exit(f"[{task_id}] наблюдение {chosen}: связь устарела на "
+                 f"{age:.0f} с (порог {config.OBSERVATION_STALE_SECONDS} с) — "
+                 f"перезапусти `artel.py watch --observation {chosen}`")
+    return observer
+
+
+def _launch_detached(cmd: str, task_id: str, client: str | None = None,
+                     chat: str | None = None, extra: tuple = (),
+                     observation_id: str | None = None) -> None:
     """R1-F3 (REVIEW.md итерации 1): до отвязки — дешёвая проверка
     `lease.is_live`, не авторитетное взятие lease (тем ниже и остаётся,
     внутри спавненного процесса, через `lease.run_locked`). Без неё
@@ -769,24 +847,11 @@ def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
     и спавном) не авторитетна и не обязана быть — тело `run_locked` внутри
     спавненного процесса решает по факту, эта проверка только возвращает
     немедленную обратную связь на очевидный случай."""
-    if client not in _CYCLE_CLIENTS or not chat or not chat.strip():
-        sys.exit("для отсоединённого запуска нужны --client codex|claude "
-                 "и --chat <непустой ID>")
+    _refuse_malformed_pair(client, chat, cmd)
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
-    task = store.get_task(conn, task_id)
-    observer = store.matching_observation(
-        conn, task_id, task["target"], session.resolve_session_id(None),
-        client, chat)
-    if observer is None:
-        sys.exit(f"[{task_id}] нет активного наблюдения для текущих "
-                 "сессии, проекта, клиента, чата и задачи")
-    if observer["last_seen_at"] is None:
-        sys.exit(f"[{task_id}] наблюдение зарегистрировано, но связи с watch ещё нет")
-    age = (datetime.now(timezone.utc) -
-           datetime.fromisoformat(observer["last_seen_at"])).total_seconds()
-    if age > config.OBSERVATION_STALE_SECONDS:
-        sys.exit(f"[{task_id}] связь наблюдения протухла ({age:.1f} с)")
+    target = store.get_task(conn, task_id)["target"] or config.DEFAULT_TARGET
+    observer = _launch_observation(conn, task_id, target, observation_id)
     if lease.is_live(conn, task_id):
         row = store.lease_row(conn, task_id)
         sys.exit(f"[{task_id}] задачу уже ведёт живой lease "
@@ -816,6 +881,12 @@ def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
     finally:
         log_fh.close()
     store.record_observed_run(conn, observer["id"], task_id, proc.pid, str(log_path))
+    # Пара — только аудит (требование 2): в `observed_runs` колонок для неё
+    # нет, поэтому её носитель — журнал шагов задачи.
+    pair = f", client={client}, chat={chat}" if client is not None else ""
+    store.journal(conn, task_id, "operator", _DETACHED_LAUNCH_ACTION,
+                  f"{cmd}: pid {proc.pid}, наблюдение {observer['id']}{pair}",
+                  target=target)
     print(f"[{task_id}] {cmd} отвязан от сессии: pid {proc.pid}")
     print(f"  лог: {log_path}")
     print(f"  наблюдать: artel.py log {task_id}")
@@ -823,26 +894,28 @@ def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
 
 def _cmd_run_or_detach(rest: list) -> None:
     _refuse_sandbox_cycle()
-    task_id, attach, client, chat = _cycle_args(
-        rest, "run <id> [--attach | --client codex|claude --chat <id>]",
+    task_id, attach, client, chat, observation_id = _cycle_args(
+        rest, f"run <id> [--attach | {_DETACHED_FLAGS_USAGE}]",
         _CYCLE_FLAGS_RUN)
     if attach:
         runner.cmd_run_and_advance(task_id)
         return
-    _launch_detached("run", task_id, client, chat)
+    _launch_detached("run", task_id, client, chat,
+                     observation_id=observation_id)
 
 
 def _cmd_auto_or_detach(rest: list) -> None:
     _refuse_sandbox_cycle()
-    task_id, attach, client, chat = _cycle_args(
-        rest, "auto <id> [--attach | --client codex|claude --chat <id>] [--wait-zone]",
+    task_id, attach, client, chat, observation_id = _cycle_args(
+        rest, f"auto <id> [--attach | {_DETACHED_FLAGS_USAGE}] [--wait-zone]",
         _CYCLE_FLAGS_AUTO)
     wait_zone = "--wait-zone" in rest
     if attach:
         auto.cmd_auto(task_id, wait_zone=wait_zone)
         return
     _launch_detached("auto", task_id, client, chat,
-                     extra=("--wait-zone",) if wait_zone else ())
+                     extra=("--wait-zone",) if wait_zone else (),
+                     observation_id=observation_id)
 
 
 def _refuse_sandbox_cycle() -> None:
@@ -885,10 +958,13 @@ def _cmd_observe(rest: list) -> None:
     action = rest[0]
     conn = store.db()
     if action == "register":
-        client = _observe_flag(rest, "--client")
-        chat = _observe_flag(rest, "--chat")
-        if client not in ("codex", "claude") or not chat.strip():
-            sys.exit("observe register: нужен клиент codex|claude и непустой chat")
+        # Пара — необязательные метаданные аудита (SPEC
+        # 01M4FZ6QYPPKYQZFEX14QH8XT6, требования 2-3): отсутствие хранится
+        # пустой строкой в колонках `NOT NULL`.
+        client = _observe_flag(rest, "--client") if "--client" in rest else None
+        chat = _observe_flag(rest, "--chat") if "--chat" in rest else None
+        _refuse_malformed_pair(client, chat, "observe register")
+        client, chat = client or "", chat or ""
         raw_tasks = _observe_flag(rest, "--tasks")
         first_task = raw_tasks.split(",", 1)[0].strip()
         target = store.get_task(conn, first_task)["target"]

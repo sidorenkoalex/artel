@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from orchestrator import artel, config, session, store
@@ -25,30 +26,48 @@ class ObservationEdgesTest(TaskSeededTmpRootTest):
             {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}))
 
     def test_two_chats_cannot_be_chosen_implicitly_for_one_task(self):
-        """Ловит мутацию: запуск берёт один из двух чатов, хотя передан третий."""
+        """Два наблюдения одной задачи: запуск без выбора по паре уходит
+        только в более свежее (SPEC 01M4FZ6QYPPKYQZFEX14QH8XT6, требование 1).
+
+        Ловит мутацию: запуск выбирает наблюдение по паре (третий чат —
+        отказ) или пишет запуск не в самое свежее либо в оба наблюдения."""
         conn = store.db()
         identity = session.resolve_session_id(None)
+        observations = []
         for chat in ("chat-a", "chat-b"):
             observation_id = store.register_observation(
                 conn, config.DEFAULT_TARGET, "codex", chat, identity, [self.TASK])
-            store.touch_observation(conn, observation_id)
+            observations.append(observation_id)
+        older, fresher = observations
+        with conn:
+            conn.execute("UPDATE observations SET last_seen_at=? WHERE id=?",
+                         ((datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(),
+                          older))
+            conn.execute("UPDATE observations SET last_seen_at=? WHERE id=?",
+                         (datetime.now(timezone.utc).isoformat(), fresher))
         with mock.patch.object(artel.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen:
-            with self.assertRaises(SystemExit):
-                artel._launch_detached("run", self.TASK, "codex", "chat-c")
-            popen.assert_not_called()
+            capture(artel._launch_detached, "run", self.TASK, "codex", "chat-c")
+            popen.assert_called_once()
+        self.assertEqual(store.observed_runs(conn, older), [])
+        self.assertEqual(len(store.observed_runs(conn, fresher)), 1)
 
     def test_two_chats_allow_only_the_named_observation(self):
-        """Ловит мутацию: два чата одной сессии блокируют точный выбор нужного чата."""
+        """Ловит мутацию: два наблюдения одной сессии блокируют точный выбор
+        названного `--observation`, либо выбор уходит в самое свежее."""
         conn = store.db()
         identity = session.resolve_session_id(None)
         first = store.register_observation(
             conn, config.DEFAULT_TARGET, "codex", "chat-a", identity, [self.TASK])
         second = store.register_observation(
             conn, config.DEFAULT_TARGET, "codex", "chat-b", identity, [self.TASK])
-        for observation_id in (first, second):
-            store.touch_observation(conn, observation_id)
+        with conn:
+            conn.execute("UPDATE observations SET last_seen_at=? WHERE id=?",
+                         ((datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(),
+                          second))
+            conn.execute("UPDATE observations SET last_seen_at=? WHERE id=?",
+                         (datetime.now(timezone.utc).isoformat(), first))
         with mock.patch.object(artel.subprocess, "Popen", return_value=mock.Mock(pid=4242)):
-            capture(artel._launch_detached, "run", self.TASK, "codex", "chat-b")
+            capture(artel._launch_detached, "run", self.TASK, None, None, (), second)
         self.assertEqual(store.observed_runs(conn, first), [])
         self.assertEqual(len(store.observed_runs(conn, second)), 1)
 
