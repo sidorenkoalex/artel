@@ -4,7 +4,10 @@
 Красен до реализации: doctor ещё не показывает нагрузку и не открывает suite.duration.
 """
 
+import contextlib
+import os
 import random
+import shutil
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -56,13 +59,31 @@ class DoctorDurationTest(TmpRootTest):
                                   lambda role: smoke):
             return doctor.all_checks(self.conn)
 
+    @contextlib.contextmanager
+    def warm_pytest_env(self):
+        """Окружение прогона с кешем байткода, общим для прогонов теста.
+
+        Пульт даёт каждому прогону свежий `PYTHONPYCACHEPREFIX`, и pytest
+        с xdist компилируется заново — около секунды на каждый из
+        девятнадцати прогонов test_ac7 (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX,
+        требование 8). К сигналу времени это не относится. Байткод
+        каталога теста — переписываемого `test_case.py` — перед каждым
+        прогоном убирается: иначе файл того же размера в ту же секунду
+        исполнился бы старым байткодом с прежней паузой."""
+        cache = self.root / ".pycache-warm"
+        for own in {self.root, self.root.resolve()}:
+            shutil.rmtree(cache / str(own).lstrip(os.sep), ignore_errors=True)
+        yield dict(os.environ, PYTHONPYCACHEPREFIX=str(cache))
+
     def measured_run(self, delay, count=4, workers=1):
         body = "import time\n"
         body += f"def test_case_0(): time.sleep({delay!r})\n"
         body += "".join(f"def test_case_{number}(): assert True\n"
                         for number in range(1, count))
         (self.root / "tests" / "test_case.py").write_text(body, encoding="utf-8")
-        with mock.patch.object(config, "FULL_SUITE_WORKERS", workers):
+        with mock.patch.object(config, "FULL_SUITE_WORKERS", workers), \
+                mock.patch.object(acceptance, "_pytest_env",
+                                  self.warm_pytest_env):
             acceptance.full_suite(self.root, self.task, fresh=True)
         rows = [row for row in store.task_steps(self.conn, self.task)
                 if row["action"] == "прогон: время"]
