@@ -1171,21 +1171,17 @@ def _ephemeral_clone(target_sha: str | None = None,
     приёмом, каким `tempfile.TemporaryDirectory` изнутри их и зовёт).
     """
     outer_root = config.ROOT
-    dest = Path(tempfile.mkdtemp(prefix="artel-canary-"))
-    origin_dir = Path(tempfile.mkdtemp(prefix="artel-canary-origin-"))
+    dest = _owned_temp_dir("artel-canary-")
+    origin_dir = _owned_temp_dir("artel-canary-origin-")
     saved = {attr: getattr(config, attr) for attr in _CLONE_CONFIG_ATTRS}
     saved_codex_home = codex_provider.codex_home_override()
     saved_skip_full_suite = config.CANARY_SKIP_FULL_SUITE
     config.CANARY_SKIP_FULL_SUITE = True
     try:
-        clone = subprocess.run(
-            ["git", "clone", "-q", str(outer_root), str(dest)],
-            capture_output=True, text=True)
+        clone = _clone_into_owned(["git", "clone", "-q"], outer_root, dest)
         if clone.returncode != 0:
             raise RuntimeError(
                 f"canary: эфемерный клон не создан: {clone.stderr.strip()}")
-        (dest / liveness.CANARY_OWNER_MARKER).write_text(
-            str(os.getpid()), encoding="utf-8")
         if target_sha is not None:
             checkout = subprocess.run(
                 ["git", "checkout", "-q", "-B", config.MAIN_BRANCH, target_sha],
@@ -1194,16 +1190,12 @@ def _ephemeral_clone(target_sha: str | None = None,
                 raise RuntimeError(
                     f"canary: checkout целевого sha {target_sha} в "
                     f"эфемерном клоне не удался: {checkout.stderr.strip()}")
-        mirror = subprocess.run(
-            ["git", "clone", "-q", "--bare", "--shared", str(dest),
-             str(origin_dir)],
-            capture_output=True, text=True)
+        mirror = _clone_into_owned(
+            ["git", "clone", "-q", "--bare", "--shared"], dest, origin_dir)
         if mirror.returncode != 0:
             raise RuntimeError(
                 f"canary: origin-заглушка не создана: "
                 f"{mirror.stderr.strip()}")
-        (origin_dir / liveness.CANARY_OWNER_MARKER).write_text(
-            str(os.getpid()), encoding="utf-8")
         origin = subprocess.run(
             ["git", "remote", "set-url", "origin", str(origin_dir)],
             cwd=dest, capture_output=True, text=True)
@@ -1255,6 +1247,43 @@ def _ephemeral_clone(target_sha: str | None = None,
             setattr(config, attr, value)
         shutil.rmtree(dest, ignore_errors=True)
         shutil.rmtree(origin_dir, ignore_errors=True)
+
+
+# Каталог клонирования внутри временного каталога канарейки: `git clone`
+# отказывает в непустой каталог, а маркер владельца в нём уже лежит.
+_CLONE_STAGE = ".artel-canary-stage"
+
+
+def _owned_temp_dir(prefix: str) -> Path:
+    """Временный каталог канарейки с маркером владельца с момента создания
+    (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX, требования 4 и 6).
+
+    Уборка сирот `doctor --fix` (`doctor/orphans.py`) удаляет каталог
+    `artel-canary-*` без маркера живого владельца. Маркер, записанный
+    только после `git clone`, оставлял окно длиной в клонирование: уборка
+    параллельного процесса удаляла пустой каталог, и клон в него падал
+    «could not lock config file». Маркер пишется сразу за `mkdtemp` — до
+    любого вызова git."""
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    (path / liveness.CANARY_OWNER_MARKER).write_text(
+        str(os.getpid()), encoding="utf-8")
+    return path
+
+
+def _clone_into_owned(command: list, source: Path,
+                      dest: Path) -> subprocess.CompletedProcess:
+    """`command source dest` для каталога `dest` с маркером владельца:
+    git клонирует в подкаталог `dest`, затем содержимое поднимается в сам
+    `dest`. Подкаталог — не верхний уровень временного каталога, уборка
+    сирот его не рассматривает, а `dest` всё это время защищён маркером."""
+    stage = dest / _CLONE_STAGE
+    result = subprocess.run([*command, str(source), str(stage)],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        for entry in stage.iterdir():
+            entry.rename(dest / entry.name)
+        stage.rmdir()
+    return result
 
 
 def _build_artel_project_area(origin_dir: Path) -> None:

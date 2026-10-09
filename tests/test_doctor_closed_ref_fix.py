@@ -159,9 +159,13 @@ class DoctorFixOrderTest(unittest.TestCase):
         """
         calls = []
         record = lambda name: (lambda *a, **k: calls.append(name))
+        # Уборка сирот подменена вместе с прочими починками: настоящая шла
+        # бы по системному временному каталогу и удаляла каталоги канарейки
+        # параллельных тестов (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX, требование 5).
         names = ("_fix_ignored_artifact_files", "_fix_unsent_closed_refs",
                  "_fix_dead_lease_groups", "_fix_hung_test_runs",
-                 "fix_models_local", "_fix_git_hooks", "_fix_project_clones")
+                 "_fix_orphan_temp_dirs", "fix_models_local",
+                 "_fix_git_hooks", "_fix_project_clones")
         patches = [mock.patch.object(doctor, n, record(n)) for n in names]
         patches += [
             mock.patch.object(doctor, "all_checks",

@@ -739,6 +739,9 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
         saved_before = {attr: getattr(config, attr)
                         for attr in canary._CLONE_CONFIG_ATTRS}
         fake_clone_dir = self.outer_root.parent / "clone"
+        # Как настоящий `mkdtemp`: каталог есть сразу, маркер владельца
+        # пишется в него до клонирования.
+        fake_clone_dir.mkdir()
 
         def fake_run(cmd, **kw):
             if cmd[:2] == ["git", "clone"]:
@@ -763,6 +766,7 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
         saved_before = {attr: getattr(config, attr)
                         for attr in canary._CLONE_CONFIG_ATTRS}
         fake_clone_dir = self.outer_root.parent / "clone2"
+        fake_clone_dir.mkdir()
 
         def fake_run(cmd, **kw):
             if cmd[:2] == ["git", "clone"]:
@@ -790,6 +794,7 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
         по умолчанию) — это ровно мутация «клон остаётся на HEAD главной
         копии вместо целевого sha», прямо названная в AC-4."""
         fake_clone_dir = self.outer_root.parent / "clone3"
+        fake_clone_dir.mkdir()
         calls = []
 
         def fake_run(cmd, **kw):

@@ -46,7 +46,14 @@ class DoctorDurationTest(TmpRootTest):
                             for item in selectors)
             return subprocess.CompletedProcess(argv, 0, line + "\n", "")
 
-        with mock.patch.object(doctor.subprocess, "run", side_effect=fake_run):
+        # Живой смок — настоящий вызов CLI роли, по секунде-пять на каждый
+        # прогон doctor: к сигналу времени он не относится, а пять таких
+        # вызовов были больше трети лимита pytest-timeout у test_ac7 (SPEC
+        # 01M4G8MNEPECNX1TCEDW4T4RPX, требование 8).
+        smoke = doctor.Check("live-smoke", "ok", "живой смок заменён тестом")
+        with mock.patch.object(doctor.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(doctor, "_live_smoke_run",
+                                  lambda role: smoke):
             return doctor.all_checks(self.conn)
 
     def measured_run(self, delay, count=4, workers=1):
