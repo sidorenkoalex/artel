@@ -106,12 +106,19 @@ def touch_observation(conn, observation_id: str) -> bool:
     return cursor.rowcount == 1
 
 
-def observation_steps_since(conn, observation_id: str, since_id: int) -> list:
+def journal_maxima(conn) -> tuple[int, int]:
+    """Current `MAX(steps.id)` and `MAX(alerts.id)`; 0 for an empty table."""
+    top_step = conn.execute("SELECT COALESCE(MAX(id), 0) FROM steps").fetchone()[0]
+    return top_step, max_alert_id(conn)
+
+
+def observation_steps_since(conn, observation_id: str, since_id: int,
+                            through_id: int) -> list:
     """One ordered journal query for the complete enabled task set."""
     return conn.execute(
-        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE id>? AND task_id IN "
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE id>? AND id<=? AND task_id IN "
         "(SELECT task_id FROM observation_tasks WHERE observation_id=? AND enabled=1) "
-        "ORDER BY id", (since_id, observation_id)).fetchall()
+        "ORDER BY id", (since_id, through_id, observation_id)).fetchall()
 
 
 def advance_notified(conn, observation_id: str, step_id: int, alert_id: int,
@@ -145,8 +152,7 @@ def acknowledge_observation(conn, observation_id: str, step_id: int,
         row = observation(conn, observation_id)
         if row is None:
             raise ValueError("наблюдение не найдено")
-        top_step = conn.execute("SELECT COALESCE(MAX(id), 0) FROM steps").fetchone()[0]
-        top_alert = max_alert_id(conn)
+        top_step, top_alert = journal_maxima(conn)
         if step_id > top_step or alert_id > top_alert:
             raise ValueError(f"пара выше текущих максимумов {top_step},{top_alert}")
         new_step = max(row["acknowledged_step_id"], step_id)
@@ -178,7 +184,10 @@ def claim_observation(conn, observation_id: str, pid: int, host: str,
         if row is None or row["state"] != "active":
             raise ValueError("наблюдение не найдено или прекращено")
         previous = (row["pid"], row["hostname"])
-        if row["pid"] and not takeover and row["pid"] != pid:
+        # Совпавший PID — свой, только если совпал и хост: тот же номер
+        # процесса на другой машине — чужой дозор.
+        own = row["pid"] == pid and row["hostname"] == host
+        if row["pid"] and not takeover and not own:
             if row["hostname"] != host:
                 raise ValueError(f"дозор {row['pid']}@{row['hostname']} на другом хосте; используйте --takeover")
             try:
@@ -1043,6 +1052,25 @@ def task_steps_since(conn: sqlite3.Connection, task_id: str,
         "ORDER BY id", (task_id, since_id)).fetchall()
 
 
+def observation_live_steps(conn: sqlite3.Connection, observation_id: str,
+                           start_action: str, end_actions: tuple) -> dict:
+    """Последняя запись `start_action` каждой задачи набора наблюдения, после
+    которой нет записи из `end_actions`, — по задаче. Одним запросом на весь
+    набор: дозор `--observation` (SPEC 01M4C954HBJWEGD3AZS7Q3EHA4, требование
+    2) не читает журнал по задачам."""
+    marks = ", ".join("?" for _ in end_actions)
+    rows = conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps AS started WHERE id IN "
+        "(SELECT MAX(id) FROM steps WHERE action=? AND task_id IN "
+        "(SELECT task_id FROM observation_tasks WHERE observation_id=? "
+        "AND enabled=1) GROUP BY task_id) "
+        "AND NOT EXISTS (SELECT 1 FROM steps AS ended WHERE "
+        f"ended.task_id=started.task_id AND ended.action IN ({marks}) "
+        "AND ended.id>started.id)",
+        (start_action, observation_id, *end_actions)).fetchall()
+    return {row["task_id"]: row for row in rows}
+
+
 def last_task_step_of(conn: sqlite3.Connection, task_id: str,
                       actions: tuple) -> sqlite3.Row | None:
     """Последняя запись журнала задачи с действием из `actions`; `None` —
@@ -1323,13 +1351,18 @@ def max_alert_id(conn) -> int:
     return row["m"] or 0
 
 
-def alerts_since(conn, min_id: int) -> list:
+def alerts_since(conn, min_id: int, max_id: int | None = None) -> list:
     """Алерты с `id > min_id`, по возрастанию `id` — независимо от
     `ack_ts`/`kind` (наблюдатель `watch`, SPEC 01M1VBEKRN0GA029J98S0K2DAQ,
     AC-3: `kind` не фильтруется, подтверждение алерта не убирает его из
-    потока новых записей)."""
+    потока новых записей). `max_id` — верхняя граница включительно: дозор
+    наблюдения читает до снятого заранее максимума журнала."""
+    if max_id is None:
+        return conn.execute(
+            "SELECT * FROM alerts WHERE id > ? ORDER BY id", (min_id,)).fetchall()
     return conn.execute(
-        "SELECT * FROM alerts WHERE id > ? ORDER BY id", (min_id,)).fetchall()
+        "SELECT * FROM alerts WHERE id > ? AND id <= ? ORDER BY id",
+        (min_id, max_id)).fetchall()
 
 
 # ===== Канарейка =====

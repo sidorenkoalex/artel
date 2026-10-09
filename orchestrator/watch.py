@@ -81,6 +81,8 @@ _PROGRESS_LINE_CHARS = 240
 # 45-минутного шага бывает в мегабайты, а нужны три последние строки.
 _LOG_TAIL_BYTES = 64 * 1024
 _LINES_WINDOW_SEC = 3600
+# Зависший `osascript` не должен останавливать опрос дозора.
+_NOTIFY_TIMEOUT_SEC = 10
 
 
 def _flag_value(argv: list, flag: str) -> str | None:
@@ -252,8 +254,10 @@ def _notify(message: str) -> None:
               'display notification noticeText with title "Артель"\nend run')
     try:
         subprocess.run(["osascript", "-e", script, "x" + message],
-                       capture_output=True, check=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
+                       capture_output=True, check=True,
+                       timeout=_NOTIFY_TIMEOUT_SEC)
+    except (OSError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as exc:
         print(f"уведомление недоступно: {safe_text(str(exc))}", flush=True)
 
 
@@ -264,20 +268,32 @@ def _significant(action: str) -> bool:
 
 
 def _observation_events(conn, row, start_step: int, start_alert: int,
-                        events: set, notify: bool = False) -> tuple[int, int]:
-    """Read one globally ordered step stream and advance past filtered rows."""
-    steps = store.observation_steps_since(conn, row["id"], start_step)
+                        events: set, notify: bool = False,
+                        budget=None) -> tuple[int, int]:
+    """Read one globally ordered step stream and advance past filtered rows.
+
+    The returned pair is the journal maximum taken before the reads, not the
+    last row of the observed tasks: while the observed tasks stay quiet the
+    position must still follow the journal, otherwise a task added later by
+    `observe add` would surface its whole history. Rows written after the
+    maximum was taken stay above the pair and come with the next read."""
+    top_step, top_alert = store.journal_maxima(conn)
+    steps = store.observation_steps_since(conn, row["id"], start_step, top_step)
     task_ids = set(store.observation_tasks(conn, row["id"]))
-    next_step = steps[-1]["id"] if steps else start_step
+    next_step = max(start_step, top_step)
     for item in steps:
         action, detail = item["action"], item["detail"] or ""
         if _matches_class(action, detail, events):
+            if (budget is not None
+                    and action == agent_log.PYTEST_RUN_ACTION
+                    and not budget.take(item["task_id"])):
+                continue
             _print_line(item["ts"], item["task_id"], item["actor"],
                         action, detail)
             if notify and _significant(action):
                 _notify(f"{item['task_id']}: {action} {detail}")
-    alerts = store.alerts_since(conn, start_alert)
-    next_alert = alerts[-1]["id"] if alerts else start_alert
+    alerts = store.alerts_since(conn, start_alert, top_alert)
+    next_alert = max(start_alert, top_alert)
     if "alerts" in events:
         for item in alerts:
             if item["target"] in task_ids or item["target"] == row["target"]:
@@ -346,6 +362,9 @@ def _watch_observation(opts: dict, conn, observed) -> None:
     if not opts["notify"]:
         print("предупреждение: дозор запущен без уведомлений", flush=True)
     pin = _pin_head()
+    known_state: dict = {}
+    live_steps: dict = {}
+    budget = _LineBudget()
     try:
         while True:
             conn = store.db()
@@ -359,9 +378,25 @@ def _watch_observation(opts: dict, conn, observed) -> None:
             if pin and current_pin and current_pin != pin:
                 print("предупреждение: пин главной копии сменился; перезапустите дозор", flush=True)
                 pin = current_pin
+            tasks_by_id = {task["id"]: task for task in store.all_tasks(conn)}
+            task_rows = [tasks_by_id[task_id] for task_id
+                         in store.observation_tasks(conn, observation_id)
+                         if task_id in tasks_by_id]
+            # Первое появление задачи в наборе (старт дозора, `observe add`)
+            # только запоминает состояние — как прежний цикл `watch`.
+            for task in task_rows:
+                previous_state = known_state.get(task["id"])
+                if previous_state is not None and previous_state != task["state"]:
+                    print(f"STATE={task['state']}", flush=True)
+                known_state[task["id"]] = task["state"]
             step_id, alert_id = _observation_events(
                 conn, row, row["notified_step_id"], row["notified_alert_id"],
-                opts["events"], opts["notify"])
+                opts["events"], opts["notify"], budget)
+            live_rows = store.observation_live_steps(
+                conn, observation_id, _STEP_START_ACTION, _STEP_END_ACTIONS)
+            for task in task_rows:
+                _emit_live_step_progress(task, live_rows.get(task["id"]),
+                                         live_steps, budget)
             if not store.advance_notified(conn, observation_id, step_id,
                                           alert_id, pid, started_at):
                 return
@@ -582,8 +617,16 @@ def _emit_progress(conn, task_row, live_steps: dict,
     до запуска дозора, задним числом не печатается: на первой итерации
     выдаётся только текущая. Строка, не напечатанная из-за границы,
     считается выданной."""
+    _emit_live_step_progress(task_row, _live_step_row(conn, task_row["id"]),
+                             live_steps, budget)
+
+
+def _emit_live_step_progress(task_row, row, live_steps: dict,
+                             budget: _LineBudget) -> None:
+    """Тело `_emit_progress` для уже найденной записи живого шага `row`
+    (`None` — живого шага нет): дозор `--observation` находит живые шаги
+    всего набора одним запросом."""
     task_id = task_row["id"]
-    row = _live_step_row(conn, task_id)
     if row is None:
         live_steps.pop(task_id, None)
         return
