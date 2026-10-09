@@ -608,7 +608,9 @@ def _helper_callers(code_branch: str, names: set, repo) -> list | None:
     for name in sorted(names):
         args += ["-e", name]
     args += [code_branch, "--", f"{guard.TESTS_PACKAGE}/"]
-    res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+    # Репозиторий назван явно и без клона проекта (ADR-0021 п.1, этап 2):
+    # `None` — главная копия пульта, то же, что у `gitcmd.show(repo=None)`.
+    res = gitcmd.in_repo(repo or config.ROOT, *args)
     if res is None or res.returncode not in (0, 1):
         return None
     if res.returncode == 1:
