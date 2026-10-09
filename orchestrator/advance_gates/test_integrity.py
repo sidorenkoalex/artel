@@ -748,19 +748,28 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
         searched |= pending
         pending = set()
         for path in callers:
-            if path in in_diff or path in visited or not in_scope(path):
+            if path in visited or not in_scope(path):
                 continue
             visited.add(path)
-            text = read_unchanged(path)
-            if text is None:
-                return _git_failure(_git_silence(
-                    f"чтение {path} из {code_branch}"))
-            file_observed, reason, file_changes = _assertion_observation(
-                path, path, None, text, text, modules)
-            observed += file_observed
-            changes += file_changes
-            if reason:
-                unobserved.append(reason)
+            if path in in_diff:
+                # Файл диффа уже сравнён выше, но его классы-наследники —
+                # звено цепочки к вызывающим вне диффа: правка
+                # промежуточного модуля не должна обрывать поиск (ревью
+                # итерации 2, R2-F1).
+                text = side_sources[1].get(path)
+                if text is None:
+                    continue
+            else:
+                text = read_unchanged(path)
+                if text is None:
+                    return _git_failure(_git_silence(
+                        f"чтение {path} из {code_branch}"))
+                file_observed, reason, file_changes = _assertion_observation(
+                    path, path, None, text, text, modules)
+                observed += file_observed
+                changes += file_changes
+                if reason:
+                    unobserved.append(reason)
             heirs = guard.subclass_names(text, classes)
             classes |= heirs
             pending |= heirs - searched

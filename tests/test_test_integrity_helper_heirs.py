@@ -129,6 +129,27 @@ class HeirOutsideDiffTest(HeirSandbox):
         self.assertTrue(self.merge_gate())
         self.assertIn("CallerTest::test_m", self.escalation())
 
+    def test_heir_through_intermediate_module_in_diff_is_reached(self):
+        """Промежуточный модуль в диффе с безобидной правкой — находка у вызывающего вне диффа.
+
+        Ловит мутацию: файл диффа, найденный поиском по имени изменённого
+        класса, пропускается до сбора его наследников — `Mid` из
+        `tests/mid.py` (в диффе только комментарий) не продолжает поиск,
+        `CallerTest::test_m` теряет утверждение молча, эскалации нет.
+        """
+        root = ("import unittest\n\n\n"
+                "class Root(unittest.TestCase):\n"
+                "    def check(self, value):\n"
+                "        self.assertEqual(value, 1)\n\n\n")
+        files = self.base_files()
+        files["tests/top.py"] = root + "class Top(Root):\n    pass\n"
+        self.commit_diff(files, {
+            "tests/top.py": root + "class Top(unittest.TestCase):\n    pass\n",
+            "tests/mid.py": "# промежуточный модуль\n" + MID})
+        self.assertTrue(self.merge_gate())
+        self.assertIn("CallerTest::test_m", self.escalation())
+
+
 class ChangedClassesTest(unittest.TestCase):
 
     def test_only_classes_with_asserting_chain_are_listed(self):
