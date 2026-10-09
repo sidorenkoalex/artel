@@ -203,27 +203,37 @@ class ObservationCliTest(TaskSeededTmpRootTest):
             popen.assert_not_called()
 
     def test_ac8_launch_requires_matching_client_and_chat(self):
-        """Контекст запуска обязателен и совпадает с наблюдением.
+        """Пара запуска — метаданные: без пары и с чужой парой запуск идёт
+        в свежее наблюдение, неполная или кривая пара — отказ до Popen
+        (SPEC 01M4FZ6QYPPKYQZFEX14QH8XT6, требование 2).
 
-        Ловит мутацию: запуск использует только session_id или игнорирует
-        отсутствие и несовпадение client/chat перед Popen.
+        Ловит мутацию: выбор наблюдения по-прежнему фильтрует по паре
+        (без пары или с чужой парой — отказ), либо проверка формы пары
+        снята — неполная пара или клиент вне codex|claude порождает процесс.
         """
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
             observation_id = json.loads(capture(artel.main))["id"]
         with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), patch_sleep(watch, mock.Mock(side_effect=RuntimeError("watch ended"))):
             with self.assertRaisesRegex(RuntimeError, "watch ended"):
                 capture(artel.main)
-        contexts = (
+        launched = (
             [],
+            ["--client", "claude", "--chat", self.chat],
+            ["--client", "codex", "--chat", self.chat + "-other"],
+        )
+        refused = (
             ["--client", "codex"],
             ["--chat", self.chat],
             ["--client", "codex", "--chat", ""],
             ["--client", "unknown", "--chat", self.chat],
-            ["--client", "claude", "--chat", self.chat],
-            ["--client", "codex", "--chat", self.chat + "-other"],
         )
         for command in ("run", "auto"):
-            for context in contexts:
+            for context in launched:
+                with self.subTest(command=command, context=context, seed=self.seed):
+                    with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK, *context]), mock.patch.object(artel.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen:
+                        capture(artel.main)
+                        popen.assert_called_once()
+            for context in refused:
                 with self.subTest(command=command, context=context, seed=self.seed):
                     with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK, *context]), mock.patch.object(artel.subprocess, "Popen") as popen:
                         with self.assertRaises(SystemExit):

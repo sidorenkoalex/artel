@@ -219,14 +219,17 @@ def release_observation(conn, observation_id: str, pid: int,
                      "AND started_at=?", (observation_id, pid, started_at))
 
 
-def matching_observation(conn, task_id: str, target: str, session_id: str,
-                         client: str, chat: str):
+def matching_observation(conn, task_id: str, target: str, session_id: str):
+    """Наблюдение отсоединённого запуска без `--observation` (SPEC
+    01M4FZ6QYPPKYQZFEX14QH8XT6, требование 1): самое свежее активное
+    наблюдение сессии и проекта с включённой задачей, при равной свежести —
+    созданное позже. Пара клиент/чат в выборе не участвует."""
     rows = conn.execute(
         "SELECT o.* FROM observations o JOIN observation_tasks ot ON ot.observation_id=o.id "
-        "WHERE o.target=? AND o.session_id=? AND o.client=? AND o.chat=? "
-        "AND o.state='active' "
-        "AND ot.task_id=? AND ot.enabled=1 ORDER BY o.last_seen_at DESC, o.rowid DESC",
-        (target, session_id, client, chat, task_id)).fetchall()
+        "WHERE o.target=? AND o.session_id=? AND o.state='active' "
+        "AND ot.task_id=? AND ot.enabled=1 "
+        "ORDER BY o.last_seen_at DESC, o.created_at DESC, o.rowid DESC",
+        (target, session_id, task_id)).fetchall()
     return rows[0] if rows else None
 
 
@@ -241,7 +244,7 @@ def session_observations(conn, task_id: str, target: str, session_id: str):
         "SELECT o.*, COALESCE(ot.enabled, 0) AS task_enabled FROM observations o "
         "LEFT JOIN observation_tasks ot ON ot.observation_id=o.id AND ot.task_id=? "
         "WHERE o.target=? AND o.session_id=? AND o.state='active' "
-        "ORDER BY task_enabled DESC, o.last_seen_at DESC, o.rowid DESC",
+        "ORDER BY task_enabled DESC, o.last_seen_at DESC, o.created_at DESC, o.rowid DESC",
         (task_id, target, session_id)).fetchall()
 
 
@@ -1087,7 +1090,8 @@ def last_task_step_of(conn: sqlite3.Connection, task_id: str,
 
 
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "",
-           *, session_id: str | None = None) -> None:
+           *, session_id: str | None = None,
+           target: str | None = None) -> None:
     """Пишет запись журнала `steps` — каждая новая запись несёт identity
     сессии, её записавшей (SPEC 01M1G..., требование 1-2, AC-1/AC-2).
 
@@ -1106,14 +1110,18 @@ def journal(conn, task_id: str, actor: str, action: str, detail: str = "",
     процесса прямо сейчас» (`lease.acquire`: identity, взявшая/перехватившая
     lease, — уже готовый аргумент функции, не обязана совпадать с тем, что
     резолвил бы повторный вызов `resolve_session_id` в контексте теста).
+
+    `target` — проект задачи, если место вызова его уже прочитало; `None`
+    — читается здесь из строки задачи.
     """
     if session_id is None:
         session_id = session.resolve_session_id(None)
+    if target is None:
+        target = task_target(conn, task_id)
     conn.execute(
         "INSERT INTO steps (task_id, target, ts, actor, action, detail,"
         " session_id) VALUES (?,?,?,?,?,?,?)",
-        (task_id, task_target(conn, task_id), now(), actor, action, detail,
-         session_id),
+        (task_id, target, now(), actor, action, detail, session_id),
     )
     conn.commit()
 
