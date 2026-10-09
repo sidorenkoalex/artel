@@ -12,7 +12,8 @@ id задачи, pid, время старта, состояние задачи �
 
 AC-2. Цикл под наблюдением (есть строка `observed_runs` для его task_id и
 pid) получает команду `auto <id> --client <client> --chat <chat>` со
-значениями из связанной строки `observations`. Цикл без наблюдения
+значениями из связанной строки `observations` (с SPEC
+01M4FZ6QYPPKYQZFEX14QH8XT6 — `auto <id> --observation <ID>`). Цикл без наблюдения
 получает `auto <id>` без этих аргументов.
 
 AC-3. Цикл, чей процесс стартовал после сдвига пина, в перечне
@@ -189,7 +190,8 @@ class _CyclesMixin:
         return {"tid": tid, "pid": pid, "state": state}
 
     def observe(self, cycle: dict, pid: int = None) -> tuple:
-        """Наблюдение задачи цикла и строка `observed_runs` с данным pid."""
+        """Наблюдение задачи цикла и строка `observed_runs` с данным pid:
+        `(client, chat, ID наблюдения)`."""
         client = f"client{self.rng.randrange(10**6)}"
         chat = f"chat{self.rng.randrange(10**6)}"
         obs = store.register_observation(
@@ -198,7 +200,7 @@ class _CyclesMixin:
         store.record_observed_run(self.conn, obs, cycle["tid"],
                                   cycle["pid"] if pid is None else pid,
                                   f"log-{self.rng.randrange(10**6)}.log")
-        return client, chat
+        return client, chat, obs
 
     def assert_cycle_named(self, text: str, cycle: dict, where: str) -> None:
         """AC-1: id задачи, pid, время старта, состояние, `stop`/`auto`."""
@@ -333,35 +335,32 @@ class PinUpdateNamesStaleCyclesTest(_PinUpdateSandbox):
         """Два живых цикла до сдвига: один под наблюдением, другой без.
 
         У наблюдаемого (строка `observed_runs` с его task_id и pid) команда
-        `auto <id> --client <client> --chat <chat>` со значениями из его
-        строки `observations`. У второго тоже есть строка `observed_runs`
+        `auto <id> --observation <ID>` с ID его наблюдения, без пары
+        клиент/чат. У второго тоже есть строка `observed_runs`
         по его задаче, но с pid прежнего запуска, — он считается не под
         наблюдением и получает `auto <id>` без аргументов.
 
         Ловит мутацию: признак наблюдения сверяется только по task_id без
         pid — цикл, у задачи которого наблюдался прежний запуск, получает
-        `--client/--chat` старого наблюдения; либо аргументы наблюдения не
+        ID старого наблюдения; либо аргументы наблюдения не
         добавляются вовсе и наблюдаемый цикл получает голый `auto <id>`.
         """
         observed = self.add_cycle()
         plain = self.add_cycle()
-        client, chat = self.observe(observed)
-        stale_client, stale_chat = self.observe(plain, pid=_dead_pid())
+        _, _, observation_id = self.observe(observed)
+        _, _, stale_observation_id = self.observe(plain, pid=_dead_pid())
         time.sleep(GAP_SEC)
 
         output, journal = self.run_pin_update()
 
-        expected = f"auto {observed['tid']} --client {client} --chat {chat}"
+        expected = f"auto {observed['tid']} --observation {observation_id}"
         for where, text in (("вывод pin-update", output),
                             ("журнал pin-update", journal)):
             self.assertIn(expected, text, self.msg(
                 f"{where}: нет команды «{expected}»:\n{text}"))
             self.assert_auto_plain(text, plain["tid"], where)
-            self.assertNotIn(stale_client, text, self.msg(
-                f"{where}: клиент наблюдения прежнего запуска приписан живому "
-                f"циклу:\n{text}"))
-            self.assertNotIn(stale_chat, text, self.msg(
-                f"{where}: чат наблюдения прежнего запуска приписан живому "
+            self.assertNotIn(stale_observation_id, text, self.msg(
+                f"{where}: наблюдение прежнего запуска приписано живому "
                 f"циклу:\n{text}"))
 
 

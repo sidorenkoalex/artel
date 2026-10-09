@@ -38,7 +38,8 @@ class CycleHintTest(TaskSeededTmpRootTest):
         fresher = self.observe("claude", "chat-fresher", [])
         store.touch_observation(self.conn, fresher)
         hint = cycle_hint.launch_hint(self.conn, self.TASK, "run")
-        self.assertIn("--client codex --chat chat-enabled", hint[0], hint)
+        self.assertIn(f"--observation {enabled}", hint[0], hint)
+        self.assertNotIn("--client", hint[0], hint)
         self.assertIn(f"watch --observation {enabled}", "\n".join(hint), hint)
         self.assertNotIn("observe add", "\n".join(hint), hint)
 
@@ -55,7 +56,8 @@ class CycleHintTest(TaskSeededTmpRootTest):
         text = "\n".join(hint)
         self.assertIn(f"observe add {observation_id} --tasks {self.TASK}", text)
         self.assertNotIn("observe register", text)
-        self.assertIn("--client claude --chat chat-removed", hint[0])
+        self.assertIn(f"--observation {observation_id}", hint[0])
+        self.assertNotIn("--client", hint[0])
 
     def test_launch_text_continues_caller_prefix_on_one_line(self):
         """Строка запуска идёт сразу за префиксом места вызова, шаги — ниже.
@@ -68,7 +70,9 @@ class CycleHintTest(TaskSeededTmpRootTest):
             self.conn, self.TASK, "auto", "— продолжит отсюда")
         lines = text.splitlines()
         self.assertTrue(lines[0].startswith(
-            f"  дальше: artel.py auto {self.TASK} --client "), text)
+            f"  дальше: artel.py auto {self.TASK}"), text)
+        self.assertNotIn("--client", lines[0], text)
+        self.assertNotIn("--chat", lines[0], text)
         self.assertTrue(lines[0].endswith("— продолжит отсюда"), text)
         self.assertEqual(lines[1].strip(), "сначала:", text)
         self.assertTrue(all(line.startswith("    ") for line in lines[1:]), text)

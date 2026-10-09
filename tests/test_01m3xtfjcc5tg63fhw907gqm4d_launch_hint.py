@@ -90,9 +90,10 @@ class LaunchHintTest(TaskSeededTmpRootTest):
         order = _execution_order(hint)
         register = _index_of(order, "observe register")
         watch = _index_of(order, "watch --observation")
-        launch = _index_of(order, f"artel.py {cmd} {self.TASK} --client")
+        launch = _index_of(order, f"artel.py {cmd} {self.TASK}")
         self.assertNotIn("observe add", text, self.msg(hint))
         self.assertGreaterEqual(register, 0, self.msg(hint))
+        self.assertNotIn("--client", order[launch], self.msg(hint))
         self.assertIn(f"--tasks {self.TASK}", order[register], self.msg(hint))
         self.assertTrue(register < watch < launch, self.msg(hint))
 
@@ -101,8 +102,9 @@ class LaunchHintTest(TaskSeededTmpRootTest):
 
         Для каждой команды run/auto и каждого случая (нет наблюдения, есть
         с включённой задачей, есть с выключенной) первая строка начинается
-        с `artel.py <cmd> <id> --client `, несёт `--chat ` и переданное
-        пояснение, вторая начинается с `сначала:`.
+        с `artel.py <cmd> <id>` — при наблюдении `--observation <ID>`, без
+        него без флагов наблюдения и пары, — несёт переданное пояснение,
+        вторая начинается с `сначала:`.
 
         Ловит мутацию: launch_hint подставляет зашитую `run` вместо
         переданной `auto` (первая строка начинается не с той команды),
@@ -120,9 +122,15 @@ class LaunchHintTest(TaskSeededTmpRootTest):
                     hint = launch_hint(self.conn, self.TASK, cmd, note)
                     self.assertIsInstance(hint, list, self.msg(hint))
                     self.assertGreaterEqual(len(hint), 2, self.msg(hint))
-                    self.assertTrue(hint[0].startswith(
-                        f"artel.py {cmd} {self.TASK} --client "), self.msg(hint))
-                    self.assertIn("--chat ", hint[0], self.msg(hint))
+                    if case == "в":
+                        self.assertTrue(hint[0].startswith(
+                            f"artel.py {cmd} {self.TASK}"), self.msg(hint))
+                        for flag in ("--client", "--chat", "--observation"):
+                            self.assertNotIn(flag, hint[0], self.msg(hint))
+                    else:
+                        self.assertTrue(hint[0].startswith(
+                            f"artel.py {cmd} {self.TASK} --observation {observation_id}"),
+                            self.msg(hint))
                     self.assertIn(note, hint[0], self.msg(hint))
                     self.assertTrue(hint[1].startswith("сначала:"), self.msg(hint))
         self.assertIsNotNone(observation_id)
@@ -132,7 +140,7 @@ class LaunchHintTest(TaskSeededTmpRootTest):
 
         В БД нет ни одного наблюдения: в подсказке есть `observe register`
         с `--tasks <id>`, затем `watch --observation`, и только потом
-        строка запуска `<cmd> <id> --client` — порядок исполнения: шаги
+        строка запуска `<cmd> <id>` без пары — порядок исполнения: шаги
         «сначала:» по списку, затем первая строка.
 
         Ловит мутацию: шаг `observe register` или `watch` выпал из
@@ -147,7 +155,7 @@ class LaunchHintTest(TaskSeededTmpRootTest):
     def test_ac3_active_observation_with_task_gives_its_client_chat_and_watch(self):
         """Активное наблюдение текущей сессии и проекта с включённой задачей.
 
-        Строка запуска несёт `--client <его клиент> --chat <его чат>`,
+        Строка запуска несёт `--observation <его ID>` без пары,
         шаги называют `watch --observation <его ID>` с оговоркой «если
         ещё не идёт», ни `observe register`, ни `observe add` нет.
 
@@ -159,7 +167,8 @@ class LaunchHintTest(TaskSeededTmpRootTest):
             with self.subTest(cmd=cmd, seed=self.seed):
                 hint = launch_hint(self.conn, self.TASK, cmd, "")
                 text = "\n".join(hint)
-                self.assertIn(f"--client {client} --chat {chat}", hint[0], self.msg(hint))
+                self.assertIn(f"--observation {observation_id}", hint[0], self.msg(hint))
+                self.assertNotIn("--client", hint[0], self.msg(hint))
                 watch = _index_of(hint[1:], f"watch --observation {observation_id}")
                 self.assertGreaterEqual(watch, 0, self.msg(hint))
                 self.assertIn("если ещё не идёт", hint[1:][watch], self.msg(hint))
@@ -171,7 +180,7 @@ class LaunchHintTest(TaskSeededTmpRootTest):
 
         Предлагается `observe add <ID> --tasks <id>`, а не register; шаг
         add идёт раньше `watch --observation <ID>`; строка запуска несёт
-        клиент и чат этого наблюдения.
+        `--observation <ID>` этого наблюдения без пары.
 
         Ловит мутацию: выключенная задача не отличается от отсутствия
         наблюдения — подсказка ведёт к register/запуску, который
@@ -188,7 +197,8 @@ class LaunchHintTest(TaskSeededTmpRootTest):
                 self.assertGreaterEqual(add, 0, self.msg(hint))
                 self.assertTrue(add < watch, self.msg(hint))
                 self.assertNotIn("observe register", text, self.msg(hint))
-                self.assertIn(f"--client {client} --chat {chat}", hint[0], self.msg(hint))
+                self.assertIn(f"--observation {observation_id}", hint[0], self.msg(hint))
+                self.assertNotIn("--client", hint[0], self.msg(hint))
 
     def test_ac5_foreign_stopped_observations_ignored_freshest_chosen(self):
         """Чужие и остановленные наблюдения не годятся, из двух — самое свежее.
@@ -198,7 +208,7 @@ class LaunchHintTest(TaskSeededTmpRootTest):
         связью — дают случай «в»: их клиент, чат и ID в подсказку не
         попадают. Затем дважды по паре подходящих наблюдений: связь позже
         обновлена сначала у первого зарегистрированного, затем у второго —
-        в строке запуска клиент и чат именно обновлённого.
+        в строке запуска ID именно обновлённого.
 
         Ловит мутацию: выборка наблюдений без фильтра сессии, проекта или
         `state='active'` либо выбор первого зарегистрированного вместо
@@ -226,9 +236,9 @@ class LaunchHintTest(TaskSeededTmpRootTest):
             with self.subTest(fresher_index=fresher_index, seed=self.seed):
                 hint = launch_hint(self.conn, self.TASK,
                                               self.rng.choice(COMMANDS), "")
-                self.assertIn(f"--client {fresher[1]} --chat {fresher[2]}",
+                self.assertIn(f"--observation {fresher[0]}",
                               hint[0], self.msg(hint))
-                self.assertNotIn(staler[2], "\n".join(hint), self.msg(hint))
+                self.assertNotIn(staler[0], "\n".join(hint), self.msg(hint))
             for observation_id, _, _ in pair:
                 store.stop_observation(self.conn, observation_id)
 
@@ -328,7 +338,7 @@ class CommandHintEndToEndTest(LightTransitionSandbox):
 
         Оператор заводит задачу из файла ТЗ командой `artel.py new
         "<название>" --tz <файл>`: вывод несёт `observe register` с
-        `--tasks <новый id>` и строку `run <новый id> --client`.
+        `--tasks <новый id>` и строку `artel.py run <новый id>` без пары.
 
         Ловит мутацию: catalog печатает старую голую строку `затем:
         artel.py run <id>  (запуск analyst)` мимо launch_hint.
@@ -342,7 +352,8 @@ class CommandHintEndToEndTest(LightTransitionSandbox):
         task_id = ids[0]
         self.assertIn("observe register", out, f"зерно: {self.seed}; вывод: {out!r}")
         self.assertIn(f"--tasks {task_id}", out, f"зерно: {self.seed}; вывод: {out!r}")
-        self.assertIn(f"run {task_id} --client", out, f"зерно: {self.seed}; вывод: {out!r}")
+        self.assertIn(f"artel.py run {task_id}", out, f"зерно: {self.seed}; вывод: {out!r}")
+        self.assertNotIn("--client", out, f"зерно: {self.seed}; вывод: {out!r}")
 
     def test_ac9_auto_stopped_by_stop_hints_observe_add(self):
         """`stop` во время `auto` при наблюдении текущей сессии — подсказка случая «б».
@@ -352,8 +363,8 @@ class CommandHintEndToEndTest(LightTransitionSandbox):
         (подменённый `runner.cmd_run`) выполняет `artel.py stop <id>` —
         настоящий SIGTERM своему процессу выключает задачу в наблюдении,
         цикл останавливается на границе шагов. Итог `auto` предлагает
-        `observe add <ID наблюдения> --tasks <id>` и `--client/--chat`
-        этого наблюдения.
+        `observe add <ID наблюдения> --tasks <id>` и `--observation <ID>`
+        этого наблюдения без пары.
 
         Ловит мутацию: auto печатает при остановке старую строку
         `artel.py auto <id> — продолжит отсюда` мимо launch_hint, и
@@ -381,5 +392,6 @@ class CommandHintEndToEndTest(LightTransitionSandbox):
         self.assertEqual(len(stops), 1, detail)
         self.assertEqual(store.observation_tasks(conn, observation_id), [], detail)
         self.assertIn(f"observe add {observation_id} --tasks {self.TASK}", out, detail)
-        self.assertIn(f"--client {client} --chat {chat}", out, detail)
+        self.assertIn(f"--observation {observation_id}", out, detail)
+        self.assertNotIn("--client", out, detail)
         self.assertNotIn("observe register", out, detail)
