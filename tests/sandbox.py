@@ -72,6 +72,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from collections import namedtuple
@@ -515,6 +516,128 @@ def patch_pult_sleep(sleep) -> ExitStack:
                      or isinstance(module_time, TimeWithSleep))):
             stack.enter_context(patch_sleep(module, sleep))
     return stack
+
+
+class PollGate:
+    """Пауза цикла опроса пульта под шагами теста (SPEC
+    01M4G8MNEPECNX1TCEDW4T4RPX, требование 3): `sleep` — подмена паузы
+    модуля (`patch_sleep(module, gate.sleep)`), цикл в своём потоке.
+
+    Цикл после каждой итерации встаёт на паузе и ждёт, пока тест не
+    разрешит следующую (`step`); тест ждёт не срок по часам, а событие —
+    конец итерации. Под нагрузкой итерация длится сколько угодно, но
+    число итераций между проверками теста то же, что задумано: «не
+    дождались за N итераций» вместо «не дождались за N секунд».
+
+    `finish` — поток цикла завершился (зовётся из его `finally`): шаг теста
+    больше не ждёт. `release` — пауза больше не держит цикл (уборка
+    теста: цикл должен дойти до своей проверки остановки)."""
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self.polls = 0
+        self._passes = 0
+        self._parked = False
+        self._released = False
+        self._finished = False
+
+    def sleep(self, _seconds) -> None:
+        with self._cond:
+            self.polls += 1
+            self._parked = True
+            self._cond.notify_all()
+            while not self._released and self._passes == 0:
+                self._cond.wait()
+            if self._passes:
+                self._passes -= 1
+            self._parked = False
+
+    def step(self, count: int = 1) -> bool:
+        """`count` итераций цикла сверх уже начатой; `False` — цикл
+        завершился раньше. Возврат — когда цикл стоит на паузе: его
+        вывод до следующего `step` не меняется."""
+        with self._cond:
+            for _ in range(count):
+                while not (self._parked or self._finished):
+                    self._cond.wait()
+                if self._finished:
+                    return False
+                target = self.polls + 1
+                self._passes += 1
+                self._cond.notify_all()
+                while not (self._finished
+                           or (self._parked and self.polls >= target)):
+                    self._cond.wait()
+                if self.polls < target:
+                    return False
+        return True
+
+    def finish(self) -> None:
+        with self._cond:
+            self._finished = True
+            self._cond.notify_all()
+
+    def release(self) -> None:
+        with self._cond:
+            self._released = True
+            self._cond.notify_all()
+
+
+def wait_processes_gone(pids, alive, polls: int = 100,
+                        pause: float = 0.1) -> bool:
+    """Ждёт завершения процессов `pids` (`alive(pid)` — жив ли): не больше
+    `polls` проверок с паузой `pause`. Уборка тестов, чьи процессы
+    отпускаются файлом-стопом: события их смерти, на которое можно ждать,
+    у чужих (не дочерних) процессов нет — остаётся пауза, и она здесь, в
+    помощнике песочницы (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX, требование 1)."""
+    for _ in range(polls):
+        if not any(alive(pid) for pid in pids):
+            return True
+        time.sleep(pause)
+    return not any(alive(pid) for pid in pids)
+
+
+# Системный временный каталог процесса прогона — снимок при импорте
+# песочницы, до подмен `tempfile.tempdir` отдельными тестами.
+_SYSTEM_TEMP = Path(tempfile.gettempdir()).resolve()
+
+
+class TempfileInTestRoot:
+    """Заместитель ссылки `orchestrator.doctor.orphans` на `tempfile` (SPEC
+    01M4G8MNEPECNX1TCEDW4T4RPX, требование 5): уборка сирот, запущенная
+    тестом, обходит не системный временный каталог процесса, а свой
+    каталог теста.
+
+    Системный каталог общий для всех процессов xdist: `doctor --fix` одного
+    теста удалял там каталоги `artel-canary-*` канарейки, которую в тот же
+    момент заводил тест другого процесса («canary: origin-заглушка не
+    создана: could not lock config file»). Тест, сам уведший
+    `tempfile.tempdir` в свой корень, видит его как есть."""
+
+    def __init__(self, testcase: unittest.TestCase):
+        self._testcase = testcase
+        self._root = None
+
+    def gettempdir(self) -> str:
+        current = tempfile.gettempdir()
+        if Path(current).resolve() != _SYSTEM_TEMP:
+            return current
+        if self._root is None:
+            self._root = Path(tempfile.mkdtemp(prefix="artel-test-orphans-"))
+            self._testcase.addCleanup(shutil.rmtree, self._root, True)
+        return str(self._root)
+
+    def __getattr__(self, name):
+        return getattr(tempfile, name)
+
+
+def isolate_orphan_sweep(testcase: unittest.TestCase) -> None:
+    """Уборка сирот `doctor` в тесте `testcase` — в его собственном
+    временном каталоге (`TempfileInTestRoot`) до конца теста."""
+    orphans = importlib.import_module("orchestrator.doctor.orphans")
+    patcher = mock.patch.object(orphans, "tempfile", TempfileInTestRoot(testcase))
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
 
 
 class TmpDirTest(unittest.TestCase):
@@ -1398,6 +1521,10 @@ class TmpRootTest(unittest.TestCase):
     (SPEC 01M48WR0HKZW8KJCBWDZTFC4ZY, требование 2); своя подмена сна
     `runner` в теле теста ложится поверх умолчания и тоже видит прежние
     длительности.
+
+    Уборка сирот `doctor --fix` идёт во временном каталоге теста, не в
+    системном (`isolate_orphan_sweep`, SPEC 01M4G8MNEPECNX1TCEDW4T4RPX,
+    требование 5).
     """
 
     PATCHED_ATTRS = ALL_CONFIG_ATTRS
@@ -1413,6 +1540,8 @@ class TmpRootTest(unittest.TestCase):
             pause_patcher = patch_retry_pause(self.retry_pauses)
             pause_patcher.start()
             self.addCleanup(pause_patcher.stop)
+
+        isolate_orphan_sweep(self)
 
         for attr in self.PATCHED_ATTRS:
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
