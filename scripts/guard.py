@@ -1162,6 +1162,64 @@ def weakened_helpers(base_source, head_source) -> set:
             if Counter(keys) - Counter(head.get((_cls, name), ()))}
 
 
+def changed_classes(base_source, head_source, path=None,
+                    modules: TestModules | None = None) -> set:
+    """Имена классов верхнего уровня текста base, у которых в head иная
+    цепочка поиска помощников: класс исчез, сменились его базовые классы
+    или набор методов (переопределение помощника без утверждений), либо
+    сменились импорты модуля, через которые разрешаются базы, — тогда
+    все классы. Наследники таких классов в файлах вне диффа могут потерять
+    утверждения, не потеряв ни одного у самих помощников (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2). В ответ входят только
+    классы, чья цепочка в base (`path`/`modules` — как у `test_assertions`
+    стороны base) несёт метод с утверждением: наследнику класса без таких
+    методов терять нечего. Неразбираемая сторона base — пусто, head — как
+    пустой файл."""
+    base_tree = _parse_or_none(base_source)
+    if base_tree is None:
+        return set()
+    head_tree = _parse_or_none(head_source) or ast.Module(body=[],
+                                                          type_ignores=[])
+    base, head = _class_shapes(base_tree), _class_shapes(head_tree)
+    if _import_dumps(base_tree) == _import_dumps(head_tree):
+        names = {name for name, shape in base.items()
+                 if head.get(name) != shape}
+    else:
+        names = set(base)
+    own = _module_entry(path, base_source, base_tree)
+    scope = _HelperScope(own, modules)
+    return {name for name in names if any(
+        _own_assertions(sub, module.source, module.imports)
+        for module, cls in scope.class_chain(own.defs[name])
+        for sub in cls.body if isinstance(sub, _FUNCTION_NODES))}
+
+
+def _class_shapes(tree: ast.Module) -> dict:
+    return {node.name: (tuple(ast.dump(b) for b in node.bases),
+                        tuple(sorted(sub.name for sub in node.body
+                                     if isinstance(sub, _FUNCTION_NODES))))
+            for node in tree.body if isinstance(node, ast.ClassDef)}
+
+
+def _import_dumps(tree: ast.Module) -> list:
+    return [ast.dump(node) for node in tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom))]
+
+
+def subclass_names(source, names: set) -> set:
+    """Имена классов верхнего уровня текста `source`, среди базовых классов
+    которых есть класс из `names` (по последнему компоненту имени базы):
+    наследник изменённого класса сам становится источником вызывающих в
+    следующем файле цепочки. Неразбираемый текст — пусто."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return set()
+    return {node.name for node in tree.body
+            if isinstance(node, ast.ClassDef) and any(
+                (_dotted_name(base) or "").rpartition(".")[2] in names
+                for base in node.bases)}
+
+
 def _helper_keys(source) -> dict:
     """{(класс либо `None`, имя): [нормальные формы своих утверждений]} по
     функциям модуля и методам классов верхнего уровня."""

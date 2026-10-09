@@ -567,8 +567,8 @@ def _git_failure(detail: str) -> Comparison:
 
 def _side_modules(base: str, code_branch: str, repo, in_diff: set,
                   sources: tuple) -> tuple:
-    """(модули base, модули head, чтение файла вне диффа) — источники
-    унаследованных помощников и функций `tests/sandbox.py` (SPEC
+    """(модули base, модули head, чтение файла вне диффа, сбои чтения) —
+    источники унаследованных помощников и функций `tests/sandbox.py` (SPEC
     01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1).
 
     Файл диффа на своей стороне — уже прочитанный текст (`sources`:
@@ -576,13 +576,28 @@ def _side_modules(base: str, code_branch: str, repo, in_diff: set,
     нет в области узла; файл вне диффа одинаков по обе стороны и читается
     один раз из головы. Модуля, которого нет, — нет: `None`, помощники из
     него не видны ни одной стороне. `in_diff` — все пути диффа обеих
-    сторон."""
+    сторон.
+
+    Непрочитанный модуль, который в дереве своей стороны есть, либо
+    молчание git на вопрос о нём — не «модуля нет», а сбой: его текст
+    попадает в список сбоев, и вызывающий отвечает `_git_failure`, как на
+    любое другое чтение узла. Иначе сбой на стороне base прятал бы
+    помощников модуля только в базе — ослабление в них не дало бы
+    находки."""
     unchanged: dict = {}
+    failures: list = []
+
+    def read(ref: str, path: str):
+        text, reason = gitcmd.show(ref, path, repo=repo)
+        if text is None:
+            listed = gitcmd.ls_tree_files(ref, path, repo=repo)
+            if listed is None or path in listed:
+                failures.append(f"чтение {path} из {ref} ({reason})")
+        return text
 
     def read_unchanged(path: str):
         if path not in unchanged:
-            unchanged[path], _reason = gitcmd.show(code_branch, path,
-                                                   repo=repo)
+            unchanged[path] = read(code_branch, path)
         return unchanged[path]
 
     def loader(ref: str, side: dict):
@@ -590,19 +605,20 @@ def _side_modules(base: str, code_branch: str, repo, in_diff: set,
             if path in side:
                 return side[path]
             if path in in_diff:
-                return gitcmd.show(ref, path, repo=repo)[0]
+                return read(ref, path)
             return read_unchanged(path)
         return load
 
     return (guard.TestModules(loader(base, sources[0])),
             guard.TestModules(loader(code_branch, sources[1])),
-            read_unchanged)
+            read_unchanged, failures)
 
 
 def _helper_callers(code_branch: str, names: set, repo) -> list | None:
     """Пути файлов `tests/` головы, где встречается слово из `names` —
-    кандидаты в вызывающих помощника, потерявшего утверждения (требование
-    2); точный разбор вызова — за `guard.test_assertions`. `None` — git не
+    кандидаты в вызывающих помощника, потерявшего утверждения, и в
+    наследников класса с изменённой цепочкой помощников (требование 2);
+    точный разбор вызова — за `guard.test_assertions`. `None` — git не
     ответил (код `git grep` 1 — совпадений нет, это не сбой)."""
     args = ["grep", "-l", "-w", "-F"]
     for name in sorted(names):
@@ -681,8 +697,8 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
     # класса может жить в файле, который в диффе стоит дальше вызывающего.
     in_diff = {p for _status, first, second in entries
                for p in (first, second) if p}
-    base_modules, head_modules, read_unchanged = _side_modules(
-        base, code_branch, repo, in_diff, side_sources)
+    base_modules, head_modules, read_unchanged, read_failures = \
+        _side_modules(base, code_branch, repo, in_diff, side_sources)
     modules = (base_modules, head_modules)
     for (base_path, head_path, base_source, head_source), renamed_to in \
             zip(files, renames):
@@ -697,24 +713,44 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
         changes += file_changes
         if reason:
             unobserved.append(reason)
+        # Одностороннего файла наблюдение не сравнивает, а храповик считает
+        # его утверждения теми же модулями — прочитать их сейчас, чтобы
+        # сбой чтения не остался незамеченным.
+        for source, path, side_modules in ((base_source, base_path,
+                                            base_modules),
+                                           (head_source, head_path,
+                                            head_modules)):
+            if source is not None and (base_path is None or
+                                       head_path is None):
+                guard.test_assertions(source, path, side_modules)
 
     # Вызывающие вне диффа (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2):
-    # помощник файла диффа потерял утверждение — его вызывающий в
-    # неизменённом файле тоже ослаблен. Файл вне диффа одинаков по обе
-    # стороны, разница — только в модулях `tests/` каждой стороны.
+    # помощник файла диффа потерял утверждение либо класс файла диффа
+    # сменил цепочку помощников (переопределение без утверждений, смена
+    # базы) — его вызывающий или наследник в неизменённом файле тоже
+    # ослаблен. Наследник наследника ищется следующим шагом поиска. Файл
+    # вне диффа одинаков по обе стороны, разница — только в модулях
+    # `tests/` каждой стороны.
     weakened: set = set()
-    for _base_path, _head_path, base_source, head_source in files:
+    classes: set = set()
+    for base_path, _head_path, base_source, head_source in files:
         if base_source is not None:
             weakened |= guard.weakened_helpers(base_source, head_source)
-    if weakened:
-        callers = _helper_callers(code_branch, weakened, repo)
+            classes |= guard.changed_classes(base_source, head_source,
+                                             base_path, base_modules)
+    pending, searched, visited = weakened | classes, set(), set()
+    while pending:
+        callers = _helper_callers(code_branch, pending, repo)
         if callers is None:
             return _git_failure(_git_silence(
-                f"поиск вызывающих помощников ({', '.join(sorted(weakened))}) "
+                f"поиск вызывающих помощников ({', '.join(sorted(pending))}) "
                 f"в {code_branch}"))
+        searched |= pending
+        pending = set()
         for path in callers:
-            if path in in_diff or not in_scope(path):
+            if path in in_diff or path in visited or not in_scope(path):
                 continue
+            visited.add(path)
             text = read_unchanged(path)
             if text is None:
                 return _git_failure(_git_silence(
@@ -725,6 +761,11 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
             changes += file_changes
             if reason:
                 unobserved.append(reason)
+            heirs = guard.subclass_names(text, classes)
+            classes |= heirs
+            pending |= heirs - searched
+    if read_failures:
+        return _git_failure(_git_silence(read_failures[0]))
     return Comparison(found, passed, observed, unobserved, changes, files,
                       base, "", modules)
 
