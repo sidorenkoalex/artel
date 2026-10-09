@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, providers, spend, store, watch, workspace
+from orchestrator import artel, config, providers, session, spend, store, watch, workspace
 from tests.sandbox import RealGitSandbox
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -196,6 +196,24 @@ class WatchProgressSandbox(RealGitSandbox):
     # --------------------------------------------------------------- дозор
 
     def start(self, argv: list) -> None:
+        if "--observation" in argv:
+            self.stop_observation_id = argv[argv.index("--observation") + 1]
+        else:
+            task_ids = argv[argv.index("--tasks") + 1].split(",")
+            self.stop_observation_id = store.register_observation(
+                store.db(), store.get_task(store.db(), task_ids[0])["target"],
+                "codex", "watch-test", session.resolve_session_id(None), task_ids)
+            original_stop = watch._should_stop
+
+            def stop_when_observation_stops(opts, selection, tasks_by_id):
+                stopped = store.observation(store.db(), self.stop_observation_id)
+                return (stopped["state"] != "active" or
+                        original_stop(opts, selection, tasks_by_id))
+
+            self.stop_patch = mock.patch.object(watch, "_should_stop",
+                                               side_effect=stop_when_observation_stops)
+            self.stop_patch.start()
+
         def worker():
             old = sys.stdout
             sys.stdout = self.stream
@@ -214,11 +232,20 @@ class WatchProgressSandbox(RealGitSandbox):
 
     def force_stop(self) -> None:
         if self.thread is None or not self.thread.is_alive():
+            if hasattr(self, "stop_patch"):
+                self.stop_patch.stop()
+                del self.stop_patch
             return
-        conn = store.db()
-        conn.execute("UPDATE tasks SET state='killed'")
-        conn.commit()
+        owner = store.observation(store.db(), self.stop_observation_id)
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": owner["session_id"],
+                                              config.ARTEL_ROLE_ENV: ""}), \
+             mock.patch.object(sys, "argv", ["artel.py", "observe", "stop",
+                                             self.stop_observation_id]):
+            artel.main()
         self.thread.join(timeout=5.0)
+        if hasattr(self, "stop_patch"):
+            self.stop_patch.stop()
+            del self.stop_patch
 
     def watch_tasks(self, *task_ids: str) -> None:
         self.start(["--tasks", ",".join(task_ids), "--interval", INTERVAL])

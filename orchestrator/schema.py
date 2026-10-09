@@ -46,7 +46,12 @@ OBSERVATIONS_DDL = """
 CREATE TABLE IF NOT EXISTS observations (
   id TEXT PRIMARY KEY, target TEXT NOT NULL, client TEXT NOT NULL,
   chat TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL,
-  last_seen_at TEXT, created_at TEXT NOT NULL
+  last_seen_at TEXT, created_at TEXT NOT NULL,
+  notified_step_id INTEGER, notified_alert_id INTEGER,
+  acknowledged_step_id INTEGER, acknowledged_alert_id INTEGER,
+  acknowledged_at TEXT, acknowledged_client TEXT, acknowledged_chat TEXT,
+  notify INTEGER NOT NULL DEFAULT 0, pid INTEGER, hostname TEXT,
+  started_at TEXT
 );
 CREATE TABLE IF NOT EXISTS observation_tasks (
   observation_id TEXT NOT NULL, task_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
@@ -345,6 +350,37 @@ def migrate(conn: sqlite3.Connection) -> None:
     # разъехались между свежей БД и догнанной.
     conn.executescript(MODEL_TARIFFS_DDL)
     conn.executescript(OBSERVATIONS_DDL)
+    for name, kind in (("notified_step_id", "INTEGER"),
+                       ("notified_alert_id", "INTEGER"),
+                       ("acknowledged_step_id", "INTEGER"),
+                       ("acknowledged_alert_id", "INTEGER"),
+                       ("acknowledged_at", "TEXT"),
+                       ("acknowledged_client", "TEXT"),
+                       ("acknowledged_chat", "TEXT"),
+                       ("notify", "INTEGER NOT NULL DEFAULT 0"),
+                       ("pid", "INTEGER"), ("hostname", "TEXT"),
+                       ("started_at", "TEXT")):
+        add_column(conn, "observations", name, kind)
+    missing_position = conn.execute(
+        "SELECT 1 FROM observations WHERE notified_step_id IS NULL "
+        "OR acknowledged_step_id IS NULL OR notified_alert_id IS NULL "
+        "OR acknowledged_alert_id IS NULL "
+        "LIMIT 1").fetchone()
+    if missing_position and all(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,)).fetchone() for name in ("steps", "alerts")):
+        conn.execute(
+            "UPDATE observations SET notified_step_id=COALESCE(notified_step_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM steps)), "
+            "acknowledged_step_id=COALESCE(acknowledged_step_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM steps)), "
+            "notified_alert_id=COALESCE(notified_alert_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM alerts)), "
+            "acknowledged_alert_id=COALESCE(acknowledged_alert_id, "
+            "(SELECT COALESCE(MAX(id), 0) FROM alerts)), "
+            "acknowledged_at=COALESCE(acknowledged_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) "
+            "WHERE notified_step_id IS NULL OR acknowledged_step_id IS NULL "
+            "OR notified_alert_id IS NULL OR acknowledged_alert_id IS NULL")
     conn.executescript(PAIR_SUSPENSION_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
