@@ -4,6 +4,8 @@
 без изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
 """
 import shutil
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts import guard
@@ -1631,3 +1633,121 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
         return False, "", stray, _journal_git_failure(
             conn, task_id, "commit", commit), mandated
     return True, gitcmd.head_sha(wt), stray, "", mandated
+
+
+# Сторож главной копии пульта после шага роли (SPEC
+# 01M4G8KPP8DVNBCPGCAPSVMAKZ, требования 2-5): 05.10 запущенный ролью
+# генератор карты переписал `docs/codebase-map.md` главной копии, и она
+# ~70 минут оставалась грязной незамеченной. Сторож только сообщает —
+# ничего не откатывает и состояние задачи не трогает.
+MAIN_COPY_WATCH_SOURCE = "main-copy-watch"
+MAIN_COPY_WATCH_FAILED_ACTION = "сверка главной копии не выполнена"
+# Сколько путей называет алерт; остальные — числом (статус главной копии
+# с крупным неотслеживаемым деревом не должен раздувать таблицу алертов).
+MAIN_COPY_WATCH_PATH_LIMIT = 20
+# Действия журнала, которыми шаг роли открывается и закрывается — те же
+# строки, что пишет `runner` (`_prepare_step`, `_finish_*`, SKIPPED
+# `_spawn_and_wait`).
+_STEP_START_ACTION = "agent run started"
+_STEP_END_ACTIONS = ("agent run finished", "agent run FAILED",
+                     "agent run TIMEOUT", "agent run SKIPPED")
+_TS_FORMAT = "%Y-%m-%d %H:%M:%SZ"
+
+
+@dataclass(frozen=True)
+class MainCopyWatch:
+    """Снимок главной копии на старте шага: id и время записи «agent run
+    started» шага и строки `git status --porcelain`."""
+    start_id: int
+    start_ts: str
+    status: frozenset
+
+
+def _main_copy_status() -> frozenset | None:
+    """Строки `git status --porcelain` главной копии; `None` — git не
+    ответил (заглушки `gitcmd.git` в тестах отвечают и `None`)."""
+    res = gitcmd.git("status", "--porcelain")
+    if res is None or res.returncode != 0:
+        return None
+    return frozenset(line for line in res.stdout.splitlines() if line.strip())
+
+
+def main_copy_watch_start(conn, task_id: str) -> MainCopyWatch | None:
+    """Снимок главной копии до запуска агента; `None` — сверки после шага
+    не будет (git не ответил или старт шага не записан в журнал)."""
+    status = _main_copy_status()
+    started = store.last_task_step_of(conn, task_id, (_STEP_START_ACTION,))
+    if status is None or started is None:
+        return None
+    return MainCopyWatch(started["id"], started["ts"], status)
+
+
+def _overlapping_steps(conn, task_id: str,
+                       watch: MainCopyWatch) -> list[tuple[str, str]]:
+    """(задача, роль) шагов других задач, шедших в промежуток шага.
+
+    Порядок — по `id` журнала, не по секундам `ts`: шаг, закрытый в ту же
+    секунду, что открылся проверяемый, ему не сосед. Конец шага — первая
+    позже его старта запись той же задачи из `_STEP_END_ACTIONS` либо её
+    следующий старт; конца нет — шаг ещё идёт. Старты старше двух
+    таймаутов шага до старта проверяемого не рассматриваются: таймаут
+    снимает шаг раньше, и «started» умершего процесса без закрывающей
+    записи иначе висел бы в каждом алерте.
+    """
+    cutoff = (datetime.strptime(watch.start_ts, _TS_FORMAT)
+              .replace(tzinfo=timezone.utc)
+              - timedelta(seconds=2 * config.AGENT_TIMEOUT_SEC)
+              ).strftime(_TS_FORMAT)
+    starts = [row for row in store.steps_of_action(conn, _STEP_START_ACTION)
+              if row["ts"] >= cutoff and row["task_id"] != task_id]
+    bounds: dict[str, list[int]] = {}
+    for action in (_STEP_START_ACTION, *_STEP_END_ACTIONS):
+        for row in store.steps_of_action(conn, action):
+            if row["ts"] >= cutoff:
+                bounds.setdefault(row["task_id"], []).append(row["id"])
+    found = []
+    for row in starts:
+        end = min((i for i in bounds.get(row["task_id"], ()) if i > row["id"]),
+                  default=None)
+        pair = (row["task_id"], row["actor"])
+        if (end is None or end > watch.start_id) and pair not in found:
+            found.append(pair)
+    return found
+
+
+def watch_main_copy(conn, task_id: str, role: str,
+                    watch: MainCopyWatch | None) -> bool:
+    """Сверка главной копии после шага: True — поднят алерт.
+
+    В алерт идут только строки статуса, которых не было в снимке на старте
+    (требование 4). Текст не утверждает, кто внёс изменения (требование 3):
+    параллельно шли шаги других задач, в главной копии работает и сессия
+    Оператора. За именем роли в тексте всегда идёт «(» — роль не стоит в
+    одном предложении с глаголом правки.
+    """
+    if watch is None:
+        return False
+    after = _main_copy_status()
+    if after is None:
+        store.journal(conn, task_id, "orchestrator",
+                      MAIN_COPY_WATCH_FAILED_ACTION,
+                      f"после шага {role}: git status главной копии "
+                      f"{config.ROOT} не ответил")
+        return False
+    paths = sorted({line[3:] for line in after - watch.status})
+    if not paths:
+        return False
+    named = ", ".join(paths[:MAIN_COPY_WATCH_PATH_LIMIT])
+    if len(paths) > MAIN_COPY_WATCH_PATH_LIMIT:
+        named += f" и ещё {len(paths) - MAIN_COPY_WATCH_PATH_LIMIT}"
+    others = _overlapping_steps(conn, task_id, watch)
+    others_text = (", ".join(f"{r} (задача {t})" for t, r in others)
+                   if others else "нет")
+    from . import alerts
+    return alerts.raise_alert(
+        conn, None, "warning", MAIN_COPY_WATCH_SOURCE,
+        f"главная копия пульта: за время шага роли {role} (задача "
+        f"{task_id}) появились изменения: {named}. Кто их внёс, не "
+        f"установлено — шаги ролей других задач в пересекающийся "
+        f"промежуток: {others_text}; в главной копии работает и сессия "
+        f"Оператора. Ничего не откачено.")
