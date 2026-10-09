@@ -23,6 +23,7 @@ import sqlite3
 import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import config, session
 from .schema import SCHEMA, add_column, create_schema, migrate, table_columns
@@ -282,6 +283,49 @@ class _AutoClosingConnection(sqlite3.Connection):
             self.close()
         except sqlite3.ProgrammingError:
             pass
+
+
+#: Файлы БД пульта относительно корня дерева: `config.DB` (`.artel/state.db`
+#: корня, из которого импортирован пакет) и его спутники SQLite (SPEC
+#: 01M4FYTB8QWJNHYCP35K8QC4E3). В рабочей копии задачи их быть не должно:
+#: тест, импортировавший пакет из неё, читает такой файл как БД пульта.
+TREE_DB_FILES = tuple(f".artel/state.db{suffix}"
+                      for suffix in ("", "-wal", "-shm", "-journal"))
+
+
+def tree_db_files(root) -> list[str]:
+    """Файлы БД пульта (`TREE_DB_FILES`), лежащие в дереве `root`. Дерево —
+    сам корень пульта (его `.artel/state.db` и есть `config.DB`): файлы на
+    месте, но это действующая БД, а не лишняя копия — список пуст."""
+    if (Path(root) / TREE_DB_FILES[0]).resolve() == config.DB.resolve():
+        return []
+    return [rel for rel in TREE_DB_FILES if (Path(root) / rel).is_file()]
+
+
+def db_usable() -> bool:
+    """БД пульта пригодна для чтения: файл `config.DB` есть и несёт таблицу
+    `tasks` (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3, требование 1).
+
+    Пустой файл, SQLite без схемы и чужой файл — «не пригодна», как и
+    отсутствие файла: читатели, проверявшие только `exists()`, падали на
+    таком файле `no such table: tasks` (09.10). Проверка открывает файл
+    только на чтение (`mode=ro`) и `store.db()` не зовёт — ни файл, ни его
+    режим журнала чтение не меняет (требование 2)."""
+    if not config.DB.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro",
+                               uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                           "AND name='tasks'").fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    return row is not None
 
 
 def db() -> sqlite3.Connection:

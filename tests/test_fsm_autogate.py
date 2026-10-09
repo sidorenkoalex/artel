@@ -20,7 +20,7 @@ from orchestrator import (acceptance, artifact_branch, artifact_source,
                           budget, ci, config, fixation, fsm_autogate, gates, gitcmd, store,
                           workspace)
 from scripts import guard
-from tests.sandbox import TmpRootTest
+from tests.sandbox import TmpRootTest, isolate_pult_db
 
 BRANCH = "artifact/T001"
 SHA = "a" * 40
@@ -36,6 +36,9 @@ class _AutogateConditionsUnitTest(unittest.TestCase):
     этих тестов — только условие «а»."""
 
     TASK = "T001"
+
+    def setUp(self):
+        isolate_pult_db(self)
 
     def call(self, *, ls_tree_files=None, show_map=None, acc_tdir=None,
              iteration=1, verifying_status=(ci.VERIFYING_GREEN, "зелёный")):
@@ -501,6 +504,9 @@ class ChecklistNamesRealChecksTest(unittest.TestCase):
     01M3FQ3JVC3DGGM33XCX8TC7ME, требование 9/AC-11)."""
 
     TASK = "T001"
+
+    def setUp(self):
+        isolate_pult_db(self)
 
     def detail(self) -> str:
         t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}

@@ -98,6 +98,10 @@ def all_checks(conn) -> list[doctor.Check]:
         checks.extend(doctor.recovery_check(conn, name))
 
     checks.extend(doctor.check_orphans(conn))
+    # Файлы БД пульта в рабочих копиях задач (SPEC
+    # 01M4FYTB8QWJNHYCP35K8QC4E3, требование 6) — рядом с сиротами: тот же
+    # предмет «в области проектов лежит то, чего там быть не должно».
+    checks.append(doctor.check_worktree_db_files())
     checks.extend(doctor.check_leases(conn))
     checks.extend(doctor.check_merge_lock(conn))
     checks.extend(doctor.check_merge_queue(conn))
