@@ -3,22 +3,26 @@
 Группа: долгоживущий
 Красен до реализации: читатели проверяют только `config.DB.exists()` и открывают `store.db()` — пустой, чужой или бестабличный файл даёт `no such table`/`file is not a database` наружу и переписывается режимом WAL, а семь тестов `tests/` без подмены пути БД падают на пустом `state.db`.
 
-Перечень читателей — требование 1 SPEC задачи: `artifact_branch.task_repo`,
-`workspace.task_target`, `acceptance.journal_suite_metrics`, ветка задачи
-помощника планки (публичный вход — `acceptance.materialize_files`), target
-и признак записи `acceptance.full_suite`, `models.live_task_set_providers`,
+Перечень читателей — требование 1 SPEC задачи: репозиторий ссылки
+документов задачи и ветка задачи помощника планки (публичный вход —
+`acceptance.materialize_files`, строка `DOCS_REPO` выложенного помощника),
+`workspace.task_target`, `acceptance.journal_suite_metrics`, target и
+признак записи `acceptance.full_suite`, `models.live_task_set_providers`,
 проверка приостановки пары (публичный вход — `models.resolve_task_role`).
+Клоны проектов песочницы — каталоги с `.git` в области проектов, контекст
+проекта отдаёт подменённый `repo_context.resolve`.
 """
 
 import json
 import random
+import re
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (acceptance, artifact_branch, config, models, store,
+from orchestrator import (acceptance, config, models, repo_context, store,
                           workspace)
 from tests.sandbox import (FIXTURE_CODEX_MODEL, FIXTURE_OTHER_MODEL,
                            TmpRootTest)
@@ -78,6 +82,16 @@ class DbReadersTest(TmpRootTest):
         self.run_root = self.root / "run"
         self.run_root.mkdir()
         self.task_row = self.memory_task_row()
+        for target in (config.DEFAULT_TARGET, self.other):
+            (repo_context.clone_path(target) / ".git").mkdir(parents=True,
+                                                           exist_ok=True)
+        patcher = mock.patch.object(
+            repo_context, "resolve",
+            side_effect=lambda name: repo_context.RepoContext(
+                path=repo_context.clone_path(name), remote="origin",
+                base=config.MAIN_BRANCH, target=name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         drop_db_files()
 
     def note(self, text: str) -> str:
@@ -105,6 +119,11 @@ class DbReadersTest(TmpRootTest):
             return (tdir / "acceptance_tests" /
                     acceptance.PLANK_HELPER_NAME).read_text(encoding="utf-8")
 
+        def docs_repo():
+            found = re.search(r"^DOCS_REPO = (.*)$", helper_text(),
+                              re.MULTILINE)
+            return found.group(1) if found else None
+
         def full_suite():
             with mock.patch.object(acceptance, "run_full_suite",
                                    return_value=(True, GREEN)):
@@ -119,8 +138,7 @@ class DbReadersTest(TmpRootTest):
         return {
             "workspace.task_target":
                 lambda: workspace.task_target(self.task),
-            "artifact_branch.task_repo":
-                lambda: str(artifact_branch.task_repo(self.task)),
+            "репозиторий ссылки документов (DOCS_REPO помощника)": docs_repo,
             "acceptance.journal_suite_metrics":
                 lambda: acceptance.journal_suite_metrics(
                     self.task, {"duration_seconds": self.rng.random()}),
@@ -177,11 +195,10 @@ class DbReadersTest(TmpRootTest):
         Сценарий: схема БД заведена, задача — в проекте со случайным
         именем и на наборе с моделью провайдера codex, пара developer →
         модель набора приостановлена пультом. `workspace.task_target` даёт
-        этот проект, `artifact_branch.task_repo` — репозиторий этого
+        этот проект, `DOCS_REPO` выложенного помощника планки — клон этого
         проекта, `live_task_set_providers` несёт codex, проверка пары —
         отказ приостановки, `journal_suite_metrics` пишет запись в журнал
-        задачи, помощник планки называет репозиторий документов этого
-        проекта.
+        задачи.
 
         Ловит мутацию: проверка пригодности ошибочно отвергает и пригодную
         БД (например ищет таблицу не `tasks`) — `task_target` отдаёт проект
@@ -197,14 +214,13 @@ class DbReadersTest(TmpRootTest):
         store.insert_pair_suspension(conn, PAIR_ROLE, FIXTURE_OTHER_MODEL,
                                      "nabor", self.task, "серия вердиктов")
         readers = self.readers()
-        own_repo = artifact_branch.repo_for_target(self.other)
-        self.assertNotEqual(own_repo, artifact_branch.repo_for_target(
-            config.DEFAULT_TARGET), self.note("фикстура проектов"))
+        own_repo = repo_context.clone_path(self.other)
 
         self.assertEqual(readers["workspace.task_target"](), self.other,
                          self.note("task_target"))
-        self.assertEqual(readers["artifact_branch.task_repo"](),
-                         str(own_repo), self.note("task_repo"))
+        self.assertEqual(
+            readers["репозиторий ссылки документов (DOCS_REPO помощника)"](),
+            repr(str(own_repo)), self.note("репозиторий ссылки документов"))
         self.assertIn("codex", readers["models.live_task_set_providers"](),
                       self.note("live_task_set_providers"))
         model, withdrawn = readers["приостановка пары (resolve_task_role)"]()
@@ -214,7 +230,7 @@ class DbReadersTest(TmpRootTest):
         self.assertIn(acceptance.SUITE_DURATION_ACTION, actions,
                       self.note("journal_suite_metrics"))
         helper = readers["ветка задачи помощника планки (materialize_files)"]()
-        self.assertIn(f"DOCS_REPO = {str(own_repo)!r}", helper,
+        self.assertIn(f"TASK_ID = {self.task!r}", helper,
                       self.note("помощник планки"))
 
     def test_ac2_readers_do_not_create_or_change_db(self):
