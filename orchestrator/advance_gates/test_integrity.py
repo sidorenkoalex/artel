@@ -94,6 +94,9 @@ ASSERTIONS_CHANGED = "утверждения изменены в"
 ASSERTIONS_COVERED = "покрыто мандатом"
 # Сколько утверждений одного метода называет текст находки (требование 4).
 ASSERTION_TEXTS_SHOWN = 3
+# Помощник вне своего класса и своего модуля в тексте находки (SPEC
+# 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2).
+HELPER_NOTE = "помощник"
 
 # Смена поведения в существующих тестах (SPEC 01M45FJD46BX45VHC36S4VS9QN).
 # Запись approve гейта SPEC — объявленный перечень и решение Оператора
@@ -144,6 +147,9 @@ class Finding(NamedTuple):
     name: str
     text: str
     alias: str = ""
+    # Путь файла помощника, мандат на который тоже покрывает находку (SPEC
+    # 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 4) — `_helper_paths`.
+    helpers: tuple = ()
 
     @property
     def line(self) -> str:
@@ -169,15 +175,20 @@ class Finding(NamedTuple):
         где файл уже лежит под новым именем, и признание одного лишь
         пути из базы сравнения стоило бы ему лишнего круга `advance` на
         безупречно выписанном разрешении (REVIEW итерация 1, R1-F2).
+
+        Находку об утверждениях, изменённых только в помощниках одного
+        чужого файла (`helpers`), покрывает ещё и путь этого файла (SPEC
+        01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 4): Оператор разрешает
+        правку `tests/sandbox.py`, не перечисляя каждый вызывающий метод.
         """
         paths = (self.path, self.alias) if self.alias else (self.path,)
         if not self.name:
-            return paths
+            return paths + self.helpers
         parts = self.name.split(guard.TEST_NAME_SEP)
         names = [guard.TEST_NAME_SEP.join(parts[:i])
                  for i in range(len(parts), 0, -1)]
         return paths + tuple(f"{p}{guard.TEST_NAME_SEP}{n}"
-                             for p in paths for n in names)
+                             for p in paths for n in names) + self.helpers
 
 
 class ConditionalSkip(NamedTuple):
@@ -462,13 +473,40 @@ class MethodChange(NamedTuple):
         return f"{self.head_path}{guard.TEST_NAME_SEP}{self.name}"
 
 
+def _helper_note(origins: tuple) -> str:
+    """Хвост текста находки — помощники вне своего класса и своего модуля,
+    чьи утверждения изменены (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование
+    2): « (помощник Base.check из tests/x.py)». Пусто — изменены только
+    утверждения самого метода и прежних помощников: текст находки прежний
+    (AC-5)."""
+    named = list(dict.fromkeys(o for o in origins if o is not None))
+    if not named:
+        return ""
+    return " (" + "; ".join(f"{HELPER_NOTE} {label} из {path}"
+                            for label, path in named) + ")"
+
+
+def _helper_paths(origins: tuple) -> tuple:
+    """Путь файла помощника, мандат на который покрывает находку
+    (требование 4): все изменённые утверждения метода — из помощников
+    ОДНОГО чужого файла. Смешанная находка (своё утверждение рядом с
+    утверждением помощника либо помощники двух файлов) путём помощника не
+    покрывается: мандат на один файл не разрешает правку другого."""
+    if not origins or any(o is None for o in origins):
+        return ()
+    paths = {path for _label, path in origins}
+    return tuple(paths) if len(paths) == 1 else ()
+
+
 def _assertion_observation(base_path, head_path, renamed_to, base_source,
-                           head_source) -> tuple:
+                           head_source, modules=(None, None)) -> tuple:
     """(находки об изменённых утверждениях одного файла, причина, по
     которой наблюдение по нему не выполнено, изменения по методам) — SPEC
     01M3Y753QNG6TS5C7MTJS1MEV6, требования 3-4; изменения по методам —
     `guard.assertion_changes` (SPEC 01M45FJD46BX45VHC36S4VS9QN, требование
-    5).
+    5). `modules` — модули `tests/` стороны base и стороны head: по ним
+    видны унаследованные помощники и функции `tests/sandbox.py` (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1).
 
     Удалённый и добавленный файл не сравниваются: у удалённого находка о
     самом файле уже названа, у нового базы нет. Метод, исчезнувший из head,
@@ -479,24 +517,27 @@ def _assertion_observation(base_path, head_path, renamed_to, base_source,
     if base_path is None or head_path is None:
         return [], "", []
     path = base_path
-    base = guard.test_assertions(base_source)
-    head = guard.test_assertions(head_source)
+    base = guard.test_assertions(base_source, base_path, modules[0])
+    head = guard.test_assertions(head_source, head_path, modules[1])
     broken = [side for side, parsed in (("base", base), ("head", head))
               if parsed is None]
     if broken:
         return [], (f"{path}: не разбирается ({', '.join(broken)}) — "
                     f"утверждения не сравнивались"), []
+    by_name = guard.assertion_changes(base_source, head_source,
+                                      (base_path, head_path), modules) or {}
     found = []
     for name, texts in guard.changed_test_assertions(base, head).items():
         shown = "; ".join(texts[:ASSERTION_TEXTS_SHOWN])
         if len(texts) > ASSERTION_TEXTS_SHOWN:
             shown += f"; и ещё {len(texts) - ASSERTION_TEXTS_SHOWN}"
+        origins = by_name[name].origins if name in by_name else ()
         found.append(Finding(path, name, f"{ASSERTIONS_CHANGED} {name}: "
-                                         f"{shown}", renamed_to or ""))
+                                         f"{shown}{_helper_note(origins)}",
+                             renamed_to or "", _helper_paths(origins)))
     changes = [MethodChange(path, renamed_to or "", head_path, name, change,
                             base_source, head_source)
-               for name, change in (guard.assertion_changes(
-                   base_source, head_source) or {}).items()]
+               for name, change in by_name.items()]
     return found, "", changes
 
 
@@ -505,8 +546,9 @@ class Comparison(NamedTuple):
     прошедшие послабление пропуски, находки наблюдения утверждений,
     причины невыполненного наблюдения, изменения утверждений по методам,
     файлы диффа (путь base, путь head, текст base, текст head) для
-    храповика, база сравнения и текст сбоя git. Сбой git — `found` равен
-    `None`, остальное пусто."""
+    храповика, база сравнения, текст сбоя git и модули `tests/` стороны
+    base и стороны head (`guard.TestModules`, их же читает храповик). Сбой
+    git — `found` равен `None`, остальное пусто."""
 
     found: list | None
     passed: list
@@ -516,10 +558,64 @@ class Comparison(NamedTuple):
     files: list
     base: str
     git_detail: str
+    modules: tuple = (None, None)
 
 
 def _git_failure(detail: str) -> Comparison:
     return Comparison(None, [], None, [], [], [], "", detail)
+
+
+def _side_modules(base: str, code_branch: str, repo, in_diff: set,
+                  sources: tuple) -> tuple:
+    """(модули base, модули head, чтение файла вне диффа) — источники
+    унаследованных помощников и функций `tests/sandbox.py` (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1).
+
+    Файл диффа на своей стороне — уже прочитанный текст (`sources`:
+    {путь: текст} base и head) либо чтение из ref этой стороны, если его
+    нет в области узла; файл вне диффа одинаков по обе стороны и читается
+    один раз из головы. Модуля, которого нет, — нет: `None`, помощники из
+    него не видны ни одной стороне. `in_diff` — все пути диффа обеих
+    сторон."""
+    unchanged: dict = {}
+
+    def read_unchanged(path: str):
+        if path not in unchanged:
+            unchanged[path], _reason = gitcmd.show(code_branch, path,
+                                                   repo=repo)
+        return unchanged[path]
+
+    def loader(ref: str, side: dict):
+        def load(path: str):
+            if path in side:
+                return side[path]
+            if path in in_diff:
+                return gitcmd.show(ref, path, repo=repo)[0]
+            return read_unchanged(path)
+        return load
+
+    return (guard.TestModules(loader(base, sources[0])),
+            guard.TestModules(loader(code_branch, sources[1])),
+            read_unchanged)
+
+
+def _helper_callers(code_branch: str, names: set, repo) -> list | None:
+    """Пути файлов `tests/` головы, где встречается слово из `names` —
+    кандидаты в вызывающих помощника, потерявшего утверждения (требование
+    2); точный разбор вызова — за `guard.test_assertions`. `None` — git не
+    ответил (код `git grep` 1 — совпадений нет, это не сбой)."""
+    args = ["grep", "-l", "-w", "-F"]
+    for name in sorted(names):
+        args += ["-e", name]
+    args += [code_branch, "--", f"{guard.TESTS_PACKAGE}/"]
+    res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+    if res is None or res.returncode not in (0, 1):
+        return None
+    if res.returncode == 1:
+        return []
+    prefix = f"{code_branch}:"
+    return [line[len(prefix):] if line.startswith(prefix) else line
+            for line in res.stdout.splitlines() if line.endswith(".py")]
 
 
 def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
@@ -551,6 +647,8 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
     unobserved: list = []
     changes: list = []
     files: list = []
+    renames: list = []
+    side_sources: tuple = ({}, {})
     for status, first, second in entries:
         base_path, head_path, renamed_to = _pair(status, first, second)
         if not in_scope(base_path) and not in_scope(head_path):
@@ -572,18 +670,61 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
                     f"чтение {path} из {ref} ({reason})"))
             sources[side] = text
         files.append((base_path, head_path, sources["base"], sources["head"]))
+        renames.append(renamed_to)
+        for index, path in enumerate((base_path, head_path)):
+            if path is not None:
+                side_sources[index][path] = sources[("base", "head")[index]]
+
+    # Модули сторон собираются после чтения всего диффа: помощник базового
+    # класса может жить в файле, который в диффе стоит дальше вызывающего.
+    in_diff = {p for _status, first, second in entries
+               for p in (first, second) if p}
+    base_modules, head_modules, read_unchanged = _side_modules(
+        base, code_branch, repo, in_diff, side_sources)
+    modules = (base_modules, head_modules)
+    for (base_path, head_path, base_source, head_source), renamed_to in \
+            zip(files, renames):
         file_found, file_passed = _file_findings(
-            base_path, head_path, renamed_to, sources["base"], sources["head"])
+            base_path, head_path, renamed_to, base_source, head_source)
         found += file_found
         passed += file_passed
         file_observed, reason, file_changes = _assertion_observation(
-            base_path, head_path, renamed_to, sources["base"], sources["head"])
+            base_path, head_path, renamed_to, base_source, head_source,
+            modules)
         observed += file_observed
         changes += file_changes
         if reason:
             unobserved.append(reason)
+
+    # Вызывающие вне диффа (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2):
+    # помощник файла диффа потерял утверждение — его вызывающий в
+    # неизменённом файле тоже ослаблен. Файл вне диффа одинаков по обе
+    # стороны, разница — только в модулях `tests/` каждой стороны.
+    weakened: set = set()
+    for _base_path, _head_path, base_source, head_source in files:
+        if base_source is not None:
+            weakened |= guard.weakened_helpers(base_source, head_source)
+    if weakened:
+        callers = _helper_callers(code_branch, weakened, repo)
+        if callers is None:
+            return _git_failure(_git_silence(
+                f"поиск вызывающих помощников ({', '.join(sorted(weakened))}) "
+                f"в {code_branch}"))
+        for path in callers:
+            if path in in_diff or not in_scope(path):
+                continue
+            text = read_unchanged(path)
+            if text is None:
+                return _git_failure(_git_silence(
+                    f"чтение {path} из {code_branch}"))
+            file_observed, reason, file_changes = _assertion_observation(
+                path, path, None, text, text, modules)
+            observed += file_observed
+            changes += file_changes
+            if reason:
+                unobserved.append(reason)
     return Comparison(found, passed, observed, unobserved, changes, files,
-                      base, "")
+                      base, "", modules)
 
 
 def findings(code_branch: str, repo=None, scope=None) -> tuple:
@@ -757,22 +898,27 @@ class _Decline(NamedTuple):
                        f"убыль в: {paths}", self.files[0][1])
 
 
-def _counts(source) -> tuple:
+def _counts(source, path=None, modules=None) -> tuple:
     """(тестовые методы, утверждения по методам) одной стороны файла;
-    неразбираемая или отсутствующая сторона — ноль."""
+    неразбираемая или отсутствующая сторона — ноль. `path`/`modules` — как
+    у `guard.test_assertions`: утверждения унаследованных помощников и
+    функций `tests/sandbox.py` в счёт входят (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 3)."""
     methods = guard.qualified_test_methods(source)
-    assertions = guard.test_assertions(source) or {}
+    assertions = guard.test_assertions(source, path, modules) or {}
     return methods, {name: len(found) for name, found in assertions.items()}
 
 
-def _ratchet_decline(files: list) -> _Decline | None:
+def _ratchet_decline(files: list, modules=(None, None)) -> _Decline | None:
     """Храповик (требование 12): общее число тестовых методов и утверждений
     по файлам диффа `tests/` в голове не меньше, чем в базе. Неизменённые
-    файлы вносят в обе стороны одно и то же и потому не читаются."""
+    файлы вносят в обе стороны одно и то же и потому не читаются.
+    `modules` — модули `tests/` стороны base и стороны head
+    (`Comparison.modules`)."""
     before, after, declining = [0, 0], [0, 0], []
     for base_path, head_path, base_source, head_source in files:
-        base_methods, base_counts = _counts(base_source)
-        head_methods, head_counts = _counts(head_source)
+        base_methods, base_counts = _counts(base_source, base_path, modules[0])
+        head_methods, head_counts = _counts(head_source, head_path, modules[1])
         b = (len(base_methods), sum(base_counts.values()))
         h = (len(head_methods), sum(head_counts.values()))
         before = [before[0] + b[0], before[1] + b[1]]
@@ -789,16 +935,23 @@ def _ratchet_decline(files: list) -> _Decline | None:
     return _Decline(tuple(before), tuple(after), declining)
 
 
-def _decline_source(decline: _Decline, mandate: dict):
+def _decline_source(decline: _Decline, mandate: dict, helpers=None):
     """ANSWER-n мандата, покрывающего убыль: каждый файл с убылью покрыт
     путём (любым путём пары переименования) либо элементами
     `путь::Класс`/`путь::Класс::метод`, покрывающими каждый его метод,
-    который исчез или потерял утверждения; `None` — не покрыта."""
+    который исчез или потерял утверждения; `None` — не покрыта.
+    `helpers` — {(путь, имя метода): пути помощников, покрывающие находку
+    об его утверждениях} (`Finding.helpers`): метод, потерявший
+    утверждения только в помощниках чужого файла, покрыт и мандатом на
+    этот файл (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 4)."""
+    helpers = helpers or {}
     sources = []
     for path, alias, names in decline.files:
         source = next((mandate[p] for p in (path, alias) if p in mandate), None)
         if source is None and names:
-            found = [_covering_source(Finding(path, name, "", alias), mandate)
+            found = [_covering_source(Finding(path, name, "", alias,
+                                              helpers.get((path, name), ())),
+                                      mandate)
                      for name in names]
             source = found[0] if all(found) else None
         if source is None:
@@ -877,8 +1030,10 @@ def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
     findings_: list = list(cmp.found)
 
     def add(method: MethodChange, reason: str) -> None:
+        origins = method.change.origins
         finding = Finding(method.path, method.name,
-                          f"{method.name}: {reason}", method.alias)
+                          f"{method.name}: {reason}{_helper_note(origins)}",
+                          method.alias, _helper_paths(origins))
         reasons[method.address] = (reason, finding)
         findings_.append(finding)
 
@@ -898,8 +1053,9 @@ def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
             conn, task_id, gitcmd.branch_head_sha(code_branch, repo=repo))
     for method, item in expectation:
         text = OUTCOME_EXPECTATION.format(n=item.requirement)
-        source = _covering_source(Finding(method.path, method.name, "",
-                                          method.alias), mandate)
+        source = _covering_source(Finding(
+            method.path, method.name, "", method.alias,
+            _helper_paths(method.change.origins)), mandate)
         if source is not None:
             outcomes[method.address] = f"{text}; {ASSERTIONS_COVERED} {source}"
             continue
@@ -921,9 +1077,11 @@ def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
         else:
             allowed.append(f"{finding.line} — разрешено {source}")
     if not rest:
-        decline = _ratchet_decline(cmp.files)
+        decline = _ratchet_decline(cmp.files, cmp.modules)
         if decline is not None:
-            source = _decline_source(decline, mandate)
+            source = _decline_source(decline, mandate, {
+                (m.path, m.name): _helper_paths(m.change.origins)
+                for m in cmp.changes})
             if source is None:
                 rest.append(decline.finding)
             else:

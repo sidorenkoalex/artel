@@ -893,11 +893,197 @@ def _own_assertions(func: ast.AST, source: str, imports: set) -> list:
     return [(key, text, normal) for _line, _col, key, text, normal in found]
 
 
-def _helper_calls(func: ast.AST, methods: dict, functions: dict) -> list:
-    """Узлы вспомогательных функций первого уровня, которые зовёт `func`
-    (требование 1): `self.<имя>(…)` — метод того же класса, голое имя —
-    функция модуля без префикса `test_`. Каждый вызов — отдельный элемент:
-    помощник, вызванный дважды, дважды и утверждает."""
+# Помощники вне своего класса и своего модуля (SPEC
+# 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1): методы базовых классов внутри
+# пакета `tests` (тот же файл, другой модуль `tests/`, `tests/sandbox.py`) и
+# функции `tests/sandbox.py`. Модули ищутся по импорту `tests.<…>`.
+TESTS_PACKAGE = "tests"
+SANDBOX_MODULE_PATH = "tests/sandbox.py"
+
+_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _module_dotted(path: str) -> str:
+    """`tests/a/b.py` → `tests.a.b`; `tests/a/__init__.py` → `tests.a`."""
+    dotted = path[:-len(".py")].replace("/", ".") if path.endswith(".py") \
+        else path.replace("/", ".")
+    return dotted[:-len(".__init__")] if dotted.endswith(".__init__") \
+        else dotted
+
+
+def _tests_import_bindings(tree: ast.Module, path) -> dict:
+    """{имя модуля: полное точечное имя, к которому оно привязано} по
+    инструкциям `import`/`from … import` уровня модуля: `from tests.x import
+    B as C` → `C: tests.x.B`, `from tests import sandbox` → `sandbox:
+    tests.sandbox`, `import tests.sandbox as sb` → `sb: tests.sandbox`.
+    Относительный импорт разрешается от пакета `path`; без пути — не
+    разрешается."""
+    package = _module_dotted(path).rsplit(".", 1)[0] if path else None
+    names: dict = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    names[alias.asname] = alias.name
+                else:
+                    root = alias.name.split(".", 1)[0]
+                    names[root] = root
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                if package is None:
+                    continue
+                parts = package.split(".")
+                parts = parts[:len(parts) - (node.level - 1)]
+                base = ".".join(parts + ([node.module] if node.module else []))
+            else:
+                base = node.module or ""
+            for alias in node.names:
+                if alias.name != "*":
+                    names[alias.asname or alias.name] = f"{base}.{alias.name}"
+    return names
+
+
+class _Module(NamedTuple):
+    """Разобранный модуль для поиска помощников: путь (`None` — свой файл
+    без названного пути), текст, импортированные имена нормальной формы,
+    определения верхнего уровня и привязки импорта."""
+
+    path: str | None
+    source: str
+    imports: set
+    defs: dict
+    bindings: dict
+
+
+def _module_entry(path, source: str, tree: ast.Module) -> _Module:
+    defs = {node.name: node for node in tree.body
+            if isinstance(node, (*_FUNCTION_NODES, ast.ClassDef))}
+    return _Module(path, source, _module_imports(tree), defs,
+                   _tests_import_bindings(tree, path))
+
+
+class TestModules:
+    """Модули `tests/` ОДНОЙ стороны сравнения для сбора утверждений
+    (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1): `load(путь)` отдаёт
+    текст модуля этой стороны либо `None` (модуля нет, текст не прочитан).
+    Разбор кэшируется: один `TestModules` на сторону обслуживает все файлы
+    прохода гейта."""
+
+    __test__ = False  # имя на `Test…` — не тестовый класс для pytest
+
+    def __init__(self, load):
+        self._load = load
+        self._cache: dict = {}
+
+    def module(self, path: str) -> _Module | None:
+        if path not in self._cache:
+            source = self._load(path)
+            tree = _parse_or_none(source)
+            self._cache[path] = None if tree is None else \
+                _module_entry(path, source, tree)
+        return self._cache[path]
+
+
+class _HelperScope:
+    """Поиск помощников первого уровня тестового метода в своём модуле
+    `own`: метод своего класса и его базовых классов, функция своего
+    модуля, функция `tests/sandbox.py`. Чужие модули — через `modules`
+    (`TestModules` той же стороны); без него видны только базовые классы
+    своего файла."""
+
+    def __init__(self, own: _Module, modules: TestModules | None):
+        self.own = own
+        self.modules = modules
+
+    def _module(self, dotted: str) -> _Module | None:
+        if dotted.split(".", 1)[0] != TESTS_PACKAGE:
+            return None
+        path = dotted.replace(".", "/") + ".py"
+        if path == self.own.path:
+            return self.own
+        return self.modules.module(path) if self.modules else None
+
+    def resolve(self, module: _Module, node: ast.AST) -> tuple | None:
+        """(модуль, узел определения) имени `node` в пространстве имён
+        `module`: своё определение верхнего уровня либо `<модуль>.<имя>`
+        через привязку импорта."""
+        dotted = _dotted_name(node)
+        if not dotted:
+            return None
+        first, _sep, rest = dotted.partition(".")
+        if not rest and first in module.defs:
+            return module, module.defs[first]
+        qualified = module.bindings.get(first)
+        if qualified is None:
+            return None
+        full = f"{qualified}.{rest}" if rest else qualified
+        target_name, _sep, member = full.rpartition(".")
+        target = self._module(target_name) if target_name else None
+        if target is None or member not in target.defs:
+            return None
+        return target, target.defs[member]
+
+    def class_chain(self, cls: ast.ClassDef) -> list:
+        """[(модуль, класс)] — сам класс своего модуля и его базовые классы
+        внутри `tests` в глубину слева направо; цикл и неразрешимая база
+        обход не роняют."""
+        chain, seen = [], set()
+
+        def visit(module: _Module, node: ast.ClassDef) -> None:
+            key = (module.path, node.name)
+            if key in seen:
+                return
+            seen.add(key)
+            chain.append((module, node))
+            for base in node.bases:
+                found = self.resolve(module, base)
+                if found and isinstance(found[1], ast.ClassDef):
+                    visit(*found)
+
+        visit(self.own, cls)
+        return chain
+
+    def method(self, chain: list, name: str) -> tuple | None:
+        """(модуль, узел, происхождение) метода `name` по цепочке классов;
+        происхождение `None` — метод своего класса (прежняя форма находки),
+        иначе (`Класс.метод`, путь файла класса)."""
+        for index, (module, cls) in enumerate(chain):
+            for sub in cls.body:
+                if isinstance(sub, _FUNCTION_NODES) and sub.name == name:
+                    origin = None if index == 0 else \
+                        (f"{cls.name}.{name}", module.path or "")
+                    return module, sub, origin
+        return None
+
+    def function(self, callee: ast.AST) -> tuple | None:
+        """(модуль, узел, происхождение) вызываемой функции: голое имя
+        функции своего модуля без префикса `test_` (происхождение `None`)
+        либо функция `tests/sandbox.py` по импорту."""
+        if isinstance(callee, ast.Name):
+            node = self.own.defs.get(callee.id)
+            if isinstance(node, _FUNCTION_NODES):
+                if callee.id.startswith("test_"):
+                    return None
+                return self.own, node, None
+        found = self.resolve(self.own, callee)
+        if found is None:
+            return None
+        module, node = found
+        if module is self.own or module.path != SANDBOX_MODULE_PATH or \
+                not isinstance(node, _FUNCTION_NODES) or \
+                node.name.startswith("test_"):
+            return None
+        return module, node, (node.name, module.path)
+
+
+def _helper_calls(func: ast.AST, scope: _HelperScope, chain: list) -> list:
+    """(модуль, узел, происхождение) вспомогательных функций первого
+    уровня, которые зовёт `func` (требование 1; SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1): `self.<имя>(…)` — метод
+    своего класса, затем его базовых классов (`chain`), голое имя — функция
+    модуля без префикса `test_`, иначе — функция `tests/sandbox.py`. Каждый
+    вызов — отдельный элемент: помощник, вызванный дважды, дважды и
+    утверждает."""
     helpers = []
     for node in ast.walk(func):
         if not isinstance(node, ast.Call):
@@ -905,60 +1091,95 @@ def _helper_calls(func: ast.AST, methods: dict, functions: dict) -> list:
         callee = node.func
         if isinstance(callee, ast.Attribute) and \
                 isinstance(callee.value, ast.Name) and \
-                callee.value.id == "self" and callee.attr in methods:
-            helpers.append((node.lineno, node.col_offset,
-                            methods[callee.attr]))
-        elif isinstance(callee, ast.Name) and callee.id in functions and \
-                not callee.id.startswith("test_"):
-            helpers.append((node.lineno, node.col_offset,
-                            functions[callee.id]))
+                callee.value.id == "self":
+            found = scope.method(chain, callee.attr)
+        else:
+            found = scope.function(callee)
+        if found is not None:
+            helpers.append((node.lineno, node.col_offset, found))
     helpers.sort(key=lambda item: item[:2])
     return [helper for _line, _col, helper in helpers]
 
 
-def test_assertions(source) -> dict[str, list] | None:
+def test_assertions(source, path=None,
+                    modules: TestModules | None = None) -> dict[str, list] | None:
     """Утверждения тестовых методов текста `source` по квалифицированному
     имени (`_collect_qualified_test_functions`): список пар (нормальная
     форма, исходный текст) — свои утверждения метода на любой глубине и
-    утверждения вспомогательных функций первого уровня (требования 1-2).
+    утверждения вспомогательных функций первого уровня (требования 1-2),
+    включая унаследованных помощников и функции `tests/sandbox.py` (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF): `path` — путь самого файла, `modules` —
+    модули `tests/` той же стороны.
 
     `None` — текста нет либо он не парсится: сравнивать утверждения не с
     чем, и вызывающий обязан отличить это от «утверждений нет»."""
-    records = _assertion_records(source)
+    records = _assertion_records(source, path, modules)
     if records is None:
         return None
-    return {name: [(key, text) for key, text, _node in found]
+    return {name: [(key, text) for key, text, _node, _origin in found]
             for name, found in records.items()}
 
 
-def _assertion_records(source) -> dict[str, list] | None:
-    """То же, что `test_assertions`, но тройками (нормальная форма,
-    исходный текст, узел нормальной формы) — один обход на оба вида
-    ответа, чтобы различение смены ожидания не разошлось с наблюдением."""
+def _assertion_records(source, path=None,
+                       modules: TestModules | None = None) -> dict[str, list] | None:
+    """То же, что `test_assertions`, но четвёрками (нормальная форма,
+    исходный текст, узел нормальной формы, происхождение) — один обход на
+    оба вида ответа, чтобы различение смены ожидания не разошлось с
+    наблюдением. Происхождение — `None` у утверждений самого метода,
+    помощника своего класса и функции своего модуля, иначе (`Класс.метод`
+    либо имя функции, путь файла помощника)."""
     tree = _parse_or_none(source)
     if tree is None:
         return None
-    imports = _module_imports(tree)
-    functions = {node.name: node for node in tree.body
-                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    class_methods: dict[str, dict] = {}
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            class_methods[node.name] = {
-                sub.name: sub for sub in node.body
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    own = _module_entry(path, source, tree)
+    scope = _HelperScope(own, modules)
 
     result: dict[str, list] = {}
     for name, func in _collect_qualified_test_functions(tree).items():
         owner = name.split(TEST_NAME_SEP, 1)[0] if TEST_NAME_SEP in name \
             else None
-        methods = class_methods.get(owner, {}) if owner else {}
-        found = _own_assertions(func, source, imports)
-        for helper in _helper_calls(func, methods, functions):
+        cls = own.defs.get(owner) if owner else None
+        chain = scope.class_chain(cls) if isinstance(cls, ast.ClassDef) \
+            else []
+        found = [(*item, None)
+                 for item in _own_assertions(func, source, own.imports)]
+        for module, helper, origin in _helper_calls(func, scope, chain):
             if helper is not func:
-                found += _own_assertions(helper, source, imports)
+                found += [(*item, origin) for item in _own_assertions(
+                    helper, module.source, module.imports)]
         result[name] = found
     return result
+
+
+def weakened_helpers(base_source, head_source) -> set:
+    """Имена функций и методов классов текста base, которые в head
+    потеряли хоть одно своё утверждение (по нормальной форме) или исчезли
+    вместе с ними: по ним гейт ищет вызывающих в файлах вне диффа (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2). Неразбираемая сторона base —
+    пусто, head — как пустой файл."""
+    base, head = _helper_keys(base_source), _helper_keys(head_source)
+    return {name for (_cls, name), keys in base.items()
+            if Counter(keys) - Counter(head.get((_cls, name), ()))}
+
+
+def _helper_keys(source) -> dict:
+    """{(класс либо `None`, имя): [нормальные формы своих утверждений]} по
+    функциям модуля и методам классов верхнего уровня."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return {}
+    imports = _module_imports(tree)
+    found: dict = {}
+    for node in tree.body:
+        if isinstance(node, _FUNCTION_NODES):
+            found[(None, node.name)] = node
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, _FUNCTION_NODES):
+                    found[(node.name, sub.name)] = sub
+    return {key: [k for k, _text, _normal in
+                  _own_assertions(func, source, imports)]
+            for key, func in found.items()}
 
 
 def changed_test_assertions(base: dict, head: dict) -> dict[str, list]:
@@ -1032,11 +1253,17 @@ class AssertionChange(NamedTuple):
     base, константа head) в порядке появления; `signs` — признаки
     ослабления: у иной смены — почему правило смены ожидания её не
     признало, у смены ожидания — оценка строгости пар (требование 9),
-    пусто — строгость не ниже прежней."""
+    пусто — строгость не ниже прежней.
+
+    `origins` — происхождение каждого изменённого утверждения base (SPEC
+    01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2): `None` — утверждение самого
+    метода, помощника своего класса или функции своего модуля, иначе
+    (`Класс.метод` либо имя функции, путь файла помощника)."""
 
     kind: str
     pairs: tuple
     signs: tuple
+    origins: tuple = ()
 
 
 def _literal(node: ast.AST) -> tuple | None:
@@ -1133,7 +1360,7 @@ def _other_change_sign(lost: tuple, candidates: list) -> str:
     маскированной формой (требование 5); `candidates` — ещё не
     сопоставленные утверждения head (берётся первое того же вида, иначе
     первое вообще, и оно из кандидатов убирается)."""
-    _key, text, node = lost
+    _key, text, node, _origin = lost
     if not candidates:
         return f"{SIGN_REMOVED}: {text}"
     kind = _assertion_kind(node)
@@ -1323,7 +1550,8 @@ def _expectation_pairs(base_node: ast.AST, head_node: ast.AST) -> list:
     return pairs
 
 
-def assertion_changes(base_source, head_source) -> dict | None:
+def assertion_changes(base_source, head_source, paths=(None, None),
+                      modules=(None, None)) -> dict | None:
     """{квалифицированное имя: AssertionChange} по методам, имя которых
     есть по обе стороны и у которых изменены утверждения (SPEC
     01M45FJD46BX45VHC36S4VS9QN, требования 5 и 9).
@@ -1340,9 +1568,10 @@ def assertion_changes(base_source, head_source) -> dict | None:
     вычисленным значением, иной сдвиг маскированной формы).
 
     `None` — одна из сторон не разбирается (тот же контракт, что у
-    `test_assertions`)."""
-    base = _assertion_records(base_source)
-    head = _assertion_records(head_source)
+    `test_assertions`). `paths`/`modules` — путь файла и модули `tests/`
+    стороны base и стороны head (`test_assertions`)."""
+    base = _assertion_records(base_source, paths[0], modules[0])
+    head = _assertion_records(head_source, paths[1], modules[1])
     if base is None or head is None:
         return None
     changes: dict = {}
@@ -1350,7 +1579,7 @@ def assertion_changes(base_source, head_source) -> dict | None:
         if name not in head:
             continue
         head_items = head[name]
-        left = Counter(key for key, _text, _node in head_items)
+        left = Counter(item[0] for item in head_items)
         lost = []
         for item in base_items:
             if left[item[0]] > 0:
@@ -1359,7 +1588,7 @@ def assertion_changes(base_source, head_source) -> dict | None:
                 lost.append(item)
         if not lost:
             continue
-        right = Counter(key for key, _text, _node in base_items)
+        right = Counter(item[0] for item in base_items)
         added = []
         for item in head_items:
             if right[item[0]] > 0:
@@ -1376,9 +1605,11 @@ def assertion_changes(base_source, head_source) -> dict | None:
             else:
                 free.remove(pair)
                 matched.append((item, pair))
+        origins = tuple(item[3] for item in lost)
         if unmatched:
             signs = tuple(_other_change_sign(item, free) for item in unmatched)
-            changes[name] = AssertionChange(ASSERTION_CHANGE_OTHER, (), signs)
+            changes[name] = AssertionChange(ASSERTION_CHANGE_OTHER, (), signs,
+                                            origins)
             continue
         pairs, signs = [], []
         for item, pair in matched:
@@ -1387,7 +1618,7 @@ def assertion_changes(base_source, head_source) -> dict | None:
                 if sign:
                     signs.append(sign)
         changes[name] = AssertionChange(ASSERTION_CHANGE_EXPECTATION,
-                                        tuple(pairs), tuple(signs))
+                                        tuple(pairs), tuple(signs), origins)
     return changes
 
 
