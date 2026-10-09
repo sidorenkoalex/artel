@@ -3,59 +3,59 @@ task: 01M4G8N9KBTVNNT7YGZ59Q5WBF
 type: review
 author_role: reviewer
 status: changes_requested
-iteration: 1
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Гейт неослабления тестов видит утверждения в унаследованных помощниках и в tests/sandbox.py
 
 ## Фаза A — план
-- Таблица покрытия полна: требования 1–6 → шаги 1–4; числа требования 5
-  названы в «Подходе» (15 → 2) и подтверждены моим прогоном (см.
-  «Проверено исполнением»).
-- Шаги размера MR, подход (одно свойство в `_assertion_records` и три
-  потребителя через общий `_compare`) конвенциям не противоречит.
-- Неточность «Рисков»: пакет `tests/<x>/__init__.py` по общему правилу НЕ
-  разрешается — `_HelperScope._module` (`scripts/guard.py`, ~строка 1000)
-  строит путь только как `<x>.py` (R1-F3).
+- Таблица покрытия полна (1–6 → шаги 1–5), шаг 5 описывает правки по
+  ревью итерации 1. Риск о пакете `tests/<x>/__init__.py` исправлен
+  (R1-F3).
+- «Влияние на систему» отстаёт от кода: «`git grep` (только при
+  ослабленном помощнике)» — теперь поиск идёт и по изменённым классам с
+  утверждающей цепочкой (`guard.changed_classes`), например при любой
+  смене импортов `tests/sandbox.py` — R2-F2.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `_HelperScope.class_chain`/`method`/`function`: базовые классы своего файла, других модулей `tests/` и `tests/sandbox.py`, функции песочницы (голое имя, `sandbox.fn`, псевдоним), один уровень. |
-| 2 | реализовано не полностью | Ослабление внутри помощника находит вызывающих вне диффа; но вызывающие вне диффа ищутся только по `weakened_helpers`, и потеря утверждений вызывающего из‑за изменения цепочки классов в файле диффа (переопределение помощника без утверждений, смена базового класса) не видна — R1-F1. |
-| 3 | OK | `_counts` с модулями стороны; AC-3 зелёный. |
-| 4 | OK | `Finding.helpers` + `_helper_paths`; смешанная находка fail-closed; убыль храповика покрывается (`_decline_source(..., helpers)`). |
-| 5 | OK | 15 → 2 на `af5e1111`, воспроизведено. |
-| 6 | OK | Абзац в `docs/operator-gates.md` п.4. |
+| 1 | OK | Без изменений с итерации 1. |
+| 2 | реализовано не полностью | Сценарии R1-F1 (пустое переопределение, смена базы, наследник наследника вне диффа) закрыты; но поиск наследников обрывается на промежуточном модуле, который сам лежит в диффе — R2-F1. |
+| 3 | OK | AC-3 зелёный. |
+| 4 | OK | Без изменений. |
+| 5 | OK | 15 → 2 (проверено в итерации 1). |
+| 6 | OK | Абзац п.4 дополнен наследниками; утверждение «то же — у наследника класса…» станет верным целиком после R2-F1. |
 
 ## Замечания
 
-- major — `orchestrator/advance_gates/test_integrity.py` (блок «Вызывающие вне диффа» в `_compare`, `guard.weakened_helpers(...)`) и `scripts/guard.py::weakened_helpers` — кандидаты в вызывающие вне диффа выбираются только по именам помощников, ПОТЕРЯВШИХ своё утверждение, тогда как сравнение, которое они питают, смотрит на список утверждений вызывающего целиком. Сценарий (проверен скриптом на `guard` ветки): `tests/top.py::Top.check` с `assertEqual`, `tests/mid.py: class Mid(Top): pass`, `tests/test_c.py: class C(Mid)`, `test_m` зовёт `self.check(1)`. В ветке меняется только `tests/mid.py` — либо `Mid` получает переопределение `def check(self, v): pass`, либо базовый класс `Mid` меняется на `unittest.TestCase`. `weakened_helpers(mid_base, mid_head)` = `set()` в обоих случаях → `git grep` не запускается → у `C::test_m` (утверждения base `[assertEqual]`, head `[]`) находки нет, мерж не эскалирует. Тот же `C::test_m`, окажись `tests/test_c.py` в диффе, находку получает — гейт ведёт себя по-разному для одного и того же ослабления, и абзац `docs/operator-gates.md` («находка у каждого метода, который его зовёт, в том числе в файле, не менявшемся в ветке») для этого класса неверен. То же через `tests/sandbox.py`: класс песочницы, которому добавили пустое переопределение метода базового класса. — Предложение: кандидатов искать не только по ослабленным помощникам, но и по классам файлов диффа, у которых изменились базовые классы или набор методов (`git grep -w <ИмяКласса>` даёт наследников), и сравнивать их тем же `_assertion_observation(path, path, …, modules)`; закрепить тестом на оба варианта (переопределение и смена базы) с вызывающим вне диффа.
-- minor — `orchestrator/advance_gates/test_integrity.py::_side_modules`, `load` (`gitcmd.show(ref, path, repo=repo)[0]` для файла диффа вне области узла) и `read_unchanged` — сбой чтения модуля молча даёт `None`: если сбой у стороны base, помощники модуля невидимы только в базе, и ослабление в нём не даёт находки (fail-open), в отличие от остальных чтений узла, где молчание git — `_git_failure`. Сценарий редкий (сбой git на одной стороне). — Предложение: различать «модуля нет» и «git не ответил» (причина второго элемента `gitcmd.show`) и на сбой возвращать `_git_failure`.
-- minor — PLAN.md «Риски» / `scripts/guard.py::_HelperScope._module` — PLAN утверждает, что модуль-пакет `tests/<x>/__init__.py` разрешается по общему правилу, но путь строится только как `tests/<x>.py`; помощники из `tests/<x>/__init__.py` не видны. Вне требований SPEC, но документ плана неверен. — Предложение: поправить формулировку риска либо пробовать `<путь>/__init__.py` вторым.
+- major — `orchestrator/advance_gates/test_integrity.py`, `_compare`, цикл поиска (`if path in in_diff or path in visited or not in_scope(path): continue` перед `guard.subclass_names(text, classes)`) — наследники собираются только из файлов ВНЕ диффа: файл диффа, найденный `git grep` по имени изменённого класса, пропускается до `subclass_names`, и его классы-наследники не попадают в `pending`. Сценарий (воспроизведён зондом в `ConnRealGitSandbox` на коде ветки, файл зонда удалён): база — `tests/top.py` (`Root.check` с `assertEqual`, `class Top(Root)`), `tests/mid.py` (`class Mid(Top): pass`), `tests/test_caller.py` (`class CallerTest(Mid)`, `test_m` зовёт `self.check(1)`). В ветке `Top` меняет базу на `unittest.TestCase`, а `tests/mid.py` получает любую безобидную правку (комментарий). `merge_gate_escalates` → `False`, журнал пуст; без правки `tests/mid.py` тот же сценарий → `True`, находка у `CallerTest::test_m`. Тот же класс дефекта, что R1-F1 (эскалация зависит от того, тронут ли посторонний файл), и абзац п.4 `docs/operator-gates.md` («то же — у наследника класса, который перестал отдавать помощника») для него неверен. (Для ослабленного помощника обрыва нет — поиск идёт по имени помощника, зонд с `tests/mid.py` в диффе даёт находку.) — Предложение: до цикла (или в нём, до `continue` по `in_diff`) пополнять `classes`/`pending` наследниками из головного текста файлов диффа (`guard.subclass_names(head_source, classes)` до неподвижной точки), закрепить тестом «промежуточный модуль в диффе с несущественной правкой, вызывающий вне диффа — находка».
+- minor — PLAN.md «Влияние на систему», пункт «Новые вызовы git» — заявлено «`git grep` (только при ослабленном помощнике)», фактически поиск идёт и по `changed_classes`; смена одного импорта `tests/sandbox.py` даёт изменёнными `RealGitSandbox`, `ConnRealGitSandbox`, `OriginRealGitSandbox`, `AutoOriginSandbox`, `SyncedOriginConnSandbox`, `GitignoreCommittedRealGitSandbox` (проверено вызовом `guard.changed_classes`), а `git grep -lw` по семейству песочниц даёт ~200 файлов `tests/`, каждый — отдельный `git show` и разбор на обеих сторонах. Ложных находок это не даёт, но стоимость гейта на таком диффе план не называет. — Предложение: поправить пункт «Влияние на систему»/«Риски» (условие запуска поиска и порядок числа чтений на правке `tests/sandbox.py`).
 
-Тесты `tests/test_guard_helper_scope.py`: заявки «Ловит мутацию» правдоподобны и наблюдаемы; две проверены временной мутацией (см. ниже), долгоживущий файл задачи не дублируется. Существующие тесты `tests/` не изменены (дифф `tests/` — только новый файл). Карта кодовой базы свежа.
+Тесты `tests/test_test_integrity_helper_heirs.py`: заявки «Ловит мутацию» у всех 8 методов, наблюдаемы; одна проверена временной мутацией (см. ниже). Существующие тесты `tests/` не изменены (дифф `tests/` — только новый файл). Долгоживущий файл задачи не дублируется.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/advance_gates/test_integrity.py (`_compare`, вызывающие вне диффа); scripts/guard.py::weakened_helpers | Вызывающие вне диффа ищутся только по помощникам, потерявшим своё утверждение; переопределение помощника без утверждений или смена базового класса в файле диффа не порождает кандидатов | Метод вызывающего в неизменённом файле теряет все утверждения — гейт мержа молчит; тот же метод в файле диффа получил бы находку | fixed: `guard.changed_classes` (класс исчез / сменились базы / набор методов / импорты модуля, цепочка в base несёт утверждающий метод) добавляет имена классов к поиску `git grep`; по найденным файлам вне диффа поиск продолжается их классами-наследниками (`guard.subclass_names`) до неподвижной точки. Тесты `tests/test_test_integrity_helper_heirs.py::HeirOutsideDiffTest` — переопределение, смена базы (импорты те же), наследник наследника через модуль вне диффа; `ChangedClassesTest`. Абзац п.4 `docs/operator-gates.md` дополнен наследниками. |
-| R1-F2 | fixed | orchestrator/advance_gates/test_integrity.py::_side_modules | Сбой `gitcmd.show` при чтении модуля стороны молча = «модуля нет» | При сбое на стороне base ослабление в помощнике этого модуля не видно (fail-open) | fixed: непрочитанный модуль переспрашивается `gitcmd.ls_tree_files` той же стороны; путь есть в дереве либо git молчит — сбой в списке `_side_modules`, `_compare` отвечает `_git_failure`; модули односторонних файлов диффа читаются в том же проходе. Тесты `SideModuleReadFailureTest` (сбой / отсутствие). |
-| R1-F3 | fixed | PLAN.md «Риски»; scripts/guard.py::_HelperScope._module | План заявляет разрешение `tests/<x>/__init__.py`, код его не делает | Ложное утверждение в плане о покрытии | fixed: формулировка риска в PLAN.md исправлена — пакет `tests/<x>/__init__.py` не разрешается (вне требований SPEC); код не менялся. |
+| R1-F1 | accepted | orchestrator/advance_gates/test_integrity.py (`_compare`); scripts/guard.py::weakened_helpers | Вызывающие вне диффа искались только по ослабленным помощникам | — | Принято: `changed_classes` + `subclass_names`, три сценария закреплены тестами `HeirOutsideDiffTest`; остаточный обрыв на промежуточном файле диффа заведён отдельно как R2-F1. |
+| R1-F2 | accepted | orchestrator/advance_gates/test_integrity.py::_side_modules | Сбой `gitcmd.show` = «модуля нет» | — | Принято: переспрос `ls_tree_files`, сбой → `_git_failure`; тесты `SideModuleReadFailureTest` на оба исхода. |
+| R1-F3 | accepted | PLAN.md «Риски» | Ложное утверждение о пакете `tests/<x>/__init__.py` | — | Принято: формулировка исправлена. |
+| R2-F1 | open | orchestrator/advance_gates/test_integrity.py::_compare (цикл поиска, `continue` по `in_diff` до `subclass_names`) | Наследники изменённого класса не ищутся через промежуточный модуль, лежащий в диффе | Вызывающий вне диффа теряет утверждения молча, если ветка вдобавок тронула промежуточный модуль (комментарий) — мерж не эскалирует; без той правки эскалирует | Собирать наследников и из головных текстов файлов диффа до неподвижной точки; тест на сценарий |
+| R2-F2 | open | PLAN.md «Влияние на систему» / «Риски» | Условие запуска `git grep` описано как «только при ослабленном помощнике» | План занижает стоимость гейта на правке `tests/sandbox.py` (~200 кандидатов) | Обновить формулировку |
 
 ## Вердикт
-changes_requested — исправить R1-F1 (major); R1-F2 и R1-F3 — minor, по желанию в той же итерации, но реестр должен быть закрыт до `approved`.
+changes_requested — исправить R2-F1 (major) и формулировку плана R2-F2 (minor). R1-F1..R1-F3 приняты.
 
 ## Проверено исполнением
-- `python3 -m pytest -q tests/test_guard_helper_scope.py tests/test_01m4g8n9kbtvnnt7ygz59q5wbf_helper_assertions.py tests/test_test_integrity_gate.py tests/test_guard_assertion_changes.py tests/test_guard_test_ast.py tests/test_class_mandate_units.py tests/test_answer_mandate.py tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py` — 122 passed, 30 subtests passed.
-- `artel.py plank-run 01M4G8N9KBTVNNT7YGZ59Q5WBF` — отказ «планки нет» (в `refs/artifacts/…` нет `test_*.py`); долгоживущий файл задачи прогнан в наборе выше — 6/6 зелёные.
-- Скрипт-зонд (во временном файле, удалён): `guard.weakened_helpers` и `guard.test_assertions` с `TestModules` на сценарии R1-F1 — `weakened_helpers` = `set()` для переопределения и для смены базы, утверждения `C::test_m` base `[self.assertEqual(v, 1)]`, head `[]`.
-- Скрипт-зонд требования 5: старый `guard` (`git show af5e1111:scripts/guard.py`) vs новый с `TestModules` рабочего дерева — 4665 методов, без утверждений 15 → 2 (те же два метода, что в PLAN).
-- Временные мутации (код возвращён `git checkout`): `_decline_source` без `helpers.get(...)` → красный `test_ratchet_decline_in_caller_covered_by_helper_path`; привязка импорта по `alias.name` вместо `asname` → красный `test_aliased_import_is_helper`.
-- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md` — отличие только в `built_at_sha`, карта свежа (изменение откачено).
+- `python3 -m pytest -q tests/test_test_integrity_helper_heirs.py tests/test_guard_helper_scope.py tests/test_01m4g8n9kbtvnnt7ygz59q5wbf_helper_assertions.py tests/test_test_integrity_gate.py tests/test_guard_assertion_changes.py tests/test_guard_test_ast.py tests/test_class_mandate_units.py tests/test_answer_mandate.py tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py` — 130 passed, 30 subtests passed.
+- `artel.py plank-run 01M4G8N9KBTVNNT7YGZ59Q5WBF` — отказ «планки нет» (в `refs/artifacts/…` нет `test_*.py`); долгоживущий файл задачи прогнан выше — зелёный.
+- Зонд R2-F1 (временный `_review_probe_test.py` на `HeirSandbox` из теста ветки, `python3 -m unittest`, файл удалён): смена базы `Top` + комментарий в `tests/mid.py` → `merge_gate` `False`, журнал `[]`; без комментария → `True`, находка `CallerTest::test_m (помощник Root.check из tests/top.py)`; ослабленный `Top.check` + комментарий в `tests/mid.py` → `True` (обрыв только у ветки поиска по классам).
+- `guard.changed_classes(sandbox, 'import os as _zz\n' + sandbox, 'tests/sandbox.py', TestModules)` — 6 классов семейства `RealGitSandbox`; `git grep -lw` по семейству песочниц в `tests/` — 203 файла (R2-F2).
+- Временная мутация (возвращено `git checkout`): в `_compare` убрано `pending |= heirs - searched` → красный `HeirOutsideDiffTest::test_heir_of_heir_outside_diff_is_reached`, остальные 7 зелёные.
+- `git show --stat 3adf4d86` — автокоммит пульта трогает только строку `docs/codebase-map.md` (`built_at_sha`).
 
 ## Предложения системе
-- Гейт неослабления выбирает «затронутых» вне диффа эвристикой по именам; класс «эвристика выбора кандидатов уже, чем сравнение, которое она питает» стоит держать в review-checklist как отдельный пункт для инкрементальных гейтов (`orchestrator/advance_gates/`).
+- Сторож роли отказывает `pytest <файл вне tests/>` как «полный прогон набора» — временный зонд ревьювера пришлось гонять через `python3 -m unittest`; стоит различать в стороже явный путь файла и прогон без аргументов.
