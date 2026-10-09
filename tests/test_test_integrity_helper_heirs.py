@@ -102,9 +102,12 @@ class HeirOutsideDiffTest(HeirSandbox):
         набором методов, смена базовых классов не учитывается — наследник
         вне диффа не становится кандидатом, эскалации нет.
         """
-        self.commit_diff(self.base_files(), {
-            "tests/mid.py": ("import unittest\n\n\n"
-                             "class Mid(unittest.TestCase):\n    pass\n")})
+        # Импорты модуля те же: меняется только база класса.
+        mid = "import unittest\n" + MID
+        files = self.base_files()
+        files["tests/mid.py"] = mid
+        self.commit_diff(files, {"tests/mid.py": mid.replace(
+            "class Mid(Top)", "class Mid(unittest.TestCase)")})
         self.assertTrue(self.merge_gate())
         self.assertIn("CallerTest::test_m", self.escalation())
 
