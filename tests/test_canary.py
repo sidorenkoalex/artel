@@ -736,6 +736,12 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def test_attrs_point_under_clone_inside_block_and_restore_after(self):
+        """Внутри блока атрибуты `config` смотрят под клон, после — прежние,
+        каталог клона убран.
+
+        Ловит мутацию: пересчёт пути под клон снят (атрибут остался под
+        главной копией), восстановление `config` по выходу из блока снято
+        или каталог клона не удаляется в `finally` `_ephemeral_clone`."""
         saved_before = {attr: getattr(config, attr)
                         for attr in canary._CLONE_CONFIG_ATTRS}
         fake_clone_dir = self.outer_root.parent / "clone"
@@ -763,6 +769,11 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
         self.assertFalse(fake_clone_dir.exists())
 
     def test_config_restored_even_when_block_raises(self):
+        """Исключение в блоке не оставляет `config` под клоном и клон на диске.
+
+        Ловит мутацию: восстановление атрибутов `config` или удаление
+        каталога клона перенесены из `finally` в обычный выход блока —
+        после `ValueError` атрибут смотрит в удалённый клон."""
         saved_before = {attr: getattr(config, attr)
                         for attr in canary._CLONE_CONFIG_ATTRS}
         fake_clone_dir = self.outer_root.parent / "clone2"
