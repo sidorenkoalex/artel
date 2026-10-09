@@ -84,10 +84,10 @@ def repo_for_target(target: str | None) -> Path:
 
 
 def task_repo(task_id: str) -> Path:
-    """Репозиторий ссылки документов задачи — по её target из БД. Файла БД
-    нет — нет и строки задачи, target тот же, что дал бы `task_target`
-    (артель); БД не заводится ради чтения."""
-    if not config.DB.exists():
+    """Репозиторий ссылки документов задачи — по её target из БД. БД нет
+    или она непригодна (`store.db_usable`) — нет и строки задачи, target тот
+    же, что дал бы `task_target` (артель); БД не заводится ради чтения."""
+    if not store.db_usable():
         return repo_for_target(config.DEFAULT_TARGET)
     return repo_for_target(store.task_target(store.db(), task_id))
 

@@ -942,7 +942,13 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
                   f"тестов; повтори: artel.py approve {task_id}")
     elif run.outcome == acceptance.FULL_SUITE_NOT_STARTED:
         detail = f"полный набор tests/ после приложений — {run.detail}"
-        advice = (f"прогон не запускался; повтори, когда машина "
+        # Файлы БД пульта в дереве прогона (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3,
+        # требование 4) — тоже «не начат», но ждать освобождения машины тут
+        # бессмысленно: команду уборки называет сам `run.detail`.
+        advice = ("прогон не запускался; убери файлы БД пульта командой из "
+                  f"причины и повтори: artel.py approve {task_id}"
+                  if "worktree-db-clean" in run.detail else
+                  f"прогон не запускался; повтори, когда машина "
                   f"освободится: artel.py approve {task_id}")
     else:
         detail = f"приложения ломают тесты: {run.detail}"

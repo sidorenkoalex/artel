@@ -1382,14 +1382,15 @@ def live_task_set_providers() -> set:
     на наборе вправе перевести роль на модель провайдера, которого не
     требует ни один ярус (требование 4).
 
-    БД нет — пустое множество, без её создания: манифест читают и вне
-    пульта (CI `scripts/stack_ci.py`). Нечитаемая БД, состав или модель
-    вне каталога — пропуск, а не исключение: о модели набора, которую
-    шаг не запустит, говорит именованный отказ самого шага."""
+    БД нет или она непригодна (`store.db_usable`) — пустое множество, без
+    её создания: манифест читают и вне пульта (CI `scripts/stack_ci.py`).
+    Нечитаемая БД, состав или модель вне каталога — пропуск, а не
+    исключение: о модели набора, которую шаг не запустит, говорит
+    именованный отказ самого шага."""
     import sqlite3
 
     from . import store
-    if not config.DB.exists():
+    if not store.db_usable():
         return set()
     try:
         rows = store.all_tasks(store.db())
@@ -1461,13 +1462,13 @@ def _set_pair_withdrawn(role: str, model_id: str, catalog: Catalog,
         document = load_model_sets()
     except ModelsError as exc:
         return f"допуск пары {role} → {model_id} не подтверждён: {exc}"
+    from . import store
     refusal = _pair_refusal(document, role, model_id)
-    if refusal is not None or not config.DB.exists():
+    if refusal is not None or not store.db_usable():
         return refusal
     # Приостановка пультом перекрывает `state: допущена` файла (SPEC
     # 01M3YCHVVEK14SK8GT4R0H7M2C, требование 5): шага роли на
     # приостановленной паре после приостановки нет.
-    from . import store
     return pair_suspension_refusal(store.db(), role, model_id)
 
 

@@ -50,10 +50,10 @@ def hooks_path() -> Path:
 
 
 def task_target(task_id: str) -> str:
-    """Проект задачи по БД; файла БД нет — нет и строки задачи, проект тот
-    же, что дал бы `store.task_target` (артель); БД ради чтения не
-    заводится."""
-    if not config.DB.exists():
+    """Проект задачи по БД; БД нет или она непригодна (`store.db_usable`) —
+    нет и строки задачи, проект тот же, что дал бы `store.task_target`
+    (артель); БД ради чтения не заводится."""
+    if not store.db_usable():
         return config.DEFAULT_TARGET
     return store.task_target(store.db(), task_id)
 
@@ -268,6 +268,36 @@ def cmd_workspace(task_id: str, session_id: str | None = None) -> None:
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_workspace(conn, task_id))
+
+
+def cmd_worktree_db_clean(task_id: str) -> None:
+    """CLI `worktree-db-clean <id>` (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3,
+    требование 6): файлы БД пульта (`store.TREE_DB_FILES`) из рабочей копии
+    задачи — в каталог логов пульта `config.LOGS`, под именем с id задачи и
+    меткой времени. Перенос, а не удаление: кто завёл файл, не установлено,
+    и содержимое — улика. Существующие файлы логов не перезаписываются.
+    Файлов нет — сообщение и успешный выход, ничего не меняется."""
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    wt_path = path(task_id, store.task_target(conn, task_id))
+    found = store.tree_db_files(wt_path)
+    if not found:
+        print(f"[{task_id}] в рабочей копии {wt_path} файлов БД пульта нет — "
+              f"переносить нечего")
+        return
+    logs = Path(config.LOGS)
+    logs.mkdir(parents=True, exist_ok=True)
+    stamp = store.now().replace(" ", "T").replace(":", "")
+    for rel in found:
+        source = wt_path / rel
+        name = f"{task_id}-worktree-{stamp}-{Path(rel).name}"
+        dest = logs / name
+        number = 1
+        while dest.exists():
+            number += 1
+            dest = logs / f"{name}.{number}"
+        shutil.move(str(source), str(dest))
+        print(f"[{task_id}] перенесён {source} → {dest}")
 
 
 def _cmd_workspace(conn, task_id: str) -> None:

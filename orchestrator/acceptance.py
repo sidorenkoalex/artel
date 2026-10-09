@@ -305,9 +305,9 @@ def suite_load_line(metrics: dict) -> str:
 
 
 def journal_suite_metrics(task_id: str, metrics: dict | None) -> None:
-    if metrics is None or not config.DB.exists():
-        return
     from . import store
+    if metrics is None or not store.db_usable():
+        return
     conn = store.db()
     if conn is None:
         return
@@ -770,7 +770,7 @@ def _plank_helper_text(task_id: str, code_dir: Path, revision: str) -> str:
     from . import store, workspace  # workspace -> runner -> acceptance
     code_dir = Path(code_dir).resolve()
     branch = (store.task_branch(store.db(), task_id)
-              if config.DB.exists() else "")
+              if store.db_usable() else "")
     repo = workspace.task_repo(task_id)
     if not branch:
         branch = gitcmd.current_branch(code_dir) or "HEAD"
@@ -950,6 +950,51 @@ def _not_started_note(holder: dict) -> str:
             f"{suite_lock.describe(holder)} — замок полных прогонов не "
             f"освободился за {config.FULL_SUITE_LOCK_WAIT_SEC} с ожидания, "
             f"pytest не запускался")
+
+
+# Флаг `approve <id> --fresh-suite` (`artel.py`): называется в тексте
+# итога, взятого из кэша, — как прогнать набор заново (SPEC
+# 01M4FYTB8QWJNHYCP35K8QC4E3, требование 5).
+FRESH_SUITE_FLAG = "--fresh-suite"
+
+# Пометка записи журнала о файле БД пульта, заведённом самим прогоном
+# набора (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3, требование 4).
+FULL_SUITE_DB_CREATED_ACTION = ("прогон набора создал файл БД — неполная "
+                                "изоляция тестов")
+
+
+def _db_in_tree_note(root: Path, task_id: str, found: list[str]) -> str:
+    """Текст отказа «в дереве прогона файлы БД пульта» (SPEC
+    01M4FYTB8QWJNHYCP35K8QC4E3, требование 4). Исход — «прогон не начат»:
+    набор не запускался, и все потребители узла (автогейт, `approve`, гейт
+    мержа) читают его как «не проверен», а не как красноту задачи. Тест,
+    импортировавший пакет из этого дерева, принял бы такой файл за БД
+    пульта — 09.10 так краснели одни и те же 7 тестов два прогона подряд."""
+    paths = ", ".join(str(Path(root) / rel) for rel in found)
+    return (f"{FULL_SUITE_NOT_STARTED}: полный набор tests/ не проверен — в "
+            f"дереве прогона лежат файлы БД пульта: {paths}; убрать их: "
+            f"artel.py worktree-db-clean {task_id}, затем повторить гейт")
+
+
+def _journal_db_files_created(root: Path, task_id: str,
+                              recordable: bool) -> None:
+    """След файла БД пульта, появившегося в дереве за время прогона (до
+    прогона их там не было — иначе отказ `_db_in_tree_note`). Исход прогона
+    и запись итога от этого не зависят; сбой записи журнала прогон не
+    роняет."""
+    from . import store  # store -> ... -> acceptance
+    created = store.tree_db_files(root)
+    if not created:
+        return
+    detail = ", ".join(str(Path(root) / rel) for rel in created)
+    print(f"[{task_id}] {FULL_SUITE_DB_CREATED_ACTION}: {detail}", flush=True)
+    if not recordable:
+        return
+    try:
+        store.journal(store.db(), task_id, "orchestrator",
+                      FULL_SUITE_DB_CREATED_ACTION, detail)
+    except sqlite3.Error as exc:
+        print(f"[{task_id}] запись журнала не удалась: {exc}", file=sys.stderr)
 
 
 class FullSuiteRun(NamedTuple):
@@ -1393,7 +1438,31 @@ def suite_tree_hash(root: Path, *, ref: str = "HEAD", base: bool = False,
                         "--", *config.FULL_SUITE_BASE_EXCLUDED_PATHS) is None:
             return None
         tree = git("write-tree")
-        return tree if tree and re.fullmatch(r"[0-9a-f]{40}", tree) else None
+        if not tree or not re.fullmatch(r"[0-9a-f]{40}", tree):
+            return None
+    return _with_tree_db_files(root, tree) if worktree and not base else tree
+
+
+def _with_tree_db_files(root: Path, tree: str) -> str:
+    """Снимок рабочего дерева с учётом файлов БД пульта (SPEC
+    01M4FYTB8QWJNHYCP35K8QC4E3, требование 5): git их не видит (`.artel/`
+    игнорируется), а итог набора от них зависит — 09.10 после уборки файла
+    `approve` выдал прежний красный итог из кэша. Файлов нет — тот же sha
+    дерева, что и до задачи (сохранённые итоги чистых деревьев не теряются);
+    есть — sha1 от дерева, наличия и sha256 содержимого каждого файла, той
+    же формы в 40 знаков, что ждут `suite_result_key`/`saved_suite_result`.
+    Итог базы (`base=True`) их не учитывает: его сверяют с деревом коммита
+    (`suite-run`), где файлов БД нет по построению."""
+    from . import store  # store -> ... -> acceptance
+    if not store.tree_db_files(root):
+        return tree
+    digest = hashlib.sha1(tree.encode())
+    for rel in store.TREE_DB_FILES:
+        path = Path(root) / rel
+        digest.update(f"\0{rel}\0".encode())
+        digest.update(b"+" + hashlib.sha256(path.read_bytes()).digest()
+                      if path.is_file() else b"-")
+    return digest.hexdigest()
 
 
 def suite_result_key(tree: str, command: list[str] | None = None,
@@ -1512,19 +1581,19 @@ def full_suite(root: Path, task_id: str,
     _last_full_suite_metrics = None
     from . import project_profile, store  # store -> ... -> acceptance
     # Прямой вызов узла без БД (юнит-сценарии и временные деревья) не
-    # должен создавать пустой state.db: читатели ссылок документов считают
-    # наличие файла признаком готовой схемы и запрашивают таблицу tasks.
-    target = config.DEFAULT_TARGET
-    if config.DB.exists():
-        try:
-            target = store.task_target(store.db(), task_id)
-        except sqlite3.OperationalError as exc:
-            if "no such table: tasks" not in str(exc):
-                raise
+    # должен создавать state.db: чтение БД её не заводит (SPEC
+    # 01M4FYTB8QWJNHYCP35K8QC4E3, требование 2).
+    recordable = store.db_usable()
+    target = (store.task_target(store.db(), task_id) if recordable
+              else config.DEFAULT_TARGET)
+    in_tree = store.tree_db_files(root)
+    if in_tree:
+        note = _db_in_tree_note(root, task_id, in_tree)
+        return FullSuiteRun(False, FULL_SUITE_NOT_STARTED, "", None,
+                            _full_suite_detail(FULL_SUITE_NOT_STARTED, "",
+                                               None, note))
     limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
-    # Direct unit calls without a usable task database cannot journal.
-    recordable = bool(config.DB.exists() and store.db() is not None)
     try:
         tree = suite_tree_hash(root)
         key = suite_result_key(tree, command) if tree else None
@@ -1535,7 +1604,9 @@ def full_suite(root: Path, task_id: str,
                 stamp = time.strftime("%Y-%m-%d %H:%M:%S UTC",
                                       time.gmtime(saved["finished_at"]))
                 note = (f"итог прогона {stamp}, дерево {tree}, лог "
-                        f"{saved['log_path']} — использован повторно")
+                        f"{saved['log_path']} — использован повторно; "
+                        f"прогнать набор заново — флаг {FRESH_SUITE_FLAG} "
+                        f"(artel.py approve {task_id} {FRESH_SUITE_FLAG})")
                 detail = _full_suite_detail(saved["outcome"],
                                             saved.get("digest") or saved["summary"],
                                             Path(saved["log_path"]))
@@ -1560,6 +1631,7 @@ def full_suite(root: Path, task_id: str,
             green, output = run_full_suite(root, **run_kwargs)
         else:
             green, output = run_full_suite(root, command=command, **run_kwargs)
+    _journal_db_files_created(root, task_id, recordable)
     outcome = _full_suite_outcome(green, output)
     if outcome == FULL_SUITE_NOT_STARTED:
         # Прогона не было: ни лога, ни выжимки, ни итога по sha.
