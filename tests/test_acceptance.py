@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import acceptance, ci, config, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, isolate_pult_db  # noqa: E402
 
 PASSING_TEST = """import unittest
 
@@ -406,6 +406,7 @@ class MaterializeFromBranchGitFailureTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.code_dir = Path(tmp.name)
+        isolate_pult_db(self)
 
     def test_none_from_ls_tree_files_leaves_existing_plank_untouched(self):
         """Ловит мутацию: `ls_tree_files(...) or []` смешивает `None`

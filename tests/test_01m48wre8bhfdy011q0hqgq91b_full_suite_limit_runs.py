@@ -38,7 +38,8 @@ from unittest import mock
 
 from orchestrator import (acceptance, catalog, checkpoint, ci, config, fsm,
                           github_adapter, store, workspace)
-from tests.sandbox import RealGitSandbox, capture, make_project_repo
+from tests.sandbox import (RealGitSandbox, capture, make_project_repo,
+                           wait_processes_gone)
 
 CODE_ROOT = Path(acceptance.__file__).resolve().parent.parent
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -57,11 +58,17 @@ def note(event):
 
 def test_{name}():
     note("start")
-    deadline = time.time() + {hold}
-    while time.time() < deadline and not os.path.exists({stop!r}):
+    for _ in range(int({hold} / 0.05) + 1):
+        if os.path.exists({stop!r}):
+            break
         time.sleep(0.05)
     note("end")
 '''
+# Пробник держится числом пауз, а не сроком по часам (SPEC
+# 01M4G8MNEPECNX1TCEDW4T4RPX, требование 3): срок по `time.time()` на
+# медленной машине истекал раньше предела прогона, и прогон заканчивался
+# сам — отчёта «не уложился» не было. Пауз хватает не меньше чем на `hold`
+# секунд.
 
 SPEC_TEXT = """---
 task: {task}
@@ -178,9 +185,7 @@ class ProbeSandbox(RealGitSandbox):
         pids = {pid for rec in self.events("start")
                 for pid in (rec["pid"], rec["ppid"])}
         pids -= {os.getpid(), 1}
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and any(pid_alive(p) for p in pids):
-            time.sleep(0.1)
+        wait_processes_gone(pids, pid_alive)
         for pid in pids:
             if pid_alive(pid):
                 with contextlib.suppress(ProcessLookupError, PermissionError):
