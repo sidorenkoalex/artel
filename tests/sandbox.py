@@ -653,6 +653,20 @@ class TmpDirTest(unittest.TestCase):
         self.tdir = Path(tmp.name)
 
 
+def isolate_pult_db(testcase: unittest.TestCase) -> Path:
+    """`config.DB` теста — путь во временном каталоге (файла нет) до конца
+    теста (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3, требование 3): без подмены тест
+    читает `.artel/state.db` корня дерева прогона — 09.10 пустой файл там
+    дважды подряд красил одни и те же тесты приёмки."""
+    tmp = tempfile.TemporaryDirectory()
+    testcase.addCleanup(tmp.cleanup)
+    db = Path(tmp.name) / ".artel" / "state.db"
+    patcher = mock.patch.object(config, "DB", db)
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+    return db
+
+
 class TmpPlanPathTest(unittest.TestCase):
     """Временный каталог + путь будущего `PLAN.md` в нём, файл ещё не
     создан (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт

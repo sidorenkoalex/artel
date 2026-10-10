@@ -148,7 +148,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
            [--fresh-suite] [--no-answer] |
   reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
-  kill <id> | release <id> |
+  kill <id> | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
@@ -1800,6 +1800,10 @@ def main() -> None:
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),
         "workspace": lambda: workspace.cmd_workspace(rest[0]),
+        # Инструмент Оператора: переносит файлы из рабочей копии задачи —
+        # вне белого списка ролей (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3,
+        # требование 8).
+        "worktree-db-clean": lambda: workspace.cmd_worktree_db_clean(rest[0]),
         "run": lambda: _cmd_run_or_detach(rest),
         "auto": lambda: _cmd_auto_or_detach(rest),
         "stop": lambda: _cmd_stop(rest[0]),
