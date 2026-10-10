@@ -21,7 +21,9 @@ schema_version: 5
 
 **Слепота — сторож главной копии** (`orchestrator/checkpoint.py`):
 - `main_copy_watch_start(conn, task_id)` — снимок `git status --porcelain`
-  главной копии (`gitcmd.git`, корень `config.ROOT`) и id/время записи
+  главной копии (своя точка вызова `subprocess.run(["git", "-C",
+  config.ROOT, "status", "--porcelain"], env=gitcmd.pult_env())`, не
+  `gitcmd.git` — см. «Возврат из verifying») и id/время записи
   «agent run started» этого шага; зовётся в `runner.run_agent_once` сразу
   после `_prepare_step`, до запуска агента. git не ответил — `None`, сверки
   не будет (шаг не страдает).
@@ -51,6 +53,25 @@ schema_version: 5
   (store.py — путь «только чтение» ТЗ, новых запросов в нём не заводим).
 - Сторож ничего не откатывает и не меняет состояние задачи (требование
   5): только `git status` и `raise_alert`.
+
+**Возврат из verifying (ANSWER-1, CI 772f0613 красный).** Сверка главной
+копии шла через `gitcmd.git("status", "--porcelain")` в
+`checkpoint._main_copy_status`:
+1. `test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py::...::test_ac8_every_call_without_repo_is_in_the_allow_list`
+   — вызов примитива без явного репозитория вне перечня;
+2. `test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`
+   — лишний `['status', '--porcelain']` в точном списке git-вызовов шага
+   (тест подменяет `gitcmd.git`).
+Исправление — одно место, закрывает оба класса: `_main_copy_status` зовёт
+git своей точкой вызова (`subprocess.run` с `-C <config.ROOT>` —
+репозиторий назван явно, окружение пульта `gitcmd.pult_env()`; сбой
+запуска/декодирования — `None`, как прежде). Сторож — наблюдение пульта
+за собой, а не git-вызов шага, поэтому в последовательность, которую
+сверяют тесты `gitcmd.git`, не попадает. Долгоживущие тесты не правились.
+Свой `tests/test_main_copy_watch.py`: подмена сбоя git перенесена с
+`gitcmd.git` на `checkpoint.subprocess.run` (имя метода и утверждения те
+же). Других вызовов `gitcmd.*` без репозитория в diff задачи нет
+(`git diff main -- orchestrator/` проверен).
 
 ## Шаги
 1. `scripts/codebase_map.py`: корень от `__file__`, докстринг модуля;
@@ -107,12 +128,27 @@ schema_version: 5
 - `plank-run`: планки нет (в ссылке документов только перечень сумм
   долгоживущих файлов) — pytest не запускался.
 - Карта регенерирована `python3 scripts/codebase_map.py`.
-- Полный набор `suite-run` не прогнан: три попытки получили отказ «на
-  машине уже идёт прогон гейта задачи 01M4G8N9KBTVNNT7YGZ59Q5WBF» (замок
-  полных прогонов); цикл ожидания в шаге недоступен (песочница bash).
-  Полный набор выполнят CI и гейт приёмки.
+- Итерация 1 (до возврата): полный набор `suite-run` не прогнан — три
+  попытки получили отказ замка полных прогонов
+  (задача 01M4G8N9KBTVNNT7YGZ59Q5WBF).
+- Итерация 2 (возврат из verifying, ANSWER-1):
+  - оба упавших в CI теста —
+    `tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py`,
+    `tests/test_review_package.py` — плюс
+    `tests/test_01m4g8kpp8dvnbcpgcapsvmakz_*.py` и
+    `tests/test_main_copy_watch.py`: 158 passed, 24 subtests;
+  - затронутые модули (`test_checkpoint_*` ×4, `test_runner_*` ×5,
+    `test_timeout_checkpoint`, `test_codebase_map`): 144 passed;
+  - `suite-run` №1 (полный набор): 4776 passed, 2 skipped, 1 failed —
+    `tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`,
+    отчёт пульта: «падают и на базе» (база eccf5709), новых падений на
+    ветке 0; тест вне зоны задачи (`liveness.py` не тронут);
+  - карта регенерирована (`docs/codebase-map.md`, 3 строки).
 
 ## Предложения системе
+- `suite-run --wait` в сводке красного прогона печатает «прошло: 1,
+  упало: 0» при логе «1 failed, 4776 passed» — сводка пульта расходится
+  с итогом pytest (orchestrator/suite_run.py, `render`/`parse`).
 - Шаг роли (bash-песочница) отказывает в `ls`/`cat` — роль не может
   посмотреть содержимое каталога документов иначе как через
   `python3 -c os.walk`; миссия шага этого не упоминает.
