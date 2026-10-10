@@ -1,3 +1,4 @@
 # Паспорт живой задачи
 
 2026-10-10 07:23:01Z  spec_gate  actor=fsm
+2026-10-10 07:41:42Z  killed  actor=operator
