@@ -81,6 +81,38 @@ def _docs_in_code_copy(own_dir: Path) -> list[str]:
                   .startswith("acceptance_tests/"))
 
 
+def _drift_from_ref(task_id: str, own_dir: Path) -> list[str] | None:
+    """Файлы `acceptance_tests/` рабочей копии кода, расходящиеся с
+    зафиксированной планкой ссылки документов (изменённые, новые и, если
+    на диске планка есть, — недостающие): незафиксированная правка
+    Оператора для `amend-tests`, которую выкладка и уборка `plank-run`
+    стёрли бы молча (SPEC 01M4JD36367E5CG3GXDV429XTE, требование 3).
+    Помощник пульта и кеш байткода — не планка. Пусто — на диске файлов
+    планки нет или они совпадают со ссылкой; `None` — ссылка не прочитана."""
+    plank_dir = own_dir / "acceptance_tests"
+    disk = {rel: data for rel, data in _draft_files(plank_dir).items()
+            if rel != acceptance.PLANK_HELPER_NAME}
+    if not disk:
+        return []
+    ref = artifact_branch.branch_name(task_id)
+    prefix = f"tasks/{task_id}/acceptance_tests/"
+    paths = artifact_branch.ls_tree(task_id, ref, prefix.rstrip("/"))
+    if paths is None and not artifact_branch.rev_sha(task_id, ref):
+        paths = []
+    if paths is None:
+        return None
+    fixed: dict[str, bytes] = {}
+    for path in paths:
+        if not path.startswith(prefix):
+            continue
+        text, _reason = artifact_branch.show(task_id, ref, path)
+        if text is None:
+            return None
+        fixed[path[len(prefix):]] = text.encode("utf-8")
+    return sorted(rel for rel in set(disk) | set(fixed)
+                  if disk.get(rel) != fixed.get(rel))
+
+
 def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
@@ -130,6 +162,18 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
                  f"пишутся в каталог документов "
                  f"{artifact_branch.docs_dir(task_id, target)}, а plank-run "
                  f"убирает {own_dir} целиком")
+    drift = _drift_from_ref(task_id, own_dir)
+    if drift is None:
+        sys.exit(f"{head}: отказ — ссылка документов "
+                 f"{artifact_branch.branch_name(task_id)} не прочитана (git "
+                 f"не ответил); сверить {own_dir / 'acceptance_tests'} не с "
+                 f"чем, планка не выложена")
+    if drift:
+        sys.exit(f"{head}: отказ — в {own_dir / 'acceptance_tests'} файлы "
+                 f"расходятся с зафиксированной планкой: {', '.join(drift)}; "
+                 f"выкладка стёрла бы эту правку. Зафиксируй её: artel.py "
+                 f"amend-tests {task_id} --reason «…» — или убери файлы "
+                 f"сам; pytest не запускался")
 
     print(f"{head}: {source}, cwd {code_dir}", flush=True)
     with acceptance.plank_in_code_copy(
