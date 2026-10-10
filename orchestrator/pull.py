@@ -30,6 +30,7 @@ SPEC.md — документа другой роли — с ветки, имен
 """
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -85,6 +86,17 @@ PULL_CONFLICT_MARKED_STATES = ("in_dev", "acceptance", "merge_gate")
 # слитых файлов — в `detail`, тем же приёмом, что и запись о карте рядом:
 # читатель журнала и тест находят запись по действию, не по перечислению.
 ADDITIVE_CONFLICT_ACTION = "аддитивный конфликт слит"
+
+# Фиксированный текст действия журнала (SPEC 01M4JMMH70NWJG72G422BFY1KC,
+# требование 2): отказ шага авторазрешения конфликта подтяжки. Прежде такой
+# отказ молча закрывал путь автоматики, и причина эскалации (например,
+# регенерация карты под непригодным `python3`) в журнал не попадала. Шаг,
+# код возврата и хвост stderr — в `detail`; запись делается ДО эскалации,
+# сама эскалация не меняется.
+AUTO_RESOLVE_STEP_FAILED_ACTION = "авторазрешение конфликта подтяжки: шаг отказал"
+
+# Потолок хвоста stderr в записи выше (требование 2).
+STEP_STDERR_TAIL = 500
 
 
 class Fresh:
@@ -310,23 +322,59 @@ def _merged_doc_texts(wt_path, docs: list) -> dict | None:
         return merged
 
 
-def _resolve_map_stage(wt_path) -> bool:
+def _journal_step_failure(conn, task_id: str, step: str, code,
+                          stderr: str) -> None:
+    """Запись журнала об отказе шага авторазрешения (SPEC
+    01M4JMMH70NWJG72G422BFY1KC, требование 2): шаг, код возврата (`None` —
+    процесс не ответил кодом) и хвост stderr не длиннее
+    `STEP_STDERR_TAIL` символов."""
+    tail = (stderr or "").strip()[-STEP_STDERR_TAIL:] or "пусто"
+    code_text = "нет" if code is None else str(code)
+    store.journal(conn, task_id, "orchestrator",
+                  AUTO_RESOLVE_STEP_FAILED_ACTION,
+                  f"шаг: {step}; код возврата: {code_text}; stderr: {tail}")
+
+
+def _git_step_ok(conn, task_id: str, wt_path, *args: str) -> bool:
+    """git-шаг авторазрешения; отказ (`None` или ненулевой код) — запись
+    журнала `_journal_step_failure` и `False`."""
+    res = gitcmd.in_repo(wt_path, *args)
+    if res is not None and res.returncode == 0:
+        return True
+    if res is None:
+        _journal_step_failure(conn, task_id, f"git {' '.join(args)}", None,
+                              "git не ответил")
+    else:
+        _journal_step_failure(conn, task_id, f"git {' '.join(args)}",
+                              res.returncode, res.stderr)
+    return False
+
+
+def _resolve_map_stage(conn, task_id: str, wt_path) -> bool:
     """Карта кодовой базы в конфликтном наборе (SPEC T067, требования 1-2,
     5): `checkout --theirs` + регенерация на слитом дереве worktree задачи
     + `add`. Коммит — не здесь: merge завершает ОДИН коммит подтяжки на
-    весь набор (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9, требования 7 и 9)."""
-    checkout = gitcmd.in_repo(wt_path, "checkout", "--theirs", MAP_REL)
-    if checkout is None or checkout.returncode != 0:
+    весь набор (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9, требования 7 и 9).
+
+    Регенерация — под интерпретатором процесса пульта (`sys.executable`,
+    SPEC 01M4JMMH70NWJG72G422BFY1KC, требование 1): голый `python3` из PATH
+    окружения, где первым стоит интерпретатор ниже требуемого, падает на
+    синтаксисе генератора и эскалировал конфликт, который пульт разрешает
+    сам."""
+    if not _git_step_ok(conn, task_id, wt_path, "checkout", "--theirs", MAP_REL):
         return False
+    step = "регенерация карты scripts/codebase_map.py"
     try:
-        regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+        regen = subprocess.run([sys.executable, "scripts/codebase_map.py"],
                                cwd=wt_path, capture_output=True, text=True)
-    except OSError:
+    except OSError as exc:
+        _journal_step_failure(conn, task_id, step, None, str(exc))
         return False
     if regen.returncode != 0:
+        _journal_step_failure(conn, task_id, step, regen.returncode,
+                              regen.stderr)
         return False
-    added = gitcmd.in_repo(wt_path, "add", MAP_REL)
-    return added is not None and added.returncode == 0
+    return _git_step_ok(conn, task_id, wt_path, "add", MAP_REL)
 
 
 def _map_journal_detail(files: list) -> str:
@@ -367,17 +415,17 @@ def _auto_resolve_conflict(conn, task_id: str, wt_path, source_branch: str,
     for rel, text in merged.items():
         try:
             (Path(wt_path) / rel).write_text(text, encoding="utf-8")
-        except OSError:
+        except OSError as exc:
+            _journal_step_failure(conn, task_id, f"запись слитого {rel}",
+                                  None, str(exc))
             return False
-        added = gitcmd.in_repo(wt_path, "add", rel)
-        if added is None or added.returncode != 0:
+        if not _git_step_ok(conn, task_id, wt_path, "add", rel):
             return False
-    if MAP_REL in files and not _resolve_map_stage(wt_path):
+    if MAP_REL in files and not _resolve_map_stage(conn, task_id, wt_path):
         return False
 
-    commit = gitcmd.in_repo(wt_path, "commit", "-m",
-                            f"{task_id}: подтяжка {source_branch}")
-    if commit is None or commit.returncode != 0:
+    if not _git_step_ok(conn, task_id, wt_path, "commit", "-m",
+                        f"{task_id}: подтяжка {source_branch}"):
         return False
     if MAP_REL in files:
         store.journal(
