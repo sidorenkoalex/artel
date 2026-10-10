@@ -264,7 +264,7 @@ def _tests_snapshot(wt_path: Path, rel_tests_dir: str) -> dict[str, bytes] | Non
     files = {}
     for rel in res.stdout.splitlines():
         rel = rel.strip()
-        if not rel:
+        if not rel or _is_plank_helper(rel, rel_tests_dir):
             continue
         try:
             files[rel] = (wt_path / rel).read_bytes()
@@ -281,7 +281,17 @@ def _artifact_tests_snapshot(task_id: str, rel_tests_dir: str) -> dict[str, byte
     prefix = f"{rel_tests_dir}/"
     return {rel: text.encode("utf-8")
            for rel, text in artifact_branch.read_tree(task_id).items()
-           if rel.startswith(prefix)}
+           if rel.startswith(prefix)
+           and not _is_plank_helper(rel, rel_tests_dir)}
+
+
+def _is_plank_helper(rel: str, rel_tests_dir: str) -> bool:
+    """Помощник пульта, выложенный рядом с планкой (гейтом или этой
+    командой), — не правка планки: в сверку со ссылкой документов и в
+    коммит правки он не входит (SPEC 01M4JD36367E5CG3GXDV429XTE,
+    требование 2), иначе гейт `tests_writing` отказал бы на
+    зарезервированном имени."""
+    return rel == f"{rel_tests_dir}/{acceptance.PLANK_HELPER_NAME}"
 
 
 def _removed_paths(disk: dict[str, bytes], baseline: dict[str, bytes],
@@ -659,11 +669,25 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
                  f"пределами {rel_tests_dir}/: {', '.join(sorted(outside))}")
     removed = _removed_paths(disk, baseline, manifest_rel)
 
-    if manifest:
-        _amend_with_long_lived(conn, t, task_id, reason, wt_path, disk,
-                               manifest, long_changed, removed, profile)
-        return
+    # Планка может импортировать помощник пульта — сбор и прогон идут с
+    # ним, как на гейтах (SPEC 01M4JD36367E5CG3GXDV429XTE, требование 1).
+    with acceptance.plank_helper_laid_out(task_id, wt_path):
+        if manifest:
+            _amend_with_long_lived(conn, t, task_id, reason, wt_path, disk,
+                                   manifest, long_changed, removed, profile)
+        else:
+            _amend_plank_only(conn, t, task_id, reason, wt_path, disk,
+                              removed)
 
+
+def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
+                      disk: dict[str, bytes], removed: list[str]) -> None:
+    """Правка из worktree задачи без долгоживущих файлов: проверки планки,
+    сухой сбор и прогон — до записи; затем коммит в ссылку документов и
+    сдвиг `tests_locked_sha`."""
+    old_locked = t["tests_locked_sha"]
+    rel_tests_dir = f"tasks/{task_id}/acceptance_tests"
+    tdir = wt_path / "tasks" / task_id
     # AC-1/AC-4: трассируемость AC — ДО прогона планки (копилка 11.09,
     # коммит 33aeb202: `amend-tests` сдвигал лок мимо этой проверки).
     created_spec = _materialize_spec_if_missing(task_id, tdir)
@@ -679,6 +703,13 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
 
+    # Сухой сбор до прогона: падение сбора (импорт, синтаксис) — дефект
+    # правки, маркер красноты его не покрывает (SPEC
+    # 01M4JD36367E5CG3GXDV429XTE, требование 4) — тем же отказом, что путь
+    # с долгоживущими файлами (`_collect_and_run`).
+    collected, collect_tail = acceptance.collect(tdir)
+    if not collected:
+        _refuse(conn, task_id, "сухой сбор планки не прошёл", [collect_tail])
     green, tail = acceptance.run(tdir)
     if not green:
         # Обязательный прогон (ТЗ п.6, инцидент опечатки 03.09) — не «OK»
