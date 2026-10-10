@@ -294,6 +294,27 @@ def rewrite(conn, task_id: str, new_ids: list[str], channel: str,
     print(f"[{task_id}] {CHANGED_ACTION}: {detail}")
 
 
+def replace_divided(conn, parent_id: str, successor_id: str) -> None:
+    """Деление `parent_id` на гейте SPEC (SPEC 01M4JC58GZFHZ4PZHW254P22M2):
+    в `merge_after` каждой задачи, зависящей от родителя, элемент-родитель
+    заменяется `successor_id` — последней подзадачей деления — на той же
+    позиции, прочие элементы остаются. Без замены родитель в `killed`
+    навсегда держал бы зависящую задачу отказом гейта мержа «зависимость
+    убита», снимаемым только ответом Оператора.
+
+    Проверки `check` здесь нет: значение отличается от уже принятого
+    одним элементом, а подзадача только что заведена и сама ни от кого
+    из зависящих не зависит — цикла она не создаёт."""
+    for row in store.all_tasks(conn):
+        old = stored(row["merge_after"])
+        if parent_id not in old:
+            continue
+        new_ids = [successor_id if dep == parent_id else dep for dep in old]
+        # Канал без id родителя: правая часть записи «было → стало» —
+        # новое значение, и родитель в ней не называется.
+        rewrite(conn, row["id"], new_ids, "деление на гейте SPEC", "operator")
+
+
 def apply_plan(conn, task_id: str, t, meta: dict, plan_text: str) -> None:
     """Канал PLAN на переходе `in_dev -> verifying` (требование 3) — по
     образцу `fsm_advance._apply_plan_budget`: отказ значения переход не
