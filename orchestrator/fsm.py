@@ -822,7 +822,9 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
     (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3, AC-5/AC-6/AC-11) и
     переводит родителя в `killed` — единственное терминальное
     непродолжаемое состояние FSM, подходящее по смыслу «поделена»
-    (`orchestrator/config.py::AUTO_STOP`, требование 2 SPEC).
+    (`orchestrator/config.py::AUTO_STOP`, требование 2 SPEC). Зависящие от
+    родителя задачи переходят на последнюю подзадачу
+    (`merge_after.replace_divided`, SPEC 01M4JC58GZFHZ4PZHW254P22M2).
 
     Ленивый импорт `catalog` — тем же приёмом, что `_approve_merge_gate`
     выше зовёт `fsm_merge_gate`: `catalog.py` не импортирует `fsm.py` на
@@ -836,6 +838,8 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
     ids_text = ", ".join(new_ids)
     store.set_state(conn, task_id, "killed", "operator",
                     expected_state=state, detail=f"поделена на: {ids_text}")
+    if new_ids:
+        merge_after.replace_divided(conn, task_id, new_ids[-1])
     _cleanup_divided_parent(conn, task_id, t["branch"])
 
 
