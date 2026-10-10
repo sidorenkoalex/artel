@@ -463,6 +463,96 @@ class ZoneLockTest(TaskSeededTmpRootTest):
 
         self.assertEqual(order, ["T904", "T902", "T903"])
 
+    def test_queue_order_dependency_through_task_outside_the_queue(self):
+        """Зависимость через задачу вне набора тоже ставит зависимость
+        раньше (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF, требование 2): T903 зависит
+        от T902 через T950, которого в очереди нет; SPEC T903 утверждён
+        раньше.
+
+        Ловит мутацию: `queue_order` смотрит только прямые `merge_after`
+        внутри набора (без транзитивного обхода `_ancestors`) — T903 идёт
+        первой по approve."""
+        self.seed_other("in_dev", "a/b", task_id="T902")
+        self.seed_other("in_dev", "a/b", task_id="T903")
+        self.seed_other("tests_writing", "x/y", task_id="T950")
+        store.update_task(store.db(), "T950", merge_after="T902")
+        store.update_task(store.db(), "T903", merge_after="T950")
+        self.mark_approved("T903")
+        self.mark_approved("T902")
+
+        order = zone_lock.queue_order(store.db(), ["T903", "T902"])
+
+        self.assertEqual(order, ["T902", "T903"])
+
+    def test_queue_order_dependency_cycle_falls_back_to_approve_order(self):
+        """Цикл `merge_after` не останавливает порядок: задачи цикла идут
+        по моменту approve.
+
+        Ловит мутацию: при отсутствии готовой задачи топологический цикл
+        `queue_order` не берёт следующую по прежнему ключу — зависает или
+        теряет задачи цикла."""
+        self.seed_other("in_dev", "a/b", task_id="T902")
+        self.seed_other("in_dev", "a/b", task_id="T903")
+        store.update_task(store.db(), "T902", merge_after="T903")
+        store.update_task(store.db(), "T903", merge_after="T902")
+        self.mark_approved("T903")
+        self.mark_approved("T902")
+
+        order = zone_lock.queue_order(store.db(), ["T902", "T903"])
+
+        self.assertEqual(order, ["T903", "T902"])
+
+    def test_sibling_files_under_common_directory_are_separate_queues(self):
+        """Файлы-соседи под одним каталогом не пересекаются и друг друга в
+        очереди не ждут, хотя оба пересекаются с задачей на сам каталог
+        (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF, требование 1: очередь — среди
+        задач с пересекающимися зонами).
+
+        Ловит мутацию: состав очереди строится транзитивным замыканием
+        пересечений (или по общему каталогу) — `claim` задачи на
+        `src/y.py` отказывает «впереди» задаче на `src/x.py`, с которой у
+        неё нет общего файла."""
+        from orchestrator import lease
+        with mock.patch.object(config, "COMMON_ZONES", (), create=True):
+            self.set_own_zones("src/y.py")
+            self.seed_other("in_dev", "src/", task_id="T902")
+            self.seed_other("in_dev", "src/x.py", task_id="T903")
+            store.update_task(store.db(), "T902", paused=1)
+            self.mark_approved("T902")
+            self.mark_approved("T903")
+            self.mark_approved(self.TASK)
+            for task_id in ("T902", "T903"):
+                refusal, _ = lease.acquire(store.db(), task_id, f"s-{task_id}")
+                self.assertIsNone(refusal)
+
+            self.assertEqual(zone_lock.queue_position(store.db(), self.TASK),
+                             (2, 2))
+            self.assertIsNone(zone_lock.refusal(store.db(), self.TASK,
+                                                self.get_task()))
+
+    def test_queue_wait_none_for_first_holder_and_marks_not_holding(self):
+        """`queue_wait` молчит у первой держащей очередь задачи и помечает
+        первую, не держащую её (нет живого lease).
+
+        Ловит мутацию: `queue_wait` возвращает ожидание без причины и для
+        задачи, которая сама держит очередь (`holds` не проверяется) —
+        `status` показал бы «ждёт зоны» у той, что стартует; либо
+        `holds` не учитывает lease — пометки «не держит очередь» нет."""
+        self.set_own_zones("a/b")
+        self.seed_other("in_dev", "a/b", task_id="T902")
+        self.mark_approved(self.TASK)
+        self.mark_approved("T902")
+
+        wait = zone_lock.queue_wait(store.db(), self.TASK, self.get_task())
+        self.assertEqual((wait.reason, wait.position, wait.total, wait.holds),
+                         ("", 1, 2, False))
+
+        from orchestrator import lease
+        refusal, _ = lease.acquire(store.db(), self.TASK, "s-own")
+        self.assertIsNone(refusal)
+        self.assertIsNone(
+            zone_lock.queue_wait(store.db(), self.TASK, self.get_task()))
+
     # ------------------------------------------------------------ queue_position
 
     def _mark_already_started(self, task_id: str) -> None:
