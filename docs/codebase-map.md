@@ -1,5 +1,5 @@
 ---
-built_at_sha: f610a3f7bca4c845a62aa08bb8635703e55bceed
+built_at_sha: e1251cf743fec926c0b645dbc360558dc0e16a64
 ---
 
 # Codebase-map пульта
@@ -1170,7 +1170,7 @@ built_at_sha: f610a3f7bca4c845a62aa08bb8635703e55bceed
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/doctor/__init__.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `orchestrator/suite_lock.py`, `orchestrator/suite_run.py`, `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`, `tests/test_01m4g8mnepecnx1tcedw4t4rpx_origin_sweep.py`, `tests/test_canary_doctor_owner.py`, `tests/test_doctor.py`, `tests/test_liveness.py`, `tests/test_merge_lock.py`, `tests/test_sandbox_determinism_helpers.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/doctor/__init__.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `orchestrator/suite_lock.py`, `orchestrator/suite_run.py`, `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`, `tests/test_01m4g8mnepecnx1tcedw4t4rpx_origin_sweep.py`, `tests/test_canary_doctor_owner.py`, `tests/test_doctor.py`, `tests/test_liveness.py`, `tests/test_merge_lock.py`, `tests/test_sandbox_determinism_helpers.py`, `tests/test_zone_lock.py`
 
 ## orchestrator/merge_after.py
 
@@ -6516,7 +6516,7 @@ built_at_sha: f610a3f7bca4c845a62aa08bb8635703e55bceed
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

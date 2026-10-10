@@ -513,9 +513,15 @@ def _waiting_dependency(t, members: dict) -> str | None:
 def _holds_queue(conn, row) -> bool:
     """Ожидающая задача может стартовать и потому держит очередь
     (требование 4): идёт её цикл `run`/`auto` (живой lease), она не на
-    паузе и не ждёт зону ради своей зависимости."""
+    паузе и не ждёт зону ради своей зависимости.
+
+    Живость цикла — правило `lease.foreign_live_lease` (heartbeat свежий
+    И pid адресуем на своём host), а не `lease.is_live`: тот смотрит
+    только на возраст heartbeat, и задача с умершим процессом цикла ещё
+    `LEASE_STALE_AFTER_SEC` держала бы свободную зону. `session_id=None`
+    не совпадает ни с одной сессией — любой lease для правила «чужой»."""
     from . import lease  # lease -> runner -> zone_lock
-    if row["paused"] or not lease.is_live(conn, row["id"]):
+    if row["paused"] or lease.foreign_live_lease(conn, row["id"], None) is None:
         return False
     own = _own_paths(row["zones"])
     members = _queue_members(conn, row["id"], row, own)

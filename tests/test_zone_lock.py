@@ -553,6 +553,62 @@ class ZoneLockTest(TaskSeededTmpRootTest):
         self.assertIsNone(
             zone_lock.queue_wait(store.db(), self.TASK, self.get_task()))
 
+    def test_lease_with_dead_pid_does_not_hold_queue(self):
+        """Задача впереди, чей lease свеж по heartbeat, но процесс цикла
+        мёртв (pid не адресуем на своём host), очередь не держит (SPEC
+        01M4JC5B3TYFCVY51RKZ1AM1VF, требование 4; REVIEW R1-F1): пока pid
+        жив, она стоит впереди, после его смерти зона идёт следующей.
+
+        Ловит мутацию: `_holds_queue` проверяет живость цикла только
+        возрастом heartbeat (`lease.is_live`) — задача с мёртвым pid ещё
+        до `LEASE_STALE_AFTER_SEC` держит свободную зону."""
+        from orchestrator import lease, liveness
+        self.set_own_zones("a/b")
+        self.seed_other("in_dev", "a/b", task_id="T902")
+        self.mark_approved("T902")
+        self.mark_approved(self.TASK)
+        refusal, _ = lease.acquire(store.db(), "T902", "s-T902")
+        self.assertIsNone(refusal)
+
+        self.assertIn("впереди T902",
+                      zone_lock.refusal(store.db(), self.TASK, self.get_task()))
+
+        with mock.patch.object(liveness, "_pid_alive", return_value=False):
+            self.assertIsNone(
+                zone_lock.refusal(store.db(), self.TASK, self.get_task()))
+            wait = zone_lock.queue_wait(store.db(), "T902",
+                                        self.get_task("T902"))
+            self.assertEqual((wait.position, wait.holds), (1, False))
+
+    def test_blocking_conflict_names_queue_head_and_waiting_dependency(self):
+        """`blocking_conflict` — интерфейс ожидания зоны `auto._wait_for_zone`
+        — на свободной зоне возвращает тройку с задачей впереди очереди и
+        с ждущей зону зависимостью `merge_after` (SPEC
+        01M4JC5B3TYFCVY51RKZ1AM1VF, требование 7, AC-8; REVIEW R1-F2).
+
+        Ловит мутацию: `blocking_conflict` возвращает только конфликт
+        занятости (`_OCCUPIED`) — отказы очереди и зависимости не доходят
+        до `auto`, и тот выходит из ожидания на свободной зоне."""
+        from orchestrator import lease
+        self.set_own_zones("a/b")
+        self.seed_other("in_dev", "a/b", task_id="T902")
+        self.mark_approved("T902")
+        self.mark_approved(self.TASK)
+        refusal, _ = lease.acquire(store.db(), "T902", "s-T902")
+        self.assertIsNone(refusal)
+
+        self.assertEqual(
+            zone_lock.blocking_conflict(store.db(), self.TASK, self.get_task()),
+            ("a/b", "T902", "in_dev"))
+
+        lease.release_any(store.db(), "T902", "fsm", "lease released")
+        store.update_task(store.db(), self.TASK, merge_after="T902")
+        self.assertEqual(
+            zone_lock.blocking_conflict(store.db(), self.TASK, self.get_task()),
+            ("a/b", "T902", "in_dev"))
+        self.assertIn("ради зависимости T902",
+                      zone_lock.refusal(store.db(), self.TASK, self.get_task()))
+
     # ------------------------------------------------------------ queue_position
 
     def _mark_already_started(self, task_id: str) -> None:
