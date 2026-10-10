@@ -1168,19 +1168,88 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     with _machine_lock(None, limit) as holder:
         if holder is not None:
             return False, _not_started_note(holder)
-        start = time.monotonic() if observe else 0.0
+        start = time.monotonic()
         load_start = os.getloadavg() if observe else (0.0, 0.0)
         green, output = _run_full_suite_now(argv, root, log, limit, observe)
-        if not observe:
-            return green, output
+        duration = time.monotonic() - start
         timed_out = output.startswith("прогон полного набора tests/ превысил ")
-        _last_full_suite_metrics = _suite_metrics(
-            start, load_start, argv, output, timed_out, _last_process_snapshot,
-            _last_run_completed_at)
-        if timed_out:
+        if observe:
+            _last_full_suite_metrics = _suite_metrics(
+                start, load_start, argv, output, timed_out,
+                _last_process_snapshot, _last_run_completed_at)
+            duration = _last_full_suite_metrics["duration_seconds"]
+        # Повтор упавших (`suite-run --failed`) — не полный прогон: его
+        # длительность с пределом полного набора не сравнивается.
+        if tuple(targets) == ("tests",):
+            _signal_near_limit(root, duration, limit, _last_full_suite_metrics)
+        if observe and timed_out:
             head, newline, rest = output.partition("\n")
             output = f"{head}\n{suite_load_line(_last_full_suite_metrics)}\n{rest}"
         return green, output
+
+
+# Порог сигнала «длительность близка к пределу» (SPEC
+# 01M4K2767FXKZ8EW7AME81SZ9N, требование 2; строка 32 docs/triggers.md):
+# доля предела полного прогона, начиная с которой прогон оставляет запись
+# журнала задачи (у `notes` — строку вывода) и алерт kind=trigger. Рост
+# времени набора до этой задачи замечали только по отказу «таймаут прогона».
+SUITE_NEAR_LIMIT_RATIO = 0.8
+SUITE_NEAR_LIMIT_ACTION = "полный прогон: длительность близка к пределу"
+# Источник алерта: один открытый алерт на проект, как у `map.growth`
+# (ANSWER-1, п.2) — дедуп по источнику, а не по тексту: текст несёт
+# длительность и у каждого прогона свой.
+SUITE_NEAR_LIMIT_SOURCE = "suite.near_limit"
+
+
+def _load_text(metrics: dict | None) -> str:
+    if metrics is not None:
+        return suite_load_line(metrics)
+    try:
+        load_1, load_5, _ = os.getloadavg()
+    except OSError:
+        return "нагрузка: load average недоступен"
+    return f"нагрузка: load average 1/5 мин {load_1:.2f}/{load_5:.2f}"
+
+
+def _signal_near_limit(root: Path, duration: float, limit: tuple[int, str],
+                       metrics: dict | None) -> None:
+    """Сигнал прогона, длившегося не меньше `SUITE_NEAR_LIMIT_RATIO` своего
+    предела: строка вывода, запись журнала задачи держателя замка (гейт,
+    `suite-run`; у `notes` задачи нет) и алерт kind=trigger проекта, если
+    открытого такого же нет. Исход прогона сигнал не меняет, и сбой записи
+    прогон не роняет (требование 2)."""
+    seconds, source = limit
+    if duration < SUITE_NEAR_LIMIT_RATIO * seconds:
+        return
+    from . import alerts, store  # store -> ... -> acceptance
+    task_id = suite_lock.my_task_id()
+    detail = (f"полный прогон tests/ ({root}) длился {duration:.1f} с — "
+              f"{duration / seconds:.0%} предела {seconds} с (источник: "
+              f"{source}), порог {SUITE_NEAR_LIMIT_RATIO:.0%}; "
+              f"{_load_text(metrics)}")
+    line = f"{SUITE_NEAR_LIMIT_ACTION}: {detail}"
+    if store.db_usable():
+        try:
+            conn = store.db()
+            target = config.DEFAULT_TARGET
+            if task_id:
+                target = store.task_target(conn, task_id) or target
+                store.journal(conn, task_id, "orchestrator",
+                              SUITE_NEAR_LIMIT_ACTION, detail)
+            if not any(row["source"] == SUITE_NEAR_LIMIT_SOURCE
+                       and row["target"] == target
+                       for row in alerts.open_alerts(conn, "trigger")):
+                who = f"задача {task_id}" if task_id else "notes"
+                alerts.raise_alert(
+                    conn, target, "trigger", SUITE_NEAR_LIMIT_SOURCE,
+                    f"длительность полного прогона tests/ близка к пределу: "
+                    f"{duration:.0f} с "
+                    f"из {seconds} с (источник: {source}), порог "
+                    f"{SUITE_NEAR_LIMIT_RATIO:.0%} ({who}) — docs/triggers.md "
+                    f"№32")
+        except Exception as exc:  # noqa: BLE001 — запись не условие прогона
+            line += f" (запись сигнала не удалась: {type(exc).__name__})"
+    print(f"[{task_id}] {line}" if task_id else line, flush=True)
 
 
 @contextlib.contextmanager
