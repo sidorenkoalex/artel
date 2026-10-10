@@ -29,8 +29,20 @@ schema_version: 5
 без правки `tests_writing.py` по этому пути. Признак добавлен в
 `long_lived_errors_from_files`, а не в `long_lived_sign_hits`: исключения
 ключуются именем файла, а `long_lived_sign_hits` получает только текст.
-Следствие из «Материалов» SPEC: `amend-tests` по тому же узлу тоже начнёт
-отказывать долгоживущему файлу с DNS-адресом (`amend.py` не меняется).
+Признак только у артели (замечание ревью R1-F1): инвариант 35 — правило
+дерева `tests/` пульта. `long_lived_errors_from_files` несёт именованный
+параметр `network_addresses` (умолчание `True` — зафиксированный
+долгоживущий файл зовёт функцию без него и остаётся зелёным); гейты
+`_tests_writing_test_groups_gate` и `_tests_writing_long_lived_gate`
+принимают тот же параметр, `fsm_advance.tests_writing` передаёт
+`repo_context.is_artel(target)` — то же условие проекта, что у рубежа
+`in_dev`. Канарейка target артели проверяется, как и прочими признаками
+гейта групп (`test_canary_task_of_default_target_is_checked`).
+Остаток: `amend-tests` (`orchestrator/amend.py:510`, файл только для
+чтения) зовёт узел без параметра — правка долгоживущего файла с
+DNS-адресом отказывает у любого проекта, включая чужой. Это следствие,
+названное в «Материалах» SPEC; сузить его можно только правкой `amend.py`
+(вне зон) — см. «Предложения системе».
 
 Рубеж 2 (требование 3): `_network_address_gate(conn, task_id, t)` в
 `orchestrator/advance_gates/tests_writing.py` (рядом с `_origin_push_gate`,
@@ -73,6 +85,15 @@ schema_version: 5
    отказа «чинит роль» через каркас `_run_gates`.
 4. Приложение к `tests/test_invariants.py` (ниже), `docs/codebase-map.md`
    регенерирована (`python3 scripts/codebase_map.py`).
+5. Итерация 2 (R1-F1): параметр `network_addresses` в
+   `guard.long_lived_errors_from_files` и обоих гейтах выхода из
+   `tests_writing`, `fsm_advance.tests_writing` передаёт
+   `repo_context.is_artel(target)`. Тесты:
+   `tests/test_network_address_gate.py::LongLivedNetworkAddressScopeTest`
+   (флаг guard снимает только признак адресов; гейт «только добавление»
+   передаёт флаг) и
+   `tests/test_fsm_advance_tests_writing_test_groups.py::TestGroupsGateTest::test_network_address_sign_only_for_artel`
+   (подключение в `fsm_advance`).
 
 Проверки шага: долгоживущий `tests/test_01m4jn2edqp8q3wvyk0ts95zvc_network_address.py`
 — 5 passed (33 подтеста); планка `plank-run` — 5 passed; приложение
@@ -94,6 +115,24 @@ schema_version: 5
 пропуска удалений — красный `test_entry_selection`; снятые условия
 канарейки/артели — красный `test_canary_and_foreign_project_skip`.
 
+Проверки итерации 2: мутации (временно, код возвращён): `fsm_advance`
+передаёт `network_addresses = True` вместе с «гейт «только добавление»
+зовёт узел без флага» — красные ровно
+`test_network_address_sign_only_for_artel` (подключение) и
+`test_long_lived_gate_passes_flag_through` (гейт); guard игнорирует флаг
+(`if True:`) — красные все три новых теста. Тесты
+затронутых модулей (`test_network_address_gate`,
+`test_fsm_advance_tests_writing_test_groups`, долгоживущий файл задачи,
+`test_fsm_advance_gate_smoke`, `test_long_lived_transitions`,
+`test_refusal_classes`, `test_amend`, `test_project_profile_gates`,
+`test_docs_dir_layout`, `test_external_code_copy_refusal`,
+`test_codebase_map`) — 139 passed; `plank-run` — 5 passed, код выхода 0.
+Полный набор `suite-run` №1 (с приложением PLAN): одно новое падение —
+`NoNetworkAddressesInTestsTest::test_no_dns_hostname_addresses_in_tests_tree`
+на адресе-образце в докстринге моего нового теста (тот самый класс
+задачи); докстринг переписан без адреса, `suite-run --failed` №2 —
+зелёный. Прочих новых падений против базы нет.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -108,12 +147,18 @@ schema_version: 5
   перенесены побайтно, сравнение хоста — то же точное; набор ловимых
   адресов не сужается. До наложения приложения инвариант держит свою
   копию — расхождения нет (AC-6 зелёный и на текущем инварианте).
-- Выход из `tests_writing` и `amend-tests` строже: долгоживущий файл с
-  DNS-адресом теперь отказ (раньше — красный CI после).
+- Выход из `tests_writing` у артели строже: долгоживущий файл с
+  DNS-адресом теперь отказ (раньше — красный CI после). У чужого проекта
+  выход из `tests_writing` не меняется (признак снят по
+  `repo_context.is_artel(target)`); канарейка target артели проверяется.
+- `amend-tests` строже у ЛЮБОГО проекта с профилем: `amend.py` (только
+  для чтения) зовёт узел без параметра, поэтому правка долгоживущего
+  файла с DNS-адресом отказывает и у чужого проекта — следствие, названное
+  в «Материалах» SPEC; сужение — отдельной правкой `amend.py`.
 - `in_dev -> verifying` получает новый рубеж за прежними; существующие
   сценарии, где git в песочнице отдаёт пустую базу, проходят (идиома
   `base is None`, как у гейта заявки мутации). Канарейка и внешние проекты
-  не затронуты.
+  этим рубежом не проверяются.
 - `amend.py`, `refusal_classes.py`, прочие файлы «только для чтения» не
   менялись.
 - Откат: revert merge-коммита задачи; приложение откатывается тем же
@@ -208,3 +253,8 @@ index fc99473c..86dfb77b 100644
   а не `None`: гейт с проверкой `if base` вместо `base is None` тихо
   ломает чужие сценарии `in_dev -> verifying` (поймано на шаге этой
   задачи) — идиому стоит записать рядом с `gitcmd.diff_base`.
+- `orchestrator/amend.py:510`: `amend-tests` зовёт
+  `guard.long_lived_errors_from_files` без `network_addresses` — признак
+  адресов инварианта 35 действует и у чужого проекта. Передать
+  `network_addresses=repo_context.is_artel(target)` (файл вне зон этой
+  задачи, был «только для чтения» ТЗ).
