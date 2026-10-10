@@ -29,6 +29,13 @@ PATH в текущем каталоге (чекаут `actions/checkout`).
 - Приложения (`guard.plan_appendices`) накладываются `git apply` подряд, в
   порядке PLAN — тем же порядком, что ворота мержа. Неприменимое
   приложение — код 1 и его номер и пути в выводе (требование 3).
+- Приложение, не легшее прямо, но уже наложенное в дереве чекаута
+  (`git apply --reverse --check` проходит: Оператор внёс его в main раньше
+  кода), пропускается строкой «уже в базе» с номером — то же правило, что
+  у узлов пульта (`advance_gates.plan_appendix.in_base`; SPEC
+  01M4JD3SRN66SD6BM63XAGHB11, требования 3-5). Пакет пульта сценарий не
+  импортирует и повторяет правило у себя; совпадение ответов держит тест
+  сверки.
 - Сценарий ничего не коммитит и не пушит, и не заводит ссылок: ссылка
   документов подтягивается в объектную базу без имени назначения, правка
   остаётся только в рабочем дереве раннера (требование 4).
@@ -185,18 +192,28 @@ def plan_text(task_id: str, sha: str) -> str | None:
     return _git_or_fail("PLAN.md не прочитан", "show", f"{sha}:{rel}")
 
 
-def apply_appendix(appendix: guard.PlanAppendix) -> str:
+def apply_appendix(appendix: guard.PlanAppendix, *flags: str) -> str:
     """`git apply` приложения в текущем дереве: пустая строка — наложено,
     иначе ответ git. Дифф — файлом, тем же способом, что
-    `advance_gates.plan_appendix.git_apply` у гейта и ворот мержа."""
+    `advance_gates.plan_appendix.git_apply` у гейта и ворот мержа.
+
+    `flags` — дополнительные ключи `git apply` (`in_base`)."""
     with tempfile.TemporaryDirectory(prefix="artel-plan-appendix-ci-") as tmp:
         patch = Path(tmp) / "appendix.diff"
         patch.write_text(appendix.diff, encoding="utf-8")
-        res = _git("apply", str(patch))
+        res = _git("apply", *flags, str(patch))
     if res.returncode == 0:
         return ""
     return ((res.stderr or res.stdout).strip()
             or f"git apply вернул {res.returncode}")[:300]
+
+
+def in_base(appendix: guard.PlanAppendix) -> bool:
+    """Правило «приложение уже в базе» — копия
+    `advance_gates.plan_appendix.in_base`: `git apply --reverse --check`
+    в текущем дереве проходит. `--check` обязателен — обратное наложение
+    без него само меняло бы дерево раннера."""
+    return not apply_appendix(appendix, "--reverse", "--check")
 
 
 def run(event_name: str, ref: str) -> int:
@@ -223,16 +240,23 @@ def run(event_name: str, ref: str) -> int:
     if not appendices:
         print(f"[{task_id}] в PLAN нет приложений — дерево ветки как есть")
         return 0
+    applied = 0
     for number, appendix in enumerate(appendices, 1):
         paths = ", ".join(appendix.paths)
         answer = apply_appendix(appendix)
+        if answer and in_base(appendix):
+            print(f"[{task_id}] приложение {number} ({paths}) уже в базе: "
+                  f"`git apply --reverse --check` проходит — не "
+                  f"накладывается повторно")
+            continue
         if answer:
             print(f"[{task_id}] приложение {number} ({paths}) не "
                   f"накладывается на дерево чекаута: {answer}",
                   file=sys.stderr)
             return 1
+        applied += 1
         print(f"[{task_id}] приложение {number} наложено: {paths}")
-    print(f"[{task_id}] приложений наложено: {len(appendices)} — только в "
+    print(f"[{task_id}] приложений наложено: {applied} — только в "
           f"рабочем дереве раннера, без коммита")
     return 0
 

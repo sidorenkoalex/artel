@@ -24,12 +24,17 @@ from typing import Callable, NamedTuple
 from scripts import guard
 
 from . import artifact_branch, artifact_source, gitcmd, repo_context, workspace
+from .advance_gates import plan_appendix
 from .advance_gates.plan_appendix import git_apply
 
 # Признак прогона на дереве с приложениями — в записи журнала, detail и
 # отчёте `suite-run` (требование 5): по нему прогон с приложениями
 # отличается от прогона рабочей копии.
 WITH_APPENDICES = "с приложениями PLAN"
+# Хвост отказа без прогона: у автогейта, approve и `suite-run` не
+# запустился полный набор; рубеж `in_dev -> verifying` называет свой
+# прогон сам (`suite_tree(not_run=...)`).
+FULL_SUITE_NOT_RUN = "полный набор не запускался"
 
 
 class Inapplicable(NamedTuple):
@@ -93,11 +98,14 @@ class SuiteTree(NamedTuple):
     `None` — прогона не будет, причина в `refusal`. `note` — признак
     «с приложениями PLAN» и пути наложенных; пусто — прогон в рабочей
     копии, как до задачи. `warning` — PLAN не прочитан, прогон идёт без
-    приложений (тот же исход, что на гейте мержа)."""
+    приложений (тот же исход, что на гейте мержа). `fixable` — отказ по
+    содержимому PLAN (приложение не разобрано или не накладывается): его
+    чинит роль в своём PLAN.md, а не тот, кто разбирается с git."""
     root: Path | None
     note: str
     refusal: str
     warning: str
+    fixable: bool = False
 
     def mark(self, detail: str) -> str:
         """`detail` с признаком прогона на дереве с приложениями либо с
@@ -158,41 +166,50 @@ def _carry_uncommitted(wt: Path, tree: Path) -> str:
     return ""
 
 
-def _inapplicable_refusal(failure: Inapplicable) -> str:
+def _inapplicable_refusal(failure: Inapplicable, not_run: str) -> str:
     paths = ", ".join(failure.appendix.paths)
     return (f"приложение {failure.number} PLAN ({paths}) не накладывается на "
-            f"дерево прогона: {failure.answer} — полный набор не запускался")
+            f"дерево прогона: {failure.answer} — {not_run}")
 
 
-def _prepared(wt: Path, branch: str | None, appendices: list,
-              tree: Path) -> tuple[str, str]:
-    """Временное дерево `tree` с наложенными приложениями: (признак с
-    путями, "") либо ("", причина отказа)."""
+def _checked_out(wt: Path, branch: str | None, tree: Path,
+                 not_run: str) -> str:
+    """Временное дерево `tree` на голове `branch` (`None` — HEAD рабочей
+    копии с её незакоммиченными правками): пустая строка — готово, иначе
+    причина отказа."""
     sha = _rev_sha(wt, branch)
     if not sha:
         what = f"голова ветки {branch}" if branch else "HEAD рабочей копии"
-        return "", (f"дерево прогона с приложениями PLAN не подготовлено: "
-                    f"{what} не прочитана — полный набор не запускался")
+        return (f"дерево прогона с приложениями PLAN не подготовлено: "
+                f"{what} не прочитана — {not_run}")
     res = gitcmd.in_repo(wt, "worktree", "add", "--detach", str(tree), sha)
     if res is None or res.returncode != 0:
-        return "", (f"дерево прогона с приложениями PLAN не подготовлено: "
-                    f"git worktree add: {_git_reason(res)} — полный набор не "
-                    f"запускался")
+        return (f"дерево прогона с приложениями PLAN не подготовлено: "
+                f"git worktree add: {_git_reason(res)} — {not_run}")
     if branch is None:
         error = _carry_uncommitted(wt, tree)
         if error:
-            return "", f"{error} — полный набор не запускался"
+            return f"{error} — {not_run}"
+    return ""
+
+
+def _overlaid(tree: Path, appendices: list,
+              skip_in_base: Callable[[int, guard.PlanAppendix], bool],
+              not_run: str) -> tuple[str, str]:
+    """Приложения поверх готового дерева `tree`: (признак с путями, "")
+    либо ("", причина отказа). Приложение, не легшее прямо, спрашивается у
+    `skip_in_base(номер, приложение)`."""
     already: list[int] = []
 
     def in_tree(number: int, appendix) -> bool:
-        if git_apply(tree, appendix, "--reverse", "--check"):
-            return False
-        already.append(number)
-        return True
+        found = skip_in_base(number, appendix)
+        if found:
+            already.append(number)
+        return found
 
     paths, failure = apply_in_order(tree, appendices, in_tree)
     if failure is not None:
-        return "", _inapplicable_refusal(failure)
+        return "", _inapplicable_refusal(failure, not_run)
     note = f"{WITH_APPENDICES}: {', '.join(paths) or 'нет новых правок'}"
     if already:
         note += (f"; уже в дереве: приложения "
@@ -200,8 +217,24 @@ def _prepared(wt: Path, branch: str | None, appendices: list,
     return note, ""
 
 
+def _prepared(wt: Path, branch: str | None, appendices: list,
+              tree: Path) -> tuple[str, str]:
+    """Временное дерево `tree` с наложенными приложениями: (признак с
+    путями, "") либо ("", причина отказа). Признание «уже в дереве» — то
+    же правило `plan_appendix.in_base`, но без записи журнала: журнала
+    задачи здесь нет (`suite_tree` зовёт части напрямую, с записью)."""
+    refusal = _checked_out(wt, branch, tree, FULL_SUITE_NOT_RUN)
+    if refusal:
+        return "", refusal
+    return _overlaid(tree, appendices,
+                     lambda number, appendix: plan_appendix.in_base(
+                         tree, appendix),
+                     FULL_SUITE_NOT_RUN)
+
+
 @contextlib.contextmanager
-def suite_tree(conn, task_id: str, wt: Path, branch: str | None = None):
+def suite_tree(conn, task_id: str, wt: Path, branch: str | None = None,
+               not_run: str = FULL_SUITE_NOT_RUN):
     """Корень полного прогона ветки задачи (`SuiteTree`) на время блока
     `with` (требования 1-4).
 
@@ -210,8 +243,13 @@ def suite_tree(conn, task_id: str, wt: Path, branch: str | None = None):
     голова этой ветки (автогейт, approve); `None` — HEAD рабочей копии с
     её незакоммиченными правками (`suite-run`). Поверх — приложения PLAN
     подряд (`apply_in_order`); приложение, уже наложенное в дереве
-    (подтянутый main его несёт), пропускается тем же правилом, что на
-    гейте мержа.
+    (подтянутый main его несёт), пропускается общим узлом признания
+    `plan_appendix.skip_in_base` — тем же правилом и той же записью
+    журнала, что на гейте мержа и гейте применимости (SPEC
+    01M4JD3SRN66SD6BM63XAGHB11, требования 3-4).
+
+    `not_run` — хвост отказа: что не запускалось. Рубеж `in_dev ->
+    verifying` гоняет на этом дереве планку, а не полный набор.
 
     Отказ разбора, наложения или git — `root=None` с причиной, прогона нет.
     Временное дерево снимается с учёта клона и удаляется на любом исходе,
@@ -225,8 +263,8 @@ def suite_tree(conn, task_id: str, wt: Path, branch: str | None = None):
                                            repo_context.protected_paths(ctx))
     if errors:
         yield SuiteTree(None, "", (f"приложения PLAN не разобраны: "
-                                   f"{'; '.join(errors)} — полный набор не "
-                                   f"запускался"), "")
+                                   f"{'; '.join(errors)} — {not_run}"), "",
+                        fixable=True)
         return
     if not appendices:
         yield SuiteTree(wt, "", "", unread)
@@ -234,9 +272,18 @@ def suite_tree(conn, task_id: str, wt: Path, branch: str | None = None):
     holder = Path(tempfile.mkdtemp(prefix="artel-appendix-suite-"))
     tree = holder / "tree"
     try:
-        note, refusal = _prepared(wt, branch, appendices, tree)
+        refusal = _checked_out(wt, branch, tree, not_run)
+        fixable = False
+        if not refusal:
+            note, refusal = _overlaid(
+                tree, appendices,
+                lambda number, appendix: plan_appendix.skip_in_base(
+                    conn, task_id, number, appendix, tree,
+                    "дереве прогона ветки", "не накладывается повторно"),
+                not_run)
+            fixable = bool(refusal)
         if refusal:
-            yield SuiteTree(None, "", refusal, "")
+            yield SuiteTree(None, "", refusal, "", fixable=fixable)
         else:
             yield SuiteTree(tree, note, "", "")
     finally:
