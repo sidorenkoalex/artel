@@ -17,6 +17,7 @@
 import contextlib
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 
@@ -35,9 +36,16 @@ POLL_SEC = 1.0
 _UNKNOWN = {"task_id": "?", "pid": "?"}
 
 
+def directory() -> Path:
+    """Каталог замка и хозяйства `suite-run` — единственный каталог пульта,
+    который шаг роли на Codex получает на запись (`--add-dir`, SPEC
+    01M4KG7VHHXTVTW5TTX2PGY5RY, требование 2)."""
+    return config.LOGS / "suite-run"
+
+
 def path() -> Path:
     """Файл замка — функция, не константа: `config.LOGS` подменяют тесты."""
-    return config.LOGS / "suite-run" / "lock.json"
+    return directory() / "lock.json"
 
 
 def _read() -> dict | None:
@@ -111,6 +119,9 @@ def wait_acquire(task_id, kind: str, limit_sec: float,
     """Замок с ожиданием не дольше `limit_sec` секунд: `None` — взят,
     иначе держатель на момент истечения предела. `on_wait(holder)`
     зовётся на первом занятом замке и на каждой смене держателя."""
+    # Ждут замок гейты и `notes` — процессы пульта с правом записи в БД:
+    # здесь они досылают журнал прогонов роли без такого права.
+    deliver_journal()
     deadline = time.monotonic() + limit_sec
     seen = None
     while True:
@@ -125,6 +136,12 @@ def wait_acquire(task_id, kind: str, limit_sec: float,
         if remaining <= 0:
             return holder
         time.sleep(min(POLL_SEC, remaining))
+
+
+def holder() -> dict | None:
+    """Запись замка как есть (держатель может быть и мёртв); `None` —
+    замка нет или он нечитаем."""
+    return _read()
 
 
 def held_by_me() -> bool:
@@ -169,6 +186,78 @@ def release() -> None:
     if holder is not None and holder.get("pid") == os.getpid():
         with contextlib.suppress(FileNotFoundError):
             path().unlink()
+
+
+# ------------------------------------------------- отложенные записи журнала
+#
+# Процесс роли на Codex пишет только в рабочий каталог, каталог документов
+# и каталог `suite-run`, БД пульта ему недоступна (SPEC
+# 01M4KG7VHHXTVTW5TTX2PGY5RY, требование 3). Запись журнала задачи, не
+# удавшаяся его прогону, ложится файлом сюда, а пишет её в журнал первый
+# процесс с правом записи: команда `suite-run` и ожидание замка гейтом.
+
+def _pending_dir() -> Path:
+    return directory() / "pending-journal"
+
+
+def defer_journal(record: dict) -> None:
+    """Откладывает запись журнала (`task_id`, `actor`, `action`, `detail`,
+    `session_id`, `at`): отдельный файл на запись, атомарно — досылающий не
+    прочтёт половину файла."""
+    folder = _pending_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"{time.time_ns()}-{os.getpid()}"
+    tmp = folder / f".{name}.tmp"
+    tmp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(folder / f"{name}.json")
+
+
+def deliver_journal() -> int:
+    """Досылает отложенные записи в журнал их задач; число досланных. Файл
+    забирается переименованием — два досылающих одну запись дважды не
+    напишут; не удалась запись в БД — файл возвращается до следующего раза.
+    Сбой досыла ничего не роняет: досыл — не условие прогона или команды.
+    Нечитаемый файл и запись о задаче, которой в БД нет, убираются: писать
+    их некуда, а возврат повторял бы их вечно."""
+    claimed = []
+    with contextlib.suppress(OSError):
+        for pending in sorted(_pending_dir().glob("*.json")):
+            mine = pending.with_name(f"{pending.name}.{os.getpid()}.claimed")
+            with contextlib.suppress(OSError):
+                pending.rename(mine)
+                claimed.append((pending, mine))
+    if not claimed:
+        return 0
+    from . import store  # store -> ... -> acceptance -> suite_lock
+    try:
+        conn = store.db()
+    except (sqlite3.Error, OSError):
+        conn = None
+    delivered = 0
+    for pending, mine in claimed:
+        try:
+            record = json.loads(mine.read_text(encoding="utf-8"))
+            task_id = str(record["task_id"])
+            text = (f"{record['detail']} [дослано процессом пульта: запись "
+                    f"прогона без права записи в БД от {record['at']}]")
+        except (OSError, ValueError, KeyError, TypeError):
+            with contextlib.suppress(OSError):
+                mine.unlink()
+            continue
+        try:
+            if conn is None:
+                raise sqlite3.OperationalError("БД пульта не открылась")
+            if store.task_exists(conn, task_id):
+                store.journal(conn, task_id, record["actor"], record["action"],
+                              text, session_id=record.get("session_id"))
+                delivered += 1
+        except sqlite3.Error:
+            with contextlib.suppress(OSError):
+                mine.rename(pending)
+            continue
+        with contextlib.suppress(OSError):
+            mine.unlink()
+    return delivered
 
 
 def describe(holder: dict) -> str:
