@@ -2784,6 +2784,81 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
             errors.append(f"{label}: метод {method} долгоживущего файла без "
                           f"«Ловит мутацию: …» в докстринге («Зелёный с "
                           f"рождения» её не заменяет)")
+        errors += network_address_errors_from_files([(label, source)])
+    return errors
+
+
+# --------------------------------------------------------------------------
+# Сетевые адреса в `tests/` (инвариант 35, docs/invariants.md; SPEC
+# 01M4JN2EDQP8Q3WVYK0TS95ZVC, требование 1): одно место правила на всех
+# потребителей — инвариант 35 в `tests/test_invariants.py`, выход из
+# `tests_writing` (через `long_lived_errors_from_files`) и рубеж
+# `in_dev -> verifying`. Реальный `git fetch` по DNS-имени резолвит его
+# настоящим резолвером и виснет на таймауте при обрыве сети (инцидент 05.09,
+# SPEC 01M1QHQ277PQQA894X97RVEX9Y).
+
+NETWORK_ADDRESS_RE = re.compile(r"https?://[^\s'\"]+")
+NETWORK_EXEMPT_HOSTS = ("localhost", "127.0.0.1")
+
+# (имя файла, хост) -> обоснование: адрес — decorative/тестовый текст,
+# никогда не передаётся реальному сетевому вызову, поэтому исключён
+# из скана (SPEC 01M1QHQ277PQQA894X97RVEX9Y, требование 3).
+NETWORK_ADDRESS_EXCEPTIONS = {
+    ("test_github_adapter.py", "github.com"):
+        "stdout уже замоканного `gh` (github_adapter.ci.gh подменена "
+        "лямбдой в setUp самого теста) — тест не открывает соединение "
+        "по этому адресу, строка лишь имитирует формат вывода "
+        "`gh pr create`",
+    ("test_ci_status.py", "api.github.com"):
+        "текст внутри сообщения об ошибке уже замоканного `ci.gh` "
+        "(`set_check_runs` подменяет ответ целиком) — адрес не "
+        "аргумент реального вызова, тест не обращается к сети",
+    ("test_sandbox.py", "example.invalid"):
+        "статические строки-фикстуры, проверяющие саму логику "
+        "распознавания DNS-адреса (`_is_local_git_address`/"
+        "`_network_git_command_denial`) — никогда не передаются "
+        "реальному `subprocess.run`, только сравниваются как текст",
+    ("test_sandbox.py", "127.0.0.1.evil.example"):
+        "та же статическая фикстура — хост, лишь НАЧИНАЮЩИЙСЯ с "
+        "loopback-адреса, проверяет точность сравнения хоста в "
+        "`_is_local_git_address`, тоже не передаётся `subprocess.run`",
+}
+
+
+def network_address_host(url: str) -> str:
+    """Хост адреса `scheme://host[:port][/path]` — без порта и пути."""
+    rest = url.split("://", 1)[1]
+    return rest.split("/", 1)[0].split(":", 1)[0]
+
+
+def network_address_hits(name: str, text: str) -> list[tuple[int, str]]:
+    """(строка, адрес) каждого адреса `http(s)://<DNS-имя>` текста файла
+    `tests/` с именем `name` (имя файла, не путь: так ключуются именованные
+    исключения). Хост сравнивается ТОЧНО, не префиксом:
+    `127.0.0.1.evil.example` — DNS-имя, лишь начинающееся с исключённого
+    `127.0.0.1`, — пойман."""
+    hits: list[tuple[int, str]] = []
+    for match in NETWORK_ADDRESS_RE.finditer(text):
+        url = match.group(0)
+        host = network_address_host(url)
+        if host in NETWORK_EXEMPT_HOSTS:
+            continue
+        if (name, host) in NETWORK_ADDRESS_EXCEPTIONS:
+            continue
+        hits.append((text.count("\n", 0, match.start()) + 1, url))
+    return hits
+
+
+def network_address_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+    """Ошибки правила адресов по (label, текст) парам файлов `tests/`;
+    исключения ключуются последним сегментом метки."""
+    errors: list[str] = []
+    for label, source in files:
+        name = label.replace("\\", "/").rsplit("/", 1)[-1]
+        for lineno, url in network_address_hits(name, source):
+            errors.append(f"{label}:{lineno}: сетевой адрес «{url}» — в "
+                          f"tests/ адреса только на "
+                          f"{'/'.join(NETWORK_EXEMPT_HOSTS)} (инвариант 35)")
     return errors
 
 

@@ -42,6 +42,7 @@ from .advance_gates.test_integrity import (TEST_INTEGRITY_REFUSAL_ACTION,
                                            _test_integrity_gate,
                                            _test_integrity_gate_refuses)
 from .advance_gates.tests_writing import (_freshness_refuses,
+                                          _network_address_gate,
                                           _origin_push_gate, _registry_gate,
                                           _tests_writing_acceptance_dir,
                                           _tests_writing_code_copy_gate,
@@ -653,6 +654,11 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if _test_integrity_gate_refuses(conn, task_id, t, branch):
         return False
     if _review_rework_gate_refuses(conn, task_id, t, branch):
+        return False
+    # Сетевые адреса в `tests/` ветки (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC,
+    # требование 3) — до push на origin: инвариант 35 иначе краснеет только
+    # в CI ветки. За прежними гейтами: старшинство их отказов не меняется.
+    if _run_gates(conn, task_id, [lambda: _network_address_gate(conn, task_id, t)]):
         return False
     # Сверка головы на origin (ADR-0015, требование 2) — не для канареечной
     # задачи (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 11/AC-11): её
