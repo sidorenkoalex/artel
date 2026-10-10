@@ -4,7 +4,8 @@
 from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint,
-                cycle_hint, fixation, github_adapter, gitcmd, store, workspace)
+                cycle_hint, fixation, github_adapter, gitcmd, repo_context,
+                store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
 from .refusal_classes import LONG_LIVED_GIT_REFUSAL_ACTION
@@ -50,6 +51,64 @@ def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
         return None
     hint = f"почини доступ к origin и повтори artel.py advance {task_id}"
     return GateRefusal("переход отклонён: голова не в origin", push_detail, hint)
+
+
+# Адрес в `tests/` чинит разработчик — класс «чинит роль». Своего действия
+# в перечне `refusal_classes` у рубежа нет (модуль вне зон задачи
+# 01M4JN2EDQP8Q3WVYK0TS95ZVC), поэтому — историческое действие без суффикса
+# того же класса, что у `_freshness_refuses`; правило называет `detail`.
+NETWORK_ADDRESS_ACTION = "переход отклонён"
+# Сбой git — не вина роли: действия нет в перечне, значит «чинит Оператор».
+NETWORK_ADDRESS_GIT_ACTION = ("переход отклонён: сетевые адреса tests/ — "
+                              "git не ответил")
+
+
+def _network_address_gate(conn, task_id: str, t) -> GateRefusal | None:
+    """Адреса `http(s)://<DNS-имя>` в файлах `tests/**/*.py`, которые
+    кодовая ветка добавила или изменила против своей базы, — отказ
+    `in_dev -> verifying` до похода в CI (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC,
+    требование 3): инвариант 35 краснел только в CI ветки. Файлы, которых
+    ветка не касалась, не читаются — их держит сам инвариант на main.
+
+    Только артель: инвариант 35 — правило дерева `tests/` пульта, в чужом
+    репозитории `tests/` значит другое. Канареечная задача — не
+    проверяется, как `_mutation_claim_gate`: её `verifying` не ждёт CI.
+    Сбой git — отказ, а не пропуск (ADR-0002)."""
+    if t["is_canary"]:
+        return None
+    if not repo_context.is_artel(store.task_target(conn, task_id)):
+        return None
+    branch = t["branch"]
+    repo = workspace.task_repo(task_id)
+    git_hint = (f"разберись, почему git не отвечает, и повтори artel.py "
+                f"advance {task_id}")
+    base = gitcmd.diff_base(branch, repo=repo)
+    entries = (None if base is None
+               else gitcmd.diff_name_status(base, branch, "tests", repo=repo))
+    if entries is None:
+        return GateRefusal(
+            NETWORK_ADDRESS_GIT_ACTION,
+            f"дифф кодовой ветки {branch} против базы не прочитан — git не "
+            f"ответил, проверка сетевых адресов tests/ невозможна", git_hint)
+    files: list[tuple[str, str]] = []
+    for status, path, new_path in entries:
+        rel = new_path or path
+        if status.startswith("D") or not (
+                rel.startswith("tests/") and rel.endswith(".py")):
+            continue
+        text, reason = gitcmd.show(branch, rel, repo=repo)
+        if text is None:
+            return GateRefusal(
+                NETWORK_ADDRESS_GIT_ACTION,
+                f"{rel} не прочитан на голове {branch}: {reason} — проверка "
+                f"сетевых адресов tests/ невозможна", git_hint)
+        files.append((rel, text))
+    errors = guard.network_address_errors_from_files(files)
+    if not errors:
+        return None
+    hint = (f"замени адрес на localhost/127.0.0.1 и повтори artel.py "
+            f"advance {task_id}")
+    return GateRefusal(NETWORK_ADDRESS_ACTION, "; ".join(errors), hint)
 
 
 def _registry_gate(conn, task_id: str, tdir, review_text, meta) -> GateRefusal | None:
@@ -247,8 +306,9 @@ def _tests_writing_artifact_source_gate(acc_tdir, task_id: str) -> GateRefusal |
 TEST_GROUPS_ACTION = "переход отклонён: группы приёмочных тестов"
 
 
-def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
-                                    profile) -> GateRefusal | None:
+def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
+                                    network_addresses: bool = True
+                                    ) -> GateRefusal | None:
     """Строка группы у каждого `test_*.py` планки и проверки долгоживущих
     файлов — признаки требования 3 и «Ловит мутацию» у каждого метода
     (SPEC 01M3N0BWYQ9KHVN41Z4G72706R, требования 1-4, 6-7; ADR-0020).
@@ -260,7 +320,11 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
     обработчик. Файлы — те же, что у сухого сбора (`acc_tdir`).
 
     Подсказка test_author — в `detail`, не только в печати: история
-    отказов брифа роли читает журнал (требование 6)."""
+    отказов брифа роли читает журнал (требование 6).
+
+    `network_addresses` — признак адресов инварианта 35 (SPEC
+    01M4JN2EDQP8Q3WVYK0TS95ZVC): только у артели, как рубеж `in_dev`
+    (`_network_address_gate`); решает вызывающий обработчик."""
     if profile is None:
         return None
     files = guard.acceptance_test_files(acc_tdir)
@@ -272,7 +336,8 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
               + guard.long_lived_plank_errors(files, task_id,
                                               profile.long_lived_dir,
                                               profile.long_lived_name)
-              + guard.long_lived_errors_from_files(files, task_id))
+              + guard.long_lived_errors_from_files(
+                  files, task_id, network_addresses=network_addresses))
     if not errors:
         return None
     hint = f"исправь файл планки и повтори artel.py advance {task_id}"
@@ -354,8 +419,9 @@ def _diff_entry_error(task_id: str, status: str, path: str,
 
 
 def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
-                                   files: dict[str, str],
-                                   profile) -> GateRefusal | None:
+                                   files: dict[str, str], profile, *,
+                                   network_addresses: bool = True
+                                   ) -> GateRefusal | None:
     """Гейт «только добавление» на выходе из `tests_writing` (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2-3; ADR-0020, п. 7 — второй
     рубеж за откатом чекпоинта): дифф кодовой ветки несёт только
@@ -366,7 +432,8 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
     gate`), он требует выписанной рабочей копии кодовой ветки.
 
     Каталог и шаблон имени — профиля тестов проекта (`profile`, SPEC
-    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5)."""
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5); `network_addresses` — как
+    у `_tests_writing_test_groups_gate`."""
     errors = [error for status, path, new_path in entries
               if (error := _diff_entry_error(task_id, status, path, new_path,
                                              profile))]
@@ -388,8 +455,9 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
                               f"{guard.GROUP_LONG_LIVED}» — в "
                               f"{profile.long_lived_dir}/ кодовой ветки "
                               f"только долгоживущие файлы")
-        errors += guard.long_lived_errors_from_files(sorted(files.items()),
-                                                     task_id)
+        errors += guard.long_lived_errors_from_files(
+            sorted(files.items()), task_id,
+            network_addresses=network_addresses)
         if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")

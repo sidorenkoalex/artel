@@ -20,7 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from orchestrator import acceptance, amend, config, fsm, store  # noqa: E402
+from orchestrator import (acceptance, amend, config, fsm,  # noqa: E402
+                          repo_context, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (LightTransitionSandbox,  # noqa: E402
                            declared_artel_profile, declared_without_profile)
@@ -156,6 +157,25 @@ class TestGroupsGateTest(_GroupsSandbox):
         self.set_row(is_canary=1)
         self.write_plank(plank(None))
         self.assertTrue(self.advance())
+
+    def test_network_address_sign_only_for_artel(self):
+        """Долгоживущий файл с адресом по DNS-имени: у артели отказ
+        называет инвариант 35, у чужого проекта признака адресов нет
+        (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC, замечание ревью R1-F1).
+
+        Ловит мутацию: `fsm_advance.tests_writing` не передаёт гейту
+        признак проекта (`network_addresses` всегда `True`) — чужой проект
+        получает отказ по неприменимому к нему инварианту 35.
+        """
+        address = "https" + ":" + "//mirror.example.test/x"
+        self.write_plank(plank(head=f"URL = '{address}'"))
+        refusals = self.advance()
+        self.assertEqual(len(refusals), 1)
+        self.assertIn("инвариант 35", refusals[0]["detail"])
+        with mock.patch.object(repo_context, "is_artel", return_value=False):
+            refusals = self.advance()
+        self.assertEqual(len(refusals), 1)
+        self.assertNotIn("инвариант 35", refusals[0]["detail"])
 
     def test_mutation_claim_goes_through_review_gate_node(self):
         """Заявка мутации долгоживущего файла проверяется узлом
