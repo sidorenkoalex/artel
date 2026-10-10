@@ -1380,6 +1380,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     if skip is not None:
         return skip
     log_path, prompt_path, env, cwd, numbered = ctx
+    # Снимок главной копии пульта до запуска агента — сверка после шага
+    # назовёт только появившееся за шаг (SPEC 01M4G8KPP8DVNBCPGCAPSVMAKZ).
+    watch = checkpoint.main_copy_watch_start(conn, task_id)
 
     skip, spawn_ctx = _spawn_and_wait(
         conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
@@ -1394,20 +1397,20 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
     if timed_out:
         return _finish_timeout(conn, task_id, role, numbered, spent,
-                               killed_group, agent_pid)
+                               killed_group, agent_pid, watch)
 
     if rc != 0:
         return _finish_failed(conn, task_id, role, rc, numbered, spent,
-                              log_path)
+                              log_path, watch)
 
     missing_artifact = _missing_required_artifact(
         role, cwd, task_id, _step_docs_dir(conn, task_id))
     if missing_artifact is not None:
         return _finish_missing_artifact(conn, task_id, role,
                                         missing_artifact, cwd, numbered,
-                                        spent)
+                                        spent, watch)
 
-    return _finish_ok(conn, task_id, role, pump, rc, numbered, spent)
+    return _finish_ok(conn, task_id, role, pump, rc, numbered, spent, watch)
 
 
 def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
@@ -1705,12 +1708,15 @@ def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
 
 
 def _finish_timeout(conn, task_id: str, role: str, numbered: str,
-                    spent: str, killed_group, agent_pid):
+                    spent: str, killed_group, agent_pid, watch=None):
     """Исход «таймаут шага» (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) —
-    перенесённая без изменений ветка `run_agent_once`."""
+    перенесённая без изменений ветка `run_agent_once`. `watch` — снимок
+    главной копии на старте шага для сторожа (SPEC
+    01M4G8KPP8DVNBCPGCAPSVMAKZ); так же у остальных `_finish_*`."""
     # Чекпоинт — до журнала таймаута, чтобы рестарт, начатый сразу по
     # этой записи, уже видел чистое дерево (SPEC T041, требования 1–4).
     checkpoint.commit_timeout_checkpoint(conn, task_id, role)
+    checkpoint.watch_main_copy(conn, task_id, role, watch)
     # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
     timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
     detail = f"{timeout_min}, {numbered} (без ретрая){spent}"
@@ -1729,7 +1735,7 @@ def _finish_timeout(conn, task_id: str, role: str, numbered: str,
 
 
 def _finish_failed(conn, task_id: str, role: str, rc: int, numbered: str,
-                   spent: str, log_path: Path):
+                   spent: str, log_path: Path, watch=None):
     """Исход «агент упал» (rc != 0) (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD,
     AC-1) — перенесённая без изменений ветка `run_agent_once`."""
     # Чекпоинт — до журнала провала, тем же доводом, что и у таймаута
@@ -1737,6 +1743,7 @@ def _finish_failed(conn, task_id: str, role: str, rc: int, numbered: str,
     # по коду возврата тоже аварийное завершение шага, не только
     # таймаут). Сам провал/ретрай/эскалация ниже не меняются.
     checkpoint.commit_abnormal_checkpoint(conn, task_id, role, f"rc={rc}")
+    checkpoint.watch_main_copy(conn, task_id, role, watch)
     reason = (f"rc={rc}, {numbered}{spent}; "
               f"хвост {log_path}:\n{agent_log.log_tail(log_path)}")
     store.journal(conn, task_id, role, "agent run FAILED", reason)
@@ -1762,7 +1769,7 @@ def _finish_failed(conn, task_id: str, role: str, rc: int, numbered: str,
 
 def _finish_missing_artifact(conn, task_id: str, role: str,
                              missing_artifact: str, cwd: Path,
-                             numbered: str, spent: str):
+                             numbered: str, spent: str, watch=None):
     """Исход «rc=0, но обязательный артефакт роли не оставлен» (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) — перенесённая без изменений ветка
     `run_agent_once`."""
@@ -1773,6 +1780,7 @@ def _finish_missing_artifact(conn, task_id: str, role: str,
     # бюджет впустую — оба инцидента 05.09, «Контекст» SPEC).
     checkpoint.commit_abnormal_checkpoint(
         conn, task_id, role, f"без артефакта {missing_artifact}")
+    checkpoint.watch_main_copy(conn, task_id, role, watch)
     reason = (f"rc=0, {numbered}{spent}; шаг завершён без артефакта "
               f"{missing_artifact} в рабочем каталоге роли {cwd}")
     store.journal(conn, task_id, role, "agent run FAILED", reason)
@@ -1782,7 +1790,7 @@ def _finish_missing_artifact(conn, task_id: str, role: str,
 
 
 def _finish_ok(conn, task_id: str, role: str, pump, rc: int,
-              numbered: str, spent: str):
+              numbered: str, spent: str, watch=None):
     """Исход «шаг завершён» (rc=0, обязательный артефакт на месте) (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) — перенесённая без изменений ветка
     `run_agent_once`."""
@@ -1805,6 +1813,7 @@ def _finish_ok(conn, task_id: str, role: str, pump, rc: int,
         # (SPEC T059, требование 1): роль может не успеть закоммитить свой
         # артефакт, а `advance` уже проверяет чистоту рабочей копии.
         checkpoint.commit_step_artifacts(conn, task_id, role)
+    checkpoint.watch_main_copy(conn, task_id, role, watch)
     store.journal(conn, task_id, role, "agent run finished",
                   f"rc={rc}, {numbered}{spent}, "
                   f"окружение: {agent_log.environment_fingerprint()}")

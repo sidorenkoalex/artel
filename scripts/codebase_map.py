@@ -4,12 +4,13 @@
 Использование:
     python3 scripts/codebase_map.py
 Корень дерева, которое картируется, — `git rev-parse --show-toplevel` от
-cwd (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7), НЕ сам cwd: запуск из
-подкаталога (например, изнутри `tasks/<id>/acceptance_tests/` — реальный
-инцидент 05.09, где `scripts/codebase_map.py` запускался тестом планки
-приёмки) кладёт карту в корень репозитория, а не рядом с cwd запуска.
-В CI — корень пульта после checkout, тот же результат, что раньше давал
-голый `Path.cwd()`.
+каталога САМОГО сценария (SPEC 01M4G8KPP8DVNBCPGCAPSVMAKZ, требование 1),
+не от cwd: 05.10 сценарий рабочей копии задачи, запущенный из каталога
+документов задачи внутри главной копии пульта, переписал карту главной
+копии. Подкаталог запуска не важен и прежним путём (SPEC
+01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7, инцидент 05.09 с cwd внутри
+`tasks/<id>/acceptance_tests/`). Пульт и CI зовут сценарий того дерева,
+которое картируют, — результат тот же, что раньше давал cwd.
 
 Перебирает `orchestrator/`, `scripts/`, `tests/` РЕКУРСИВНО — вместе с
 модулями подпакетов (`orchestrator/doctor/`, `orchestrator/advance_gates/`,
@@ -18,7 +19,7 @@ T027 устарело, когда подпакеты появились в фа�
 быть видны и карте, и брифу роли. Служебные каталоги (`__pycache__`,
 скрытые) в перечень не входят. Разбор — статический (`ast`), файлы не исполняются
 и не импортируются: содержимое чужого дерева — данные, не код для запуска.
-Выход: `<cwd>/docs/codebase-map.md`. Код возврата: 0 — успех, иначе — сбой
+Выход: `<корень дерева сценария>/docs/codebase-map.md`. Код возврата: 0 — успех, иначе — сбой
 (ADR-0003 3б: карта никогда не выдаётся за актуальную молча).
 """
 import ast
@@ -346,7 +347,7 @@ def render(modules, resolved_imports, imported_by, sha: str) -> str:
 
 
 def main() -> int:
-    root = repo_root(Path.cwd())
+    root = repo_root(Path(__file__).resolve().parent)
     sha = git_head_sha(root)
     modules, resolved_imports, imported_by = build_modules(root)
     text = render(modules, resolved_imports, imported_by, sha)
