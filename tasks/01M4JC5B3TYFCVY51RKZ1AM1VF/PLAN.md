@@ -30,8 +30,10 @@ schema_version: 5
    зону ради зависимости <id>» (требование 3); проверяется до порядка,
    поэтому `zone-reorder` его не обходит (AC-4).
 4. Первая по `queue_order` задача, которая держит очередь
-   (`_holds_queue`: живой lease — `lease.is_live`, не `paused`, без
-   отказа п.3); сама проверяемая задача считается держащей (её `run`/
+   (`_holds_queue`: живой цикл — правило `lease.foreign_live_lease`:
+   heartbeat свежий И pid адресуем на своём host, не `paused`, без
+   отказа п.3; `lease.is_live` смотрит только на heartbeat и мёртвый
+   процесс держал бы очередь до 2 ч — REVIEW R1-F1); сама проверяемая задача считается держащей (её `run`/
    `auto` держат lease в момент вызова; пауза отказывает дальше своим
    штатным отказом и захват снимается `release_claim`). Первая — не сама
    задача → отказ «ждёт очереди зоны: впереди <id>» (требования 1, 4).
@@ -71,6 +73,12 @@ schema_version: 5
    очереди, цикл `merge_after`, не-вложенные зоны под общим каталогом —
    разные очереди, запуск без зависимости в очереди); карта
    `scripts/codebase_map.py`.
+4. Итерация 2 (REVIEW R1-F1, R1-F2): `_holds_queue` — живость цикла с
+   проверкой pid (`lease.foreign_live_lease(conn, id, None)`); сторожа в
+   `tests/test_zone_lock.py`:
+   `test_lease_with_dead_pid_does_not_hold_queue`,
+   `test_blocking_conflict_names_queue_head_and_waiting_dependency`
+   (тройка `blocking_conflict` для отказа очереди и отказа зависимости).
 
 ## Покрытие требований
 
@@ -79,10 +87,10 @@ schema_version: 5
 | 1 | 1 |
 | 2 | 1 |
 | 3 | 1 |
-| 4 | 1 |
+| 4 | 1, 4 |
 | 5 | 1, 2 |
 | 6 | 1 |
-| 7 | 1 |
+| 7 | 1, 4 |
 | 8 | 3 (существующие ожидания не меняются) |
 
 ## Влияние на систему
@@ -103,6 +111,15 @@ schema_version: 5
 мутациях: временная подмена `_ancestors`, `_holds_queue` и
 `_queue_members` через `mock`. `suite-run` №1: новых падений на ветке
 0, одно падение есть и на базе 9738666a.
+
+Итерация 2: те же четыре файла `tests/` (задачи, `test_zone_lock`,
+`…zone_lock_projects`, `test_auto_cycle`) — 113 passed, 49 subtests;
+`plank-run` — 1 passed, код 0. Мутации через `mock` (код на диске не
+менялся): `lease.foreign_live_lease` подменён правилом «только
+heartbeat» — `test_lease_with_dead_pid_does_not_hold_queue` красный;
+`blocking_conflict`, отдающий только `_OCCUPIED`, —
+`test_blocking_conflict_names_queue_head_and_waiting_dependency` красный;
+без мутаций оба зелёные.
 
 ## Риски
 - Запись входа в ожидание `auto` (`wait_enter_action`, текст в `auto.py`,
