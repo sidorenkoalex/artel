@@ -17,6 +17,7 @@ pid, но по группе целиком (`os.killpg`) — потомок, з�
 через `pytest`/`unittest`, не пересиживает ни один из этих путей.
 """
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -67,19 +68,46 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _group_exists(pgid: int) -> bool:
+    """`os.killpg(pgid, 0)` — адресуемость группы без сигнала, тот же
+    приём, что `_pid_alive` для одиночного pid."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _ps_executable() -> str:
+    """`ps` на macOS лежит в `/bin`, а PATH окружения роли собран из
+    манифеста без `/bin` (`runner.role_env`) — голый `ps` там не
+    находится (SPEC 01M4JJJF9SCR128A0XJPT2M7QX, причина нуля в
+    suite-run шага роли)."""
+    path = os.pathsep.join([os.environ.get("PATH", ""), "/bin", "/usr/bin"])
+    return shutil.which("ps", path=path) or "ps"
+
+
 def _group_member_count(pgid: int) -> int:
     """Число процессов, прямо сейчас числящихся в группе `pgid` (`ps -g`
     — переносимо между BSD/macOS и Linux `ps`, в отличие от `/proc`,
-    которого на macOS нет). 0 — группа пуста/уже не существует, либо
-    `ps` не ответил (тихая деградация, тот же приём, что и у остальных
-    git/OS-примитивов пульта)."""
+    которого на macOS нет). 0 — группа пуста/уже не существует.
+
+    Сбой `ps` (не запустился, не ответил в срок, ненулевой код) не
+    выдаётся за пустую группу (SPEC 01M4JJJF9SCR128A0XJPT2M7QX): тогда
+    существование группы сверяется `os.killpg(pgid, 0)` — живая группа
+    даёт нижнюю оценку 1, несуществующая 0. Штатный `ps` на пустой
+    группе отвечает кодом 1 — эта же сверка и даёт ему 0."""
     try:
-        res = subprocess.run(["ps", "-o", "pid=", "-g", str(pgid)],
+        res = subprocess.run([_ps_executable(), "-o", "pid=", "-g", str(pgid)],
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
-        return 0
+        return 1 if _group_exists(pgid) else 0
     if res.returncode != 0:
-        return 0
+        return 1 if _group_exists(pgid) else 0
     return len([line for line in res.stdout.splitlines() if line.strip()])
 
 
@@ -108,6 +136,9 @@ def terminate_process_group(
         os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return count
+    # SIGTERM дошёл — в группе был хотя бы один процесс, даже если подсчёт
+    # до сигнала его не увидел (SPEC 01M4JJJF9SCR128A0XJPT2M7QX, требование 4).
+    count = max(count, 1)
     deadline = time.monotonic() + grace_sec
     while time.monotonic() < deadline and _group_member_count(pgid) > 0:
         time.sleep(poll_sec)

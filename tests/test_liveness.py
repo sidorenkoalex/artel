@@ -10,9 +10,11 @@
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -156,6 +158,29 @@ class TerminateProcessGroupTest(unittest.TestCase):
         count = liveness.terminate_process_group(own_pgid)
 
         self.assertEqual(count, 0)
+
+
+class GroupMemberCountPathTest(unittest.TestCase):
+
+    def test_counts_members_exactly_when_ps_is_not_on_path(self):
+        """Окружение роли собирает PATH из манифеста без `/bin`, где на
+        macOS лежит `ps` (SPEC 01M4JJJF9SCR128A0XJPT2M7QX, требование 1):
+        подсчёт всё равно находит штатный `ps` и считает группу из лидера
+        и потомка точно — 2, а не нижней оценкой сверки существования.
+
+        Ловит мутацию: `ps` снова ищется только по PATH вызывающего
+        (`["ps", ...]` без запасных `/bin`, `/usr/bin`) — в таком PATH он
+        не находится, подсчёт падает на сверку `os.killpg(pgid, 0)` и
+        возвращает 1 вместо 2."""
+        leader, child_pid = _spawn_group_with_child()
+        self.addCleanup(leader.wait)
+        self.addCleanup(liveness.terminate_process_group, leader.pid, 0.1)
+
+        with tempfile.TemporaryDirectory() as empty_dir, \
+                mock.patch.dict(os.environ, {"PATH": empty_dir}):
+            count = liveness._group_member_count(leader.pid)
+
+        self.assertEqual(count, 2)
 
 
 class GroupKillDetailTest(unittest.TestCase):
