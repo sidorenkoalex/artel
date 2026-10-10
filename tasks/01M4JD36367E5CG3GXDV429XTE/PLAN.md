@@ -57,6 +57,14 @@ schema_version: 5
    файл — расхождение; помощник и `__pycache__` — не расхождение), каждая
    заявка мутации проверена временной мутацией (оба теста краснели).
    Карта: `python3 scripts/codebase_map.py`.
+4. Возврат по ANSWER-1 (конфликт подтяжки main в `docs/codebase-map.md`):
+   `git merge main` → `git checkout --theirs docs/codebase-map.md` →
+   `python3 scripts/codebase_map.py` (Python 3.13, venv пульта) → коммит
+   подтяжки e8e4a054. Код и тесты задачи не менялись; повторная
+   регенерация после коммита меняет только `built_at_sha`. Тесты
+   `tests/test_01m4jd36367e5cg3gxdv429xte_*.py` +
+   `tests/test_plank_run_edges.py` на слитом дереве — 19 passed,
+   4 subtests passed.
 
 ## Покрытие требований
 
