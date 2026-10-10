@@ -134,6 +134,17 @@ def held_by_me() -> bool:
     return holder is not None and holder.get("pid") == os.getpid()
 
 
+def my_task_id() -> str | None:
+    """Задача прогона, чей замок держит текущий процесс (гейт, фоновый
+    процесс `suite-run`); `None` — замок не за этим процессом либо прогон
+    без задачи (`notes`). По ней сигнал «длительность близка к пределу»
+    находит журнал задачи, не меняя сигнатур вызова прогона."""
+    holder = _read()
+    if holder is None or holder.get("pid") != os.getpid():
+        return None
+    return holder.get("task_id") or None
+
+
 def hand(task_id, run, pid: int) -> None:
     """Замок, взятый процессом команды `suite-run`, — за её фоновым
     процессом: держателем становится `pid`, задача и номер прогона те же."""
