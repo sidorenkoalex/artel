@@ -508,11 +508,15 @@ class CommandWithoutDocsDirTest(unittest.TestCase):
         документов не несёт `--add-dir` (офлайн-смок изоляции и
         `role_cmd()` сверяют прежнюю команду); с каталогом — пара
         `--add-dir <каталог>` есть, а хвост argv (модель у claude, модель и
-        промпт со стандартного входа у codex) тот же, что без неё.
+        промпт со стандартного входа у codex) тот же, что без неё. У codex
+        пар `--add-dir` в шаге две — каталог документов и каталог
+        `config.LOGS / "suite-run"` (SPEC 01M4KG7VHHXTVTW5TTX2PGY5RY,
+        требование 2); без всех пар argv тот же, что без каталога.
 
         Ловит мутацию: флаг добавляется всегда (с `None` или пустым
         значением) — команда без каталога несёт `--add-dir`; флаг встал
-        после `--model`/`-m` — хвост argv меняется."""
+        после `--model`/`-m` — хвост argv меняется; codex не открывает
+        каталог `suite-run` либо открывает его и без каталога документов."""
         docs = "/docs/tasks/X"
         for name in ("claude", "codex"):
             with self.subTest(provider=name):
@@ -522,7 +526,16 @@ class CommandWithoutDocsDirTest(unittest.TestCase):
                 self.assertNotIn("--add-dir", bare)
                 at = opened.index("--add-dir")
                 self.assertEqual(opened[at + 1], docs)
-                self.assertEqual(opened[:at] + opened[at + 2:], bare)
+                if name == "codex":
+                    pairs = [i for i, token in enumerate(opened)
+                             if token == "--add-dir"]
+                    self.assertEqual([opened[i + 1] for i in pairs],
+                                     [docs, str(config.LOGS / "suite-run")])
+                    self.assertEqual(
+                        [token for i, token in enumerate(opened)
+                         if i not in pairs and i - 1 not in pairs], bare)
+                else:
+                    self.assertEqual(opened[:at] + opened[at + 2:], bare)
                 tail = 2 if name == "claude" else 3
                 self.assertEqual(opened[-tail:], bare[-tail:])
 

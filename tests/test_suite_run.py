@@ -209,7 +209,7 @@ class LockTest(TmpRootTest):
         """`cmd_suite_run` с подменённым запуском фонового процесса; замок
         в момент запуска — в ответе."""
         seen = {}
-        log = config.LOGS / f"{task_id}-{suite_run.LOG_KIND}-7.log"
+        log = suite_run._log_path(task_id, 7)
 
         def popen(*args, **kwargs):
             seen["at_popen"] = json.loads(suite_run._lock_path().read_text())
@@ -224,8 +224,7 @@ class LockTest(TmpRootTest):
                                   return_value=(["pytest"], "")), \
                 mock.patch.object(suite_run.workspace, "path",
                                   return_value=self.root), \
-                mock.patch.object(suite_run.agent_log, "new_agent_log",
-                                  return_value=log), \
+                mock.patch.object(suite_run, "_new_log", return_value=log), \
                 mock.patch.object(suite_run.subprocess, "Popen", popen):
             suite_run.cmd_suite_run([task_id])
         return seen

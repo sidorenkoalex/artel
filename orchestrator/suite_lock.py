@@ -17,6 +17,8 @@
 import contextlib
 import json
 import os
+import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -35,9 +37,16 @@ POLL_SEC = 1.0
 _UNKNOWN = {"task_id": "?", "pid": "?"}
 
 
+def directory() -> Path:
+    """Каталог замка и хозяйства `suite-run` — единственный каталог пульта,
+    который шаг роли на Codex получает на запись (`--add-dir`, SPEC
+    01M4KG7VHHXTVTW5TTX2PGY5RY, требование 2)."""
+    return config.LOGS / "suite-run"
+
+
 def path() -> Path:
     """Файл замка — функция, не константа: `config.LOGS` подменяют тесты."""
-    return config.LOGS / "suite-run" / "lock.json"
+    return directory() / "lock.json"
 
 
 def _read() -> dict | None:
@@ -111,6 +120,9 @@ def wait_acquire(task_id, kind: str, limit_sec: float,
     """Замок с ожиданием не дольше `limit_sec` секунд: `None` — взят,
     иначе держатель на момент истечения предела. `on_wait(holder)`
     зовётся на первом занятом замке и на каждой смене держателя."""
+    # Ждут замок гейты и `notes` — процессы пульта с правом записи в БД:
+    # здесь они досылают журнал прогонов роли без такого права.
+    deliver_journal()
     deadline = time.monotonic() + limit_sec
     seen = None
     while True:
@@ -125,6 +137,12 @@ def wait_acquire(task_id, kind: str, limit_sec: float,
         if remaining <= 0:
             return holder
         time.sleep(min(POLL_SEC, remaining))
+
+
+def holder() -> dict | None:
+    """Запись замка как есть (держатель может быть и мёртв); `None` —
+    замка нет или он нечитаем."""
+    return _read()
 
 
 def held_by_me() -> bool:
@@ -169,6 +187,130 @@ def release() -> None:
     if holder is not None and holder.get("pid") == os.getpid():
         with contextlib.suppress(FileNotFoundError):
             path().unlink()
+
+
+# ------------------------------------------------- отложенные записи журнала
+#
+# Процесс роли на Codex пишет только в рабочий каталог, каталог документов
+# и каталог `suite-run`, БД пульта ему недоступна (SPEC
+# 01M4KG7VHHXTVTW5TTX2PGY5RY, требование 3). Запись журнала задачи, не
+# удавшаяся его прогону, ложится файлом сюда, а пишет её в журнал первый
+# процесс с правом записи: команда `suite-run` и ожидание замка гейтом.
+#
+# Файлы очереди пишет процесс роли — это данные, не доверенный канал: досыл
+# принимает только действия закрытого перечня (`deferrable`), автора ставит
+# сам и режет текст. Иначе роль подложила бы запись, которой верят гейты
+# («объявлена смена поведения тестов», «двусторонний прогон пройден») от
+# имени Оператора (REVIEW итерации 1, R1-F1).
+
+DEFERRED_ACTOR = "orchestrator"
+# Потолок текста досылаемой записи: сигнал «близко к пределу» — одна строка
+# с нагрузкой машины, длиннее ему быть незачем.
+DEFERRED_DETAIL_MAX = 2000
+
+
+def deferrable(action) -> bool:
+    """Действие журнала, которое вправе прийти из очереди: только то, что
+    пишет полный прогон `suite-run` у предела. «Прогон: время»
+    (`acceptance.SUITE_DURATION_ACTION`) прогон `suite-run` не пишет, а
+    калибровку `doctor` по нему подменять ролью незачем."""
+    from . import acceptance  # acceptance -> suite_lock
+    return action == acceptance.SUITE_NEAR_LIMIT_ACTION
+
+
+def _pending_dir() -> Path:
+    return directory() / "pending-journal"
+
+
+def defer_journal(record: dict) -> bool:
+    """Откладывает запись журнала (`task_id`, `action`, `detail`,
+    `session_id`, `at`): отдельный файл на запись, атомарно — досылающий не
+    прочтёт половину файла. Действие вне `deferrable` не откладывается
+    (`False`): досыл его всё равно выбросит."""
+    if not deferrable(record.get("action")):
+        return False
+    folder = _pending_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"{time.time_ns()}-{os.getpid()}"
+    tmp = folder / f".{name}.tmp"
+    tmp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(folder / f"{name}.json")
+    return True
+
+
+def _deferred_text(record: dict) -> tuple[str, str]:
+    """Задача и текст досылаемой записи; `ValueError` — запись не из
+    перечня или не той формы."""
+    if not deferrable(record.get("action")):
+        raise ValueError(f"действие вне перечня: {record.get('action')!r}")
+    task_id, detail, at = record["task_id"], record["detail"], record["at"]
+    if not all(isinstance(value, str) for value in (task_id, detail, at)):
+        raise ValueError("поля записи — не строки")
+    if len(detail) > DEFERRED_DETAIL_MAX:
+        detail = detail[:DEFERRED_DETAIL_MAX] + "…"
+    return task_id, (f"{detail} [дослано процессом пульта: запись прогона "
+                     f"без права записи в БД от {at[:40]}]")
+
+
+def deliver_journal() -> int:
+    """Досылает отложенные записи в журнал их задач; число досланных. Файл
+    забирается переименованием — два досылающих одну запись дважды не
+    напишут; не удалась запись в БД — файл возвращается до следующего раза.
+    Сбой досыла ничего не роняет: досыл — не условие прогона или команды.
+    Нечитаемый файл, запись вне перечня `deferrable` и запись о задаче,
+    которой в БД нет, убираются: писать их некуда (или нельзя), а возврат
+    повторял бы их вечно. Выброшенная запись вне перечня называется в
+    stderr — подложенный файл не исчезает бесследно."""
+    claimed = []
+    with contextlib.suppress(OSError):
+        for pending in sorted(_pending_dir().glob("*.json")):
+            mine = pending.with_name(f"{pending.name}.{os.getpid()}.claimed")
+            with contextlib.suppress(OSError):
+                pending.rename(mine)
+                claimed.append((pending, mine))
+    if not claimed:
+        return 0
+    from . import store  # store -> ... -> acceptance -> suite_lock
+    try:
+        conn = store.db()
+    except (sqlite3.Error, OSError):
+        conn = None
+    try:
+        return _deliver(store, conn, claimed)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _deliver(store, conn, claimed: list) -> int:
+    delivered = 0
+    for pending, mine in claimed:
+        try:
+            record = json.loads(mine.read_text(encoding="utf-8"))
+            task_id, text = _deferred_text(record)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            print(f"suite-run: отложенная запись журнала {pending.name} "
+                  f"выброшена: {exc}", file=sys.stderr)
+            with contextlib.suppress(OSError):
+                mine.unlink()
+            continue
+        session_id = record.get("session_id")
+        try:
+            if conn is None:
+                raise sqlite3.OperationalError("БД пульта не открылась")
+            if store.task_exists(conn, task_id):
+                store.journal(conn, task_id, DEFERRED_ACTOR, record["action"],
+                              text, session_id=(session_id
+                                                if isinstance(session_id, str)
+                                                else None))
+                delivered += 1
+        except sqlite3.Error:
+            with contextlib.suppress(OSError):
+                mine.rename(pending)
+            continue
+        with contextlib.suppress(OSError):
+            mine.unlink()
+    return delivered
 
 
 def describe(holder: dict) -> str:

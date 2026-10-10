@@ -25,12 +25,19 @@
 Состояния задачи команда не меняет, lease не берёт, журнал шагов не пишет:
 всё её хозяйство — в каталоге логов пульта (`_state_dir`), поэтому она в
 перечне команд роли (`artel._ROLE_ALLOWED_COMMANDS`).
+
+Роль на Codex идёт в песочнице, открывающей на запись из хозяйства пульта
+только `_state_dir` (SPEC 01M4KG7VHHXTVTW5TTX2PGY5RY): логи прогонов лежат
+в нём же, а запись журнала задачи, которую прогон без права записи в БД
+сделать не смог, откладывается (`suite_lock.defer_journal`) и досылается
+процессом пульта (`suite_lock.deliver_journal`).
 """
 import contextlib
 import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -39,12 +46,12 @@ import traceback
 from pathlib import Path
 from typing import NamedTuple
 
-from . import (acceptance, agent_log, appendix_tree, config, gitcmd,
-               liveness, project_profile, repo_context, store, suite_lock,
+from . import (acceptance, appendix_tree, config, gitcmd, liveness,
+               project_profile, repo_context, session, store, suite_lock,
                workspace)
 
-# «Роль» в имени лога прогона: `.artel/logs/<id>-suiterun-<n>.log`, номер
-# прогона — номер `agent_log.new_agent_log`, второй нумерации нет.
+# Вид в имени лога прогона: `.artel/logs/suite-run/<id>/<id>-suiterun-<n>.log`
+# — имя прежнее, каталог — хозяйство команды (`_new_log`).
 LOG_KIND = "suiterun"
 
 STILL_RUNNING = "ещё идёт"
@@ -86,7 +93,7 @@ _SUMMARY_COUNT = re.compile(
 
 def _state_dir() -> Path:
     """Каталог хозяйства команды — функция: `config.LOGS` подменяют тесты."""
-    return config.LOGS / "suite-run"
+    return suite_lock.directory()
 
 
 def _task_dir(task_id: str) -> Path:
@@ -113,7 +120,72 @@ def _failed_path(task_id: str) -> Path:
 
 
 def _log_path(task_id: str, run_no: int, suffix: str = "") -> Path:
-    return config.LOGS / f"{task_id}-{LOG_KIND}-{run_no}{suffix}.log"
+    """Лог прогона — в каталоге задачи хозяйства команды, не в `config.LOGS`:
+    каталог логов пульта роли на Codex на запись не открыт (требование 2)."""
+    return _task_dir(task_id) / f"{task_id}-{LOG_KIND}-{run_no}{suffix}.log"
+
+
+def _new_log(task_id: str) -> Path:
+    """Лог следующего прогона задачи, файл создаётся сразу (как у
+    `agent_log.new_agent_log`). Номер — следующий за наибольшим из логов
+    каталога задачи и номеров `run.json`/`result.json`: прогон, начатый до
+    переноса логов из `config.LOGS`, номер не повторит, а `--wait` узнаёт
+    свой отчёт именно по номеру."""
+    prefix = f"{task_id}-{LOG_KIND}-"
+    folder = _task_dir(task_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    used = [int(p.stem[len(prefix):]) for p in folder.glob(f"{prefix}*.log")
+            if p.stem[len(prefix):].isdigit()]
+    for state in (_read_json(_run_path(task_id)),
+                  _read_json(_result_path(task_id))):
+        run = (state or {}).get("run")
+        if isinstance(run, int) and not isinstance(run, bool):
+            used.append(run)
+    path = _log_path(task_id, max(used, default=0) + 1)
+    path.touch()
+    return path
+
+
+def _db():
+    """БД пульта; не открылась на запись (песочница роли на Codex) —
+    только на чтение: команде и прогону из БД нужно лишь прочесть задачу."""
+    try:
+        return store.db()
+    except (sqlite3.Error, OSError):
+        conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro",
+                               uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+
+@contextlib.contextmanager
+def _journal_deferred():
+    """На время прогона запись журнала, отказанная БД (`sqlite3.Error`),
+    откладывается в хозяйство команды (требование 3). Подменяется сам
+    `store.journal`: записи журнала делает узел пульта
+    (`acceptance.run_full_suite`), который этот модуль не меняет. Сбой
+    вызывающий видит, как и прежде, — он же решает, ронять ли прогон.
+    Откладываются только действия перечня `suite_lock.deferrable`: автора
+    записи досыл ставит сам, из очереди его не берёт."""
+    write = store.journal
+
+    def journal(conn, task_id, actor, action, detail="", **kwargs):
+        try:
+            write(conn, task_id, actor, action, detail, **kwargs)
+        except sqlite3.Error:
+            with contextlib.suppress(OSError):
+                suite_lock.defer_journal({
+                    "task_id": task_id, "action": action, "detail": detail,
+                    "session_id": (kwargs.get("session_id")
+                                   or session.resolve_session_id(None)),
+                    "at": store.now()})
+            raise
+
+    store.journal = journal
+    try:
+        yield
+    finally:
+        store.journal = write
 
 
 def _read_json(path: Path) -> dict | None:
@@ -426,7 +498,7 @@ def _base(task_id: str, target: str, branch: str, command: list[str],
 # ------------------------------------------------------ фоновый процесс
 
 def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
-    conn = store.db()
+    conn = _db()
     task = store.get_task(conn, task_id)
     target = store.task_target(conn, task_id)
     command, refusal = _profile_command(target)
@@ -476,6 +548,7 @@ def background(task_id: str, run_text: str, mode: str) -> None:
     логу, а не тишину; замок снимается в `finally` (требование 13)."""
     run_no = int(run_text)
     log = _log_path(task_id, run_no)
+    log.parent.mkdir(parents=True, exist_ok=True)
     holder = _adopt_lock(task_id, run_no)
     if holder is not None:
         _write_json(_result_path(task_id), {
@@ -486,7 +559,8 @@ def background(task_id: str, run_text: str, mode: str) -> None:
         return
     try:
         try:
-            report, green = _run(task_id, run_no, mode, log)
+            with _journal_deferred():
+                report, green = _run(task_id, run_no, mode, log)
         except Exception as exc:  # отчёт обязан быть на любом исходе
             traceback.print_exc()
             report, green = (f"[{task_id}] suite-run №{run_no}: прогон оборван "
@@ -543,12 +617,18 @@ def _wait_minutes(text: str) -> int:
 
 
 def _running(task_id: str) -> dict | None:
-    """Последний прогон задачи, если он ещё идёт: процесс жив, отчёта нет."""
+    """Последний прогон задачи, если он ещё идёт: процесс жив, отчёта нет и
+    замок машины держит он. Без сверки с замком живой чужой процесс на
+    переиспользованном pid сходил за идущий прогон, и команда отвечала
+    «уже идёт», не сказав, кто на самом деле держит замок."""
     state = _read_json(_run_path(task_id))
     if state is None or not _alive(state.get("pid")):
         return None
     result = _read_json(_result_path(task_id))
     if result is not None and result.get("run") == state.get("run"):
+        return None
+    holder = suite_lock.holder()
+    if holder is None or holder.get("pid") != state.get("pid"):
         return None
     return state
 
@@ -605,8 +685,12 @@ def _wait(task_id: str, minutes: int) -> None:
 def cmd_suite_run(rest: list) -> None:
     task_arg, wait, failed = _parse_args(rest)
     minutes = _wait_minutes(wait) if wait is not None else None
-    conn = store.db()
+    conn = _db()
     task_id = store.resolve_task_id(conn, task_arg)
+    # Процесс с правом записи в БД (Оператор, роль на Claude) досылает
+    # журнал прогонов роли без такого права; у роли на Codex файлы
+    # остаются до процесса пульта (требование 3).
+    suite_lock.deliver_journal()
     if minutes is not None:
         _wait(task_id, minutes)
         return
@@ -646,7 +730,7 @@ def cmd_suite_run(rest: list) -> None:
                  f"полный прогон — повтори после его конца")
     mode = MODE_FAILED if failed else MODE_FULL
     try:
-        log = agent_log.new_agent_log(task_id, LOG_KIND)
+        log = _new_log(task_id)
         run_no = int(log.stem.rsplit("-", 1)[1])
         _hand_lock(task_id, run_no, os.getpid())
         _task_dir(task_id).mkdir(parents=True, exist_ok=True)

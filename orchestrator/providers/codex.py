@@ -34,10 +34,12 @@
 приёмом и по той же причине, что в `providers/claude.py` (см. докстринг
 `base.py` про 3.9-совместимость пути импорта манифеста стека).
 """
+import contextlib
 import json
 import re
 from pathlib import Path
 
+from .. import suite_lock
 from .base import (CliTool, EMPTY_EVENT, HomeReference, RoleExecutorProvider,
                    RunResult, StreamEvent, ToolCall, ToolResult)
 
@@ -405,6 +407,15 @@ class CodexProvider(RoleExecutorProvider):
         primary workspace», ADR-0021 пп. 2, 7, этап 1): песочница
         `workspace-write` открывает на запись рабочий каталог шага (код),
         документы задачи лежат вне его.
+
+        Шагу (команда с каталогом документов) вторым `--add-dir` открыт
+        каталог `suite-run` (`suite_lock.directory()`: замок полных прогонов
+        машины, хозяйство и логи команды) — без него `suite-run` из шага
+        падает PermissionError (SPEC 01M4KG7VHHXTVTW5TTX2PGY5RY, требование
+        2). Каталог логов пульта целиком, `.artel/` и БД не открываются:
+        рядом лежат итоги полного прогона, по которым approve принимает
+        набор. Каталог заводится здесь же: создать его из песочницы роль не
+        сможет — его родитель ей закрыт.
         """
         from .. import runner
         cmd = [runner.declared_tool_path(CLI_NAME)]
@@ -417,7 +428,10 @@ class CodexProvider(RoleExecutorProvider):
         cmd += [EXEC_SUBCOMMAND, "--json", "--sandbox", SANDBOX_MODE,
                 "--ephemeral", "--ignore-rules"]
         if docs_dir is not None:
-            cmd += [ADD_DIR_FLAG, str(docs_dir)]
+            suite_dir = suite_lock.directory()
+            with contextlib.suppress(OSError):
+                suite_dir.mkdir(parents=True, exist_ok=True)
+            cmd += [ADD_DIR_FLAG, str(docs_dir), ADD_DIR_FLAG, str(suite_dir)]
         if model is not None:
             cmd += ["-m", model]
         cmd.append(STDIN_PROMPT)
