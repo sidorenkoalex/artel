@@ -754,17 +754,25 @@ def _zone_wait_suffix(conn, t) -> str:
     `run`/`auto` без флага останавливаются немедленно и не оставляют
     записи входа — строка в этом случае не меняется, тем же приёмом, что
     и очередь из одного конкурента выше.
+
+    Ожидание и очередь — `zone_lock.queue_wait`, то же решение, что у
+    `claim` (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF, требование 5): причина
+    («занята», «ждёт очереди зоны: впереди», «ждёт зону ради
+    зависимости»), позиция в общей для вложенных зон очереди и после неё
+    «не держит очередь» у задачи, которая сама стартовать не может.
     """
-    conflict = zone_lock.blocking_conflict(conn, t["id"], t)
-    if conflict is None:
+    wait = zone_lock.queue_wait(conn, t["id"], t)
+    if wait is None:
         return ""
-    path, occupier_id, occupier_state = conflict
-    position, total = zone_lock.queue_position(conn, t["id"], path)
-    queue = f", очередь {position}/{total}" if total > 1 else ""
+    parts = [wait.reason] if wait.reason else []
+    if wait.total > 1:
+        parts.append(f"очередь {wait.position}/{wait.total}")
+        if not wait.holds:
+            parts.append("не держит очередь")
     minutes = zone_lock.wait_minutes(conn, t["id"])
-    waited = f", ждёт {minutes} мин" if minutes is not None else ""
-    return (f"  [ждёт зоны {path}: занята {occupier_id} ({occupier_state})"
-            f"{queue}{waited}]")
+    if minutes is not None:
+        parts.append(f"ждёт {minutes} мин")
+    return f"  [ждёт зоны {wait.path}: {', '.join(parts)}]"
 
 
 def _zone_forecast_suffix(conn, t) -> str:
