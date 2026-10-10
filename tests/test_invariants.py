@@ -2014,6 +2014,10 @@ class DeterministicTestsLintTest(unittest.TestCase):
             "docs/operator-session.md и docs/stack.md",
         "tests/test_01m4c954hbjwegd3azs7q3eha4_documentation.py::DocumentationAcceptanceTest::test_ac16_reviewed_position_is_shared_by_chats":
             "предмет приёмки — правило в живом docs/operator-session.md",
+        "tests/test_01m4k2767fxkz8ew7ame81sz9n_suite_near_limit.py::GateNearLimitTest::threshold_constant":
+            "предмет приёмки (AC-10) — строка триггера в живом "
+            "docs/triggers.md, называющая константу порога кода; документ "
+            "правится Оператором, копии нет",
         "tests/test_models.py::DocsTemplateTest::test_example_file_equals_the_template":
             "сверяет пример docs/reference/models-local.example.yaml с "
             "шаблоном кода — расхождение живого файла и есть находка",
