@@ -36,10 +36,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from orchestrator import catalog, liveness, store  # noqa: E402
-from tests.sandbox import TaskSeededTmpRootTest, _dead_pid, capture  # noqa: E402
+from orchestrator import catalog, liveness, store
+from tests.sandbox import TaskSeededTmpRootTest, _dead_pid, capture
 
 REAL_POPEN = subprocess.Popen
 
