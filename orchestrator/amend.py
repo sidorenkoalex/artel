@@ -34,8 +34,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifact_branch, fixation, gitcmd,
-               github_adapter, lease, project_profile, store, workspace,
-               yamlmini)
+               github_adapter, lease, project_profile, repo_context, store,
+               workspace, yamlmini)
 from .advance_gates import acceptance as acceptance_gates
 
 AMEND_ACTION = "правка планки"
@@ -507,7 +507,12 @@ def _long_lived_errors(task_id: str, files: dict[str, str],
             errors.append(f"{rel}: нет строки «Группа: {guard.GROUP_LONG_LIVED}» "
                           f"— в {profile.long_lived_dir}/ кодовой ветки только "
                           f"долгоживущие файлы")
-    errors += guard.long_lived_errors_from_files(sorted(files.items()), task_id)
+    # Сетевые адреса (инвариант 35) — правило дерева `tests/` пульта: у
+    # чужого проекта не проверяются, как на выходе из `tests_writing`.
+    errors += guard.long_lived_errors_from_files(
+        sorted(files.items()), task_id,
+        network_addresses=repo_context.is_artel(
+            workspace.task_target(task_id)))
     kept: set[str] = set()
     for source in [*plank_sources, *files.values()]:
         kept |= _method_names(source)
