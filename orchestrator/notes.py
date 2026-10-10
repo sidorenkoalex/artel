@@ -983,6 +983,28 @@ def _suite_gate_applies(request: dict) -> bool:
     return _config_path_request(request) and not request.get("accept_red")
 
 
+def _suite_limit_kwargs() -> dict:
+    """Предел полного прогона из профиля тестов артели — тот же, что у
+    гейтов (`project_profile.full_suite_limit`; SPEC
+    01M4K2767FXKZ8EW7AME81SZ9N, требование 1), с источником в выводе.
+    Запасной предел «config» не передаётся: его подставит сама
+    `acceptance.run_full_suite`, как у `acceptance.full_suite`.
+
+    Нечитаемый профиль команду не роняет: прогон идёт с запасным
+    пределом, как до задачи, а причина — в выводе."""
+    from . import project_profile, targets  # project_profile -> store -> models -> notes
+    try:
+        limit = project_profile.full_suite_limit(config.DEFAULT_TARGET)
+    except targets.TargetsError as exc:
+        print(f"профиль тестов проекта {config.DEFAULT_TARGET} не прочитан: "
+              f"{exc}", flush=True)
+        limit = (config.FULL_SUITE_TIMEOUT_SEC, "config")
+    seconds, source = limit
+    print(f"полный набор tests/: предел {seconds} с (источник: {source})",
+          flush=True)
+    return {"limit": limit} if source != "config" else {}
+
+
 def _suite_gate_refusal(work_dir: Path, request: dict) -> str | None:
     """Текст отказа гейта полного набора `tests/` перед отправкой правки
     конфигурации Оператора, либо `None` — гейт неприменим или пройден
@@ -1007,7 +1029,7 @@ def _suite_gate_refusal(work_dir: Path, request: dict) -> str | None:
     """
     if not _suite_gate_applies(request):
         return None
-    green, output = acceptance.run_full_suite(work_dir)
+    green, output = acceptance.run_full_suite(work_dir, **_suite_limit_kwargs())
     if green:
         return None
     return (f"{request['path']}: полный набор tests/ не обеспечен на дереве "
