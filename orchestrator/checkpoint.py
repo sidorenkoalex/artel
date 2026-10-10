@@ -4,6 +4,7 @@
 без изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
 """
 import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1665,8 +1666,19 @@ class MainCopyWatch:
 
 def _main_copy_status() -> frozenset | None:
     """Строки `git status --porcelain` главной копии; `None` — git не
-    ответил (заглушки `gitcmd.git` в тестах отвечают и `None`)."""
-    res = gitcmd.git("status", "--porcelain")
+    ответил.
+
+    Своя точка вызова, не `gitcmd.git`: сверка — наблюдение пульта за
+    собой, а не git-вызов шага, и не должна попадать в последовательность
+    git-вызовов шага, которую подменяют и сверяют тесты `gitcmd.git`.
+    Репозиторий назван явно (`-C`, ADR-0021 п.1, этап 2).
+    """
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(config.ROOT), "status", "--porcelain"],
+            env=gitcmd.pult_env(), capture_output=True, text=True)
+    except (OSError, UnicodeDecodeError):
+        return None
     if res is None or res.returncode != 0:
         return None
     return frozenset(line for line in res.stdout.splitlines() if line.strip())

@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-from orchestrator import alerts, checkpoint, config, gitcmd, store
+from orchestrator import alerts, checkpoint, config, store
 from tests.sandbox import RealGitSandbox
 
 
@@ -41,7 +41,8 @@ class MainCopyWatchTest(RealGitSandbox):
         self.assertIsNotNone(watch)
         (self.root / "tracked.txt").write_text("правка\n", encoding="utf-8")
         failed = subprocess.CompletedProcess(["git"], 128, "", "fatal")
-        with mock.patch.object(gitcmd, "git", return_value=failed):
+        with mock.patch.object(checkpoint.subprocess, "run",
+                               return_value=failed):
             raised = checkpoint.watch_main_copy(
                 self.conn, "01TASKGITFAIL", "developer", watch)
         self.assertFalse(raised)
