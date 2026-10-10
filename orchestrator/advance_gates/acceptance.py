@@ -11,8 +11,10 @@ from pathlib import Path
 
 from scripts import guard
 
-from .. import (acceptance, agent_log, artifact_branch, config, fsm, gitcmd,
-               project_profile, store, workspace, yamlmini)
+from .. import (acceptance, agent_log, appendix_tree, artifact_branch, config,
+               fsm, gitcmd, project_profile, store, workspace, yamlmini)
+from .plan_appendix import (PLAN_APPENDIX_GATE_FAILURE_ACTION,
+                            PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION)
 from .refusal_classes import ACCEPTANCE_CODE_COPY_REFUSAL_ACTION
 
 LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень долгоживущих тестов"
@@ -21,6 +23,10 @@ LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень 
 # спор с тестом решает Оператор, не правка.
 LONG_LIVED_MANIFEST_HINT = ("код чинится под тест; правка теста — "
                             "`amend-tests` по решению Оператора")
+# Хвост отказа дерева с приложениями PLAN на рубеже `in_dev -> verifying`
+# (`appendix_tree.suite_tree(not_run=...)`): без прогона здесь остаётся
+# планка, а не полный набор.
+PLANK_NOT_RUN = "планка и долгоживущие файлы задачи не запускались"
 
 
 def long_lived_manifest_rel(task_id: str) -> str:
@@ -284,6 +290,14 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     требование 5.2): «приёмочные тесты» остаётся за красной планкой,
     которую чинит developer.
 
+    Прогон идёт на дереве с наложенными приложениями PLAN — тем же узлом
+    `appendix_tree.suite_tree`, что у автогейта, approve и `suite-run`
+    (SPEC 01M4JD3SRN66SD6BM63XAGHB11, требования 1-2): тест задачи вправе
+    краснеть без правки защищённого теста, которую везёт приложение, и
+    прогон рабочей копии без неё был красен по построению.
+    PLAN без приложений и проект не артели — рабочая копия, как прежде.
+    Неприменимое приложение — именованный отказ без прогона.
+
     `True` — переход отклонён (планка красная) либо задача эскалирована
     повторами долгоживущих файлов (`_seed_repeats_escalate`)."""
     def _missing_plank_refuses() -> bool:
@@ -344,6 +358,24 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
         print(f"  дальше: artel.py workspace {task_id} и повтори "
               f"artel.py advance {task_id}")
         return True
+    # HEAD рабочей копии с её незакоммиченными правками (как `suite-run`):
+    # рубеж судит то же дерево, что до приложений, плюс сами приложения.
+    tree = cleanup.enter_context(appendix_tree.suite_tree(
+        conn, task_id, run_cwd, not_run=PLANK_NOT_RUN))
+    if tree.root is None:
+        # Причину по содержимому PLAN чинит роль в своём PLAN.md — тем же
+        # действием, что у гейта применимости; сбой git — нет.
+        if tree.fixable:
+            action = PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION
+            hint = "почини приложение в PLAN.md"
+        else:
+            action = PLAN_APPENDIX_GATE_FAILURE_ACTION
+            hint = "разберись, почему git не отвечает по ветке задачи,"
+        store.journal(conn, task_id, "fsm", action, tree.refusal)
+        print(f"[{task_id}] переход отклонён: {tree.refusal}")
+        print(f"  дальше: {hint} и повтори artel.py advance {task_id}")
+        return True
+    run_cwd = tree.root
     acc_tdir = cleanup.enter_context(
         acceptance.plank_in_code_copy(task_id, branch, run_cwd))
     # Долгоживущие файлы перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
@@ -402,6 +434,6 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
             long_lived=[run_cwd / path for path in long_lived],
             repo=workspace.task_repo(task_id))
     store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
-                  f"{card}\nокружение: {fingerprint}")
+                  f"{tree.mark(card)}\nокружение: {fingerprint}")
     print(f"[{task_id}] {card}")
     return False
