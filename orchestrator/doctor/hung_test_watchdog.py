@@ -244,21 +244,26 @@ def check_zone_waits(conn) -> list[doctor.Check]:
     Позиция в очереди (`zone_lock.queue_position`, R1-F3, REVIEW.md
     итерация 1) — в детали, только когда конкурентов по ЭТОЙ зоне больше
     одного.
+
+    Ожидание и очередь — `zone_lock.queue_wait`, то же решение, что у
+    `claim` и строки `status` (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF,
+    требование 5), с пометкой «не держит очередь» после позиции.
     """
     blocked = []
     for row in doctor.store.all_tasks(conn):
         if row["state"] != "in_dev":
             continue
-        conflict = doctor.zone_lock.blocking_conflict(conn, row["id"], row)
-        if conflict is None:
+        wait = doctor.zone_lock.queue_wait(conn, row["id"], row)
+        if wait is None:
             continue
-        path, occupier_id, occupier_state = conflict
-        position, total = doctor.zone_lock.queue_position(conn, row["id"], path)
-        queue = f", очередь {position}/{total}" if total > 1 else ""
+        parts = [wait.reason] if wait.reason else []
+        if wait.total > 1:
+            parts.append(f"очередь {wait.position}/{wait.total}")
+            if not wait.holds:
+                parts.append("не держит очередь")
         blocked.append(doctor.Check(
             "zone-waits", "warn",
-            f"{row['id']} ждёт зоны {path} — занята {occupier_id} "
-            f"({occupier_state}){queue}"))
+            f"{row['id']} ждёт зоны {wait.path} — {', '.join(parts)}"))
     if not blocked:
         return [doctor.Check("zone-waits", "ok", "нет задач, ожидающих зоны")]
     return blocked

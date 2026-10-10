@@ -169,6 +169,28 @@ class PlanChannelSameValueTest(MergeAfterDbSandbox):
             store.get_task(self.conn, self.TASK)["merge_after"]), [dep])
 
 
+class ReplaceDividedTest(MergeAfterDbSandbox):
+
+    def test_task_not_depending_on_parent_is_untouched(self):
+        """Деление родителя не трогает задачу, в чьём `merge_after` его нет.
+
+        Ловит мутацию: фильтр «родитель в значении» снят — колонка
+        независимой задачи переписывается тем же значением, а в её журнал
+        ложится лишняя запись «merge_after изменён».
+        """
+        parent, other, successor = (self.insert("in_dev"),
+                                    self.insert("in_dev"),
+                                    self.insert("spec_writing"))
+        self.set_deps(self.TASK, [other])
+        before = len(store.task_steps(self.conn, self.TASK))
+
+        self.capture(merge_after.replace_divided, self.conn, parent, successor)
+
+        self.assertEqual(len(store.task_steps(self.conn, self.TASK)), before)
+        self.assertEqual(merge_after.stored(
+            store.get_task(self.conn, self.TASK)["merge_after"]), [other])
+
+
 class MigrationTest(unittest.TestCase):
 
     def test_migrate_adds_merge_after_to_old_tasks_table(self):
