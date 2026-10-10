@@ -150,7 +150,7 @@ def _plan_appendix_gate(conn, task_id: str, t,
     называющий проект: допустить пути не по чему.
 
     Приложение, уже наложенное в базе сравнения, — пропуск с записью
-    журнала (`_appendix_already_in_base`), не отказ.
+    журнала (`skip_in_base`), не отказ.
     """
     target = store.task_target(conn, task_id)
     ctx = repo_context.resolve(target)
@@ -192,43 +192,66 @@ def _plan_appendix_gate(conn, task_id: str, t,
             answer = git_apply(repo, appendix)
             if not answer:
                 continue
-            if _appendix_already_in_base(conn, task_id, number, appendix,
-                                         repo, base):
+            if skip_in_base(conn, task_id, number, appendix, repo,
+                            f"базе сравнения {base}",
+                            "проверка применимости пропущена"):
                 continue
-            detail = (f"приложение PLAN {', '.join(appendix.paths)} не "
-                      f"применяется к базе сравнения {base}: {answer}")
+            # Номер — тем же видом «приложение N PLAN (пути)», что у отказа
+            # дерева полного прогона (`appendix_tree`): в PLAN бывает
+            # несколько приложений к одному файлу, и путь один их не
+            # различает (SPEC 01M4JD3SRN66SD6BM63XAGHB11, требование 2).
+            detail = (f"приложение {number} PLAN ({', '.join(appendix.paths)}) "
+                      f"не применяется к базе сравнения {base}: {answer}")
             return _inapplicable_refusal(task_id, detail)
     finally:
         _drop_base_worktree(repo, task_repo)
     return None
 
 
-# Действие журнала: приложение уже наложено в базе сравнения и проверкой
-# применимости пропущено (решение Оператора ANSWER-5 задачи
-# 01M45FK56DWMNBRKA1VWM12H19).
+# Действие журнала: приложение уже наложено в базе и пропущено (решение
+# Оператора ANSWER-5 задачи 01M45FK56DWMNBRKA1VWM12H19). С SPEC
+# 01M4JD3SRN66SD6BM63XAGHB11 (требование 4) этой формой пишут все узлы
+# пульта, признающие такое приложение (`skip_in_base`).
 PLAN_APPENDIX_ALREADY_IN_BASE_ACTION = "приложение PLAN уже в базе"
 
 
-def _appendix_already_in_base(conn, task_id: str, number: int, appendix,
-                              repo: Path, base: str) -> bool:
-    """Приложение, не легшее прямым `git apply`, уже наложено в базе
-    сравнения: `git apply --reverse --check` на её дереве проходит. То же
-    признание и тот же `git_apply`, что у ворот мержа
-    (`fsm_merge_gate._appendix_already_in_main`): Оператор внёс приложение
-    в main раньше кода, и без этого исхода гейт отказывал бы задаче на уже
-    сделанной работе, хотя мерж её принял бы (решение Оператора ANSWER-5
-    задачи 01M45FK56DWMNBRKA1VWM12H19).
+def in_base(tree: Path, appendix: guard.PlanAppendix) -> bool:
+    """Правило «приложение уже в базе» (SPEC 01M4JD3SRN66SD6BM63XAGHB11,
+    требование 3): `git apply --reverse --check` на дереве `tree` проходит.
+    Спрашивается только про приложение, не легшее прямым `git apply`.
 
-    Неприменимое в обе стороны (частично наложенное, битое) — False, и
-    вызывающий отказывает, как прежде."""
-    if git_apply(repo, appendix, "--reverse", "--check"):
+    Неприменимое в обе стороны (частично наложенное, битое) — False:
+    вызывающий отказывает, как прежде (требование 6). `--check` здесь
+    обязателен: обратное наложение без него само меняло бы дерево.
+
+    `scripts/plan_appendix_ci.py` повторяет это правило у себя (пакет
+    `orchestrator` CI-скрипт не импортирует, требование 5); совпадение
+    ответов держит тест сверки."""
+    return not git_apply(tree, appendix, "--reverse", "--check")
+
+
+def skip_in_base(conn, task_id: str, number: int,
+                 appendix: guard.PlanAppendix, tree: Path, where: str,
+                 outcome: str) -> bool:
+    """Общий узел признания для гейта применимости на выходе `in_dev`, ворот
+    мержа и дерева полного прогона (`appendix_tree`, в том числе на рубеже
+    `in_dev -> verifying`): `in_base` и, если оно уже наложено, запись
+    журнала одной формы (требование 4) — действие
+    `PLAN_APPENDIX_ALREADY_IN_BASE_ACTION: <пути>`, в подробностях
+    «приложение N (<пути>)», где нашлось (`where`) и что из этого следует
+    (`outcome`).
+
+    Прецедент — Оператор внёс правку приложения в main раньше кода: без
+    этого исхода узел отказывал бы задаче на уже сделанной работе.
+
+    `True` — приложение пропускается; `False` — признания нет."""
+    if not in_base(tree, appendix):
         return False
     paths = ", ".join(appendix.paths)
     store.journal(conn, task_id, "orchestrator",
                   f"{PLAN_APPENDIX_ALREADY_IN_BASE_ACTION}: {paths}",
-                  f"приложение {number} ({paths}) уже наложено в базе "
-                  f"сравнения {base} (`git apply --reverse --check` "
-                  f"проходит) — проверка применимости пропущена")
+                  f"приложение {number} ({paths}) уже наложено в {where} "
+                  f"(`git apply --reverse --check` проходит) — {outcome}")
     return True
 
 

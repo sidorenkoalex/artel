@@ -49,7 +49,10 @@ set_state`), не пишет маркер `"state -> tests_writing"` вовсе 
 от факта блокировки (это уже AC-1..AC-3): порядок по возрастанию
 времени approve, если Оператор явно не переставил её `cmd_zone_reorder`
 — тогда позиция, записанная им, решает раньше времени approve (колонка
-`zone_queue_position`, `NULL` — переставлено не было).
+`zone_queue_position`, `NULL` — переставлено не было). С SPEC
+01M4JC5B3TYFCVY51RKZ1AM1VF очередь решает старт: свободную зону получает
+первая по очереди ожидающая задача, которая может стартовать
+(`_start_conflict`), зависимость `merge_after` идёт раньше зависящей.
 
 Источник времени approve (R1-F2, REVIEW.md итерация 1) — id записи
 журнала `"state -> {X}"`, первой ПОСЛЕ последней `"state -> spec_gate"`
@@ -81,7 +84,9 @@ ZoneSandbox.seed_task`, докстринг «Допущения интерфей
 (латест-wins по id журнала — снимающий маркер `"zone claim released"`,
 `release_claim`, откатывает занятость, если `runner._cmd_run` решит не
 продолжать шаг после захвата)."""
+import sys
 from datetime import datetime
+from typing import NamedTuple
 
 from . import config, store
 
@@ -396,12 +401,16 @@ def _occupies(conn, task_id: str) -> bool:
 
 
 def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
-    """(путь, id занявшей задачи, её состояние) — конфликт зоны, который
+    """(путь, id задачи, её состояние) — конфликт зоны, который
     блокирует первый шаг developer этой задачи прямо сейчас, либо `None`
     (нет конфликта: эта задача сама уже занимает свои зоны в текущем
-    пребывании — требования 1-2, 5-6 — либо ни один кандидат диапазона
-    `BLOCKING_STATES` с пересекающейся зоной её не занимает — требование
-    1, AC-1/AC-8).
+    пребывании — требования 1-2, 5-6 — либо зону никто не занимает и
+    очередь зоны пускает её первой). Названная задача — держатель зоны,
+    либо на свободной зоне задача впереди в очереди или ждущая зону
+    зависимость `merge_after` (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF, требования
+    1, 3, 7: так отказ очереди доходит до `auto._wait_for_zone` той же
+    тройкой); вид конфликта различают `claim`/`refusal`
+    (`_start_conflict`).
 
     `t` — строка задачи, уже прочитанная вызывающим (`store.get_task`/
     `store.all_tasks`); функция не читает её сама — тот же приём, что
@@ -415,13 +424,35 @@ def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
     одинаковые пути зон разных проектов — разные файлы (SPEC
     01M484RNV3QBDY3B0M16J916ZP, строки 2-3).
     """
+    conflict = _start_conflict(conn, task_id, t)
+    if conflict is None:
+        return None
+    return conflict[1:]
+
+
+# Виды конфликта старта (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF): зону держит
+# другая задача; зона свободна, но впереди в очереди задача, которая может
+# стартовать (требование 1); своя незавершённая зависимость `merge_after`
+# ждёт ту же зону (требование 3).
+_OCCUPIED = "occupied"
+_QUEUE = "queue"
+_DEPENDENCY = "dependency"
+
+
+def _waiting(conn, task_id: str, t) -> set[str] | None:
+    """Свои зоны задачи, которая ждёт зону: `in_dev`, зоны есть, сама в
+    текущем пребывании их ещё не занимает; иначе `None`."""
     if t["state"] != "in_dev":
         return None
     own = _own_paths(t["zones"])
-    if not own:
+    if not own or _occupies(conn, task_id):
         return None
-    if _occupies(conn, task_id):
-        return None
+    return own
+
+
+def _occupier(conn, task_id: str, t, own: set[str]) -> tuple[str, str, str] | None:
+    """(путь, id, состояние) задачи того же проекта, которая занимает
+    зону, пересекающуюся с `own` (прежнее правило `blocking_conflict`)."""
     project = _project(t)
     for row in store.all_tasks(conn):
         if row["id"] == task_id or _project(row) != project:
@@ -436,21 +467,129 @@ def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
     return None
 
 
-def _refusal_text(task_id: str, conflict: tuple[str, str, str]) -> str:
-    """Текст именованного отказа вида «зона <путь> занята задачей <id>
-    (<состояние>)» (требование 2, AC-2) — общий для `refusal()` (обычный,
-    не гоночный конфликт) и `claim()` (SPEC 01M28NWPS3PJHJAT4APXRY7MF7,
-    AC-1/AC-6: проигравший гонку получает то же наблюдаемое сообщение)."""
-    path, occupier_id, occupier_state = conflict
-    return (f"[{task_id}] зона {path} занята задачей {occupier_id} "
-            f"({occupier_state}) — ждёт зоны, первый шаг разработчика не "
-            f"запускается")
+def _queue_members(conn, task_id: str, t, own: set[str]) -> dict:
+    """Состав очереди зоны задачи `task_id`, {id: строка задачи}: она сама
+    и ожидающие задачи (`in_dev`, свои зоны ещё не занимают) того же
+    проекта, чьи собственные зоны пересекаются с `own` с учётом
+    вложенности. Задача в `escalated` — не `in_dev`, в состав не входит и
+    очередь не держит (требование 4).
+
+    Порядок вставки — порядок `store.all_tasks` и для самой задачи: при
+    равных ключах `queue_order` (стабильная сортировка) у всех участников
+    очереди тогда один и тот же порядок."""
+    members = {}
+    project = _project(t)
+    for row in store.all_tasks(conn):
+        if row["id"] == task_id:
+            members[task_id] = t
+            continue
+        if row["state"] != "in_dev":
+            continue
+        if _project(row) != project:
+            continue
+        if _shared_zone(own, _own_paths(row["zones"])) is None:
+            continue
+        if _occupies(conn, row["id"]):
+            continue
+        members[row["id"]] = row
+    return members
+
+
+def _dependencies(row) -> list[str]:
+    from . import merge_after  # merge_after -> scripts/guard -> zone_lock
+    return merge_after.stored(row["merge_after"])
+
+
+def _waiting_dependency(t, members: dict) -> str | None:
+    """Зависимость `merge_after` задачи, которая сама ждёт ту же зону
+    (входит в состав очереди — значит, `in_dev` и не `done`), — требование
+    3; `None` — такой нет."""
+    for dep in _dependencies(t):
+        if dep != t["id"] and dep in members:
+            return dep
+    return None
+
+
+def _holds_queue(conn, row) -> bool:
+    """Ожидающая задача может стартовать и потому держит очередь
+    (требование 4): идёт её цикл `run`/`auto` (живой lease), она не на
+    паузе и не ждёт зону ради своей зависимости.
+
+    Живость цикла — правило `lease.foreign_live_lease` (heartbeat свежий
+    И pid адресуем на своём host), а не `lease.is_live`: тот смотрит
+    только на возраст heartbeat, и задача с умершим процессом цикла ещё
+    `LEASE_STALE_AFTER_SEC` держала бы свободную зону. `session_id=None`
+    не совпадает ни с одной сессией — любой lease для правила «чужой»."""
+    from . import lease  # lease -> runner -> zone_lock
+    if row["paused"] or lease.foreign_live_lease(conn, row["id"], None) is None:
+        return False
+    own = _own_paths(row["zones"])
+    members = _queue_members(conn, row["id"], row, own)
+    return _waiting_dependency(row, members) is None
+
+
+def _start_conflict(conn, task_id: str, t) -> tuple[str, str, str, str] | None:
+    """(вид, путь, id, состояние) — почему первый шаг разработчика задачи
+    не стартует прямо сейчас, либо `None`. Держатель пересекающейся зоны
+    главнее всего (требование 5: при занятой зоне отказ называет его);
+    на свободной зоне — своя ждущая зависимость (требование 3, до
+    порядка: `zone-reorder` её не обходит), затем первая по `queue_order`
+    задача, держащая очередь (требования 1-2, 4).
+
+    Сама проверяемая задача считается держащей очередь: её спрашивает
+    `run`/`auto`, которые держат lease; пауза отказывает дальше в
+    `runner` своим отказом, и захват снимается (`release_claim`)."""
+    own = _waiting(conn, task_id, t)
+    if own is None:
+        return None
+    occupier = _occupier(conn, task_id, t, own)
+    if occupier is not None:
+        return (_OCCUPIED, *occupier)
+    members = _queue_members(conn, task_id, t, own)
+    dep = _waiting_dependency(t, members)
+    if dep is not None:
+        dep_row = members[dep]
+        return (_DEPENDENCY, _shared_zone(own, _own_paths(dep_row["zones"])),
+                dep, dep_row["state"])
+    for other in queue_order(conn, list(members)):
+        if other == task_id:
+            return None
+        row = members[other]
+        if _holds_queue(conn, row):
+            return (_QUEUE, _shared_zone(own, _own_paths(row["zones"])),
+                    other, row["state"])
+    return None
+
+
+def _reason(kind: str, other_id: str, other_state: str) -> str:
+    """Причина ожидания — общая часть отказа и показа `status`/`doctor`."""
+    if kind == _QUEUE:
+        return f"ждёт очереди зоны: впереди {other_id}"
+    if kind == _DEPENDENCY:
+        return f"ждёт зону ради зависимости {other_id}"
+    return f"занята {other_id} ({other_state})"
+
+
+def _refusal_text(task_id: str, conflict: tuple[str, str, str, str]) -> str:
+    """Текст именованного отказа (требование 2, AC-2) — общий для
+    `refusal()` (обычный, не гоночный конфликт) и `claim()` (SPEC
+    01M28NWPS3PJHJAT4APXRY7MF7, AC-1/AC-6: проигравший гонку получает то
+    же наблюдаемое сообщение). Занятая зона — «зона <путь> занята задачей
+    <id> (<состояние>)»; свободная — причина очереди или зависимости."""
+    kind, path, other_id, other_state = conflict
+    if kind == _OCCUPIED:
+        return (f"[{task_id}] зона {path} занята задачей {other_id} "
+                f"({other_state}) — ждёт зоны, первый шаг разработчика не "
+                f"запускается")
+    return (f"[{task_id}] зона {path} свободна, "
+            f"{_reason(kind, other_id, other_state)} — первый шаг "
+            f"разработчика не запускается")
 
 
 def refusal(conn, task_id: str, t) -> str | None:
-    """Именованный отказ вида «зона <путь> занята задачей <id>
-    (<состояние>)» (требование 2, AC-2), либо `None` — конфликта нет."""
-    conflict = blocking_conflict(conn, task_id, t)
+    """Именованный отказ старта (требование 2, AC-2), либо `None` —
+    конфликта нет."""
+    conflict = _start_conflict(conn, task_id, t)
     if conflict is None:
         return None
     return _refusal_text(task_id, conflict)
@@ -483,7 +622,7 @@ def claim(conn, task_id: str, t) -> tuple[str | None, bool]:
         if _occupies(conn, task_id):
             conn.rollback()
             return None, False
-        conflict = blocking_conflict(conn, task_id, t)
+        conflict = _start_conflict(conn, task_id, t)
         if conflict is not None:
             conn.rollback()
             return _refusal_text(task_id, conflict), False
@@ -574,9 +713,18 @@ def queue_order(conn, task_ids: list[str]) -> list[str]:
     — фолбэк, зафиксированный приёмочными тестами AC-8/AC-9 буквально для
     этого случая. Переставленные вперёд позиций естественного порядка —
     иначе `cmd_zone_reorder` был бы виден только пока НИ у одной задачи
-    очереди нет естественного порядка вовсе."""
+    очереди нет естественного порядка вовсе.
+
+    Без явной позиции зависимость стоит раньше зависящей задачи (SPEC
+    01M4JC5B3TYFCVY51RKZ1AM1VF, требование 2): топологический порядок по
+    `merge_after`, транзитивно — в том числе через задачи вне `task_ids`;
+    среди задач, чьи зависимости из набора уже поставлены, первой идёт
+    меньшая по прежнему ключу. Цикл зависимостей порядок не останавливает:
+    оставшиеся тогда берутся по прежнему ключу."""
+    rows = {task_id: store.get_task(conn, task_id) for task_id in task_ids}
+
     def sort_key(task_id: str):
-        row = store.get_task(conn, task_id)
+        row = rows[task_id]
         position = row["zone_queue_position"]
         if position is not None:
             return (0, 0, position)
@@ -584,40 +732,105 @@ def queue_order(conn, task_ids: list[str]) -> list[str]:
         if marker is not None:
             return (1, 0, marker)
         return (1, 1, row["updated_at"])
-    return sorted(task_ids, key=sort_key)
+
+    positioned = sorted((t for t in task_ids
+                         if rows[t]["zone_queue_position"] is not None),
+                        key=sort_key)
+    rest = sorted((t for t in task_ids
+                   if rows[t]["zone_queue_position"] is None), key=sort_key)
+    blockers = {t: _ancestors(conn, rows[t]) & set(rest) for t in rest}
+    ordered = []
+    while rest:
+        ready = [t for t in rest if not blockers[t] - set(ordered)]
+        chosen = ready[0] if ready else rest[0]
+        ordered.append(chosen)
+        rest.remove(chosen)
+    return positioned + ordered
 
 
-def queue_position(conn, task_id: str, path: str) -> tuple[int, int]:
-    """(позиция, всего) — место `task_id` в очереди задач, СЕЙЧАС
-    заблокированных пересечением ИМЕННО зоны `path` (требование 7:
-    очередь — среди конкурентов по ОДНОЙ и той же зоне, не глобально
-    среди всех ожидающих чего угодно). Наблюдаемость (R1-F3, REVIEW.md
-    итерация 1): `queue_order`/`zone_queue_position`/`cmd_zone_reorder`
-    сами по себе ничего не решают — кто реально стартует первым, решает
-    исключительно занятость (`blocking_conflict`/`refusal`), не эта
-    функция; она только показывает Оператору текущий порядок среди
-    конкурентов по конкретной зоне (`catalog.cmd_status`,
-    `doctor.check_zone_waits`), прежде чем он решит подождать, снять
-    ожидание (`cmd_zone_release`) или переставить очередь
-    (`cmd_zone_reorder`)."""
-    project = store.task_target(conn, task_id)
-    competitors = []
-    for row in store.all_tasks(conn):
-        if row["state"] != "in_dev" or _project(row) != project:
+def _ancestors(conn, row) -> set[str]:
+    """Все задачи, от которых `row` зависит по `merge_after`, транзитивно."""
+    seen: set[str] = set()
+    stack = list(_dependencies(row))
+    while stack:
+        dep = stack.pop()
+        if dep in seen or dep == row["id"]:
             continue
-        conflict = blocking_conflict(conn, row["id"], row)
-        if conflict is not None and conflict[0] == path:
-            competitors.append(row["id"])
-    ordered = queue_order(conn, competitors)
+        seen.add(dep)
+        dep_row = store.get_task(conn, dep)
+        if dep_row is not None:
+            stack.extend(_dependencies(dep_row))
+    return seen
+
+
+def queue_position(conn, task_id: str, path: str | None = None) -> tuple[int, int]:
+    """(позиция, всего) — место `task_id` в очереди ожидающих зону: тот
+    же состав (`_queue_members` — пересечение с учётом вложенности) и тот
+    же порядок (`queue_order`), по которым `claim` решает старт (SPEC
+    01M4JC5B3TYFCVY51RKZ1AM1VF, требование 5). Задача, которая очередь не
+    держит (требование 4), из состава не выпадает. `path` сужает состав
+    до задач, чьи зоны пересекают этот путь. Задача, которая сама не
+    ждёт зону (не `in_dev` или уже занимает её), — позиция 0."""
+    t = store.get_task(conn, task_id)
+    own = _own_paths(t["zones"])
+    members = _queue_members(conn, task_id, t, own)
+    if path is not None:
+        members = {m: row for m, row in members.items()
+                   if m == task_id
+                   or _shared_zone({path}, _own_paths(row["zones"])) is not None}
+    if _waiting(conn, task_id, t) is None:
+        members.pop(task_id)
+    ordered = queue_order(conn, list(members))
     if task_id not in ordered:
         return 0, len(ordered)
     return ordered.index(task_id) + 1, len(ordered)
 
 
+class QueueWait(NamedTuple):
+    """Ожидание зоны для показа `status`/`doctor`: путь, причина (пусто —
+    впереди никого, но задача сама очередь не держит), место в очереди и
+    держит ли задача очередь (требование 4)."""
+    path: str
+    reason: str
+    position: int
+    total: int
+    holds: bool
+
+
+def queue_wait(conn, task_id: str, t) -> QueueWait | None:
+    """Ожидание зоны задачей `task_id` — то же решение, что у `claim`
+    (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF, требование 5), либо `None`: задача
+    зону не ждёт или сама её получит."""
+    own = _waiting(conn, task_id, t)
+    if own is None:
+        return None
+    conflict = _start_conflict(conn, task_id, t)
+    members = _queue_members(conn, task_id, t, own)
+    ordered = queue_order(conn, list(members))
+    holds = _holds_queue(conn, t)
+    if conflict is None:
+        if holds or len(ordered) == 1:
+            return None
+        path = sorted(filter(None, (_shared_zone(own, _own_paths(row["zones"]))
+                                    for m, row in members.items()
+                                    if m != task_id)))[0]
+        reason = ""
+    else:
+        kind, path, other_id, other_state = conflict
+        reason = _reason(kind, other_id, other_state)
+    return QueueWait(path, reason, ordered.index(task_id) + 1, len(ordered),
+                     holds)
+
+
 def cmd_zone_reorder(task_ids_in_order: list[str]) -> None:
     """Явная операторская перестановка очереди ожидания зоны (требование
     9, AC-9): `task_ids_in_order` становится порядком `queue_order` для
-    этого же множества id, независимо от времени approve их SPEC."""
+    этого же множества id, независимо от времени approve их SPEC. Пустой
+    перечень — отказ с подсказкой формы вызова (SPEC
+    01M4JC5B3TYFCVY51RKZ1AM1VF, требование 6)."""
+    if not task_ids_in_order:
+        sys.exit("[очередь ожидания зоны] не названы задачи — форма вызова: "
+                 "zone-reorder <id1> <id2> ...")
     conn = store.db()
     resolved = [store.resolve_task_id(conn, tid) for tid in task_ids_in_order]
     for position, task_id in enumerate(resolved):

@@ -30,7 +30,7 @@ from . import (acceptance, appendix_tree, artifact_branch, artifact_source,
               workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
-from .advance_gates.plan_appendix import git_apply
+from .advance_gates import plan_appendix
 from .advance_gates.test_integrity import merge_gate_escalates
 
 _fresh_suite_for_cycle: ContextVar[bool] = ContextVar(
@@ -859,16 +859,14 @@ def _appendix_already_in_main(conn, task_id: str, number: int, appendix,
     накладывается повторно.
 
     Частично наложенное (ни прямой, ни обратный `--check` не проходят) —
-    False, и вызывающий возвращает задачу прежним исходом (требование 6)."""
-    if git_apply(scratch, appendix, "--reverse", "--check"):
-        return False
-    paths = ", ".join(appendix.paths)
-    store.journal(conn, task_id, "orchestrator",
-                  f"приложение PLAN уже в main: {paths}",
-                  f"приложение {number} ({paths}) уже наложено в подтянутом "
-                  f"main (`git apply --reverse --check` проходит) — не "
-                  f"накладывается повторно")
-    return True
+    False, и вызывающий возвращает задачу прежним исходом (требование 6).
+
+    Признание и запись журнала — общий узел `plan_appendix.skip_in_base`
+    (SPEC 01M4JD3SRN66SD6BM63XAGHB11, требования 3-4): база здесь —
+    подтянутый main, он и назван в подробностях записи."""
+    return plan_appendix.skip_in_base(conn, task_id, number, appendix, scratch,
+                                      "подтянутом main",
+                                      "не накладывается повторно")
 
 
 def _commit_applied_appendices(conn, task_id: str, paths: list[str],
