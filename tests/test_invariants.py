@@ -1889,50 +1889,23 @@ class NoNetworkAddressesInTestsTest(unittest.TestCase):
     Хост сравнивается ТОЧНО, не префиксом (`127.0.0.1.evil.example` —
     DNS-имя, лишь начинающееся с исключённого `127.0.0.1`, не сам
     loopback — обязан быть пойман, не пропущен).
+
+    Правило — шаблон адреса, исключённые хосты, именованные исключения по
+    паре (имя файла, хост) с обоснованиями — живёт одной функцией
+    `guard.network_address_hits` (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC,
+    требование 1): её же зовут выход из `tests_writing` и рубеж
+    `in_dev -> verifying`, копии правила здесь нет.
     """
 
-    _URL_RE = re.compile(r"https?://[^\s'\"]+")
-    _EXEMPT_HOSTS = ("localhost", "127.0.0.1")
-
-    # (имя файла, хост) -> обоснование: адрес — decorative/тестовый текст,
-    # никогда не передаётся реальному сетевому вызову, поэтому исключён
-    # из скана (SPEC 01M1QHQ277PQQA894X97RVEX9Y, требование 3).
-    _EXCEPTIONS = {
-        ("test_github_adapter.py", "github.com"):
-            "stdout уже замоканного `gh` (github_adapter.ci.gh подменена "
-            "лямбдой в setUp самого теста) — тест не открывает соединение "
-            "по этому адресу, строка лишь имитирует формат вывода "
-            "`gh pr create`",
-        ("test_ci_status.py", "api.github.com"):
-            "текст внутри сообщения об ошибке уже замоканного `ci.gh` "
-            "(`set_check_runs` подменяет ответ целиком) — адрес не "
-            "аргумент реального вызова, тест не обращается к сети",
-        ("test_sandbox.py", "example.invalid"):
-            "статические строки-фикстуры, проверяющие саму логику "
-            "распознавания DNS-адреса (`_is_local_git_address`/"
-            "`_network_git_command_denial`) — никогда не передаются "
-            "реальному `subprocess.run`, только сравниваются как текст",
-        ("test_sandbox.py", "127.0.0.1.evil.example"):
-            "та же статическая фикстура — хост, лишь НАЧИНАЮЩИЙСЯ с "
-            "loopback-адреса, проверяет точность сравнения хоста в "
-            "`_is_local_git_address`, тоже не передаётся `subprocess.run`",
-    }
-
-    @classmethod
-    def _host_of(cls, url: str) -> str:
-        rest = url.split("://", 1)[1]
-        return rest.split("/", 1)[0].split(":", 1)[0]
-
     def _dns_addresses(self, text: str) -> list:
-        return [m.group(0) for m in self._URL_RE.finditer(text)
-                if self._host_of(m.group(0)) not in self._EXEMPT_HOSTS]
+        # Пустое имя файла не совпадает ни с одной парой исключения.
+        return [url for _line, url in guard.network_address_hits("", text)]
 
     def test_no_dns_hostname_addresses_in_tests_tree(self):
         offenders = {}
         for path in sorted((config.ROOT / "tests").rglob("*.py")):
-            hits = [url for url in self._dns_addresses(
-                        path.read_text(encoding="utf-8"))
-                    if (path.name, self._host_of(url)) not in self._EXCEPTIONS]
+            hits = [url for _line, url in guard.network_address_hits(
+                        path.name, path.read_text(encoding="utf-8"))]
             if hits:
                 offenders[str(path.relative_to(config.ROOT))] = hits
         self.assertEqual(
