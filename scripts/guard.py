@@ -2764,14 +2764,19 @@ def long_lived_sign_hits(source: str, task_id: str) -> list[tuple[int, str]]:
 
 
 def long_lived_errors_from_files(files: list[tuple[str, str]],
-                                 task_id: str) -> list[str]:
+                                 task_id: str, *,
+                                 network_addresses: bool = True) -> list[str]:
     """Ошибки долгоживущих файлов планки (требования 3, 4) по (label,
     текст) парам `test_*.py`: файлы иной группы (и без распознанной
     группы — это ошибка строки группы, не этой проверки) пропускаются.
 
     Заявка мутации — тем же узлом, что гейт выхода из `in_dev`
     (`test_functions_without_mutation_claim`): файл планки новый, base
-    `None`, каждый метод обязан нести «Ловит мутацию: …»."""
+    `None`, каждый метод обязан нести «Ловит мутацию: …».
+
+    `network_addresses` — признак сетевых адресов (инвариант 35): правило
+    дерева `tests/` пульта, вызывающий снимает его для чужого проекта
+    (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC, замечание ревью R1-F1)."""
     errors: list[str] = []
     for label, source in files:
         group, _error = plank_file_group(source)
@@ -2784,7 +2789,8 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
             errors.append(f"{label}: метод {method} долгоживущего файла без "
                           f"«Ловит мутацию: …» в докстринге («Зелёный с "
                           f"рождения» её не заменяет)")
-        errors += network_address_errors_from_files([(label, source)])
+        if network_addresses:
+            errors += network_address_errors_from_files([(label, source)])
     return errors
 
 

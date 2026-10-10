@@ -306,8 +306,9 @@ def _tests_writing_artifact_source_gate(acc_tdir, task_id: str) -> GateRefusal |
 TEST_GROUPS_ACTION = "переход отклонён: группы приёмочных тестов"
 
 
-def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
-                                    profile) -> GateRefusal | None:
+def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
+                                    network_addresses: bool = True
+                                    ) -> GateRefusal | None:
     """Строка группы у каждого `test_*.py` планки и проверки долгоживущих
     файлов — признаки требования 3 и «Ловит мутацию» у каждого метода
     (SPEC 01M3N0BWYQ9KHVN41Z4G72706R, требования 1-4, 6-7; ADR-0020).
@@ -319,7 +320,11 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
     обработчик. Файлы — те же, что у сухого сбора (`acc_tdir`).
 
     Подсказка test_author — в `detail`, не только в печати: история
-    отказов брифа роли читает журнал (требование 6)."""
+    отказов брифа роли читает журнал (требование 6).
+
+    `network_addresses` — признак адресов инварианта 35 (SPEC
+    01M4JN2EDQP8Q3WVYK0TS95ZVC): только у артели, как рубеж `in_dev`
+    (`_network_address_gate`); решает вызывающий обработчик."""
     if profile is None:
         return None
     files = guard.acceptance_test_files(acc_tdir)
@@ -331,7 +336,8 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
               + guard.long_lived_plank_errors(files, task_id,
                                               profile.long_lived_dir,
                                               profile.long_lived_name)
-              + guard.long_lived_errors_from_files(files, task_id))
+              + guard.long_lived_errors_from_files(
+                  files, task_id, network_addresses=network_addresses))
     if not errors:
         return None
     hint = f"исправь файл планки и повтори artel.py advance {task_id}"
@@ -413,8 +419,9 @@ def _diff_entry_error(task_id: str, status: str, path: str,
 
 
 def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
-                                   files: dict[str, str],
-                                   profile) -> GateRefusal | None:
+                                   files: dict[str, str], profile, *,
+                                   network_addresses: bool = True
+                                   ) -> GateRefusal | None:
     """Гейт «только добавление» на выходе из `tests_writing` (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2-3; ADR-0020, п. 7 — второй
     рубеж за откатом чекпоинта): дифф кодовой ветки несёт только
@@ -425,7 +432,8 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
     gate`), он требует выписанной рабочей копии кодовой ветки.
 
     Каталог и шаблон имени — профиля тестов проекта (`profile`, SPEC
-    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5)."""
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 5); `network_addresses` — как
+    у `_tests_writing_test_groups_gate`."""
     errors = [error for status, path, new_path in entries
               if (error := _diff_entry_error(task_id, status, path, new_path,
                                              profile))]
@@ -447,8 +455,9 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
                               f"{guard.GROUP_LONG_LIVED}» — в "
                               f"{profile.long_lived_dir}/ кодовой ветки "
                               f"только долгоживущие файлы")
-        errors += guard.long_lived_errors_from_files(sorted(files.items()),
-                                                     task_id)
+        errors += guard.long_lived_errors_from_files(
+            sorted(files.items()), task_id,
+            network_addresses=network_addresses)
         if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")

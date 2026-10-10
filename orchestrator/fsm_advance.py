@@ -20,7 +20,7 @@ from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
               fsm, fsm_autogate, gitcmd, github_adapter, merge_after,
-              project_profile, store, workspace, yamlmini)
+              project_profile, repo_context, store, workspace, yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
@@ -462,10 +462,16 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     acc_tdir, run_cwd = _tests_writing_acceptance_dir(
         task_id, tdir, target, branch, t["branch"])
     long_lived_paths = sorted(long_lived or {})
-    gates = [lambda: _tests_writing_test_groups_gate(acc_tdir, task_id, profile)]
+    # Сетевые адреса (инвариант 35) — правило дерева `tests/` пульта: у
+    # чужого проекта не проверяются, как и на рубеже `in_dev`
+    # (`_network_address_gate`).
+    network_addresses = repo_context.is_artel(target)
+    gates = [lambda: _tests_writing_test_groups_gate(
+        acc_tdir, task_id, profile, network_addresses=network_addresses)]
     if code_diff is not None:
         gates.append(lambda: _tests_writing_long_lived_gate(
-            task_id, t["branch"], code_diff, long_lived, profile))
+            task_id, t["branch"], code_diff, long_lived, profile,
+            network_addresses=network_addresses))
     command = list(profile.command) if profile is not None else None
     gates.append(lambda: _tests_writing_dry_collect_gate(
         acc_tdir, run_cwd, task_id, extra=long_lived_paths, command=command))
