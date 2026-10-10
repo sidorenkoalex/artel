@@ -79,6 +79,56 @@ class PlankRunStrayDocsTest(PlankRunSandbox):
                          f"план {self.seed}\n", self.explain(output))
 
 
+class PlankRunDriftEdgesTest(PlankRunSandbox):
+    """Углы сверки планки рабочей копии со ссылкой документов (SPEC
+    01M4JD36367E5CG3GXDV429XTE, требование 3), не покрытые долгоживущими
+    файлами задачи: удалённый файл и остаток отказа `amend-tests`."""
+
+    def setUp(self):
+        super().setUp()
+        self.fixed = {"test_a_plank.py": PASSING.format(name="a"),
+                      "test_b_plank.py": PASSING.format(name="b")}
+        self.commit_fixed_plank(self.fixed)
+        self.plank = self.own_dir / "acceptance_tests"
+        self.plank.mkdir(parents=True)
+
+    def test_deleted_plank_file_is_drift(self):
+        """На диске — планка без одного зафиксированного файла (удаление
+        Оператора под `amend-tests`): отказ называет удалённый файл, pytest
+        не запускается, оставшийся файл на месте.
+
+        Ловит мутацию: сверка смотрит только на файлы диска (изменённые и
+        новые) — удаление не расхождение, выкладка возвращает файл и
+        уборка стирает правку, pytest запущен.
+        """
+        kept, gone = self.rng.sample(sorted(self.fixed), 2)
+        (self.plank / kept).write_text(self.fixed[kept], encoding="utf-8")
+        status, output = self.plank_run()
+        self.assertNotEqual(status, 0, self.explain(output))
+        self.assertIn(gone, output, self.explain(output))
+        self.assertIn("amend-tests", output, self.explain(output))
+        self.assertEqual(self.pytest_calls, [], self.explain(output))
+        self.assertEqual((self.plank / kept).read_text(encoding="utf-8"),
+                         self.fixed[kept], self.explain(output))
+
+    def test_helper_and_bytecode_alone_are_not_drift(self):
+        """В каталоге планки только помощник пульта и кеш байткода (остаток
+        отказа `amend-tests`) — не расхождение: планка выложена и прогнана.
+
+        Ловит мутацию: помощник `_pult.py` или `__pycache__` читаются
+        файлами планки — отказ «расходятся» без прогона.
+        """
+        (self.plank / acceptance.PLANK_HELPER_NAME).write_text(
+            f"TASK_ID = 'чужой {self.seed}'\n", encoding="utf-8")
+        cache = self.plank / "__pycache__"
+        cache.mkdir()
+        (cache / "test_a_plank.cpython-311.pyc").write_bytes(b"\0" * 8)
+        status, output = self.plank_run()
+        self.assertEqual(status, 0, self.explain(output))
+        self.assertEqual(len(self.pytest_calls), 1, self.explain(output))
+        self.assertIn("2 passed", output, self.explain(output))
+
+
 class PlankRunTimeoutTest(PlankRunSandbox):
 
     def test_timeout_exits_nonzero_and_drops_layout(self):
