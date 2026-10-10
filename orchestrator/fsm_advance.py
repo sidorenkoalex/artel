@@ -31,7 +31,8 @@ from .advance_gates.plan_appendix import (
     PLAN_APPENDIX_GATE_FAILURE_ACTION,
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION, _plan_appendix_gate,
     _plan_appendix_gate_refuses)
-from .advance_gates.review import (_code_sha_at_review_escalation,
+from .advance_gates.review import (_answer_gate,
+                                   _code_sha_at_review_escalation,
                                    _mutation_claim_gate,
                                    _review_escalation_sha_gate,
                                    _review_rework_gate,
@@ -616,6 +617,11 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         return True
     if status == "escalate":
         return _in_dev_plan_escalate(conn, task_id, tdir, plan_text, state)
+    # ANSWER Оператора, ещё не дошедший до developer (SPEC
+    # 01M4KAYMW2YRFB7G0442WFVSHA, требования 1-3), — до подтяжки main и
+    # остальных гейтов: переход держит шаг роли, не состояние ветки.
+    if _run_gates(conn, task_id, [lambda: _answer_gate(conn, task_id)]):
+        return False
     if _acceptance_lock_refuses(conn, task_id, t, branch, foreign):
         return False
     # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4).

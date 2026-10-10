@@ -7,10 +7,11 @@ from datetime import datetime, timezone
 
 from scripts import guard
 
-from .. import (auto, budget, config, gitcmd, project_profile, store,
-                workspace, yamlmini)
+from .. import (auto, budget, config, cycle_hint, gitcmd, project_profile,
+                store, workspace, yamlmini)
 from ._base import GateRefusal, _run_gates
-from .refusal_classes import MUTATION_CLAIM_GIT_REFUSAL_ACTION
+from .refusal_classes import (ANSWER_UNPROCESSED_REFUSAL_ACTION,
+                              MUTATION_CLAIM_GIT_REFUSAL_ACTION)
 
 
 def _code_sha_at_review_escalation(conn, task_id: str) -> str | None:
@@ -381,6 +382,67 @@ def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | Non
     hint = (f"почини код (не спорь с ревью втихую) и повтори "
            f"artel.py advance {task_id}")
     return GateRefusal(_REWORK_REFUSAL_ACTION, detail, hint)
+
+
+# Префикс действия журнала каждой записи ANSWER Оператора
+# (`orchestrator/answer.py`: указание, мандат, ответ на эскалацию,
+# `zones-extend`); detail записи — путь `tasks/<id>/ANSWER-n.md`.
+_ANSWER_ACTION_PREFIX = "ANSWER создан"
+
+# Действие `checkpoint.commit_success_checkpoint` — коммит кода пультом за
+# developer; его единственный вызов — успешное завершение шага developer
+# (`runner`, перед `agent run finished`), так что запись — тоже признак
+# завершённого шага.
+_DEVELOPER_STEP_COMMIT_ACTION = "код закоммичен пультом за роль"
+
+
+def _unprocessed_answer(conn, task_id: str) -> str | None:
+    """Путь последнего ANSWER Оператора, после которого не было шага
+    developer, начатого позже него (SPEC 01M4KAYMW2YRFB7G0442WFVSHA,
+    требования 1, 4); `None` — неотработанного ANSWER нет.
+
+    Шаг, шедший в момент ANSWER (указание в `in_dev` пишется без lease,
+    поверх идущего шага), ANSWER не отрабатывает: его бриф собран раньше.
+    Завершение шага без записи о его старте (песочницы, журналирующие
+    только `agent run finished` или коммит пульта за developer)
+    засчитывается — старта до ANSWER не видно.
+    """
+    pending = None
+    step_open = False
+    open_at_answer = False
+    for row in store.task_steps(conn, task_id):
+        if row["actor"] == "operator" and row["action"].startswith(
+                _ANSWER_ACTION_PREFIX):
+            pending = row["detail"] or row["action"]
+            open_at_answer = step_open
+        elif row["actor"] == "developer" and row["action"] == "agent run started":
+            step_open = True
+            open_at_answer = False
+        elif row["actor"] == "developer" and row["action"] == "agent run finished":
+            step_open = False
+            if not open_at_answer:
+                pending = None
+            open_at_answer = False
+        elif row["action"] == _DEVELOPER_STEP_COMMIT_ACTION and not open_at_answer:
+            pending = None
+    return pending
+
+
+def _answer_gate(conn, task_id: str) -> GateRefusal | None:
+    """Гейт `in_dev -> verifying` (SPEC 01M4KAYMW2YRFB7G0442WFVSHA,
+    требования 1-3): ANSWER Оператора, не отработанный шагом developer, —
+    отказ класса «чинит роль». На него `auto` запускает developer (бриф
+    несёт ANSWER), а не уводит заведомо известный Оператору дефект в CI по
+    готовым артефактам; ручной `advance` держится тем же рубежом."""
+    path = _unprocessed_answer(conn, task_id)
+    if path is None:
+        return None
+    name = posixpath.basename(path)
+    detail = (f"{name} записан после последнего шага developer — указание "
+             f"Оператора ещё не дошло до разработчика")
+    hint = cycle_hint.launch_text(
+        conn, task_id, "auto", f"— цикл запустит developer, бриф несёт {name}")
+    return GateRefusal(ANSWER_UNPROCESSED_REFUSAL_ACTION, detail, hint)
 
 
 def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:

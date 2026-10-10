@@ -22,6 +22,12 @@ OPERATOR_FIXES = "чинит Оператор"
 GUARD_REFUSAL_ACTION = "переход отклонён guard'ом"
 TREE_NOT_ON_BRANCH_REFUSAL_ACTION = "переход отклонён: дерево не на ветке задачи"
 REWORK_REFUSAL_ACTION = "переход отклонён: замечания ревью не отработаны"
+# ANSWER Оператора позже последнего шага developer (SPEC
+# 01M4KAYMW2YRFB7G0442WFVSHA, требования 1, 5): «чинит роль», но НЕ подкласс
+# «роль ещё не закончила» — тот же отказ после шага developer в этом визите
+# значит новый ANSWER поверх отработанного, и решает Оператор, не второй шаг.
+ANSWER_UNPROCESSED_REFUSAL_ACTION = ("переход отклонён: ANSWER Оператора не "
+                                     "отработан developer")
 
 # Подкласс «роль ещё не закончила» класса «чинит роль»: шаг роли
 # запускается, но в бриф эти отказы не попадают — роли нечего в них
@@ -51,6 +57,7 @@ REFUSAL_CLASSES = {
     GUARD_REFUSAL_ACTION: ROLE_FIXES,
     TREE_NOT_ON_BRANCH_REFUSAL_ACTION: ROLE_FIXES,
     REWORK_REFUSAL_ACTION: ROLE_FIXES,
+    ANSWER_UNPROCESSED_REFUSAL_ACTION: ROLE_FIXES,
     "переход отклонён: защищённый путь": ROLE_FIXES,
     "переход отклонён: гейт зон — мандат есть, раздел PLAN не оформлен": ROLE_FIXES,
     "переход отклонён: приложение PLAN неприменимо": ROLE_FIXES,
