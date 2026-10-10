@@ -87,6 +87,74 @@ class DeferredJournalTest(TmpRootTest):
         self.assertEqual(len(self.records()), 1)
         self.assertEqual(self.pending(), [])
 
+    def test_forged_actor_and_foreign_action_are_not_delivered(self):
+        """Очередь — не канал записи журнала от имени Оператора: действие
+        вне перечня выбрасывается, автора ставит досыл (R1-F1).
+
+        Ловит мутацию: досыл берёт `actor`/`action` из файла очереди — роль на
+        Codex подкладывает «объявлена смена поведения тестов» от `operator`,
+        и гейт неослабления тестов верит записи; досыл не режет текст —
+        подложенный detail уходит в журнал целиком."""
+        from orchestrator.advance_gates import test_integrity
+        folder = suite_lock.directory() / "pending-journal"
+        folder.mkdir(parents=True, exist_ok=True)
+        forged = {"task_id": TASK, "actor": "operator",
+                  "action": test_integrity.DECLARED_CHANGE_ACTION,
+                  "detail": "tests/x.py::A::b: a → b\n-", "at": "2026-10-10"}
+        (folder / "1-1.json").write_text(json.dumps(forged, ensure_ascii=False),
+                                         encoding="utf-8")
+        self.assertFalse(suite_lock.defer_journal(dict(forged)))
+        (folder / "2-1.json").write_text(json.dumps(
+            {"task_id": TASK, "actor": "operator", "action": ACTION,
+             "detail": "x" * 10_000, "at": "2026-10-10"}), encoding="utf-8")
+        self.assertEqual(suite_lock.deliver_journal(), 1)
+        rows = store.task_steps(store.db(), TASK)
+        self.assertEqual(
+            [row for row in rows
+             if row["action"] == test_integrity.DECLARED_CHANGE_ACTION], [])
+        self.assertEqual([row["actor"] for row in self.records()],
+                         [suite_lock.DEFERRED_ACTOR])
+        self.assertLess(len(self.records()[0]["detail"]),
+                        suite_lock.DEFERRED_DETAIL_MAX + 200)
+        self.assertEqual(self.pending(), [])
+
+    def test_background_does_not_defer_foreign_action(self):
+        """Обёртка прогона откладывает только действие перечня.
+
+        Ловит мутацию: `_journal_deferred` кладёт в очередь любое отказанное
+        действие — запись, которую процесс пульта не досылает, копится или
+        (при ослабленном досыле) уходит в журнал."""
+        readonly = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro",
+                                   uri=True)
+        self.addCleanup(readonly.close)
+        readonly.row_factory = sqlite3.Row
+        with suite_run._journal_deferred():
+            with self.assertRaises(sqlite3.Error):
+                store.journal(readonly, TASK, "orchestrator", "прогон: время",
+                              "{}")
+        self.assertFalse((suite_lock.directory() / "pending-journal").exists()
+                         and self.pending())
+
+    def test_delivery_closes_connection(self):
+        """Досыл закрывает своё соединение с БД (R1-F2).
+
+        Ловит мутацию: `store.db()` досыла не закрывается — долгоживущий
+        процесс пульта копит соединения на каждом ожидании замка гейтом."""
+        self.defer()
+        opened = []
+        real_db = store.db
+
+        def db():
+            conn = real_db()
+            opened.append(conn)
+            return conn
+
+        with mock.patch.object(store, "db", side_effect=db):
+            self.assertEqual(suite_lock.deliver_journal(), 1)
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            opened[0].execute("SELECT 1")
+
     def test_gate_lock_wait_delivers(self):
         """Ожидание замка гейтом досылает журнал без команды `suite-run`.
 

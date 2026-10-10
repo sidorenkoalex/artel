@@ -164,7 +164,9 @@ def _journal_deferred():
     откладывается в хозяйство команды (требование 3). Подменяется сам
     `store.journal`: записи журнала делает узел пульта
     (`acceptance.run_full_suite`), который этот модуль не меняет. Сбой
-    вызывающий видит, как и прежде, — он же решает, ронять ли прогон."""
+    вызывающий видит, как и прежде, — он же решает, ронять ли прогон.
+    Откладываются только действия перечня `suite_lock.deferrable`: автора
+    записи досыл ставит сам, из очереди его не берёт."""
     write = store.journal
 
     def journal(conn, task_id, actor, action, detail="", **kwargs):
@@ -173,8 +175,7 @@ def _journal_deferred():
         except sqlite3.Error:
             with contextlib.suppress(OSError):
                 suite_lock.defer_journal({
-                    "task_id": task_id, "actor": actor, "action": action,
-                    "detail": detail,
+                    "task_id": task_id, "action": action, "detail": detail,
                     "session_id": (kwargs.get("session_id")
                                    or session.resolve_session_id(None)),
                     "at": store.now()})
