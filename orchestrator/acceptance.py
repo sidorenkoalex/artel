@@ -844,6 +844,40 @@ def materialize_files(task_id: str, files: dict[str, str | bytes],
     return tdir
 
 
+@contextlib.contextmanager
+def plank_helper_laid_out(task_id: str, code_dir: Path) -> Iterator[Path]:
+    """Только помощник пульта в `tasks/<id>/acceptance_tests/` каталога
+    `code_dir` на время блока `with`, файлы планки на диске не трогаются:
+    правку Оператора для `amend-tests` прунинг `_write_plank` стёр бы (SPEC
+    01M4JD36367E5CG3GXDV429XTE, требование 1). Текст и ревизия — те же,
+    что у `materialize_files`: правка ещё не в ссылке документов, артефакты
+    задачи планка читает с её головы.
+
+    На выходе (в том числе по отказу `sys.exit`) прежнее состояние
+    помощника возвращается — отказ `amend-tests` оставляет каталог задачи
+    побайтно как был (SPEC 01M42NBCADGSGTCBZB8NKBVDVH, требование 2); если
+    каталога планки уже нет (успешная правка убрала `tasks/<id>/`), он не
+    воссоздаётся."""
+    tests_dir = Path(code_dir) / "tasks" / task_id / "acceptance_tests"
+    helper = tests_dir / PLANK_HELPER_NAME
+    created_dir = not tests_dir.is_dir()
+    before = helper.read_bytes() if helper.is_file() else None
+    revision = _docs_revision(task_id, artifact_branch.branch_name(task_id))
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        helper.write_text(_plank_helper_text(task_id, code_dir, revision),
+                          encoding="utf-8")
+        yield helper
+    finally:
+        if tests_dir.is_dir():
+            if before is None:
+                helper.unlink(missing_ok=True)
+            else:
+                helper.write_bytes(before)
+            if created_dir and not any(tests_dir.iterdir()):
+                tests_dir.rmdir()
+
+
 def drop_from_code_copy(task_id: str, code_dir: Path) -> None:
     """Убирает `tasks/<id>/` из рабочей копии кода `code_dir` (ADR-0021,
     этап 1): документы задачи там не лежат, планка — только на время
