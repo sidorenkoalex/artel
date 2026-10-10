@@ -16,6 +16,7 @@ merge (`orchestrator/fsm_merge_gate.py::_cmd_approve_merge_gate`)
 """
 import json
 import subprocess
+import sys
 
 from scripts import codebase_map
 
@@ -87,9 +88,11 @@ def _regenerate_and_commit_map(conn, task_id: str, repo=None) -> None:
         _map_regen_incident(conn, task_id, f"{MAP_REL} не прочитан: {exc}")
         return
     # Не git-вызов (требование 6, AC-4) — прямой subprocess.run, тем же
-    # приёмом, что brief._regenerate_map.
+    # приёмом, что brief._regenerate_map. Интерпретатор — процесса пульта, не
+    # `python3` из PATH (SPEC 01M4JMMH70NWJG72G422BFY1KC, требование 1): тот
+    # может оказаться ниже требуемого и упасть на синтаксисе генератора.
     try:
-        regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+        regen = subprocess.run([sys.executable, "scripts/codebase_map.py"],
                                cwd=root, capture_output=True, text=True)
     except OSError as exc:
         _map_regen_incident(conn, task_id,

@@ -280,7 +280,9 @@ def _regenerate_map(conn, task_id: str) -> tuple[str | None, str]:
     Возвращает (текст_карты, причина_отказа) — текст `None` при отказе
     самой регенерации.
     """
-    regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+    # Интерпретатор процесса пульта, не `python3` из PATH (SPEC
+    # 01M4JMMH70NWJG72G422BFY1KC, требование 1).
+    regen = subprocess.run([sys.executable, "scripts/codebase_map.py"],
                            cwd=config.ROOT, capture_output=True, text=True)
     if regen.returncode != 0:
         reason = regen.stderr.strip()[:200] or f"код возврата {regen.returncode}"
