@@ -3,91 +3,84 @@ task: 01M4JD36367E5CG3GXDV429XTE
 type: review
 author_role: reviewer
 status: approved
-iteration: 1
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: amend-tests и plank-run работают с планкой, импортирующей помощник `_pult.py`
 
+## Что поменялось с итерации 1
+Итерация 1 одобрила ветку на e803b034. После этого в ветку добавлен один
+коммит — подтяжка main e8e4a054 (merge e803b034 + 1f3a0413) по ANSWER-1.
+- `git diff 1f3a0413 e8e4a054 --stat` (merge против main) показывает ровно
+  семь файлов задачи и больше ничего: `orchestrator/acceptance.py`,
+  `amend.py`, `plank_run.py`, `tests/test_plank_run_edges.py`, два
+  долгоживущих файла и `docs/codebase-map.md`. Значит, конфликт разрешён
+  без посторонних правок, а изменения main перенесены как есть.
+- Код и тесты задачи этим коммитом не менялись: `git diff e803b034 HEAD` по
+  файлам задачи пустой (в коммите подтяжки только изменения из main и
+  карта). Это соответствует ANSWER-1: «код и тесты задачи не менять».
+- Подтянутый main (zone_lock, appendix_tree, advance_gates/acceptance и
+  другие) не задевает узлы задачи: в его диффе по `orchestrator/` нет
+  ни одного вхождения `PLANK_HELPER`, `_pult`, `plank_in_code_copy`,
+  `materialize_`, `_tests_snapshot`, `drop_from_code_copy`.
+
 ## Фаза A — гейт плана
-- Таблица покрытия полна: требования 1–4 привязаны к шагам 1–3, требование 5
-  честно помечено «—» (существующие методы `tests/` не меняются: диф
-  `tests/` — только новый класс `PlankRunDriftEdgesTest` и два файла лока).
-- Шаги размером MR, проверяемые. Подход в зоне SPEC: `.gitignore`,
-  `advance_gates/`, `plank_helper.py` не тронуты.
-- «Влияние на систему» сходится с дифом (4 файла кода/тестов + карта).
-  Ужесточение простого пути (сухой сбор → отказ на планке без тестов)
-  вынесено в «Риски» открыто, и с путём с долгоживущими файлами и гейтом
-  `in_dev` оно согласовано.
+- Покрытие требований прежнее и полное: требования 1–4 — шаги 1–3,
+  требование 5 — «—» (существующие методы `tests/` не меняются). Шаг 4
+  честно описывает возврат по ANSWER-1 и называет прогон тестов задачи.
+- «Влияние на систему» сходится с диффом. Путь отката — revert.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `acceptance.plank_helper_laid_out` (acceptance.py:847) кладёт помощник `_plank_helper_text` и той же ревизией, что `materialize_files`; `_cmd_amend_tests` оборачивает им оба пути (amend.py:672–680). `--from-branch` уже шёл через `plank_in_code_copy` → `materialize_from_branch`; AC-3 зелёный. Обходов нет: в тестах пути без PYTHONPATH и без exclude. |
-| 2 | OK | `_is_plank_helper` исключает помощник из `_tests_snapshot` (диск) и из `_artifact_tests_snapshot` (ссылка). Снимок диска — источник и для `plank_same`, и для файлов коммита, поэтому в ссылку помощник не попадает (AC-4, AC-5 зелёные). |
-| 3 | OK | `plank_run._drift_from_ref` побайтно сверяет диск с головой ссылки: ловит изменённые, новые и недостающие файлы, помощник и `__pycache__` пропускает. Отказ идёт до `plank_in_code_copy`, то есть до любой записи на диск; в тексте есть имена файлов и `amend-tests`. Если ссылку прочитать не удалось — отказ (fail-closed). |
-| 4 | OK | В простом пути добавлен сухой сбор `acceptance.collect` с отказом `_refuse`, разбор маркеров красноты остался прежним. AC-8 (синтаксис) и AC-9 (красный тест) зелёные. |
-| 5 | OK | Утверждения существующих методов `tests/` не менялись: диф `tests/test_plank_run_edges.py` только добавляет новый класс; `setUp` и фикстуры базового `PlankRunSandbox` не тронуты. |
-
-Тесты. Оба долгоживущих файла несут маркер `Группа: долгоживущий` и
-проверяют свойства кода, а не факты задачи. Заявки «Ловит мутацию» говорят
-о наблюдаемом: отказ/проход, вызов pytest, содержимое ссылки. Два новых
-метода `PlankRunDriftEdgesTest` не повторяют долгоживущие: случаи
-«удалённый файл» и «только помощник и кеш байткода» долгоживущие файлы не
-покрывают. Обе заявки я подтвердил временной мутацией (см. ниже).
-
-Код решает задачу в общем виде: нет ветвлений под литералы фикстур.
-Помощник берётся по глобалу `PLANK_HELPER_NAME`, а не по строке `_pult.py`.
+| 1 | OK | Без изменений с итерации 1: `acceptance.plank_helper_laid_out` оборачивает оба пути `_cmd_amend_tests`; `--from-branch` выкладывает через `plank_in_code_copy` → `materialize_from_branch`. AC-1…AC-3 зелёные на слитом дереве. |
+| 2 | OK | `_is_plank_helper` исключает помощник из `_tests_snapshot` и `_artifact_tests_snapshot`. AC-4 и AC-5 зелёные. |
+| 3 | OK | `plank_run._drift_from_ref` срабатывает до выкладки и fail-closed, если ссылка не прочитана. AC-6, AC-7 и углы `PlankRunDriftEdgesTest` зелёные. |
+| 4 | OK | Сухой сбор в простом пути, разбор маркеров красноты прежний. AC-8 и AC-9 зелёные. |
+| 5 | OK | Существующие утверждения `tests/` не тронуты: подтяжка не меняла тестов задачи, дифф `tests/test_plank_run_edges.py` относительно main — только новый класс. |
 
 ## Замечания
-Замечаний уровня blocker/major/minor нет.
+Замечаний уровня blocker, major или minor нет.
 
-Наблюдения, которые замечаниями не являются:
-- `plank_run.py:93–113`: чтобы выйти из отказа «расходятся» при
-  оставленном черновике, Оператору надо убрать файлы руками; текст отказа
-  это прямо подсказывает. Требование 3 так и сформулировано: отказ, а не
-  перезапись.
-- `--from-branch` по-прежнему стирает незафиксированную правку в рабочей
-  копии. SPEC это не покрывает (требование 3 только про `plank-run`), в
-  PLAN это вынесено в «Предложения системе» — поддерживаю отдельной
-  задачей.
+Наблюдение из итерации 1 остаётся в силе: `--from-branch` по-прежнему стирает незафиксированную
+правку в рабочей копии. Это вне SPEC, оно вынесено в «Предложения системе» PLAN.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
 
-Реестр пуст: замечаний в этой итерации нет, записей прошлых итераций нет.
+Реестр пуст: замечаний нет ни в итерации 1, ни в итерации 2.
 
 ## Вердикт
 approved
 
 ## Проверено исполнением
-- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4JD36367E5CG3GXDV429XTE`
-  — отказ «планки нет: … нет файлов test_*.py». Это ожидаемо: в
-  зафиксированной планке задачи только `long_lived.sha256.txt`, а её
-  свойства держат долгоживущие файлы в `tests/`.
+- `git diff 1f3a0413 e8e4a054 --stat` — 7 файлов, все из задачи: merge не
+  принёс посторонних правок.
+- `git diff e803b034 HEAD -- orchestrator/acceptance.py orchestrator/amend.py orchestrator/plank_run.py tests/test_plank_run_edges.py tests/test_01m4jd36367e5cg3gxdv429xte_*.py`
+  — пусто, код задачи после одобрения итерации 1 не менялся.
+- `python3 scripts/codebase_map.py` (Python 3.13.12) + `git diff -- docs/codebase-map.md`
+  без строк `built_at_sha` — расхождений нет, карта на слитом дереве свежая.
+  Регенерацию откатил `git checkout`, `git status` чистый.
 - `python3 -m pytest -q -p no:cacheprovider tests/test_01m4jd36367e5cg3gxdv429xte_amend_pult.py tests/test_01m4jd36367e5cg3gxdv429xte_plank_run_drift.py tests/test_plank_run_edges.py tests/test_01m42nbcadgsgtcbzb8nkbvdvh_amend_cleanup.py`
-  — 21 passed, 4 subtests passed (48 с).
-- `python3 -m pytest -q -p no:cacheprovider tests/test_amend*.py tests/test_plank_helper.py tests/test_01m41r4y*_plank_run.py tests/test_01m41w15*_plank_run_role.py`
-  — 78 passed, 35 subtests passed (4 мин 16 с).
-- Временные мутации `orchestrator/plank_run.py` (после каждой код
-  возвращён `git checkout`, `git status` чистый):
-  - `set(disk) | set(fixed)` → `set(disk)`: красный
-    `test_deleted_plank_file_is_drift`;
-  - снят фильтр помощника `rel != acceptance.PLANK_HELPER_NAME`: красный
-    `test_helper_and_bytecode_alone_are_not_drift`;
-  - снят фильтр `_is_plank_file` в `_draft_files` (кеш байткода): красный
-    `test_helper_and_bytecode_alone_are_not_drift`.
-- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md`
-  без строки `built_at_sha` — расхождений нет, карта свежая (регенерацию
-  откатил).
-- CI коммита e803b034 — зелёный (16 проверок, из пакета).
+  — 21 passed, 4 subtests passed (56,6 с) на HEAD e8e4a054.
+- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M4JD36367E5CG3GXDV429XTE`
+  — отказ «планки нет … нет файлов test_*.py». Это ожидаемо: зафиксированная
+  планка задачи — только `long_lived.sha256.txt`, а её свойства держат
+  долгоживущие файлы `tests/`, прогнанные выше.
+- Временные мутации `plank_run.py` (три штуки, все тесты покраснели)
+  выполнены в итерации 1 на том же коде. С тех пор код не менялся, поэтому
+  повторно их не гонял.
+- CI коммита e8e4a054 — зелёный (16 проверок, из пакета).
 
 ## Предложения системе
-- Пакет ревью/миссия велят прогнать планку через `plank-run`, но у задач,
-  где вся планка — это `long_lived.sha256.txt`, команда отвечает отказом
-  «планки нет». Стоит, чтобы `plank-run` в таком случае гонял долгоживущие
-  файлы из перечня лока либо говорил прямо, что планка состоит только из
-  перечня (`orchestrator/plank_run.py`).
+- Пакет ревью итерации 2 сообщает, что «базу сравнения … определить не
+  удалось», и показывает полный дифф от main. Это вероятно потому, что
+  итерация 1 уже стояла `approved` и вердикт был учтён. Для возврата после
+  подтяжки main по ANSWER пакету стоит брать базой sha прошлого
+  одобренного вердикта (здесь e803b034) и показывать дифф
+  `<sha>..HEAD` без merge-части main
+  (`orchestrator/` — сборка ревью-пакета).
