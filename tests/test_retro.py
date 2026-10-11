@@ -184,6 +184,14 @@ class RetroGenerationTest(TmpRootTest):
         store.journal(self.conn, self.TASK, actor, action, detail)
 
     def test_build_done_has_merge_sha_address_and_first_context_line_only(self):
+        """Адрес по умолчанию — ссылка документов `refs/artifacts/<id>`
+        (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 9), sha мержа — в
+        строке итога.
+
+        Ловит мутацию: «Итог: done» несёт не переданный sha мержа (например,
+        `gitcmd.head_sha()` пульта) — уронит `assertIn` итога; адрес по
+        умолчанию остаётся `<sha>:tasks/<id>/` — уронит `assertIn` адреса.
+        """
         self.write_spec()
         store.update_task(self.conn, self.TASK, spent_usd=1.5,
                           review_iters=1, accept_rejects=0)
@@ -192,7 +200,8 @@ class RetroGenerationTest(TmpRootTest):
 
         text = retro.build_done(self.conn, self.TASK, "deadbeef" * 5)
 
-        self.assertIn("deadbeef" * 5 + f":tasks/{self.TASK}/", text)
+        self.assertIn(f"Адрес артефактов: refs/artifacts/{self.TASK}", text)
+        self.assertIn("Итог: done, sha " + "deadbeef" * 5, text)
         self.assertIn("Первая строка контекста.", text)
         self.assertNotIn("Вторая строка контекста", text)
         self.assertIn("developer", text)
