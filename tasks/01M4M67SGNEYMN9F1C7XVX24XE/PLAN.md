@@ -218,6 +218,15 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
   `MergeNeedsGreenCiTest` — 13 passed, 116 subtests passed; правка снята,
   `git apply --check` приложения на чистом дереве ветки — проходит. Код
   ветки в этой итерации не менялся.
+- Итерация возврата из verifying (подтяжка main, пин c47f3c9a): main
+  c47f3c9a влит в ветку коммитом ded6d00a без конфликтов (origin/main —
+  предок HEAD). Код задачи не менялся. Карта регенерирована после подтяжки
+  (`python3 scripts/codebase_map.py`; изменился только `built_at_sha`).
+  `git apply --check` приложения к `tests/test_invariants.py` на дереве
+  после подтяжки (там уже правка 98ea7506) — проходит. Долгоживущий файл
+  задачи + `test_plan_appendix`, `test_retro_artifact_branch_reads`,
+  `test_snapshot_closing_outcome`, `test_guard_task_root_subdirectory`,
+  `test_kill_cleanup`, `test_retro` — 123 passed, 28 subtests passed.
 
 ## Предложения системе
 
