@@ -101,6 +101,11 @@ spec_audit.py` вне зон SPEC не заводится — пакет `advanc
 
 Бюджет SPEC ($85) не переоцениваю.
 
+ANSWER-3 (11.10.2026) отработан: мандат Оператора покрывает смену
+`assertEqual(cmd_run.call_count, 1)` → `assertEqual(cmd_run.call_count, 2)`
+в `tests/test_analyst_role.py::AutoAnalystTest::test_auto_runs_analyst_and_stops_at_spec_gate`;
+по указанию ответа код и тесты в этом шаге не менялись — повтор перехода.
+
 ## Шаги
 
 1. Ядро: `config` (STATE_ROLE, лимит возвратов, порог и пути-признаки
