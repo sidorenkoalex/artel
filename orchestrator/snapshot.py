@@ -4,10 +4,19 @@
 
 Коммит закрытия записывается в журнал (`CLOSING_ACTION`) — с ним `doctor`
 сверяет неизменность закрытой ссылки (`closing_sha`).
+
+Исторический снимок (ADR-0021, этап 4; SPEC 01M4M68557TT4KYN814H8AZ01A) —
+ссылка документов задачи, у которой есть каталог `tasks/<id>/` в
+`origin/main`, но ссылки не было: команда Оператора
+`artifact-history-snapshots` пишет её из дерева main
+(`cmd_artifact_history_snapshots`), журнал (`HISTORY_ACTION`) несёт коммит
+снимка, `doctor` сверяет с ним голову так же, как закрытую ссылку
+(`history_snapshots`).
 """
 import os
+import sys
 
-from . import artifact_branch, fixation, gitcmd, retro, store
+from . import artifact_branch, config, fixation, gitcmd, retro, store
 
 SNAPSHOT_REF_TMPL = "refs/artifacts/{task_id}"
 RETRO_REL_TMPL = "tasks/{task_id}/RETRO.md"
@@ -113,6 +122,234 @@ def closing_sha(conn, task_id: str) -> str:
     снимок записи о коммите закрытия не несёт)."""
     for row in reversed(store.task_steps(conn, task_id)):
         if row["action"] == CLOSING_ACTION:
-            _, _, rest = (row["detail"] or "").partition(" <- ")
-            return rest.split(" ", 1)[0]
+            return _recorded_sha(row["detail"])
     return ""
+
+
+def _recorded_sha(detail: str | None) -> str:
+    """sha из детали записи вида `<ссылка> <- <sha> (…)`."""
+    _, _, rest = (detail or "").partition(" <- ")
+    return rest.split(" ", 1)[0]
+
+
+# --- исторические снимки (ADR-0021, этап 4) ---------------------------------
+
+# Действие журнала исторического снимка: `doctor` ищет по нему коммит, с
+# которым сверяет голову ссылки, — как `CLOSING_ACTION` у закрытой задачи.
+HISTORY_ACTION = "исторический снимок"
+HISTORY_COMMAND = "artifact-history-snapshots"
+# Приватное пространство подтягивания ссылок из origin на время команды:
+# в `refs/artifacts/*` напрямую fetch не пишет — существующие ссылки
+# команда не меняет ни при каких условиях.
+_HISTORY_FETCH_NS = "refs/artel/history-snapshots"
+_TASKS_DIR = "tasks"
+
+
+def history_snapshots(conn) -> dict:
+    """{id задачи: коммит снимка} — по последней записи `HISTORY_ACTION`
+    каждой задачи. Строка `tasks` не нужна: у задачи T-серии её нет, а
+    запись журнала есть (у `steps` нет внешнего ключа). Target снимка —
+    всегда артель (`config.DEFAULT_TARGET`): команда пишет снимки только
+    из `origin/main` клона артели."""
+    found = {}
+    for row in store.steps_of_action(conn, HISTORY_ACTION):
+        sha = _recorded_sha(row["detail"])
+        if sha:
+            found[row["task_id"]] = sha
+    return found
+
+
+def _out(res) -> str | None:
+    """stdout удавшейся git-команды; `None` — git отказал или не ответил."""
+    if res is None or res.returncode != 0:
+        return None
+    out = res.stdout
+    return out.decode() if isinstance(out, bytes) else (out or "")
+
+
+def _ls_tree(repo, *args: str) -> dict | None:
+    """{путь: sha} строк `git ls-tree <args>`; `None` — git отказал."""
+    out = _out(gitcmd.in_repo(repo, "ls-tree", *args))
+    if out is None:
+        return None
+    entries = {}
+    for line in out.splitlines():
+        meta, _, path = line.partition("\t")
+        parts = meta.split()
+        if path and len(parts) == 3:
+            entries[path] = parts[2]
+    return entries
+
+
+def _last_change_ts(repo, rev: str, path: str) -> int:
+    """Время (коммиттера) последнего коммита истории `rev`, менявшего
+    `path`; 0 — не прочитано."""
+    out = _out(gitcmd.in_repo(repo, "log", "-1", "--format=%ct", rev, "--",
+                              path))
+    try:
+        return int((out or "").strip() or 0)
+    except ValueError:
+        return 0
+
+
+def _newer_in_main(repo, task_id: str, origin_main: str,
+                   head: str) -> list[str] | None:
+    """Строки отчёта «путь, sha main, sha снимка» по файлам `tasks/<id>/`,
+    которые в main новее, чем в снимке `head`: блоб другой (или файла в
+    снимке нет), а последний коммит main, менявший путь, позже последнего
+    коммита снимка, менявшего его. `None` — деревья не прочитаны."""
+    prefix = f"{_TASKS_DIR}/{task_id}/"
+    main_files = _ls_tree(repo, "-r", origin_main, prefix)
+    snap_files = _ls_tree(repo, "-r", head, prefix)
+    if main_files is None or snap_files is None:
+        return None
+    lines = []
+    for path, blob in sorted(main_files.items()):
+        snap_blob = snap_files.get(path)
+        if snap_blob == blob:
+            continue
+        if snap_blob is not None and (
+                _last_change_ts(repo, origin_main, path)
+                <= _last_change_ts(repo, head, path)):
+            continue
+        lines.append(f"  {path}  main {blob}  снимок {snap_blob or 'нет'} "
+                     f"(коммит снимка {head})")
+    return lines
+
+
+def _mktree(repo, entry: str) -> str:
+    res = gitcmd.carpentry(repo, ["mktree"], dict(os.environ),
+                           input=entry.encode("utf-8"), text=False)
+    return (_out(res) or "").strip()
+
+
+def _history_commit(repo, task_id: str, dir_tree: str,
+                    origin_main: str) -> str:
+    """Коммит без родителя, дерево которого — только `tasks/<id>/`, тот же
+    объект дерева, что в `origin/main` (как есть, без перечитывания
+    файлов). Пустая строка — git не ответил."""
+    inner = _mktree(repo, f"040000 tree {dir_tree}\t{task_id}\n")
+    root = _mktree(repo, f"040000 tree {inner}\t{_TASKS_DIR}\n") if inner else ""
+    if not root:
+        return ""
+    env = {**os.environ,
+           "GIT_AUTHOR_NAME": fixation.FIXATION_AUTHOR_NAME,
+           "GIT_AUTHOR_EMAIL": fixation.FIXATION_AUTHOR_EMAIL,
+           "GIT_COMMITTER_NAME": fixation.FIXATION_AUTHOR_NAME,
+           "GIT_COMMITTER_EMAIL": fixation.FIXATION_AUTHOR_EMAIL}
+    message = (f"{task_id}: {HISTORY_ACTION} tasks/{task_id}/ из origin/main "
+               f"{origin_main}\n\nДерево — каталог задачи из origin/main "
+               f"{origin_main} как есть (ADR-0021, этап 4; команда "
+               f"{HISTORY_COMMAND}).\n")
+    res = gitcmd.carpentry(repo, ["commit-tree", root, "-m", message], env)
+    return (_out(res) or "").strip()
+
+
+def _create_history_ref(conn, repo, task_id: str, dir_tree: str,
+                        origin_main: str) -> tuple[bool, str]:
+    """(создана, строка вывода) — один исторический снимок.
+
+    Сначала push коммита в `origin` без force (ссылки там нет — origin
+    заводит её; появилась тем временем — отклоняет), затем локальная
+    ссылка со сверкой «её не было», затем запись журнала: запись обещает
+    `doctor`'у ссылку в origin, поэтому пишется только после удачного
+    push. Отказ push — ни ссылки, ни записи."""
+    ref = artifact_branch.branch_name(task_id)
+    sha = _history_commit(repo, task_id, dir_tree, origin_main)
+    if not sha:
+        return False, f"  {ref}: не создана — коммит снимка не записан"
+    push = gitcmd.in_repo(repo, "push", "-q", "origin", f"{sha}:{ref}")
+    if _out(push) is None:
+        reason = ((push.stderr or "").strip()[:200] if push is not None
+                  else "git не ответил")
+        return False, f"  {ref}: не создана — push в origin отклонён: {reason}"
+    line = f"  {ref} <- {sha}"
+    upd = gitcmd.in_repo(repo, "update-ref", ref, sha, "0" * 40)
+    if _out(upd) is None:
+        line += (" (в origin; локальная ссылка не записана — подтянуть: "
+                 "artel.py docs --fetch-all)")
+    store.journal(conn, task_id, "operator", HISTORY_ACTION,
+                  f"{ref} <- {sha} (origin/main {origin_main})",
+                  target=config.DEFAULT_TARGET)
+    return True, line
+
+
+def cmd_artifact_history_snapshots(dry_run: bool) -> None:
+    """Команда Оператора `artifact-history-snapshots [--dry-run]`: ссылка
+    `refs/artifacts/<id>` для каждого каталога `tasks/<id>/` текущего
+    `origin/main` артели, у которого её нет ни локально, ни в origin.
+    Существующие ссылки не меняются; файлы, где main новее снимка, только
+    перечисляются. `--dry-run` — перечень без записи ссылок и журнала.
+
+    origin не ответил — отказ до любой записи: без перечня ссылок origin
+    нельзя отличить задачу без ссылки от задачи, чья ссылка есть только
+    там."""
+    repo = artifact_branch.repo_for_target(config.DEFAULT_TARGET)
+    if repo == artifact_branch._NO_REPO:
+        sys.exit(f"{HISTORY_COMMAND}: {artifact_branch.NO_REPO_REASON}")
+    ns = f"{_HISTORY_FETCH_NS}/{os.getpid()}"
+    main_ref = f"refs/remotes/origin/{config.MAIN_BRANCH}"
+    fetch = gitcmd.in_repo(repo, "fetch", "-q", "--no-tags", "origin",
+                           f"+refs/heads/{config.MAIN_BRANCH}:{main_ref}",
+                           f"+refs/artifacts/*:{ns}/*")
+    fetched = artifact_branch._refs_with_prefix(repo, f"{ns}/") or {}
+    try:
+        if _out(fetch) is None:
+            reason = ((fetch.stderr or "").strip()[:200] if fetch is not None
+                      else "git не ответил")
+            sys.exit(f"{HISTORY_COMMAND}: origin не ответил — ссылки не "
+                     f"созданы: {reason}")
+        _history_pass(repo, main_ref, ns, fetched, dry_run)
+    finally:
+        artifact_branch._drop_fetch_refs(repo, list(fetched))
+
+
+def _history_pass(repo, main_ref: str, ns: str, fetched: dict,
+                  dry_run: bool) -> None:
+    origin_main = gitcmd.branch_head_sha(main_ref, repo=repo)
+    dirs = _ls_tree(repo, "-d", origin_main, f"{_TASKS_DIR}/") if origin_main else None
+    local = artifact_branch._refs_with_prefix(repo, "refs/artifacts/")
+    if dirs is None or local is None:
+        sys.exit(f"{HISTORY_COMMAND}: origin/main или локальные ссылки "
+                 f"документов не прочитаны — ссылки не созданы")
+    remote = {ref[len(ns) + 1:]: sha for ref, sha in fetched.items()}
+    candidates, newer, unread = [], [], []
+    for path, tree in sorted(dirs.items()):
+        task_id = path[len(_TASKS_DIR) + 1:]
+        head = (local.get(artifact_branch.branch_name(task_id))
+                or remote.get(task_id))
+        if not head:
+            candidates.append((task_id, tree))
+            continue
+        lines = _newer_in_main(repo, task_id, origin_main, head)
+        if lines is None:
+            unread.append(task_id)
+        else:
+            newer += lines
+    print(f"{HISTORY_COMMAND}: origin/main {origin_main}; каталогов задач "
+          f"{len(dirs)}, со ссылкой {len(dirs) - len(candidates)}, без "
+          f"ссылки {len(candidates)}")
+    failed = 0
+    if dry_run:
+        print("пробный режим — ссылки и журнал не пишутся; были бы созданы:")
+        for task_id, _tree in candidates:
+            print(f"  {artifact_branch.branch_name(task_id)}")
+    elif candidates:
+        conn = store.db()
+        print("исторические снимки:")
+        for task_id, tree in candidates:
+            ok, line = _create_history_ref(conn, repo, task_id, tree,
+                                           origin_main)
+            failed += not ok
+            print(line)
+    if newer:
+        print("файлы, где main новее снимка (ссылки не менялись, решение — "
+              "за Оператором):")
+        for line in newer:
+            print(line)
+    if unread:
+        print(f"снимки не сверены с main (git не прочитал дерево): "
+              f"{', '.join(unread)}")
+    if failed:
+        sys.exit(f"{HISTORY_COMMAND}: не созданы {failed} из "
+                 f"{len(candidates)} ссылок — см. строки выше")
