@@ -329,8 +329,8 @@ class ProfileLimitCutsGateRunTest(MergeGateLimitSandbox):
     def test_ac3_gate_run_is_cut_at_profile_limit_not_config(self):
         """Предел профиля N меньше config — прогон гейта оборван через N секунд.
 
-        Сценарий: `config.FULL_SUITE_TIMEOUT_SEC` — C (60–70 с, от зерна), в
-        профиле артели `full_suite_timeout_sec: N` (13–16 с); пробник набора
+        Сценарий: `config.FULL_SUITE_TIMEOUT_SEC` — C (40–50 с, от зерна), в
+        профиле артели `full_suite_timeout_sec: N` (11–13 с); пробник набора
         держится дольше C. `approve` на `merge_gate` отказывает «прогон не
         уложился в N с» и возвращается раньше C секунд; пробник стартовал.
 
@@ -338,8 +338,8 @@ class ProfileLimitCutsGateRunTest(MergeGateLimitSandbox):
         `config.FULL_SUITE_TIMEOUT_SEC` (подполе профиля читается только
         `suite-run`) — прогон идёт C секунд, отказ называет C, а не N.
         """
-        default = self.rng.randint(60, 70)
-        limit = self.rng.randint(13, 16)
+        default = self.rng.randint(40, 50)
+        limit = self.rng.randint(11, 13)
         self.set_config_limit(default)
         self.prepare(hold=100, profile_limit=limit)
 
@@ -382,7 +382,7 @@ class ConfigLimitCutsGateRunTest(MergeGateLimitSandbox):
         """Без подполя — прогон гейта оборван по подменённому config.
 
         Сценарий: профиль артели без `full_suite_timeout_sec`;
-        `config.FULL_SUITE_TIMEOUT_SEC` подменён тестом на C (13–16 с, от
+        `config.FULL_SUITE_TIMEOUT_SEC` подменён тестом на C (11–13 с, от
         зерна) уже после импорта модулей пульта; пробник держится дольше.
         `approve` отказывает «прогон не уложился в C с» и возвращается
         быстрее, чем пробник отпустил бы прогон сам.
@@ -392,8 +392,8 @@ class ConfigLimitCutsGateRunTest(MergeGateLimitSandbox):
         модуля) — подмена не видна, прогон идёт до конца пробника, отказа
         «не уложился в C с» нет.
         """
-        default = self.rng.randint(13, 16)
-        hold = self.rng.randint(90, 100)
+        default = self.rng.randint(11, 13)
+        hold = self.rng.randint(60, 80)
         self.set_config_limit(default)
         self.prepare(hold=hold, profile_limit=None)
 
@@ -593,7 +593,7 @@ class SuiteRunProfileLimitTest(SuiteRunLimitSandbox):
         """`suite-run` обрывает прогон по пределу профиля N и называет N.
 
         Сценарий: в `config.py` копии пульта предел — 60 с; в профиле
-        проекта задачи `full_suite_timeout_sec: N` (13–16 с, от зерна);
+        проекта задачи `full_suite_timeout_sec: N` (11–13 с, от зерна);
         пробник ветки держится дольше 60 с. Запуск `suite-run`, затем
         `suite-run --wait 1`: отчёт несёт «не уложился» и N в той же
         строке, без 60.
@@ -603,7 +603,7 @@ class SuiteRunProfileLimitTest(SuiteRunLimitSandbox):
         гейт) — прогон за минуту ожидания не оборван, отчёта нет; либо
         отчёт о таймауте печатает значение config, а не N.
         """
-        limit = self.rng.randint(13, 16)
+        limit = self.rng.randint(11, 13)
         task_id, wt = self.add_project_task(limit)
 
         code, launched = self.cli("suite-run", task_id, cwd=wt, timeout=60)
