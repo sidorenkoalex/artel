@@ -229,12 +229,13 @@ class RetroBranchReadTest(RealGitSandbox):
     def test_done_address_names_the_snapshot_ref_when_asked(self):
         """Требование 3/AC-2: вызыватель (ретроспектива снимка) вправе
         назвать вечный адрес `refs/artifacts/<id>`; по умолчанию строка
-        остаётся контент-адресной (`docs/retro/<id>.md`, SPEC «Не входит»).
+        называет ту же ссылку документов — каталога задачи в main с
+        ADR-0021 п.4 нет (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 9).
 
         Ловит мутацию: параметр `address` игнорируется (адрес всегда
         собирается из sha мержа) — «Адрес артефактов: refs/artifacts/<id>»
-        в тексте не появится; обратная мутация (`address` подставляется
-        всегда) уронит второй `assertIn`.
+        в тексте не появится; адрес по умолчанию остаётся контент-адресным
+        `<sha>:tasks/<id>/` — уронит второй `assertIn`.
         """
         self.commit_branch_artifacts()
 
@@ -244,7 +245,7 @@ class RetroBranchReadTest(RealGitSandbox):
 
         self.assertIn(f"Адрес артефактов: refs/artifacts/{TASK}", by_ref)
         self.assertNotIn("артефакты не сохранены", by_ref)
-        self.assertIn(f"Адрес артефактов: {'abcd' * 10}:tasks/{TASK}/",
+        self.assertIn(f"Адрес артефактов: refs/artifacts/{TASK}",
                       default)
 
 

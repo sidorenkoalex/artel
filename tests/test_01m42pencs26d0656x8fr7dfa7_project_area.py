@@ -1601,13 +1601,14 @@ class MergeGateStepsOnCloneTest(TaskFlowSandbox):
         self.assertIn(line, self.origin_file("docs/invariants.md"), self.msg(out))
 
     def test_ac5_code_map_and_retro_are_committed_in_the_clone_merge_copy(self):
-        """Чистый мерж: в origin/main — `docs/retro/<id>.md` и
-        регенерированная карта кодовой базы (не заглушка первого коммита),
-        коммит рождён в клоне.
+        """Чистый мерж: в origin/main — регенерированная карта кодовой базы
+        (не заглушка первого коммита), коммит рождён в клоне; RETRO задачи в
+        main нет — оно живёт только в коммите закрытия ссылки документов
+        (ADR-0021 п.4, SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 2).
 
-        Ловит мутацию: регенерация карты и RETRO включены сравнением с
-        `config.ROOT` — для клона пропущены, в main нет ни RETRO, ни новой
-        карты.
+        Ловит мутацию: регенерация карты включена сравнением с
+        `config.ROOT` — для клона пропущена, в main нет новой карты; либо
+        коммит RETRO в main оставлен — `docs/retro/<id>.md` в дереве main.
         """
         task, step_out = self.run_to_merge_gate(
             {f"kod/kod_{self.rng.randrange(10 ** 6)}.py": "A = 1\n"})
@@ -1615,7 +1616,7 @@ class MergeGateStepsOnCloneTest(TaskFlowSandbox):
         out = self.approve_until_settled(task)
 
         self.assert_merged_in_clone(task, f"{step_out}\n{out}")
-        self.assertIn(f"docs/retro/{task}.md", self.origin_tree(), self.msg(out))
+        self.assertNotIn(f"docs/retro/{task}.md", self.origin_tree(), self.msg(out))
         self.assertNotEqual(self.origin_file("docs/codebase-map.md"),
                             CODE_MAP_PLACEHOLDER, self.msg(out))
 

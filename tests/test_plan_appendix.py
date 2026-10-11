@@ -768,15 +768,16 @@ class MergeAppendixTest(RealGitSandbox):
 
     def test_appendix_commit_precedes_the_artifact_snapshot(self):
         """Приложение к двум защищённым файлам одним блоком уезжает в main
-        отдельным коммитом «<id>: приложения Оператора — <пути>», ДО
-        коммита снимка артефактов, и коммит несёт ОБА файла.
+        отдельным коммитом «<id>: приложения Оператора — <пути>», коммит
+        несёт ОБА файла; коммита снимка артефактов в main нет (ADR-0021 п.4,
+        SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 1; порядок «merge —
+        приложения — карта» держит долгоживущий тест той задачи, AC-5).
 
         Ловит мутацию: вызов `_apply_plan_appendices` снят из
-        `_cmd_approve_merge_gate` (или переставлен после публикации
-        артефактов) — коммита приложений в main не окажется вовсе либо он
-        встанет после снимка; вторая мутация — из блока берётся только
-        первый заголовок `diff --git`, и второй файл в коммит не
-        попадает."""
+        `_cmd_approve_merge_gate` — коммита приложений в main не окажется
+        вовсе; вторая мутация — из блока берётся только первый заголовок
+        `diff --git`, и второй файл в коммит не попадает; третья —
+        наложение снимка артефактов на main оставлено."""
         self.commit_plan([self.applicable_block(
             [PROTECTED_FILE, PROTECTED_FILE_2], "правка Оператора")])
 
@@ -789,8 +790,7 @@ class MergeAppendixTest(RealGitSandbox):
         snapshot = [i for i, s in enumerate(subjects)
                     if "снимок артефактной ветки" in s]
         self.assertTrue(applied, f"нет коммита приложений: {subjects}")
-        self.assertTrue(snapshot, f"нет коммита снимка: {subjects}")
-        self.assertLess(applied[0], snapshot[0], subjects)
+        self.assertEqual(snapshot, [], subjects)
         self.assertEqual(
             sorted(self.origin_files_changed_by("приложения Оператора")),
             sorted([PROTECTED_FILE, PROTECTED_FILE_2]))
