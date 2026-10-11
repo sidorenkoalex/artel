@@ -109,6 +109,23 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
    - `cleanup.drop_task_dir` — на прежнем признаке «каталог в дереве main»
      (`_dir_in_main`, «None — каталог оставлен» сохранён), шесть методов
      `tests/test_kill_cleanup.py` не тронуты (п.5).
+8. Мандат ANSWER-3 (`tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py::MergeGateStepsOnCloneTest::test_ac5_code_map_and_retro_are_committed_in_the_clone_merge_copy`):
+   - п.1 — `assertIn` → `assertNotIn(f"docs/retro/{task}.md", self.origin_tree(), …)`;
+   - п.2 — после `assert_merged_in_clone` добавлена проверка RETRO закрытия:
+     `self.in_repo(self.origin, "show", f"refs/artifacts/{task}:tasks/{task}/RETRO.md")`
+     несёт «Итог: done»;
+   - п.3 — `assert_merged_in_clone` и карта в origin/main не тронуты;
+     докстринг: RETRO в ссылке документов, не в main; в «Ловит мутацию»
+     добавлен пропуск RETRO закрытия.
+   - Чтобы п.2 был исполним: общий помощник `TaskFlowSandbox.approve_until_settled`
+     подменяет `fixation.read` на `("", True)` — с такой подменой
+     `fixation.ref_drift` видит «голова ссылки не прочитана», и коммит
+     закрытия fail-closed не пишется (требование 4 — инцидент, RETRO нет;
+     это поведение кода верное). Помощнику добавлен ключ
+     `live_fixation: bool = False`: по умолчанию подмена прежняя (прочие
+     вызовы и их утверждения не меняются), метод AC-5 зовёт его с
+     `live_fixation=True` — фиксация читается настоящая. Утверждения прочих
+     методов не тронуты.
 
 ## Покрытие требований
 
@@ -184,6 +201,12 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
   нет» — их и закрывает приложение); на базе падений нет. Остальные тесты
   вопросов 1–2 эскалации (`test_retro`, `MergeGuardAfterSnapshotTest`) —
   зелёные. Лог: `.artel/logs/suite-run/01M4M67SGNEYMN9F1C7XVX24XE/01M4M67SGNEYMN9F1C7XVX24XE-suiterun-2.log`.
+- Итерация ANSWER-3: `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`
+  целиком — 30 passed. Мутация «мерж из клона пропускает коммит закрытия»
+  (вызов `cleanup._commit_closing` в `_cmd_approve_merge_gate` убран) —
+  `test_ac5_code_map_and_retro…` красный; код возвращён. Без
+  `live_fixation=True` метод красный на чистом коде (RETRO.md в ссылке
+  origin нет — см. шаг 8). Карта регенерирована.
 
 ## Предложения системе
 
