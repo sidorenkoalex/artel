@@ -550,10 +550,22 @@ class MergeOnlyFromMergeGateTest(FsmTest):
         именно ветку задачи) — сам мандат даёт ANSWER-1, образец —
         нелокированный `tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
         test_ac15_invariants_12_19_remain_green.py`.
+
+        Ловит мутацию: approve из merge_gate не вливает ветку задачи (merge
+        не вызван либо вливает не её) или не доводит задачу до `done`.
         """
+        from orchestrator import fsm_merge_gate
         self.set_state("merge_gate")
 
-        self.capture(fsm.cmd_approve, self.TASK)
+        # Песочница не исполняет git, и ссылки документов у задачи нет: без
+        # подмены чтения её дерева проверка документов задачи отказывает
+        # мерж «ссылки нет» (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 7).
+        # Сама проверка исполняется настоящая — подменено только чтение
+        # дерева ссылки, чистым деревом документов (ANSWER-2 п.4).
+        with mock.patch.object(
+                fsm_merge_gate, "_task_docs_files",
+                return_value=("d" * 40, [f"tasks/{self.TASK}/SPEC.md"], "")):
+            self.capture(fsm.cmd_approve, self.TASK)
 
         # Ассерт по содержанию инварианта, а не по точному списку вызовов:
         # merge случается здесь и мержит ветку задачи. Равенство всей
@@ -766,10 +778,21 @@ class MergeNeedsGreenCiTest(FsmTest):
         self.assertTrue(any("python=failure" in d for d in details), details)
 
     def test_green_ci_merges(self):
-        """Контроль: гейт проходим — зелёный CI мержит, как и раньше."""
+        """Контроль: гейт проходим — зелёный CI мержит, как и раньше.
+
+        Ловит мутацию: зелёный CI читается как не-зелёный — merge не
+        вызван, задача не доходит до `done`.
+        """
+        from orchestrator import fsm_merge_gate
         self.set_state("merge_gate")
 
-        self.capture(fsm.cmd_approve, self.TASK)
+        # Чтение дерева ссылки документов подменено чистым деревом — та же
+        # причина, что в `test_merge_gate_approve_is_that_path` (ANSWER-2
+        # п.4 SPEC 01M4M67SGNEYMN9F1C7XVX24XE).
+        with mock.patch.object(
+                fsm_merge_gate, "_task_docs_files",
+                return_value=("d" * 40, [f"tasks/{self.TASK}/SPEC.md"], "")):
+            self.capture(fsm.cmd_approve, self.TASK)
 
         self.assertIn("merge", self.git_spy.git_subcommands())
         self.assertEqual(self.state(), "done")
@@ -1521,14 +1544,30 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
                                      f"{name} прошла гейт {gate} за Оператора")
 
     def test_operator_approve_passes_each_gate(self):
-        """Контроль: гейты проходимы — но только командой Оператора."""
+        """Контроль: гейты проходимы — но только командой Оператора.
+
+        Ловит мутацию: approve Оператора не проводит задачу через один из
+        ручных гейтов — состояние после него не следующее по автомату.
+        """
+        from orchestrator import fsm_merge_gate
         for gate, expected in (("spec_gate", "in_dev"),
                                ("acceptance", "merge_gate"),
                                ("merge_gate", "done")):
             with self.subTest(гейт=gate):
                 self.set_state(gate)
 
-                self.capture(fsm.cmd_approve, self.TASK)
+                if gate == "merge_gate":
+                    # Чтение дерева ссылки документов подменено чистым
+                    # деревом — та же причина, что в
+                    # `MergeOnlyFromMergeGateTest.test_merge_gate_approve_is_that_path`
+                    # (ANSWER-4 SPEC 01M4M67SGNEYMN9F1C7XVX24XE).
+                    with mock.patch.object(
+                            fsm_merge_gate, "_task_docs_files",
+                            return_value=("d" * 40,
+                                          [f"tasks/{self.TASK}/SPEC.md"], "")):
+                        self.capture(fsm.cmd_approve, self.TASK)
+                else:
+                    self.capture(fsm.cmd_approve, self.TASK)
 
                 self.assertEqual(self.state(), expected)
 
