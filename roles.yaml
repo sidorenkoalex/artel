@@ -10,7 +10,7 @@ roles:
     executor: system            # не LLM: FSM + журнал
     token_slot: artel-orchestrator
   analyst:
-    executor: agent              # A5 (tasks/T025): SPEC из ТЗ Оператора;
+    executor: agent              # A5 (refs/artifacts/T025): SPEC из ТЗ Оператора;
                                   # без tasks/<id>/TZ.md — прежний флоу
                                   # (SPEC пишет Оператор, run отказывает
                                   # именованно)
@@ -25,7 +25,7 @@ roles:
     skills: [conventions-core, escalation-rules, spec-audit]
     model_tier: strong            # ярус -> модель: .artel/models.yaml (tiers)
   test_author:
-    executor: agent              # A4 (tasks/T023): приёмочные тесты до кода
+    executor: agent              # A4 (refs/artifacts/T023): приёмочные тесты до кода
     token_slot: artel-test-author
     skills: [conventions-core, escalation-rules, test-authoring]
     model_tier: strong            # ярус -> модель: .artel/models.yaml (tiers)

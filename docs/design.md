@@ -97,7 +97,7 @@ SPEC (Оператор) → роль `test_author` пишет залоченны
 для наблюдаемости — три задачи одним механизмом.
 
 *Фаза 0 (ADR-0001):* `REQUEST.md` не заводится — запрос Оператор формулирует
-сразу в SPEC.md **(superseded частично — roadmap A5, tasks/T025: с ТЗ,
+сразу в SPEC.md **(superseded частично — roadmap A5, refs/artifacts/T025: с ТЗ,
 сохранённым в `TZ.md`, SPEC пишет роль `analyst`, `roles.yaml`:
 `executor: agent`; без `TZ.md` — прежний флоу этого абзаца, роль исполняет
 Оператор)**. Шаблонов в `templates/` четыре: SPEC, PLAN, REVIEW,
