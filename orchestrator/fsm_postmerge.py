@@ -1,11 +1,14 @@
 """Побочные эффекты merge_gate после успешного merge: карта кодовой базы
-(SPEC T042) и RETRO (SPEC T043). Перенесено из orchestrator/fsm.py без
-изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
+(SPEC T042) и строка приложений PLAN для RETRO. Перенесено из
+orchestrator/fsm.py без изменения поведения (T091, декомпозиция
+диспетчеров fsm/runner). RETRO в main мерж больше не коммитит (ADR-0021
+п.4, SPEC 01M4M67SGNEYMN9F1C7XVX24XE): оно живёт только в коммите закрытия
+`refs/artifacts/<id>` (`orchestrator/snapshot.py`).
 
-Зовётся ПОСЛЕ успешного merge, ДО push (orchestrator/fsm_merge_gate.py) —
-что бы тут ни случилось, `git push` вызывающего кода выполняется в любом
-случае: обе функции никогда не бросают исключение и не делают `sys.exit`,
-любой провал уходит в свой incident-алерт.
+Карта зовётся ПОСЛЕ успешного merge, ДО push (orchestrator/fsm_merge_gate.py)
+— что бы тут ни случилось, `git push` вызывающего кода выполняется в любом
+случае: шаг никогда не бросает исключение и не делает `sys.exit`, любой
+провал уходит в свой incident-алерт.
 
 `repo` (A7, Stage0, AC-9): корень, в котором физически читаются/пишутся
 файлы и делаются git-коммиты — по умолчанию `None` (существующее
@@ -20,7 +23,7 @@ import sys
 
 from scripts import codebase_map
 
-from . import alerts, config, gitcmd, retro, store
+from . import alerts, config, gitcmd, store
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042) — своя
 # копия константы, тем же приёмом, что уже применяют orchestrator/brief.py
@@ -135,51 +138,10 @@ def _regenerate_and_commit_map(conn, task_id: str, repo=None) -> None:
     _journal_map_size(conn, task_id, regenerated, repo)
 
 
-# Дайджест задачи в main на переходе в done/killed (SPEC T043). killed-RETRO
-# доставляется не самим `kill` (решение (d) Оператора, tasks/T043/TZ.md —
-# `orchestrator/cleanup.py` не трогается, инвариант 15 цел буквально), а
-# ближайшим `merge_gate` ЛЮБОЙ задачи, тем же приёмом, что карта T042.
-
-
-def _retro_incident(conn, task_id: str, message: str) -> None:
-    """Провал шага RETRO — журнал и incident-алерт, не отказ merge (SPEC
-    T043, требование 9), тем же приёмом, что `_map_regen_incident`."""
-    store.journal(conn, task_id, "orchestrator", "RETRO FAILED", message)
-    alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
-                       "fsm.retro", message)
-
-
-def _write_and_stage_retro(conn, task_id: str, text: str, repo=None) -> bool:
-    """True — файл записан и добавлен в индекс git; False — провал
-    (инцидент уже заведён)."""
-    path = retro.retro_path(task_id, repo)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    except OSError as exc:
-        _retro_incident(conn, task_id, f"{path} не записан: {exc}")
-        return False
-    added = _git(repo, "add", retro.retro_rel_path(task_id))
-    if added.returncode != 0:
-        _retro_incident(conn, task_id,
-                        f"git add {retro.retro_rel_path(task_id)} не удался: "
-                        f"{added.stderr.strip()[:200]}")
-        return False
-    return True
-
-
-def _commit_retro(conn, task_id: str, message: str, repo=None) -> None:
-    commit = _git(repo, "commit", "-m", message)
-    if commit.returncode != 0:
-        _retro_incident(conn, task_id,
-                        f"коммит RETRO не удался: "
-                        f"{commit.stderr.strip()[:200]}")
-
-
 # Строка RETRO о приложениях Оператора (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF,
-# требование 6): дописывается здесь, а не в `retro.build_done` —
-# `orchestrator/retro.py` вне зон той задачи, а перечень применённых путей
-# знает только цикл мержа.
+# требование 6): дописывается не в `retro.build_done`, а поверх него —
+# перечень применённых путей знает только цикл мержа. С ADR-0021 п.4 её
+# дописывает к RETRO коммит закрытия (`orchestrator/snapshot.py`).
 APPENDICES_RETRO_PREFIX = "Приложения Оператора применены:"
 
 
@@ -192,47 +154,3 @@ def _with_appendices_line(text: str, applied_appendices) -> str:
         return text
     return (f"{text}\n{APPENDICES_RETRO_PREFIX} "
             f"{', '.join(applied_appendices)}\n")
-
-
-def _generate_and_commit_retro(conn, task_id: str, merge_sha: str,
-                               repo=None, applied_appendices=None) -> None:
-    """done-RETRO мержащейся задачи + подбор killed-долгов (SPEC T043,
-    требования 1, 2, 5-8) — коммит отдельный на каждую задачу (провал
-    одной не должен мешать журналировать/чинить остальные по отдельности).
-
-    Зовётся ПОСЛЕ успешного merge, ДО push (тем же местом, что
-    `_regenerate_and_commit_map`): что бы тут ни случилось, `push` в
-    вызывающем коде выполняется в любом случае (требование 9) — генерация
-    контента обёрнута широким `except Exception` умышленно (не только
-    `OSError`, как у карты): в отличие от регенерации карты, здесь
-    несколько независимых источников чтения (журнал БД, SPEC, разбор
-    acceptance_tests/), и ни один сбой любого из них не имеет права
-    отменить сам переход.
-
-    `applied_appendices` (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 6) —
-    пути приложений PLAN, применённых этим же мержем: строка с их
-    перечнем дописывается к done-RETRO мержащейся задачи (долги killed
-    ниже её не несут — приложения принадлежат ЭТОЙ задаче).
-    """
-    try:
-        text = _with_appendices_line(retro.build_done(conn, task_id, merge_sha),
-                                     applied_appendices)
-    except Exception as exc:  # noqa: BLE001 — см. докстринг: провал не критичен
-        _retro_incident(conn, task_id, f"генерация RETRO не удалась: {exc}")
-    else:
-        if _write_and_stage_retro(conn, task_id, text, repo):
-            _commit_retro(conn, task_id, f"{task_id}: RETRO задачи", repo)
-
-    debts = [t["id"] for t in store.all_tasks(conn)
-            if t["state"] == "killed"
-            and not retro.retro_path(t["id"], repo).exists()]
-    for debt_id in debts:
-        try:
-            debt_text = retro.build_killed(conn, debt_id)
-        except Exception as exc:  # noqa: BLE001 — см. докстринг выше
-            _retro_incident(conn, debt_id,
-                            f"генерация killed-RETRO {debt_id} не удалась: {exc}")
-            continue
-        if _write_and_stage_retro(conn, debt_id, debt_text, repo):
-            _commit_retro(conn, debt_id,
-                          f"{task_id}: killed-RETRO долга {debt_id}", repo)

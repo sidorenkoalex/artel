@@ -16,7 +16,8 @@
 import os
 import sys
 
-from . import artifact_branch, config, fixation, gitcmd, retro, store
+from . import (alerts, artifact_branch, config, fixation, fsm_postmerge,
+               gitcmd, retro, store)
 
 SNAPSHOT_REF_TMPL = "refs/artifacts/{task_id}"
 RETRO_REL_TMPL = "tasks/{task_id}/RETRO.md"
@@ -40,26 +41,30 @@ def _model_identifier() -> str:
     return os.environ.get("ARTEL_MODEL") or os.environ.get("ANTHROPIC_MODEL") or "unknown"
 
 
-def _retro_with_frontmatter(conn, task_id: str, outcome: str) -> str:
-    """Ретроспектива снимка: `outcome` — ФАКТИЧЕСКИЙ исход задачи, не
-    литерал (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 1-4). У
+def _retro_with_frontmatter(conn, task_id: str, outcome: str,
+                            merge_sha: str = "",
+                            applied_appendices=None) -> str:
+    """Ретроспектива коммита закрытия: `outcome` — ФАКТИЧЕСКИЙ исход
+    задачи, не литерал (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 1-4). У
     смерженной задачи это «Итог: done, sha …» и вечный адрес
-    `refs/artifacts/<id>` (ADR-0005 п.4, ADR-0018 п.1) вместо
-    контент-адресной строки `docs/retro/<id>.md`: снимок сам и есть тот
-    адрес, а на `<sha>:tasks/<id>/` его читателю опираться незачем. У
-    ликвидированной — прежние «Итог: killed — причина: …» и прежняя
-    строка адреса, путь не меняется (требование 4).
+    `refs/artifacts/<id>` (ADR-0005 п.4, ADR-0018 п.1). У ликвидированной —
+    прежние «Итог: killed — причина: …» и прежняя строка адреса.
 
-    sha в строке «Итог: done» — `gitcmd.head_sha()` пульта на момент
-    публикации, то же значение, что несёт `artel_sha` ниже: sha самого
-    коммита мержа известен только внутри
-    `orchestrator/fsm_merge_gate.py::_publish_merge_artifacts` (локальная
-    `merge_sha`) и ни одним носителем наружу не выставлен — точный sha
-    мержа смерженной задачи остаётся в `docs/retro/<id>.md` main."""
-    body = (retro.build_killed(conn, task_id) if outcome == "killed"
-           else retro.build_done(
-               conn, task_id, gitcmd.head_sha(),
-               address=SNAPSHOT_REF_TMPL.format(task_id=task_id)))
+    С ADR-0021 п.4 это единственное RETRO задачи — в main оно больше не
+    коммитится (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 3), поэтому
+    несёт то, что раньше несло только `docs/retro/<id>.md`: `merge_sha` —
+    коммит мержа задачи в main проекта (merge кодовой ветки плюс приложения
+    PLAN, без карты), его передаёт тело гейта мержа; без него (прямой вызов
+    узла закрытия) — прежний `gitcmd.head_sha()` пульта. `applied_appendices`
+    — пути приложений PLAN, применённых этим мержем: строка с их перечнем
+    (`fsm_postmerge._with_appendices_line`); без приложений текст прежний."""
+    if outcome == "killed":
+        body = retro.build_killed(conn, task_id)
+    else:
+        body = fsm_postmerge._with_appendices_line(
+            retro.build_done(conn, task_id, merge_sha or gitcmd.head_sha(),
+                             address=SNAPSHOT_REF_TMPL.format(task_id=task_id)),
+            applied_appendices)
     header = (
         "---\n"
         f"operator: {_operator_identity()}\n"
@@ -73,13 +78,27 @@ def _retro_with_frontmatter(conn, task_id: str, outcome: str) -> str:
 # Действие журнала коммита закрытия: `doctor` ищет по нему sha, с которым
 # сверяет голову закрытой ссылки.
 CLOSING_ACTION = "коммит закрытия"
+# Источник incident-алерта о незаписанном коммите закрытия (SPEC
+# 01M4M67SGNEYMN9F1C7XVX24XE, требования 4-5): RETRO задачи живёт только в
+# нём, и молча пропасть оно не вправе.
+CLOSING_INCIDENT_SOURCE = "snapshot.closing"
 
 
-def commit_closing(conn, task_id: str, outcome: str) -> str:
+def _closing_failed(conn, task_id: str, note: str) -> str:
+    """Незаписанный коммит закрытия — incident-алерт с target проекта
+    задачи (тем же адресом, что прочие инциденты задачи на мерже), не отказ
+    перехода: задача уже закрыта, уборка идёт дальше."""
+    alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
+                       CLOSING_INCIDENT_SOURCE, note)
+    return note
+
+
+def commit_closing(conn, task_id: str, outcome: str, merge_sha: str = "",
+                   applied_appendices=None) -> str:
     """Коммит `tasks/<id>/RETRO.md` поверх головы ссылки документов;
     строка — что вышло. `outcome` — фактическое состояние закрытой задачи
     из БД (`done`/`killed`): его называют и ретроспектива, и сообщение
-    коммита.
+    коммита. `merge_sha`/`applied_appendices` — см. `_retro_with_frontmatter`.
 
     Ссылки локально нет (задача заведена до ADR-0021 и на новое
     устройство не переносилась, п.13) — коммит не пишется: первый коммит
@@ -89,19 +108,33 @@ def commit_closing(conn, task_id: str, outcome: str) -> str:
 
     Голова, разошедшаяся с фиксацией (`fixation.ref_drift`), коммита
     закрытия не получает: RETRO поверх подмены узаконил бы её; голова
-    остаётся как есть для разбора."""
+    остаётся как есть для разбора.
+
+    Любой незаписанный коммит — ссылки нет, расхождение с фиксацией, git
+    не ответил, построение RETRO бросило исключение — кроме записи журнала
+    поднимает incident-алерт (`_closing_failed`, SPEC
+    01M4M67SGNEYMN9F1C7XVX24XE, требование 4) и исключения наружу не
+    выпускает: переход и уборка задачи от него не зависят."""
     ref = artifact_branch.branch_name(task_id)
     if not artifact_branch.ref_head(task_id):
         note = f"коммит закрытия {task_id} не записан: {ref} нет локально"
         store.journal(conn, task_id, "orchestrator",
                       "коммит закрытия не записан", note)
-        return note
+        return _closing_failed(conn, task_id, note)
     drift = fixation.ref_drift(conn, task_id)
     if drift is not None:
         what = f"коммит закрытия {task_id} ({outcome}) не записан"
         fixation.journal_drift(conn, task_id, drift, "orchestrator", what)
-        return f"{what}: {drift.text()}"
-    text = _retro_with_frontmatter(conn, task_id, outcome)
+        return _closing_failed(conn, task_id, f"{what}: {drift.text()}")
+    try:
+        text = _retro_with_frontmatter(conn, task_id, outcome, merge_sha,
+                                       applied_appendices)
+    except Exception as exc:  # noqa: BLE001 — см. докстринг: сбой не отменяет закрытие
+        note = (f"коммит закрытия {task_id} не записан: RETRO не построено: "
+                f"{exc}")
+        store.journal(conn, task_id, "orchestrator",
+                      "коммит закрытия не записан", note)
+        return _closing_failed(conn, task_id, note)
     sha = artifact_branch.commit_files(
         task_id, {RETRO_REL_TMPL.format(task_id=task_id): text},
         f"{task_id}: закрытие ({outcome}) — RETRO")
@@ -109,7 +142,7 @@ def commit_closing(conn, task_id: str, outcome: str) -> str:
         note = f"коммит закрытия {task_id} не записан: git не ответил"
         store.journal(conn, task_id, "orchestrator",
                       "коммит закрытия не записан", note)
-        return note
+        return _closing_failed(conn, task_id, note)
     store.journal(conn, task_id, "orchestrator", CLOSING_ACTION,
                   f"{ref} <- {sha} ({outcome})")
     store.record_fixation(conn, task_id)

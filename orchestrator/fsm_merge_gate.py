@@ -353,83 +353,114 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
         time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
 
 
-def _overlay_artifact_snapshot(conn, task_id: str, repo: Path) -> None:
-    """Накладывает `tasks/<id>/` из ГОЛОВЫ артефактной ветки поверх
-    результата обычного `git merge --no-ff branch` в `repo` (SPEC
-    01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11):
-    содержимое `tasks/<id>/`, которое попадает в main, обязано быть
-    снимком АРТЕФАКТНОЙ ветки на момент `approve`, не тем, что принесла
-    легаси-копия кодовой ветки задачи (если она вообще есть — обычно её
-    нет, `checkpoint.py` исключает `tasks/<id>/` из коммитов кодовой
-    ветки всех ролей, кроме коммита в артефактную ветку).
-
-    Материализация не удалась (`artifact_branch.materialize_task_dir`
-    вернула пустую строку — ветка не читается) — журналируется
-    предупреждение, main остаётся с тем, что уже принёс обычный merge
-    (деградация, не отказ перехода: требование 3 не разрешает провалу
-    materialize держать гейт). Наложение не поменяло НИ ОДНОГО файла
-    (`git status --porcelain` пуст — легаси-копия и снимок уже
-    совпадают, либо легаси не было и снимок пуст тоже) — коммитить
-    нечего. Иначе — новый коммит поверх merge; если ДО наложения
-    `tasks/<id>/` уже нёс файлы (легаси-копия кодовой ветки
-    существовала), расхождение с ней журналируется отдельным
-    предупреждением (AC-8) — переход не отказывает по этой причине.
-    """
-    legacy_dir = repo / "tasks" / task_id
-    legacy_present = legacy_dir.is_dir() and any(
-        p.is_file() for p in legacy_dir.rglob("*"))
-
-    head = artifact_branch.materialize_task_dir(task_id, repo)
+def _task_docs_files(conn, task_id: str) -> tuple[str, list[str] | None, str]:
+    """(ревизия, пути файлов `tasks/<id>/` на ней, причина) — дерево ссылки
+    документов задачи на ЗАФИКСИРОВАННОЙ голове (`tasks.fixed_sha`; фиксации
+    нет — голова ссылки). Пути `None` — ссылки нет либо её дерево не
+    читается: причина называет, что именно (SPEC 01M4M67SGNEYMN9F1C7XVX24XE,
+    требование 7)."""
+    ref = artifact_branch.branch_name(task_id)
+    head = artifact_branch.ref_head(task_id)
     if not head:
-        store.journal(
-            conn, task_id, "orchestrator",
-            "снимок артефактной ветки не наложен",
-            "материализация tasks/<id>/ из артефактной ветки не удалась "
-            "— main понесёт содержимое обычного merge")
-        return
+        return "", None, f"ссылки документов {ref} нет в репозитории задачи"
+    fixed = store.get_task(conn, task_id)["fixed_sha"] or head
+    paths = artifact_branch.ls_tree(task_id, fixed, f"tasks/{task_id}")
+    if paths is None:
+        return fixed, None, f"дерево {ref} на {fixed} не читается"
+    return fixed, paths, ""
 
-    status = gitcmd.in_repo(repo, "status", "--porcelain", "--",
-                            f"tasks/{task_id}")
-    changed = bool(status.stdout.strip()) if (
-        status is not None and status.returncode == 0) else False
-    if not changed:
-        return
 
-    add = gitcmd.in_repo(repo, "add", "-A", "--", f"tasks/{task_id}")
-    if add is None or add.returncode != 0:
-        store.journal(
-            conn, task_id, "orchestrator",
-            "снимок артефактной ветки не наложен",
-            add.stderr.strip()[:300] if add is not None else "git не ответил")
+def _task_docs_violations(task_id: str, rev: str, paths: list[str],
+                          guard_rules: bool) -> list[str]:
+    """Нарушения документов задачи на ревизии `rev` ссылки: посторонние
+    файлы каталога задачи — у любого проекта (критерий
+    `_guard_task_root_or_refuse`, включая подкаталоги); с `guard_rules` —
+    ещё правила `guard --all` к каталогу задачи (посторонние файлы
+    `acceptance_tests/`, маркер AC-n с отступом, структура `.md`).
+
+    Освобождения «закрытой истории» по `docs/retro/<id>.md`, которое
+    `guard --all` даёт задачам дерева, здесь нет: проверяется живая
+    мержащаяся задача (требование 6). Нужный правилу файл, который git не
+    отдал, — нарушение, как нечитаемый файл у `guard.check`."""
+    prefix = f"tasks/{task_id}/"
+    rels = [p[len(prefix):] for p in paths if p.startswith(prefix)]
+    violations = [f"{prefix}{rel}: {guard.EXTRANEOUS_TASK_ROOT_FILE_REASON}"
+                  for rel in rels if guard.is_extraneous_task_root_file(rel)]
+    if not guard_rules:
+        return violations
+    plank: list[tuple[str, str]] = []
+    for rel in rels:
+        parts = rel.split("/")
+        in_plank = parts[0] == "acceptance_tests" and len(parts) > 1
+        if in_plank:
+            if "__pycache__" in parts:
+                continue
+            if guard.is_extraneous_acceptance_test_file("/".join(parts[1:])):
+                violations.append(f"{prefix}{rel}: "
+                                  f"{guard.EXTRANEOUS_ACCEPTANCE_FILE_REASON}")
+                continue
+        elif guard.is_extraneous_task_root_file(rel):
+            continue
+        is_test = (in_plank and parts[-1].startswith("test_")
+                   and rel.endswith(".py"))
+        if not (is_test or rel.endswith(".md")):
+            continue
+        if guard.is_task_passport(Path("tasks") / task_id / rel):
+            continue
+        text, reason = artifact_branch.show(task_id, rev, prefix + rel)
+        if text is None:
+            violations.append(f"{prefix}{rel}: не прочитан: {reason}")
+        elif is_test:
+            plank.append((prefix + rel, text))
+        else:
+            violations.extend(guard.check_content(prefix + rel, text))
+    violations.extend(guard.indented_ac_marker_errors_from_files(plank))
+    return violations
+
+
+def _guard_task_docs_or_refuse(conn, task_id: str, scratch: Path,
+                               ctx: repo_context.RepoContext) -> None:
+    """Документы мержащейся задачи — на дереве `refs/artifacts/<id>`, не на
+    дереве мержа (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требования 6-7; ADR-0021
+    п.4): каталог задачи в main больше не накладывается, и проверять его в
+    scratch нечего. Стоит до карты, `guard --all`, sha для push и коммита
+    закрытия; любой проект.
+
+    Ссылки нет или она не читается — отказ, не пропуск: прежнее наложение
+    при сбое материализации проверяло пустой каталог. Отказ — тем же путём,
+    что `_guard_task_root_or_refuse`: «merge FAILED», scratch снят,
+    `sys.exit`, задача на `merge_gate` без эскалации, main не тронут."""
+    rev, paths, reason = _task_docs_files(conn, task_id)
+    if paths is None:
+        violations = [reason]
+    else:
+        # Правила `guard --all` — там же, где их сегодня применял guard
+        # дерева мержа: артель, в дереве которой guard есть.
+        guard_rules = (repo_context.is_artel(ctx)
+                       and (scratch / "scripts" / "guard.py").is_file())
+        violations = _task_docs_violations(task_id, rev, paths, guard_rules)
+    if not violations:
         return
-    commit = gitcmd.in_repo(repo, "commit", "-m",
-                            f"{task_id}: снимок артефактной ветки поверх merge")
-    if commit is None or commit.returncode != 0:
-        store.journal(
-            conn, task_id, "orchestrator",
-            "снимок артефактной ветки не наложен",
-            commit.stderr.strip()[:300] if commit is not None
-            else "git не ответил")
-        return
-    if legacy_present:
-        store.journal(
-            conn, task_id, "orchestrator",
-            "расхождение легаси-копии tasks/<id>/ и снимка артефактной ветки",
-            f"легаси-копия tasks/<id>/ кодовой ветки разошлась со снимком "
-            f"артефактной ветки {head} — наложен снимок артефактной ветки "
-            f"(main несёт его, не легаси-копию)")
+    detail = (f"документы задачи на {artifact_branch.branch_name(task_id)}: "
+              + "; ".join(violations))
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    _drop_scratch_worktree(ctx, scratch)
+    listing = "\n".join(f"  - {v}" for v in violations)
+    sys.exit(f"[{task_id}] merge отклонён: документы задачи на "
+             f"{artifact_branch.branch_name(task_id)}:\n{listing}\n"
+             f"  задача осталась на гейте merge; почини документы задачи "
+             f"и повтори: artel.py approve {task_id}")
 
 
 def _guard_task_root_or_refuse(conn, task_id: str, scratch: Path,
                                ctx: repo_context.RepoContext) -> None:
-    """Guard на `tasks/<id>/` СНИМКА артефактной ветки в scratch-дереве —
-    ДО push в main (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0, AC-7/AC-8): вызывается
-    ПОСЛЕ `_overlay_artifact_snapshot` (снимок артефактной ветки к этому
-    моменту уже наложен на `tasks/<id>/` `scratch`, не легаси-копия
-    кодовой ветки), ДО `_push_merged_main` — единственный способ поймать
-    посторонний файл (инцидент 06.09), уже проникший в артефактную ветку
-    В ОБХОД автокоммита (правка Оператора на гейте, старая ветка,
-    отставшая от фильтра `checkpoint.py`).
+    """Guard на `tasks/<id>/`, выложенный каталогом на диск под `scratch`
+    (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0, AC-7/AC-8) — посторонний файл
+    (инцидент 06.09), проникший в документы задачи В ОБХОД автокоммита
+    (правка Оператора на гейте, старая ветка, отставшая от фильтра
+    `checkpoint.py`). Тело гейта мержа документы задачи на диск больше не
+    выкладывает (ADR-0021 п.4) и проверяет их на ссылке тем же критерием —
+    `_guard_task_docs_or_refuse`.
 
     Критерий — тот же `scripts.guard`, что `checkpoint.py` уже применяет
     на автокоммите (единый источник истины, не независимая копия).
@@ -484,14 +515,11 @@ def _guard_all_violations(scratch: Path) -> list[str] | None:
 
 def _guard_all_or_refuse(conn, task_id: str, scratch: Path,
                          ctx: repo_context.RepoContext) -> None:
-    """`guard.py --all` по дереву результата мержа — после снимка
-    артефактной ветки и карты, до RETRO и push (SPEC
-    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 1, AC-1): дерево, которое уйдёт
-    в main, без RETRO самой задачи — с ним guard счёл бы её закрытой
-    историей и не проверил бы её планку на посторонние файлы. Ветка задачи guard
-    проходила, а снимок артефактной ветки накладывается позже —
-    30.09 README без frontmatter в `acceptance_tests/` уехал в main и
-    покрасил его.
+    """`guard.py --all` по дереву результата мержа — после приложений PLAN
+    и карты, до sha для push (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, требование 1,
+    AC-1; SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 8): дерево, которое
+    уйдёт в main. Документы самой задачи в нём больше не лежат — их
+    проверяет `_guard_task_docs_or_refuse` на ссылке документов.
 
     Guard — того же дерева (`scripts/guard.py` мержа, его правила), не
     пульта. Только self target: у внешнего target'а guard пульта к его
@@ -503,8 +531,7 @@ def _guard_all_or_refuse(conn, task_id: str, scratch: Path,
     violations = _guard_all_violations(scratch)
     if not violations:
         return
-    detail = ("guard --all по дереву мержа (снимок артефактной ветки "
-              "наложен): " + "; ".join(violations))
+    detail = "guard --all по дереву мержа: " + "; ".join(violations)
     store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
     _drop_scratch_worktree(ctx, scratch)
     listing = "\n".join(f"  - {v}" for v in violations)
@@ -806,9 +833,9 @@ def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
 
     PLAN.md, не прочитанный с ветки (git не ответил, ветки нет), —
     журналируемое предупреждение и «приложений нет», а не отказ мержа:
-    тем же принципом деградации, что `_overlay_artifact_snapshot` уже
-    применяет к провалу материализации снимка. Ничего некорректного в
-    main это не пропускает — не применяется ничего."""
+    ничего некорректного в main это не пропускает — не применяется ничего.
+    Нечитаемую ссылку документов отказом встретит следом
+    `_guard_task_docs_or_refuse`."""
     appendices, errors, unread = appendix_tree.read_plan(
         conn, task_id, repo_context.protected_paths(ctx))
     if unread:
@@ -963,9 +990,9 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
                            fresh_suite: bool = False):
     """Приложения PLAN к защищённым путям — применение пультом (SPEC
     01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6): ПОСЛЕ плотницкого merge и
-    ДО снимка артефактов, то есть коммит приложений ложится в main раньше
-    коммита снимка (AC-8) и входит в содержимое, на которое адресуется
-    RETRO.
+    ДО карты и `guard --all`, то есть коммит приложений ложится в main
+    раньше коммита карты и входит в коммит мержа, на который адресуется
+    RETRO закрытия (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требования 3б, 8).
 
     До этой задачи защищённый путь в main мог попасть только ручным
     коммитом Оператора; после включения хуков защиты main
@@ -1038,50 +1065,26 @@ def _map_step(conn, task_id: str, scratch: Path) -> None:
 
 
 def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
-                             ctx: repo_context.RepoContext,
-                             applied_appendices: list[str] | None = None) -> str:
-    """Снимок артефактной ветки поверх обычного merge (SPEC
-    01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11) —
-    ДО sha "коммита мержа" ниже: main обязан унести АРТЕФАКТНЫЙ снимок
-    tasks/<id>/, значит это часть содержимого, на которое указывает
-    `merge_sha`, а не служебная правка вроде карты/RETRO после него.
+                             ctx: repo_context.RepoContext) -> str:
+    """Шаги дерева мержа между приложениями PLAN и push (ADR-0021 п.4; SPEC
+    01M4M67SGNEYMN9F1C7XVX24XE): каталог задачи и её RETRO в main больше не
+    попадают ни у одного проекта — RETRO живёт только в коммите закрытия
+    `refs/artifacts/<id>` (`orchestrator/snapshot.py`), куда перечень
+    применённых приложений и sha мержа передаёт тело гейта.
 
-    Карта кодовой базы (SPEC T042) — у любого проекта, в дереве мержа
-    которого есть генератор (`_map_step`, SPEC 01M45FK56DWMNBRKA1VWM12H19,
-    требование 7). RETRO (SPEC T043, требование 8, адресуется на
-    `merge_sha` — сразу после merge/наложения снимка, ДО любых
-    последующих служебных коммитов) — ТОЛЬКО для self
-    (`repo_context.is_artel(ctx)`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
-    требование 4, AC-13 — для внешнего target RETRO в её main НЕ
-    коммитится (остаётся только в коммите закрытия `refs/artifacts/<id>`,
-    `orchestrator/snapshot.py`). Провалы карты и RETRO некритичны, push
-    ниже выполняется независимо от их исхода; оба шага работают В
-    SCRATCH (AC-9) — не в `config.ROOT`.
+    Первым — проверка документов задачи на её ссылке
+    (`_guard_task_docs_or_refuse`): отказ `sys.exit`'ом до карты, push и
+    коммита закрытия. Карта кодовой базы (SPEC T042) — у любого проекта, в
+    дереве мержа которого есть генератор (`_map_step`), отдельным коммитом
+    поверх merge и приложений. `guard --all` по дереву мержа артели (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E) — после карты и до sha для push: дерево уже
+    несёт приложения. Шаги работают В SCRATCH (AC-9), не в `config.ROOT`.
 
-    `_guard_task_root_or_refuse` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
-    AC-7/AC-8) — сразу после наложения снимка, ДО карты/RETRO/push:
-    посторонний файл `tasks/<id>/` отказывает переходу `sys.exit`'ом,
-    дальше этой функции выполнение не идёт. `_guard_all_or_refuse` (SPEC
-    01M3SF7DPFGEZ7VYEGGXGTX49E, AC-1) — после снимка и карты, но ДО
-    RETRO, тем же `sys.exit`'ом до push: guard не сканирует на посторонние
-    файлы планки задачу с `docs/retro/<id>.md` (закрытая история), и
-    собственный RETRO задачи в дереве мержа скрыл бы нарушение её снимка.
-
-    `applied_appendices` (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 6) —
-    пути приложений, применённых `_apply_plan_appendices` ДО этого вызова:
-    RETRO задачи обязано нести их перечень, а собирается RETRO здесь.
-
-    Возврат — `final_sha` (после карты/RETRO для self) для push явным sha.
+    Возврат — `final_sha` (после карты) для push явным sha.
     """
-    _overlay_artifact_snapshot(conn, task_id, scratch)
-    _guard_task_root_or_refuse(conn, task_id, scratch, ctx)
-    merge_sha = gitcmd.head_sha(scratch)
+    _guard_task_docs_or_refuse(conn, task_id, scratch, ctx)
     _map_step(conn, task_id, scratch)
-    if repo_context.is_artel(ctx):
-        _guard_all_or_refuse(conn, task_id, scratch, ctx)
-        fsm_postmerge._generate_and_commit_retro(
-            conn, task_id, merge_sha, repo=scratch,
-            applied_appendices=applied_appendices)
+    _guard_all_or_refuse(conn, task_id, scratch, ctx)
     final_sha = gitcmd.head_sha(scratch)
     _drop_scratch_worktree(ctx, scratch)
     return final_sha
@@ -1246,9 +1249,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     публикация головы ->
     свежесть main -> зелёный CI -> плотницкий merge в scratch-worktree
     (Stage0, AC-8) -> приложения PLAN к защищённым путям (SPEC
-    01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6) -> снимок артефактов/
-    карта/RETRO -> push явным sha -> done -> коммит закрытия в
-    `refs/artifacts/<id>` -> уборка worktree/ветки. Первым шагом —
+    01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6) -> документы задачи на
+    ссылке/карта/`guard --all` -> push явным sha -> done -> коммит закрытия
+    с RETRO в `refs/artifacts/<id>` -> уборка worktree/ветки. Первым шагом —
     сверка ссылки документов с `origin` (ADR-0021 п.3).
 
     Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
@@ -1272,8 +1275,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     требование 4, AC-12/AC-13): резолвится ОДИН раз здесь (`store.
     task_target`, не `t["target"]` — `t` в некоторых существующих тестах
     несёт только `branch`) и передаётся дальше каждому шагу, который
-    решает, где физически стоит scratch-worktree/куда идёт push и нужны
-    ли карта/RETRO (только self, AC-13). Контекст не читается
+    решает, где физически стоит scratch-worktree/куда идёт push и нужен
+    ли `guard --all` (только self). Контекст не читается
     (targets.yaml сломан/неизвестный target) — `sys.exit` тем же стилем,
     что и остальные инфраструктурные отказы этого гейта: merge — точка
     без права молча деградировать на чужой репозиторий.
@@ -1282,7 +1285,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     ветки и до merge — сверка цвета CI main (`_refuse_if_main_red`,
     `fixes_main` — основание флага `--fixes-main`); после push, `done` и
     уборки — ожидание CI новой головы main (`_await_main_ci`); guard по
-    дереву мержа — внутри `_publish_merge_artifacts`.
+    дереву мержа и по документам задачи — внутри `_publish_merge_artifacts`.
     """
     target = store.task_target(conn, task_id)
     ctx = repo_context.resolve(target)
@@ -1319,12 +1322,15 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
         fresh_suite or _fresh_suite_for_cycle.get())
     if appendix_kind != "ok":
         return ("stopped",)
-    final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx,
-                                         applied_appendices=applied)
+    # Коммит мержа задачи — merge кодовой ветки плюс приложения, без карты:
+    # на него адресуется «Итог: done» RETRO закрытия.
+    merge_sha = gitcmd.head_sha(scratch)
+    final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx)
     if _push_merged_main(conn, task_id, final_sha, ctx) == "moved":
         return ("moved", branch)
     _finalize_done_state(conn, task_id, state, branch)
-    cleanup._commit_closing(conn, task_id)
+    cleanup._commit_closing(conn, task_id, merge_sha=merge_sha,
+                            applied_appendices=applied)
     _cleanup_merged_task(conn, task_id, branch)
     _await_main_ci(conn, task_id, final_sha, ctx)
     return ("done",)
@@ -1380,7 +1386,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
     уже зелёный, и `_wait_for_branch_ci_green` вернулась бы мгновенно, не
     сверив потолок и не паузя, — без этих шагов устойчиво отвергаемый push
     (застрявший lock ref origin, чужой пульт, стабильно выигрывающий
-    гонку) крутил бы fetch/worktree/merge/карту/RETRO/push горячим циклом
+    гонку) крутил бы fetch/worktree/merge/карту/push горячим циклом
     без конца. Потолок один и тот же для обоих исходов — не сбрасывается
     (требование 9): истёк — запись «merge FAILED» и `sys.exit` с
     именованным отказом, задача остаётся на `merge_gate`.

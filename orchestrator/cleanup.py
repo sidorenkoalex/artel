@@ -9,11 +9,9 @@ from . import (config, fixation, gitcmd, lease, liveness, repo_context, store,
                workspace)
 
 
-def artifacts_in_main(task_id: str) -> bool | None:
-    """Есть ли каталог задачи в дереве main. None — git не ответил.
-
-    Достаточно самого факта наличия: артефакты задачи, убитой после
-    мержа, — история (docs/design.md §6), её не трогаем целиком.
+def _dir_in_main(task_id: str) -> bool | None:
+    """Есть ли каталог задачи в дереве main главной копии. None — git не
+    ответил.
 
     Легаси-каталог `config.TASKS/<id>` (задачи старше T094) лежит в рабочем
     дереве главной копии — о нём и спрашивается её git, только чтением.
@@ -23,6 +21,24 @@ def artifacts_in_main(task_id: str) -> bool | None:
     if res.returncode != 0:
         return None
     return bool(res.stdout.strip())
+
+
+def artifacts_in_main(task_id: str) -> bool | None:
+    """Сохранены ли документы задачи историей: каталог задачи в дереве main
+    либо ссылка документов `refs/artifacts/<id>` в репозитории задачи. None
+    — git не ответил на вопрос о main.
+
+    Достаточно самого факта наличия: артефакты задачи, убитой после
+    мержа, — история (docs/design.md §6), её не трогаем целиком. С ADR-0021
+    п.4 мерж каталог задачи в main не кладёт (SPEC
+    01M4M67SGNEYMN9F1C7XVX24XE, требование 9) — документы такой задачи
+    хранит только её ссылка.
+    """
+    in_main = _dir_in_main(task_id)
+    if in_main is not False:
+        return in_main
+    from . import artifact_branch
+    return bool(artifact_branch.ref_head(task_id))
 
 
 def artifacts_tracked_here(task_id: str) -> bool | None:
@@ -38,9 +54,14 @@ def artifacts_tracked_here(task_id: str) -> bool | None:
 
 
 def drop_task_dir(task_id: str) -> str:
-    """Убирает каталог артефактов убитой задачи; строка — что вышло."""
+    """Убирает каталог артефактов убитой задачи; строка — что вышло.
+
+    Бережёт каталог, который main отслеживает (`_dir_in_main`): rmtree
+    оставил бы в главной копии удаления. Документы, сохранённые только
+    ссылкой (`artifacts_in_main` по ссылке), локальную неотслеживаемую
+    копию не берегут — история цела в ссылке, копия на диске — хвост."""
     tdir = config.TASKS / task_id
-    in_main = artifacts_in_main(task_id)
+    in_main = _dir_in_main(task_id)
     if in_main is None:
         return f"каталог tasks/{task_id}/ оставлен: main не прочитан"
     if in_main:
@@ -496,11 +517,17 @@ def _closing_outcome(conn, task_id: str) -> str:
     return state if state in TERMINAL_STATES else "killed"
 
 
-def _commit_closing(conn, task_id: str) -> None:
+def _commit_closing(conn, task_id: str, merge_sha: str = "",
+                    applied_appendices=None) -> None:
     """Коммит закрытия (`snapshot.commit_closing`) — один узел на оба пути
     закрытия, `kill` и мерж; канарейка идёт тем же потоком (ADR-0021
-    п.13). Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
-    импорт на уровне модуля замкнул бы этот же файл в цикл."""
+    п.13). `merge_sha`/`applied_appendices` передаёт путь мержа — RETRO
+    закрытия несёт sha мержа и перечень приложений PLAN (SPEC
+    01M4M67SGNEYMN9F1C7XVX24XE, требование 3). Отложенный импорт:
+    `snapshot` -> `retro` -> `cleanup` — прямой импорт на уровне модуля
+    замкнул бы этот же файл в цикл."""
     from . import snapshot
-    note = snapshot.commit_closing(conn, task_id, _closing_outcome(conn, task_id))
+    note = snapshot.commit_closing(conn, task_id, _closing_outcome(conn, task_id),
+                                   merge_sha=merge_sha,
+                                   applied_appendices=applied_appendices)
     print(f"  {note}")

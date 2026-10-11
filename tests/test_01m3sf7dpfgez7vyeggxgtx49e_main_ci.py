@@ -466,21 +466,29 @@ class MergeGuardAfterSnapshotTest(MergeSandbox):
     def test_ac1_clean_snapshot_merges_as_before(self):
         """Снимок без нарушений guard: мерж проходит как прежде.
 
-        Задача в `done`, origin/main сдвинут и несёт файл снимка.
+        Задача в `done`, origin/main сдвинут; файла снимка в main нет
+        (ADR-0021 п.4, SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 1), он
+        остаётся в `refs/artifacts/<id>` на origin.
 
         Ловит мутацию: guard после снимка зовётся не по дереву мержа (не
         из его корня либо по рабочей копии пульта) и падает «файл не
-        найден»/без каталога `tasks` — отказ даже на чистом снимке.
+        найден»/без каталога `tasks` — отказ даже на чистом снимке;
+        наложение снимка на main оставлено — уронит `assertFalse`; мерж
+        теряет документы задачи в ссылке на origin — уронит последний
+        `assertIn`.
         """
         task = self.make_task()
         before = self.origin_main()
 
         ok, out = self.cli("approve", task["id"])
 
+        fixture = f"{task['dir']}/acceptance_tests/test_ac1_fixture.py"
         self.assertEqual(self.state_of(task), "done", self.msg(out))
         self.assertNotEqual(self.origin_main(), before, self.msg(out))
-        self.assertTrue(self.origin_tree_has(
-            f"{task['dir']}/acceptance_tests/test_ac1_fixture.py"), self.msg(out))
+        self.assertFalse(self.origin_tree_has(fixture), self.msg(out))
+        docs = self.git("-C", str(self.origin), "ls-tree", "-r",
+                        "--name-only", f"refs/artifacts/{task['id']}")
+        self.assertIn(fixture, docs.splitlines(), self.msg(out))
 
     def test_ac1_guard_warnings_do_not_stop_merge(self):
         """Снимок, на котором `guard --all` даёт только предупреждение

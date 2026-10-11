@@ -1,4 +1,8 @@
-"""Детерминированная генерация содержимого `docs/retro/<id>.md` (SPEC T043).
+"""Детерминированная генерация содержимого RETRO задачи (SPEC T043).
+
+С ADR-0021 п.4 (SPEC 01M4M67SGNEYMN9F1C7XVX24XE) RETRO живёт только в
+коммите закрытия `refs/artifacts/<id>` (`orchestrator/snapshot.py`);
+исторические `docs/retro/<id>.md` в main остаются читаемыми.
 
 Только чтение и вёрстка текста: побочные эффекты (запись файла, `git
 add`/`commit`, обработка провала как incident-алерта) — дело
@@ -562,19 +566,17 @@ def build_done(conn, task_id: str, merge_sha: str,
     """RETRO задачи, дошедшей до `done` (требования 4, 5, 8).
 
     `address` (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требование 3) — строка
-    «Адрес артефактов», когда у вызывающего он свой: ретроспектива снимка
-    закрытия называет вечный адрес `refs/artifacts/<id>` (ADR-0005 п.4,
-    ADR-0018 п.1), и имя этой ссылки знает `orchestrator/snapshot.py`, а
-    не этот модуль (обратный импорт замкнул бы цикл). По умолчанию —
-    прежний контент-адресный `<sha мержа>:tasks/<id>/`
-    `docs/retro/<id>.md`, который SPEC менять не просит."""
+    «Адрес артефактов», когда у вызывающего он свой. По умолчанию — ссылка
+    документов `refs/artifacts/<id>` (SPEC 01M4M67SGNEYMN9F1C7XVX24XE,
+    требование 9): с ADR-0021 п.4 каталога задачи в main нет, и
+    контент-адресный `<sha мержа>:tasks/<id>/` указывал бы в пустоту."""
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
     files = _artifact_branch_files(task_id)
     context_line = _first_context_sentence(_spec_text(files, task_id))
     count, manual, skip = _acceptance_counts(task_id, files)
     artifacts_address = (address if address is not None
-                         else f"{merge_sha}:tasks/{task_id}/")
+                         else artifact_branch.branch_name(task_id))
 
     lines = [
         f"# RETRO: {task_id} — {t['title']}",
