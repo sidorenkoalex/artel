@@ -2,7 +2,7 @@
 task: 01M4P4ZP37WV81410YTZHKQC8D
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -119,6 +119,11 @@ schema_version: 5
   (`test_ac8_skill_appendix.py`) красный по своему маркеру — PLAN.md ещё
   не в ссылке документов; приложение ниже проверено `git apply --check` на
   чистом дереве (см. «Риски»).
+- После ANSWER-2 (Оператор поправил планку `amend-tests`, вариант A:
+  уже наложенное приложение признаётся по `git apply --reverse --check`;
+  лок 95eae7c5): `artel.py plank-run 01M4P4ZP37WV81410YTZHKQC8D` —
+  1 passed, код 0. Код и приложение PLAN, по указанию ANSWER-2, не
+  менялись; эскалация снята.
 
 ## Риски
 
@@ -174,45 +179,3 @@ index fa6b2950..e43a9bbf 100644
   стоит дополнить: проверяя приложение к защищённому пути, планка
   признаёт «уже наложено» (`git apply --reverse --check`), как
   `plan_appendix.skip_in_base`.
-
-## Эскалация
-
-**Код причины:** тест-дефект зафиксированной планки (правка — `amend-tests`).
-
-**Вопросы**
-
-1. (блокирует) Как поступить с
-   `acceptance_tests/test_ac8_skill_appendix.py::SkillAppendixTest::test_ac8_plan_appendix_puts_preflight_into_skill`?
-   - **A (дефолт):** `amend-tests`. В `skill_after_plan`/`apply_to_copy`
-     до наложения проверять `git apply --reverse --check` на копии: если
-     приложение уже наложено (дерево рубежа), брать текст копии как есть.
-     Проверка абзаца «artel.py preflight … перед сдачей» не меняется.
-   - B: `amend-tests` — читать исходный скил не из `CODE_ROOT`, а из базы
-     ветки (`git show <база>:skills/test-authoring.md`) и накладывать на
-     него.
-   - C: другое решение Оператора.
-
-**Контекст**
-
-- Отказ рубежа (история advance): «приложение 1 к skills/test-authoring.md
-  не легло: error: patch failed: skills/test-authoring.md:413». Планка
-  шла с cwd `/var/folders/…/artel-appendix-suite-…/tree`, то есть на
-  дереве `orchestrator/appendix_tree.py:236` `suite_tree`: по докстрингу
-  (строки 241–249) это HEAD ветки «поверх — приложения PLAN подряд».
-  `CODE_ROOT` планки = это дерево, и `skills/test-authoring.md` в нём уже
-  несёт абзац приложения. Тест (`test_ac8_skill_appendix.py:91–93`)
-  накладывает то же приложение второй раз — контекст хунка (пустая строка
-  перед «Прогоны — только…») уже занят вставкой, `git apply` отказывает.
-  Любое корректное приложение красит этот тест на рубеже.
-- Само приложение исправно: на чистом дереве ветки (HEAD `bb4c58e0`,
-  после подтяжки main) проверено `git apply --check -v` на дифф из PLAN.md
-  в этом шаге — «Checking patch skills/test-authoring.md...», код 0.
-- Код задачи не менялся с прошлой сдачи; долгоживущий файл задачи и
-  `tests/test_preflight.py`: 24 passed, 28 subtests passed (этот шаг).
-  `docs/codebase-map.md` регенерирован (сменился только `built_at_sha`).
-- Подгонять приложение под тест (например, контекстом, который
-  встречается в скиле дважды, чтобы второе наложение легло в другое
-  место) не стал: это обход теста, а не исправление.
-
-**Блокирует:** переход `in_dev -> verifying` — планка задачи на рубеже
-красна при любом PLAN с приложением к скилу.
