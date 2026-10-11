@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Артель — Пульт Оператора (макет, П1)</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --border: #dde1e6;
+    --text: #1c2530;
+    --muted: #667085;
+    --accent: #2f5fd6;
+    --accent-soft: #e8edfc;
+    --ok: #1f8a4c;
+    --warn: #b7791f;
+    --danger: #c22b2b;
+    --killed: #6b7280;
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.4;
+  }
+  header.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 24px;
+    background: #16213e;
+    color: #f4f5f7;
+  }
+  header.topbar h1 {
+    font-size: 18px;
+    margin: 0;
+    font-weight: 600;
+  }
+  header.topbar .subtitle {
+    font-size: 12px;
+    color: #aab4c8;
+    margin-top: 2px;
+  }
+  .topbar-actions { display: flex; align-items: center; gap: 10px; }
+  .btn {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: default;
+    font-weight: 500;
+  }
+  .btn.approve { border-color: #1f8a4c; color: #1f8a4c; background: #eafaf0; }
+  .btn.reject { border-color: #c22b2b; color: #c22b2b; background: #fdecec; }
+  .btn.pause {
+    border-color: #f2c94c;
+    color: #16213e;
+    background: #f2c94c;
+    font-weight: 600;
+  }
+  .banner {
+    margin: 16px 24px 0;
+    padding: 10px 14px;
+    background: #fff7e0;
+    border: 1px solid #f0d98c;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #6b5a1a;
+  }
+  main {
+    padding: 20px 24px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  section.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  section.panel > h2 {
+    margin: 0 0 12px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  /* --- Алерты --- */
+  ul.alert-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .alert-item {
+    display: flex;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border-left: 3px solid var(--warn);
+    background: #fdf6ea;
+    font-size: 13px;
+  }
+  .alert-item.incident { border-left-color: var(--danger); background: #fdecec; }
+  .alert-item .alert-task { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; flex-shrink: 0; }
+  .alert-item .alert-text { color: var(--text); }
+  .alert-item .alert-source { color: var(--muted); font-size: 11px; }
+  /* --- Очередь гейтов --- */
+  .gate-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .gate-row:last-child { margin-bottom: 0; }
+  .gate-meta { display: flex; flex-direction: column; gap: 2px; }
+  .gate-name {
+    display: inline-block;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 1px 6px;
+    width: fit-content;
+  }
+  .gate-task { font-size: 13px; font-weight: 600; }
+  .gate-note { font-size: 12px; color: var(--muted); }
+  .gate-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  /* --- Борд --- */
+  .layout { display: flex; gap: 20px; align-items: flex-start; }
+  .board-wrap { flex: 1; min-width: 0; }
+  .board {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .col {
+    background: #fafbfc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-width: 168px;
+    flex: 0 0 168px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .col-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 2px; }
+  .state-tag {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #16213e;
+  }
+  .col-hint { font-size: 10px; color: var(--muted); }
+  .col-empty { font-size: 11px; color: var(--muted); font-style: italic; padding: 4px 2px; }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+  .tile .tile-id { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; }
+  .tile .tile-title { display: block; margin: 2px 0 4px; color: var(--text); }
+  .tile .tile-stat { color: var(--muted); font-size: 11px; }
+  .col.done .tile { border-left: 3px solid var(--ok); }
+  .col.killed .tile { border-left: 3px solid var(--killed); }
+  .col.escalated .tile { border-left: 3px solid var(--danger); }
+  .col.merge_gate .tile, .col.review .tile { border-left: 3px solid var(--accent); }
+  .col.in_dev .tile { border-left: 3px solid var(--warn); }
+  /* --- Карточка задачи --- */
+  aside.task-card {
+    flex: 0 0 300px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  aside.task-card h2 { margin: 0 0 4px; font-size: 15px; }
+  aside.task-card .card-sub { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  dl.card-fields { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  dl.card-fields .field { display: flex; flex-direction: column; gap: 1px; }
+  dl.card-fields dt {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+  }
+  dl.card-fields dd { margin: 0; font-size: 13px; }
+  footer {
+    padding: 0 24px 30px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div>
+    <h1>Артель — Пульт Оператора</h1>
+    <div class="subtitle">макет (П1) — статический артефакт, без демона, БД и кода панели</div>
+  </div>
+  <div class="topbar-actions">
+    <button type="button" class="btn pause">⏸ Pause — приостановить задачу</button>
+  </div>
+</header>
+
+<p class="banner">
+  Данные на этой странице — статические примеры, списанные с реальной
+  истории пульта (docs/retro/*.md и SPEC-фронтматтер задач), а не
+  live-срез внутренней БД оркестратора: макет к ней не подключается
+  (границы задачи П1). Кнопки approve/reject/pause — только разметка,
+  без обработчиков.
+</p>
+
+<main>
+
+  <section class="panel">
+    <h2>Алерты</h2>
+    <ul class="alert-list">
+      <li class="alert-item incident">
+        <span class="alert-task">T075</span>
+        <span class="alert-text">эскалация (5-я): конфликт подтяжки main
+          в ветку task/t075-answer-artefakt-kanal-otveta-o</span>
+        <span class="alert-source">source: fsm.merge_conflict</span>
+      </li>
+      <li class="alert-item incident">
+        <span class="alert-task">T078</span>
+        <span class="alert-text">эскалация: агент не отработал за 3
+          попытки: rc=1, попытка 3/3, стоимость $0.0000, токенов 0</span>
+        <span class="alert-source">source: runner.agent_failure</span>
+      </li>
+      <li class="alert-item incident">
+        <span class="alert-task">T063</span>
+        <span class="alert-text">эскалация (4-я): конфликт подтяжки main
+          в ветку task/t063-retro-polnoe-pervoe-predlozhen</span>
+        <span class="alert-source">source: fsm.merge_conflict</span>
+      </li>
+      <li class="alert-item">
+        <span class="alert-task">T068</span>
+        <span class="alert-text">задача снята: kill switch (решение
+          Оператора)</span>
+        <span class="alert-source">source: cleanup.kill</span>
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel">
+    <h2>Очередь гейтов Оператора</h2>
+
+    <div class="gate-row">
+      <div class="gate-meta">
+        <span class="gate-name">spec_gate</span>
+        <span class="gate-task">T080 — «П1: макет панели — артефакт UX»</span>
+        <span class="gate-note">пример записи очереди: SPEC на подтверждение —
+          в этой же задаче исторически уже пройден, до старта tests_writing</span>
+      </div>
+      <div class="gate-actions">
+        <button type="button" class="btn approve">Approve</button>
+        <button type="button" class="btn reject">Reject</button>
+      </div>
+    </div>
+
+    <div class="gate-row">
+      <div class="gate-meta">
+        <span class="gate-name">merge_gate</span>
+        <span class="gate-task">T078 — «Отказ advance доносится до следующего запуска роли»</span>
+        <span class="gate-note">пример записи очереди: ревью 0/3 итераций,
+          $10.66 / $25.00, готова к merge</span>
+      </div>
+      <div class="gate-actions">
+        <button type="button" class="btn approve">Approve</button>
+        <button type="button" class="btn reject">Reject</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="layout">
+    <section class="panel board-wrap">
+      <h2>Борд задач — состояния FSM</h2>
+      <div class="board">
+
+        <div class="col spec_writing">
+          <div class="col-head">
+            <span class="state-tag">spec_writing</span>
+            <span class="col-hint">analyst пишет SPEC</span>
+          </div>
+          <div class="col-empty">нет задач</div>
+        </div>
+
+        <div class="col spec_gate">
+          <div class="col-head">
+            <span class="state-tag">spec_gate</span>
+            <span class="col-hint">SPEC ждёт Оператора</span>
+          </div>
+          <div class="col-empty">нет задач</div>
+        </div>
+
+        <div class="col tests_writing">
+          <div class="col-head">
+            <span class="state-tag">tests_writing</span>
+            <span class="col-hint">test_author пишет AC</span>
+          </div>
+          <div class="col-empty">нет задач</div>
+        </div>
+
+        <div class="col in_dev">
+          <div class="col-head">
+            <span class="state-tag">in_dev</span>
+            <span class="col-hint">developer в работе</span>
+          </div>
+          <div class="tile">
+            <span class="tile-id">T080</span>
+            <span class="tile-title">П1: макет панели — артефакт UX</span>
+            <span class="tile-stat">$25.00 потолок · ревью 0/3</span>
+          </div>
+        </div>
+
+        <div class="col review">
+          <div class="col-head">
+            <span class="state-tag">review</span>
+            <span class="col-hint">reviewer проверяет diff</span>
+          </div>
+          <div class="tile">
+            <span class="tile-id">T075</span>
+            <span class="tile-title">ANSWER-артефакт: канал ответа Оператора на эскалацию</span>
+            <span class="tile-stat">$32.69 / $50.00 · ревью 1/3</span>
+          </div>
+        </div>
+
+        <div class="col acceptance">
+          <div class="col-head">
+            <span class="state-tag">acceptance</span>
+            <span class="col-hint">приёмочные тесты</span>
+          </div>
+          <div class="col-empty">нет задач</div>
+        </div>
+
+        <div class="col merge_gate">
+          <div class="col-head">
+            <span class="state-tag">merge_gate</span>
+            <span class="col-hint">ждёт merge Оператора</span>
+          </div>
+          <div class="tile">
+            <span class="tile-id">T078</span>
+            <span class="tile-title">Отказ advance доносится до следующего запуска роли</span>
+            <span class="tile-stat">$10.66 / $25.00 · ревью 0/3</span>
+          </div>
+        </div>
+
+        <div class="col escalated">
+          <div class="col-head">
+            <span class="state-tag">escalated</span>
+            <span class="col-hint">нужен Оператор</span>
+          </div>
+          <div class="tile">
+            <span class="tile-id">T063</span>
+            <span class="tile-title">RETRO: полное первое предложение сути, killed — из ТЗ</span>
+            <span class="tile-stat">$13.79 / $15.00 · эскалаций: 4</span>
+          </div>
+        </div>
+
+        <div class="col done">
+          <div class="col-head">
+            <span class="state-tag">done</span>
+            <span class="col-hint">задача закрыта</span>
+          </div>
+          <div class="tile">
+            <span class="tile-id">T074</span>
+            <span class="tile-title">pause --now: жёсткая пауза + чекпоинт аварийного шага</span>
+            <span class="tile-stat">$19.63 / $45.00 · ревью 0/3 · без эскалаций</span>
+          </div>
+        </div>
+
+        <div class="col killed">
+          <div class="col-head">
+            <span class="state-tag">killed</span>
+            <span class="col-hint">задача снята</span>
+          </div>
+          <div class="tile">
+            <span class="tile-id">T068</span>
+            <span class="tile-title">B1a: изоляция обвязки целевого — MCP-вектор</span>
+            <span class="tile-stat">$0.00 · kill switch</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <aside class="task-card">
+      <h2>Карточка задачи — пример T080</h2>
+      <div class="card-sub">П1: макет панели — артефакт UX</div>
+      <dl class="card-fields">
+        <div class="field">
+          <dt>Статус</dt>
+          <dd>in_dev — роль developer выполняет этот шаг прямо сейчас</dd>
+        </div>
+        <div class="field">
+          <dt>Бюджет / расход</dt>
+          <dd>$25.00 потолок (SPEC) · расход обновляется по журналу шага,
+            в статике этого макета не фиксируется</dd>
+        </div>
+        <div class="field">
+          <dt>Итерации ревью</dt>
+          <dd>0 / 3 — задача ещё не дошла до review</dd>
+        </div>
+        <div class="field">
+          <dt>Lease</dt>
+          <dd>держит текущая сессия разработчика (host HYD6R6VFH9-MBP)</dd>
+        </div>
+      </dl>
+    </aside>
+  </div>
+
+</main>
+
+<footer>
+  Источники примеров: docs/retro/T063.md, docs/retro/T068.md,
+  docs/retro/T074.md, docs/retro/T075.md, docs/retro/T078.md;
+  tasks/T080/SPEC.md (бюджет). Открывается напрямую как локальный файл,
+  без сервера, демона и шагов сборки.
+</footer>
+
+</body>
+</html>
