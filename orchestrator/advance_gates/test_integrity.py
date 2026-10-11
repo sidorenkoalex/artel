@@ -49,7 +49,9 @@ fail-closed на сбое git) и `merge_gate_escalates` в
 любую находку.
 """
 import ast
+import difflib
 import re
+import time
 from typing import NamedTuple
 
 from scripts import guard
@@ -119,6 +121,17 @@ TWO_SIDED_FOR_HEAD = "двусторонний прогон для текуще�
 TWO_SIDED_NOT_RECORDED = "не записан"
 _TWO_SIDED_RECORD = re.compile(r"^голова ([0-9a-f]+); база ([0-9a-f]*); "
                                r"методы: (.*)$", re.S)
+# Наблюдение неослабления (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP): двусторонний
+# прогон каждого изменённого метода на переходе — только запись, гейт её
+# не читает и «пройден» по ней не пишется. Запись — одна на метод; её
+# форму разбирает сводка `report` (`OBSERVATION_*` ниже).
+OBSERVATION_ACTION = "двусторонний прогон (наблюдение)"
+OBSERVATION_VERDICT = "вердикт: "
+OBSERVATION_KIND = "; вид: "
+OBSERVATION_CHANGED = "в изменённых строках: "
+CHANGED_YES = "да"
+CHANGED_NO = "нет"
+CHANGED_NA = "неприменимо"
 
 # Декораторы пропуска, несущие УСЛОВИЕ — подмножество
 # `guard.SKIP_DECORATOR_NAMES`. Остальные из того набора (`skip`,
@@ -1289,6 +1302,162 @@ def _two_sided_methods(ev: _Evaluation) -> list:
                              m.head_source) for m in ev.expectation]
 
 
+def _method_span(source: str, name: str) -> tuple | None:
+    """(первая, последняя) строки метода `Класс::метод` в тексте файла
+    (с декораторами); `None` — метод не найден или файл не разбирается."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    *classes, method = name.split(guard.TEST_NAME_SEP)
+    body = tree.body
+    for cls in classes:
+        node = next((n for n in body if isinstance(n, ast.ClassDef)
+                     and n.name == cls), None)
+        if node is None:
+            return None
+        body = node.body
+    node = next((n for n in body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.name == method), None)
+    if node is None:
+        return None
+    return (min([node.lineno] + [d.lineno for d in node.decorator_list]),
+            node.end_lineno)
+
+
+def _changed_lines(method: MethodChange) -> dict:
+    """{"base"/"head": (строки метода, изменённые строки)} — номера строк
+    файла каждой версии по диффу base/head самого метода, не файлов:
+    правка выше метода сдвигает номера, но не делает строки изменёнными
+    (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP, требование 3). Ключа нет — метод в
+    этой версии не найден."""
+    spans = {"base": _method_span(method.base_source, method.name),
+             "head": _method_span(method.head_source, method.name)}
+    if spans["base"] is None or spans["head"] is None:
+        return {}
+    (b0, b1), (h0, h1) = spans["base"], spans["head"]
+    base_lines = method.base_source.splitlines()[b0 - 1:b1]
+    head_lines = method.head_source.splitlines()[h0 - 1:h1]
+    base_changed, head_changed = set(), set()
+    matcher = difflib.SequenceMatcher(None, base_lines, head_lines,
+                                      autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            base_changed.update(range(b0 + i1, b0 + i2))
+            head_changed.update(range(h0 + j1, h0 + j2))
+    return {"base": (spans["base"], base_changed),
+            "head": (spans["head"], head_changed)}
+
+
+def _changed_flag(place: dict, path: str, lines) -> str:
+    """Признак «строка упавшего утверждения в изменённых строках метода»
+    для одной стороны: место в другом файле или вне тела метода —
+    «неприменимо» (решение Оператора на гейте SPEC, В2; ANSWER-1, п.5)."""
+    line = place.get("line")
+    if lines is None or place.get("path") != path or not isinstance(line, int):
+        return CHANGED_NA
+    (first, last), changed = lines
+    if not first <= line <= last:
+        return CHANGED_NA
+    return CHANGED_YES if line in changed else CHANGED_NO
+
+
+def _side_text(label: str, place: dict, flag: str) -> str:
+    text = (f"{label}: {place.get('outcome') or 'исход не записан'}; "
+            f"{OBSERVATION_CHANGED}{flag}")
+    if place.get("path"):
+        text += (f"; место {place['path']}:{place.get('line')} "
+                 f"«{place.get('text', '')}»")
+    return text
+
+
+def _observation_detail(head_sha: str, base: str, method: MethodChange,
+                        verdict: str, sides: dict, seconds: float) -> str:
+    """Запись наблюдения одного метода (требование 2): исход и признак —
+    по каждой стороне (требование 3)."""
+    lines = _changed_lines(method)
+    parts = []
+    for label, path, version in ((two_sided.NEW_ON_BASE, method.head_path,
+                                  "head"),
+                                 (two_sided.OLD_ON_BRANCH, method.path,
+                                  "base")):
+        place = sides.get(label) or {}
+        flag = _changed_flag(place, path, lines.get(version))
+        parts.append(_side_text(label, place, flag))
+    change = method.change
+    return (f"голова {head_sha}; база {base}; метод {method.address}; "
+            f"{OBSERVATION_VERDICT}{verdict}{OBSERVATION_KIND}{change.kind}; "
+            f"признаки: {', '.join(change.signs) or '—'}; "
+            f"длительность {seconds:.2f} с; " + "; ".join(parts))
+
+
+def _observed(conn, task_id: str, head_sha: str) -> bool:
+    """Наблюдение на голове `head_sha` уже записано (требование 4)."""
+    prefix = f"голова {head_sha};"
+    return any(row["action"] == OBSERVATION_ACTION
+               and (row["detail"] or "").startswith(prefix)
+               for row in store.task_steps(conn, task_id))
+
+
+def _same_sides(outcome: str) -> dict:
+    return {label: {"outcome": outcome}
+            for label in (two_sided.NEW_ON_BASE, two_sided.OLD_ON_BRANCH)}
+
+
+def _observe_methods(conn, task_id: str, branch: str, ev: _Evaluation,
+                     methods: list) -> None:
+    repo = workspace.task_repo(task_id)
+    head_sha = gitcmd.branch_head_sha(branch, repo=repo)
+    if not head_sha:
+        store.journal(conn, task_id, "fsm", OBSERVATION_ACTION,
+                      f"наблюдение не выполнено: git не ответил на голову "
+                      f"ветки {branch}; методы: "
+                      f"{', '.join(m.address for m in methods)}")
+        return
+    if _observed(conn, task_id, head_sha):
+        return
+    deadline = time.monotonic() + config.TWO_SIDED_OBSERVATION_LIMIT_SEC
+    for method in methods:
+        began = time.monotonic()
+        target = two_sided.Method(method.path, method.head_path, method.name,
+                                  method.base_source, method.head_source)
+        if deadline - began <= 0:
+            sides = _same_sides(two_sided.SIDE_LIMIT)
+        else:
+            try:
+                result = two_sided.run(repo, branch, ev.cmp.base, [target],
+                                       deadline=deadline)
+                sides = (result.sides or {}).get(target.address) or {}
+            except Exception as exc:  # noqa: BLE001 — наблюдение не роняет переход
+                sides = _same_sides(f"сбой наблюдения: {exc!r}")
+        store.journal(conn, task_id, "fsm", OBSERVATION_ACTION,
+                      _observation_detail(head_sha, ev.cmp.base, method,
+                                          ev.outcomes.get(method.address, ""),
+                                          sides, time.monotonic() - began))
+
+
+def _observe(conn, task_id: str, t, ev: _Evaluation) -> None:
+    """Наблюдение неослабления (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP,
+    требования 2-6): двусторонний прогон КАЖДОГО изменённого метода —
+    объявленного или нет — и запись «двусторонний прогон (наблюдение)» на
+    метод. Ничего не возвращает: гейт итог наблюдения не читает, сбой
+    наблюдения — запись с причиной, не отказ и не исключение. Метод с
+    одинаковыми текстами файла base и head (вызывающий изменённого
+    помощника) не прогоняется: его версии не различаются."""
+    if not config.TWO_SIDED_OBSERVATION:
+        return
+    methods = [m for m in ev.cmp.changes if m.base_source != m.head_source]
+    if not methods:
+        return
+    try:
+        _observe_methods(conn, task_id, t["branch"], ev, methods)
+    except Exception as exc:  # noqa: BLE001 — наблюдение не роняет переход
+        store.journal(conn, task_id, "fsm", OBSERVATION_ACTION,
+                      f"наблюдение не выполнено: сбой {exc!r}; методы: "
+                      f"{', '.join(m.address for m in methods)}")
+
+
 def _test_integrity_gate(conn, task_id: str, t,
                          artifact_branch: str) -> GateRefusal | None:
     """Гейт `in_dev -> verifying` (требование 6): удаление, переименование
@@ -1334,6 +1503,10 @@ def _test_integrity_gate(conn, task_id: str, t,
     ev = _evaluate(conn, task_id, t["branch"], artifact_branch,
                    scope=decision.profile.in_weakening_scope)
     _journal_pass(conn, task_id, ev)
+    # Наблюдение — здесь, не в общем `_journal_pass` (его зовут и гейт
+    # мержа, и `uncovered`): только на этом переходе и до ветвления, чтобы
+    # запись была и при отказе (решение Оператора на гейте SPEC, Е4).
+    _observe(conn, task_id, t, ev)
     if ev.rest is None:
         hint = (f"разберись, почему git не отвечает, и повтори "
                f"artel.py advance {task_id}")

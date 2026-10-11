@@ -14,8 +14,11 @@ id` и есть единая хронология журнала.
 """
 import html as html_lib
 import json
+import re
 import statistics
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 # `alerts` этот модуль сам больше не зовёт (алерт расхождения курса
 # заводит `spend.check_rate_divergence`, SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH
@@ -27,6 +30,8 @@ from datetime import datetime, timedelta, timezone
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
 from . import agent_log, alerts, config, retro, spend, store  # noqa: F401
+from .advance_gates import test_integrity, two_sided
+from .providers import claude as claude_provider
 
 # Гейты, где решение принимает только Оператор, независимо от политики
 # `gates.yaml` (`orchestrator/gates.py` применяет её ТОЛЬКО к acceptance;
@@ -75,6 +80,38 @@ MAP_GROWTH_CALLS_TASK_WINDOW = 10
 # буквальный текст SPEC, без изменений.
 NO_MEASUREMENTS_TEXT = ("измерений нет: карта ни разу не регенерировалась "
                         "после мержа этой версией")
+
+# Замер расхода test_author (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP, требование
+# 10) — только чтение журнала шага, лога шага и файлов на диске. Лог шага —
+# рендер провайдера: строка вызова `· <Инструмент> <аргумент>`, аргумент
+# обрезан до `TOOL_ARGUMENT_LIMIT`; видимый аргумент такой длины мог быть
+# обрезан — его полного пути нет, файлы и строки по нему «н/д».
+TEST_AUTHOR_ROLE = "test_author"
+STEP_STARTED_ACTION = "agent run started"
+NOT_AVAILABLE = "н/д"
+_LOG_PATH_RE = re.compile(r"лог: (.+?), промпт: ")
+_PROVIDER_RE = re.compile(r"provider=([\w-]+)")
+_PYTEST_SECONDS_RE = re.compile(r" in (\d+(?:\.\d+)?)s\b")
+# Группы Write по видимому префиксу пути: `acceptance_tests/` может быть
+# виден лишь как `…/acceptance` (обрезка), `tests/` — отдельным сегментом,
+# иначе `acceptance_tests/` попал бы и сюда. Порядок — проверки.
+WRITE_GROUPS = (("acceptance_tests/", re.compile(r"(?:^|/)acceptance")),
+                ("tests/", re.compile(r"(?:^|/)tests/")))
+
+# Сводка наблюдения неослабления (требование 11): класс текстового
+# вердикта — по первому совпавшему маркеру; «покрыто мандатом» первым —
+# старше любых других маркеров того же текста (решение Оператора, В3).
+OBSERVATION_CLASSES = (
+    ("покрыто мандатом", test_integrity.ASSERTIONS_COVERED),
+    ("смена ожидания по SPEC",
+     test_integrity.OUTCOME_EXPECTATION.split(" (", 1)[0]),
+    ("находка вне раздела", test_integrity.REASON_OUTSIDE),
+    ("ослабление", f"{test_integrity.OUTCOME_FINDING}: "
+                   f"{test_integrity.REASON_WEAKENING}"),
+    ("несовпадение с объявленным", test_integrity.REASON_MISMATCH),
+)
+OBSERVATION_OTHER_CLASS = "прочее"
+OBSERVATION_OTHER_OUTCOME = "иная причина"
 
 
 def _esc(value) -> str:
@@ -769,6 +806,205 @@ def _friction_html(tasks: list, steps: list) -> str:
     )
 
 
+# ------------------------- расход test_author и сводка наблюдения неослабления
+#
+# SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP, требования 10-11: только чтение уже
+# записанного — журнала, лога шага и файлов на диске; git не вызывается.
+
+def _in_window(ts) -> bool:
+    """Запись не старше `OPERATOR_WINDOW_DAYS` — то же окно и то же
+    сравнение дат, что у `_operator_journal_by_day`."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=OPERATOR_WINDOW_DAYS)).date()
+    try:
+        return datetime.strptime((ts or "")[:10], "%Y-%m-%d").date() >= cutoff
+    except ValueError:
+        return False
+
+
+def _test_author_steps(steps: list) -> list:
+    """Запуски test_author за окно: запись «agent run started» открывает
+    запуск задачи, следующие записи test_author той же задачи (прогоны
+    pytest, стоимость, провайдер) относятся к нему."""
+    current: dict = {}
+    found = []
+    for row in steps:
+        if row["actor"] != TEST_AUTHOR_ROLE:
+            continue
+        detail = row["detail"] or ""
+        if row["action"] == STEP_STARTED_ACTION:
+            match = _LOG_PATH_RE.search(detail)
+            step = {"task": row["task_id"], "ts": row["ts"] or "",
+                    "log": match.group(1) if match else None, "cost": None,
+                    "tokens": None, "provider": None, "pytest": []}
+            current[row["task_id"]] = step
+            if _in_window(row["ts"]):
+                found.append(step)
+            continue
+        step = current.get(row["task_id"])
+        if step is None:
+            continue
+        if row["action"] == agent_log.PYTEST_RUN_ACTION:
+            match = _PYTEST_SECONDS_RE.search(detail)
+            step["pytest"].append(float(match.group(1)) if match else 0.0)
+            continue
+        provider = _PROVIDER_RE.search(detail)
+        if provider is not None:
+            step["provider"] = provider.group(1)
+        if row["action"] == retro.FINISHED_JOURNAL_ACTION:
+            cost = retro.COST_RE.search(detail)
+            tokens = retro.TOKENS_RE.search(detail)
+            step["cost"] = float(cost.group(1)) if cost else None
+            step["tokens"] = int(tokens.group(1)) if tokens else None
+    return found
+
+
+def _tool_calls(log) -> list | None:
+    """[(инструмент, видимый аргумент)] строк вызова лога шага; `None` —
+    лога нет на диске."""
+    if not log:
+        return None
+    try:
+        text = Path(log).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    prefix = claude_provider.TOOL_CALL_LINE_PREFIX
+    calls = []
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            name, _, arg = line[len(prefix):].partition(" ")
+            if name:
+                calls.append((name, arg))
+    return calls
+
+
+def _file_lines(path: str) -> int | None:
+    try:
+        return len(Path(path).read_text(encoding="utf-8",
+                                        errors="replace").splitlines())
+    except OSError:
+        return None
+
+
+def _write_groups(calls: list) -> dict:
+    """{группа: (вызовов Write, файлов, строк, строк Write «н/д»)} —
+    файлы по различным полным путям; путь, видимый целиком до предела
+    обрезки, или файл, которого нет на диске, — «н/д» (ANSWER-1, п.2)."""
+    groups = {}
+    def group_of(arg: str):
+        return next((g for g, p in WRITE_GROUPS if p.search(arg)), None)
+
+    for group, _pattern in WRITE_GROUPS:
+        writes = [arg for name, arg in calls
+                  if name == "Write" and group_of(arg) == group]
+        lines, unknown = {}, 0
+        for arg in writes:
+            count = None
+            if len(arg) < claude_provider.TOOL_ARGUMENT_LIMIT:
+                count = lines[arg] if arg in lines else _file_lines(arg)
+            if count is None:
+                unknown += 1
+            else:
+                lines[arg] = count
+        groups[group] = (len(writes), len(lines), sum(lines.values()), unknown)
+    return groups
+
+
+def _test_author_row_html(step: dict) -> str:
+    calls = _tool_calls(step["log"])
+    # Запуск без записи провайдера — старше поля `provider=`, когда
+    # исполнитель был один: Claude.
+    claude = (step["provider"] or claude_provider.ClaudeProvider.name) \
+        == claude_provider.ClaudeProvider.name
+    cost = _usd(step["cost"]) if step["cost"] is not None else _DASH
+    tokens = step["tokens"] if step["tokens"] is not None else _DASH
+    parts = [f"стоимость {cost}", f"токенов {tokens}"]
+    if calls is None:
+        parts.append(f"вызовы инструментов: {NOT_AVAILABLE} (лога нет)")
+    else:
+        kinds = Counter(name for name, _arg in calls)
+        if not claude:
+            kinds.pop("Write", None)
+        shown = ", ".join(f"{name} {count}" for name, count in sorted(kinds.items()))
+        parts.append(f"вызовы инструментов: {shown or 'нет'}")
+    runs = step["pytest"]
+    parts.append(f"прогоны pytest: {len(runs)}, {sum(runs):.2f} с")
+    for group, _pattern in WRITE_GROUPS:
+        if calls is None or not claude:
+            parts.append(f"{group} Write {NOT_AVAILABLE}, файлов "
+                         f"{NOT_AVAILABLE}, строк {NOT_AVAILABLE}")
+            continue
+        writes, files, lines, unknown = _write_groups(calls)[group]
+        text = f"{group} Write {writes}, файлов {files}, строк {lines}"
+        if unknown:
+            text += (f", {NOT_AVAILABLE} по {unknown} вызовам Write (путь "
+                     f"обрезан или файла нет)")
+        parts.append(text)
+    return (f'<div class="metric-row">{_esc(step["task"])} '
+            f'{_esc(step["ts"][:10])}: {_esc(" · ".join(parts))}</div>')
+
+
+def _test_author_html(steps: list) -> str:
+    rows = [_test_author_row_html(step) for step in _test_author_steps(steps)]
+    return "".join(rows) or (f'<p class="empty">Шагов test_author за '
+                             f'{OPERATOR_WINDOW_DAYS} дней нет.</p>')
+
+
+def _observation_class(verdict: str) -> str:
+    for label, marker in OBSERVATION_CLASSES:
+        if marker in verdict:
+            return label
+    return OBSERVATION_OTHER_CLASS
+
+
+def _observation_key(detail: str) -> tuple:
+    """(класс вердикта, исход и признак стороны «новая на базе», исход и
+    признак стороны «старая на ветке») записи наблюдения."""
+    verdict = re.search(rf"{re.escape(test_integrity.OBSERVATION_VERDICT)}"
+                        rf"(.*?){re.escape(test_integrity.OBSERVATION_KIND)}",
+                        detail, re.S)
+    key = [_observation_class(verdict.group(1)) if verdict
+           else OBSERVATION_OTHER_CLASS]
+    known = (two_sided.SIDE_ASSERTION, two_sided.SIDE_GREEN,
+             two_sided.SIDE_LIMIT)
+    for label in (two_sided.NEW_ON_BASE, two_sided.OLD_ON_BRANCH):
+        side = re.search(
+            rf"{re.escape(label)}: (.*?); "
+            rf"{re.escape(test_integrity.OBSERVATION_CHANGED)}(\w+)",
+            detail, re.S)
+        if side is None:
+            key += [OBSERVATION_OTHER_OUTCOME, _DASH]
+            continue
+        outcome = side.group(1)
+        key += [outcome if outcome in known else OBSERVATION_OTHER_OUTCOME,
+                side.group(2)]
+    return tuple(key)
+
+
+def _observation_html(steps: list) -> str:
+    """Таблица «класс текстового вердикта × исход и признак «в изменённых
+    строках» по каждой стороне → число записей» (требование 11)."""
+    counts = Counter(_observation_key(row["detail"] or "") for row in steps
+                     if row["action"] == test_integrity.OBSERVATION_ACTION)
+    if not counts:
+        return '<p class="empty">Записей наблюдения нет.</p>'
+    order = [label for label, _marker in OBSERVATION_CLASSES] + \
+        [OBSERVATION_OTHER_CLASS]
+    body = "".join(
+        "<tr>" + "".join(f"<td>{_esc(cell)}</td>" for cell in key)
+        + f"<td>{count}</td></tr>"
+        for key, count in sorted(counts.items(),
+                                 key=lambda item: (order.index(item[0][0]),
+                                                   item[0])))
+    new, old = two_sided.NEW_ON_BASE, two_sided.OLD_ON_BRANCH
+    return ('<table class="map-size-table">'
+            f'<thead><tr><th>текстовый вердикт</th><th>{_esc(new)}</th>'
+            '<th>в изменённых</th>'
+            f'<th>{_esc(old)}</th><th>в изменённых</th>'
+            '<th>записей</th></tr></thead>'
+            f'<tbody>{body}</tbody></table>')
+
+
 def _map_size_table_html(rows: list) -> str:
     body_rows = "".join(
         '<tr>'
@@ -947,6 +1183,12 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         f"{_token_cost_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Метрика «трение»</h2>'
         f"{_friction_html(tasks, steps)}</section>\n"
+        f'<section class="panel"><h2>Шаги test_author (последние '
+        f'{OPERATOR_WINDOW_DAYS} дней)</h2>'
+        f'<div class="metrics">{_test_author_html(steps)}</div></section>\n'
+        '<section class="panel"><h2>Двусторонний прогон (наблюдение '
+        'неослабления)</h2>'
+        f"{_observation_html(steps)}</section>\n"
         '<section class="panel"><h2>Рост карты кодовой базы</h2>'
         f"{map_growth_html}</section>\n"
         "</main>\n"
