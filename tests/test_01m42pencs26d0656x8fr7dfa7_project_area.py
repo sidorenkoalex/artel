@@ -1379,16 +1379,24 @@ class TaskFlowSandbox(ProjectAreaSandbox):
                 patch_pult_sleep(mock.Mock(side_effect=sleep)):
             yield
 
-    def approve_until_settled(self, task: str, attempts: int = 4) -> str:
+    def approve_until_settled(self, task: str, attempts: int = 4,
+                              live_fixation: bool = False) -> str:
         """`approve` на `merge_gate`, пока задача на гейте (подтяжка main
-        возвращает «жди» и требует повтора); весь вывод."""
+        возвращает «жди» и требует повтора); весь вывод.
+
+        `live_fixation` — фиксация документов читается настоящая: без неё
+        коммит закрытия не пишется (голова ссылки «не прочитана», SPEC
+        01M4M67SGNEYMN9F1C7XVX24XE, требование 4), а сценарию нужен RETRO
+        закрытия."""
         outputs = []
         # Сверка фиксации документов при `approve` — не предмет сценария
         # (тот же патч, что в `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`).
         self.probe.unlink(missing_ok=True)
+        unread = (contextlib.nullcontext() if live_fixation else
+                  mock.patch.object(fixation, "read", return_value=("", True)))
         with self.fake_clock(), \
                 mock.patch.dict(os.environ, {"ARTEL_MERGE_PROBE": str(self.probe)}), \
-                mock.patch.object(fixation, "read", return_value=("", True)):
+                unread:
             for _ in range(attempts):
                 ok, out = self.cli("approve", task)
                 outputs.append(out)
@@ -1607,8 +1615,10 @@ class MergeGateStepsOnCloneTest(TaskFlowSandbox):
         (ADR-0021 п.4, SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 2).
 
         Ловит мутацию: регенерация карты включена сравнением с
-        `config.ROOT` — для клона пропущена, в main нет новой карты; либо
-        коммит RETRO в main оставлен — `docs/retro/<id>.md` в дереве main.
+        `config.ROOT` — для клона пропущена, в main нет новой карты; шаги
+        артели для мержа из клона пропускают RETRO — в коммите закрытия
+        `refs/artifacts/<id>` origin нет RETRO с «Итог: done»; либо коммит
+        RETRO в main оставлен — `docs/retro/<id>.md` в дереве main.
         """
         task, step_out = self.run_to_merge_gate(
             {f"kod/kod_{self.rng.randrange(10 ** 6)}.py": "A = 1\n"})
@@ -1616,6 +1626,9 @@ class MergeGateStepsOnCloneTest(TaskFlowSandbox):
         out = self.approve_until_settled(task)
 
         self.assert_merged_in_clone(task, f"{step_out}\n{out}")
+        retro =self.in_repo(self.origin, "show",
+                             f"refs/artifacts/{task}:tasks/{task}/RETRO.md")
+        self.assertIn("Итог: done", retro, self.msg(out))
         self.assertNotIn(f"docs/retro/{task}.md", self.origin_tree(), self.msg(out))
         self.assertNotEqual(self.origin_file("docs/codebase-map.md"),
                             CODE_MAP_PLACEHOLDER, self.msg(out))
