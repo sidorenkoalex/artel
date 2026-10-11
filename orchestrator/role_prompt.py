@@ -1,11 +1,13 @@
 """Миссия роли + бриф/ревью-пакет шага: сборка содержимого промпта, общего
-для всех ролей `cmd_run` (analyst/test_author/developer/reviewer).
+для всех ролей `cmd_run` (analyst/spec_auditor/test_author/developer/
+reviewer).
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
 from scripts import guard
 
 from . import brief, config, review, stack
+from .advance_gates import spec_audit
 
 
 def mission_brief_package(conn, task_id: str, t, role: str, cwd,
@@ -113,6 +115,9 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"{suite_run_note(task_id)}"
         )
         brief_text = brief.developer_brief(conn, task_id)
+    elif role == "spec_auditor":
+        mission = _spec_auditor_mission(conn, task_id, t)
+        brief_text = brief.spec_auditor_brief(conn, task_id)
     else:
         # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
         iteration = t["reviewed_iter"] + 1
@@ -152,6 +157,47 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                   f"документов задачи недоступна.")
         mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
     return mission, brief_text, package
+
+
+def _spec_auditor_mission(conn, task_id: str, t) -> str:
+    """Миссия аудитора SPEC (ADR-0022 пп. 2-3, SPEC
+    01M4MQAGRWMWR0GFDM9086P3TD, требования 6-7): проверяемая версия SPEC
+    (sha содержимого на входе), сработавшие сигналы и глубина разбора — из
+    записи входа в `spec_audit`, не пересчётом: аудитор проверяет ровно ту
+    версию, к которой пульт потом привяжет его вердикт."""
+    task_ref = f"tasks/{task_id}"
+    entry = spec_audit.entry(conn, task_id) or {}
+    sha = entry.get("sha") or "(не записан — эскалируй)"
+    listed = entry.get("signals") or spec_audit.NO_SIGNALS
+    if entry.get("full", True):
+        depth = ("полный разбор — каждый из разделов «ТЗ и SPEC», «Факты "
+                 "против кода», «Проверяемость критериев», «Зоны», «Матрица "
+                 "неослабления», «Пути обхода гейтов» по существу, с "
+                 "проверкой по коду")
+    else:
+        depth = ("краткий разбор — вердикт и отклонения; разделы без "
+                 "находок — одной строкой «отклонений нет»")
+    return (
+        f"Роль: аудитор SPEC. Задача {task_id}, ветка {t['branch']}. Ты — "
+        f"независимая проверка SPEC аналитика до гейта SPEC: ТЗ, SPEC, ответы "
+        f"Оператора и карта кодовой базы — в БРИФЕ РОЛИ ниже, код — в "
+        f"рабочем каталоге.\n"
+        f"Проверяемая версия: sha содержимого {task_ref}/SPEC.md в ссылке "
+        f"документов — {sha}.\n"
+        f"Сработавшие сигналы глубины: {listed}.\n"
+        f"Глубина: {depth}.\n"
+        f"1) Заполни {task_ref}/{spec_audit.ARTIFACT} по "
+        f"templates/{spec_audit.ARTIFACT}: в «Вердикте» — перечень отклонений "
+        f"со ссылками файл:строка; поля frontmatter — verdict (pass | "
+        f"concerns | fail), signals (сигналы выше дословно) и spec_sha: "
+        f"{sha}; status: ready.\n"
+        f"2) Без ответа Оператора вердикт не вынести — status: escalate и "
+        f"раздел «Эскалация» (skills/escalation-rules.md).\n"
+        f"3) SPEC.md, ТЗ и код не правь: правка SPEC за визит аудита делает "
+        f"вердикт недействительным. Прогони scripts/guard.py на своём файле. "
+        f"tasks/<id>/ коммитить не нужно — автокоммит оркестратора сам "
+        f"перенесёт {spec_audit.ARTIFACT} в артефактную ветку."
+    )
 
 
 def suite_run_note(task_id: str) -> str:

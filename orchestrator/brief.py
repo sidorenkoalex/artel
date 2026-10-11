@@ -59,7 +59,13 @@ _RETURN_TRIGGER_STATES = frozenset(
 # и тогда test_author/developer получали бы раздел «Причина возврата» с
 # текстом «гейт SPEC пройден — приёмочные тесты до кода» на ПЕРВОМ,
 # совершенно штатном входе (требование 5/AC-6 этого не допускают).
-_RETURN_TRIGGER_STATES_BY_TARGET = {"spec_writing": frozenset({"spec_gate"})}
+#
+# `spec_audit -> spec_writing` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование
+# 15) — тоже только возврат: вердикт `fail` аудитора, запись перехода несёт
+# отклонения `SPEC-AUDIT.md`. Из `spec_audit` задача уходит и на гейт, но
+# туда раздел не доходит — `spec_gate` агентским состоянием не бывает.
+_RETURN_TRIGGER_STATES_BY_TARGET = {
+    "spec_writing": frozenset({"spec_gate", "spec_audit"})}
 # Потолок записей в блоке отказов advance (SPEC T078, требование 3) —
 # мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
 # при частом топтании на одном состоянии.
@@ -721,6 +727,63 @@ def developer_brief(conn, task_id: str) -> str:
                                          run_id))
     parts.extend(_developer_answer_components(conn, task_id, branch, foreign,
                                               run_id))
+    text, num_parts = context_package.discipline(
+        [HEADER, BOUNDARY_INSTRUCTION, *parts])
+    return mark_unclosed_parts(text, run_id, num_parts)
+
+
+def _answer_rel_names(task_id: str, branch: str, foreign: bool) -> list[str]:
+    """Имена всех `ANSWER-n.md` задачи по возрастанию `n` — с ветки или с
+    диска, тем же источником, что `_latest_answer_rel`."""
+    if foreign:
+        paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
+        names = [Path(p).name for p in paths]
+    else:
+        names = [p.name for p in (config.TASKS / task_id).glob("ANSWER-*.md")]
+    numbered = []
+    for name in names:
+        found = re.fullmatch(r"ANSWER-(\d+)\.md", name)
+        if found:
+            numbered.append((int(found.group(1)), name))
+    return [name for _, name in sorted(numbered)]
+
+
+def spec_auditor_brief(conn, task_id: str) -> str:
+    """Бриф аудитора SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 6):
+    ТЗ, текущий SPEC целиком, КАЖДЫЙ ответ Оператора (мандат в любом из
+    них — предмет аудита, не только последний) и карта кодовой базы — той
+    же описью и дисциплиной частей, что бриф разработчика. Ни QUESTIONS.md,
+    ни логов шагов, ни иных документов задачи: аудитор проверяет SPEC
+    против ТЗ и кода, а не переписку аналитика. Раздел «Причина возврата» —
+    только если визит начался возвратом (из эскалации)."""
+    role = "spec_auditor"
+    branch, foreign = _artifact_source_branch(conn, task_id)
+    run_id = new_run_id()
+    parts = []
+    return_reason_part = _return_reason_component(
+        conn, task_id, role, "spec_audit", branch, foreign, run_id,
+        render=_manifest_component)
+    if return_reason_part:
+        parts.append(return_reason_part)
+    tz_text = _branch_or_disk_text(task_id, branch, "TZ.md", foreign)
+    if tz_text is not None:
+        parts.append(_manifest_component(conn, task_id, role,
+                                         f"tasks/{task_id}/TZ.md", tz_text,
+                                         run_id))
+    spec_text = _developer_spec_text(conn, task_id, branch, foreign)
+    parts.append(_manifest_component(conn, task_id, role,
+                                     f"tasks/{task_id}/SPEC.md", spec_text,
+                                     run_id))
+    for name in _answer_rel_names(task_id, branch, foreign):
+        text = _branch_or_disk_text(task_id, branch, name, foreign)
+        if text is not None:
+            parts.append(_manifest_component(conn, task_id, role,
+                                             f"tasks/{task_id}/{name}", text,
+                                             run_id))
+    map_text, map_note = _fresh_map_text_and_note(conn, task_id)
+    parts.append(map_note + MAP_PROJECTION_NOTE + _manifest_component(
+        conn, task_id, role, MAP_PROJECTION_LABEL,
+        codebase_map.project_for_brief(map_text), run_id))
     text, num_parts = context_package.discipline(
         [HEADER, BOUNDARY_INSTRUCTION, *parts])
     return mark_unclosed_parts(text, run_id, num_parts)

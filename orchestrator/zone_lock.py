@@ -112,10 +112,11 @@ BLOCKING_STATES = ("in_dev", "review", "verifying", "acceptance",
 
 # Состояния, которые зону ещё НЕ занимают, но займут позже (SPEC
 # 01M3GKJ84XM5QPC6TK5EE307Q9, требование 1): задача, чей SPEC пишется или
-# чья планка приёмки пишется, до `in_dev` ещё не дошла — но дойдёт, и
+# проходит аудит (`spec_audit`, SPEC 01M4MQAGRWMWR0GFDM9086P3TD) или чья
+# планка приёмки пишется, до `in_dev` ещё не дошла — но дойдёт, и
 # пересечение её зоны с чужой видно уже сейчас. `done`/`killed` в набор
 # не входят: они не займут зону никогда.
-LATER_STATES = ("spec_writing", "spec_gate", "tests_writing")
+LATER_STATES = ("spec_writing", "spec_audit", "spec_gate", "tests_writing")
 
 # Набор состояний ПРОГНОЗА очереди зон (требование 1): занимающие плюс
 # те, что займут позже. Прогноз — не отказ: `_occupies` (старт шага

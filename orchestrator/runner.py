@@ -1228,6 +1228,8 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str,
 
     if role == "reviewer":
         return None if has_file("REVIEW.md") else "REVIEW.md"
+    if role == "spec_auditor":
+        return None if has_file("SPEC-AUDIT.md") else "SPEC-AUDIT.md"
     if role == "developer":
         return None if has_file("PLAN.md") else "PLAN.md"
     if role == "analyst":

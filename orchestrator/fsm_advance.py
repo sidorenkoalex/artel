@@ -21,6 +21,7 @@ from scripts import guard
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
               fsm, fsm_autogate, gitcmd, github_adapter, merge_after,
               project_profile, repo_context, store, workspace, yamlmini)
+from .advance_gates import spec_audit as spec_audit_gate
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
@@ -73,12 +74,13 @@ def _mark_artifact_escalation(conn, task_id: str, detail: str) -> None:
     раньше шага роли. `detail` — текст самой эскалации, как у
     `pull.PULL_CONFLICT_ROLE_STEP_MARKER` (`orchestrator/pull.py`).
 
-    Точек вызова пять: `spec_writing` ×2 (батч `QUESTIONS.md`, оба пути —
+    Точек вызова шесть: `spec_writing` ×2 (батч `QUESTIONS.md`, оба пути —
     ветка-источник и диск), `tests_writing` (пометка `AC-n: escalate`),
     `_review_escalate` (`REVIEW.md status: escalate`, SPEC
-    01M31JWD10728N5YGWVQGWYACW, требование 1) и `_in_dev_plan_escalate`
+    01M31JWD10728N5YGWVQGWYACW, требование 1), `_in_dev_plan_escalate`
     (`PLAN.md status: escalate`, SPEC 01M3XTF1CEBXT4J7P0EKG5J342,
-    требование 1)."""
+    требование 1) и `_spec_audit_escalate` (`SPEC-AUDIT.md status:
+    escalate`, SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 11)."""
     store.journal(conn, task_id, "fsm",
                   fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER, detail)
 
@@ -166,12 +168,80 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if fsm.guard_refuses(conn, task_id, tdir / "SPEC.md", text=spec_text):
             return True
         # До смены состояния: потолок задачи должен стоять уже к тому
-        # моменту, когда Оператор смотрит на неё на гейте SPEC.
+        # моменту, когда Оператор смотрит на неё на гейте SPEC, — а у задачи
+        # с ТЗ раньше: шаг аудитора идёт под потолком SPEC.
         budget.apply_spec_budget(conn, t, meta)
-        store.set_state(conn, task_id, "spec_gate", "fsm",
-                        expected_state=state, detail="SPEC готов — ждёт approve")
+        # SPEC аналитика (задача с ТЗ — роль шага `analyst`) идёт на гейт
+        # только через аудит (ADR-0022 п.2, SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+        # требование 2); SPEC Оператора — как прежде, прямо на гейт.
+        from . import runner
+        if runner.step_role(t) == "analyst":
+            store.set_state(conn, task_id, spec_audit_gate.STATE, "fsm",
+                            expected_state=state,
+                            detail="SPEC готов — независимый аудит до гейта")
+            spec_audit_gate.record_entry(conn, task_id)
+        else:
+            store.set_state(conn, task_id, "spec_gate", "fsm",
+                            expected_state=state,
+                            detail="SPEC готов — ждёт approve")
     else:
         print(f"[{task_id}] SPEC.md ещё не ready — нечего продвигать")
+    return False
+
+
+def _spec_audit_refused(conn, task_id: str, refusal: tuple[str, str]) -> None:
+    action, detail = refusal
+    store.journal(conn, task_id, "fsm", action, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+
+
+def spec_audit(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
+    # Выход из аудита SPEC (ADR-0022 п.2, SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+    # требования 11-14): только по свежему (последний коммит файла —
+    # автокоммит шага аудитора после входа) и привязанному к проверенной
+    # версии SPEC вердикту. Порядок — тот же, что у `review`: статус, грязная
+    # копия, guard, затем содержательные сверки.
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    name = spec_audit_gate.ARTIFACT
+    audit_text = fsm._read_branch_text_or_refuse(conn, task_id, branch, name)
+    if audit_text is None:
+        return False
+    refusal = spec_audit_gate.freshness_refusal(conn, task_id, branch)
+    if refusal is not None:
+        _spec_audit_refused(conn, task_id, refusal)
+        return False
+    meta = yamlmini.frontmatter(audit_text) or {}
+    status = meta.get("status")
+    if status not in ("ready", "escalate"):
+        print(f"[{task_id}] {name} status={status} — жду вердикта аудитора")
+        return False
+    if fsm._dirty_refuses(conn, task_id, target, name):
+        return False
+    if fsm.guard_refuses(conn, task_id, tdir / name, text=audit_text):
+        return True
+    if status == "escalate":
+        return _spec_audit_escalate(conn, task_id, tdir, state)
+    refusal = spec_audit_gate.binding_refusal(conn, task_id, branch, audit_text)
+    if refusal is not None:
+        _spec_audit_refused(conn, task_id, refusal)
+        return False
+    spec_audit_gate.leave(conn, task_id, state, meta["verdict"], audit_text)
+    return False
+
+
+def _spec_audit_escalate(conn, task_id: str, tdir, state: str) -> bool:
+    # Эскалация аудитора — тем же каналом, что у ревьювера
+    # (`_review_escalate`): ответ Оператора обязан дойти до роли, возврат —
+    # в `spec_audit` по `escalated_from`.
+    answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
+    if answer_baseline is None:
+        return False
+    store.update_task(conn, task_id, escalated_from=spec_audit_gate.STATE,
+                      answer_baseline=answer_baseline)
+    detail = "эскалация от аудитора SPEC"
+    store.set_state(conn, task_id, "escalated", "fsm",
+                    expected_state=state, detail=detail)
+    _mark_artifact_escalation(conn, task_id, detail)
     return False
 
 

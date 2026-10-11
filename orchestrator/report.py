@@ -38,8 +38,9 @@ MANUAL_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
 # списка (опечатка фикстуры, будущий FSM) уходит в конец отсортированным,
 # а не пропадает молча.
 STATE_ORDER = (
-    "spec_writing", "spec_gate", "tests_writing", "in_dev", "review",
-    "verifying", "acceptance", "merge_gate", "escalated", "done", "killed",
+    "spec_writing", "spec_audit", "spec_gate", "tests_writing", "in_dev",
+    "review", "verifying", "acceptance", "merge_gate", "escalated", "done",
+    "killed",
 )
 
 # Действие и пара акторов журнала на переходе acceptance -> merge_gate:
