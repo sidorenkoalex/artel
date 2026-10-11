@@ -160,6 +160,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   canary pool-seal |
   prune [--execute] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
+  artifact-history-snapshots [--dry-run] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   ci-rerun <id> --reason "<основание>" |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
@@ -577,6 +578,10 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
   artifact_cleanup команда `artifact-branches-cleanup [--execute]`: уборка
             веток artifact/** со сверкой ссылок документов в origin
             (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ)
+  snapshot  коммит закрытия задачи; команда `artifact-history-snapshots
+            [--dry-run]`: исторические снимки refs/artifacts/<id> для
+            каталогов tasks/<id>/ origin/main без ссылки, журнал и сверка
+            doctor (SPEC 01M4M68557TT4KYN814H8AZ01A)
   amend    штатная правка зафиксированной планки приёмки: коммит,
             лок, журнал, порог «планка девальвируется» (ADR-0012,
             SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
@@ -698,8 +703,8 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           docs_fetch, dry_run, fsm, lease,
                           liveness, models, notes, pause, pin, plank_run,
                           pool_seal, projects, prune, release, report, runner,
-                          session, store, suite_run, venv, version, watch,
-                          workspace, zone_lock)
+                          session, snapshot, store, suite_run, venv, version,
+                          watch, workspace, zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -1852,6 +1857,10 @@ def main() -> None:
         "artifact-branches-cleanup":
             lambda: artifact_cleanup.cmd_artifact_branches_cleanup(
                 "--execute" in rest),
+        # Пишет ссылки документов и журнал, ходит в сеть — вне белого
+        # списка ролей (SPEC 01M4M68557TT4KYN814H8AZ01A).
+        "artifact-history-snapshots":
+            lambda: snapshot.cmd_artifact_history_snapshots("--dry-run" in rest),
         "amend-tests": lambda: amend.cmd_amend_tests(
             rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
         "ci-rerun": lambda: ci_rerun.cmd_ci_rerun(rest[0], _reason_arg(rest)),
