@@ -89,6 +89,40 @@ def _closed_with_closing_sha(conn, tasks) -> list:
     return closed
 
 
+def _historical_snapshots(conn, tasks, closed: dict, target_of: dict) -> dict:
+    """{id: коммит снимка} исторических снимков, которые сверяются по
+    правилу закрытой ссылки: без записи о коммите закрытия и не живые.
+    `target_of` дополняется артелью — у задачи T-серии строки `tasks` нет,
+    а снимки команда пишет только в клоне артели."""
+    live_ids = {t["id"] for t in tasks if t["state"] not in ("done", "killed")}
+    historical = {}
+    for task_id, sha in doctor.snapshot.history_snapshots(conn).items():
+        if task_id in closed or task_id in live_ids:
+            continue
+        historical[task_id] = sha
+        target_of.setdefault(task_id, doctor.config.DEFAULT_TARGET)
+    return historical
+
+
+def _historical_ref_problem(task_id: str, ref: str, snapshot_sha: str,
+                            local: str, origin: str) -> str | None:
+    if local != snapshot_sha:
+        return (f"{task_id}: историческая {ref} изменилась после "
+                f"исторического снимка {snapshot_sha} — голова "
+                f"{local or '(нет локально)'}")
+    if origin != snapshot_sha:
+        return (f"{task_id}: историческая {ref} в origin ({origin or 'нет'}) "
+                f"не совпадает с историческим снимком {snapshot_sha}")
+    return None
+
+
+def _historical_summary(historical: dict) -> str:
+    """Хвост строки `ok`: число сверенных исторических снимков (пусто — их
+    нет, прежний текст строки не меняется)."""
+    return (f", исторические — с коммитом снимка ({len(historical)})"
+            if historical else "")
+
+
 def _push_closing_sha(source, repo, task_id: str, closing: str) -> None:
     """Досылка коммита закрытия `closing` из репозитория `source` (клон или
     главная копия пульта) в `origin` клона `repo` — продвижением
@@ -175,10 +209,15 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     - живая задача: локальная `refs/artifacts/<id>` ≠ ей же в `origin`
       (задача без локальной ссылки, заведённая до ADR-0021, не сверяется);
     - закрытая задача: голова ссылки (локально и в `origin`) ≠ коммиту
-      закрытия из журнала (исторический снимок записи не несёт — не
+      закрытия из журнала (снимок закрытия ADR-0018 записи не несёт — не
       сверяется). Локальной ссылки нет, а в `origin` она равна коммиту
       закрытия — не расхождение: такие задачи считаются в одной строке
-      `ok` с подсказкой `docs --fetch-all`.
+      `ok` с подсказкой `docs --fetch-all`;
+    - исторический снимок команды `artifact-history-snapshots` (ADR-0021,
+      этап 4): то же правило с коммитом снимка из журнала
+      (`snapshot.HISTORY_ACTION`), в том числе для задачи без строки
+      `tasks` — target берётся из записи журнала. Запись о коммите
+      закрытия и живое состояние задачи главнее записи о снимке.
 
     Ссылка и `origin` — репозитория задачи: задачи внешнего проекта
     сверяются в его git и с его `origin`, не с пультом. `origin`
@@ -189,12 +228,14 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     live = [t["id"] for t in tasks
             if t["state"] not in ("done", "killed")
             and _local_head(t["id"], t["target"])]
-    if not live and not closed:
+    historical = _historical_snapshots(conn, tasks, closed, target_of)
+    if not live and not closed and not historical:
         return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "ok",
                              "ссылок документов для сверки нет")]
     problems, skips = [], []
     only_in_origin = 0
-    for repo, ids in _by_repo(live + list(closed), target_of).items():
+    fixed = {**historical, **closed}
+    for repo, ids in _by_repo(live + list(fixed), target_of).items():
         if (repo == doctor.artifact_branch._NO_REPO
                 or doctor.gitcmd.has_no_remote(repo)):
             where = ("origin пульта" if repo == doctor.workspace.repo(
@@ -213,12 +254,13 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
         for task_id in ids:
             ref = doctor.artifact_branch.branch_name(task_id)
             local = _local_head(task_id, target_of[task_id])
-            if task_id in closed:
-                if not local and remote.get(ref, "") == closed[task_id]:
+            if task_id in fixed:
+                if not local and remote.get(ref, "") == fixed[task_id]:
                     only_in_origin += 1
                     continue
-                problem = _closed_ref_problem(task_id, ref, closed[task_id],
-                                              local, remote.get(ref, ""))
+                problem = (_closed_ref_problem if task_id in closed
+                           else _historical_ref_problem)(
+                    task_id, ref, fixed[task_id], local, remote.get(ref, ""))
             else:
                 problem = _live_ref_problem(task_id, ref, local,
                                             remote.get(ref, ""))
@@ -233,7 +275,8 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "ok",
                          f"ссылки документов совпадают с origin (живых "
                          f"{len(live)}), закрытые — с коммитом закрытия "
-                         f"({len(closed) - only_in_origin})")] + summary
+                         f"({len(closed) - only_in_origin})"
+                         + _historical_summary(historical))] + summary
 
 
 def _only_in_origin_summary(count: int) -> list:
