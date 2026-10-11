@@ -12,6 +12,7 @@ from . import (alerts, artifact_branch, budget, config, cycle_hint,
               gitcmd, idgen, liveness, merge_after, merge_queue, models,
               providers, repo_context, retro, runner,
               store, targets, workspace, zone_lock)
+from .advance_gates import spec_audit
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -780,7 +781,7 @@ def _zone_forecast_suffix(conn, t) -> str:
     01M3GKJ84XM5QPC6TK5EE307Q9, требование 3) — тем же приёмом добавки в
     конец строки, что `_lease_holder_suffix`/`_zone_wait_suffix`.
 
-    Только три состояния `zone_lock.LATER_STATES`: задача в `in_dev` этой
+    Только состояния `zone_lock.LATER_STATES`: задача в `in_dev` этой
     добавки не получает — её ожидание зоны уже печатает `_zone_wait_suffix`
     по `zone_lock.blocking_conflict` (держатель, очередь, минуты), и
     поведение того суффикса не меняется. Кандидаты — только
@@ -883,6 +884,9 @@ def cmd_status() -> None:
         # Ожидание зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
         # требование 5) — последней добавкой строки, заново из БД.
         deps_wait = merge_after.status_suffix(conn, r)
+        # Вердикт аудита SPEC у задачи на гейте SPEC (SPEC
+        # 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) — из журнала.
+        audit = spec_audit.status_suffix(conn, r)
         # Набор моделей задачи — сразу за бюджетом (SPEC
         # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
         # модели шагов, и тариф, по которому тратится этот бюджет.
@@ -893,8 +897,8 @@ def cmd_status() -> None:
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
             f"  токенов {tokens}  {r['title']}"
-            f"{flag}{mark}{holder}{zone}{wave_breaker}{division}{merge_wait}"
-            f"{deps_wait}"
+            f"{flag}{audit}{mark}{holder}{zone}{wave_breaker}{division}"
+            f"{merge_wait}{deps_wait}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
@@ -928,6 +932,9 @@ def cmd_show(task_id: str) -> None:
     deps_line = merge_after.show_line(conn, t)
     if deps_line:
         print(deps_line)
+    audit_line = spec_audit.summary(conn, task_id)
+    if audit_line:
+        print(audit_line)
     for name in ("SPEC.md", "PLAN.md", "REVIEW.md", "TEST_REPORT.md"):
         meta = _artifact_frontmatter(t["target"], task_id, name)
         if meta:

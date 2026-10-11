@@ -21,6 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
+from orchestrator.advance_gates import spec_audit  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpRootTest, capture_new_task_id,  # noqa: E402
                            disk_backed_ls_tree_files, disk_backed_show,
@@ -75,6 +76,50 @@ schema_version: 2
 AC-1. Критерий, размеченный корректно.
 
 ## Не входит
+"""
+
+# Вердикт аудитора SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD): задача с ТЗ идёт
+# из `spec_writing` на гейт через `spec_audit`; `SPEC_SHA` — sha содержимого
+# проверенного SPEC, подставляется сценарием.
+SPEC_AUDIT_PASS = """---
+task: {task}
+type: spec_audit
+author_role: spec_auditor
+status: ready
+verdict: pass
+signals: нет
+spec_sha: SPEC_SHA
+---
+
+# SPEC-AUDIT: аудит
+
+## ТЗ и SPEC
+
+Расхождений нет.
+
+## Факты против кода
+
+Расхождений нет.
+
+## Проверяемость критериев
+
+AC-1 проверяем.
+
+## Зоны
+
+Замечаний нет.
+
+## Матрица неослабления
+
+Ослаблений нет.
+
+## Пути обхода гейтов
+
+Не найдены.
+
+## Вердикт
+
+pass — отклонений нет.
 """
 
 QUESTIONS_VALID = """---
@@ -456,15 +501,37 @@ class AutoAnalystTest(TmpRootTest):
         self.assertEqual(self.state(), "spec_writing")
 
     def test_auto_runs_analyst_and_stops_at_spec_gate(self):
+        """auto ведёт задачу с ТЗ через шаг аналитика и шаг аудитора SPEC до
+        гейта SPEC и там останавливается (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+        «Меняемое поведение»: два шага вместо одного).
+
+        Подменённый первый шаг пишет SPEC, второй — `SPEC-AUDIT.md` с
+        вердиктом pass по sha этого SPEC. Свежесть вердикта (последний
+        коммит файла — автокоммит шага аудитора) читается из истории ссылки
+        документов, которой в лёгкой песочнице нет: здесь она подменена
+        «свежим», её предмет — `tests/test_01m4mqagrwmwr0gfdm9086p3td_
+        spec_audit_flow.py::FreshnessTest`.
+
+        Ловит мутацию: auto не запускает агента в `spec_audit` (состояние
+        без роли) — задача стоит на аудите; вердикт pass не уводит задачу
+        на гейт; задача с ТЗ идёт мимо аудита — один вызов `cmd_run`.
+        """
         self.write_tz()
+        spec_text = SPEC_V2_READY.format(task=self.TASK)
 
         def fake_run(task_id: str, session_id: str | None = None) -> None:
-            self.write("SPEC.md", SPEC_V2_READY)
+            if self.state() == "spec_writing":
+                self.write("SPEC.md", SPEC_V2_READY)
+            else:
+                self.write("SPEC-AUDIT.md", SPEC_AUDIT_PASS.replace(
+                    "SPEC_SHA", spec_audit.blob_sha(spec_text)))
 
-        with mock.patch.object(runner, "cmd_run", side_effect=fake_run) as cmd_run:
+        with mock.patch.object(runner, "cmd_run", side_effect=fake_run) as cmd_run, \
+                mock.patch.object(spec_audit, "freshness_refusal",
+                                  return_value=None):
             out = self.auto()
 
-        self.assertEqual(cmd_run.call_count, 1)
+        self.assertEqual(cmd_run.call_count, 2)
         self.assertEqual(self.state(), "spec_gate")
         self.assertIn("гейт SPEC", out)
 

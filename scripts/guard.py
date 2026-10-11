@@ -112,7 +112,22 @@ RULES = {
         "sections": ["Ответы"],
         "statuses": {"ready"},
     },
+    # Вердикт аудита SPEC (ADR-0022 п.2, SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+    # требование 8): разделы а–ж аудита; поля вердикта — `SPEC_AUDIT_FIELDS`.
+    "spec_audit": {
+        "sections": ["ТЗ и SPEC", "Факты против кода",
+                     "Проверяемость критериев", "Зоны",
+                     "Матрица неослабления", "Пути обхода гейтов", "Вердикт"],
+        "statuses": {"draft", "ready", "escalate"},
+    },
 }
+
+# Вердикты аудита SPEC: `pass`/`concerns` ведут на гейт SPEC, `fail` —
+# возврат аналитику (`orchestrator/advance_gates/spec_audit.py`).
+SPEC_AUDIT_VERDICTS = ("pass", "concerns", "fail")
+# Обязательные поля frontmatter `SPEC-AUDIT.md`: вердикт, сработавшие
+# сигналы глубины (или «нет») и sha содержимого проверенного SPEC.md.
+SPEC_AUDIT_FIELDS = ("verdict", "signals", "spec_sha")
 
 
 def schema_errors(path: Path | str, meta: dict) -> list[str]:
@@ -1980,8 +1995,12 @@ EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в ката�
 # `store._append_passport_line`); белый список 01M1TNN4 (06.09) его не
 # знал — мерж любой задачи внешнего target отказывал бы «посторонним
 # файлом» (нашла планка B2 01M1R5B33C, AC-15).
+# SPEC-AUDIT.md — вердикт аудитора SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+# требование 9): ровно это имя, не маска — соседние имена остаются
+# посторонними.
 TASK_ROOT_ALLOWED_MD = re.compile(
-    r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|PASSPORT|ANSWER-\d+)\.md$")
+    r"^(SPEC|SPEC-AUDIT|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|PASSPORT|"
+    r"ANSWER-\d+)\.md$")
 
 
 def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
@@ -3167,9 +3186,11 @@ def escalation_status_errors(path: Path | str, text: str, meta: dict) -> list[st
     остальных типов канал эскалации не через этот раздел (analyst,
     например, эскалирует QUESTIONS.md целиком, не разделом внутри
     SPEC.md — см. «Контекст» SPEC: для type: spec это правило —
-    страховка от ошибки, не рабочий канал).
+    страховка от ошибки, не рабочий канал) — и к `spec_audit`: аудитор SPEC
+    эскалирует тем же разделом, что developer и ревьювер (SPEC
+    01M4MQAGRWMWR0GFDM9086P3TD, требование 11).
     """
-    if meta.get("type") not in ("plan", "review", "spec"):
+    if meta.get("type") not in ("plan", "review", "spec", "spec_audit"):
         return []
     status = meta.get("status") or ""
     if status == "escalate":
@@ -3186,6 +3207,27 @@ def escalation_status_errors(path: Path | str, text: str, meta: dict) -> list[st
             f"несёт непустые «Вопросы» и/или «Блокирует», а status '{status}' "
             f"— смени status на 'escalate' либо убери текст эскалации из "
             f"артефакта"]
+
+
+def spec_audit_field_errors(path: Path | str, meta: dict) -> list[str]:
+    """Поля вердикта `SPEC-AUDIT.md` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+    требование 8): каждое из `SPEC_AUDIT_FIELDS` есть и непусто, `verdict` —
+    из `SPEC_AUDIT_VERDICTS`. Пустое значение — отказ так же, как
+    отсутствующее поле: `signals:` без значения не говорит ни «нет», ни
+    перечня, а пульт переносит его в журнал. `path` — только для текста
+    ошибок (см. `schema_errors`)."""
+    errors = []
+    for field in SPEC_AUDIT_FIELDS:
+        value = meta.get(field)
+        if value is None or not str(value).strip():
+            errors.append(f"{path}: поле {field} не заполнено — впиши его во "
+                          f"frontmatter (templates/SPEC-AUDIT.md)")
+    verdict = meta.get("verdict")
+    if verdict is not None and str(verdict).strip() \
+            and verdict not in SPEC_AUDIT_VERDICTS:
+        errors.append(f"{path}: verdict '{verdict}' вне перечня — замени на "
+                      f"одно из: {', '.join(SPEC_AUDIT_VERDICTS)}")
+    return errors
 
 
 # --------------------------------------------------------------------------
@@ -4116,6 +4158,9 @@ def _content_errors(label: str, text: str) -> list[str]:
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
         errors.extend(registry_errors(label, text, meta))
+
+    if atype == "spec_audit":
+        errors.extend(spec_audit_field_errors(label, meta))
 
     errors.extend(escalation_status_errors(label, text, meta))
 

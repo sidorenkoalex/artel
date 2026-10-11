@@ -667,6 +667,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
     from . import fsm_advance
     handler = {
         "spec_writing": fsm_advance.spec_writing,
+        "spec_audit": fsm_advance.spec_audit,
         "review": fsm_advance.review,
         "verifying": fsm_advance.verifying,
         "tests_writing": fsm_advance.tests_writing,
@@ -787,7 +788,8 @@ def cmd_approve(task_id: str, sha: str | None = None,
                accept_red: str | None = None,
                fixes_main: str | None = None,
                no_answer: bool = False,
-               fresh_suite: bool = False) -> None:
+               fresh_suite: bool = False,
+               accept_audit_fail: bool = False) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -807,13 +809,19 @@ def cmd_approve(task_id: str, sha: str | None = None,
 
     `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG, требования 3, 5) — флаг
     `approve <id> --no-answer`: снимает эскалацию «нужен шаг роли» без
-    ANSWER после неё; допустим только в `escalated`."""
+    ANSWER после неё; допустим только в `escalated`.
+
+    `accept_audit_fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) —
+    флаг `approve <id> [sha] --accept-audit-fail`: принятие последнего
+    вердикта `fail` аудита SPEC Оператором; допустим только на
+    `spec_gate`."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
-                                 fixes_main, no_answer, fresh_suite))
+                                 fixes_main, no_answer, fresh_suite,
+                                 accept_audit_fail))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -958,7 +966,21 @@ def _spec_protected_zones_refusal(conn, task_id: str, meta: dict) -> str:
     return f"в zones SPEC {', '.join(protected)} — {guard.PROTECTED_ZONE_REFUSAL}"
 
 
-def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
+def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
+                       accept_audit_fail: bool = False) -> None:
+    # Последний вердикт аудита SPEC `fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+    # требование 16) проходит гейт только явным флагом Оператора — раньше
+    # всех прочих сверок: без флага решать здесь нечего. Вердикт — из
+    # журнала, не из файла (требование 14).
+    from .advance_gates import spec_audit
+    audit_fail = spec_audit.last_verdict(conn, task_id) == "fail"
+    if audit_fail and not accept_audit_fail:
+        reason = (f"последний вердикт аудита SPEC — fail; принять его "
+                  f"решением Оператора: artel.py approve {task_id} "
+                  f"{spec_audit.ACCEPT_FAIL_FLAG}")
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
     # tests_writing до кода (SPEC T023, требование 1): пропускается
     # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
     # весь беклог T001–T022 — требование 7); иначе тесты пишутся
@@ -1038,6 +1060,11 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
                       test_integrity.DECLARED_CHANGE_ACTION, declared)
         print(f"[{task_id}] {test_integrity.DECLARED_CHANGE_ACTION}:\n"
               f"{declared}")
+    if audit_fail:
+        # После всех отказов гейта: запись о принятии остаётся только у
+        # approve, который задачу с гейта действительно уводит.
+        store.journal(conn, task_id, "operator", spec_audit.ACCEPTED_FAIL_ACTION,
+                      f"approve {spec_audit.ACCEPT_FAIL_FLAG}")
     # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
     # же моментом входа approve на spec_gate, что и budget/split_
     # assessment рядом — meta уже прочитана выше, поле отсутствует у
@@ -1334,6 +1361,11 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str,
                     expected_state=state, detail="эскалация разрешена, продолжаем")
     if back == "in_dev":
         _maybe_ensure_draft_mr(conn, task_id)
+    if back == "spec_audit":
+        # Возврат в аудит — новый вход: SPEC мог поменяться за эскалацию, и
+        # вердикт сверяется с версией, взятой на аудит сейчас.
+        from .advance_gates import spec_audit
+        spec_audit.record_entry(conn, task_id)
     print("  дальше: " + cycle_hint.launch_text(conn, task_id, "run"))
 
 
@@ -1341,12 +1373,18 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                 accept_red: str | None = None,
                 fixes_main: str | None = None,
                 no_answer: bool = False,
-                 fresh_suite: bool = False) -> None:
+                 fresh_suite: bool = False,
+                 accept_audit_fail: bool = False) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if no_answer and state != "escalated":
         sys.exit(f"[{task_id}] approve отклонён: флаг {NO_ANSWER_FLAG} "
                  f"допустим только в состоянии escalated, задача в {state}")
+    if accept_audit_fail and state != "spec_gate":
+        from .advance_gates import spec_audit
+        sys.exit(f"[{task_id}] approve отклонён: флаг "
+                 f"{spec_audit.ACCEPT_FAIL_FLAG} допустим только в состоянии "
+                 f"spec_gate, задача в {state}")
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
         return
     # Явный sha, совпавший с живой головой, — решение Оператора: голову,
@@ -1364,10 +1402,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # `partial`, а не шестым параметром во всех четырёх обработчиках:
     # сигнатура «(conn, task_id, t, state, sid)» остаётся общей для
     # таблицы. Тем же приёмом `fixes_main` (SPEC
-    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`, и
-    # `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) — только для `escalated`.
+    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`,
+    # `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) — только для `escalated`,
+    # `accept_audit_fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD) — для `spec_gate`.
     handler = {
-        "spec_gate": _approve_spec_gate,
+        "spec_gate": partial(_approve_spec_gate,
+                             accept_audit_fail=accept_audit_fail),
         "acceptance": partial(_approve_acceptance, accept_red=accept_red,
                               fresh_suite=fresh_suite),
         "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main,
@@ -1466,6 +1506,39 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
                         expected_state=state,
                         detail=f"приёмка отклонена: {reason}")
         _maybe_ensure_draft_mr(conn, task_id)
+
+
+def cmd_spec_audit(task_id: str, session_id: str | None = None) -> None:
+    """`spec-audit <id>` — повторный аудит SPEC командой Оператора (SPEC
+    01M4MQAGRWMWR0GFDM9086P3TD, требование 17): задача с гейта SPEC уходит
+    в `spec_audit` тем же входом, что из `spec_writing` (потолок из SPEC,
+    запись входа), в том числе задача без ТЗ. Счётчик возвратов по `fail`
+    команда не сбрасывает. Берёт lease задачи, как прочие команды
+    Оператора."""
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    lease.run_locked(conn, task_id, session_id,
+                     lambda sid: _cmd_spec_audit(conn, task_id))
+
+
+def _cmd_spec_audit(conn, task_id: str) -> None:
+    from .advance_gates import spec_audit
+    t = store.get_task(conn, task_id)
+    state = t["state"]
+    if state != "spec_gate":
+        sys.exit(f"[{task_id}] spec-audit применим только на spec_gate "
+                 f"(сейчас {state})")
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    spec_text = _read_branch_text_or_refuse(conn, task_id, branch, "SPEC.md")
+    if spec_text is None:
+        return
+    budget.apply_spec_budget(conn, t, yamlmini.frontmatter(spec_text) or {})
+    store.set_state(conn, task_id, spec_audit.STATE, "operator",
+                    expected_state=state,
+                    detail="повторный аудит SPEC командой Оператора")
+    spec_audit.record_entry(conn, task_id)
+    print("  дальше: " + cycle_hint.launch_text(
+        conn, task_id, "auto", "(аудитор проверит SPEC)"))
 
 
 #: Состояния, в которых Оператор меняет набор моделей задачи командой

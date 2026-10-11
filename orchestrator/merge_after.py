@@ -55,7 +55,7 @@ STATUS_WAIT_STATES = ("acceptance", "merge_gate")
 
 # Состояния до гейта SPEC: колонка в них — заявленное Оператором значение,
 # `status` печатает его своей добавкой, отличной от «[ждёт мержа:».
-STATUS_DECLARED_STATES = ("spec_writing", "spec_gate")
+STATUS_DECLARED_STATES = ("spec_writing", "spec_audit", "spec_gate")
 
 # Строка ТЗ, заявляющая зависимости: метка с первой позиции, затем слово
 # «после». «Порядок: без зависимостей» под неё не подходит и ничего не

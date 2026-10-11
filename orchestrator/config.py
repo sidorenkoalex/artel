@@ -789,8 +789,36 @@ def is_protected_path(path: str, protected=None) -> bool:
 COMMON_ZONES = ("orchestrator/config.py", "docs/codebase-map.md", "tests/",
                 "roles.yaml")
 
+# `spec_audit` (ADR-0022 п.2, SPEC 01M4MQAGRWMWR0GFDM9086P3TD): независимый
+# аудит SPEC между сдачей SPEC аналитиком и гейтом SPEC — обычное агентское
+# состояние, без особого случая резолвинга роли, как у `spec_writing`.
 STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
-             "review": "reviewer"}
+             "review": "reviewer", "spec_audit": "spec_auditor"}
+
+# Возвратов `spec_audit -> spec_writing` по вердикту `fail` за жизнь задачи
+# (ADR-0022 п.2): следующий `fail` ведёт на гейт SPEC с этим вердиктом.
+SPEC_AUDIT_FAIL_RETURNS = 2
+
+# Сигналы глубины аудита SPEC (ADR-0022 п.3, SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
+# требование 7). Порог `budget_usd` SPEC, с которого задача считается
+# крупной (сигнал «г», нестрогое сравнение).
+SPEC_AUDIT_BUDGET_SIGNAL_USD = 45
+
+# Пути-признаки сигнала «в» по категориям: зона SPEC или путь его разделов
+# «Требования»/«Критерии приёмки», попавший под путь категории (каталог —
+# префиксом, файл — равенством, та же формула `is_protected_path`), — сигнал
+# полного разбора. `gates.yaml` здесь признак, не зона: файл защищён и задача
+# его не меняет, но SPEC, называющий его, трогает механику гейтов.
+SPEC_AUDIT_SIGNAL_PATHS = {
+    "тесты": ("tests/",),
+    "гейты": ("orchestrator/advance_gates/", "gates.yaml",
+              "orchestrator/fsm_advance.py", "orchestrator/fsm_autogate.py",
+              "orchestrator/fsm_merge_gate.py", "orchestrator/gates.py"),
+    "лимиты": ("orchestrator/budget.py", "orchestrator/parallel_limit.py",
+               "orchestrator/suite_lock.py"),
+    "песочница ролей": ("orchestrator/providers/", "docs/reference/role-home/",
+                        "orchestrator/runner.py"),
+}
 
 # Состояния, на которых останавливается `auto`: причина остановки и следующая
 # команда Оператора. Ключи покрывают все состояния FSM вне STATE_ROLE, КРОМЕ

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
               fsm, lease, models, pause, pull, runner, store, zone_lock)
-from .advance_gates import refusal_classes
+from .advance_gates import refusal_classes, spec_audit
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
 # требование 5)»: цикл доигрывает уже начатый шаг и останавливается сам
@@ -534,6 +534,18 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
     elif state == "escalated" and fsm.unanswered_role_step_escalation(
             conn, task_id) is not None:
         reason, hint = config.AUTO_STOP_ESCALATED_ROLE_STEP
+    audit_hint = ""
+    if state == "spec_gate":
+        # Последний вердикт аудита SPEC — из журнала (SPEC
+        # 01M4MQAGRWMWR0GFDM9086P3TD, требования 14, 16): `fail` проходит
+        # гейт только флагом Оператора, и подсказка его называет.
+        verdict = spec_audit.last_verdict(conn, task_id)
+        if verdict is not None:
+            reason = f"{reason} (аудит SPEC: вердикт {verdict})"
+        if verdict == "fail":
+            audit_hint = (f"; вердикт fail принимается только флагом: "
+                          f"artel.py approve {task_id} "
+                          f"{spec_audit.ACCEPT_FAIL_FLAG}")
     sha_hint = set_hint = ""
     if needs_sha:
         target = store.task_target(conn, task_id)
@@ -542,7 +554,7 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
         # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): Оператор решает
         # гейт, зная, на каких моделях шла задача.
         set_hint = models.task_set_hint(store.get_task(conn, task_id))
-    return reason, hint.format(id=task_id, sha=sha_hint) + set_hint
+    return reason, hint.format(id=task_id, sha=sha_hint) + set_hint + audit_hint
 
 
 def auto_stop(conn, task_id: str, state: str, reason: str, hint: str, *,
