@@ -34,6 +34,7 @@ from unittest import mock
 from orchestrator import (answer, catalog, config, projects, runner,
                           store)
 from orchestrator.advance_gates import test_integrity
+from tests import mandate_matrix
 from tests.sandbox import (ConnRealGitSandbox,
                            GitignoreCommittedRealGitSandbox)
 
@@ -336,7 +337,7 @@ class AnswerSandbox(GitignoreCommittedRealGitSandbox):
     def answer_file(self, text: str) -> str:
         path = self.root / ".artel" / f"answer-{random.randrange(1 << 30)}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_text(mandate_matrix.with_matrix(text), encoding="utf-8")
         return str(path)
 
     def docs_files(self) -> list:

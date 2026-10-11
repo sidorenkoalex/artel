@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import answer, config, fsm, gitcmd, store  # noqa: E402
 from scripts import guard  # noqa: E402
+from tests import mandate_matrix  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 QUESTIONS_TEXT = """---
@@ -130,7 +131,7 @@ class _ArtifactBranchAnswerTest(RealPultGitTest):
         f = tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", delete=False, encoding="utf-8")
         self.addCleanup(lambda: Path(f.name).unlink(missing_ok=True))
-        f.write(text)
+        f.write(mandate_matrix.with_matrix(text))
         f.close()
         return f.name
 
@@ -381,14 +382,18 @@ class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
             {f"tasks/{self.TASK}/PLAN.md": PLAN_WITH_EXTENSION_TEMPLATE.format(
                 task=self.TASK, paths="docs/a.md")},
             "PLAN v1")
-        answer.cmd_zones_extend(self.TASK, "docs/a.md")
+        answer.cmd_zones_extend(
+            self.TASK, "docs/a.md",
+            matrix_path=mandate_matrix.matrix_file(self, "docs/a.md"))
         self.assertEqual(self.row()["zones_extension"], "docs/a.md")
 
         self.artifact_commit(
             {f"tasks/{self.TASK}/PLAN.md": PLAN_WITH_EXTENSION_TEMPLATE.format(
                 task=self.TASK, paths="docs/a.md, docs/b.md")},
             "PLAN v2")
-        answer.cmd_zones_extend(self.TASK, "docs/a.md, docs/b.md")
+        answer.cmd_zones_extend(
+            self.TASK, "docs/a.md, docs/b.md",
+            matrix_path=mandate_matrix.matrix_file(self, "docs/a.md, docs/b.md"))
 
         self.assertEqual(self.row()["zones_extension"], "docs/a.md,docs/b.md")
 
@@ -403,7 +408,9 @@ class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
         13.09; либо ветка «раздела нет» начала писать `zones_extension`."""
         before = self.row()["zones_extension"]
 
-        out = self.capture(answer.cmd_zones_extend, self.TASK, "docs/a.md")
+        matrix = mandate_matrix.matrix_file(self, "docs/a.md")
+        out = self.capture(lambda: answer.cmd_zones_extend(
+            self.TASK, "docs/a.md", matrix_path=matrix))
 
         self.assertIn(f"дальше: artel.py auto {self.TASK}", out)
         self.assertEqual(self.row()["zones_extension"], before)
@@ -421,7 +428,9 @@ class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
                 task=self.TASK, paths="docs/a.md")},
             "PLAN v1")
 
-        out = self.capture(answer.cmd_zones_extend, self.TASK, "docs/a.md")
+        matrix = mandate_matrix.matrix_file(self, "docs/a.md")
+        out = self.capture(lambda: answer.cmd_zones_extend(
+            self.TASK, "docs/a.md", matrix_path=matrix))
 
         self.assertNotIn("дальше: artel.py auto", out)
         self.assertEqual(self.row()["zones_extension"], "docs/a.md")
