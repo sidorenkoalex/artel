@@ -233,3 +233,162 @@ def refusals(text: str, code_branch: str | None,
     if repeated is not None:
         found.append(repeated)
     return found
+
+
+# Матрица неослабления (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, ADR-0022 п.4):
+# механика проверяет только ФОРМУ матрицы при мандате — раздел, пять
+# канонических столбцов, строки данных, названность каждого элемента и
+# «ок при условии» у строки «остаётся, не покрыто»; верность названных
+# свойств остаётся за Оператором и независимой проверкой.
+MATRIX_DOC_REF = "docs/operator-gates.md, раздел «Матрица неослабления»"
+
+# Маркеры, строка которых — мандат, требующий матрицы. «Зависимости мержа:»
+# сюда не входит: это не ослабление и не расширение (требование 1).
+MATRIX_MANDATE_MARKERS = (_ZONES_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER)
+
+_MATRIX_HEADING_RE = re.compile(r"##\s+Матрица неослабления(?!\w)")
+
+# Канон заголовков — `docs/operator-gates.md`, раздел «Матрица
+# неослабления»; заголовок столбца сравнивается по началу.
+MATRIX_HEADERS = ("Что меняется", "Какое свойство сейчас держит",
+                  "Остаётся ли свойство после изменения", "Чем покрыто после",
+                  "Решение")
+
+_SEPARATOR_CELL_RE = re.compile(r":?-+:?\Z")
+
+# Границы токена в ячейке «Что меняется» (требование 2).
+_TOKEN_SPLIT_RE = re.compile(r"[\s`,;()«»]+")
+
+# Ссылка на тест в ячейке «Чем покрыто»: `tests/<…>.py`, за ней может стоять
+# `:строка` или `::имя`.
+_TEST_REF_RE = re.compile(r"(?<![\w/])tests/[\w./-]*\.py(?!\w)")
+
+_EMPHASIS_RE = re.compile(r"(?<!\S)[*_`]+|[*_`]+(?!\S)")
+
+_CONDITIONAL = "ок при условии"
+_REPLACEMENTS_SEPARATORS = ":—-,;."
+
+
+def _normalized(cell: str) -> str:
+    """Нормализация ячейки (SPEC, термины): `strip`, снятие выделения по
+    краям слов, нижний регистр, «ё» = «е»."""
+    return _EMPHASIS_RE.sub("", cell.strip()).strip().lower().replace("ё", "е")
+
+
+def matrix_section(text: str) -> str | None:
+    """Раздел матрицы: от заголовка `## Матрица неослабления` до следующего
+    заголовка уровня 1 или 2 либо до конца текста; `None` — раздела нет."""
+    lines = text.splitlines()
+    for start, line in enumerate(lines):
+        if _MATRIX_HEADING_RE.match(line.strip()):
+            break
+    else:
+        return None
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith(("# ", "## ")):
+            end = i
+            break
+    return "\n".join(lines[start:end]) + "\n"
+
+
+def _row_cells(line: str) -> list[str]:
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [cell.strip() for cell in inner.split("|")]
+
+
+def _matrix_table(section: str) -> tuple[list[str], list[list[str]]] | None:
+    """(заголовки, строки данных) первой markdown-таблицы раздела; `None` —
+    таблицы со строкой-разделителем нет."""
+    lines = section.splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("|"):
+            continue
+        if i + 1 >= len(lines) or not lines[i + 1].strip().startswith("|"):
+            return None
+        separator = [c for c in _row_cells(lines[i + 1]) if c]
+        if not separator or not all(_SEPARATOR_CELL_RE.match(c)
+                                    for c in separator):
+            return None
+        rows = []
+        for row_line in lines[i + 2:]:
+            if not row_line.strip().startswith("|"):
+                break
+            cells = _row_cells(row_line)
+            if any(cells):
+                rows.append(cells)
+        return _row_cells(line), rows
+    return None
+
+
+def _headers_ok(headers: list[str]) -> bool:
+    return len(headers) == len(MATRIX_HEADERS) and all(
+        _normalized(cell).startswith(_normalized(canon))
+        for cell, canon in zip(headers, MATRIX_HEADERS))
+
+
+def _names(cell: str, element: str) -> bool:
+    """`element` стоит в ячейке отдельным токеном (требование 2); `/` на
+    конце не учитывается — у элемента зон-каталога и у токена."""
+    want = element.rstrip("/")
+    return any(token.rstrip("/") == want
+               for token in _TOKEN_SPLIT_RE.split(cell) if token)
+
+
+def _remains(cell: str) -> bool:
+    return not _normalized(cell).startswith(("нет", "не остается", "исчезает"))
+
+
+def _covered(cell: str) -> bool:
+    value = _normalized(cell)
+    if "не покрыто" in value or value.startswith(("нет", "—", "–", "-")):
+        return False
+    return _TEST_REF_RE.search(value) is not None
+
+
+def _conditional_with_replacements(cell: str) -> bool:
+    value = _normalized(cell)
+    if not value.startswith(_CONDITIONAL):
+        return False
+    rest = value[len(_CONDITIONAL):]
+    return any(not ch.isspace() and ch not in _REPLACEMENTS_SEPARATORS
+               for ch in rest)
+
+
+def matrix_refusals(text: str, elements: list[str]) -> list[str]:
+    """Причины отказа по форме матрицы неослабления в тексте `text` при
+    мандате на `elements` (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, требования 1-3,
+    7); пустой список — форма годна. Одна функция на оба канала — `answer`
+    и `zones-extend`: правило не может разойтись между ними."""
+    section = matrix_section(text)
+    if section is None:
+        return ["нет раздела «## Матрица неослабления»"]
+    table = _matrix_table(section)
+    if table is None:
+        return ["в разделе «## Матрица неослабления» нет таблицы (строка "
+                "заголовков и строка-разделитель)"]
+    headers, rows = table
+    if not _headers_ok(headers):
+        return ["таблица матрицы обязана нести ровно пять столбцов: "
+                + ", ".join(f"«{h}…»" for h in MATRIX_HEADERS)
+                + f" (сейчас: {', '.join(headers)})"]
+    if not rows:
+        return ["в таблице матрицы нет ни одной строки данных"]
+    found = []
+    unnamed = [e for e in elements
+               if not any(_names(row[0], e) for row in rows)]
+    if unnamed:
+        found.append("в столбце «Что меняется» не названы элементы мандата: "
+                     + ", ".join(unnamed))
+    for number, row in enumerate(rows, start=1):
+        cells = row + [""] * (len(MATRIX_HEADERS) - len(row))
+        if (_remains(cells[2]) and not _covered(cells[3])
+                and not _conditional_with_replacements(cells[4])):
+            found.append(f"строка данных {number}: свойство остаётся и не "
+                         f"покрыто, а «Решение» не начинается с «ок при "
+                         f"условии» с перечнем замен")
+    return found

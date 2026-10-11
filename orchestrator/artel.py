@@ -155,7 +155,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
            [--fresh-suite] [--no-answer] [--accept-audit-fail] |
   reject <id> "<причина>" | spec-audit <id> |
-  answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
+  answer <id> <файл-с-ответом> |
+  zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
   kill <id> | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
@@ -482,9 +483,11 @@ escalate` из `tests_writing`, вердикт REVIEW.md `status: escalate` из
 baseline` (вопрос роли) флаг не обходит; вне `escalated` флаг —
 отказ.
 
-`zones-extend <id> <путь1>[, <путь2>]` (SPEC 01M287TPG0HAVXS8CHBCY679WN)
-— коммитит `ANSWER-n.md` с той же строкой маркера и текстом «мандат
-Оператора: <пути>»; если PLAN.md головы артефактной ветки уже несёт
+`zones-extend <id> <путь1>[, <путь2>] --matrix <файл>` (SPEC 01M287TPG0HAVXS8CHBCY679WN)
+— коммитит `ANSWER-n.md` с той же строкой маркера, текстом «мандат
+Оператора: <пути>» и разделом «## Матрица неослабления» из файла
+`--matrix` (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0: без файла, при негодной
+форме матрицы или при строке мандата в файле — отказ); если PLAN.md головы артефактной ветки уже несёт
 раздел «## Расширение зон» с РОВНО теми же путями — сразу обновляет
 `tasks.zones_extension` (гейт зон пропускает дифф без отдельного
 `answer`), иначе БД не трогает и журналирует, что раздела PLAN нет.
@@ -1723,6 +1726,41 @@ def _answer_args(rest: list) -> tuple[str, str]:
     return rest[0], path
 
 
+MATRIX_FLAG = "--matrix"
+_ZONES_EXTEND_SYNTAX = ("artel.py zones-extend {id} <путь>[, <путь>...] "
+                        "--matrix <файл>")
+
+
+def _zones_extend_args(rest: list) -> tuple[str, str, str | None]:
+    """(id, пути, файл матрицы) команды `zones-extend`. Отсутствие
+    `--matrix` здесь не отказывает: отказ стоит в `answer.cmd_zones_extend`
+    (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, требование 5), один на CLI и на
+    прямой вызов функции."""
+    syntax = _ZONES_EXTEND_SYNTAX.format(id=rest[0] if rest else "<id>")
+    matrix = None
+    positional = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == MATRIX_FLAG:
+            if i + 1 >= len(rest) or rest[i + 1].startswith("--"):
+                sys.exit(f"zones-extend: после {MATRIX_FLAG} не передан файл "
+                         f"матрицы; синтаксис: {syntax}")
+            matrix = rest[i + 1]
+            i += 2
+            continue
+        positional.append(rest[i])
+        i += 1
+    if len(positional) < 2:
+        sys.exit(f"zones-extend: не переданы id задачи и пути; синтаксис: "
+                 f"{syntax}")
+    return positional[0], positional[1], matrix
+
+
+def _cmd_zones_extend(rest: list) -> None:
+    task_id, paths, matrix = _zones_extend_args(rest)
+    answer.cmd_zones_extend(task_id, paths, matrix_path=matrix)
+
+
 def _cmd_pin(rest: list) -> None:
     """`pin --to <sha>` / `pin --to` (tasks/01M1NGFK3N6MRMYGCC09H975V3,
     ANSWER-1 п.5) — откат пина; отдельная команда от `pin-update`, не
@@ -1849,7 +1887,7 @@ def main() -> None:
                                          rest[1] if len(rest) > 1 else ""),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
         "answer": lambda: answer.cmd_answer(*_answer_args(rest)),
-        "zones-extend": lambda: answer.cmd_zones_extend(rest[0], rest[1]),
+        "zones-extend": lambda: _cmd_zones_extend(rest),
         "kill": lambda: cleanup.cmd_kill(rest[0], confirmed="--yes" in rest[1:]),
         "release": lambda: release.cmd_release(rest[0]),
         "pause": lambda: _cmd_pause(rest),
