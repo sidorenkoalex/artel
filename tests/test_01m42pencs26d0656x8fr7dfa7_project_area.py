@@ -1623,10 +1623,10 @@ class MergeGateStepsOnCloneTest(TaskFlowSandbox):
         task, step_out = self.run_to_merge_gate(
             {f"kod/kod_{self.rng.randrange(10 ** 6)}.py": "A = 1\n"})
 
-        out = self.approve_until_settled(task)
+        out = self.approve_until_settled(task, live_fixation=True)
 
         self.assert_merged_in_clone(task, f"{step_out}\n{out}")
-        retro =self.in_repo(self.origin, "show",
+        retro = self.in_repo(self.origin, "show",
                              f"refs/artifacts/{task}:tasks/{task}/RETRO.md")
         self.assertIn("Итог: done", retro, self.msg(out))
         self.assertNotIn(f"docs/retro/{task}.md", self.origin_tree(), self.msg(out))
