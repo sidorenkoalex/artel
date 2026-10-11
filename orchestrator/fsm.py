@@ -913,7 +913,11 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
     Каждый названный метод обязан существовать в голове main репозитория
     задачи под этим квалифицированным именем (`guard.
     qualified_test_methods`); нет файла, нет метода или git молчит — мягкий
-    отказ с именем метода либо причиной. Текст записи — строки раздела как
+    отказ с именем метода либо причиной. Затем каждая пара «было → стало»
+    сверяется с кодом метода и его помощников первого уровня там же
+    (`guard.behavior_change_refusals`, SPEC 01M4NZ5KT0PX0RYWTSTN1XEFS5,
+    требование 5): смена вида, не литерал, контейнер, «было» не из кода —
+    тот же мягкий отказ. Текст записи — строки раздела как
     есть, по одной на метод: узел неослабления разбирает их тем же
     `guard.parse_behavior_change_line`."""
     if t["is_canary"] or not repo_context.is_artel(t):
@@ -929,7 +933,7 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
         return "", (f"раздел «{guard.BEHAVIOR_CHANGE_SECTION}»: git не ответил "
                     f"на голову {config.MAIN_BRANCH} репозитория задачи "
                     f"({repo}) — сверить названные методы не с чем")
-    missing = []
+    missing, sources = [], {}
     for item in items:
         text, why = gitcmd.show(head, item.path, repo=repo)
         if text is None:
@@ -938,10 +942,27 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
         elif item.name not in guard.qualified_test_methods(text):
             missing.append(f"{item.address} — метода нет в "
                            f"{config.MAIN_BRANCH}")
+        sources[item.path] = text
     if missing:
         return "", (f"раздел «{guard.BEHAVIOR_CHANGE_SECTION}» называет "
                     f"методы, которых нет в голове {config.MAIN_BRANCH} "
                     f"{head[:12]}: {'; '.join(missing)}")
+    # Пары сверяются с кодом той же головы main (SPEC
+    # 01M4NZ5KT0PX0RYWTSTN1XEFS5, требование 5): помощники из других модулей
+    # `tests/` читаются оттуда же. Непрочитанный модуль помощника — «модуля
+    # нет», его литералов не видно, и пара получает отказ, а не проход.
+    modules = guard.TestModules(
+        lambda path: sources[path] if path in sources
+        else gitcmd.show(head, path, repo=repo)[0])
+    refusals = []
+    for item in items:
+        literals = guard.method_literal_keys(sources[item.path], item.path,
+                                             item.name, modules) or set()
+        refusals += guard.behavior_change_refusals(item, literals)
+    if refusals:
+        return "", (f"раздел «{guard.BEHAVIOR_CHANGE_SECTION}» не сверился с "
+                    f"головой {config.MAIN_BRANCH} {head[:12]}: "
+                    f"{'; '.join(refusals)}")
     return "\n".join(item.line for item in items), ""
 
 

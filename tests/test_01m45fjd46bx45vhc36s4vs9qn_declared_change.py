@@ -583,14 +583,19 @@ class DeclaredChangeSandbox(GitignoreCommittedRealGitSandbox):
 
     def undeclared_scenario(self) -> tuple:
         """Смена литерала в методе вне перечня; раздел — от зерна: нет
-        вовсе либо называет другой (неизменённый) метод."""
+        вовсе либо называет другой (неизменённый) метод. «было» `1` строки о
+        `test_kept` — литерал его утверждения (approve сверяет «было» с
+        кодом метода, SPEC 01M4NZ5KT0PX0RYWTSTN1XEFS5, требование 10б);
+        `VALUE` и до, и после смены не меньше 10."""
         old, new = self.two_values()
+        kept = ["self.assertTrue(app.VALUE)",
+                "self.assertGreaterEqual(app.VALUE, 1)"]
         base = {"app.py": f"VALUE = {old}\n", self.path: fixture_source(self.cls, {
             "test_value": [f"self.assertEqual(app.VALUE, {old})"],
-            "test_kept": ["self.assertTrue(app.VALUE)"]})}
+            "test_kept": kept})}
         head = {"app.py": f"VALUE = {new}\n", self.path: fixture_source(self.cls, {
             "test_value": [f"self.assertEqual(app.VALUE, {new})"],
-            "test_kept": ["self.assertTrue(app.VALUE)"]})}
+            "test_kept": kept})}
         section = None if self.rng.random() < 0.5 else [
             self.line("test_kept", [("1", "2")], 1)]
         return base, head, section
@@ -635,12 +640,19 @@ class SpecWritingFormTest(DeclaredChangeSandbox):
 
 class ApproveDeclaredTest(DeclaredChangeSandbox):
 
-    def base_two(self) -> dict:
+    def base_two(self, first_was=(), second_was=()) -> dict:
+        """База с `test_first`/`test_second`; `first_was`/`second_was` —
+        значения «было», которые approve ищет литералами утверждений метода
+        (SPEC 01M4NZ5KT0PX0RYWTSTN1XEFS5, требование 10а)."""
         return {"app.py": "VALUE = 1\n",
                 self.path: fixture_source(self.cls, {
-                    "test_first": ["self.assertEqual(app.VALUE, 1)"],
+                    "test_first": ["self.assertEqual(app.VALUE, 1)"]
+                    + [f"self.assertNotEqual(app.VALUE, {was!r})"
+                       for was in first_was],
                     "test_second": ["self.assertIn('a', 'abc')",
-                                    "self.assertEqual(app.VALUE, 1)"]})}
+                                    "self.assertEqual(app.VALUE, 1)"]
+                    + [f"self.assertNotEqual(app.VALUE, {was!r})"
+                       for was in second_was]})}
 
     def assert_soft_refusal(self, out: str, named: str) -> None:
         context = self.note(f"вывод approve:\n{out}\nжурнал:\n{self.journal_text()}")
@@ -725,7 +737,7 @@ class ApproveDeclaredTest(DeclaredChangeSandbox):
         section = [self.line("test_first", [(repr(a1), repr(b1))], r1),
                    self.line("test_second", [(repr(a2), repr(b2)),
                                              (repr(a3), repr(b3))], r2)]
-        out = self.start(self.base_two(), section)
+        out = self.start(self.base_two([a1], [a2, a3]), section)
         context = self.note(f"вывод approve:\n{out}\nжурнал:\n{self.journal_text()}")
         self.assertEqual(self.state(), "tests_writing", context)
         records = self.details(DECLARED_ACTION)
