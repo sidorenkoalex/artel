@@ -438,6 +438,11 @@ config.ROLES = _SANDBOX_ROLES_PATH
 config.MODELS_LOCAL = _SANDBOX_CONFIG_DIR / "models.yaml"
 config.MODELS_LOCAL.write_text(role_map_fixture().local_text,
                                encoding="utf-8")
+# Наблюдение неослабления гоняет настоящий pytest на каждом изменённом
+# методе перехода `in_dev -> verifying`; существующие тесты гейта считают
+# запуски и записи журнала без него (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP,
+# требование 7) — тесты наблюдения включают флаг сами.
+config.TWO_SIDED_OBSERVATION = False
 
 
 def capture(fn, *args) -> str:

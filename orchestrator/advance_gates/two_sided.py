@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -41,6 +42,12 @@ OLD_ON_BRANCH = "старая версия на ветке"
 NOT_PROOF = "не доказательство"
 TIMEOUT = "таймаут"
 PASSED = "пройден"
+# Исходы стороны в `Outcome.sides` (наблюдение, SPEC
+# 01M4NZ5W9ZTKGTW7DGZQGMP2GP): упала на утверждении, зелёная, не
+# запущена — предел наблюдения исчерпан.
+SIDE_ASSERTION = "утверждение"
+SIDE_GREEN = "зелёная"
+SIDE_LIMIT = "не прогнан: предел"
 
 # Имя модуля плагина отчёта — уникальное, чтобы не встретиться ни с одним
 # модулем проверяемого дерева; переменная окружения — путь файла отчёта.
@@ -49,16 +56,47 @@ REPORT_ENV = "ARTEL_TWO_SIDED_REPORT"
 
 _PLUGIN_SOURCE = '''"""Отчёт пульта о классе и фазе исхода узлов (двусторонний прогон)."""
 import json
+import linecache
 import os
+import sysconfig
 
 import pytest
 
 _SETUP_FRAMES = {"setUp", "asyncSetUp", "setUpClass", "setUpModule"}
+_LIBRARY_DIRS = tuple(sorted({
+    os.path.realpath(sysconfig.get_paths()[key]) + os.sep
+    for key in ("stdlib", "platstdlib") if sysconfig.get_paths().get(key)}))
 
 
 def _write(record):
     with open(os.environ["ARTEL_TWO_SIDED_REPORT"], "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\\n")
+
+
+def _own(path, root):
+    """Файл дерева прогона, не библиотеки: внутри корня, не под
+    site-packages и не под каталогом стандартной библиотеки."""
+    return path.startswith(root) and not path.startswith(_LIBRARY_DIRS) \\
+        and not {"site-packages", "dist-packages"} & set(path.split(os.sep))
+
+
+def _location(item, tb):
+    """Место утверждения — последний кадр трассировки вне библиотек: у
+    `self.assert*` это строка теста, а не `unittest/case.py`; у помощника
+    другого файла — строка помощника. Путь — относительно корня дерева."""
+    root = os.path.realpath(str(getattr(item.config, "rootpath", None)
+                                or item.config.rootdir)) + os.sep
+    found = None
+    while tb is not None:
+        path = os.path.realpath(tb.tb_frame.f_code.co_filename)
+        if _own(path, root):
+            found = (path, tb.tb_lineno)
+        tb = tb.tb_next
+    if found is None:
+        return None
+    path, line = found
+    return {"path": os.path.relpath(path, root).replace(os.sep, "/"),
+            "line": line, "text": linecache.getline(path, line).strip()}
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -80,6 +118,10 @@ def pytest_runtest_makereport(item, call):
         record["timeout"] = issubclass(kind, pytest.fail.Exception) and \\
             str(call.excinfo.value).startswith("Timeout")
         record["in_setup"] = bool(frames & _SETUP_FRAMES)
+        try:
+            record["location"] = _location(item, call.excinfo.tb)
+        except Exception:  # noqa: BLE001 — место лишь наблюдение, не вердикт
+            record["location"] = None
     _write(record)
 
 
@@ -110,12 +152,17 @@ class Method(NamedTuple):
 class Outcome(NamedTuple):
     """Итог прогона: `refusals` — строки отказа (пусто — доказано),
     `results` — {адрес метода: итог для записи исхода рубежа},
-    `head_sha`/`base_sha` — деревья прогона."""
+    `head_sha`/`base_sha` — деревья прогона. `sides` — {адрес метода:
+    {сторона: {"outcome": исход стороны, у упавшей на утверждении —
+    "path"/"line"/"text" места утверждения}}}: его читает только
+    наблюдение (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP, требование 1), вердикт
+    прогона — по-прежнему `refusals`/`results`."""
 
     refusals: list
     results: dict
     head_sha: str
     base_sha: str
+    sides: dict | None = None
 
 
 def _git_reason(res) -> str:
@@ -162,8 +209,18 @@ def _verdict(records: list, nodeid: str) -> str:
     return "green"
 
 
+def _location(records: list, nodeid: str) -> dict:
+    """Место упавшего утверждения узла из записи фазы call плагина;
+    пусто — плагин места не нашёл."""
+    for record in records:
+        if record.get("nodeid") == nodeid and record.get("when") == "call" \
+                and isinstance(record.get("location"), dict):
+            return record["location"]
+    return {}
+
+
 def _run_side(tree: Path, nodes: list, plugin_dir: Path,
-              report: Path) -> tuple:
+              report: Path, timeout: float) -> tuple:
     """(записи отчёта, причина сбоя) одного прогона pytest по `nodes` в
     дереве `tree`. Команда и окружение — те же, что у прогона планки
     (`acceptance._pytest_command`/`_pytest_env`)."""
@@ -175,11 +232,9 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
         env[REPORT_ENV] = str(report)
         try:
             res = subprocess.run(cmd, cwd=tree, env=env, capture_output=True,
-                                 text=True,
-                                 timeout=config.TWO_SIDED_PYTEST_TIMEOUT_SEC)
+                                 text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            return [], (f"{TIMEOUT} прогона pytest "
-                        f"({config.TWO_SIDED_PYTEST_TIMEOUT_SEC} с)")
+            return [], f"{TIMEOUT} прогона pytest ({timeout:g} с)"
         except OSError as exc:
             return [], f"pytest не запустился: {exc}"
     records = []
@@ -205,7 +260,10 @@ def _failed(methods: list, reason: str, head_sha: str,
     """Сбой, общий всем методам рубежа: отказ называет каждый метод."""
     return Outcome([f"{m.head_path}: {m.name}: двусторонний прогон: {reason}"
                     for m in methods],
-                   {m.address: reason for m in methods}, head_sha, base_sha)
+                   {m.address: reason for m in methods}, head_sha, base_sha,
+                   {m.address: {label: {"outcome": reason}
+                                for label in (NEW_ON_BASE, OLD_ON_BRANCH)}
+                    for m in methods})
 
 
 def _place(tree: Path, rel: str, text: str) -> None:
@@ -214,9 +272,24 @@ def _place(tree: Path, rel: str, text: str) -> None:
     target.write_text(text, encoding="utf-8")
 
 
-def run(repo: Path, code_branch: str, base_sha: str, methods: list) -> Outcome:
+def _side_timeout(deadline: float | None) -> float:
+    """Таймаут стороны: `TWO_SIDED_PYTEST_TIMEOUT_SEC`, а при `deadline`
+    (наблюдение) — меньшее из него и остатка до `deadline`."""
+    timeout = config.TWO_SIDED_PYTEST_TIMEOUT_SEC
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+    return timeout
+
+
+def run(repo: Path, code_branch: str, base_sha: str, methods: list,
+        deadline: float | None = None) -> Outcome:
     """Двусторонний прогон `methods` (список `Method`) на деревьях базы
-    сравнения `base_sha` и головы `code_branch` в клоне `repo`."""
+    сравнения `base_sha` и головы `code_branch` в клоне `repo`.
+
+    `deadline` (`time.monotonic()`) — предел наблюдения (SPEC
+    01M4NZ5W9ZTKGTW7DGZQGMP2GP, требование 6): сторона, для которой
+    остатка нет, не запускается и получает исход `SIDE_LIMIT`. Гейт зовёт
+    без него — таймаут стороны прежний."""
     head_sha = gitcmd.branch_head_sha(code_branch, repo=repo)
     if not head_sha:
         return _failed(methods, f"git не ответил на голову ветки {code_branch}",
@@ -250,26 +323,39 @@ def run(repo: Path, code_branch: str, base_sha: str, methods: list) -> Outcome:
              {m.address: f"{m.base_path}::{m.name}" for m in methods},
              "зелёная — поведение не сменилось"))
         refusals, results = [], {m.address: [] for m in methods}
+        observed = {m.address: {} for m in methods}
         for index, (label, tree, nodes, green) in enumerate(sides):
             report = scratch / f"report-{index}.jsonl"
-            records, failure = _run_side(tree, sorted(set(nodes.values())),
-                                         plugin_dir, report)
+            timeout = _side_timeout(deadline)
+            if timeout <= 0:
+                records, failure = [], SIDE_LIMIT
+            else:
+                records, failure = _run_side(
+                    tree, sorted(set(nodes.values())), plugin_dir, report,
+                    timeout)
             for method in methods:
                 if failure:
                     reason = failure
+                    observed[method.address][label] = {"outcome": reason}
                 else:
                     verdict = _verdict(records, nodes[method.address])
                     if not verdict:
+                        observed[method.address][label] = {
+                            "outcome": SIDE_ASSERTION,
+                            **_location(records, nodes[method.address])}
                         continue
                     reason = green if verdict == "green" \
                         else f"{NOT_PROOF} — {verdict}"
+                    observed[method.address][label] = {
+                        "outcome": SIDE_GREEN if verdict == "green"
+                        else reason}
                 results[method.address].append(f"{label}: {reason}")
                 refusals.append(f"{method.head_path}: {method.name}: "
                                 f"двусторонний прогон: {label}: {reason}")
         return Outcome(refusals,
                        {address: "; ".join(found) or PASSED
                         for address, found in results.items()},
-                       head_sha, base_sha)
+                       head_sha, base_sha, observed)
     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой прогона не пропуск
         return _failed(methods, f"сбой {exc!r}", head_sha, base_sha)
     finally:
