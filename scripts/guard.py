@@ -3231,6 +3231,99 @@ def spec_audit_field_errors(path: Path | str, meta: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Матрица последствий в QUESTIONS.md (SPEC 01M4NZ5KT0PX0RYWTSTN1XEFS5,
+# требования 2-3; ADR-0022 п.4): у каждого варианта каждого вопроса четыре
+# пункта, по которым Оператор принимает решение. Проверяется только форма —
+# текст после метки guard не оценивает. Статус не освобождает: черновик,
+# по которому задача эскалирует, читает Оператор так же, как `ready`.
+QUESTIONS_SECTION = "Вопросы"
+QUESTIONS_MATRIX_LABELS = ("ломается", "ослабляется", "цена", "чьё решение")
+# Вопрос — строка раздела БЕЗ отступа; вариант, строка дефолта и пункт
+# матрицы — строки внутри вопроса, отступ допустим.
+_QUESTION_LINE = re.compile(r"^(\d+)\.\s")
+_VARIANT_LINE = re.compile(r"^\s*-\s+([A-Z])\)")
+# Вариант с буквой не латинского алфавита (`- А)` кириллицей) — не вариант
+# и не молчание: иначе его метки ушли бы предыдущему варианту.
+_FOREIGN_VARIANT_LINE = re.compile(r"^\s*-\s+([^\W\d_])\)")
+_DEFAULT_LINE = re.compile(r"^\s*(?:-\s+)?дефолт:", re.I)
+_MATRIX_LABEL_LINE = re.compile(
+    rf"^\s*(?:-\s+)?({'|'.join(QUESTIONS_MATRIX_LABELS)}):")
+
+
+def _questions_batch(body: str) -> list:
+    """[(номер вопроса, [(буква, {метки})], [чужие буквы])] раздела
+    «Вопросы» по порядку. Граница варианта — следующий вариант (в том числе
+    с чужой буквой), строка дефолта или следующий вопрос: метка за ней
+    этому варианту не засчитывается."""
+    questions: list = []
+    variant = None
+    for line in body.splitlines():
+        question = _QUESTION_LINE.match(line)
+        if question:
+            questions.append((question.group(1), [], []))
+            variant = None
+            continue
+        if not questions:
+            continue
+        _number, variants, foreign = questions[-1]
+        latin = _VARIANT_LINE.match(line)
+        if latin:
+            variant = (latin.group(1), set())
+            variants.append(variant)
+            continue
+        other = _FOREIGN_VARIANT_LINE.match(line)
+        if other and not other.group(1).isascii():
+            foreign.append(other.group(1))
+            variant = None
+            continue
+        if _DEFAULT_LINE.match(line):
+            variant = None
+            continue
+        label = _MATRIX_LABEL_LINE.match(line)
+        if label and variant is not None:
+            variant[1].add(label.group(1))
+    return questions
+
+
+def questions_matrix_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Нарушения формы матрицы последствий QUESTIONS.md при любом статусе:
+    в разделе нет вопроса `<N>. `; у вопроса нет варианта `- <A-Z>) `;
+    внутри вопроса вариант с не латинской буквой; у варианта нет хотя бы
+    одной из меток `QUESTIONS_MATRIX_LABELS`. Отказ называет номер вопроса
+    и букву варианта. `path` — только для текста ошибок."""
+    if (meta.get("type") or "") != "questions":
+        return []
+    shape = (f"форма — templates/QUESTIONS.md: вопрос `<N>. ` без отступа, "
+             f"варианты строками `- A) …`, под каждым пункты "
+             f"{', '.join(f'`{label}:`' for label in QUESTIONS_MATRIX_LABELS)}, "
+             f"затем `- дефолт: …`")
+    batch = _questions_batch(section_body(text, QUESTIONS_SECTION))
+    if not batch:
+        return [f"{path}: в разделе «{QUESTIONS_SECTION}» нет ни одного "
+                f"вопроса `<N>. ` — {shape}"]
+    errors = []
+    for number, variants, foreign in batch:
+        for letter in foreign:
+            errors.append(f"{path}: вопрос {number}: вариант `- {letter})` "
+                          f"с буквой не латинского алфавита — пиши букву "
+                          f"варианта латиницей (A, B, …)")
+        if not variants:
+            errors.append(f"{path}: вопрос {number}: нет ни одного варианта "
+                          f"`- <A-Z>) …` — {shape}")
+        for letter, labels in variants:
+            missing = [label for label in QUESTIONS_MATRIX_LABELS
+                       if label not in labels]
+            if missing:
+                errors.append(
+                    f"{path}: вопрос {number}, вариант {letter}: в матрице "
+                    f"последствий нет пунктов "
+                    f"{', '.join(f'`{label}:`' for label in missing)} — "
+                    f"допиши их строками под вариантом до следующего "
+                    f"варианта или строки дефолта")
+    return errors
+
+
+# --------------------------------------------------------------------------
 # Сигналы «подозрения на большой объём» на этапе SPEC
 # (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требования 1, 3; ANSWER-1 — правила
 # для AC-1 (константы, прогноз диффа) и AC-3 (пересечение зон с
@@ -3674,6 +3767,100 @@ def behavior_change_errors(path: Path | str, text: str, meta: dict) -> list[str]
     if (meta.get("type") or "") != "spec":
         return []
     return [f"{path}: {e}" for e in behavior_change_items(text)[1]]
+
+
+# Сверка пар раздела «Меняемое поведение» с кодом main на `approve` гейта
+# SPEC (SPEC 01M4NZ5KT0PX0RYWTSTN1XEFS5, требования 4-5, 7): разбор тот же,
+# что у гейта неослабления — `_is_assertion`/`_assertion_kind` для вида,
+# `literal_pair_keys` для литерала, `_assertion_records` для помощников
+# первого уровня и `_literal_positions` для позиций литералов. Пара, которую
+# гейт неослабления не засчитает, отказывается уже здесь, а не на
+# `in_dev -> verifying`.
+BEHAVIOR_NEED_LITERAL = "нужен литерал"
+BEHAVIOR_NEED_SCALAR = "нужен скалярный литерал"
+_CONTAINER_TYPES = (list, tuple, set, frozenset, dict)
+_BEHAVIOR_FIX_HINT = ("исправь строку раздела либо вынеси смену вопросом "
+                      "Оператору в батче с матрицей")
+
+
+def _assertion_call_kind(text: str) -> str | None:
+    """Вид утверждения, если `text` — выражение-вызов утверждения, иначе
+    `None`."""
+    try:
+        node = ast.parse(text, mode="eval").body
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+    if isinstance(node, ast.Call) and _is_assertion(node):
+        return _assertion_kind(node)
+    return None
+
+
+def _side_key(text: str) -> tuple | None:
+    """Ключ значения одной стороны пары тем же `literal_pair_keys`, что у
+    гейта неослабления; `None` — сторона не читается как литерал."""
+    keys = literal_pair_keys([(text, text)])
+    return None if keys is None else next(iter(keys))[0]
+
+
+def method_literal_keys(source, path, name: str,
+                        modules: TestModules | None = None) -> set | None:
+    """Ключи значений литералов на позициях констант утверждений метода
+    `name` (`Класс::метод`) и его помощников первого уровня — те же
+    позиции, что сравнивает гейт неослабления. Докстринги и комментарии не
+    утверждения и не учитываются. `None` — файл не разбирается или метода
+    в нём нет."""
+    records = _assertion_records(source, path, modules)
+    if records is None or name not in records:
+        return None
+    return {_value_key(value)
+            for _key, _text, node, _origin in records[name]
+            for _node, value in _literal_positions(node)}
+
+
+def behavior_change_refusals(item: BehaviorChange, literals: set) -> list[str]:
+    """Причины отказа `approve` по парам строки `item` раздела «Меняемое
+    поведение», по одной на пару (требование 5): а) обе стороны — вызовы
+    утверждений разного вида; б) сторона не читается литералом; в) сторона —
+    контейнер; г) «было» нет среди `literals` (`method_literal_keys`).
+    Пункты проверяются по порядку, первый сработавший — причина пары.
+    Пусто — пары годны."""
+    refusals = []
+    for old, new in item.pairs:
+        pair = f"`{old}` → `{new}`"
+        kinds = (_assertion_call_kind(old), _assertion_call_kind(new))
+        if all(kinds) and kinds[0] != kinds[1]:
+            refusals.append(
+                f"{item.address}: {pair} — {SIGN_OTHER_KIND} ({kinds[0]} → "
+                f"{kinds[1]}): смена вида утверждения в «Меняемое поведение» "
+                f"не входит — вынеси её вопросом Оператору в батче с "
+                f"матрицей (мандат на ослабление даёт Оператор)")
+            continue
+        keys = {"было": _side_key(old), "стало": _side_key(new)}
+        unreadable = [f"«{side}» `{text}`" for side, text in
+                      (("было", old), ("стало", new)) if keys[side] is None]
+        if unreadable:
+            refusals.append(
+                f"{item.address}: {BEHAVIOR_NEED_LITERAL} — "
+                f"{', '.join(unreadable)} не читается ast.literal_eval "
+                f"(слова, имя, выражение или вызов); «было» и «стало» — "
+                f"скалярные литералы Python в обратных кавычках; "
+                f"{_BEHAVIOR_FIX_HINT}")
+            continue
+        containers = [f"«{side}» `{text}`" for side, text in
+                      (("было", old), ("стало", new))
+                      if isinstance(ast.literal_eval(text), _CONTAINER_TYPES)]
+        if containers:
+            refusals.append(
+                f"{item.address}: {BEHAVIOR_NEED_SCALAR} — "
+                f"{', '.join(containers)} — контейнер, гейт неослабления "
+                f"такую пару не засчитает; {_BEHAVIOR_FIX_HINT}")
+            continue
+        if keys["было"] not in literals:
+            refusals.append(
+                f"{item.address}: «было» `{old}` нет среди литералов "
+                f"утверждений метода и его помощников первого уровня — "
+                f"«было» берётся из кода метода на main; {_BEHAVIOR_FIX_HINT}")
+    return refusals
 
 
 # --------------------------------------------------------------------------
@@ -4161,6 +4348,9 @@ def _content_errors(label: str, text: str) -> list[str]:
 
     if atype == "spec_audit":
         errors.extend(spec_audit_field_errors(label, meta))
+
+    if atype == "questions" and QUESTIONS_SECTION in headers:
+        errors.extend(questions_matrix_errors(label, text, meta))
 
     errors.extend(escalation_status_errors(label, text, meta))
 
