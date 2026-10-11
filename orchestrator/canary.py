@@ -162,6 +162,7 @@ from scripts import guard
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
               auto, budget, catalog, cleanup, config, fsm, gitcmd, liveness,
               models, roles, runner, store, workspace, yamlmini)
+from .advance_gates import spec_audit
 from .pool_seal import _pool_dir
 from .providers import codex as codex_provider
 
@@ -1340,6 +1341,18 @@ def _spec_gate_next_state(conn, task_id: str, t) -> str | None:
 
 
 def _pass_spec_gate(conn, task_id: str) -> None:
+    # Вердикт `fail` аудита SPEC проходит гейт только явным флагом
+    # Оператора (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 19): автогейт
+    # канарейки его не принимает — задача снимается как неоконченная,
+    # прогон красный.
+    verdict = spec_audit.last_verdict(conn, task_id)
+    if verdict == "fail":
+        _kill_inconclusive(
+            conn, task_id,
+            f"canary: аудит SPEC — последний вердикт fail, возвраты "
+            f"аналитику исчерпаны; автогейт SPEC канарейки этот вердикт не "
+            f"проводит")
+        return
     t = store.get_task(conn, task_id)
     next_state = _spec_gate_next_state(conn, task_id, t)
     if next_state is None:

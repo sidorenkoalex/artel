@@ -5,7 +5,7 @@
 шагами не думает никто. Все гейты Фазы 0 — ручные (approve/reject из CLI).
 
 Состояния:
-  spec_writing -> spec_gate -> tests_writing -> in_dev -> verifying -> review -> acceptance -> merge_gate -> done
+  spec_writing [-> spec_audit] -> spec_gate -> tests_writing -> in_dev -> verifying -> review -> acceptance -> merge_gate -> done
                                                    ^______________________|  (changes_requested, <=3)
                                                    ^__________________________________|  (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
@@ -26,6 +26,14 @@ approve идёт прямо в `in_dev`, как до T023. Выход из `test
 (`tasks/<id>/acceptance_tests/`); `escalate` уводит задачу в `escalated`
 немедленно. После выхода каталог `acceptance_tests/` залочен фиксацией
 (T021): правка после лока — отказ перехода `in_dev -> verifying`.
+
+`spec_audit` (ADR-0022) — независимый аудит SPEC аналитика, роль
+spec_auditor: задача с ТЗ уходит из `spec_writing` на гейт SPEC только через
+него. Вердикт `SPEC-AUDIT.md`: pass/concerns — на гейт, fail — возврат
+аналитику (не больше двух за жизнь задачи), затем гейт с этим вердиктом.
+`approve` на гейте при последнем вердикте fail требует флага
+`--accept-audit-fail`; `spec-audit <id>` возвращает задачу с гейта SPEC на
+повторный аудит (в том числе задачу без ТЗ).
 
 `approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
 агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
@@ -145,8 +153,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   hook-migrate inspect|apply|restore --client codex|claude --config <path>
                [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
-           [--fresh-suite] [--no-answer] |
-  reject <id> "<причина>" |
+           [--fresh-suite] [--no-answer] [--accept-audit-fail] |
+  reject <id> "<причина>" | spec-audit <id> |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
   kill <id> | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
@@ -705,6 +713,7 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           pool_seal, projects, prune, release, report, runner,
                           session, snapshot, store, suite_run, venv, version,
                           watch, workspace, zone_lock)
+from orchestrator.advance_gates import spec_audit  # noqa: E402
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -1632,6 +1641,7 @@ def _fixes_main_arg(rest: list) -> str | None:
 
 
 NO_ANSWER_FLAG = fsm.NO_ANSWER_FLAG
+ACCEPT_AUDIT_FAIL_FLAG = spec_audit.ACCEPT_FAIL_FLAG
 
 
 def _approve_reason_indices(rest: list) -> set[int]:
@@ -1649,8 +1659,21 @@ def _approve_no_answer_arg(rest: list) -> bool:
     01M44ENW1B73Z80PR73HP1C9CG, требование 3) — снятие эскалации «нужен
     шаг роли» без ответа. Основание другого флага, совпавшее с текстом
     флага, флагом не считается."""
+    return _approve_bool_flag(rest, NO_ANSWER_FLAG)
+
+
+def _approve_accept_audit_fail_arg(rest: list) -> bool:
+    """Флаг `approve <id> [sha] --accept-audit-fail` (SPEC
+    01M4MQAGRWMWR0GFDM9086P3TD, требование 16) — принятие последнего
+    вердикта `fail` аудита SPEC на гейте SPEC."""
+    return _approve_bool_flag(rest, ACCEPT_AUDIT_FAIL_FLAG)
+
+
+def _approve_bool_flag(rest: list, flag: str) -> bool:
+    """Флаг без значения после `<id>`; основание другого флага, совпавшее
+    с текстом флага, флагом не считается."""
     skipped = _approve_reason_indices(rest)
-    return any(arg == NO_ANSWER_FLAG and i not in skipped
+    return any(arg == flag and i not in skipped
                for i, arg in enumerate(rest[1:], start=1))
 
 
@@ -1659,10 +1682,13 @@ def _approve_sha_arg(rest: list) -> str | None:
     после `<id>`, не являющийся ни флагом `--accept-red`/`--fixes-main`,
     ни его основанием (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8:
     разбор позиционного sha не меняется), ни флагом `--no-answer` (SPEC
-    01M44ENW1B73Z80PR73HP1C9CG, требование 5); `None` — sha не передан."""
+    01M44ENW1B73Z80PR73HP1C9CG, требование 5) или `--accept-audit-fail`
+    (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 16); `None` — sha не
+    передан."""
     skipped = _approve_reason_indices(rest)
     for i, arg in enumerate(rest[1:], start=1):
-        if i in skipped or arg in (NO_ANSWER_FLAG, FRESH_SUITE_FLAG):
+        if i in skipped or arg in (NO_ANSWER_FLAG, FRESH_SUITE_FLAG,
+                                   ACCEPT_AUDIT_FAIL_FLAG):
             continue
         return arg
     return None
@@ -1817,9 +1843,11 @@ def main() -> None:
             accept_red=_accept_red_arg(rest),
             fixes_main=_fixes_main_arg(rest),
             fresh_suite=FRESH_SUITE_FLAG in rest[1:],
-            no_answer=_approve_no_answer_arg(rest)),
+            no_answer=_approve_no_answer_arg(rest),
+            accept_audit_fail=_approve_accept_audit_fail_arg(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
+        "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
         "answer": lambda: answer.cmd_answer(*_answer_args(rest)),
         "zones-extend": lambda: answer.cmd_zones_extend(rest[0], rest[1]),
         "kill": lambda: cleanup.cmd_kill(rest[0], confirmed="--yes" in rest[1:]),

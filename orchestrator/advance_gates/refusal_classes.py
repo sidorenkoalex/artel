@@ -28,6 +28,15 @@ REWORK_REFUSAL_ACTION = "переход отклонён: замечания р�
 # значит новый ANSWER поверх отработанного, и решает Оператор, не второй шаг.
 ANSWER_UNPROCESSED_REFUSAL_ACTION = ("переход отклонён: ANSWER Оператора не "
                                      "отработан developer")
+# Аудит SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требования 12-13): вердикт
+# прошлого визита или чужой роли — роль ещё не закончила; `spec_sha` вердикта
+# не тот — чинит аудитор; SPEC сменился за визит — решает Оператор.
+SPEC_AUDIT_NOT_FRESH_REFUSAL_ACTION = ("переход отклонён: вердикт аудита SPEC "
+                                       "не свежий")
+SPEC_AUDIT_SPEC_SHA_REFUSAL_ACTION = ("переход отклонён: spec_sha аудита не "
+                                      "равен sha SPEC входа")
+SPEC_AUDIT_SPEC_CHANGED_REFUSAL_ACTION = ("переход отклонён: SPEC сменился за "
+                                          "визит аудита")
 
 # Подкласс «роль ещё не закончила» класса «чинит роль»: шаг роли
 # запускается, но в бриф эти отказы не попадают — роли нечего в них
@@ -40,7 +49,8 @@ ANSWER_UNPROCESSED_REFUSAL_ACTION = ("переход отклонён: ANSWER О
 # порог холостых шагов `config.AUTO_STALL_STEPS_LIMIT`, как нежурналируемый
 # «PLAN.md не ready».
 ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (REWORK_REFUSAL_ACTION,
-                                     TREE_NOT_ON_BRANCH_REFUSAL_ACTION)
+                                     TREE_NOT_ON_BRANCH_REFUSAL_ACTION,
+                                     SPEC_AUDIT_NOT_FRESH_REFUSAL_ACTION)
 
 # Действия класса «чинит Оператор», отделённые от прежнего действия того
 # же гейта (требование 5): прежний текст остаётся за причиной роли.
@@ -58,6 +68,8 @@ REFUSAL_CLASSES = {
     TREE_NOT_ON_BRANCH_REFUSAL_ACTION: ROLE_FIXES,
     REWORK_REFUSAL_ACTION: ROLE_FIXES,
     ANSWER_UNPROCESSED_REFUSAL_ACTION: ROLE_FIXES,
+    SPEC_AUDIT_NOT_FRESH_REFUSAL_ACTION: ROLE_FIXES,
+    SPEC_AUDIT_SPEC_SHA_REFUSAL_ACTION: ROLE_FIXES,
     "переход отклонён: защищённый путь": ROLE_FIXES,
     "переход отклонён: гейт зон — мандат есть, раздел PLAN не оформлен": ROLE_FIXES,
     "переход отклонён: приложение PLAN неприменимо": ROLE_FIXES,
@@ -77,6 +89,7 @@ REFUSAL_CLASSES = {
     MUTATION_CLAIM_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
     ACCEPTANCE_CODE_COPY_REFUSAL_ACTION: OPERATOR_FIXES,
     LONG_LIVED_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
+    SPEC_AUDIT_SPEC_CHANGED_REFUSAL_ACTION: OPERATOR_FIXES,
     "переход отклонён: результат шага не закоммичен": OPERATOR_FIXES,
     "переход отклонён: рабочая копия артефактов грязная": OPERATOR_FIXES,
     "переход отклонён: лок приёмочных тестов": OPERATOR_FIXES,

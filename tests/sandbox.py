@@ -328,6 +328,13 @@ FIXTURE_ROLES = {
                  "skills": ["conventions-core", "escalation-rules",
                             "review-checklist"],
                  "model_tier": FIXTURE_TIER},
+    # Аудитор SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD): агентская роль
+    # состояния `spec_audit`. Скил `spec-audit` боевой карты здесь не назван:
+    # его файл едет приложением PLAN, а песочницы, копирующие `skills/`
+    # репозитория, не должны зависеть от того, наложено ли оно.
+    "spec_auditor": {"executor": "agent", "token_slot": "artel-spec-auditor",
+                     "skills": ["conventions-core", "escalation-rules"],
+                     "model_tier": FIXTURE_TIER},
     "verifier": {"executor": "none", "token_slot": "artel-verifier"},
 }
 
