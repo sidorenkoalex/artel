@@ -2,7 +2,7 @@
 task: 01M4NZ5KT0PX0RYWTSTN1XEFS5
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -101,6 +101,13 @@ QUESTIONS (`tests/test_answer_branch_reads.py`,
    `test_task_id_prefix_regression`, все `test_guard_*`), планка
    `plank-run`, полный набор `suite-run`.
 
+   Итог (шаг после WIP-чекпоинта 30f8d731): долгоживущие тесты задачи —
+   13 passed; тесты затронутых модулей (13 файлов выше) — 205 passed;
+   `plank-run` — 2 passed, код 0; `suite-run` №1 с приложениями PLAN —
+   «зелёный прогон»; заявки «Ловит мутацию» у изменённых файлов `tests/`
+   на месте (`guard.test_functions_without_mutation_claim` против main —
+   пусто); карта регенерирована; guard по PLAN.md — ок.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -148,6 +155,14 @@ QUESTIONS (`tests/test_answer_branch_reads.py`,
   в PATH (`command not found`), а циклы `for … done` в Bash требуют
   подтверждения — разбор файлов пришлось делать `python3 -c`; стоит
   назвать это в миссии, чтобы роль не тратила шаги на пробы.
+- `orchestrator/suite_run.py`: отчёт зелёного полного прогона №1 печатает
+  «прошло: 1, упало: 0», хотя промежуточный отчёт того же прогона называл
+  4986 выполненных тестов ветки; счётчик, похоже, считает не тесты, а
+  что-то иное. Лог прогона роли прочитать нельзя: он лежит вне её
+  каталогов.
+- `pytest -n 4` в окружении роли падает («node down: Not properly
+  terminated», запускается около 20 воркеров вместо 4), поэтому тесты
+  затронутых модулей шли последовательно, около 4,5 минуты.
 
 ## Приложение: правка templates/QUESTIONS.md
 
