@@ -583,6 +583,9 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
   suite_run команда `suite-run <id> [--wait <минуты> | --failed]`: полный
             прогон тестов проекта задачи фоном у пульта, сравнение с базой
             ветки, повтор упавших (SPEC 01M462QACEH29RPRD2RZHGHQFM)
+  preflight команда `preflight <id>`: предпроверка выхода из tests_writing
+            по черновику test_author теми же ядрами guard, что переход;
+            только чтение (SPEC 01M4P4ZP37WV81410YTZHKQC8D)
   docs_fetch команда `docs <id> [файл]`/`docs --fetch-all`: ссылка
             документов задачи из origin её репозитория, только вперёд
             (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ)
@@ -713,9 +716,9 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           budget, canary, catalog, ci_rerun, cleanup, doctor,
                           docs_fetch, dry_run, fsm, lease,
                           liveness, models, notes, pause, pin, plank_run,
-                          pool_seal, projects, prune, release, report, runner,
-                          session, snapshot, store, suite_run, venv, version,
-                          watch, workspace, zone_lock)
+                          pool_seal, preflight, projects, prune, release,
+                          report, runner, session, snapshot, store, suite_run,
+                          venv, version, watch, workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
 
 
@@ -1792,10 +1795,12 @@ def _cmd_pause(rest: list) -> None:
 #: требование 2). `suite-run` пишет только в каталог логов пульта (лог,
 #: перечень упавших, итог базы, состояние прогона и замок) — состояния
 #: задачи, lease и журнала не трогает (SPEC 01M462QACEH29RPRD2RZHGHQFM,
-#: требование 14).
+#: требование 14). `preflight` только читает: БД — `mode=ro`, без lease,
+#: журнала, коммитов и выкладки планки (SPEC 01M4P4ZP37WV81410YTZHKQC8D,
+#: требования 7, 9, 10).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
-     "acceptance-dry-run", "plank-run", "suite-run"))
+     "acceptance-dry-run", "plank-run", "suite-run", "preflight"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -1917,6 +1922,7 @@ def main() -> None:
         "plank-run": lambda: plank_run.cmd_plank_run(
             rest[0], rest[1] if len(rest) > 1 else None),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
+        "preflight": lambda: preflight.cmd_preflight(rest[0]),
         # `docs` и `artifact-branches-cleanup` ходят в сеть и переписывают
         # локальные ссылки — вне белого списка ролей.
         "docs": lambda: docs_fetch.cmd_docs(rest),
