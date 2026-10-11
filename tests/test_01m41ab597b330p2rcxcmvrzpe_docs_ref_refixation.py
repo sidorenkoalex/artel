@@ -39,6 +39,7 @@ from unittest import mock
 from orchestrator import (amend, answer, catalog, checkpoint, cleanup, config,
                           doctor, fixation, fsm, idgen, projects, runner,
                           snapshot, store)
+from tests import mandate_matrix
 from tests.sandbox import GitignoreCommittedRealGitSandbox, make_project_repo
 
 REF_PREFIX = "refs/artifacts/"
@@ -502,8 +503,9 @@ class OperatorCommandsAfterRoleMoveTest(DocsRefSandbox):
         moved = self.role_moves_ref(task_id)
         mark = self.journal_mark(task_id)
 
-        out, _exited = self.run_cmd(answer.cmd_zones_extend, task_id,
-                                    self.rng.choice(("docs/x.md", "orchestrator/y.py")))
+        path = self.rng.choice(("docs/x.md", "orchestrator/y.py"))
+        out, _exited = self.run_cmd(answer.cmd_zones_extend, task_id, path,
+                                    matrix_path=mandate_matrix.matrix_file(self, path))
 
         self.assert_untouched(task_id, fixed, moved, f"zones-extend\n{out}")
         self.assertEqual(self.state(task_id), "escalated", self.note(

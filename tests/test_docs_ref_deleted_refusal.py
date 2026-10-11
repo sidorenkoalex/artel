@@ -9,6 +9,7 @@ update-ref -d` мимо пульта.
 """
 from orchestrator import amend, answer, fixation, store
 from orchestrator.advance_gates import tests_writing
+from tests import mandate_matrix
 from tests.test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation import (
     DocsRefSandbox)
 
@@ -48,8 +49,9 @@ class DeletedRefTest(DocsRefSandbox):
         self.force_state(task_id, "in_dev")
         self.delete_ref(task_id)
 
-        out, exited = self.run_cmd(answer.cmd_zones_extend, task_id,
-                                   "docs/extra.md")
+        out, exited = self.run_cmd(
+            answer.cmd_zones_extend, task_id, "docs/extra.md",
+            matrix_path=mandate_matrix.matrix_file(self, "docs/extra.md"))
 
         self.assert_refused_untouched(task_id, fixed, "in_dev", out, exited,
                                       "zones-extend")

@@ -36,6 +36,7 @@ from unittest import mock
 from orchestrator import (answer, catalog, config, lease, projects, review,
                           runner, store)
 from orchestrator.advance_gates import mandate
+from tests import mandate_matrix
 from tests.sandbox import GitignoreCommittedRealGitSandbox, _alive_foreign_pid
 
 INSTRUCTION_ACTION = "указание Оператора"
@@ -165,7 +166,7 @@ class InstructionSandbox(GitignoreCommittedRealGitSandbox):
     def answer_file(self, text: str) -> str:
         path = self.root / ".artel" / f"answer-{self.rng.randrange(1 << 40)}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_text(mandate_matrix.with_matrix(text), encoding="utf-8")
         return str(path)
 
     # ------------------------------------------------- ссылка и журнал

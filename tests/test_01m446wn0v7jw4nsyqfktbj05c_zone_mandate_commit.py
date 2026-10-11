@@ -33,6 +33,7 @@ from unittest import mock
 
 from orchestrator import answer, checkpoint, config, fsm, pull, store, workspace
 from orchestrator.advance_gates.zones import ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
+from tests import mandate_matrix
 from tests.sandbox import RealGitSandbox
 
 LETTERS = "ABCDEFGHJKMNPQRSTVWXYZ"
@@ -224,8 +225,9 @@ class ZoneMandateSandbox(RealGitSandbox):
         before = set(self.answers(task_id))
         source = self.root / ".artel" / f"answer-{self.rng.randrange(1 << 30)}.txt"
         source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text(f"{MARKER} {', '.join(entries)}\n\nОснование: решение "
-                          f"Оператора ({self.seed}).\n", encoding="utf-8")
+        source.write_text(mandate_matrix.with_matrix(
+            f"{MARKER} {', '.join(entries)}\n\nОснование: решение "
+            f"Оператора ({self.seed}).\n"), encoding="utf-8")
         out, failed = self.run_cmd(answer.cmd_answer, task_id, str(source))
         self.assertFalse(failed, self.explain(f"answer отказала:\n{out}"))
         created = sorted(set(self.answers(task_id)) - before)

@@ -116,7 +116,63 @@ def _read_checked_answer_file(conn, task_id: str, file_path: str,
     if problems:
         sys.exit(f"[{task_id}] answer отказана — строка мандата не прошла "
                  f"проверку:\n" + "\n".join(f"  {p}" for p in problems))
+    _refuse_without_matrix(task_id, "answer", _matrix_problems(raw))
     return raw
+
+
+INDEPENDENT_CHECK_MARKER = "Независимая проверка:"
+
+
+def _matrix_mandate_elements(raw: str) -> list[str] | None:
+    """Элементы ВСЕХ строк мандатов зон и тестов файла, без повторов;
+    `None` — строки мандата нет (матрица не требуется)."""
+    found: list[str] | None = None
+    for line in raw.splitlines():
+        for marker in mandate.MATRIX_MANDATE_MARKERS:
+            parsed = mandate.elements(line, marker)
+            if parsed is None:
+                continue
+            found = found if found is not None else []
+            found.extend(e for e in parsed if e not in found)
+    return found
+
+
+def _has_independent_check(raw: str) -> bool:
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if (stripped.startswith(INDEPENDENT_CHECK_MARKER)
+                and stripped[len(INDEPENDENT_CHECK_MARKER):].strip()):
+            return True
+    return False
+
+
+def _matrix_problems(raw: str) -> list[str]:
+    """Причины отказа файлу `answer` с мандатом по матрице неослабления
+    (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, требования 1-4): форма — общей
+    `mandate.matrix_refusals`, строка независимой проверки — только при
+    мандате тестов."""
+    elements = _matrix_mandate_elements(raw)
+    if elements is None:
+        return []
+    problems = mandate.matrix_refusals(raw, elements)
+    weakening = any(
+        mandate.elements(line, mandate.TEST_WEAKENING_MANDATE_MARKER)
+        is not None for line in raw.splitlines())
+    if weakening and not _has_independent_check(raw):
+        problems.append(f"при мандате «{mandate.TEST_WEAKENING_MANDATE_MARKER}» "
+                        f"нет строки «{INDEPENDENT_CHECK_MARKER} <вердикт>» "
+                        f"с непустым вердиктом")
+    return problems
+
+
+def _refuse_without_matrix(task_id: str, command: str,
+                           problems: list[str]) -> None:
+    """Отказ по матрице — до записи ANSWER и коммита (требование 6)."""
+    if problems:
+        sys.exit(f"[{task_id}] {command} отказана — матрица неослабления "
+                 f"({mandate.MATRIX_DOC_REF}) не прошла проверку формы, "
+                 f"ANSWER не создан:\n"
+                 + "\n".join(f"  {p}" for p in problems))
 
 
 def _answer_document(task_id: str, n: int, raw: str) -> str:
@@ -340,17 +396,48 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
 
 
 def cmd_zones_extend(task_id: str, paths_arg: str,
-                     session_id: str | None = None) -> None:
-    """`zones-extend <id> <путь1>[, <путь2>]` (SPEC
+                     session_id: str | None = None,
+                     matrix_path: str | None = None) -> None:
+    """`zones-extend <id> <путь1>[, <путь2>] --matrix <файл>` (SPEC
     01M287TPG0HAVXS8CHBCY679WN, требование 2): та же lease-дисциплина
-    и резолв префикса, что у `cmd_answer`."""
+    и резолв префикса, что у `cmd_answer`.
+
+    `matrix_path` — файл матрицы неослабления Оператора (SPEC
+    01M4NZ5QRB7MNEYCWGXEWVWFP0, требование 5); без него — отказ здесь,
+    а не только в разборе CLI: прямой вызов функции не обходит правило."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_zones_extend(conn, task_id, paths_arg))
+                     lambda sid: _cmd_zones_extend(conn, task_id, paths_arg,
+                                                   matrix_path))
 
 
-def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
+def _zones_extend_matrix(task_id: str, matrix_path: str | None,
+                         paths: list[str]) -> str:
+    """Раздел матрицы файла `matrix_path`, прошедший проверку формы для
+    `paths`, — его и только его переносит ANSWER (требование 5).
+
+    Строка любого маркера мандата в файле — отказ: мандат `zones-extend`
+    собирает пульт из аргумента, а строка мандата тестов из файла попала
+    бы в ANSWER мимо `mandate.refusals`, и гейт неослабления засчитал бы
+    её (`test_integrity._answer_mandate` читает все ANSWER)."""
+    if matrix_path is None:
+        _refuse_without_matrix(task_id, "zones-extend", [
+            "не передан файл матрицы: zones-extend <id> <путь>[, <путь>...] "
+            "--matrix <файл>"])
+    raw = _read_answer_file(task_id, matrix_path)
+    foreign = [line.strip() for line in raw.splitlines()
+               if line.strip().startswith(mandate.MANDATE_MARKERS)]
+    problems = [f"строка мандата в файле матрицы: «{line}» — мандат "
+                f"zones-extend собирается только из путей аргумента"
+                for line in foreign]
+    problems += mandate.matrix_refusals(raw, paths)
+    _refuse_without_matrix(task_id, "zones-extend", problems)
+    return mandate.matrix_section(raw)
+
+
+def _cmd_zones_extend(conn, task_id: str, paths_arg: str,
+                      matrix_path: str | None = None) -> None:
     """Тот же рубеж `runner.in_role_environment()`, что и ветка
     `in_dev`/`review` `_cmd_answer` выше, и по той же причине (REVIEW
     01M287TPG0HAVXS8CHBCY679WN итерация 1, замечание R1-F1) — эта команда
@@ -364,6 +451,7 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
     paths = fsm_advance._split_zone_paths(paths_arg)
     if not paths:
         sys.exit(f"[{task_id}] zones-extend: отказ — пустой список путей")
+    section = _zones_extend_matrix(task_id, matrix_path, paths)
 
     fixation.stop_on_ref_drift(conn, task_id, "operator", "zones-extend")
     branch, _foreign = artifact_source.resolve(conn, task_id)
@@ -372,7 +460,7 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
     rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
     paths_str = ", ".join(paths)
     raw = (f"{fsm_advance._ZONES_MANDATE_MARKER} {paths_str}\n\n"
-          f"мандат Оператора: {paths_str}\n")
+          f"мандат Оператора: {paths_str}\n\n{section}")
     text = _answer_document(task_id, n, raw)
     commit_message = f"{task_id}: ANSWER-{n} — ответ Оператора"
     commit_sha = artifact_branch.commit_files(task_id, {rel_answer: text},
