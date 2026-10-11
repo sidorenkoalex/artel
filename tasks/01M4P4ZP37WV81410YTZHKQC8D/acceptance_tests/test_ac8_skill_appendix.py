@@ -38,12 +38,25 @@ GIT_LOCATING_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
 def apply_to_copy(original: str, diff: str) -> tuple[str | None, str]:
-    """(текст скила после наложения `diff`, ответ git при отказе)."""
+    """(текст скила после наложения `diff`, ответ git при отказе).
+
+    Рубеж перехода гоняет планку на дереве «ветка + приложения PLAN»
+    (`orchestrator/appendix_tree.py::suite_tree`): там приложение к скилу
+    уже наложено. Признак «уже наложено» — только `git apply --reverse
+    --check` всего приложения на копии (то же правило, что
+    `plan_appendix.in_base`); частично наложенное обратную проверку не
+    проходит и идёт обычным наложением — отказ git (правка Оператора по
+    ADR-0012 п.(а), amend-tests 11.10.2026)."""
     env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATING_ENV}
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / SKILL
         path.parent.mkdir(parents=True)
         path.write_text(original, encoding="utf-8")
+        applied = subprocess.run(
+            ["git", "apply", "--reverse", "--check", f"--include={SKILL}", "-"],
+            cwd=tmp, input=diff, capture_output=True, text=True, env=env)
+        if applied.returncode == 0:
+            return original, ""
         res = subprocess.run(["git", "apply", f"--include={SKILL}", "-"],
                              cwd=tmp, input=diff, capture_output=True,
                              text=True, env=env)
@@ -68,6 +81,18 @@ def skill_after_plan(plan: str, original: str) -> tuple[str | None, str]:
 
 def preflight_paragraphs(text: str) -> list[str]:
     return [p for p in re.split(r"\n[^\S\n]*\n", text) if PREFLIGHT.search(p)]
+
+
+def added_text(plan: str) -> str:
+    """Текст строк «+» приложений PLAN к скилу (без заголовков `+++`):
+    абзац о предпроверке обязан прийти из приложения, а не уже стоять в
+    скиле."""
+    appendices, _errors = guard.plan_appendices(plan)
+    lines = []
+    for appendix in (a for a in appendices if SKILL in a.paths):
+        lines += [line[1:] for line in appendix.diff.splitlines()
+                  if line.startswith("+") and not line.startswith("+++")]
+    return "\n".join(lines)
 
 
 class SkillAppendixTest(unittest.TestCase):
@@ -97,6 +122,10 @@ class SkillAppendixTest(unittest.TestCase):
         self.assertTrue(any(BEFORE_HANDING.search(p) for p in paragraphs),
                         f"абзацы с «artel.py preflight» не говорят о запуске "
                         f"перед сдачей шага: {paragraphs}")
+        own = preflight_paragraphs(added_text(plan))
+        self.assertTrue(any(BEFORE_HANDING.search(p) for p in own),
+                        f"строки «+» приложения к {SKILL} не несут абзаца с "
+                        f"«artel.py preflight» и «перед сдачей»: {own}")
 
 
 if __name__ == "__main__":
