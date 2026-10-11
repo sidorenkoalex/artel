@@ -2,7 +2,7 @@
 task: 01M4M67SGNEYMN9F1C7XVX24XE
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -85,21 +85,44 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
 4. `cleanup.py`: `_commit_closing` пробрасывает аргументы; `artifacts_in_main`
    — по ссылке документов.
 5. `retro.py`: адрес по умолчанию — `refs/artifacts/<id>`.
-6. Тесты: удаление по мандату; три смены ожидания из SPEC; регенерация карты.
+6. Тесты: удаление по мандату ANSWER-1; три смены ожидания из SPEC;
+   регенерация карты.
+7. Мандат ANSWER-2 (итерация после эскалации):
+   - `tests/test_retro.py::RetroGenerationTest::test_build_done_has_merge_sha_address_and_first_context_line_only`
+     — адрес → `assertIn(f"Адрес артефактов: refs/artifacts/{self.TASK}", text)`,
+     добавлен `assertIn("Итог: done, sha " + "deadbeef" * 5, text)`; строки о
+     первой строке контекста не тронуты (п.1);
+   - `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py::MergeGuardAfterSnapshotTest::test_ac1_clean_snapshot_merges_as_before`
+     — `assertTrue(origin_tree_has(...))` → `assertFalse(...)`, добавлена
+     проверка, что `{dir}/acceptance_tests/test_ac1_fixture.py` есть в
+     `ls-tree -r refs/artifacts/<id>` origin; `done` и сдвиг origin/main не
+     тронуты (п.2);
+   - `tests/test_retro_artifact_branch_reads.py::RetroBranchReadTest::test_done_address_names_the_snapshot_ref_when_asked`
+     — явный адрес отличим (`address="X-адрес"`, проверяется он), вызов без
+     `address` — на `refs/artifacts/{TASK}` (п.3);
+   - два метода `tests/test_invariants.py` — приложением PLAN ниже (защищённый
+     путь, в код ветки не коммитится): внутри метода
+     `mock.patch.object(fsm_merge_gate, "_task_docs_files", ...)` с непустым
+     чистым деревом `tasks/<id>/SPEC.md`; проверка документов настоящая,
+     утверждения не тронуты, `SpyRun` не тронут; в докстринги добавлена
+     строка «Ловит мутацию» (п.4);
+   - `cleanup.drop_task_dir` — на прежнем признаке «каталог в дереве main»
+     (`_dir_in_main`, «None — каталог оставлен» сохранён), шесть методов
+     `tests/test_kill_cleanup.py` не тронуты (п.5).
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1 |
+| 1 | 1, 7 |
 | 2 | 1, 2 |
 | 3 | 1, 3 |
 | 4 | 3, 4 |
 | 5 | 2, 3 |
 | 6 | 1 |
-| 7 | 1 |
+| 7 | 1, 7 |
 | 8 | 1 |
-| 9 | 4, 5 |
+| 9 | 4, 5, 7 |
 | 10 | 1 |
 
 ## Влияние на систему
@@ -142,6 +165,25 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
 - `plank-run`: планка задачи — только перечень долгоживущих файлов,
   `test_*.py` нет («pytest не запускался»); долгоживущий файл прогнан напрямую.
 - Карта кодовой базы регенерирована (`python3 scripts/codebase_map.py`).
+- Итерация ANSWER-2: `test_retro.py`, `test_retro_artifact_branch_reads.py` —
+  зелёные; мутации проверены: «Итог: done» несёт иной sha — красный
+  `test_build_done_has_merge_sha_address…`; параметр `address` игнорируется —
+  красный `test_done_address_names_the_snapshot_ref_when_asked`.
+  `MergeGuardAfterSnapshotTest` в процессе роли не исполняется
+  («artel.py approve: команда недоступна процессу роли developer» — тот же
+  класс, что `FixesMainArgTest`), проверяется `suite-run`.
+- Приложение к `tests/test_invariants.py`: применено во временной правке,
+  `MergeOnlyFromMergeGateTest` + `MergeNeedsGreenCiTest` — 7 passed; правка
+  снята, `git apply --check` приложения на чистом дереве ветки — проходит.
+  `suite-run` этого шага приложение не видит (PLAN читается из ссылки
+  документов, в неё он попадёт автокоммитом по итогам шага) — два метода
+  там ожидаемо красные до применения приложения.
+- `suite-run` №2 (после правок ANSWER-2): новые на ветке — ровно 2,
+  `test_invariants.py::MergeOnlyFromMergeGateTest::test_merge_gate_approve_is_that_path`
+  и `::MergeNeedsGreenCiTest::test_green_ci_merges` («ссылки документов …
+  нет» — их и закрывает приложение); на базе падений нет. Остальные тесты
+  вопросов 1–2 эскалации (`test_retro`, `MergeGuardAfterSnapshotTest`) —
+  зелёные. Лог: `.artel/logs/suite-run/01M4M67SGNEYMN9F1C7XVX24XE/01M4M67SGNEYMN9F1C7XVX24XE-suiterun-2.log`.
 
 ## Предложения системе
 
@@ -152,62 +194,64 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
   grep по `tests/` литералов снимаемого поведения (здесь — «:tasks/{»,
   «снимок артефактной ветки», `origin_tree_has(...tasks/`).
 
-## Эскалация
+## Приложение: правка tests/test_invariants.py (ANSWER-2 п.4)
 
-**Вопросы** (по блокирующести; код и долгоживущий файл задачи готовы, ветка
-красна только этими тестами):
+Два метода инвариантов мержа в песочнице `FsmTest` (git не исполняется,
+ссылки документов нет): чтение дерева ссылки подменено чистым деревом,
+проверка документов задачи исполняется настоящая, утверждения методов не
+меняются. `git apply --check` на чистом дереве ветки — проходит.
 
-1. `tests/test_retro.py::RetroGenerationTest::test_build_done_has_merge_sha_address_and_first_context_line_only`
-   — требование 9 / AC-13 (адрес по умолчанию `refs/artifacts/<id>`) прямо
-   противоречит утверждению
-   `self.assertIn("deadbeef" * 5 + f":tasks/{self.TASK}/", text)`; в разделе
-   «Меняемое поведение» метода нет. Предлагаемая смена:
-   → `self.assertIn(f"Адрес артефактов: refs/artifacts/{self.TASK}", text)`.
-   Варианты: а) мандат на эту смену (строкой «Меняемое поведение» SPEC или
-   ANSWER); б) иное решение по требованию 9. Дефолт — а).
-2. `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py::MergeGuardAfterSnapshotTest::test_ac1_clean_snapshot_merges_as_before`
-   — требование 1 (каталога задачи в main нет) противоречит утверждению
-   `self.assertTrue(self.origin_tree_has(f"{task['dir']}/acceptance_tests/test_ac1_fixture.py"), self.msg(out))`.
-   Предлагаемая смена: → `self.assertFalse(self.origin_tree_has(f"{task['dir']}/acceptance_tests/test_ac1_fixture.py"), self.msg(out))`
-   (прочие утверждения метода — `done`, main сдвинут — остаются). Варианты:
-   а) мандат на смену; б) удаление утверждения. Дефолт — а).
-3. `tests/test_invariants.py::MergeOnlyFromMergeGateTest::test_merge_gate_approve_is_that_path`
-   и `tests/test_invariants.py::MergeNeedsGreenCiTest::test_green_ci_merges` —
-   песочница `FsmTest` не исполняет git, ссылки документов у задачи нет, и
-   требование 7 / AC-11 («ссылки нет» — отказ мержа) отказывает там, где
-   метод ждёт `done` («ссылки документов refs/artifacts/<id> нет в
-   репозитории задачи»). Утверждения менять не нужно — фикстуре нужна
-   ссылка. `tests/test_invariants.py` — путь «только чтение» SPEC. Варианты:
-   а) Оператор правит фикстуру (`amend-tests`/коммит Оператора): в этих двух
-   методах подменить `fsm_merge_gate._task_docs_files` на чистое дерево
-   (`return ("<sha>", [f"tasks/{TASK}/SPEC.md"], "")`) либо научить шпион
-   git отвечать за `refs/artifacts/<id>`; б) мандат разработчику на ту же
-   правку фикстуры с расширением зон на `tests/test_invariants.py`;
-   в) ослабить требование 7 для задачи без фиксации — не предлагаю: AC-11
-   долгоживущего файла это запрещает. Дефолт — б).
-4. (не блокирует, подтверждение интерпретации) `cleanup.drop_task_dir`
-   оставлен на признаке «каталог в дереве main», а не на новом
-   `artifacts_in_main` (см. «Подход»). Варианты: а) так и оставить
-   (дефолт); б) перевести на `artifacts_in_main` — тогда нужен мандат на
-   смену ожидания шести методов `tests/test_kill_cleanup.py`
-   (`KillCleanupTest::test_branch_only_artifacts_and_branch_are_removed`,
-   `::test_cleanup_is_listed_in_the_journal`,
-   `::test_dir_committed_into_a_foreign_branch_is_left_alone`,
-   `::test_dir_staged_on_main_is_left_alone`,
-   `::test_repeated_kill_finds_nothing_and_does_not_fail`,
-   `CleanupWithoutGitTest::test_unreadable_index_keeps_the_dir`).
-
-**Контекст.** Реализованы требования 1–10: `fsm_merge_gate.py`
-(`_guard_task_docs_or_refuse`, `_publish_merge_artifacts`, `merge_sha` в
-`_cmd_approve_merge_gate`), `fsm_postmerge.py` (снят коммит RETRO и долгов),
-`snapshot.py` (sha мержа, строка приложений, инцидент `snapshot.closing` на
-каждом провале), `cleanup.py`, `retro.py`, карта. По мандату ANSWER-1 удалены
-`tests/test_fsm_retro.py` и
-`tests/test_main_ci_line.py::GuardAllLaunchTest::test_task_retro_does_not_hide_snapshot_violation`;
-три смены ожидания из «Меняемое поведение» внесены. Тесты из вопросов 1–3 не
-тронуты (красные на ветке). `suite-run` №1 — лог
-`.artel/logs/suite-run/01M4M67SGNEYMN9F1C7XVX24XE/01M4M67SGNEYMN9F1C7XVX24XE-suiterun-1.log`.
-
-**Блокирует.** Сдачу `ready`: без мандата по вопросам 1–3 ветка красна на
-четырёх существующих тестах, а их правка без мандата откажет рубежом
-неослабления.
+```diff
+diff --git a/tests/test_invariants.py b/tests/test_invariants.py
+index 514349a9..6d698989 100644
+--- a/tests/test_invariants.py
++++ b/tests/test_invariants.py
+@@ -549,10 +549,22 @@ class MergeOnlyFromMergeGateTest(FsmTest):
+         именно ветку задачи) — сам мандат даёт ANSWER-1, образец —
+         нелокированный `tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
+         test_ac15_invariants_12_19_remain_green.py`.
++
++        Ловит мутацию: approve из merge_gate не вливает ветку задачи (merge
++        не вызван либо вливает не её) или не доводит задачу до `done`.
+         """
++        from orchestrator import fsm_merge_gate
+         self.set_state("merge_gate")
+ 
+-        self.capture(fsm.cmd_approve, self.TASK)
++        # Песочница не исполняет git, и ссылки документов у задачи нет: без
++        # подмены чтения её дерева проверка документов задачи отказывает
++        # мерж «ссылки нет» (SPEC 01M4M67SGNEYMN9F1C7XVX24XE, требование 7).
++        # Сама проверка исполняется настоящая — подменено только чтение
++        # дерева ссылки, чистым деревом документов (ANSWER-2 п.4).
++        with mock.patch.object(
++                fsm_merge_gate, "_task_docs_files",
++                return_value=("d" * 40, [f"tasks/{self.TASK}/SPEC.md"], "")):
++            self.capture(fsm.cmd_approve, self.TASK)
+ 
+         # Ассерт по содержанию инварианта, а не по точному списку вызовов:
+         # merge случается здесь и мержит ветку задачи. Равенство всей
+@@ -765,10 +777,21 @@ class MergeNeedsGreenCiTest(FsmTest):
+         self.assertTrue(any("python=failure" in d for d in details), details)
+ 
+     def test_green_ci_merges(self):
+-        """Контроль: гейт проходим — зелёный CI мержит, как и раньше."""
++        """Контроль: гейт проходим — зелёный CI мержит, как и раньше.
++
++        Ловит мутацию: зелёный CI читается как не-зелёный — merge не
++        вызван, задача не доходит до `done`.
++        """
++        from orchestrator import fsm_merge_gate
+         self.set_state("merge_gate")
+ 
+-        self.capture(fsm.cmd_approve, self.TASK)
++        # Чтение дерева ссылки документов подменено чистым деревом — та же
++        # причина, что в `test_merge_gate_approve_is_that_path` (ANSWER-2
++        # п.4 SPEC 01M4M67SGNEYMN9F1C7XVX24XE).
++        with mock.patch.object(
++                fsm_merge_gate, "_task_docs_files",
++                return_value=("d" * 40, [f"tasks/{self.TASK}/SPEC.md"], "")):
++            self.capture(fsm.cmd_approve, self.TASK)
+ 
+         self.assertIn("merge", self.git_spy.git_subcommands())
+         self.assertEqual(self.state(), "done")
+```
