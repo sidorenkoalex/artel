@@ -126,6 +126,10 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
      вызовы и их утверждения не меняются), метод AC-5 зовёт его с
      `live_fixation=True` — фиксация читается настоящая. Утверждения прочих
      методов не тронуты.
+9. Мандат ANSWER-4: в приложение к `tests/test_invariants.py` добавлен
+   третий метод `ManualGatesNeedTheOperatorTest::test_operator_approve_passes_each_gate`
+   тем же образцом подмены `_task_docs_files`, только в подтесте
+   `merge_gate`; комментарий о причине и «Ловит мутацию» в докстринге.
 
 ## Покрытие требований
 
@@ -207,6 +211,13 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
   `test_ac5_code_map_and_retro…` красный; код возвращён. Без
   `live_fixation=True` метод красный на чистом коде (RETRO.md в ссылке
   origin нет — см. шаг 8). Карта регенерирована.
+- Итерация ANSWER-4: приложение дополнено третьим методом
+  (`ManualGatesNeedTheOperatorTest::test_operator_approve_passes_each_gate`,
+  подтест `merge_gate`). Применено во временной правке:
+  `ManualGatesNeedTheOperatorTest` + `MergeOnlyFromMergeGateTest` +
+  `MergeNeedsGreenCiTest` — 13 passed, 116 subtests passed; правка снята,
+  `git apply --check` приложения на чистом дереве ветки — проходит. Код
+  ветки в этой итерации не менялся.
 
 ## Предложения системе
 
@@ -217,16 +228,21 @@ incident-алерт `snapshot.closing` с target проекта задачи; п
   grep по `tests/` литералов снимаемого поведения (здесь — «:tasks/{»,
   «снимок артефактной ветки», `origin_tree_has(...tasks/`).
 
-## Приложение: правка tests/test_invariants.py (ANSWER-2 п.4)
+## Приложение: правка tests/test_invariants.py (ANSWER-2 п.4, ANSWER-4)
 
-Два метода инвариантов мержа в песочнице `FsmTest` (git не исполняется,
+Три метода инвариантов мержа в песочнице `FsmTest` (git не исполняется,
 ссылки документов нет): чтение дерева ссылки подменено чистым деревом,
 проверка документов задачи исполняется настоящая, утверждения методов не
-меняются. `git apply --check` на чистом дереве ветки — проходит.
+меняются. Третий метод (ANSWER-4) —
+`ManualGatesNeedTheOperatorTest::test_operator_approve_passes_each_gate`:
+подмена только вокруг `self.capture(fsm.cmd_approve, self.TASK)` в подтесте
+`merge_gate`, подтесты `spec_gate` и `acceptance` исполняются без подмены,
+`assertEqual(self.state(), expected)` и перечень гейтов не тронуты.
+`git apply --check` на чистом дереве ветки — проходит.
 
 ```diff
 diff --git a/tests/test_invariants.py b/tests/test_invariants.py
-index 514349a9..6d698989 100644
+index 514349a9..34d30b9a 100644
 --- a/tests/test_invariants.py
 +++ b/tests/test_invariants.py
 @@ -549,10 +549,22 @@ class MergeOnlyFromMergeGateTest(FsmTest):
@@ -277,4 +293,37 @@ index 514349a9..6d698989 100644
  
          self.assertIn("merge", self.git_spy.git_subcommands())
          self.assertEqual(self.state(), "done")
+@@ -1520,14 +1543,30 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
+                                      f"{name} прошла гейт {gate} за Оператора")
+ 
+     def test_operator_approve_passes_each_gate(self):
+-        """Контроль: гейты проходимы — но только командой Оператора."""
++        """Контроль: гейты проходимы — но только командой Оператора.
++
++        Ловит мутацию: approve Оператора не проводит задачу через один из
++        ручных гейтов — состояние после него не следующее по автомату.
++        """
++        from orchestrator import fsm_merge_gate
+         for gate, expected in (("spec_gate", "in_dev"),
+                                ("acceptance", "merge_gate"),
+                                ("merge_gate", "done")):
+             with self.subTest(гейт=gate):
+                 self.set_state(gate)
+ 
+-                self.capture(fsm.cmd_approve, self.TASK)
++                if gate == "merge_gate":
++                    # Чтение дерева ссылки документов подменено чистым
++                    # деревом — та же причина, что в
++                    # `MergeOnlyFromMergeGateTest.test_merge_gate_approve_is_that_path`
++                    # (ANSWER-4 SPEC 01M4M67SGNEYMN9F1C7XVX24XE).
++                    with mock.patch.object(
++                            fsm_merge_gate, "_task_docs_files",
++                            return_value=("d" * 40,
++                                          [f"tasks/{self.TASK}/SPEC.md"], "")):
++                        self.capture(fsm.cmd_approve, self.TASK)
++                else:
++                    self.capture(fsm.cmd_approve, self.TASK)
+ 
+                 self.assertEqual(self.state(), expected)
+ 
 ```
