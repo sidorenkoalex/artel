@@ -71,10 +71,11 @@ TRUNCATED_CI = json.dumps({
 
 # Все состояния FSM (docs/design.md §6 в срезе Фазы 0, artel.py docstring).
 # tests_writing — A4 (tasks/T023): приёмочные тесты до кода, между
-# spec_gate и in_dev.
-FSM_STATES = ("spec_writing", "spec_gate", "tests_writing", "in_dev",
-              "review", "acceptance", "merge_gate", "done", "escalated",
-              "killed")
+# spec_gate и in_dev. spec_audit — аудит SPEC между spec_writing и
+# spec_gate (SPEC 01M4MQAGRWMWR0GFDM9086P3TD).
+FSM_STATES = ("spec_writing", "spec_audit", "spec_gate", "tests_writing",
+              "in_dev", "review", "acceptance", "merge_gate", "done",
+              "escalated", "killed")
 
 # Заготовки артефактов — валидные по guard: с T017 он вызывается кодом на
 # каждом переходе `advance`, и артефакт без обязательных секций задачу не

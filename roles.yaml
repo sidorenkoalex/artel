@@ -17,6 +17,13 @@ roles:
     token_slot: artel-analyst
     skills: [conventions-core, escalation-rules, spec-authoring]
     model_tier: strong            # ярус -> модель: .artel/models.yaml (tiers)
+  spec_auditor:
+    executor: agent              # ADR-0022: независимый аудит SPEC между
+                                  # spec_writing и spec_gate (SPEC-AUDIT.md);
+                                  # модель аналитика не наследуется
+    token_slot: artel-spec-auditor
+    skills: [conventions-core, escalation-rules, spec-audit]
+    model_tier: strong            # ярус -> модель: .artel/models.yaml (tiers)
   test_author:
     executor: agent              # A4 (tasks/T023): приёмочные тесты до кода
     token_slot: artel-test-author
