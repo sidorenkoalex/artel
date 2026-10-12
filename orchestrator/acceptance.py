@@ -147,15 +147,24 @@ _RUN_SUMMARY = re.compile(
 # импорта), но назван он там же и тем же форматом, а Оператору нужен
 # именно nodeid. Якорь на начало строки обязателен — иначе слово FAILED
 # внутри traceback или в сообщении ассерта читалось бы как имя теста.
-_FAILED_LINE = re.compile(r"^(?:FAILED|ERROR) \S+.*$", re.MULTILINE)
+# `SUBFAILED<метка> <nodeid>` — упавший подтест (unittest subTest, фикстура
+# `subtests`; SPEC 01M4PMQ5FQMEV11WPY64G0GNXS): pytest считает его в «N
+# failed» отдельно, а родитель unittest при этом — «passed».
+_FAILED_LINE = re.compile(r"^(?:(?:FAILED|ERROR) \S|SUBFAILED\S).*$",
+                          re.MULTILINE)
 
 
 def run_summary_line(output: str) -> str:
     """Итоговая строка прогона pytest (`N passed in Xs`/`M failed, N
     passed in Xs`) из вывода прогона; пустая строка — строки в выводе
     нет (прогон оборвался раньше сводки, вывод обрезан иначе, чем
-    ожидается)."""
-    match = _RUN_SUMMARY.search(output)
+    ожидается). Совпадение — последнее: итог pytest печатает в конце, а
+    метка подтеста в строке хода и коротком итоге вправе содержать текст
+    вида «1 passed in 0.1s» (11.10 первое совпадение дало «прошло: 1,
+    упало: 0» красному прогону)."""
+    match = None
+    for match in _RUN_SUMMARY.finditer(output):
+        pass
     return match.group(0).strip() if match else ""
 
 
@@ -320,9 +329,10 @@ def journal_suite_metrics(task_id: str, metrics: dict | None) -> None:
 
 
 def failed_test_lines(output: str) -> list[str]:
-    """Строки `FAILED <nodeid>`/`ERROR <nodeid>` блока «short test summary
-    info» — имена упавших тестов вместе с коротким сообщением, которым
-    pytest их сопровождает (оно и есть первая версия причины)."""
+    """Строки `FAILED <nodeid>`/`ERROR <nodeid>`/`SUBFAILED<метка> <nodeid>`
+    блока «short test summary info» — имена упавших тестов и подтестов
+    вместе с коротким сообщением, которым pytest их сопровождает (оно и
+    есть первая версия причины)."""
     return [line.strip() for line in _FAILED_LINE.findall(output)]
 
 
@@ -1396,6 +1406,12 @@ def _run_full_suite_to_log(argv: list[str], root: Path,
 
 _FAILED_ENTRY = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - (.*))?$",
                            re.MULTILINE)
+# Упавший подтест в коротком итоге: `SUBFAILED<метка> <nodeid> - <сообщение>`.
+# nodeid — слово с `::` перед « - », метка — всё между `SUBFAILED` и nodeid
+# (пробелы, скобки и кавычки в ней — как их печатает pytest; вид метки
+# зависит от xdist: `(i=1)` без него, `(i='1')` с ним).
+_SUBFAILED_ENTRY = re.compile(
+    r"^SUBFAILED(.*?) ?(\S*::\S*)(?: - (.*))?$", re.MULTILINE)
 _SHORT_SUMMARY_HEADER = re.compile(r"^=+ short test summary info =+$",
                                    re.MULTILINE)
 # Разделитель секции вывода pytest («==== FAILURES ====», итоговая строка
@@ -1417,12 +1433,34 @@ def short_summary_block(output: str) -> str:
     return output[start:end.start() if end else len(output)]
 
 
+def subtest_unit(node: str, label: str) -> str:
+    """Единица упавшего подтеста — `<nodeid родителя> <метка>`: один вид для
+    строки хода и короткого итога, чтобы один подтест считался один раз, а
+    подтесты одного теста на базе и ветке различались."""
+    label = label.strip()
+    return f"{node.strip()} {label}" if label else node.strip()
+
+
+def subtest_parents(output: str) -> dict[str, str]:
+    """Единица упавшего подтеста короткого итога -> nodeid родителя: повтор
+    упавших (`suite-run --failed`) зовёт pytest по nodeid, метку он не
+    найдёт."""
+    return {subtest_unit(m.group(2), m.group(1)): m.group(2)
+            for m in _SUBFAILED_ENTRY.finditer(short_summary_block(output))}
+
+
 def failed_entries(output: str) -> list[tuple[str, str]]:
     """(id теста, первая строка сообщения) из блока «short test summary
     info» — по одной паре на упавший тест, без повторов; сообщения нет —
-    пустая строка. Строки вне блока не читаются (`short_summary_block`)."""
+    пустая строка. Упавший подтест — парой с единицей `subtest_unit`.
+    Строки вне блока не читаются (`short_summary_block`)."""
+    block = short_summary_block(output)
+    found = [(m.start(), m.group(1), m.group(2))
+             for m in _FAILED_ENTRY.finditer(block)]
+    found += [(m.start(), subtest_unit(m.group(2), m.group(1)), m.group(3))
+              for m in _SUBFAILED_ENTRY.finditer(block)]
     seen = {}
-    for node, message in _FAILED_ENTRY.findall(short_summary_block(output)):
+    for _, node, message in sorted(found, key=lambda item: item[0]):
         seen.setdefault(node.strip(), (message or "").strip())
     return list(seen.items())
 

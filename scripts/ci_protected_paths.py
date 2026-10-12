@@ -24,12 +24,19 @@
 ci.yml` сегодня. Код возврата: 0 — нарушений нет; 1 — PR трогает путь,
 защищённый в базе; 2 — список базы не прочитан.
 
+База сравнения — первый родитель HEAD, когда HEAD доказанно merge-коммит PR
+(`refs/pull/N/merge`, его выгружает `actions/checkout` на `pull_request`),
+иначе `BASE_SHA` (SPEC 01M4PMPMZ7PPCN3JWX75RTJZQN): `base.sha` события
+устаревает, и коммит Оператора в main по защищённому пути после открытия
+PR попадал в дифф как правка PR. Вывод называет базу и её источник.
+
 Список базы не прочитан (файла в базе нет, git не ответил, значение не
 разбирается) — это код возврата 2 с названной причиной, а не пустой список
 и молчаливо зелёный джоб: неизвестный статус — это «нельзя» (fail-closed,
 ADR-0002).
 """
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -120,36 +127,119 @@ def _git(*args) -> tuple:
     return res.stdout, ""
 
 
-def base_protected_paths(base_sha: str) -> tuple:
+def base_protected_paths(base_sha: str, label: str = BASE_ENV) -> tuple:
     """(список защищённых путей базы | None, причина) — `git show
-    <base>:orchestrator/config.py` плюс разбор значения."""
+    <base>:orchestrator/config.py` плюс разбор значения. `label` — источник
+    базы в тексте причины."""
     if not base_sha:
         return None, f"переменная окружения {BASE_ENV} пуста — базы нет"
     source, reason = _git("show", f"{base_sha}:{CONFIG_REL}")
     if source is None:
         return None, (f"git не отдал {CONFIG_REL} из базы {base_sha} "
-                      f"({BASE_ENV}): {reason}")
+                      f"({label}): {reason}")
     return protected_paths_from_source(source)
 
 
-def changed_files(base_sha: str) -> tuple:
+def changed_files(base_sha: str, label: str = BASE_ENV) -> tuple:
     """(пути диффа `<base>...HEAD` | None, причина) — тот же диапазон с
     тремя точками, каким мерил дифф bash джоба."""
     out, reason = _git("diff", "--name-only", f"{base_sha}...HEAD")
     if out is None:
         return None, (f"git не ответил на дифф {base_sha}...HEAD "
-                      f"({BASE_ENV}): {reason}")
+                      f"({label}): {reason}")
     return [line for line in out.splitlines() if line], ""
+
+
+SOURCE_MERGE = "первый родитель merge-коммита PR"
+
+SOURCE_EVENT = "BASE_SHA события"
+
+EVENT_ENV = "GITHUB_EVENT_PATH"
+
+
+def _event_head_sha() -> tuple:
+    """(`pull_request.head.sha` из файла события | None, причина)."""
+    event_path = os.environ.get(EVENT_ENV, "").strip()
+    if not event_path:
+        return None, f"переменная окружения {EVENT_ENV} не задана — файла события нет"
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"файл события {event_path} не читается: {exc}"
+    except ValueError as exc:
+        return None, f"файл события {event_path} не JSON: {exc}"
+    head = event.get("pull_request") if isinstance(event, dict) else None
+    head = head.get("head") if isinstance(head, dict) else None
+    sha = head.get("sha") if isinstance(head, dict) else None
+    if not isinstance(sha, str) or not sha.strip():
+        return None, f"в файле события {event_path} нет pull_request.head.sha"
+    return sha.strip(), ""
+
+
+def merge_first_parent(base_sha: str) -> tuple:
+    """(sha `HEAD^1` | None, невыполненное условие) — база от первого
+    родителя берётся, только если HEAD доказанно merge-коммит PR
+    (`refs/pull/N/merge`): ровно два родителя, `BASE_SHA` — предок
+    `HEAD^1`, `HEAD^2` — голова PR из файла события.
+
+    Слияние main в ветку задачи тоже даёт два родителя, но `HEAD^1` там —
+    вершина ветки, и дифф от неё спрятал бы ранние коммиты ветки; поэтому
+    без сверки второго родителя с головой PR база остаётся `BASE_SHA`, чей
+    дифф шире. Ошибка git в любой проверке — невыполненное условие, а не
+    выполненное: откат на `BASE_SHA` строже (ADR-0002)."""
+    out, reason = _git("rev-list", "--parents", "-n", "1", "HEAD")
+    if out is None:
+        return None, f"родители HEAD не прочитаны: {reason}"
+    parents = out.split()[1:]
+    if len(parents) != 2:
+        return None, (f"у HEAD не ровно два родителя, а {len(parents)} — "
+                      f"HEAD не merge-коммит PR")
+    first, second = parents
+    try:
+        res = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", base_sha, first],
+            capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as exc:
+        return None, (f"проверка «{BASE_ENV} — предок HEAD^1» не выполнена: "
+                      f"{exc}")
+    if res.returncode == 1:
+        return None, f"{BASE_ENV} {base_sha} не предок HEAD^1 {first}"
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()[:200]
+        return None, (f"проверка «{BASE_ENV} {base_sha} — предок HEAD^1 "
+                      f"{first}» (git merge-base --is-ancestor) завершилась "
+                      f"кодом {res.returncode}: {detail}")
+    head_sha, reason = _event_head_sha()
+    if head_sha is None:
+        return None, reason
+    if second != head_sha:
+        return None, (f"второй родитель HEAD^2 {second} не равен "
+                      f"pull_request.head.sha {head_sha} из файла события")
+    return first, ""
 
 
 def main() -> int:
     base_sha = os.environ.get(BASE_ENV, "").strip()
-    protected, reason = base_protected_paths(base_sha)
+    if not base_sha:
+        _, reason = base_protected_paths(base_sha)
+        print(f"::error::список защищённых путей базы сравнения не прочитан "
+              f"— джоб красный (fail-closed, ADR-0002): {reason}")
+        return 2
+    first, unmet = merge_first_parent(base_sha)
+    if first is not None:
+        base, source = first, SOURCE_MERGE
+    else:
+        base, source = base_sha, SOURCE_EVENT
+        print(f"HEAD не признан merge-коммитом PR — база {BASE_ENV}: {unmet}")
+    print(f"база сравнения: {base} ({source})")
+    # Сбой чтения от доказанного HEAD^1 — код 2, а не откат на BASE_SHA:
+    # перечень BASE_SHA не строже перечня HEAD^1 (SPEC, требование 4).
+    protected, reason = base_protected_paths(base, source)
     if protected is None:
         print(f"::error::список защищённых путей базы сравнения не прочитан "
               f"— джоб красный (fail-closed, ADR-0002): {reason}")
         return 2
-    changed, reason = changed_files(base_sha)
+    changed, reason = changed_files(base, source)
     if changed is None:
         print(f"::error::список изменённых PR файлов не собран — джоб "
               f"красный (fail-closed, ADR-0002): {reason}")
@@ -158,7 +248,7 @@ def main() -> int:
     if not violations:
         return 0
     print(f"::error::PR меняет защищённые пути ({LIST_NAME} базы сравнения "
-          f"{base_sha}) — их правит только Оператор коммитом в main:")
+          f"{base}, {source}) — их правит только Оператор коммитом в main:")
     for path in violations:
         print(path)
     return 1
