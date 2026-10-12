@@ -170,7 +170,7 @@ class FakeGitHub:
             run_status, run_conclusion = "completed", "success"
         run = {
             "id": run_id, "name": "CI", "event": event, "head_sha": sha,
-            "head_branch": "main", "run_number": self.rng.randint(1, 9999),
+            "head_branch": "task/x", "run_number": self.rng.randint(1, 9999),
             "run_attempt": 1, "check_suite_id": suite,
             "status": run_status, "conclusion": run_conclusion,
             "html_url": f"http://127.0.0.1/{OWNER_REPO}/actions/runs/{run_id}",
