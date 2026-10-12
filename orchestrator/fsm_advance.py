@@ -85,6 +85,46 @@ def _mark_artifact_escalation(conn, task_id: str, detail: str) -> None:
                   fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER, detail)
 
 
+QUESTIONS_SKIPPED_ACTION = "батч вопросов признан отвеченным"
+
+
+def _answered_batch_skip(conn, task_id: str, text: str | None) -> str | None:
+    """Формулировка пропуска «батч вопросов признан отвеченным (ANSWER-n)»,
+    если батч `text` уже отвечен и аналитик с тех пор отработал шаг; `None`
+    — батч ведёт себя как прежде: эскалация и проверка guard (SPEC
+    01M4R4JKC28J80Z82TZA62RF2J, требование 5).
+
+    Хэш сравнивается только с ПОСЛЕДНЕЙ строкой признака. Шаг аналитика
+    проверяется здесь, в самом переходе, тем же рубежом, что пред-advance
+    `auto` (`auto._role_step_since_state_entry`, требование 8): иначе ручной
+    `advance` сразу после approve провёл бы старый SPEC.md мимо ответа."""
+    if text is None:
+        return None
+    answered = fsm._last_questions_answered(conn, task_id)
+    if answered is None:
+        return None
+    sha, number = answered
+    if fsm._questions_batch_sha256(text) != sha:
+        return None
+    from . import auto
+    ran, _ = auto._role_step_since_state_entry(conn, task_id, "spec_writing",
+                                               "analyst")
+    if not ran:
+        return None
+    phrase = f"{QUESTIONS_SKIPPED_ACTION} (ANSWER-{number})"
+    store.journal(conn, task_id, "fsm", QUESTIONS_SKIPPED_ACTION,
+                  f"{phrase}: sha256={sha}, QUESTIONS.md остаётся в документах")
+    print(f"[{task_id}] {phrase} — эскалации нет, дальше по SPEC.md")
+    return phrase
+
+
+def _disk_questions_text(path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Батч вопросов analyst (SPEC T025, требование 4): файл на месте —
     # эскалация немедленно, не дожидаясь статуса SPEC.md, тем же
@@ -101,6 +141,7 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # прежний путь через диск, не тронутый T047.
     branch, foreign = artifact_source.resolve(conn, task_id)
     spec_text = None
+    skipped = None
     if foreign:
         # QUESTIONS.md необязателен (большинство задач его не заводят)
         # — отсутствие на ветке не отказ, тот же приём, что
@@ -121,6 +162,8 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                                                       "QUESTIONS.md")
             if q_text is None:
                 return False
+            skipped = _answered_batch_skip(conn, task_id, q_text)
+        if q_paths and skipped is None:
             if fsm.guard_refuses(conn, task_id, tdir / "QUESTIONS.md",
                                  text=q_text):
                 return True
@@ -146,6 +189,9 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     else:
         questions = tdir / "QUESTIONS.md"
         if questions.exists():
+            skipped = _answered_batch_skip(conn, task_id,
+                                           _disk_questions_text(questions))
+        if questions.exists() and skipped is None:
             if fsm.guard_refuses(conn, task_id, questions):
                 return True
             answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
@@ -175,15 +221,17 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # только через аудит (ADR-0022 п.2, SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
         # требование 2); SPEC Оператора — как прежде, прямо на гейт.
         from . import runner
+        suffix = f"; {skipped}" if skipped else ""
         if runner.step_role(t) == "analyst":
             store.set_state(conn, task_id, spec_audit_gate.STATE, "fsm",
                             expected_state=state,
-                            detail="SPEC готов — независимый аудит до гейта")
+                            detail="SPEC готов — независимый аудит до гейта"
+                                   + suffix)
             spec_audit_gate.record_entry(conn, task_id)
         else:
             store.set_state(conn, task_id, "spec_gate", "fsm",
                             expected_state=state,
-                            detail="SPEC готов — ждёт approve")
+                            detail="SPEC готов — ждёт approve" + suffix)
     else:
         print(f"[{task_id}] SPEC.md ещё не ready — нечего продвигать")
     return False
