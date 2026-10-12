@@ -171,8 +171,16 @@ class GroupMemberCountPathTest(unittest.TestCase):
         Ловит мутацию: `ps` снова ищется только по PATH вызывающего
         (`["ps", ...]` без запасных `/bin`, `/usr/bin`) — в таком PATH он
         не находится, подсчёт падает на сверку `os.killpg(pgid, 0)` и
-        возвращает 1 вместо 2."""
-        leader, child_pid = _spawn_group_with_child()
+        возвращает 1 вместо 2.
+
+        Группа живёт до явного снятия уборкой теста, а не `sleep_sec`
+        (SPEC 01M4P9PHCTT7TXWF422E3Y9GXN, требование 4): лидер печатает
+        pid потомка в канал, и без `PYTHONUNBUFFERED` вывод уходит из
+        буфера только при выходе лидера — `readline` помощника вернулся бы
+        в момент распада группы, и подсчёт под нагрузкой застал бы
+        лидера без потомка (1 != 2)."""
+        with mock.patch.dict(os.environ, {"PYTHONUNBUFFERED": "1"}):
+            leader, child_pid = _spawn_group_with_child(sleep_sec=600)
         self.addCleanup(leader.wait)
         self.addCleanup(liveness.terminate_process_group, leader.pid, 0.1)
 
