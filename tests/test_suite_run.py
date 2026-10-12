@@ -142,6 +142,26 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn(suite_run.ALSO_ON_BASE, text)
         self.assertIn("tests/test_b.py::test_b", text)
 
+    def test_summary_mismatch_line_only_when_parsed_fewer(self):
+        """Строка «итог pytest: N упавших, разобрано M» — только при M < N.
+
+        Сценарий: завершённый вывод, где разобраны все упавшие (2 из 2 —
+        FINISHED), — строки сверки нет; тот же вывод, где итог называет 3
+        упавших, — строка есть с числами 3 и 2.
+
+        Ловит мутацию: строка сверки печатается всегда или при M <= N —
+        полностью разобранный прогон получает ложную тревогу; сверка
+        сравнивает с числом строк хода — 3 упавших итога не названы.
+        """
+        def text(output):
+            return suite_run.render("T1", 1, suite_run.MODE_FULL,
+                                    suite_run.parse(False, output), None,
+                                    "база фикстуры", Path("/x.log"))
+        self.assertNotIn("итог pytest:", text(FINISHED))
+        more = FINISHED.replace("1 failed, 1 passed, 1 error",
+                                "2 failed, 1 passed, 1 error")
+        self.assertIn("итог pytest: 3 упавших, разобрано 2", text(more))
+
     def test_plural_forms(self):
         """Формы «тест/теста/тестов» и «группа/группы/групп» по числу.
 
