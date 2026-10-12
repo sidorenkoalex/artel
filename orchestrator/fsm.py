@@ -200,7 +200,8 @@ def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | Non
 
 
 def _pull_main_or_escalate(conn, task_id: str, t, state: str,
-                           run_plank: bool = True) -> str:
+                           run_plank: bool = True, *,
+                           operator_pull: bool = False) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
     01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1..AC-4/AC-8) и, начиная с T053
@@ -243,6 +244,12 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
     `run_plank=False` — четвёртая точка, перед шагом разработчика (SPEC
     01M443BPQEA9ZMJ3R50THNB1MF, требование 6): тот же узел без прогона
     планки после слияния (см. `pull.evaluate`).
+
+    `operator_pull=True` — команда Оператора `pull-main` (SPEC
+    01M4PMR5EVFK4KQDPWB1KEGM7V, `orchestrator/pull_main.py`): см.
+    `pull.evaluate`. Только на этом пути возможен пятый исход
+    `"unavailable"` — сверка свежести не дала ответа; прежние вызыватели
+    его не получают.
     """
     ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
     repo_path = repo_context.path_or_none(ctx)
@@ -251,7 +258,12 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
         origin_main_source=_origin_main_source,
         origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
         read_branch_text_or_refuse=_read_foreign_branch_text_or_refuse,
-        repo_path=repo_path, run_plank=run_plank)
+        repo_path=repo_path, run_plank=run_plank, operator_pull=operator_pull)
+    if isinstance(outcome, pull.Unavailable):
+        store.journal(conn, task_id, "fsm", pull.UNAVAILABLE_ACTION,
+                      outcome.reason)
+        print(f"[{task_id}] {pull.UNAVAILABLE_ACTION}: {outcome.reason}")
+        return "unavailable"
     if isinstance(outcome, pull.Fresh):
         return "fresh"
     if isinstance(outcome, pull.Pulled):
