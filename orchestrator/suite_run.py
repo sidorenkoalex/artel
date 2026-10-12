@@ -80,6 +80,15 @@ _PROGRESS = re.compile(
     rf"^(?:\[gw\d+\] \[\s*\d+%\] (?P<s1>{_STATUS}) (?P<n1>.+?)"
     rf"|(?P<n2>\S.*?::.+?) (?P<s2>{_STATUS})(?: +\[\s*\d+%\])?)\s*$",
     re.MULTILINE)
+# Строка хода упавшего подтеста (SPEC 01M4PMQ5FQMEV11WPY64G0GNXS): с xdist —
+# «[gw0] [ 50%] SUBFAILED<метка> <id>» (id — последнее слово), без него —
+# «<id> SUBFAILED<метка> [ 50%]» (id — первое слово). Без xdist провал
+# unittest subTest строки хода не оставляет — его знает только короткий
+# итог (`acceptance.failed_entries`).
+_SUBFAILED_PROGRESS = re.compile(
+    r"^(?:\[gw\d+\] \[\s*\d+%\] SUBFAILED(?P<l1>.*?) (?P<n1>\S+)"
+    r"|(?P<n2>\S+::\S*) SUBFAILED(?P<l2>.*?)(?: +\[\s*\d+%\])?)\s*$",
+    re.MULTILINE)
 # Первая секция отчёта pytest после строк хода («==== FAILURES ====» и
 # далее): в ней захваченный вывод тестов, и строка вида «<x>::<y> PASSED»
 # оттуда — не ход прогона.
@@ -281,29 +290,48 @@ def _profile_command(target: str) -> tuple[list[str] | None, str]:
 class Parsed(NamedTuple):
     """Итог одного прогона: исход (`acceptance.FULL_SUITE_*`), числа,
     упавшие парами (id, первая строка сообщения) и признак «прогон
-    завершён» — только такой годится в итог базы (требование 8)."""
+    завершён» — только такой годится в итог базы (требование 8).
+    Упавший подтест — единицей `acceptance.subtest_unit`; `rerun` — id
+    тестов для повтора `--failed` (подтест — id родителя)."""
     outcome: str
     passed: int
     failed: int
     skipped: int
     failures: list
     finished: bool
+    rerun: tuple = ()
+
+
+def _progress_part(output: str) -> str:
+    """Строки хода — до первой секции отчёта (`_REPORT_SECTION`)."""
+    section = _REPORT_SECTION.search(output)
+    return output if section is None else output[:section.start()]
 
 
 def _progress(output: str) -> dict[str, str]:
     """id теста -> исход по строкам хода прогона; упавший хоть раз (в том
     числе на teardown после PASSED) остаётся упавшим. Читаются только
-    строки до секций отчёта (`_REPORT_SECTION`)."""
-    section = _REPORT_SECTION.search(output)
-    if section is not None:
-        output = output[:section.start()]
+    строки до секций отчёта (`_REPORT_SECTION`). Подтестов здесь нет:
+    счёт хода — по тестам (`_subtest_progress`)."""
     statuses = {}
-    for match in _PROGRESS.finditer(output):
+    for match in _PROGRESS.finditer(_progress_part(output)):
         node = (match.group("n1") or match.group("n2")).strip()
         status = match.group("s1") or match.group("s2")
         if statuses.get(node) not in ("FAILED", "ERROR"):
             statuses[node] = status
     return statuses
+
+
+def _subtest_progress(output: str) -> dict[str, str]:
+    """Единица упавшего подтеста -> id родителя по строкам хода. Строка
+    `PASSED <id>` родителя после неё провала не снимает: единица — не id
+    теста, `_progress` её не перезаписывает."""
+    units = {}
+    for match in _SUBFAILED_PROGRESS.finditer(_progress_part(output)):
+        node = match.group("n1") or match.group("n2")
+        label = match.group("l1") if match.group("n1") else match.group("l2")
+        units[acceptance.subtest_unit(node, label)] = node
+    return units
 
 
 def parse(green: bool, output: str) -> Parsed:
@@ -312,11 +340,14 @@ def parse(green: bool, output: str) -> Parsed:
     finished = (outcome in (acceptance.FULL_SUITE_GREEN,
                             acceptance.FULL_SUITE_RED) and bool(summary))
     statuses = _progress(output)
+    parents = _subtest_progress(output)
     failures = dict.fromkeys(
         (node for node, status in statuses.items()
          if status in ("FAILED", "ERROR")), "")
+    failures.update(dict.fromkeys(parents, ""))
     if finished:
         failures.update(acceptance.failed_entries(output))
+        parents.update(acceptance.subtest_parents(output))
         counts = {}
         for number, kind in _SUMMARY_COUNT.findall(summary):
             counts[kind.rstrip("s") if kind.startswith("error") else kind] = int(number)
@@ -326,10 +357,13 @@ def parse(green: bool, output: str) -> Parsed:
     else:
         values = list(statuses.values())
         passed = values.count("PASSED")
-        failed = values.count("FAILED") + values.count("ERROR")
+        failed = (values.count("FAILED") + values.count("ERROR")
+                  + len(parents))
         skipped = values.count("SKIPPED")
+    rerun = tuple(dict.fromkeys(parents.get(node, node)
+                                for node in sorted(failures)))
     return Parsed(outcome, passed, failed, skipped,
-                  sorted(failures.items()), finished)
+                  sorted(failures.items()), finished, rerun)
 
 
 # ------------------------------------------------------------------ отчёт
@@ -393,6 +427,12 @@ def render(task_id: str, run_no: int, mode: str, parsed: Parsed,
     lines = [f"[{task_id}] suite-run №{run_no} ({what}): {title}",
              f"прошло: {parsed.passed}, упало: {parsed.failed}, "
              f"пропущено: {parsed.skipped}"]
+    if parsed.finished and len(parsed.failures) < parsed.failed:
+        # Числа — из итоговой строки, перечень — из разбора: расхождение
+        # называется прямо, а не прячется за коротким перечнем.
+        lines.append(f"итог pytest: {parsed.failed} упавших, разобрано "
+                     f"{len(parsed.failures)} — неразобранные ищи в полном "
+                     f"логе")
     if parsed.failures:
         if base_failed is None:
             lines.append(f"{NO_BASE} ({base_note}) — упавшие по базе не "
@@ -526,8 +566,9 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
                 log=log, limit=limit)
     metrics = acceptance._last_full_suite_metrics
     parsed = parse(green, output)
+    # Повтор — по id тестов: единицу подтеста `<id> <метка>` pytest не найдёт.
     _write_json(_failed_path(task_id),
-                {"run": run_no, "failed": [n for n, _ in parsed.failures]})
+                {"run": run_no, "failed": list(parsed.rerun)})
     base_failed, base_note = _base(task_id, target, task["branch"], command,
                                    run_no, mode, limit)
     with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
