@@ -12,17 +12,23 @@
 зерна (печатается).
 
 Группа: долгоживущий
-Красен до реализации: модуля orchestrator.knowledge_cards ещё нет, а role_prompt.mission_brief_package не дописывает строку о команде knowledge — импорт модуля теста падает ImportError.
+Красен до реализации: модуля orchestrator.knowledge_cards ещё нет, а role_prompt.mission_brief_package не дописывает строку о команде knowledge — его импорт внутри тестов падает ModuleNotFoundError, констант config.KNOWLEDGE_CARD_* (К-4а) нет — AttributeError.
 """
+import importlib
 import random
 import unittest
 from contextlib import ExitStack
 from unittest import mock
 
-from orchestrator import (brief, config, knowledge_cards, review, role_prompt,
-                          store)
+from orchestrator import brief, config, review, role_prompt, store
 from orchestrator.advance_gates import spec_audit
 from tests.sandbox import RealGitSandbox, TmpRootTest, artel_target_entry
+
+
+def knowledge_cards_module():
+    """Модуль карточек — импорт в тесте, чтобы файл собирался и до реализации."""
+    return importlib.import_module("orchestrator.knowledge_cards")
+
 
 ROLES = ("analyst", "spec_auditor", "test_author", "developer", "reviewer")
 ALPHA = "alphaproj"
@@ -78,7 +84,7 @@ def hint_lines(mission: str) -> list:
 
 def hint_records(task_id: str) -> list:
     return [r for r in store.task_steps(store.db(), task_id)
-            if r["action"] == knowledge_cards.HINT_REFUSAL_ACTION]
+            if r["action"] == knowledge_cards_module().HINT_REFUSAL_ACTION]
 
 
 class HintSandbox(RealGitSandbox):
@@ -256,14 +262,14 @@ class HintLineTest(HintSandbox):
                 lines = hint_lines(mission)
                 self.assertEqual(len(lines), 1, f"{role}\n{mission}")
                 self.assertTrue(any(code in lines[0]
-                                    for code in knowledge_cards.REFUSAL_CODES),
+                                    for code in knowledge_cards_module().REFUSAL_CODES),
                                 f"зерно: {self.seed}; {role}: {lines[0]}")
                 self.assertNotIn(leak, mission, f"зерно: {self.seed}")
                 for key in alpha_keys:
                     self.assertIn(key, lines[0], f"зерно: {self.seed}")
         records = hint_records("T501")
         self.assertEqual(len(records), 1, f"зерно: {self.seed}")
-        self.assertEqual(records[0]["actor"], knowledge_cards.JOURNAL_ACTOR)
+        self.assertEqual(records[0]["actor"], knowledge_cards_module().JOURNAL_ACTOR)
 
     def test_ac15_project_by_task_row_target(self):
         """Карточки систем, проектов ALPHA, BETA и артели

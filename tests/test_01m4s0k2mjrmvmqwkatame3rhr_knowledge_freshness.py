@@ -11,7 +11,7 @@
 метки карточек порождаются от зерна (печатается).
 
 Группа: долгоживущий
-Красен до реализации: модуля orchestrator.knowledge_cards и команды knowledge в диспетчере artel.py ещё нет — импорт модуля теста падает ImportError.
+Красен до реализации: модуля orchestrator.knowledge_cards и команды knowledge в диспетчере artel.py ещё нет — тесты падают на отказе диспетчера («Неизвестная команда knowledge»), отсутствии пометок свежести и констант config.KNOWLEDGE_CARD_* (К-4а).
 """
 import ast
 import contextlib
@@ -23,7 +23,7 @@ import unittest
 import warnings
 from unittest import mock
 
-from orchestrator import artel, config, knowledge_cards, store, workspace
+from orchestrator import artel, config, store, workspace
 from tests.sandbox import RealGitSandbox, artel_target_entry
 
 EXT = "extproj"

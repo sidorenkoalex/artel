@@ -12,9 +12,10 @@
 запросы и роли порождаются при каждом запуске от зерна (печатается).
 
 Группа: долгоживущий
-Красен до реализации: модуля orchestrator.knowledge_cards и команды knowledge в диспетчере artel.py ещё нет — импорт модуля теста падает ImportError.
+Красен до реализации: модуля orchestrator.knowledge_cards и команды knowledge в диспетчере artel.py ещё нет — его импорт внутри тестов падает ModuleNotFoundError, констант config.KNOWLEDGE_CARD_* (К-4а) нет — AttributeError.
 """
 import contextlib
+import importlib
 import io
 import json
 import os
@@ -26,9 +27,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (acceptance, artel, brief, config, knowledge_cards,
-                          roles, store, suite_lock, watch, workspace)
+from orchestrator import (acceptance, artel, brief, config, roles, store,
+                          suite_lock, watch, workspace)
 from tests.sandbox import RealGitSandbox, artel_target_entry
+
+
+def knowledge_cards_module():
+    """Модуль карточек — импорт в тесте, чтобы файл собирался и до реализации."""
+    return importlib.import_module("orchestrator.knowledge_cards")
+
 
 EXT = "extproj"
 OTHER = "otherproj"
@@ -205,7 +212,7 @@ class KnowledgeSandbox(RealGitSandbox):
 
     def access_rows(self, task_id: str) -> list:
         return [r for r in store.task_steps(store.db(), task_id)
-                if r["action"] == knowledge_cards.ACCESS_ACTION]
+                if r["action"] == knowledge_cards_module().ACCESS_ACTION]
 
     def plain_access(self, task_id: str) -> list:
         return [r for r in self.access_rows(task_id)
@@ -527,7 +534,7 @@ class KindRefusalTest(KnowledgeSandbox):
                 self.assertIsNotNone(found, f"зерно: {self.seed}\n{out}{err}")
                 self.assertTrue(
                     any(found.group(2).strip().startswith(c)
-                        for c in knowledge_cards.REFUSAL_CODES),
+                        for c in knowledge_cards_module().REFUSAL_CODES),
                     f"зерно: {self.seed}: код вне перечня: {found.group(0)}")
                 self.assertIn(f"правило {other}", out, f"зерно: {self.seed}")
                 self.assertNotEqual(code, 0, f"зерно: {self.seed}; {label}")
@@ -670,7 +677,7 @@ class AccessJournalTest(KnowledgeSandbox):
         rows = self.access_rows("T101")
         self.assertEqual(len(rows), 2, f"зерно: {self.seed}")
         for row in rows:
-            self.assertEqual(row["actor"], knowledge_cards.JOURNAL_ACTOR)
+            self.assertEqual(row["actor"], knowledge_cards_module().JOURNAL_ACTOR)
             self.assertNotIn(row["actor"], names)
         first, second = rows[0]["detail"], rows[1]["detail"]
         prefix = os.path.commonprefix([first, second])
@@ -706,7 +713,7 @@ class AccessJournalTest(KnowledgeSandbox):
         _code, out, err = self.run_knowledge("T101", "pkg/mod.py")
         found = REFUSAL_LINE.search(out + err)
         self.assertIsNotNone(found, f"зерно: {self.seed}")
-        code_text = next(c for c in knowledge_cards.REFUSAL_CODES
+        code_text = next(c for c in knowledge_cards_module().REFUSAL_CODES
                          if found.group(2).strip().startswith(c))
         rows = self.access_rows("T101")
         self.assertEqual(len(rows), 1, f"зерно: {self.seed}")
@@ -797,11 +804,11 @@ class CommandLimitTest(KnowledgeSandbox):
         limit = config.KNOWLEDGE_CARD_JOURNAL_MAX_PER_TASK
         conn = store.db()
         for i in range(limit - 1):
-            store.journal(conn, "T101", knowledge_cards.JOURNAL_ACTOR,
-                          knowledge_cards.ACCESS_ACTION, f"посев {i}")
+            store.journal(conn, "T101", knowledge_cards_module().JOURNAL_ACTOR,
+                          knowledge_cards_module().ACCESS_ACTION, f"посев {i}")
         for i in range(self.rng.randint(2, 4)):
-            store.journal(conn, "T101", knowledge_cards.JOURNAL_ACTOR,
-                          knowledge_cards.HINT_REFUSAL_ACTION, f"посев {i}")
+            store.journal(conn, "T101", knowledge_cards_module().JOURNAL_ACTOR,
+                          knowledge_cards_module().HINT_REFUSAL_ACTION, f"посев {i}")
         role = self.rng.choice(self.role_names())
         for call in range(4):
             code, out, err = self.run_knowledge("T101", "pkg/mod.py",
@@ -813,7 +820,7 @@ class CommandLimitTest(KnowledgeSandbox):
             self.assertEqual(len(self.exhausted("T101")), 0 if call == 0 else 1,
                              f"зерно: {self.seed}; вызов {call}")
         last = self.exhausted("T101")[0]
-        self.assertEqual(last["actor"], knowledge_cards.JOURNAL_ACTOR)
+        self.assertEqual(last["actor"], knowledge_cards_module().JOURNAL_ACTOR)
 
 
 class DeferredJournalTest(KnowledgeSandbox):
@@ -850,7 +857,7 @@ class DeferredJournalTest(KnowledgeSandbox):
         rows = self.access_rows("T101")
         self.assertEqual(len(rows), 2, f"зерно: {self.seed}")
         for row in rows:
-            self.assertEqual(row["actor"], knowledge_cards.JOURNAL_ACTOR)
+            self.assertEqual(row["actor"], knowledge_cards_module().JOURNAL_ACTOR)
         near = [r for r in store.task_steps(store.db(), "T101")
                 if r["action"] == acceptance.SUITE_NEAR_LIMIT_ACTION]
         self.assertEqual([r["actor"] for r in near],

@@ -11,7 +11,7 @@
 записей «предел исчерпан» порождаются от зерна (печатается).
 
 Группа: долгоживущий
-Красен до реализации: модуля orchestrator.knowledge_cards с JOURNAL_ACTOR/ACCESS_ACTION/HINT_REFUSAL_ACTION ещё нет — импорт модуля теста падает ImportError.
+Красен до реализации: модуля orchestrator.knowledge_cards с JOURNAL_ACTOR/ACCESS_ACTION/HINT_REFUSAL_ACTION ещё нет — его импорт внутри тестов падает ModuleNotFoundError, констант config.KNOWLEDGE_CARD_* (К-4а) нет — AttributeError.
 """
 import contextlib
 import importlib
@@ -25,9 +25,15 @@ from unittest import mock
 
 import orchestrator
 from orchestrator import (artel, brief, checkpoint, config, fsm,
-                          knowledge_cards, review, roles, store, suite_lock)
+                          review, roles, store, suite_lock)
 from orchestrator.advance_gates import spec_audit
 from tests.sandbox import LightTransitionSandbox, TmpRootTest
+
+
+def knowledge_cards_module():
+    """Модуль карточек — импорт в тесте, чтобы файл собирался и до реализации."""
+    return importlib.import_module("orchestrator.knowledge_cards")
+
 
 EXHAUSTED_PREFIX = "предел журнала обращений исчерпан"
 FORBIDDEN_STARTS = ("state -> ", "переход отклонён", "ANSWER создан",
@@ -92,7 +98,7 @@ class ConstantsTest(TmpRootTest):
         запись обращения выглядит доверенной для `spec_audit`, тест видит
         совпадение с особым автором.
         """
-        actor = knowledge_cards.JOURNAL_ACTOR
+        actor = knowledge_cards_module().JOURNAL_ACTOR
         self.assertIsInstance(actor, str)
         self.assertTrue(actor.strip())
         forbidden = {"operator", "orchestrator", "lease", "fsm"}
@@ -115,8 +121,8 @@ class ConstantsTest(TmpRootTest):
         действию (например `review.FIXATION_ACTION`) — читатель журнала
         принял бы запись обращения за свою.
         """
-        own = (knowledge_cards.ACCESS_ACTION,
-               knowledge_cards.HINT_REFUSAL_ACTION)
+        own = (knowledge_cards_module().ACCESS_ACTION,
+               knowledge_cards_module().HINT_REFUSAL_ACTION)
         self.assertEqual(own[0], "knowledge: обращение роли")
         self.assertEqual(own[1], "knowledge: темы подсказки не прочитаны")
         self.assertNotEqual(own[0], own[1])
@@ -184,8 +190,8 @@ class ConstantsTest(TmpRootTest):
 
         before = outputs()
         other = "".join(rng.choice("0123456789abcdef") for _ in range(40))
-        store.journal(conn, "T301", knowledge_cards.JOURNAL_ACTOR,
-                      knowledge_cards.ACCESS_ACTION,
+        store.journal(conn, "T301", knowledge_cards_module().JOURNAL_ACTOR,
+                      knowledge_cards_module().ACCESS_ACTION,
                       f"SPEC.md {other} — сигналы: x; разбор: полный; "
                       f"вердикт fail; ANSWER-1.md")
         self.assertEqual(outputs(), before, f"зерно: {seed}")
@@ -207,7 +213,7 @@ class QueueLimitSandbox(TmpRootTest):
 
     def access(self) -> list:
         return [r for r in store.task_steps(store.db(), "T401")
-                if r["action"] == knowledge_cards.ACCESS_ACTION]
+                if r["action"] == knowledge_cards_module().ACCESS_ACTION]
 
     def plain(self) -> list:
         return [r for r in self.access()
@@ -220,8 +226,8 @@ class QueueLimitSandbox(TmpRootTest):
     def seed_access(self, count: int) -> None:
         conn = store.db()
         for i in range(count):
-            store.journal(conn, "T401", knowledge_cards.JOURNAL_ACTOR,
-                          knowledge_cards.ACCESS_ACTION, f"посев {i}")
+            store.journal(conn, "T401", knowledge_cards_module().JOURNAL_ACTOR,
+                          knowledge_cards_module().ACCESS_ACTION, f"посев {i}")
 
     def queue(self, plain: int, exhausted: int) -> None:
         """Файлы очереди: `plain` обращений и `exhausted` записей «предел
@@ -232,7 +238,7 @@ class QueueLimitSandbox(TmpRootTest):
             detail = (f"{EXHAUSTED_PREFIX}: {i}" if kind == "exhausted"
                       else f"обращение из очереди {i}")
             self.assertTrue(suite_lock.defer_journal({
-                "task_id": "T401", "action": knowledge_cards.ACCESS_ACTION,
+                "task_id": "T401", "action": knowledge_cards_module().ACCESS_ACTION,
                 "detail": detail, "session_id": None, "at": store.now()}))
 
     def pending(self) -> list:
@@ -274,7 +280,7 @@ class DeliveryLimitTest(QueueLimitSandbox):
         self.assertEqual(len(self.plain()), self.limit, f"зерно: {self.seed}")
         self.assertEqual(len(self.exhausted()), 1, f"зерно: {self.seed}")
         for row in self.access():
-            self.assertEqual(row["actor"], knowledge_cards.JOURNAL_ACTOR)
+            self.assertEqual(row["actor"], knowledge_cards_module().JOURNAL_ACTOR)
         self.assertEqual(self.pending(), [], f"зерно: {self.seed}")
 
     def test_ac11_many_queued_files_respect_limit(self):
@@ -355,11 +361,11 @@ class TestsWritingGateTest(LightTransitionSandbox):
         """
         self.enter_with_stray_files()
         self.assertTrue(suite_lock.defer_journal({
-            "task_id": self.TASK, "action": knowledge_cards.ACCESS_ACTION,
+            "task_id": self.TASK, "action": knowledge_cards_module().ACCESS_ACTION,
             "detail": "обращение", "session_id": None, "at": store.now()}))
         suite_lock.deliver_journal()
         last = store.task_steps(store.db(), self.TASK)[-1]
-        self.assertEqual(last["actor"], knowledge_cards.JOURNAL_ACTOR)
+        self.assertEqual(last["actor"], knowledge_cards_module().JOURNAL_ACTOR)
         self.assert_refused(self.capture(fsm.cmd_advance, self.TASK))
 
     def test_ac12_hint_refusal_record_does_not_lift_refusal(self):
@@ -372,8 +378,8 @@ class TestsWritingGateTest(LightTransitionSandbox):
         уходит в `in_dev`.
         """
         self.enter_with_stray_files()
-        store.journal(store.db(), self.TASK, knowledge_cards.JOURNAL_ACTOR,
-                      knowledge_cards.HINT_REFUSAL_ACTION, "отказ чтения вида")
+        store.journal(store.db(), self.TASK, knowledge_cards_module().JOURNAL_ACTOR,
+                      knowledge_cards_module().HINT_REFUSAL_ACTION, "отказ чтения вида")
         self.assert_refused(self.capture(fsm.cmd_advance, self.TASK))
 
     def test_ac12_journal_actor_with_stray_action_still_refuses(self):
@@ -389,9 +395,9 @@ class TestsWritingGateTest(LightTransitionSandbox):
         conn = store.db()
         store.journal(conn, self.TASK, "operator", "заметка Оператора",
                       "маркер снят")
-        store.journal(conn, self.TASK, knowledge_cards.JOURNAL_ACTOR,
-                      knowledge_cards.ACCESS_ACTION, "обращение")
-        store.journal(conn, self.TASK, knowledge_cards.JOURNAL_ACTOR,
+        store.journal(conn, self.TASK, knowledge_cards_module().JOURNAL_ACTOR,
+                      knowledge_cards_module().ACCESS_ACTION, "обращение")
+        store.journal(conn, self.TASK, knowledge_cards_module().JOURNAL_ACTOR,
                       checkpoint.STRAY_ACCEPTANCE_FILES_ACTION,
                       f"{checkpoint.STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX}"
                       f"fixtures.json")
