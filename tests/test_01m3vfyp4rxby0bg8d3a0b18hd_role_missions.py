@@ -39,6 +39,7 @@ def _missions(seed: int) -> dict[str, str]:
             mock.patch.object(brief, "test_author_answer_component",
                               return_value=None), \
             mock.patch.object(brief, "developer_brief", return_value=""), \
+            mock.patch.object(brief, "step_notes_block", return_value=""), \
             mock.patch.object(review, "review_package", return_value=""), \
             mock.patch.object(review, "previous_verdict_sha", return_value=""):
         for role in ROLES:

@@ -1428,6 +1428,7 @@ class MissionTest(unittest.TestCase):
         rng = random.Random(seed)
         pult = config.ROOT / "orchestrator" / "artel.py"
         with mock.patch.object(brief, "developer_brief", return_value=""), \
+                mock.patch.object(brief, "step_notes_block", return_value=""), \
                 mock.patch.object(review, "review_package", return_value=""):
             for _ in range(3):
                 task_id = "01M" + "".join(rng.choice(ALPHABET)
