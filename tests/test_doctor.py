@@ -555,8 +555,9 @@ class RecoveryCheckTest(TmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
         config.TARGETS.write_text(TARGETS_YAML_WITH_SLED, encoding="utf-8")
-        capture(projects.cmd_target_init, "sled")
+        # Клон — до `target-init`, который иначе клонировал бы проект сам.
         make_project_repo("sled")
+        capture(projects.cmd_target_init, "sled")
         store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
                           f"task/{self.TASK.lower()}", "sled", 25.0)
 

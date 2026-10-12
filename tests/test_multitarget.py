@@ -270,9 +270,10 @@ class TargetInitTest(TmpRootTest):
     def dirs(self) -> list:
         # .git/.gitignore — артефактный git-репо каталога (tasks/T021,
         # ADR-0003 3д/п.15), не часть структуры PROJECT_DIRS этого теста.
-        # `repo` — клон проекта (ADR-0021 п.1, этап 2): его заводит
-        # `workspace.ensure_clone`, не `target-init`, и песочница кладёт его
-        # заранее (`tests/sandbox.py::seed_artel_clone_stub`).
+        # `repo` — клон проекта (ADR-0021 п.1, этап 2): `target-init` заводит
+        # его через `workspace.ensure_clone` (SPEC 01M4RRW7FT1EE77EY9Y462AZKC),
+        # здесь песочница кладёт его заранее
+        # (`tests/sandbox.py::seed_artel_clone_stub`).
         names = {p.name for p in (config.PROJECTS / "artel").iterdir()}
         return sorted(names - {".git", ".gitignore", "repo"})
 
