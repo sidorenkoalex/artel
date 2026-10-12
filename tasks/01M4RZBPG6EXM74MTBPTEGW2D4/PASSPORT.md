@@ -22,3 +22,4 @@
 2026-10-12 23:01:49Z  verifying  actor=fsm
 2026-10-12 23:09:33Z  review  actor=fsm
 2026-10-12 23:14:52Z  acceptance  actor=fsm
+2026-10-12 23:14:57Z  merge_gate  actor=autogate
