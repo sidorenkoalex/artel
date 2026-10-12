@@ -1055,10 +1055,13 @@ class RunEventLabelTest(_HeadShaPatchedTest):
         self.assertIn("python=failure (push, прогон 555)", note)
 
     def test_green_outcome_does_not_ask_workflow_runs(self):
-        """Зелёный исход не прибавляет запроса прогонов («Не входит» SPEC).
+        """Зелёный исход спрашивает прогоны коммита ровно один раз на вызов
+        статуса: без индекса не отделить проверки прогонов других веток
+        (SPEC 01M4PMQSYPR2KD6N1JCVG9ZABV, требование 8).
 
-        Ловит мутацию: прогоны коммита спрашиваются на любом исходе —
-        в вызовах `gh` зелёного статуса появляется `actions/runs`.
+        Ловит мутацию: прогоны коммита запрашиваются повторно в одном вызове
+        статуса, либо читатель статуса не строит индекс прогонов и не
+        отсекает проверки других веток (ноль запросов в его вызове).
         """
         calls = self.serve([self.linked("python", "success", 1, 10),
                             self.linked("guard", "skipped", 2, 20)],
@@ -1066,8 +1069,12 @@ class RunEventLabelTest(_HeadShaPatchedTest):
 
         self.assertEqual(ci.verifying_status("task/t001-x")[0],
                          ci.VERIFYING_GREEN)
+        boundary = len(calls)
         self.assertIs(ci.branch_status("task/t001-x")[0], True)
-        self.assertFalse([c for c in calls if "actions/runs" in c], calls)
+        verifying_runs = [c for c in calls[:boundary] if "actions/runs" in c]
+        branch_runs = [c for c in calls[boundary:] if "actions/runs" in c]
+        self.assertEqual(len(verifying_runs), 1, calls)
+        self.assertEqual(len(branch_runs), 1, calls)
 
     def test_unlinked_check_runs_do_not_ask_workflow_runs(self):
         """Check-run'ы без связки с прогоном — запроса прогонов нет, у

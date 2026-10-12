@@ -418,6 +418,68 @@ def _run_label(check: dict, index: _RunIndex | None) -> str:
     return f"{head}, прогон {run_id}" if run_id is not None else head
 
 
+def _other_branch(check: dict, index: _RunIndex | None, branch: str) -> str:
+    """Головная ветка прогона проверки, если она доказанно не `branch`;
+    "" — прогон не найден либо его `head_branch` пуст или совпадает.
+
+    Ветка берётся только из `head_branch` ответа `actions/runs`: без
+    найденного прогона с непустой чужой веткой проверка остаётся в
+    вердикте (SPEC 01M4PMQSYPR2KD6N1JCVG9ZABV, требование 2) — недоказанная
+    чужесть не должна делать красное зелёным."""
+    run = _run_of(check, index)
+    head = run.get("head_branch") if run is not None else None
+    return head if isinstance(head, str) and head and head != branch else ""
+
+
+def _branch_checks(checks: list, index: _RunIndex | None,
+                   branch: str) -> tuple[list, list]:
+    """(Проверки прогонов ветки задачи, исключённые проверки прогонов других
+    веток) — вердикт строится только по первым (требование 1): красный
+    прогон `main` на том же коммите не красит задачу."""
+    own, excluded = [], []
+    for check in checks:
+        (excluded if _other_branch(check, index, branch) else own).append(check)
+    return own, excluded
+
+
+def _excluded_phrase(excluded: list, index: _RunIndex | None,
+                     branch: str) -> str:
+    """Отдельная фраза об исключённых проверках, "" — их нет.
+
+    Текст не несёт подстрок, на которых стоят разборщики статуса («не
+    зелёный:», «ещё идёт», «неизвестен», «check-run id») — требование 5."""
+    if not excluded:
+        return ""
+    listing = ", ".join(
+        f"{c.get('name', '?')}={c.get('conclusion') or c.get('status')} "
+        f"(ветка {_other_branch(c, index, branch)}, {_run_label(c, index)})"
+        for c in excluded)
+    return f"; вне вердикта — проверки прогонов других веток: {listing}"
+
+
+def _inherited_from_main(failed: list, repo: Path | None) -> str:
+    """Фраза «красный унаследован от main <sha>» по упавшим проверкам ветки,
+    упавшим с тем же именем и на вершине main; "" — совпадений нет либо
+    вершину main или её проверки узнать не удалось (требование 4)."""
+    main_sha, _why = head_sha("main", **_repo_kwargs(repo))
+    if not main_sha:
+        return ""
+    main_failed, _why = failed_check_names(main_sha)
+    if not main_failed:
+        return ""
+    shared = sorted({str(c.get("name", "?")) for c in failed} & main_failed)
+    if not shared:
+        return ""
+    return (f"; красный унаследован от main {main_sha[:8]}: "
+            f"{', '.join(shared)}")
+
+
+# Подсказка красного текста `verifying_status` при унаследованном красном.
+# Id задачи не подставляется: у читателя статуса его нет.
+PULL_MAIN_HINT = ("; подтянуть main в ветку задачи: artel.py pull-main "
+                  "<id задачи>")
+
+
 def _event_divergence(checks: list, index: _RunIndex | None,
                       where: str = "") -> list[str]:
     """Проверки, исполнившиеся зелёными в прогоне одного события и
@@ -548,25 +610,23 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         first_source = (f"у коммита {short} нет ни одной проверки CI"
                         if runs is not None else
                         f"статус check-runs коммита {short} неизвестен ({why})")
-        runs_by_branch, run_why = run_list(branch)
-        if runs_by_branch:
-            return VERIFYING_RUNNING, (f"{first_source}, но `gh run list` "
-                                       f"по ветке {branch} показывает "
-                                       f"запуск — проверки идут")
-        detail = (f"и `gh run list` по ветке {branch} не ответил "
-                  f"({run_why})" if runs_by_branch is None else
-                  f"и `gh run list` по ветке {branch} не показывает "
-                  f"запусков")
-        return VERIFYING_NONE, f"{first_source}, {detail} — проверок нет вовсе"
+        return _no_checks_by_branch(branch, first_source, "")
+
+    # Индекс прогонов нужен на любом исходе: без него не отделить проверки
+    # прогонов других веток (запроса нет, если связки с прогоном нет ни у
+    # одной проверки).
+    index = _commit_workflow_runs(sha, runs)
+    runs, excluded = _branch_checks(runs, index, branch)
+    foreign = _excluded_phrase(excluded, index, branch)
+    if not runs:
+        # Только чужие проверки — то же, что коммит без проверок: зелёным
+        # пустой вердикт быть не может (требование 3).
+        return _no_checks_by_branch(
+            branch, f"у коммита {short} нет проверок прогонов ветки {branch}",
+            foreign)
 
     unfinished, reread = _unfinished_checks(runs)
     failed = [r for r in runs if r.get("conclusion") not in GREEN]
-    skipped_full_suite = (repo is None or repo_context.is_artel(repo)) and any(
-        r.get("name") in FULL_SUITE_CHECKS
-        and r.get("conclusion") == "skipped" for r in runs)
-    index = (_commit_workflow_runs(sha, runs) if unfinished or failed
-             or skipped_full_suite
-             else None)
     unexecuted = _unexecuted_full_suite(runs, repo, index)
     divergence = _divergence_phrase(_event_divergence(runs, index))
     stuck = _stuck_checks(unfinished, index)
@@ -576,21 +636,42 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         return VERIFYING_STUCK, _with_reread(
             f"CI коммита {short}: проверка зависла (порог "
             f"{config.CI_STUCK_CHECK_MINUTES} мин) — {'; '.join(stuck)}; "
-            f"перезапуск — ci-rerun{divergence}", reread)
+            f"перезапуск — ci-rerun{divergence}{foreign}", reread)
     if unfinished:
         return VERIFYING_RUNNING, _with_reread(
             f"CI коммита {short} ещё идёт: "
-            f"{_running_listing(unfinished, index)}{divergence}", reread)
+            f"{_running_listing(unfinished, index)}{divergence}{foreign}",
+            reread)
     if failed:
+        inherited = _inherited_from_main(failed, repo)
+        hint = PULL_MAIN_HINT if inherited else ""
         return VERIFYING_RED, _with_reread(
             f"CI коммита {short} не зелёный: "
-            f"{_failed_listing(failed, index)}{divergence}", reread)
+            f"{_failed_listing(failed, index)}{divergence}{inherited}{hint}"
+            f"{foreign}", reread)
     if unexecuted:
         return VERIFYING_RUNNING, _with_reread(
             f"CI коммита {short} ещё идёт: полный набор не исполнен — "
-            f"{', '.join(unexecuted)}", reread)
+            f"{', '.join(unexecuted)}{foreign}", reread)
     return VERIFYING_GREEN, _with_reread(
-        f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
+        f"CI коммита {short} зелёный ({len(runs)} проверок){foreign}", reread)
+
+
+def _no_checks_by_branch(branch: str, first_source: str,
+                         foreign: str) -> tuple[str, str]:
+    """Исход `verifying_status` без проверок ветки: `gh run list` по ветке
+    показывает запуск — «идут», иначе «проверок нет вовсе» (SPEC T079)."""
+    runs_by_branch, run_why = run_list(branch)
+    if runs_by_branch:
+        return VERIFYING_RUNNING, (f"{first_source}, но `gh run list` "
+                                   f"по ветке {branch} показывает "
+                                   f"запуск — проверки идут{foreign}")
+    detail = (f"и `gh run list` по ветке {branch} не ответил "
+              f"({run_why})" if runs_by_branch is None else
+              f"и `gh run list` по ветке {branch} не показывает "
+              f"запусков")
+    return VERIFYING_NONE, (f"{first_source}, {detail} — проверок нет "
+                            f"вовсе{foreign}")
 
 
 def verifying_is_red(note: str) -> bool:
@@ -692,32 +773,37 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
         return False, (f"у коммита {short} нет ни одной проверки CI — "
                        f"статус неизвестен")
 
+    index = _commit_workflow_runs(sha, runs)
+    runs, excluded = _branch_checks(runs, index, branch)
+    foreign = _excluded_phrase(excluded, index, branch)
+    if not runs:
+        # «Неизвестен», как у коммита без проверок: гейт мержа ждёт, а не
+        # отказывает и не перезапускает CI (требование 3).
+        return False, (f"у коммита {short} нет проверок прогонов ветки "
+                       f"{branch} — статус неизвестен{foreign}")
+
     # Состояния «проверка зависла» здесь нет (SPEC 01M3Y75C9TY76083CG1PK00EM4,
     # «Не входит»): на гейте мержа проверка без исхода — просто не зелёная.
     unfinished, reread = _unfinished_checks(runs)
     failed = [r for r in runs if r.get("conclusion") not in GREEN]
-    skipped_full_suite = (repo is None or repo_context.is_artel(repo)) and any(
-        r.get("name") in FULL_SUITE_CHECKS
-        and r.get("conclusion") == "skipped" for r in runs)
-    index = (_commit_workflow_runs(sha, runs) if unfinished or failed
-             or skipped_full_suite
-             else None)
     unexecuted = _unexecuted_full_suite(runs, repo, index)
     divergence = _divergence_phrase(_event_divergence(runs, index))
     if unfinished:
         return False, _with_reread(
             f"CI коммита {short} ещё идёт: "
-            f"{_running_listing(unfinished, index)}{divergence}", reread)
+            f"{_running_listing(unfinished, index)}{divergence}{foreign}",
+            reread)
     if failed:
         return False, _with_reread(
             f"CI коммита {short} не зелёный: "
-            f"{_failed_listing(failed, index)}{divergence}", reread)
+            f"{_failed_listing(failed, index)}{divergence}"
+            f"{_inherited_from_main(failed, repo)}{foreign}", reread)
     if unexecuted:
         return False, _with_reread(
             f"CI коммита {short} ещё идёт: полный набор не исполнен — "
-            f"{', '.join(unexecuted)}", reread)
+            f"{', '.join(unexecuted)}{foreign}", reread)
     return True, _with_reread(
-        f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
+        f"CI коммита {short} зелёный ({len(runs)} проверок){foreign}", reread)
 
 
 def accepted_full_suite(sha: str, repo: Path | None = None) -> tuple[str, str]:
