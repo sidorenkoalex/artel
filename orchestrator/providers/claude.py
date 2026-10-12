@@ -18,6 +18,7 @@ import json
 import os
 import re
 
+from . import base
 from .base import (CliTool, EMPTY_EVENT, FailureSignature, HomeReference,
                    RoleExecutorProvider, RunResult, StreamEvent, ToolCall,
                    ToolResult)
@@ -52,7 +53,10 @@ SECRET_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 # аргумента в отметке вызова инструмента — те же числа, что несли
 # `agent_log.render_agent_line`/`render_block` до переезда разбора сюда
 # (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 2: ни один символ строки
-# лога не меняется).
+# лога не меняется). Заморозка снята задачей 01M4RZB9287PXZ4Y7ZJG7HDR6Y
+# в одной части — путь файла (`file_path`) пишется в короткой форме
+# `wt:`/`docs:` общей функцией `base.short_log_path` до обрезки;
+# остальное в строке, включая символ и предел, прежнее.
 ERROR_TEXT_LIMIT = 200
 TOOL_ARGUMENT_LIMIT = 100
 ERROR_LINE_PREFIX = "! ошибка агента: "
@@ -71,6 +75,9 @@ TOOL_CALL_LINE_PREFIX = "· "
 # под сведёнными порядками другую строку лога или другое число трения.
 LOG_ARGUMENT_KEYS = ("command", "file_path", "pattern")
 CALL_ARGUMENT_KEYS = ("file_path", "command", "pattern")
+
+# Ключ, чьё значение — путь файла: только его строка лога сокращает.
+FILE_PATH_KEY = "file_path"
 
 # Сигнатуры провалов попытки (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования
 # 9-10) — дословно те же строки, что до задачи жили литералами в
@@ -439,19 +446,25 @@ class ClaudeProvider(RoleExecutorProvider):
                 counts[kind] = value
         return counts or None
 
-    @staticmethod
-    def _tool_argument(block, keys):
+    @classmethod
+    def _tool_argument(cls, block, keys):
         """Аргумент вызова инструмента по первому найденному ключу
         `keys` — см. `LOG_ARGUMENT_KEYS`/`CALL_ARGUMENT_KEYS` о том,
         почему порядков два."""
+        return cls._tool_argument_entry(block, keys)[1]
+
+    @staticmethod
+    def _tool_argument_entry(block, keys):
+        """(ключ, аргумент) вызова по первому найденному ключу `keys`;
+        `(None, "")` — ни одного из них нет."""
         args = block.get("input") or {}
         if not isinstance(args, dict):
-            return ""
+            return None, ""
         for key in keys:
             value = args.get(key)
             if value:
-                return value
-        return ""
+                return key, value
+        return None, ""
 
     @classmethod
     def _render_block(cls, block):
@@ -464,7 +477,11 @@ class ClaudeProvider(RoleExecutorProvider):
             text = block.get("text", "").strip()
             return f"{text}\n" if text else ""
         if kind == "tool_use":
-            arg = cls._tool_argument(block, LOG_ARGUMENT_KEYS)
+            key, arg = cls._tool_argument_entry(block, LOG_ARGUMENT_KEYS)
+            # Сокращается только путь файла: команда и шаблон поиска —
+            # текст, а не путь, даже когда выглядят как путь.
+            if key == FILE_PATH_KEY:
+                arg = base.short_log_path(arg)
             flat = " ".join(str(arg).split())[:TOOL_ARGUMENT_LIMIT]
             return (f"{TOOL_CALL_LINE_PREFIX}{block.get('name')} "
                     f"{flat}").rstrip() + "\n"
