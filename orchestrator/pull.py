@@ -79,7 +79,17 @@ PULL_CONFLICT_ROLE_STEP_MARKER = (
 # набора метку не получает: метка обещает читателям в `auto.py`, что шаг
 # роли после возврата действительно состоится, — обещать это за
 # состояние, из которого возврат уходит куда-то ещё, нечем.
-PULL_CONFLICT_MARKED_STATES = ("in_dev", "acceptance", "merge_gate")
+# `verifying` — четвёртая точка (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V,
+# требование 12): команда Оператора `pull-main` (`orchestrator/
+# pull_main.py`); эскалация её конфликта тоже не пишет `escalated_from`,
+# и возврат уходит в `in_dev`.
+PULL_CONFLICT_MARKED_STATES = ("in_dev", "acceptance", "merge_gate", "verifying")
+
+# Причина эскалации отказа ПОСЛЕ слияния на пути команды `pull-main` (SPEC
+# 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 13 (б)): слияние уже в ветке, а
+# планка по ней не прогнана — оставить задачу в `verifying` значило бы
+# отдать CI и мержу непроверенную голову.
+UNVERIFIED_HEAD_REASON = "голова после подтяжки не проверена планкой"
 
 # Фиксированный текст действия журнала (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9,
 # требование 7): аддитивный конфликт документов, слитый пультом. Список
@@ -107,6 +117,23 @@ class Fresh:
 
     def __eq__(self, other) -> bool:
         return isinstance(other, Fresh)
+
+
+class Unavailable:
+    """Сверка свежести не дала ответа: вершина origin main не получена или
+    `gitcmd.commits_behind` вернул `None`. Только на пути команды
+    `pull-main` (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 6): прежние
+    вызыватели получают в этих случаях `Fresh()`, как до задачи; `reason` —
+    какой из двух случаев."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def __repr__(self) -> str:
+        return f"Unavailable(reason={self.reason!r})"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Unavailable) and other.reason == self.reason
 
 
 class Pulled:
@@ -681,7 +708,7 @@ def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
 
 def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
             origin_main_sha, read_branch_text_or_refuse,
-            repo_path=None, run_plank=True):
+            repo_path=None, run_plank=True, operator_pull=False):
     """Исход подтяжки главной ветки target'а задачи в её ветку — вызывается
     из `fsm._pull_main_or_escalate`. `origin_main_source`/`origin_main_sha`/
     `read_branch_text_or_refuse` — узлы `fsm.py`, инъекция параметрами (не
@@ -706,6 +733,15 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     слияния превратил бы каждую подтяжку в эскалацию. Исход слияния —
     `Pulled(base)` без прогона; на выходе из `in_dev` планку гоняет
     прежняя точка подтяжки.
+
+    `operator_pull=True` — путь команды Оператора `pull-main` (SPEC
+    01M4PMR5EVFK4KQDPWB1KEGM7V, требования 5, 6, 13): Оператор зовёт
+    подтяжку ровно тогда, когда она нужна, поэтому (1) документный дифф
+    main её не пропускает; (2) неполученная вершина origin main и
+    `commits_behind` → `None` — `Unavailable`, а не `Fresh()`, иначе сбой
+    git неотличим от «main уже в ветке»; (3) отказ ПОСЛЕ слияния
+    эскалирует задачу причиной `UNVERIFIED_HEAD_REASON`. Прежние
+    вызыватели (`False`) получают прежние исходы.
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
@@ -717,12 +753,18 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     source_branch = source[1] if source is not None else config.MAIN_BRANCH
     base = origin_main_sha(target_name)
     if not base:
+        if operator_pull:
+            return Unavailable(f"вершина {source_branch} в origin не получена")
         return Fresh()
     behind = gitcmd.commits_behind(branch, base=base, repo=repo_path)
+    if behind is None and operator_pull:
+        return Unavailable(f"отставание ветки {branch} от {source_branch} "
+                           f"({base}) не определено — git не ответил")
     if not behind:
         return Fresh()
 
-    doc_files = _doc_only_main_advance(branch, base, repo_path)
+    doc_files = (None if operator_pull
+                 else _doc_only_main_advance(branch, base, repo_path))
     if doc_files is not None:
         store.journal(
             conn, task_id, "fsm",
@@ -762,6 +804,14 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
 
     if not run_plank:
         return Pulled(base)
-    return _materialize_and_run_plank(conn, task_id, t, branch, source_branch,
-                                     wt_path, state, base,
-                                     read_branch_text_or_refuse)
+    outcome = _materialize_and_run_plank(conn, task_id, t, branch, source_branch,
+                                         wt_path, state, base,
+                                         read_branch_text_or_refuse)
+    if operator_pull and isinstance(outcome, Refused):
+        why = outcome.reason or "SPEC.md не прочитан с артефактной ветки"
+        detail = (f"{UNVERIFIED_HEAD_REASON}: подтяжка {source_branch} в "
+                  f"ветку {branch} состоялась, но {why}")
+        store.set_state(conn, task_id, "escalated", "fsm",
+                        expected_state=state, detail=detail)
+        return Conflict([], detail)
+    return outcome

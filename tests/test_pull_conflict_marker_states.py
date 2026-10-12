@@ -168,15 +168,16 @@ class MarkedStatesSetTest(unittest.TestCase):
 
     def test_marked_states_are_exactly_the_three_returning_to_in_dev(self):
         """`pull.PULL_CONFLICT_MARKED_STATES` — ровно `in_dev`,
-        `acceptance`, `merge_gate`.
+        `acceptance`, `merge_gate` и `verifying` (подтяжка командой
+        `pull-main`, SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 12).
 
-        Ловит мутацию: в набор дописано четвёртое состояние (`review`,
-        `verifying`, `spec_gate`), из которого возврат из эскалации
-        уходит не в `in_dev`, либо одно из трёх из него выпало —
-        `assertEqual` ниже это поймает.
+        Ловит мутацию: в набор дописано пятое состояние (`review`,
+        `spec_gate`), из которого возврат из эскалации уходит не в
+        `in_dev`, либо одно из четырёх из него выпало — `assertEqual`
+        ниже это поймает.
         """
         self.assertEqual(pull.PULL_CONFLICT_MARKED_STATES,
-                         ("in_dev", "acceptance", "merge_gate"))
+                         ("in_dev", "acceptance", "merge_gate", "verifying"))
 
 
 class MarkerPerStateTest(PullConflictCase):
