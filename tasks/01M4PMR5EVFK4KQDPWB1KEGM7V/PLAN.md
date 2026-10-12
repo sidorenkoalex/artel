@@ -69,6 +69,21 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
    предварительного advance. Проверен мутацией: `verifying` убран из
    `pull.PULL_CONFLICT_MARKED_STATES` — тест красный
    (`assertEqual(len(markers), 1)`), код возвращён.
+5. Замечания REVIEW итерации 1:
+   - R1-F1: `tests/test_pull_main_unavailable.py` — сторож требования 6 на
+     пути команды (через `artel.main()`, песочница `PullMainSandbox`
+     долгоживущего файла): (а) `fsm._origin_main_sha` → `None`, (б)
+     `rev-list --count` с ошибкой git — отказ `pull-main`, без
+     `PULL_MAIN_ALREADY_FRESH`, без слияния/планки/отправки/записи
+     подтяжки/сброса потолка, задача в `verifying`. Не повтор
+     долгоживущего файла — тот AC-6 не проверяет.
+   - R1-F2: `pull.UNAVAILABLE_ACTION`; `fsm._pull_main_or_escalate` на
+     исходе `Unavailable` пишет запись журнала с этим действием и
+     `reason`, текст отказа `pull_main` ссылается на неё. Прежние
+     вызыватели `Unavailable` не получают — для них журнал не меняется.
+   Проверено мутациями (код возвращён `git checkout`): `Unavailable` →
+   `Fresh()` в обеих ветках `pull.evaluate` — оба теста красные; запись
+   журнала в `fsm` убрана — оба красные.
 
 ## Покрытие требований
 
@@ -79,7 +94,7 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
 | 3 | 2 |
 | 4 | 2 |
 | 5 | 1 |
-| 6 | 1, 2 |
+| 6 | 1, 2, 5 |
 | 7 | 2 |
 | 8 | 2 |
 | 9 | 2 |
@@ -88,7 +103,7 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
 | 12 | 1, 3 |
 | 13 | 1, 2 |
 | 14 | 2 |
-| 15 | — тесты долгоживущего файла `tests/test_01m4pmr5evfk4kqdpwb1kegm7v_pull_main.py` держат все семь мутаций (заявки найдены проверкой AC-15 планки); новых тестов не дописано, повтор запрещён требованием 15 |
+| 15 | — тесты долгоживущего файла `tests/test_01m4pmr5evfk4kqdpwb1kegm7v_pull_main.py` держат все семь мутаций (заявки найдены проверкой AC-15 планки); новых тестов не дописано, повтор запрещён требованием 15; сторож требования 6 (вне перечня мутаций требования 15) — шаг 5 |
 
 Проверка в шаге:
 - `python3 -m pytest tests/test_01m4pmr5evfk4kqdpwb1kegm7v_pull_main.py
@@ -107,6 +122,14 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
   suite-run 01M4PMR5EVFK4KQDPWB1KEGM7V` прогон №1 (полный набор) —
   «зелёный прогон», упало 0 (сводка печатает «прошло: 1» — см.
   «Предложения системе»).
+- Шаг после REVIEW итерации 1: `python3 -m pytest
+  tests/test_pull_main_unavailable.py tests/test_01m4pmr5evfk4kqdpwb1kegm7v_pull_main.py
+  tests/test_pull_conflict_marker_states.py tests/test_stack_zones_pull_section.py
+  tests/test_pull.py tests/test_branch_freshness_gate.py
+  tests/test_pull_long_lived_plank.py tests/test_ci_rerun_command.py
+  tests/test_codebase_map.py tests/test_runner_pre_step_pull.py` — 119
+  passed, 34 subtests passed; `artel.py plank-run` — 7 passed, код 0;
+  `artel.py suite-run` прогон №2 (полный набор) — «зелёный прогон», упало 0.
 
 ## Влияние на систему
 

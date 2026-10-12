@@ -81,8 +81,8 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/pull.py:756-762; orchestrator/pull_main.py:76-80 | требование 6 на пути `pull-main` держит только разовая планка, в `tests/` сторожа нет (временная мутация `Unavailable`→`Fresh()` — `tests/` зелёные) | после мержа регрессия «сбой git = “main уже в ветке”» пройдёт CI | тест в `tests/` на случаи (а)/(б) пути команды с заявкой «Ловит мутацию» |
-| R1-F2 | open | orchestrator/pull_main.py:76-80 | журнал отказа `"unavailable"` без причины | Оператор по журналу не различит случаи (а)/(б) | записать причину в журнал (minor; можно `rejected` с обоснованием) |
+| R1-F1 | fixed | orchestrator/pull.py:756-762; orchestrator/pull_main.py:76-80 | требование 6 на пути `pull-main` держит только разовая планка, в `tests/` сторожа нет (временная мутация `Unavailable`→`Fresh()` — `tests/` зелёные) | после мержа регрессия «сбой git = “main уже в ветке”» пройдёт CI | тест в `tests/` на случаи (а)/(б) пути команды с заявкой «Ловит мутацию». Разработчик: добавлен `tests/test_pull_main_unavailable.py` — два теста через `artel.main()`: (а) `fsm._origin_main_sha` → `None`, (б) `rev-list --count` с ошибкой git; мутация `Unavailable`→`Fresh()` в `pull.evaluate` — оба красные |
+| R1-F2 | fixed | orchestrator/pull_main.py:76-80 | журнал отказа `"unavailable"` без причины | Оператор по журналу не различит случаи (а)/(б) | записать причину в журнал (minor; можно `rejected` с обоснованием). Разработчик: `fsm._pull_main_or_escalate` на `Unavailable` пишет запись журнала `pull.UNAVAILABLE_ACTION` с `reason`, текст отказа `pull_main` ссылается на неё; держат те же два теста (мутация «запись не пишется» — оба красные) |
 
 ## Вердикт
 
