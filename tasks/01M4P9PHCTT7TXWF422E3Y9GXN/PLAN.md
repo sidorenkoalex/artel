@@ -2,7 +2,7 @@
 task: 01M4P9PHCTT7TXWF422E3Y9GXN
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -129,7 +129,8 @@ tests/ превысил Nс») — старт пробника не утверж
    причина — в докстринге.
 3. Убрать из ветки `tests/test_zzmain_limit_copy.py` — копию файла main,
    оставленную прерванным шагом developer (чекпоинт pause --now
-   b41257c5) для замера времени; в main её нет.
+   b41257c5) для замера времени; в main её нет. Сделано: `git diff
+   main...HEAD --stat` её не содержит.
 4. Регенерация `docs/codebase-map.md`.
 5. Замеры AC-1/AC-2/AC-4/AC-7 и мутации AC-3/AC-4 (ниже).
 
@@ -150,7 +151,37 @@ tests/ превысил Nс») — старт пробника не утверж
 
 ## Проверки
 
-ЗАПОЛНИТЬ
+Машина Оператора (macOS, 14 ядер); нагрузка — 14 процессов
+`python -c 'while 1: pass'`; pytest `-p no:cacheprovider -p timeout -o
+timeout=120`.
+
+- Планка: `artel.py plank-run 01M4P9PHCTT7TXWF422E3Y9GXN` — 10 passed
+  за 95,8 с, код 0 (в т.ч. мутации AC-3 и мутация `ps` AC-4 —
+  `test_ac3_mutations_still_caught.py`, `test_ac4_ac5_liveness.py`).
+- AC-1/AC-4, ветка под нагрузкой, 5 прогонов подряд ac3_cut, `test_ac4_*`,
+  `test_ac5_*` и `test_counts_members_exactly_when_ps_is_not_on_path` —
+  5/5 зелёные (4 passed каждый раз, 73,9–93,5 с на прогон).
+- AC-7, время метода под нагрузкой (call): ac3_cut 24,5–35,3 с; ac4
+  25,7–33,4 с; ac5 19,5–24,4 с; liveness 0,24–0,91 с — все < 120 с.
+- AC-7, время файла без нагрузки, ветка против main (main — версии файлов
+  из main на месте, затем возврат `git checkout HEAD -- …`):
+  full_suite_limit_runs 76,48 с против 52,25 с (+24,2 с ≤ 30);
+  test_liveness 8,34 с против 16,15 с (−7,8 с).
+- AC-2, main:
+  - ac3_cut + `test_ac4_*` под нагрузкой, 5 прогонов — прогон 2 красный:
+    `ProfileLimitCutsGateRunTest::test_ac3_…` «AssertionError: [] is not
+    true» (тот же симптом, что в CI).
+  - test_liveness без нагрузки, 4 прогона — 2 красных:
+    `test_counts_members_exactly_when_ps_is_not_on_path` «1 != 2»
+    (`tests/test_liveness.py:183`).
+- AC-8: `tests/sandbox.py` не входит в `git diff main...HEAD`. AC-9:
+  `PROBE_TEST`, `note("start")` и обе подмены `FULL_SUITE_WORKERS` не
+  тронуты (дифф — только `randint` и докстринги; планка
+  `test_ac6_ac8_ac9_limit_file_data.py` зелёная).
+- `python3 scripts/codebase_map.py` — карта регенерирована.
+- Полный набор: `artel.py suite-run 01M4P9PHCTT7TXWF422E3Y9GXN` №1 —
+  зелёный; лог: «5051 passed, 2 skipped, 2340 subtests passed in
+  445.05s».
 
 ## Влияние на систему
 
@@ -159,7 +190,7 @@ tests/ превысил Nс») — старт пробника не утверж
 литералы) прежние, мутации AC-3 по-прежнему ловятся (механизм проверки
 предела тот же, сменился только масштаб чисел). Время набора: файл
 full_suite_limit_runs дольше не больше чем на 29 с в худшем зерне,
-test_liveness быстрее на ~4,5 с. Откат — revert merge-коммита.
+test_liveness быстрее (замер: 16,15 → 8,34 с, «Проверки»). Откат — revert merge-коммита.
 
 ## Риски
 
@@ -174,3 +205,6 @@ test_liveness быстрее на ~4,5 с. Откат — revert merge-комм�
   как обычный код: чекпоинт не отличает рабочий мусор замера от правки.
   Для замеров «ветка против main» не хватает команды пульта (времени
   файла на базе) — роль делает копию в `tests/` руками.
+- `suite-run --wait` (orchestrator/suite_run.py, `render`) на зелёном
+  прогоне №1 этой задачи напечатал «прошло: 1, упало: 0», хотя в логе
+  «5051 passed, 2 skipped»: счётчик отчёта не совпадает с итогом pytest.
