@@ -10,9 +10,12 @@ git-репозитории и отвечает на вопрос «тот ли �
 не различает «список не разобрался» и «git не ответил» (оба ненулевые), а
 именно это различие несёт причину в лог джоба.
 """
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -141,6 +144,32 @@ class ViolationMatchingTest(unittest.TestCase):
         self.assertFalse(cpp.is_violation("orchestrator/config.py", protected))
         self.assertFalse(cpp.is_violation("tests/skills/x.md", protected))
         self.assertFalse(cpp.is_violation("scripts/guard.py", protected))
+
+
+class EventHeadShaTest(unittest.TestCase):
+    """Чтение `pull_request.head.sha` из файла события (SPEC
+    01M4PMPMZ7PPCN3JWX75RTJZQN, требование 4)."""
+
+    def test_json_of_wrong_shape_is_a_reason_not_a_crash(self):
+        """Файл события — валидный JSON не той формы (массив, `null` вместо
+        `pull_request`, строка вместо `head`) — причина отката на
+        `BASE_SHA`, а не исключение.
+
+        Ловит мутацию: проверки `isinstance(..., dict)` выброшены и путь
+        берётся цепочкой `event["pull_request"]["head"]["sha"]` — массив
+        или `null` роняют скрипт трейсбеком вместо названной причины.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            for text in ("[]", '{"pull_request": null}',
+                         '{"pull_request": {"head": "abc"}}'):
+                with self.subTest(event=text):
+                    path = Path(tmp) / "event.json"
+                    path.write_text(text, encoding="utf-8")
+                    with mock.patch.dict(
+                            os.environ, {cpp.EVENT_ENV: str(path)}):
+                        sha, reason = cpp._event_head_sha()
+                    self.assertIsNone(sha)
+                    self.assertIn("pull_request.head.sha", reason)
 
 
 if __name__ == "__main__":
