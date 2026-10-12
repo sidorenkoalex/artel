@@ -196,10 +196,11 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
     def setUp(self):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
-        capture(projects.cmd_target_init, "sled")
         # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
-        # п.3) — клон проекта со своим `origin`.
+        # п.3) — клон проекта со своим `origin`; заведён до `target-init`,
+        # который иначе клонировал бы проект сам.
         make_project_repo("sled")
+        capture(projects.cmd_target_init, "sled")
         capture(catalog.cmd_init)
         store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
                           f"task/{self.TASK.lower()}", "sled", 25.0)
@@ -241,12 +242,12 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         # `tests/test_github_adapter.py`).
         #
         # Гейт ёмкости (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-10) теперь
-        # считает diff в клоне контекста target'а для ЛЮБОГО target —
-        # `config.PROJECTS/sled/workspace` здесь пустой каталог, не
-        # настоящий git-клон (`cmd_target_init` его не заводит, это ТЗ-2,
-        # вне зоны этой задачи), и гейт fail-closed отказал бы переходу
-        # по не отвечающему git — предмет ЭТОГО теста (сверка чистоты),
-        # не гейт ёмкости, поэтому он замокан отдельно.
+        # считает diff в клоне контекста target'а для ЛЮБОГО target, а
+        # ветки задачи в клоне проекта здесь нет (`cmd_target_init` клон
+        # заводит, SPEC 01M4RRW7FT1EE77EY9Y462AZKC, но ветку задачи — нет),
+        # и гейт fail-closed отказал бы переходу по не отвечающему git —
+        # предмет ЭТОГО теста (сверка чистоты), не гейт ёмкости, поэтому
+        # он замокан отдельно.
         with mock.patch.object(github_adapter, "ensure_head_in_origin",
                               return_value=(True, "")), \
              mock.patch.object(fsm_advance, "_capacity_gate_refuses",
@@ -277,10 +278,11 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
     def setUp(self):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
-        capture(projects.cmd_target_init, "sled")
         # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
-        # п.3) — клон проекта со своим `origin`.
+        # п.3) — клон проекта со своим `origin`; заведён до `target-init`,
+        # который иначе клонировал бы проект сам.
         make_project_repo("sled")
+        capture(projects.cmd_target_init, "sled")
         capture(catalog.cmd_init)
         # SPEC T094, требование 10: бриф developer для ЛЮБОГО не-self
         # target читает tasks/<id>/ из артефактной ветки ПУЛЬТА
@@ -404,10 +406,11 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
     def setUp(self):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
-        capture(projects.cmd_target_init, "sled")
         # Ссылка документов внешней задачи живёт в git проекта (ADR-0021
-        # п.3) — клон проекта со своим `origin`.
+        # п.3) — клон проекта со своим `origin`; заведён до `target-init`,
+        # который иначе клонировал бы проект сам.
         make_project_repo("sled")
+        capture(projects.cmd_target_init, "sled")
         capture(catalog.cmd_init)
         # SPEC T094, требование 10: approve на spec_gate для НЕ-self
         # target читает tasks/<id>/SPEC.md из артефактной ветки ПУЛЬТА
