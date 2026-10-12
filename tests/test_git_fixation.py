@@ -235,6 +235,15 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
             f"{self.TASK}: PLAN заглушка")
 
     def test_uncommitted_plan_still_advances_for_external_target(self):
+        """Внешний target: `advance` из `in_dev` не останавливается
+        сверкой чистоты, когда документы задачи закоммичены в ссылку
+        `refs/artifacts/<id>` проекта.
+
+        Ловит мутацию: если сверка чистоты в `fsm` отказывает без учёта
+        признака `clean` из `fixation.read` (условие `if not current or
+        clean` сужено до `if not current`), задача sled останется в
+        `in_dev` с отказом «не закоммичен» — тест покраснеет.
+        """
         # ADR-0015: сверка головы на origin переехала на `in_dev ->
         # verifying` — эта песочница не заводит настоящую кодовую ветку
         # `task/sled-t001` (только артефактную PLAN-заглушку), а предмет
