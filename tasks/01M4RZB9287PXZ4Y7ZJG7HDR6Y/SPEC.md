@@ -26,10 +26,14 @@ budget_usd: 45
 
 Точки кода (origin/main ddcf33b1, по ТЗ): Claude — `_render_block`
 (`orchestrator/providers/claude.py` ~457, сборка строки ~468),
-`LOG_ARGUMENT_KEYS` (~72), `CALL_ARGUMENT_KEYS` (~371); Codex —
-`_call_line` (`orchestrator/providers/codex.py` ~881) из
-`_tool_call_event` (~715), `file_change` (~267), `ITEM_ARGUMENT_KEYS`
-(~279), `_text_of`; читатель строки — `report._tool_calls` (~862) →
+`LOG_ARGUMENT_KEYS` (`claude.py:72`), `CALL_ARGUMENT_KEYS`
+(`claude.py:73`); Codex — `_call_line` (`orchestrator/providers/codex.py`
+~881) из `_tool_call_event` (`codex.py:700`), `file_change` (~267),
+`ITEM_ARGUMENT_KEYS` (`codex.py:279`, порядок `command`, `query`,
+`arguments`, `path`, `changes`, `text`), `_argument` (~843), `_text_of`;
+детектор утечки пула канарейки — `orchestrator/doctor/canary_pool.py:73-83`
+(подстрока `config.CANARY_POOL_DIRNAME` = `.artel-canary` в логе роли,
+SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ); читатель строки — `report._tool_calls` (~862) →
 `_write_groups` (~889), `WRITE_GROUPS` (~98), `_file_lines` (~881).
 
 ## Требования
@@ -39,13 +43,19 @@ budget_usd: 45
    применяется только:
    - у Claude — к значению `file_path`, когда ключевой аргумент строки
      взят из него (не из `command` и не из `pattern`);
-   - у Codex — к строковому значению `path` каждого элемента перечня
-     `changes` элемента `file_change` и к строковому значению `path`
-     самого элемента (оба ключа входят в `ITEM_ARGUMENT_KEYS`); строка
-     лога собирается из отдельной сериализации тем же `_text_of`, общий
-     `_argument` и `ToolCall.argument` не меняются.
+   - у Codex — к тому из ключей `path`/`changes` элемента, который стал
+     ключевым аргументом строки (первый непустой по `ITEM_ARGUMENT_KEYS`;
+     `path` стоит раньше `changes`): у элемента с непустым `path` — к
+     строковому значению `path` самого элемента; у элемента без `path` —
+     к строковому значению `path` каждого элемента перечня `changes`
+     (`file_change`). Строка лога собирается из отдельной сериализации
+     тем же `_text_of`, общий `_argument` и `ToolCall.argument` не
+     меняются.
    Bash-команды, шаблоны Grep, `command_execution` и прочий текст
-   аргумента не меняются.
+   аргумента не меняются — в том числе когда значение `command`
+   (Claude и `command_execution` Codex) или `pattern` САМО является
+   абсолютным путём под `/.artel/worktrees/<id>/` с хвостом (например
+   `/x/.artel/worktrees/T1/scripts/run.sh`).
 2. Значение заменяется, только если оно абсолютное и содержит каталог
    `/.artel/` по якорю:
    - `…/.artel/worktrees/<id>/` и `…/.artel/projects/<проект>/worktrees/<id>/`
@@ -60,6 +70,14 @@ budget_usd: 45
    не меняются. Относительный путь и абсолютный путь вне этих каталогов
    (временный каталог, главная копия) не меняются. Корень по
    `config.ROOT` не берётся: якорь — `/.artel/` и имена каталогов.
+   Свойство детектора утечки пула канарейки сохраняется
+   (`orchestrator/doctor/canary_pool.py:73-83`, SPEC
+   01M1NEEWH5K1XPFRDGRMPYSBXJ): значение, содержащее
+   `config.CANARY_POOL_DIRNAME` (`.artel-canary`), не сокращается — иначе
+   сокращение могло бы убрать из строки лога подстроку, по которой
+   детектор находит утечку (например
+   `/Users/u/.artel-canary/.artel/worktrees/T1/x.py` → `wt:x.py`).
+   Ограничение требования 3 на импорты `base.py` касается уровня модуля.
 3. Замена живёт только в строке лога (`log_text`): `ToolCall.argument`,
    учёт токенов, результат вызова и поток событий не меняются.
    Реализация — одна общая функция сокращения пути
@@ -93,7 +111,14 @@ budget_usd: 45
    формы блок test_author выдаёт те же числа, что до задачи.
 6. Новый файл тестов в `tests/`, каждый тест с заявкой «Ловит мутацию:»,
    ловит мутации: префикс заменён после обрезки; замена применена к
-   Bash-команде с абсолютным путём или к шаблону Grep; относительный
+   Bash-команде с абсолютным путём или к шаблону Grep; замена применена
+   к `command` (Claude Bash, Codex `command_execution`) или `pattern`
+   (Grep), которые САМИ являются абсолютным путём под
+   `/.artel/worktrees/<id>/` с хвостом (например
+   `/x/.artel/worktrees/T1/scripts/run.sh`); у элемента Codex с непустым
+   `path` и перечнем `changes` замена применена не к `path`, ставшему
+   аргументом строки; значение, содержащее `.artel-canary`
+   (`config.CANARY_POOL_DIRNAME`), сокращено; относительный
    `tasks/T005/SPEC.md` превращён в `docs:SPEC.md`; путь вне `.artel/`
    изменён; замена попала в `ToolCall.argument`; старая вложенная
    раскладка дала `docs:X` или `wt:wt:`; в `file_change` заменён только
@@ -137,16 +162,28 @@ AC-3. Не меняются: `/home/u/my.artel/worktrees/T1/x.py` (`.artel` не
 `docs:`; `…/.artel/logs/…`,
 `…/.artel/state.db`, `…/.artel/projects/<проект>/repo/…`; относительные
 `tasks/T005/SPEC.md` и `orchestrator/artel.py`; абсолютный путь вне
-`.artel/` (временный каталог, главная копия).
+`.artel/` (временный каталог, главная копия); значение, содержащее
+`config.CANARY_POOL_DIRNAME` (`.artel-canary`), — например
+`/Users/u/.artel-canary/.artel/worktrees/T1/x.py` и
+`/x/.artel/worktrees/T1/.artel-canary/y.py`: строка лога по-прежнему
+несёт подстроку `.artel-canary`, детектор
+`orchestrator/doctor/canary_pool.py:73-83` её находит.
 
-AC-4. Claude: ключевой аргумент из `command` (Bash, в том числе с
-абсолютным путём рабочей копии внутри команды) и из `pattern` (Grep) в
-строке лога не меняется.
+AC-4. Claude: ключевой аргумент из `command` (Bash) и из `pattern`
+(Grep) в строке лога не меняется — и когда абсолютный путь рабочей копии
+стоит внутри команды, и когда значение `command`/`pattern` САМО является
+абсолютным путём под `/.artel/worktrees/<id>/` с хвостом (например
+`command` = `/x/.artel/worktrees/T1/scripts/run.sh`; Grep с таким
+`pattern`).
 
-AC-5. Codex: в строке лога `file_change` строковый `path` каждого
-элемента `changes` (не только первого) и строковый `path` самого элемента
-заменены по формам AC-2; `command_execution` и прочий текст аргумента не
-меняются.
+AC-5. Codex: замена применяется к тому из ключей `path`/`changes`, который
+стал ключевым аргументом строки (`path` стоит раньше `changes` в
+`ITEM_ARGUMENT_KEYS`): у элемента с непустым `path` в строке лога
+строковый `path` самого элемента заменён по формам AC-2; у элемента
+`file_change` без `path` строковый `path` каждого элемента `changes` (не
+только первого) заменён по формам AC-2. `command_execution` (в том числе
+с `command` = `/x/.artel/worktrees/T1/scripts/run.sh`) и прочий текст
+аргумента не меняются.
 
 AC-6. Замена не попадает в `ToolCall.argument` ни у Claude, ни у Codex:
 для `file_path`/`file_change` с абсолютным путём рабочей копии
@@ -261,6 +298,10 @@ AC-14. `docs/codebase-map.md` в ветке совпадает с выводом
 - Матрица неослабления (ТЗ): строка несёт больше сведений; предел 100,
   метрика трения, учёт стоимости и токенов, поток событий и
   `ToolCall.argument` не меняются; гейтов, лимитов и прав ролей задача не
-  касается.
+  касается; свойство детектора утечки пула канарейки
+  (`orchestrator/doctor/canary_pool.py:73-83`, SPEC
+  01M1NEEWH5K1XPFRDGRMPYSBXJ) сохраняется — значение с
+  `config.CANARY_POOL_DIRNAME` не сокращается, подстрока остаётся в строке
+  лога (требование 2, AC-3).
 - Задача 01M4C1ZQS930 пересекается по файлам `providers/*` текстово;
   очерёдность разработки решит замок зон.
