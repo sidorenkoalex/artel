@@ -9,7 +9,9 @@ acceptance — `orchestrator/fsm_autogate.py` (T091, декомпозиция
 `cmd_approve`, `cmd_reject`) и узлы, общие для нескольких состояний/
 гейтов (сверка свежести ветки, чтения с ветки задачи, guard-отказ).
 """
+import hashlib
 import json
+import re
 import subprocess  # шов для tests/test_ac3_ac9_pull_message_fixtures.py:
                     # mock.patch.object(fsm.subprocess, "run", ...) —
                     # сам fsm.py вызовов subprocess не делает (они в pull.py)
@@ -84,6 +86,14 @@ ANSWER_CREATED_ACTION_PREFIX = "ANSWER создан"
 NO_ANSWER_FLAG = "--no-answer"
 APPROVE_NO_ANSWER_REFUSED_ACTION = "approve отклонён: нет ANSWER после эскалации"
 ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION = "эскалация снята без ответа"
+
+# Признак «Оператор ответил на этот батч QUESTIONS.md и вернул задачу»
+# (SPEC 01M4R4JKC28J80Z82TZA62RF2J, требование 1): строка журнала, а не
+# колонка БД — схема не меняется. Detail — `sha256=<хэш>; ANSWER-<n>`;
+# читает `fsm_advance.spec_writing`, сравнивая хэш только с ПОСЛЕДНЕЙ
+# такой строкой задачи.
+QUESTIONS_ANSWERED_ACTION = "батч вопросов отвечен"
+_QUESTIONS_ANSWERED_DETAIL = re.compile(r"sha256=([0-9a-f]{64}); ANSWER-(\d+)")
 
 # Действия журнала о полном наборе tests/ на `approve` из `acceptance`
 # (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 6-8): три исхода — прогон
@@ -508,6 +518,83 @@ def _answer_baseline_or_refuse(conn, task_id: str, tdir: Path) -> int | None:
                            f"{branch} — число ANSWER-*.md не посчитано, "
                            f"эскалация отложена")
     return count
+
+
+def _questions_batch_sha256(text: str) -> str:
+    """Хэш батча `QUESTIONS.md` — sha256 его текста в UTF-8; одна функция
+    для ветки документов и диска (SPEC 01M4R4JKC28J80Z82TZA62RF2J,
+    требование 4): ни время изменения файла, ни sha объекта git в нём не
+    участвуют."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _latest_answer_number(conn, task_id: str) -> int | None:
+    """Наибольший `n` среди `ANSWER-*.md` задачи — тем же источником, что
+    `_answer_file_count` (ветка документов; диск — только при
+    `foreign=False`), разбор номера — как `brief._latest_answer_rel`.
+    `None` — номера нет или git не ответил."""
+    branch, foreign = artifact_source.resolve(conn, task_id)
+    if foreign:
+        paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}")
+        if paths is None:
+            return None
+        names = [Path(p).name for p in paths]
+    else:
+        names = [p.name for p in (config.TASKS / task_id).glob("ANSWER-*.md")]
+    numbers = [int(name[len("ANSWER-"):-len(".md")]) for name in names
+               if name.startswith("ANSWER-") and name.endswith(".md")
+               and name[len("ANSWER-"):-len(".md")].isdigit()]
+    return max(numbers) if numbers else None
+
+
+def _questions_text(conn, task_id: str) -> str | None:
+    """Текст `QUESTIONS.md` тем же источником, что в
+    `fsm_advance.spec_writing`; `None` — файла нет или он не прочитан.
+    Без записи отказа в журнал: на `approve` непрочитанный батч только
+    лишает задачу признака, возврат идёт как прежде (требование 2)."""
+    branch, foreign = artifact_source.resolve(conn, task_id)
+    if foreign:
+        text, _ = artifact_branch.show(task_id, branch,
+                                       f"tasks/{task_id}/QUESTIONS.md")
+        return text
+    path = config.TASKS / task_id / "QUESTIONS.md"
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _mark_questions_answered(conn, task_id: str) -> None:
+    """Строка `QUESTIONS_ANSWERED_ACTION` на `approve` из эскалации по
+    батчу, уже прошедшего сверку числа ANSWER (требования 1-3). Нет батча,
+    не прочитан он или номер ANSWER не найден — признака нет."""
+    text = _questions_text(conn, task_id)
+    if text is None:
+        print(f"[{task_id}] QUESTIONS.md не прочитан — батч не признан "
+              f"отвеченным, следующий advance эскалирует его снова")
+        return
+    number = _latest_answer_number(conn, task_id)
+    if number is None:
+        return
+    store.journal(conn, task_id, "operator", QUESTIONS_ANSWERED_ACTION,
+                  f"sha256={_questions_batch_sha256(text)}; ANSWER-{number}")
+
+
+def _last_questions_answered(conn, task_id: str) -> tuple[str, int] | None:
+    """(хэш, номер ANSWER) ПОСЛЕДНЕЙ строки `QUESTIONS_ANSWERED_ACTION`
+    задачи; `None` — строки нет или её detail не разобран. Более ранние
+    строки не участвуют: возврат к тексту старого отвеченного батча —
+    новый вопрос (требование 5)."""
+    rows = [row for row in store.task_steps(conn, task_id)
+            if row["action"] == QUESTIONS_ANSWERED_ACTION]
+    if not rows:
+        return None
+    match = _QUESTIONS_ANSWERED_DETAIL.fullmatch(rows[-1]["detail"] or "")
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
 
 
 def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
@@ -1383,6 +1470,12 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str,
             return
         store.journal(conn, task_id, "operator",
                       ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION, escalation)
+    # Батч QUESTIONS.md отвечен и возвращается аналитику — признак до смены
+    # состояния (SPEC 01M4R4JKC28J80Z82TZA62RF2J, требование 1): иначе
+    # `spec_writing` эскалирует тот же файл снова, а удалить его роль не
+    # может. Сюда доходит только approve, прошедший сверку числа ANSWER.
+    if t["escalated_from"] == "spec_writing" and baseline is not None:
+        _mark_questions_answered(conn, task_id)
     # Куда возвращать — знает только тот, кто эскалировал: провал агента
     # (cmd_run) пишет в escalated_from состояние своего шага, потому что
     # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
