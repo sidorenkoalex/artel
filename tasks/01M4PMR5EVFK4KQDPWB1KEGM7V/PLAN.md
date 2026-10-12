@@ -2,7 +2,7 @@
 task: 01M4PMR5EVFK4KQDPWB1KEGM7V
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -56,8 +56,19 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
 3. `docs/stack.md` — `verifying` в перечне помечаемых состояний;
    `tests/test_pull_conflict_marker_states.py::MarkedStatesSetTest::
    test_marked_states_are_exactly_the_three_returning_to_in_dev` —
-   ожидаемый кортеж с `verifying` (см. «Эскалация»); регенерация
+   ожидаемый кортеж с `verifying` (мандат ANSWER-1 п.1); регенерация
    `docs/codebase-map.md`.
+4. Обязательная замена по ANSWER-1 п.2: в
+   `tests/test_pull_conflict_marker_states.py` — помощник
+   `PullConflictCase.escalate_via_pull_main` (конфликт подтяжки из
+   `verifying` целиком командой `pull_main.cmd_pull_main`) и класс
+   `VerifyingPullMainReturnGivesDeveloperItsStepTest` по образцу
+   `MergeGateReturnGivesDeveloperItsStepTest`: эскалация с меткой,
+   `approve` с ANSWER → `in_dev`, следующий `auto` журналирует
+   `auto.REWORK_REFUSAL_ACTION` и отдаёт шаг developer без
+   предварительного advance. Проверен мутацией: `verifying` убран из
+   `pull.PULL_CONFLICT_MARKED_STATES` — тест красный
+   (`assertEqual(len(markers), 1)`), код возвращён.
 
 ## Покрытие требований
 
@@ -90,9 +101,12 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
   `test_branch_freshness_gate.py`, `test_fsm_map_conflict_autoresolve.py`,
   `test_fsm_merge_conflict_note.py`, `test_long_lived_transitions.py`,
   `test_ci_rerun_command.py`, `test_codebase_map.py`) — 128 passed.
-- `artel.py suite-run` отказал: на машине шёл прогон задачи
-  01M4PMPMZ7PPCN3JWX75RTJZQN (одновременно — один полный прогон). Полный
-  набор в этом шаге не прогнан.
+- Шаг после ANSWER-1: `python3 -m pytest
+  tests/test_pull_conflict_marker_states.py` — 8 passed; `artel.py
+  plank-run 01M4PMR5EVFK4KQDPWB1KEGM7V` — 7 passed, код 0; `artel.py
+  suite-run 01M4PMR5EVFK4KQDPWB1KEGM7V` прогон №1 (полный набор) —
+  «зелёный прогон», упало 0 (сводка печатает «прошло: 1» — см.
+  «Предложения системе»).
 
 ## Влияние на систему
 
@@ -107,8 +121,9 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
   пишет) — обещание метки выполняется.
 - Lease, гейты, потолок `VERIFYING_CEILING_SEC`, `store.py` не меняются.
   Команда не в белом списке ролей.
-- Существующий тест меняет ожидаемый кортеж — требует мандата Оператора
-  (раздел «Эскалация»).
+- Существующий тест меняет ожидаемый кортеж — по мандату Оператора
+  (ANSWER-1: `Ослабление тестов разрешено:` с именем метода); замена из
+  матрицы ANSWER-1 — новый тест возврата из `verifying` (шаг 4).
 - Откат: revert merge-коммита задачи.
 
 ## Риски
@@ -117,29 +132,6 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
   после слияния на пути команды читается как «переход», хотя перехода нет;
   следом идёт эскалация с причиной `UNVERIFIED_HEAD_REASON`, так что
   Оператор видит обе. Текст прежних записей не менял (вне задачи).
-
-## Эскалация
-
-- **Вопросы**
-  1. (блокирует сдачу) Мандат на смену ожидания существующего метода
-     `tests/test_pull_conflict_marker_states.py::MarkedStatesSetTest::test_marked_states_are_exactly_the_three_returning_to_in_dev`.
-     Было: `assertEqual(pull.PULL_CONFLICT_MARKED_STATES, ("in_dev",
-     "acceptance", "merge_gate"))`; стало: `assertEqual(...,
-     ("in_dev", "acceptance", "merge_gate", "verifying"))`, докстринг и
-     заявка «Ловит мутацию» обновлены под четыре состояния (вид
-     утверждения `assertEqual` прежний). Причина — требование 12 SPEC и
-     раздел «Ожидаемая краснота существующих тестов», п.1: SPEC прямо
-     называет мандат условием. Правка уже в рабочей копии. Варианты:
-     (а) мандат строкой ANSWER `Ослабление тестов разрешено:
-     tests/test_pull_conflict_marker_states.py::MarkedStatesSetTest::test_marked_states_are_exactly_the_three_returning_to_in_dev`;
-     (б) иное решение Оператора на гейте. Дефолт при молчании — нет: без
-     мандата рубеж неослабления откажет, и задача стоит.
-- **Контекст** — реализация закончена целиком (шаги 1–3), планка и
-  долгоживущий файл задачи зелёные; полный набор не прогнан (суперзамок
-  `suite-run` занят другой задачей). После мандата следующий шаг
-  разработчика — прогон `suite-run` и `status: ready`.
-- **Блокирует** — выход из `in_dev` (рубеж неослабления тестов на
-  изменённом методе).
 
 ## Предложения системе
 
@@ -150,3 +142,6 @@ updated_at=store.now())`. Сбой отправки — `sys.exit` с подст
   обрекает задачу на эскалацию разработчика ради мандата, который
   Оператор мог дать ещё на гейте SPEC: стоит дать гейту SPEC принимать
   строку мандата (`skills/analyst*`, `orchestrator/advance_gates/mandate.py`).
+- Сводка `suite-run --wait` зелёного полного прогона печатает «прошло: 1,
+  упало: 0» при тысячах тестов в логе (`orchestrator/suite_run.py::render`)
+  — счётчик, похоже, считает не тесты; по сводке не виден объём прогона.
