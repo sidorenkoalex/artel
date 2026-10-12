@@ -17,7 +17,16 @@ import unittest
 from unittest import mock
 
 from orchestrator import config
-from orchestrator import knowledge_cards as kc
+try:
+    from orchestrator import knowledge_cards as kc
+except ImportError as exc:  # до реализации модуля нет: сбор проходит, тесты красны
+    kc = None
+    KC_IMPORT_ERROR = exc
+
+
+def setUpModule() -> None:
+    if kc is None:
+        raise KC_IMPORT_ERROR
 
 LATIN = "abcdefghijklmnopqrstuvwxyz"
 
@@ -55,8 +64,8 @@ class Inputs:
                 return value
 
 
-def card(key: str, where: tuple, kind: str = kc.SYSTEM) -> "kc.Card":
-    return kc.Card(kind=kind, key=key, where=tuple(where), rule="правило",
+def card(key: str, where: tuple, kind: str = "") -> "kc.Card":
+    return kc.Card(kind=kind or kc.SYSTEM, key=key, where=tuple(where), rule="правило",
                    why="причина", check="", example="", incidents=())
 
 

@@ -24,7 +24,16 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import acceptance, config, notes, store
-from orchestrator import knowledge_cards as kc
+try:
+    from orchestrator import knowledge_cards as kc
+except ImportError as exc:  # до реализации модуля нет: сбор проходит, тесты красны
+    kc = None
+    KC_IMPORT_ERROR = exc
+
+
+def setUpModule() -> None:
+    if kc is None:
+        raise KC_IMPORT_ERROR
 from tests.sandbox import RealGitSandbox, clone_artel_from_origin, init_bare_origin
 
 LATIN = "abcdefghijklmnopqrstuvwxyz"

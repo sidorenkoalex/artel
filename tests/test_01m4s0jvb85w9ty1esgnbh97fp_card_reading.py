@@ -27,7 +27,16 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import brief, config, repo_context
-from orchestrator import knowledge_cards as kc
+try:
+    from orchestrator import knowledge_cards as kc
+except ImportError as exc:  # до реализации модуля нет: сбор проходит, тесты красны
+    kc = None
+    KC_IMPORT_ERROR = exc
+
+
+def setUpModule() -> None:
+    if kc is None:
+        raise KC_IMPORT_ERROR
 from tests.sandbox import RealGitSandbox, artel_target_entry
 
 # Боевая область проектов этого процесса — до любых подмен песочницы.

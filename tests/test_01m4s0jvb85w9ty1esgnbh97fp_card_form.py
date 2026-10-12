@@ -17,7 +17,16 @@ import unittest
 from unittest import mock
 
 from orchestrator import config
-from orchestrator import knowledge_cards as kc
+try:
+    from orchestrator import knowledge_cards as kc
+except ImportError as exc:  # до реализации модуля нет: сбор проходит, тесты красны
+    kc = None
+    KC_IMPORT_ERROR = exc
+
+
+def setUpModule() -> None:
+    if kc is None:
+        raise KC_IMPORT_ERROR
 
 # Образец файла карточек из ТЗ задачи (карточка `merge-lock-order`).
 TZ_SAMPLE = """\
@@ -312,8 +321,8 @@ class CardFormTest(unittest.TestCase):
         self.assertTrue(result.detail.strip(), self.inp.msg(label))
         return result
 
-    def accepted(self, text: str, label: str, kind: str = kc.SYSTEM) -> tuple:
-        result = kc.check_text(text, self.inp.file(), kind)
+    def accepted(self, text: str, label: str, kind: str = "") -> tuple:
+        result = kc.check_text(text, self.inp.file(), kind or kc.SYSTEM)
         self.assertNotIsInstance(result, kc.Refusal, self.inp.msg(
             f"{label}: отказ {result!r}\n{text}"))
         self.assertIsInstance(result, tuple, self.inp.msg(label))
