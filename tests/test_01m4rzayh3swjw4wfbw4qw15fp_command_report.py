@@ -470,7 +470,7 @@ class ReportBlockTest(ExploreSandbox):
                 self.step(tid, "developer", reads(self.rng.randint(1, 4), "w")
                           + [CODE_EDIT], n=n)
 
-    def stubbed_report(self) -> tuple:
+    def stubbed_report(self, shared: SharedConnection | None = None) -> tuple:
         """Отчёт с заглушкой функции сводки (пустой журнал на входе) и
         признак того, что заглушка вызвана."""
         original = explore_metric.summarize
@@ -488,7 +488,7 @@ class ReportBlockTest(ExploreSandbox):
             stack.enter_context(mock.patch.object(explore_metric, "summarize", stub))
             if getattr(report, "summarize", None) is original:
                 stack.enter_context(mock.patch.object(report, "summarize", stub))
-            _page, count = self.run_report()
+            _page, count = self.run_report(shared)
         return count, bool(called)
 
     def test_ac15_block_is_rendered_with_own_window(self):
@@ -543,27 +543,36 @@ class ReportBlockTest(ExploreSandbox):
         self.assertEqual((1, 1), (small.opened, large.opened))
 
     def test_ac15_block_adds_no_steps_query_at_any_task_count(self):
-        """Отчёт с настоящей функцией сводки и с заглушкой — на двух задачах
-        и затем на семи.
+        """Отчёт с настоящей функцией сводки и с заглушкой — на наборе из
+        двух задач и затем из семи.
 
         Заглушка сводит функцию сводки к пустому журналу и действительно
-        вызвана; на каждом размере журнала число запросов к `steps` с
-        блоком равно числу без него — блок не добавляет ни одного запроса,
-        и его вклад не растёт с числом задач.
+        вызвана; на каждом наборе `store.db()` за прогон вызывается один
+        раз (и с блоком, и с заглушкой), а число запросов к `steps` с
+        блоком равно числу с заглушкой — блок не добавляет ни одного
+        запроса (ANSWER-1: рост существующих блоков с числом задач вне
+        задачи).
 
         Ловит мутацию: блок (или функция сводки через переданное
         соединение) делает свой запрос журнала — один на прогон или по
         одному на задачу: с настоящей функцией запросов станет больше, чем
-        с заглушкой.
+        с заглушкой; блок открывает своё `store.db()` — открытий за прогон
+        станет два.
         """
-        for count in (2, 5):
-            self.seed_tasks(count)
-            _page, real = self.run_report()
-            stubbed, called = self.stubbed_report()
+        total = 0
+        for size in (2, 7):
+            self.seed_tasks(size - total)
+            total = size
+            real_db = SharedConnection(self.conn)
+            _page, real = self.run_report(real_db)
+            stub_db = SharedConnection(self.conn)
+            stubbed, called = self.stubbed_report(stub_db)
             self.assertTrue(called, "заглушка функции сводки не вызвана")
+            self.assertEqual((1, 1), (real_db.opened, stub_db.opened),
+                             self.msg(f"{size} задач: открытий store.db()"))
             self.assertEqual(stubbed, real,
-                             self.msg(f"+{count} задач: с блоком {real}, "
-                                      f"без него {stubbed}"))
+                             self.msg(f"{size} задач: с блоком {real}, "
+                                      f"с заглушкой {stubbed}"))
 
     def test_ac15_block_numbers_match_default_command(self):
         """Три шага developer за 7 суток (до правки кода 5, 17, 19 из 9, 23,
