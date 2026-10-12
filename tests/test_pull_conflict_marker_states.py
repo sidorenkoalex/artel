@@ -28,8 +28,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, auto, ci, config, fsm,  # noqa: E402
-                          fsm_merge_gate, gitcmd, pull, repo_context, runner,
-                          store)
+                          fsm_merge_gate, gitcmd, pull, pull_main,
+                          repo_context, runner, store)
 from tests.sandbox import LightTransitionSandbox  # noqa: E402
 from tests.test_auto_cycle import FakeRun  # noqa: E402
 
@@ -119,6 +119,18 @@ class PullConflictCase(LightTransitionSandbox):
         return fsm_merge_gate._sync_main_or_wait(
             store.db(), self.TASK, self.task_row(), "merge_gate",
             self.branch, ctx)
+
+    def escalate_via_pull_main(self) -> str:
+        """Тот же конфликт из `verifying` — командой Оператора `pull-main`
+        (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V), целиком: lease, свежее чтение
+        состояния, узел подтяжки. Эскалация завершает команду `sys.exit`
+        — его текст возвращается вместо stdout."""
+        self.set_state("verifying")
+        self.arm_conflict()
+        try:
+            return self.capture(pull_main.cmd_pull_main, self.TASK)
+        except SystemExit as exc:
+            return str(exc.code)
 
     # --------------------------------------------------------- возврат
 
@@ -312,6 +324,64 @@ class MergeGateReturnGivesDeveloperItsStepTest(PullConflictCase):
             ESCALATION_ACTION, actions[:step_index],
             "auto сделал предварительный advance до шага developer и снова "
             "эскалировал задачу тем же конфликтом (случай 21.09)")
+
+
+class VerifyingPullMainReturnGivesDeveloperItsStepTest(PullConflictCase):
+    """SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 12 (замена по ANSWER-1
+    п.2): `verifying` в наборе метки оправдан тем же, что `merge_gate`, —
+    возврат из эскалации конфликта подтяжки командой `pull-main` ведёт в
+    `in_dev`, и следующий `auto` отдаёт шаг developer, не повторяя
+    подтяжку предварительным advance."""
+
+    def test_auto_refuses_pre_advance_and_runs_developer_after_the_return(self):
+        """Конфликт подтяжки командой `pull-main` эскалирует задачу из
+        `verifying` и метит её; `approve` с ANSWER переводит её в `in_dev`;
+        следующий `auto` журналирует `auto.REWORK_REFUSAL_ACTION` и зовёт
+        developer, не сделав до этого ни одного предварительного advance.
+
+        Ловит мутацию: `verifying` выпал из `PULL_CONFLICT_MARKED_STATES`
+        (метки на эскалации из `verifying` нет) — `assertEqual(len(markers),
+        1)` покраснеет, а `auto` первым же предварительным advance повторит
+        подтяжку и переэскалирует задачу до шага developer; либо эскалация
+        из `verifying` записала `escalated_from` — возврат уйдёт не в
+        `in_dev`, и `assertEqual` по состоянию это поймает.
+        """
+        self.write_plan_ready()
+
+        out = self.escalate_via_pull_main()
+        self.assertEqual(self.state(), "escalated", out)
+        self.assertEqual(
+            len(self.marker_rows()), 1,
+            "конфликт подтяжки командой pull-main из verifying не пометил "
+            "задачу признаком «нужен шаг роли»")
+
+        self.approve()
+        self.assertEqual(
+            self.state(), "in_dev",
+            "возврат из эскалации подтяжки pull-main обязан вести в in_dev — "
+            "escalated_from эта эскалация не пишет")
+
+        before = len(self.journal_rows())
+        self.auto()
+        rows = self.journal_rows()[before:]
+        actions = [r["action"] for r in rows]
+
+        self.assertIn(
+            auto.REWORK_REFUSAL_ACTION, actions,
+            "auto не журналировал отказ рубежа переделки — предварительный "
+            "advance не был отклонён после возврата из эскалации")
+        step_index = next(
+            (i for i, r in enumerate(rows)
+             if r["action"] == ROLE_STEP_ACTION and r["actor"] == "developer"),
+            None)
+        self.assertIsNotNone(step_index, "auto не отдал шаг роли developer")
+        self.assertLess(actions.index(auto.REWORK_REFUSAL_ACTION), step_index,
+                        "отказ рубежа обязан быть журналирован ДО шага "
+                        "developer — он и есть причина, по которой шаг отдан")
+        self.assertNotIn(
+            ESCALATION_ACTION, actions[:step_index],
+            "auto сделал предварительный advance до шага developer и снова "
+            "эскалировал задачу тем же конфликтом")
 
 
 class ResolvedConflictPassesWithoutStreakStopTest(PullConflictCase):

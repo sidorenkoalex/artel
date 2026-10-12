@@ -1,5 +1,5 @@
 ---
-built_at_sha: fdb7e482a0a3904130a0dee9c84b08ccb0f91de8
+built_at_sha: 9bd11866dce035c21e5156bf4b5c4e084a431e32
 ---
 
 # Codebase-map пульта
@@ -1520,7 +1520,7 @@ built_at_sha: fdb7e482a0a3904130a0dee9c84b08ccb0f91de8
 
 **Импортирует:** `orchestrator/fsm.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`
+**Импортируется:** `orchestrator/artel.py`, `tests/test_pull_conflict_marker_states.py`
 
 ## orchestrator/release.py
 
@@ -6333,7 +6333,7 @@ built_at_sha: fdb7e482a0a3904130a0dee9c84b08ccb0f91de8
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/pull.py`, `orchestrator/repo_context.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_auto_cycle.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/pull.py`, `orchestrator/pull_main.py`, `orchestrator/repo_context.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_auto_cycle.py`
 
 **Импортируется:** —
 
