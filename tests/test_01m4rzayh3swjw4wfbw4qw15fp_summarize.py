@@ -11,7 +11,7 @@
 в текст провала.
 
 Группа: долгоживущий
-Красен до реализации: модуля orchestrator/explore_metric.py ещё нет — импорт `explore_metric` в начале файла падает ImportError, ни один тест не собирается.
+Красен до реализации: модуля orchestrator/explore_metric.py ещё нет — имя `explore_metric` равно None, каждый тест падает на обращении к `summarize`.
 """
 import ast
 import inspect
@@ -22,8 +22,13 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from orchestrator import explore_metric, retro
+from orchestrator import retro
 from orchestrator.providers import claude, codex
+
+try:
+    from orchestrator import explore_metric
+except ImportError:  # модуля ещё нет: тесты красны, сбор файла цел
+    explore_metric = None
 
 LIMIT = claude.TOOL_ARGUMENT_LIMIT
 PREFIX = claude.TOOL_CALL_LINE_PREFIX

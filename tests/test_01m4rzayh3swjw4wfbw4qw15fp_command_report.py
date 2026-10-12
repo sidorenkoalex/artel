@@ -10,7 +10,7 @@
 текст провала.
 
 Группа: долгоживущий
-Красен до реализации: модуля orchestrator/explore_metric.py ещё нет — импорт в начале файла падает ImportError; команды explore-stats нет в таблице artel.main, блока «Разведка ролей» в отчёте нет.
+Красен до реализации: модуля orchestrator/explore_metric.py ещё нет — имя explore_metric равно None и заглушка сводки не ставится; команды explore-stats нет в таблице artel.main, блока «Разведка ролей» в отчёте нет.
 """
 import contextlib
 import hashlib
@@ -26,8 +26,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import artel, config, explore_metric, report, retro, store
+from orchestrator import artel, config, report, retro, store
 from orchestrator.providers import claude
+
+try:
+    from orchestrator import explore_metric
+except ImportError:  # модуля ещё нет: тесты красны, сбор файла цел
+    explore_metric = None
 from tests.sandbox import SchemaConnTmpRootTest
 
 PREFIX = claude.TOOL_CALL_LINE_PREFIX
