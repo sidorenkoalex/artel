@@ -136,6 +136,13 @@ class Unavailable:
         return isinstance(other, Unavailable) and other.reason == self.reason
 
 
+# Действие записи журнала об исходе `Unavailable` (пишет
+# `fsm._pull_main_or_escalate`): без неё Оператор по журналу не различит,
+# не ответил origin или не нашлась ветка (REVIEW 01M4PMR5EVFK4KQDPWB1KEGM7V,
+# R1-F2).
+UNAVAILABLE_ACTION = "сверка свежести не дала ответа"
+
+
 class Pulled:
     """Подтяжка состоялась (или легитимно не требовала планки); `sha` —
     зафетченный sha main, влитый merge'ем."""

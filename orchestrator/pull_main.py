@@ -15,7 +15,7 @@
 """
 import sys
 
-from . import github_adapter, lease, store
+from . import github_adapter, lease, pull, store
 
 # Действие записи журнала об исходе «подтянуто» (требование 7): её читают
 # тесты и Оператор — «событие подтяжки» команды есть ровно эта запись.
@@ -75,8 +75,8 @@ def _cmd_pull_main(conn, task_id: str) -> None:
     if outcome == "unavailable":
         _refuse(conn, task_id,
                 f"сверка ветки {branch} с origin не состоялась (причина — "
-                f"строкой выше): подтяжки не было, повтори команду, когда "
-                f"git ответит")
+                f"строкой выше и записью журнала «{pull.UNAVAILABLE_ACTION}»): "
+                f"подтяжки не было, повтори команду, когда git ответит")
     if outcome == "refused":
         # Требование 13 (а): отказ до слияния — `git merge` не начинался,
         # причину уже записал и напечатал узел подтяжки.

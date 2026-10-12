@@ -260,7 +260,9 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
         read_branch_text_or_refuse=_read_foreign_branch_text_or_refuse,
         repo_path=repo_path, run_plank=run_plank, operator_pull=operator_pull)
     if isinstance(outcome, pull.Unavailable):
-        print(f"[{task_id}] сверка свежести не дала ответа: {outcome.reason}")
+        store.journal(conn, task_id, "fsm", pull.UNAVAILABLE_ACTION,
+                      outcome.reason)
+        print(f"[{task_id}] {pull.UNAVAILABLE_ACTION}: {outcome.reason}")
         return "unavailable"
     if isinstance(outcome, pull.Fresh):
         return "fresh"
