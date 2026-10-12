@@ -112,7 +112,11 @@ budget_usd: 40
 
 AC-1. `new "<название>" --target <имя>` с объявленным в `targets.yaml`
 `<имя>` вызывает `catalog.cmd_new` с `target=<имя>`, и задача заводится со
-значением `tasks.target = <имя>`. `_NEW_USAGE` и общая справка CLI
+значением `tasks.target = <имя>`. Проверяется на не-artel `<имя>`:
+временный `targets.yaml` песочницы с двумя записями — `artel` и этим
+проектом; `catalog.cmd_new` получает `target=<этот проект>` (не `None` и не
+`artel`), `tasks.target` заведённой задачи — `<этот проект>`, не `artel`.
+`_NEW_USAGE` и общая справка CLI
 содержат `--target <имя>`. `new "<название>" --target` без значения —
 отказ (выход с ненулевым кодом), задача не заведена.
 
@@ -178,7 +182,9 @@ AC-9. При нечитаемом `targets.yaml` (файла нет либо о�
 Ниже — перечень перестановок подготовки тестов по требованию 6 (без смены
 утверждений): клон проекта создаётся до вызова `projects.cmd_target_init`;
 плюс правка устаревших комментариев требования 6
-(`tests/test_git_fixation.py:246`, `tests/test_multitarget.py:273-275`).
+(`tests/test_git_fixation.py:246`, `tests/test_multitarget.py:273-275`);
+плюс развязка `NewSetFlagTest` с боевым `targets.yaml` по требованию 3
+(тоже правка подготовки, без смены утверждений).
 
 tests/test_git_fixation.py::ExternalTargetAdvanceIgnoresDirtyCheckTest::setUp —
 `make_project_repo("sled")` до `cmd_target_init("sled")`; комментарий
@@ -193,8 +199,20 @@ tests/test_git_fixation.py::ExternalApproveDoesNotCommitOthersWorkInProgressTest
 tests/test_doctor.py::RecoveryCheckTest::setUp — `make_project_repo("sled")`
 до `cmd_target_init("sled")`.
 
-tests/test_doctor.py::RecoveryCheckTest::test_artel_gets_the_same_recovery_sverka_as_any_target —
-клон артели до `cmd_target_init(config.DEFAULT_TARGET)`.
+tests/test_task_model_set_units.py::NewSetFlagTest — развязка с боевым
+`targets.yaml` правкой подготовки, без смены утверждений: класс
+(`tests/test_task_model_set_units.py:137`) — `unittest.TestCase` без
+песочницы путей, и `artel._cmd_new` в обоих методах (строки 150-155 и
+164-167) читает настоящий `config.TARGETS`. После записи sled в настоящий
+`targets.yaml` Оператором (две записи) правило требования 3 откажет `new`
+без `--target`, и `test_set_flag_passes_name_and_keeps_tz` (утверждение
+`assert_called_once_with` строк 166-167) покрасит main. Подготовка класса
+подменяет `config.TARGETS` на время теста временным `targets.yaml` с одной
+записью артели (по образцу `tests/sandbox.py::declared_artel_profile` /
+`mock.patch.object(config, "TARGETS", …)`); утверждения строк 153-155 и
+166-167 — `SystemExit` с «--set», `assert_not_called`,
+`assert_called_once_with("Название", tz_path="т.md", model_set="nabor")` —
+не меняются.
 
 ## Оценка объёма и деление
 
