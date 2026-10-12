@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import artel, catalog, config, models, spend, stack, store  # noqa: E402
 from tests.sandbox import (FIXTURE_CODEX_MODEL, FIXTURE_OTHER_MODEL,  # noqa: E402
                            FIXTURE_TIER_MODEL, TaskSeededTmpRootTest,
-                           TmpRootTest)
+                           TmpRootTest, declared_artel_profile)
 
 
 def set_task(conn, task_id: str, name: str, members: dict) -> None:
@@ -135,6 +135,14 @@ class LiveTaskSetProvidersNoDbTest(TmpRootTest):
 
 
 class NewSetFlagTest(unittest.TestCase):
+
+    def setUp(self):
+        # `artel._cmd_new` сверяет число проектов с `config.TARGETS` (SPEC
+        # 01M4RRW7FT1EE77EY9Y462AZKC, требование 3) — не с боевым файлом
+        # пульта, а с временной декларацией одной артели.
+        targets_file = declared_artel_profile()
+        targets_file.__enter__()
+        self.addCleanup(targets_file.__exit__, None, None, None)
 
     def test_set_flag_without_name_refused_before_new(self):
         """`new <название> --set` без имени — отказ до заведения задачи.
