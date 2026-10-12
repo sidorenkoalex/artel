@@ -59,7 +59,13 @@ schema_version: 5
    `tests/test_git_fixation.py` (~246) и `tests/test_multitarget.py` (~273);
    `NewSetFlagTest.setUp` подменяет `config.TARGETS` временной декларацией
    одной артели (`tests.sandbox.declared_artel_profile`), утверждения
-   методов не тронуты.
+   методов не тронуты. Правка комментария внутри
+   `ExternalTargetAdvanceIgnoresDirtyCheckTest::test_uncommitted_plan_still_advances_for_external_target`
+   делает метод «изменённым» для гейта заявки мутации — ему добавлен
+   докстринг с «Ловит мутацию» (условие `if not current or clean` в
+   сверке чистоты `fsm` сужено до `if not current`); заявка проверена
+   временной мутацией `orchestrator/fsm.py` — тест красный, код возвращён.
+   Утверждения метода не тронуты.
 5. `python3 scripts/codebase_map.py` — карта регенерирована.
 
 ## Покрытие требований
@@ -98,3 +104,9 @@ schema_version: 5
   полным прогоном `suite-run`.
 
 ## Предложения системе
+- Гейт заявки мутации (`guard.test_functions_without_mutation_claim`)
+  считает метод изменённым при правке одного комментария внутри тела —
+  а правку такого комментария SPEC требовал (требование 6). Стоило бы
+  сравнивать сегменты без комментариев, либо подсказывать проверку
+  `test_functions_without_mutation_claim` до сдачи (одна итерация
+  потрачена на отказ гейта).
