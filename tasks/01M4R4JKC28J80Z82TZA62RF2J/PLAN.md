@@ -2,7 +2,7 @@
 task: 01M4R4JKC28J80Z82TZA62RF2J
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -102,7 +102,19 @@ id, "spec_writing", "analyst")` даёт «шаг был» (тот же рубе
   аналитика эскалирует отвеченный батч снова — это буква требования 5
   («после последнего входа в spec_writing»), пред-advance `auto` в этом
   случае и так ждёт шага роли.
-- Полный набор: см. итог `suite-run` (дописывается по завершении).
+- Полный набор: `suite-run` №1 — 5116 passed, 5 failed (все «новые на
+  ветке», но вне зоны задачи: `test_01m46d5t8sz9d6s34tzfx8s46v_full_suite_lock`
+  ×3, `test_01m462qaceh29rprd2rzhghqfm_suite_run`,
+  `test_01m4araxf7vss5xz8c99bx8de2_suite_observation` — замок/тайминги
+  прогона, шёл параллельно с моим модульным прогоном); повтор
+  `suite-run --failed` №2 — 5 passed, 0 failed.
+- Тесты затронутых модулей (20 файлов + долгоживущий файл задачи):
+  196 passed, 1 subtest упал по таймауту 120 с под нагрузкой
+  (`test_01m4mqagrwmwr0gfdm9086p3td_spec_audit_flow.py::AcceptAuditFailTest::test_ac20_fail_verdict_needs_flag_in_both_forms`),
+  отдельно — зелёный (90 с).
+- Планка: `plank-run` — «в refs/artifacts нет файлов test_*.py», pytest не
+  запускался; требования покрыты долгоживущим файлом задачи (15 passed /
+  28 subtests).
 
 ## Предложения системе
 - `ls`/`cat` в песочнице роли отказаны («command not found»/требует
