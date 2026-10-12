@@ -171,7 +171,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   artifact-history-snapshots [--dry-run] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
-  ci-rerun <id> --reason "<основание>" |
+  ci-rerun <id> --reason "<основание>" | pull-main <id> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
@@ -541,6 +541,18 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
 красная главная ветка 22-26.09). Неизвестный статус вершины главной ветки
 — тоже отказ, а не повтор (инвариант 19).
 
+`pull-main <id>` (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V) — подтяжка main в ветку
+задачи, стоящей в `verifying`, без возврата к роли: тот же узел подтяжки,
+что на переходах автомата (`fsm._pull_main_or_escalate`, планка после
+слияния), но без пропуска по документному диффу main. Подтянутая голова
+уходит в origin (у канарейки — нет), отсчёт потолка `verifying` начинается
+заново; состояние задачи не меняется — дальше её ведёт CI новой головы.
+Отказывает именованно, ничего не подтягивая: задача не в `verifying`; lease
+держит другой процесс (включая отвязанный `auto` своей сессии); вершина
+origin main или отставание ветки не определены; посторонние файлы в рабочей
+копии. Конфликт слияния, красная планка, отказ планки после слияния —
+эскалация задачи. Не отправленная в origin голова — потолок не сбрасывается.
+
 Модули пакета (T015; здесь — только разбор argv и таблица команд):
   config    пути и константы; все обращения к ним идут через модуль
   store     БД, миграции схемы, журнал шагов, смена состояния
@@ -599,6 +611,8 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
   amend    штатная правка зафиксированной планки приёмки: коммит,
             лок, журнал, порог «планка девальвируется» (ADR-0012,
             SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
+  pull_main команда `pull-main <id>`: подтяжка main в ветку задачи на
+            verifying без возврата к роли (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V)
   zone_lock занятость зоны на старте кода: предусловие первого шага
             developer, снятие ожидания и очередь Оператором
             (SPEC 01M1P9QAG65GVF69YJEV0V18D9)
@@ -716,7 +730,8 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           budget, canary, catalog, ci_rerun, cleanup, doctor,
                           docs_fetch, dry_run, fsm, lease,
                           liveness, models, notes, pause, pin, plank_run,
-                          pool_seal, preflight, projects, prune, release,
+                          pool_seal, preflight, projects, prune, pull_main,
+                          release,
                           report, runner, session, snapshot, store, suite_run,
                           venv, version, watch, workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
@@ -1936,6 +1951,9 @@ def main() -> None:
         "amend-tests": lambda: amend.cmd_amend_tests(
             rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
         "ci-rerun": lambda: ci_rerun.cmd_ci_rerun(rest[0], _reason_arg(rest)),
+        # Подтягивает main в ветку задачи и отправляет её в origin — вне
+        # белого списка ролей (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 14).
+        "pull-main": lambda: pull_main.cmd_pull_main(rest[0]),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
