@@ -528,12 +528,14 @@ class ProjectDiskReadTest(CardsSandbox):
             self.target.chmod(0)
             self.addCleanup(lambda: self.target.exists()
                             and self.target.chmod(0o644))
+            readable = True
             try:
                 with open(self.target, encoding="utf-8"):
                     pass
             except OSError:
-                return
-            self.skipTest("права файла не ограничивают чтение (root)")
+                readable = False
+            if readable:
+                self.skipTest("права файла не ограничивают чтение (root)")
 
         def non_utf8():
             self.target.write_bytes(good_text.encode("utf-8") + b"\xff\xfe\x80")
