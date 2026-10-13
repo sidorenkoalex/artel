@@ -21,7 +21,8 @@ from pathlib import Path
 
 from scripts import codebase_map
 
-from . import alerts, artifact_branch, config, context_package, gitcmd, store
+from . import (alerts, artifact_branch, config, context_package, gitcmd,
+               reference_cache, store)
 from .advance_gates import refusal_classes
 
 MAP_REL = "docs/codebase-map.md"
@@ -93,6 +94,20 @@ _ROLE_NOT_FINISHED_REFUSAL_ACTIONS = refusal_classes.ROLE_NOT_FINISHED_REFUSAL_A
 # жать — в отличие от пропуска артефакта конкретной задачи (AC-22),
 # который остаётся фактом описи и алерт не поднимает.
 MAP_OVERSIZED_ALERT_SOURCE = "brief.codebase_map_oversized"
+# Справочник ядра в брифе developer/test_author (SPEC
+# 01M4S24EBVB72B8WYJ3JY96Y0E, требования 5, 7, 8): метка — путь кэша
+# относительно корня пульта, без домашнего каталога; тексты алертов — без
+# размеров и sha, чтобы повтор того же условия не заводил второй алерт.
+CORE_REFERENCE_LABEL = ".artel/projects/{target}/" + reference_cache.CACHE_REL.as_posix()
+CORE_REFERENCE_OVERSIZED_ALERT_SOURCE = "brief.core_reference_oversized"
+CORE_REFERENCE_NEAR_LIMIT_ALERT_SOURCE = "brief.core_reference_near_limit"
+CORE_REFERENCE_OVERSIZED_MESSAGE = (
+    "справочник ядра крупнее предела брифа — не включён в бриф; решение за "
+    "Оператором (сузить настройку проекта или поднять "
+    "CORE_REFERENCE_MAX_BYTES)")
+CORE_REFERENCE_NEAR_LIMIT_MESSAGE = (
+    "справочник ядра больше 90% предела брифа — скоро перестанет "
+    "включаться в бриф")
 # Записки шагов (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4, требования 8-11): потолок
 # текста одной записки в брифе — мягкое значение кода, как
 # `ADVANCE_REFUSAL_LIMIT`; предел хранения — `checkpoint.
@@ -440,7 +455,9 @@ def _manifest_component(conn, task_id: str, role: str, label: str,
 
     Не используется для analyst/test_author (SPEC «Не входит»: опись
     требование 1 называет только бриф разработчика и ревью-пакет) —
-    те продолжают звать `_journal_component` напрямую.
+    те продолжают звать `_journal_component` напрямую. Исключение —
+    справочник ядра у test_author (SPEC 01M4S24EBVB72B8WYJ3JY96Y0E,
+    требование 5): опись у него та же, что у developer.
     """
     store.journal(conn, task_id, role, "бриф: компонент",
                   f"{label}: sha256={component_hash(text)}")
@@ -724,6 +741,52 @@ def _handle_map_size_alert(conn, task_id: str, map_text: str) -> None:
             alerts.auto_ack(conn, row["id"])
 
 
+def _set_alert(conn, target: str, kind: str, source: str, message: str,
+               raised: bool) -> None:
+    """Открыть алерт источника `source` проекта `target` или снять открытый
+    — тем же приёмом авто-закрытия, что `_handle_map_size_alert`."""
+    if raised:
+        alerts.raise_alert(conn, target, kind, source, message)
+        return
+    for row in alerts.open_alerts(conn, kind):
+        if row["source"] == source and row["target"] == target:
+            alerts.auto_ack(conn, row["id"])
+
+
+def _core_reference_part(conn, task_id: str, role: str, run_id: str) -> str:
+    """Справочник ядра проекта задачи — кусок брифа developer/test_author
+    (SPEC 01M4S24EBVB72B8WYJ3JY96Y0E, требования 1-2, 4-8); пустая строка —
+    справочник выключен (`off`): ни компонента, ни пометки, ни записи
+    журнала, вызывающий код кусок не добавляет.
+
+    Пометка `note` идёт перед компонентом вне хэшируемого текста — тот же
+    приём, что `map_note` у карты; при `absent` — только она. Предел —
+    байты UTF-8 текста кэша: крупнее — строка пропуска без пути кэша
+    (читать файл адресно роль не зовётся, решение за Оператором)."""
+    reference = reference_cache.get_reference(conn, task_id, reason="brief")
+    if reference.state == "off":
+        return ""
+    note = f"{reference.note}\n\n" if reference.note else ""
+    if reference.state == "absent" or not reference.text:
+        return note
+    target = store.task_target(conn, task_id)
+    size = len(reference.text.encode("utf-8"))
+    limit = config.CORE_REFERENCE_MAX_BYTES
+    oversized = size > limit
+    _set_alert(conn, target, "incident", CORE_REFERENCE_OVERSIZED_ALERT_SOURCE,
+               CORE_REFERENCE_OVERSIZED_MESSAGE, oversized)
+    _set_alert(conn, target, "warning", CORE_REFERENCE_NEAR_LIMIT_ALERT_SOURCE,
+               CORE_REFERENCE_NEAR_LIMIT_MESSAGE,
+               not oversized and size * 10 > limit * 9)
+    if oversized:
+        return (f"{note}справочник ядра: {size} байт > {limit} — не включён, "
+                f"решение за Оператором (сузить настройку проекта или "
+                f"поднять предел)\n")
+    return note + _manifest_component(
+        conn, task_id, role, CORE_REFERENCE_LABEL.format(target=target),
+        reference.text, run_id)
+
+
 def _plan_review_components(conn, task_id: str, branch: str, foreign: bool,
                             run_id: str) -> list[str]:
     """PLAN.md/REVIEW.md артефактной ветки — в бриф developer, тем же
@@ -801,9 +864,12 @@ def developer_brief(conn, task_id: str) -> str:
         map_note + MAP_PROJECTION_NOTE + _manifest_component(
             conn, task_id, "developer", MAP_PROJECTION_LABEL,
             projected_map_text, run_id),
-        _manifest_component(conn, task_id, "developer", CONVENTIONS_REL,
-                            conventions_text, run_id),
     ]
+    reference_part = _core_reference_part(conn, task_id, "developer", run_id)
+    if reference_part:
+        parts.append(reference_part)
+    parts.append(_manifest_component(conn, task_id, "developer",
+                                     CONVENTIONS_REL, conventions_text, run_id))
     parts.extend(_plan_review_components(conn, task_id, branch, foreign,
                                          run_id))
     parts.extend(_developer_answer_components(conn, task_id, branch, foreign,
@@ -1178,7 +1244,11 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
     эскалации (SPEC T075, AC-6) — эта роль не получает SPEC/карту/
     конвенции отдельным брифом (`runner.py`, ветка `test_author`) ни до,
     ни после этой задачи, добавляется только новый минимум. `None` —
-    ответов ещё нет, промпт шага остаётся прежним (без добавки)."""
+    ответов ещё нет и справочник ядра выключен, промпт шага остаётся
+    прежним (без добавки).
+
+    Справочник ядра (SPEC 01M4S24EBVB72B8WYJ3JY96Y0E, требование 2) —
+    последним куском, после причины возврата и ANSWER."""
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
     return_reason_part = _return_reason_component(
@@ -1186,8 +1256,8 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
         run_id)
     part = _answer_component(conn, task_id, "test_author", branch, foreign,
                              run_id)
-    if not return_reason_part and not part:
+    reference_part = _core_reference_part(conn, task_id, "test_author", run_id)
+    pieces = [p for p in (return_reason_part, part, reference_part) if p]
+    if not pieces:
         return None
-    sep = "\n" if return_reason_part and part else ""
-    return (f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n"
-           f"{return_reason_part}{sep}{part}")
+    return f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n" + "\n".join(pieces)

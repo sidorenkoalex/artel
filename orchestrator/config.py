@@ -986,3 +986,7 @@ CORE_REFERENCE_MAX_SOURCE_BYTES = 32 * 1024 * 1024
 CORE_REFERENCE_MAX_BLOB_BYTES = 1 * 1024 * 1024
 CORE_REFERENCE_MAX_LISTING_BYTES = 64 * 1024 * 1024
 CORE_REFERENCE_GIT_TIMEOUT_SEC = 60
+# Предел справочника в брифе developer/test_author (SPEC
+# 01M4S24EBVB72B8WYJ3JY96Y0E, К-3б, требование 7) — байты UTF-8 текста
+# кэша: справочник крупнее в бриф не идёт, решение за Оператором.
+CORE_REFERENCE_MAX_BYTES = 32_768
