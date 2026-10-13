@@ -48,7 +48,12 @@ budget_usd: 40
      начальное состояние задачи `spec_writing`: задача заводится сразу в
      нём, и первый вход журналом `state -> spec_writing` не пишется
      (`orchestrator/catalog.py:667`, `:670`; докстринг
-     `orchestrator/auto.py:400`).
+     `orchestrator/auto.py:400`). Записи прочих действий журнала (не
+     `state -> …`: `created`, `набор моделей задачи`, `agent run started`,
+     `agent run finished` и любые другие), стоящие между переходом и
+     `state -> escalated` или перед первым переходом, на
+     состояние-источник не влияют — в журнале клона между ними всегда есть
+     записи шага роли.
    - Роль по состоянию-источнику: `spec_writing` — `analyst`, прочие —
      роль этого состояния по `orchestrator/config.py::STATE_ROLE`
      (`spec_audit` — `spec_auditor`, `tests_writing` — `test_author`,
@@ -80,7 +85,11 @@ budget_usd: 40
 4. Строки `canary_runs` без данных о ролях (записанные до этой задачи)
    разбираются по нынешнему правилу: выполненная ожидаемая эскалация
    покрывает ровно одну эскалацию по общему числу `escalations`. Задним
-   числом прогоны не перекрашиваются.
+   числом прогоны не перекрашиваются. «Без данных о ролях» — значение
+   `escalation_roles` равно `NULL` (`None`) либо в строке нет ключа
+   `escalation_roles` вовсе (словарь-строка без этого ключа, как у
+   помощника `canary_row` в `tests/test_model_sets.py`): отсутствие ключа
+   равнозначно `NULL` и читается по нынешнему правилу, без исключения.
 5. Сводка `admit` (`models.pair_admission`) в строке не чистого прогона
    называет причину по новому правилу (требование 2). Прочие числа
    допуска ADR-0019 п.5 (три чистых, два шаблона, чистый на среднем
@@ -91,29 +100,39 @@ budget_usd: 40
    две эскалации `analyst` — не чистый; одна эскалация `spec_auditor` без
    ловушки — не чистый; строка без данных о ролях с двумя эскалациями при
    выполненной ожидаемой — не чистая, как раньше; роль определяется по
-   состоянию до `escalated`.
+   последнему переходу до `escalated` при записях шага роли между ними.
 
 ## Критерии приёмки
 
-AC-1. `canary.escalation_roles` на журнале как у реального клона —
-`created`, `state -> escalated` (без предшествующего `state -> spec_writing`),
-`state -> spec_writing`, `state -> spec_audit`, `state -> escalated` —
-возвращает `["analyst", "spec_auditor"]`. Строка `canary_runs`, записанная
+AC-1. `canary.escalation_roles` на журнале как у реального клона, с
+записями шагов роли между переходами — `created`,
+`набор моделей задачи`, `agent run started`, `agent run finished`,
+`state -> escalated` (без предшествующего `state -> spec_writing`),
+`state -> spec_writing`, `agent run started`, `agent run finished`,
+`state -> spec_audit`, `agent run started`, `agent run finished`,
+`state -> escalated` — возвращает `["analyst", "spec_auditor"]` (вторая
+эскалация — `spec_auditor`, хотя непосредственно перед ней стоит не
+переход, а `agent run finished`). Строка `canary_runs`, записанная
 `_run_one_task` по результату клона с таким `steps`, несёт в колонке
 `escalation_roles` значение `analyst,spec_auditor` и `escalations = 2`.
 
-AC-2. Роль эскалации берётся из состояния до `escalated`, не из текста
-детали: `state -> escalated` после `state -> spec_audit` с деталью
+AC-2. Роль эскалации берётся из последнего перехода `state -> X` до
+`escalated`, не из текста детали и не из непосредственно предыдущей
+записи: в каждом случае ниже между `state -> X` и `state -> escalated`
+стоят записи `agent run started` и `agent run finished`.
+`state -> escalated` после `state -> spec_audit` с деталью
 «analyst: батч вопросов по ТЗ» даёт `spec_auditor`; после
 `state -> in_dev` — `developer`; после `state -> tests_writing` —
 `test_author`; после `state -> review` — `reviewer`; после
 `state -> spec_writing` — `analyst`.
 
 AC-3. `state -> escalated`, перед которым в журнале нет ни одного
-перехода `state -> X`, даёт `analyst` (источник — начальное
-`spec_writing`), а не `unknown`. `state -> escalated` после
-`state -> verifying` (состояния вне сопоставления ролей) даёт `unknown`.
-Журнал без `state -> escalated` даёт пустой список.
+перехода `state -> X`, но есть записи `created`, `набор моделей задачи`,
+`agent run started`, `agent run finished`, даёт `analyst` (источник —
+начальное `spec_writing`), а не `unknown`. `state -> escalated` после
+`state -> verifying` (состояния вне сопоставления ролей), между которыми
+стоит запись `agent run finished`, даёт `unknown`. Журнал без
+`state -> escalated` даёт пустой список.
 
 AC-4. Результат клона без нового поля в `metrics` (набор полей как у
 кода до задачи: ровно `_DRIVE_METRIC_FIELDS` на main) принимается
@@ -153,7 +172,9 @@ AC-9. Строка без данных о ролях (`escalation_roles` — `NU
 записанная до задачи) с выполненной ожидаемой эскалацией и
 `escalations = 2` — не чистая с нынешней причиной («эскалаций 2,
 ожидаемая эскалация покрывает только одну»); с `escalations = 1` —
-чистая. БД, заведшая `canary_runs` до задачи, после миграции сохраняет у
+чистая. То же для строки-словаря без ключа `escalation_roles` (иначе
+та же): `escalations = 2` — не чистая с той же нынешней причиной,
+`escalations = 1` — чистая, исключения при чтении нет. БД, заведшая `canary_runs` до задачи, после миграции сохраняет у
 прежних строк `escalation_roles = NULL`, и их вердикт чистоты не
 меняется.
 
@@ -197,6 +218,10 @@ AC-10. Сводка `pair_admission` для пары с прогоном
   (строки без данных о ролях, `escalations > 1` — не чистые) сохраняет
   своё ожидание без изменений: это и есть требование 4, отдельный тест
   на старое правило сверх него не заказывается.
+- Правка помощника `canary_row` в `tests/test_model_sets.py` (ключ
+  `escalation_roles` в нём не появляется): строка без ключа читается по
+  нынешнему правилу (требование 4), и проверки этого файла остаются на
+  старой ветке критерия.
 
 ## Материалы
 - ТЗ: `tasks/01M4VC31NFCS6JZ0VE8HNJ7FYM/TZ.md`; копилка 13.10, коммит
@@ -211,7 +236,10 @@ AC-10. Сводка `pair_admission` для пары с прогоном
 - `orchestrator/config.py:805` — `STATE_ROLE` (без `spec_writing`).
 - `orchestrator/canary_drive.py:67-87` (`build_result`: `steps` — журнал
   клона); `orchestrator/canary.py:291` (`_DRIVE_METRIC_FIELDS`), `:2330-2343`
-  (разбор результата), `:2232` (`steps = result["steps"]` в `_run_one_task`).
+  (разбор результата), `:2232` (`steps = result["steps"]` в
+  `_run_task_in_ephemeral_clone`, def `:2146`; `steps` возвращаются в
+  `_run_one_task`, def `:2504`, распаковка `:2565-2568`; в
+  `_record_canary_run`, `:2361`, вызов `:2578`, сейчас идут только `metrics`).
 - `orchestrator/catalog.py:667`, `:670` — задача заводится в
   `spec_writing` без записи `state -> spec_writing`; то же — докстринг
   `orchestrator/auto.py:400` (только чтение).
