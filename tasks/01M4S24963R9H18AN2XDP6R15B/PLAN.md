@@ -69,6 +69,15 @@ schema_version: 5
    пояснение многострочной константы, вырезание комментариев из значения,
    отказ CLI на `--constants-module` без `--constants`); карта
    `docs/codebase-map.md` регенерирована.
+6. Возврат из verifying (CI красный из-за утечки состояния между тестами,
+   не из-за кода задачи): `auto._stop_requested`/`auto._zone_wait_sleeping`
+   после настоящего SIGTERM в
+   `tests/test_01m3xtfjcc5tg63fhw907gqm4d_launch_hint.py::CommandHintEndToEndTest`
+   доживали до `tests/test_auto_cycle.py`. Правки без изменения проверок:
+   `CommandHintEndToEndTest.setUp` возвращает оба флага через `addCleanup`;
+   `AutoCycleTest.setUp` выставляет оба в `False` через `patch_object`
+   (`mock.patch.object` + `addCleanup(stop)` — прежние значения
+   возвращаются). Код задачи не менялся; карта регенерирована.
 
 ## Покрытие требований
 
@@ -100,6 +109,12 @@ schema_version: 5
   пересобираемые.
 
 ## Проверка
+- Шаг 6: `python3 -m pytest
+  tests/test_01m3xtfjcc5tg63fhw907gqm4d_launch_hint.py::CommandHintEndToEndTest::test_ac9_auto_stopped_by_stop_hints_observe_add
+  tests/test_auto_cycle.py::WaitForZoneTest::test_lease_lost_during_wait_stops_the_cycle_named
+  tests/test_auto_cycle.py::ZoneWaitStopTest::test_signal_during_the_poll_sleep_aborts_it_and_stops_the_wait
+  -p no:cacheprovider -q` — 3 passed (до правки — 2 failed по причине
+  возврата); оба файла целиком — 71 passed, 53 subtests passed.
 - `python3 -m pytest tests/test_01m4s24963r9h18an2xdp6r15b_generator.py
   tests/test_01m4s24963r9h18an2xdp6r15b_cli.py
   tests/test_01m4s24963r9h18an2xdp6r15b_targets_field.py
