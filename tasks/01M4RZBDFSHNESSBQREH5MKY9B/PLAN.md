@@ -94,8 +94,21 @@ analyst), с общим `run_id` брифа: граница, опись и за�
 - `suite-run` №1, полный набор: прошло 5364, упало 0, пропущено 2.
 - Свой сторож `tests/test_brief.py::TemplateUnreadReasonTest` краснеет на
   мутации «причина без схлопывания» (проверено временной мутацией).
+- Отказ гейта заявки мутации (итерация 2): двум методам из «Меняемого
+  поведения» (`DeveloperBriefTest::test_assembles_three_components_and_journals_their_hashes`,
+  `AnalystMapComponentTest::test_adds_only_the_map_and_journals_one_hash`)
+  добавлены докстринги с «Ловит мутацию: …»; утверждения не тронуты.
+  Временные мутации `ROLE_TEMPLATES` (analyst без QUESTIONS.md, developer
+  без PLAN.md) — каждый метод красный, после возврата 2 passed;
+  `guard.test_functions_without_mutation_claim` по всем изменённым против
+  main файлам `tests/` — пусто. `tests/test_brief.py` + долгоживущий файл
+  задачи: 41 passed.
 
 ## Предложения системе
 - Песочница роли не даёт `ls`/`sed -i` в Bash (только python/grep/git):
   временная мутация сторожа делается правкой через Edit туда-обратно;
   скил coding-standards описывает мутацию так, будто shell-правка доступна.
+- Смена литерала по «Меняемому поведению» делает метод «изменённым» для
+  гейта заявки мутации, хотя докстринга у старого метода не было: стоит
+  назвать это в skills/coding-standards.md рядом с правилом о «Меняемом
+  поведении» — иначе шаг сдаётся дважды (01M4RZBDFSHNESSBQREH5MKY9B).
