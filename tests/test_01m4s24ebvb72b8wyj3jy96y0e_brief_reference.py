@@ -363,6 +363,15 @@ class OffStateTest(ReferenceBriefSandbox):
         for needle in (CACHE_TAIL, REFERENCE_PHRASE):
             self.assertNotIn(needle, text, self.msg(f"developer: «{needle}»"))
         rows = self.rows_since(since)
+        # Шаблон PLAN в брифе developer (задача 01M4RZBDFSHNESSBQREH5MKY9B):
+        # в песочнице без templates/ — одна запись «шаблон не прочитан»; к
+        # справочнику она не относится и сверяется отдельно, точно.
+        template_rows = [r for r in rows
+                         if r["action"] == brief.TEMPLATE_UNREAD_ACTION]
+        self.assertEqual([(r["detail"] or "").split(":")[0] for r in template_rows],
+                         ["templates/PLAN.md"],
+                         self.msg(f"журнал: {[tuple(r) for r in rows]}"))
+        rows = [r for r in rows if r["action"] != brief.TEMPLATE_UNREAD_ACTION]
         self.assertEqual([r["action"] for r in rows], [COMPONENT_ACTION] * 3,
                          self.msg(f"журнал: {[tuple(r) for r in rows]}"))
         self.assertEqual([(r["detail"] or "").split(": sha256=")[0] for r in rows],
