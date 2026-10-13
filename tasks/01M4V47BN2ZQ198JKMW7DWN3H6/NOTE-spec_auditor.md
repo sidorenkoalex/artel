@@ -1,16 +1,16 @@
 ## Выяснено
-- Выкладка: runner.role_cwd (orchestrator/runner.py:1089-1162) -> artifact_branch.materialize_task_dir (artifact_branch.py:604-654), запасной путь — runner.py:1160-1161 (_place_harvested_docs); при сбое materialize диск не трогается вовсе.
-- role_cwd без параметра роли; вызов с ролью в области видимости — runner.py:1466; doctor/isolation.py:102 зовёт role_cwd(None, None, target); ~10 тестов зовут role_cwd(conn, id, target) позиционно.
-- Автокоммит не удалит отсутствующую записку: кандидаты на удаление — только type questions (checkpoint.py:1083-1144, 184).
-- Бриф уже не несёт чужих записок проверяющим (brief.py:119-125).
-- Ссылка refs/artifacts/<id> читается git'ом прямо из worktree роли (проверено ls-tree) — обходной канал.
-- TZ «Рамка: $15» против budget_usd: 25 в SPEC; ANSWER нет.
+- Второй аудит (SPEC sha 09ecd797…): все 6 пунктов решения Оператора №1 отражены; вердикт pass.
+- Имена записок: scripts/guard.py:1907-1924 (STEP_NOTE_ROLES, is_step_note — первый уровень, parent.parent == "tasks").
+- Выкладка: runner.role_cwd (runner.py:1089-1162) -> artifact_branch.materialize_task_dir (:604-654); запасной путь runner.py:1160-1161 _place_harvested_docs; при сбое чтения диск не трогается.
+- Единственный путь шага: run_agent_once (runner.py:749) -> _prepare_step (:1380) -> role_cwd (:1466), отказ OSError -> "agent run SKIPPED" (:1465-1473). doctor/isolation.py:102 зовёт role_cwd(None, None, target).
+- Автокоммит записки не удаляет: checkpoint.py:184 (_DELETABLE_ARTIFACT_TYPES = questions), :1129-1143.
+- docs/codebase-map.md в COMMON_ZONES (config.py:799).
 
 ## Не сработало
-- ls в Bash недоступен, grep с `cd &&` требует подтверждения — абсолютные пути.
+- Bash с переменной/`;` требует подтверждения — только одиночные команды с абсолютными путями.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, вердикт concerns.
+- SPEC-AUDIT.md записан, guard ок, status ready, verdict pass (с замечанием о трактовке условия отказа AC-4).
 
 ## Чего не хватило
 - Нет.
