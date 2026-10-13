@@ -459,6 +459,8 @@ class ShortLogPathTest(SeededTest):
                 self.assertEqual(module.TOOL_CALL_LINE_PREFIX, LINE_PREFIX)
         for _ in range(10):
             tail = self.paths.tail(parts=self.rng.randint(14, 20))
+            while len(tail) <= LIMIT:
+                tail = self.paths.seg() + "/" + tail
             self.assertGreater(len(tail), LIMIT)
             path, short = self.rng.choice(self.paths.forms(tail)[:3])
             context = self.note(f"путь: {path}")
