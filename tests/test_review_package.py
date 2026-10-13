@@ -1262,6 +1262,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["-C", clone, "ls-tree", "-r", "--name-only",
                            f"refs/artifacts/{self.TASK}", "--",
                            f"tasks/{self.TASK}"],
+                          ["-C", root, "show", "main:templates/PLAN.md"],
                           ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"],
                           ["-C", clone, "rev-parse", "--verify", "--quiet",

@@ -212,6 +212,12 @@ class FreshMapTextTest(BriefUnitTest):
 class DeveloperBriefTest(BriefUnitTest):
 
     def test_assembles_three_components_and_journals_their_hashes(self):
+        """Три компонента developer и запись шаблона PLAN — четыре записи журнала.
+
+        Ловит мутацию: developer_brief перестал читать templates/PLAN.md
+        (нет ни компонента, ни записи «не прочитан») или пропустил запись
+        одного из прежних компонентов — записей не 4, тест покраснеет.
+        """
         conn = store.db()
         with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.developer_brief(conn, "T001")
@@ -221,7 +227,7 @@ class DeveloperBriefTest(BriefUnitTest):
         self.assertIn("Конвенции проекта", text)
 
         details = self.journal_details("developer")
-        self.assertEqual(len(details), 3)
+        self.assertEqual(len(details), 4)
         for label in ("tasks/T001/SPEC.md", "docs/codebase-map.md",
                      "CLAUDE.md"):
             self.assertTrue(any(label in d for d in details), details)
@@ -252,6 +258,12 @@ class DeveloperBriefStaleMapManifestTest(BriefUnitTest):
 class AnalystMapComponentTest(BriefUnitTest):
 
     def test_adds_only_the_map_and_journals_one_hash(self):
+        """Карта первой записью и по записи на SPEC и QUESTIONS — три записи.
+
+        Ловит мутацию: analyst_map_component читает только один из двух
+        шаблонов (SPEC без QUESTIONS или наоборот) или ставит шаблон перед
+        картой — записей не 3 или первая не карта, тест покраснеет.
+        """
         conn = store.db()
         with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.analyst_map_component(conn, "T001")
@@ -260,7 +272,7 @@ class AnalystMapComponentTest(BriefUnitTest):
         self.assertNotIn("Маркер-текста-SPEC.", text, "SPEC — не вход analyst")
 
         details = self.journal_details("analyst")
-        self.assertEqual(len(details), 1)
+        self.assertEqual(len(details), 3)
         self.assertIn("docs/codebase-map.md", details[0])
 
 
@@ -519,6 +531,39 @@ class ReturnReasonComponentTest(BriefUnitTest):
         self.assertIsNone(
             text, "штатный approve со spec_gate не даёт test_author ни "
                   "раздела возврата, ни ответа — добавки нет вовсе")
+
+
+class TemplateUnreadReasonTest(BriefUnitTest):
+    """SPEC 01M4RZBDFSHNESSBQREH5MKY9B, требование 4: пометка о
+    непрочитанном шаблоне — одна строка брифа, даже когда git отдал
+    многострочный stderr."""
+
+    def test_multiline_git_reason_collapses_into_one_note_line(self):
+        """Многострочная причина отказа `git show` — в пометке и журнале одной строкой.
+
+        Ловит мутацию: причина вставляется в пометку как есть (без
+        схлопывания пробелов) — строка «шаблон templates/PLAN.md не
+        прочитан: …» обрывается на первом переводе строки, хвост «прочитай
+        его сам» уходит на следующую строку, и тест покраснеет."""
+        reason = "fatal: path 'templates/PLAN.md' does not exist\n  hint: ещё строка"
+
+        def show(branch, rel, *, repo=None):
+            if rel.startswith("templates/"):
+                return None, reason
+            return disk_backed_show(branch, rel, repo=repo)
+
+        conn = store.db()
+        with mock.patch.object(gitcmd, "git", fake_git), \
+                mock.patch.object(gitcmd, "show", show):
+            text = brief.developer_brief(conn, "T001")
+
+        flat = " ".join(reason.split())
+        self.assertIn(f"шаблон templates/PLAN.md не прочитан: {flat} — "
+                      f"прочитай его сам\n", text)
+        unread = [r["detail"] for r in conn.execute(
+            "SELECT detail FROM steps WHERE actor='developer' AND action=?",
+            (brief.TEMPLATE_UNREAD_ACTION,))]
+        self.assertEqual(unread, [f"templates/PLAN.md: {flat}"])
 
 
 if __name__ == "__main__":

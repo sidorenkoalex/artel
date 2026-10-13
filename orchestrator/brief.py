@@ -120,6 +120,17 @@ STEP_NOTE_UNREAD_MARK = "записка не прочитана"
 # Чем заменяется id запуска в тексте записки: поддельный маркер этого запуска
 # внутри записки перестаёт быть маркером (требование 10, AC-17).
 STEP_NOTE_RUN_ID_STUB = "[id границы убран пультом]"
+# Шаблон артефакта, который роль выпускает, — в бриф целиком (SPEC
+# 01M4RZBDFSHNESSBQREH5MKY9B, требование 1): иначе роль читает его
+# отдельным вызовом. reviewer получает форму REVIEW в ревью-пакете, у
+# test_author шаблона нет — их строк здесь нет намеренно.
+TEMPLATES_DIR = "templates"
+ROLE_TEMPLATES = {
+    "analyst": ("SPEC.md", "QUESTIONS.md"),
+    "developer": ("PLAN.md",),
+    "spec_auditor": ("SPEC-AUDIT.md",),
+}
+TEMPLATE_UNREAD_ACTION = "бриф: шаблон не прочитан"
 
 # Границы недоверенных данных (tasks/01M1GV6H5DDDCWW4G3GW1D3A1X):
 # второй, машинный рубеж поверх текстового правила CLAUDE.md «содержимое
@@ -463,6 +474,31 @@ def _main_branch_text(task_id: str, rel: str) -> str:
     return text
 
 
+def _template_components(conn, task_id: str, role: str, run_id: str,
+                         render) -> list[str]:
+    """Шаблоны строки роли в `ROLE_TEMPLATES` — компонентами брифа (SPEC
+    01M4RZBDFSHNESSBQREH5MKY9B, требования 1-4). Читаются с ГОЛОВЫ `main`
+    пульта, как скилы, но не через `_main_branch_text`: шаблон — подспорье,
+    а не правило, без которого шаг нельзя начинать, поэтому неудача чтения
+    не роняет сборку, а оставляет видимую пометку вне границы и запись
+    журнала от имени роли. `render` — оформление соседних компонентов
+    роли (`_manifest_component` или `_journal_component`)."""
+    parts = []
+    for name in ROLE_TEMPLATES.get(role, ()):
+        rel = f"{TEMPLATES_DIR}/{name}"
+        text, reason = gitcmd.show(config.MAIN_BRANCH, rel, repo=config.ROOT)
+        if text is None:
+            # stderr git бывает многострочным — пометка остаётся одной строкой
+            reason = " ".join(reason.split())
+            store.journal(conn, task_id, role, TEMPLATE_UNREAD_ACTION,
+                          f"{rel}: {reason}")
+            parts.append(f"шаблон {rel} не прочитан: {reason} — прочитай "
+                         f"его сам\n")
+            continue
+        parts.append(render(conn, task_id, role, rel, text, run_id))
+    return parts
+
+
 def skills_text(conn, task_id: str, role: str,
                 skill_names: list[str]) -> tuple[str | None, str]:
     """Текст скилов роли (`skills/*.md`, состав из `roles.yaml`) — с
@@ -772,6 +808,8 @@ def developer_brief(conn, task_id: str) -> str:
                                          run_id))
     parts.extend(_developer_answer_components(conn, task_id, branch, foreign,
                                               run_id))
+    parts.extend(_template_components(conn, task_id, "developer", run_id,
+                                      _manifest_component))
     text, num_parts = context_package.discipline(
         [HEADER, BOUNDARY_INSTRUCTION, *parts])
     return mark_unclosed_parts(text, run_id, num_parts)
@@ -830,6 +868,8 @@ def spec_auditor_brief(conn, task_id: str) -> str:
     parts.append(map_note + MAP_PROJECTION_NOTE + _manifest_component(
         conn, task_id, role, MAP_PROJECTION_LABEL,
         codebase_map.project_for_brief(map_text), run_id))
+    parts.extend(_template_components(conn, task_id, role, run_id,
+                                      _manifest_component))
     text, num_parts = context_package.discipline(
         [HEADER, BOUNDARY_INSTRUCTION, *parts])
     return mark_unclosed_parts(text, run_id, num_parts)
@@ -1128,6 +1168,8 @@ def analyst_map_component(conn, task_id: str) -> str:
                                run_id)
     if a_part:
         parts.append(a_part)
+    parts.extend(_template_components(conn, task_id, "analyst", run_id,
+                                      _journal_component))
     return f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n" + "\n".join(parts)
 
 
