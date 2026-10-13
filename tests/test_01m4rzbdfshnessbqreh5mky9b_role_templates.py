@@ -762,7 +762,8 @@ class MissionTemplateWordingTest(unittest.TestCase):
                 mock.patch.object(brief, "developer_brief", return_value=""), \
                 mock.patch.object(brief, "spec_auditor_brief",
                                   return_value=""), \
-                mock.patch.object(spec_audit, "entry", return_value=None):
+                mock.patch.object(spec_audit, "entry", return_value=None), \
+                mock.patch.object(brief, "step_notes_block", return_value=""):
             for role in ROLE_TEMPLATES:
                 mission, _b, _p = role_prompt.mission_brief_package(
                     None, task_id, t, role, f"/tmp/cwd-{rng.randrange(999)}")
