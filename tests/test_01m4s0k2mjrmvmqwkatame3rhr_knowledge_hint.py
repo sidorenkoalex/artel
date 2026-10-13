@@ -63,6 +63,7 @@ def build_missions(conn, task_id: str, t) -> dict:
                 (brief, "test_author_answer_component", None),
                 (brief, "developer_brief", ""),
                 (brief, "spec_auditor_brief", ""),
+                (brief, "step_notes_block", ""),
                 (spec_audit, "entry", {}),
                 (review, "review_package", ""),
                 (review, "previous_verdict_sha", "")):
