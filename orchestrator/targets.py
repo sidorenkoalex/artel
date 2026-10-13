@@ -64,7 +64,12 @@ KNOWLEDGE_FILE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.yaml")
 # `reference_cache.get_reference` через `core_reference(name)`. Имена
 # модулей и констант механизм не знает — всё берётся отсюда.
 REFERENCE_FIELD = "core_reference"
-REFERENCE_FIELDS = ("modules", "constants_module", "constants")
+REFERENCE_FIELDS = ("modules", "constants_module", "constants", "min_uses")
+# Порог использования справочника — необязательное подполе (SPEC
+# 01M4TVBT9ZCRQDY669QV3S95MA, требование 1); без него действует
+# `config.CORE_REFERENCE_MIN_USES`.
+REFERENCE_MIN_USES = "min_uses"
+REFERENCE_MIN_USES_RANGE = (1, 1000)
 
 
 class TargetsError(Exception):
@@ -182,6 +187,13 @@ def _check_reference(where: str, value: object) -> None:
             raise TargetsError(f"{field}: подполе 'modules' — {reason}")
     if len(set(modules)) != len(modules):
         raise TargetsError(f"{field}: подполе 'modules' — модуль повторён")
+    if REFERENCE_MIN_USES in value:
+        low, high = REFERENCE_MIN_USES_RANGE
+        threshold = value[REFERENCE_MIN_USES]
+        # `type(...) is int`: булево — подкласс int, `true` не порог 1.
+        if type(threshold) is not int or not low <= threshold <= high:
+            raise TargetsError(f"{field}: подполе '{REFERENCE_MIN_USES}' — "
+                               f"{threshold!r}, ожидается целое от {low} до {high}")
     has_module = "constants_module" in value
     has_constants = "constants" in value
     if has_module and not has_constants:

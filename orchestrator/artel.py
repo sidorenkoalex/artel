@@ -132,6 +132,16 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 персистентный счётчик проекта. Артефакты задач самой артели до A7
 остаются в tasks/ пульта — особый случай догфуда.
 
+`reference <проект> [--sha <sha>]` (SPEC 01M4TVBT9ZCRQDY669QV3S95MA) —
+сборка справочника ядра проекта по требованию: без `--sha` — коммит
+`refs/heads/<base>` клона проекта (без `fetch`), `--sha <sha>` — только
+полный sha из 40 шестнадцатеричных знаков. Кэш записывается, печатается
+сводка: состояние, sha, размер в байтах, предел, доля, порог
+использования (подполе `core_reference.min_uses` записи targets.yaml либо
+умолчание) и вывод по формулам брифа. Алертов команда не поднимает и не
+снимает; код выхода ненулевой при `absent`. `target-init` после клона
+печатает ту же сводку.
+
 `new "<название>" --tz <файл>` заводит задачу с ТЗ Оператора
 (`tasks/<id>/TZ.md`, SPEC T025): `spec_writing` в этом случае исполняет
 роль analyst (`run`/`auto`), а не Оператор руками — без флага поведение
@@ -160,7 +170,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
   kill <id> | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
-  target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
+  target-init <target> | reference <проект> [--sha <sha>] |
+  doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
   admit [--revoke] <роль> <модель> --basis "<основание>" |
@@ -1958,6 +1969,9 @@ def main() -> None:
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),
         "target-init": lambda: projects.cmd_target_init(rest[0]),
+        # Пишет кэш справочника и журнал пульта — команда Оператора, вне
+        # белого списка ролей (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 4).
+        "reference": lambda: projects.cmd_reference(rest),
         "doctor": lambda: doctor.cmd_doctor("--restore" in rest, "--fix" in rest),
         "alert-ack": lambda: _cmd_alert_ack(rest),
         "version": lambda: version.cmd_version(),
