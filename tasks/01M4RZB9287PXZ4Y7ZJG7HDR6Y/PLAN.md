@@ -2,7 +2,7 @@
 task: 01M4RZB9287PXZ4Y7ZJG7HDR6Y
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -54,6 +54,15 @@ schema_version: 5
    `docs/codebase-map.md` (`python3 scripts/codebase_map.py`). Сделано,
    коммит `8e89a58f`.
 
+2. По ANSWER-1 (вариант А, мандат на метод
+   `tests/test_01m4rzb9287pxz4y7zjg7hdr6y_short_log_path.py::ShortLogPathTest::test_ac7_limit_symbol_and_flattening_kept`):
+   после построения хвоста фикстуры добавлен цикл
+   `while len(tail) <= LIMIT: tail = self.paths.seg() + "/" + tail` —
+   предусловие `len(tail) > LIMIT` теперь выполняется всегда; проверки
+   метода, заявка «Ловит мутацию:» и прочие методы файла не тронуты.
+   После подтяжки main (`f30b48ee`) карта пересобрана
+   `python3 scripts/codebase_map.py`.
+
 Проверено:
 - `python3 -m pytest tests/test_01m4rzb9287pxz4y7zjg7hdr6y_short_log_path.py
   tests/test_providers.py tests/test_providers_codex.py tests/test_report.py
@@ -61,12 +70,14 @@ schema_version: 5
   tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_test_author_report.py
   tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py
   tests/test_doctor_canary_pool.py` — 249 passed, 1 failed:
-  `test_ac7_limit_symbol_and_flattening_kept`, на предусловии фикстуры
-  (см. «Эскалация»), а не на проверке кода.
+  `test_ac7_limit_symbol_and_flattening_kept`, на предусловии фикстуры,
+  а не на проверке кода. После шага 2 — 250 passed; `-k ac7` 20 запусков
+  подряд — 20 зелёных (до правки было 11 провалов из 12).
 - `artel.py plank-run 01M4RZB9287PXZ4Y7ZJG7HDR6Y` — 3 passed, код выхода 0.
 - `artel.py suite-run 01M4RZB9287PXZ4Y7ZJG7HDR6Y` №1 — зелёный: прошло
-  5149, упало 0, пропущено 2. `test_ac7_…` в нём попал на удачное зерно:
-  это лотерея, а не стабильность (см. «Эскалация»).
+  5149, упало 0, пропущено 2 (`test_ac7_…` попал на удачное зерно).
+- После шага 2: `artel.py plank-run` — 3 passed, код выхода 0;
+  `artel.py suite-run` №2 — зелёный: прошло 5163, упало 0, пропущено 2.
 
 ## Покрытие требований
 
@@ -77,7 +88,7 @@ schema_version: 5
 | 3 | 1 |
 | 4 | 1 |
 | 5 | 1 |
-| 6 | долгоживущий файл `tests/test_01m4rzb9287pxz4y7zjg7hdr6y_short_log_path.py` (test_author); свойств вне него не осталось |
+| 6 | 2; долгоживущий файл `tests/test_01m4rzb9287pxz4y7zjg7hdr6y_short_log_path.py` (test_author); свойств вне него не осталось |
 | 7 | 1 |
 
 ## Влияние на систему
@@ -106,35 +117,3 @@ schema_version: 5
   повтором долгоживущего файла с N разными зёрнами
   (`skills/test-authoring.md`).
 
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. Долгоживущий тест
-   `tests/test_01m4rzb9287pxz4y7zjg7hdr6y_short_log_path.py::ShortLogPathTest::test_ac7_limit_symbol_and_flattening_kept`
-   нестабилен из-за своей фикстуры, а не из-за кода. Строки 461-462:
-   `tail = self.paths.tail(parts=self.rng.randint(14, 20))`, затем
-   `self.assertGreater(len(tail), LIMIT)`. При 14 сегментах по 3-9 символов
-   средняя длина хвоста ≈ 100, поэтому предусловие часто ложно. Замер:
-   12 запусков подряд дали 11 провалов `AssertionError: 95 not greater than
-   100` (и подобные) и 1 проход. Моделирование генератора по 2000 зёрнам —
-   ≈68% провалов. Когда предусловие выполнено, тест зелёный на коде ветки.
-   Гейт полного набора и CI будут краснеть в большинстве прогонов. Сам
-   файл я не правлю: он залочен перечнем сумм.
-   - Вариант А (дефолт): правка теста командой `amend-tests` — строить
-     хвост, пока он не длиннее предела, например после строки 461
-     `while len(tail) <= LIMIT: tail = self.paths.seg() + "/" + tail`.
-     Заявка «Ловит мутацию:» и проверки метода не меняются, исчезает
-     только вероятностный провал фикстуры.
-   - Вариант Б: поднять нижнюю границу числа сегментов (например,
-     `randint(20, 26)`: минимум 20·3+19+3 = 82 — тоже не гарантия, хуже А).
-   - Дефолт при молчании: А.
-
-**Контекст**: реализация закончена и закоммичена (`8e89a58f`); планка —
-3 passed; остальные 249 тестов затронутых модулей и прочие методы
-долгоживущего файла зелёные. Провал воспроизводится:
-`python3 -m pytest tests/test_01m4rzb9287pxz4y7zjg7hdr6y_short_log_path.py -k ac7 -p no:cacheprovider -q`
-(в выводе печатается `зерно: N`).
-
-**Блокирует**: стабильно зелёный полный набор `tests/` и CI ветки, а
-значит выход из `in_dev` в `verifying` без лотереи по зерну.
