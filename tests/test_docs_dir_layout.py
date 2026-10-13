@@ -556,6 +556,8 @@ class MissionNamesDocsDirTest(unittest.TestCase):
                            return_value=""), \
                 mock.patch("orchestrator.brief.developer_brief",
                            return_value=""), \
+                mock.patch("orchestrator.brief.step_notes_block",
+                           return_value=""), \
                 mock.patch("orchestrator.review.review_package",
                            return_value={"text": ""}):
             for role in ("analyst", "test_author", "developer", "reviewer"):

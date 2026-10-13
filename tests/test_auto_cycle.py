@@ -216,6 +216,10 @@ class AutoCycleTest(unittest.TestCase):
                             # `.artel/worktrees/` репозитория.
                             ("WORKTREES", root / ".artel" / "worktrees")):
             self.patch_object(config, attr, value)
+        # Модульные флаги останова цикла: SIGTERM, пойманный в другом тесте
+        # того же процесса, не должен читаться здесь как «команда stop».
+        self.patch_object(auto, "_stop_requested", False)
+        self.patch_object(auto, "_zone_wait_sleeping", False)
         # Клон артели (ADR-0021 п.1, этап 2): ветка и рабочая копия задачи
         # живут в нём, `new` без клона отказывает — пустой настоящий
         # репозиторий песочницы.

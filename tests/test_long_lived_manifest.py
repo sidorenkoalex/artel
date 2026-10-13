@@ -377,7 +377,8 @@ class RolePromptTest(unittest.TestCase):
             with self.subTest(role=role), \
                     mock.patch.object(brief, "test_author_answer_component",
                                       return_value=""), \
-                    mock.patch.object(brief, "developer_brief", return_value=""):
+                    mock.patch.object(brief, "developer_brief", return_value=""), \
+                    mock.patch.object(brief, "step_notes_block", return_value=""):
                 mission, _b, _p = role_prompt.mission_brief_package(
                     None, task_id, t, role, Path("/нет"))
                 self.assertIn(f"tests/test_{task_id.lower()}_", mission)
