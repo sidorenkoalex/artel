@@ -14,6 +14,7 @@ AC-12). Единственный способ продвинуть ROOT впер
 операторская команда `pin-update` (`orchestrator/pin.py`, Stage1), вне
 цикла FSM.
 """
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -24,10 +25,10 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, appendix_tree, artifact_branch, artifact_source,
-              ci, cleanup, config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
-              merge_lock, merge_queue, project_profile, repo_context, store,
-              workspace)
+from . import (acceptance, alerts, appendix_tree, artifact_branch,
+              artifact_source, ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
+              github_adapter, lease, merge_lock, merge_queue, project_profile,
+              reference_cache, repo_context, store, workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
 from .advance_gates import plan_appendix
@@ -50,6 +51,12 @@ GUARD_ALL_TIMEOUT_SEC = 300
 
 # Действие журнала об исходе CI main после мержа (AC-4).
 MAIN_CI_AFTER_MERGE_ACTION = "CI main после мержа"
+
+# Пересборка справочника ядра после мержа (SPEC 01M4S24EBVB72B8WYJ3JY96Y0E,
+# требование 9): исход шага и его сбой.
+REFERENCE_REBUILD_ACTION = "справочник ядра после мержа"
+REFERENCE_REBUILD_FAILED_ACTION = "справочник ядра после мержа: сбой"
+REFERENCE_REBUILD_FAILED_ALERT = "справочник ядра: пересборка после мержа не удалась"
 
 
 def _touches_protected_path(path: str, protected=None) -> bool:
@@ -406,6 +413,10 @@ def _task_docs_violations(task_id: str, rev: str, paths: list[str],
         if not (is_test or rel.endswith(".md")):
             continue
         if guard.is_task_passport(Path("tasks") / task_id / rel):
+            continue
+        # Записка шага — свободный текст роли (SPEC
+        # 01M4RZBPG6EXM74MTBPTEGW2D4, требование 2), структурой не проверяется.
+        if guard.is_step_note(Path("tasks") / task_id / rel):
             continue
         text, reason = artifact_branch.show(task_id, rev, prefix + rel)
         if text is None:
@@ -1333,7 +1344,36 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             applied_appendices=applied)
     _cleanup_merged_task(conn, task_id, branch)
     _await_main_ci(conn, task_id, final_sha, ctx)
+    _rebuild_core_reference(conn, task_id, final_sha)
     return ("done",)
+
+
+def _rebuild_core_reference(conn, task_id: str, final_sha: str) -> None:
+    """Справочник ядра проекта на новой голове main (SPEC
+    01M4S24EBVB72B8WYJ3JY96Y0E, требование 9): последний шаг мержа, вне
+    его критического пути — задача уже `done`, коммит закрытия и уборка
+    исполнены, поэтому сбой шага любого типа, в том числе в собственной
+    записи журнала или алерте, мерж не срывает. Шаг ничего не коммитит:
+    кэш лежит в области проектов вне git (К-3а). Проект без поля
+    `core_reference` — `off`, без записей."""
+    try:
+        reference = reference_cache.get_reference(
+            conn, task_id, reason="merge", sha=final_sha)
+        if reference.state != "off":
+            detail = f"{reference.state} sha={final_sha}"
+            if reference.note:
+                detail += f"; {reference.note}"
+            store.journal(conn, task_id, "orchestrator",
+                          REFERENCE_REBUILD_ACTION, detail)
+    except Exception as exc:  # noqa: BLE001 — шаг вне критического пути мержа
+        with contextlib.suppress(Exception):
+            store.journal(conn, task_id, "orchestrator",
+                          REFERENCE_REBUILD_FAILED_ACTION,
+                          f"sha={final_sha}; {type(exc).__name__}: {exc}")
+        with contextlib.suppress(Exception):
+            alerts.raise_alert(conn, store.task_target(conn, task_id),
+                               "incident", reference_cache.ALERT_SOURCES["merge"],
+                               REFERENCE_REBUILD_FAILED_ALERT)
 
 
 def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,

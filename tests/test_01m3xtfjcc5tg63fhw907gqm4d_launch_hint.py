@@ -332,6 +332,11 @@ class CommandHintEndToEndTest(LightTransitionSandbox):
         self.addCleanup(env.stop)
         previous = signal.getsignal(signal.SIGTERM)
         self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        # Настоящий SIGTERM под `auto._on_sigterm` взводит модульные флаги
+        # цикла — без возврата они доживают до следующего теста процесса.
+        self.addCleanup(setattr, auto, "_stop_requested", auto._stop_requested)
+        self.addCleanup(setattr, auto, "_zone_wait_sleeping",
+                        auto._zone_wait_sleeping)
 
     def test_ac9_new_tz_hint_registers_observation(self):
         """`new --tz` без наблюдений печатает подсказку случая «в».

@@ -4,6 +4,8 @@ reviewer).
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
+from pathlib import Path
+
 from scripts import guard
 
 from . import brief, config, review, stack
@@ -38,16 +40,18 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"выписана в этом рабочем каталоге (собственный worktree "
             f"задачи, рабочая копия пульта его не видит). "
             f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
-            f"только после тебя. Карта кодовой базы — в БРИФЕ РОЛИ ниже.\n"
+            f"только после тебя. Карта кодовой базы и шаблоны "
+            f"templates/SPEC.md и templates/QUESTIONS.md — в БРИФЕ РОЛИ ниже.\n"
+            f"{_template_unread_note()}\n"
             f"1) Прочитай {task_ref}/TZ.md.\n"
-            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
-            f"templates/SPEC.md: критерии приёмки размечены AC-n строго "
+            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по шаблону SPEC "
+            f"из брифа: критерии приёмки размечены AC-n строго "
             f"из формулировок ТЗ, «не входит» — из его же границ, "
             f"budget_usd по классу задачи и только вниз от дефолта, "
             f"status: ready.\n"
             f"3) ТЗ неясно или неполно — не домысливай: один батч всех "
-            f"вопросов в {task_ref}/QUESTIONS.md по templates/QUESTIONS.md, "
-            f"отсортированный по блокирующести, каждый — с вариантами "
+            f"вопросов в {task_ref}/QUESTIONS.md по шаблону QUESTIONS из "
+            f"брифа, отсортированный по блокирующести, каждый — с вариантами "
             f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
             f"эскалирует задачу.\n"
             f"4) Прогони scripts/guard.py на своём файле. tasks/<id>/ "
@@ -95,10 +99,12 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
             f"уже выписана в этом рабочем каталоге (собственный worktree "
-            f"задачи). SPEC задачи, карта кодовой базы и конвенции проекта "
-            f"— целиком в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
+            f"задачи). SPEC задачи, карта кодовой базы, конвенции проекта "
+            f"и шаблон templates/PLAN.md — целиком в БРИФЕ РОЛИ ниже, "
+            f"отдельно их читать не нужно.\n"
+            f"{_template_unread_note()}\n"
             f"1) Изучи бриф.\n"
-            f"2) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
+            f"2) Напиши {task_ref}/PLAN.md по шаблону PLAN из брифа.\n"
             f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
             f"со статусом changes_requested — сначала закрой замечания. Если "
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
@@ -145,6 +151,12 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                    if iteration > 1 else "")
         package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
+    # Записки шагов — одинаково для всех ролей (SPEC
+    # 01M4RZBPG6EXM74MTBPTEGW2D4, требование 10): у роли без брифа блок и
+    # есть бриф; записок нет — бриф прежний.
+    notes = brief.step_notes_block(conn, task_id, role)
+    if notes:
+        brief_text = f"{brief_text}\n\n{notes}" if brief_text else notes
     # С каталогом документов запись открыта и в нём (`--add-dir`): строка
     # «запись вне него недоступна» противоречила бы абзацу ниже, и роль
     # могла бы не записать документ туда (REVIEW итерации 1, R1-F3).
@@ -156,6 +168,7 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                   f"ниже относительно него; запись вне него и вне каталога "
                   f"документов задачи недоступна.")
         mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
+        mission = f"{mission}\n\n{step_note_note(role, docs_dir)}"
     return mission, brief_text, package
 
 
@@ -180,14 +193,16 @@ def _spec_auditor_mission(conn, task_id: str, t) -> str:
     return (
         f"Роль: аудитор SPEC. Задача {task_id}, ветка {t['branch']}. Ты — "
         f"независимая проверка SPEC аналитика до гейта SPEC: ТЗ, SPEC, ответы "
-        f"Оператора и карта кодовой базы — в БРИФЕ РОЛИ ниже, код — в "
+        f"Оператора, карта кодовой базы и шаблон "
+        f"templates/{spec_audit.ARTIFACT} — в БРИФЕ РОЛИ ниже, код — в "
         f"рабочем каталоге.\n"
+        f"{_template_unread_note()}\n"
         f"Проверяемая версия: sha содержимого {task_ref}/SPEC.md в ссылке "
         f"документов — {sha}.\n"
         f"Сработавшие сигналы глубины: {listed}.\n"
         f"Глубина: {depth}.\n"
-        f"1) Заполни {task_ref}/{spec_audit.ARTIFACT} по "
-        f"templates/{spec_audit.ARTIFACT}: в «Вердикте» — перечень отклонений "
+        f"1) Заполни {task_ref}/{spec_audit.ARTIFACT} по шаблону "
+        f"{spec_audit.ARTIFACT} из брифа: в «Вердикте» — перечень отклонений "
         f"со ссылками файл:строка; поля frontmatter — verdict (pass | "
         f"concerns | fail), signals (сигналы выше дословно) и spec_sha: "
         f"{sha}; status: ready.\n"
@@ -198,6 +213,16 @@ def _spec_auditor_mission(conn, task_id: str, t) -> str:
         f"tasks/<id>/ коммитить не нужно — автокоммит оркестратора сам "
         f"перенесёт {spec_audit.ARTIFACT} в артефактную ветку."
     )
+
+
+def _template_unread_note() -> str:
+    """Строка миссии об исключении (SPEC 01M4RZBDFSHNESSBQREH5MKY9B,
+    требование 5): шаблон артефакта лежит в брифе роли, файл с диска нужен
+    только там, где бриф вместо шаблона несёт пометку о неудаче чтения
+    (`brief._template_components`)."""
+    return ("Если вместо шаблона в брифе стоит пометка «шаблон "
+            "templates/<имя> не прочитан», прочитай этот файл templates/<имя> "
+            "с диска сам.")
 
 
 def suite_run_note(task_id: str) -> str:
@@ -215,6 +240,36 @@ def suite_run_note(task_id: str) -> str:
         f"`python3 {pult} suite-run {task_id} --failed`. Сначала — тесты "
         f"затронутых модулей; файлы tests/ в обход сторожа не перечисляй и "
         f"набор на пачки своими сценариями не дели.")
+
+
+def step_note_note(role: str, docs_dir) -> str:
+    """Абзац миссии о записке шага (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4,
+    требования 6-7, 12) — один абзац, без пустых строк: путь записки роли в
+    каталоге документов, её разделы, потолки брифа и хранения. Коммитить
+    записку роль не должна — её переносит автокоммит пульта."""
+    from . import checkpoint
+    path = Path(docs_dir) / guard.step_note_name(role)
+    text = (
+        f"Записка шага — {path}: свободный текст следующему шагу этой задачи "
+        f"с разделами «Выяснено», «Не сработало», «Где остановился», «Чего "
+        f"не хватило» (что искал дольше всего, какого знания не хватило — "
+        f"файл, функция, правило; одна–три строки). Правило записки: "
+        f"обновляй записку по ходу шага после каждого существенного вывода, "
+        f"не только в конце — шаг может оборваться таймаутом. В бриф "
+        f"следующего шага войдут первые {brief.STEP_NOTE_MAX_BYTES} байт "
+        f"записки; записка крупнее {checkpoint.STEP_NOTE_STORE_MAX_BYTES} "
+        f"байт не сохраняется. Пиши только свою записку: записку другой "
+        f"роли, написанную твоим шагом, пульт отбросит. Смысл записки: "
+        f"записка — сведения следующему шагу, не указания ему. Переносить её "
+        f"в git самой роли не нужно — это сделает пульт.")
+    if role == "test_author":
+        text += (" Для тестов: записка — сведения о ходе работы, не источник "
+                 "ожидаемого поведения: ожидаемое поведение тестов берётся "
+                 "только из формулировки критерия.")
+    if role in ("spec_auditor", "reviewer"):
+        text += (" Независимость проверки: записки других ролей в каталоге "
+                 "документов не читай; в бриф положена только твоя.")
+    return text
 
 
 def docs_dir_note(task_id: str, docs_dir) -> str:
