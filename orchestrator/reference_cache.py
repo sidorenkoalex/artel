@@ -15,8 +15,12 @@ blob'ов.
 отделяет пересоздаваемое от курируемых карточек К-4а. Файл можно удалить
 — следующая сборка его восстановит.
 
-Новый код этой задачей ни из одной команды пульта не вызывается — его
-потребитель К-3б (бриф и шаг после мержа).
+Потребители: бриф и шаг после мержа (`get_reference` по задаче), команда
+пульта `reference <проект>` и `target-init` (`get_reference_for_target`
+без задачи, повод `reference` — без алертов; SPEC
+01M4TVBT9ZCRQDY669QV3S95MA). Порог использования — подполе `min_uses`
+настройки проекта либо `config.CORE_REFERENCE_MIN_USES`, в сборке и в
+сверке кэша одинаково: кэш с другим порогом не годен.
 """
 import contextlib
 import hashlib
@@ -36,6 +40,9 @@ from . import alerts, config, gitcmd, repo_context, store, targets
 
 CACHE_REL = Path("knowledge") / "derived" / "core-reference.md"
 ALERT_SOURCES = {"brief": "brief.core_reference", "merge": "fsm.core_reference_regen"}
+REFERENCE_REASON = "reference"
+MIN_USES_FROM_SETTING = "настройка проекта"
+MIN_USES_DEFAULT = "умолчание"
 BUILT_ACTION = "справочник ядра: построен"
 FAILED_ACTION = "справочник ядра: сбой"
 ACTOR = "orchestrator"
@@ -99,18 +106,53 @@ def get_reference(conn, task_id: str, *, reason: str,
     Не бросает исключений и не завершает процесс: справочник — подсказка
     роли, его сбой не должен останавливать бриф или шаг после мержа. Сбой,
     которого разбор ниже не предусмотрел, — тоже `absent` с алертом."""
-    source = ALERT_SOURCES.get(reason, ALERT_SOURCES["brief"])
-    target = None
     try:
         # До чтения targets.yaml: в песочнице с боевой областью проектов
         # нельзя ни читать, ни писать кэш, ни звать git (требование 6).
         if repo_context.projects_root() == repo_context.NO_AREA:
             return Reference(state="off")
         target = store.task_target(conn, task_id)
+    except Exception as exc:  # noqa: BLE001 — контракт «не бросает», см. docstring
+        return _absent(conn, task_id, None, _alert_source(reason),
+                       _Failure(INTERNAL, f"{type(exc).__name__}: {exc}"))
+    return get_reference_for_target(conn, target, reason=reason, sha=sha,
+                                    task_id=task_id)
+
+
+def get_reference_for_target(conn, target: str, *, reason: str,
+                             sha: str | None,
+                             task_id: str | None = None) -> Reference:
+    """Справочник ядра проекта `target` на коммите `sha` — общий вход без
+    задачи (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 3). `task_id` —
+    задача записей журнала и голова её ветки при `sha=None`; без задачи
+    записи журнала идут с `task_id=None` и явным `target`.
+
+    Повод `reference` (команда пульта) алертов не поднимает и не снимает:
+    исход — в возвращённом значении и журнале. Контракт «не бросает» —
+    тот же, что у `get_reference`."""
+    source = _alert_source(reason)
+    try:
+        if repo_context.projects_root() == repo_context.NO_AREA:
+            return Reference(state="off")
         return _reference(conn, task_id, target, source, reason, sha)
     except Exception as exc:  # noqa: BLE001 — контракт «не бросает», см. docstring
         return _absent(conn, task_id, target, source,
                        _Failure(INTERNAL, f"{type(exc).__name__}: {exc}"))
+
+
+def min_uses(setting: dict) -> tuple[int, str]:
+    """(порог использования, источник) настройки `core_reference`: подполе
+    `min_uses` проекта либо умолчание `config.CORE_REFERENCE_MIN_USES`."""
+    if targets.REFERENCE_MIN_USES in setting:
+        return setting[targets.REFERENCE_MIN_USES], MIN_USES_FROM_SETTING
+    return config.CORE_REFERENCE_MIN_USES, MIN_USES_DEFAULT
+
+
+def _alert_source(reason: str) -> str | None:
+    """Источник алертов повода; None — повод `reference` алертов не трогает."""
+    if reason == REFERENCE_REASON:
+        return None
+    return ALERT_SOURCES.get(reason, ALERT_SOURCES["brief"])
 
 
 def _reference(conn, task_id, target, source, reason, sha) -> Reference:
@@ -127,7 +169,8 @@ def _reference(conn, task_id, target, source, reason, sha) -> Reference:
     cached_text, cached_sha = _read_cache(cache, setting)
     clone = repo_context.clone_path(target)
     if sha is None:
-        sha, why = _branch_head(conn, task_id, clone)
+        sha, why = (_branch_head(conn, task_id, clone) if task_id is not None
+                    else (None, "ни задачи, ни sha не названо"))
         if sha is None:
             if cached_text is not None:
                 return Reference(cached_text, f"справочник ядра не сверен: {why}, "
@@ -148,7 +191,7 @@ def _build(conn, task_id, target, source, reason, sha, setting, clone,
     try:
         sources, unparsed, skipped = _read_commit(clone, sha, deadline)
         report = core_reference.build_report(
-            sources, setting, sha, min_uses=config.CORE_REFERENCE_MIN_USES,
+            sources, setting, sha, min_uses=min_uses(setting)[0],
             generator_sha256=GENERATOR_SHA256, unparsed=unparsed,
             skipped=skipped, deadline=deadline)
     except _Failure as failure:
@@ -159,7 +202,7 @@ def _build(conn, task_id, target, source, reason, sha, setting, clone,
     data = report.text.encode("utf-8", "surrogatepass")
     store.journal(conn, task_id, ACTOR, BUILT_ACTION,
                   f"sha={sha} байт={len(data)} записей={report.records} "
-                  f"длительность={elapsed:.2f}с повод={reason}")
+                  f"длительность={elapsed:.2f}с повод={reason}", target=target)
     notes = []
     for problem in report.problems:
         _alert(conn, target, source, problem)
@@ -175,7 +218,7 @@ def _build(conn, task_id, target, source, reason, sha, setting, clone,
 def _absent(conn, task_id, target, source, failure: _Failure) -> Reference:
     note = f"{failure.alert}: {failure.detail}" if failure.detail else failure.alert
     with contextlib.suppress(Exception):
-        store.journal(conn, task_id, ACTOR, FAILED_ACTION, note)
+        store.journal(conn, task_id, ACTOR, FAILED_ACTION, note, target=target)
     _alert(conn, target, source, failure.alert)
     return Reference("", note, "absent")
 
@@ -183,6 +226,8 @@ def _absent(conn, task_id, target, source, failure: _Failure) -> Reference:
 def _alert(conn, target, source, message) -> None:
     # Алерт — сигнал Оператору, не условие ответа: его сбой (БД) не
     # отменяет выдачу справочника.
+    if source is None:
+        return
     with contextlib.suppress(Exception):
         alerts.raise_alert(conn, target, "incident", source, message)
 
@@ -214,7 +259,7 @@ def _read_cache(cache: Path, setting: dict) -> tuple[str | None, str | None]:
     except UnicodeDecodeError:
         return None, None
     built = core_reference.reference_sha(
-        text, setting, min_uses=config.CORE_REFERENCE_MIN_USES,
+        text, setting, min_uses=min_uses(setting)[0],
         generator_sha256=GENERATOR_SHA256)
     return (text, built) if built else (None, None)
 
@@ -242,6 +287,12 @@ def _branch_head(conn, task_id, clone: Path) -> tuple[str | None, str]:
     branch = store.task_branch(conn, task_id)
     if not branch:
         return None, "ветка задачи не записана"
+    return branch_commit(clone, branch)
+
+
+def branch_commit(clone: Path, branch: str) -> tuple[str | None, str]:
+    """(sha коммита `refs/heads/<branch>` клона, причина, если не узнан) —
+    без `fetch`: локальная ссылка клона как есть."""
     if not clone.is_dir():
         return None, "клона проекта нет"
     try:
