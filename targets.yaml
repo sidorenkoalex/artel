@@ -46,3 +46,11 @@ targets:
       report: junit-xml
       install: []
       full_suite_timeout_sec: 1500
+    # Справочник ядра в брифе developer/test_author (SPEC
+    # 01M4S24963R9H18AN2XDP6R15B, 01M4S24EBVB72B8WYJ3JY96Y0E): модули ядра и
+    # константы, которые роль получает коротким ответом «как пользоваться»;
+    # кэш — .artel/projects/artel/knowledge/derived/core-reference.md.
+    core_reference:
+      modules: [orchestrator/store.py, orchestrator/config.py, tests/sandbox.py, orchestrator/fsm.py, orchestrator/runner.py, orchestrator/gitcmd.py]
+      constants_module: orchestrator/config.py
+      constants: [PROTECTED_PATHS, COMMON_ZONES, STATE_ROLE, DEFAULT_TARGET, PROJECT_DIRS, MAIN_BRANCH, ROOT, TASKS, PROJECTS, TARGETS, DB, LOGS]
