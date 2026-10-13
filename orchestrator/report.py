@@ -31,6 +31,7 @@ from pathlib import Path
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
 from . import agent_log, alerts, config, retro, spend, store  # noqa: F401
 from .advance_gates import test_integrity, two_sided
+from .providers import base as provider_base
 from .providers import claude as claude_provider
 
 # Гейты, где решение принимает только Оператор, независимо от политики
@@ -94,9 +95,16 @@ _PROVIDER_RE = re.compile(r"provider=([\w-]+)")
 _PYTEST_SECONDS_RE = re.compile(r" in (\d+(?:\.\d+)?)s\b")
 # Группы Write по видимому префиксу пути: `acceptance_tests/` может быть
 # виден лишь как `…/acceptance` (обрезка), `tests/` — отдельным сегментом,
-# иначе `acceptance_tests/` попал бы и сюда. Порядок — проверки.
-WRITE_GROUPS = (("acceptance_tests/", re.compile(r"(?:^|/)acceptance")),
-                ("tests/", re.compile(r"(?:^|/)tests/")))
+# иначе `acceptance_tests/` попал бы и сюда. Порядок — проверки. Слева от
+# сегмента допустимо и «:» — короткая форма пути `wt:tests/…`,
+# `docs:acceptance_tests/…` (`base.short_log_path`, задача
+# 01M4RZB9287PXZ4Y7ZJG7HDR6Y).
+WRITE_GROUPS = (("acceptance_tests/", re.compile(r"(?:^|[/:])acceptance")),
+                ("tests/", re.compile(r"(?:^|[/:])tests/")))
+# Короткая форма пути не называет корня, от которого её читать: число
+# строк по ней — «н/д», а не файл относительно рабочего каталога отчёта.
+SHORT_PATH_PREFIXES = (provider_base.WORKTREE_LOG_PREFIX,
+                       provider_base.DOCS_LOG_PREFIX)
 
 # Сводка наблюдения неослабления (требование 11): класс текстового
 # вердикта — по первому совпавшему маркеру; «покрыто мандатом» первым —
@@ -889,7 +897,8 @@ def _file_lines(path: str) -> int | None:
 def _write_groups(calls: list) -> dict:
     """{группа: (вызовов Write, файлов, строк, строк Write «н/д»)} —
     файлы по различным полным путям; путь, видимый целиком до предела
-    обрезки, или файл, которого нет на диске, — «н/д» (ANSWER-1, п.2)."""
+    обрезки, путь в короткой форме `wt:`/`docs:` или файл, которого нет на
+    диске, — «н/д» (ANSWER-1, п.2)."""
     groups = {}
     def group_of(arg: str):
         return next((g for g, p in WRITE_GROUPS if p.search(arg)), None)
@@ -900,7 +909,8 @@ def _write_groups(calls: list) -> dict:
         lines, unknown = {}, 0
         for arg in writes:
             count = None
-            if len(arg) < claude_provider.TOOL_ARGUMENT_LIMIT:
+            if (len(arg) < claude_provider.TOOL_ARGUMENT_LIMIT
+                    and not arg.startswith(SHORT_PATH_PREFIXES)):
                 count = lines[arg] if arg in lines else _file_lines(arg)
             if count is None:
                 unknown += 1
