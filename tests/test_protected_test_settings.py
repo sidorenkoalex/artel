@@ -48,8 +48,9 @@ class RealProtectedPathsCompositionTest(unittest.TestCase):
 
     def test_real_list_keeps_legacy_entries_and_adds_test_settings(self):
         """Реальный `config.PROTECTED_PATHS` — прежние 12 записей на
-        прежних местах плюс пять записей настроек сбора тестов и
-        `model_sets.yaml`.
+        прежних местах плюс пять записей настроек сбора тестов,
+        `model_sets.yaml` и `knowledge/` (карточки знаний, SPEC
+        01M4S0JVB85W9TY1ESGNBH97FP) — 19 записей.
 
         Ловит мутацию: из перечня удалена `**/conftest.py` (или любой из
         литералов `pyproject.toml`/`pytest.ini`/`setup.cfg`/`tox.ini`),
@@ -61,7 +62,7 @@ class RealProtectedPathsCompositionTest(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.assertIn(entry, config.PROTECTED_PATHS)
         self.assertIn("model_sets.yaml", config.PROTECTED_PATHS)
-        self.assertEqual(len(config.PROTECTED_PATHS), 18)
+        self.assertEqual(len(config.PROTECTED_PATHS), 19)
 
     def test_real_config_source_carries_the_entries_for_ci_job(self):
         """Текст `orchestrator/config.py`, разобранный джобом CI, несёт те

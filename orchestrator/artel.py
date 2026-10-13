@@ -140,7 +140,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 и падение любого другого агентского шага.
 
 Команды:
-  init | new "<название>" [--tz <файл>] [--set <набор>] | status | show <id> |
+  init | new "<название>" [--tz <файл>] [--set <набор>] [--target <имя>] |
+  status | show <id> |
   advance <id> | set-models <id> <набор>|--default |
   run <id> [--attach | [--observation <ID>] [--client codex|claude --chat <id>]] |
   auto <id> [--wait-zone] [--attach | [--observation <ID>]
@@ -465,6 +466,18 @@ escalate` из `tests_writing`, вердикт REVIEW.md `status: escalate` из
 роли: `ANSWER-n.md` коммитится в ссылку документов, lease не берётся,
 журнал пишет «ANSWER создан: указание Оператора», текст доходит до
 роли на её следующем шаге; пустой файл — отказ.
+
+`answer <id> <файл>` для задачи в `spec_gate` (SPEC
+01M4R4JQZEX2MBDB195SBJ8A7S) принимает только мандат тестов — строку
+«Ослабление тестов разрешено: …» с матрицей неослабления и строкой
+«Независимая проверка:», под lease задачи; состояние не меняется.
+Строки «Расширение зон разрешено:» и «Зависимости мержа:» — отказ (зоны
+и зависимости задают поля SPEC и reject), файл без мандата тестов —
+отказ (решения по SPEC передаются reject). Порядок: мандат даётся после
+вердикта аудита SPEC и перед approve; `answer` перефиксирует документы,
+поэтому sha для `approve <id> <sha>` копируется после мандата (или
+голый `approve`). Мандат действует всю жизнь задачи: после reject и
+новой редакции SPEC его следует перечитать.
 
 `answer` разбирает аргументы до любого действия (SPEC
 01M44ENW1B73Z80PR73HP1C9CG): ключ вместо файла (`answer <id> --from
@@ -1365,7 +1378,8 @@ def _tz_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
-_NEW_USAGE = 'new "<название>" [--tz <файл>] [--set <набор>]'
+_NEW_USAGE = ('new "<название>" [--tz <файл>] [--set <набор>] '
+              '[--target <имя>]')
 
 
 def _parse_new_args(rest: list) -> tuple | None:
@@ -1542,13 +1556,31 @@ def _new_set_arg(rest: list) -> tuple[list, str | None]:
     return rest[:idx] + rest[idx + 2:], rest[idx + 1]
 
 
+def _new_target_arg(rest: list) -> tuple[list, str | None]:
+    """(argv `new` без пары `--target <имя>`, имя проекта либо `None`) —
+    SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование 1; тот же приём, что
+    `_new_set_arg`: флаг без значения — именованный отказ."""
+    if "--target" not in rest:
+        return rest, None
+    idx = rest.index("--target")
+    if idx + 1 >= len(rest) or rest[idx + 1].startswith("-"):
+        sys.exit(f"--target требует имя проекта из {config.TARGETS.name} "
+                 f"следующим аргументом.\n{_NEW_USAGE}")
+    return rest[:idx] + rest[idx + 2:], rest[idx + 1]
+
+
 def _cmd_new(rest: list) -> None:
     rest, model_set = _new_set_arg(rest)
+    rest, target = _new_target_arg(rest)
     parsed = _parse_new_args(rest)
     if parsed is None:
         return
     title, tz_path = parsed
-    catalog.cmd_new(title, tz_path=tz_path, model_set=model_set)
+    target = catalog.new_cli_target(target)
+    # Без проекта — прежний вызов без keyword `target=` (требование 1):
+    # `cmd_new(target=None)` и есть артель.
+    project = {} if target is None else {"target": target}
+    catalog.cmd_new(title, tz_path=tz_path, model_set=model_set, **project)
 
 
 _SET_MODELS_USAGE = "set-models <id> <набор>|--default"
