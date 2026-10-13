@@ -14,6 +14,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -70,6 +71,50 @@ class MaterializeTaskDirTest(RealGitSandbox):
 
         self.assertEqual(head, "")
         self.assertFalse((dest / "tasks" / self.TASK).exists())
+
+    def test_checker_filters_only_recognized_top_level_notes(self):
+        """Неизвестное имя и вложенная записка остаются обычными файлами.
+
+        Ловит мутацию: фильтр удаляет все имена `NOTE-*.md` или имена во
+        вложенном каталоге — у проверяющей роли пропадают обычные документы.
+        """
+        prefix = f"tasks/{self.TASK}/"
+        self.commit_artifact({
+            prefix + "NOTE-analyst.md": "чужая\n",
+            prefix + "NOTE-reviewer.md": "своя\n",
+            prefix + "NOTE-external.md": "обычный файл\n",
+            prefix + "acceptance_tests/NOTE-analyst.md": "вложенный\n",
+        }, "записки")
+        dest = self.root / "checker_docs"
+
+        head = artifact_branch.materialize_task_dir(self.TASK, dest,
+                                                    role="reviewer")
+
+        task_dir = dest / "tasks" / self.TASK
+        self.assertTrue(head)
+        self.assertFalse((task_dir / "NOTE-analyst.md").exists())
+        self.assertEqual((task_dir / "NOTE-reviewer.md").read_text(), "своя\n")
+        self.assertEqual((task_dir / "NOTE-external.md").read_text(),
+                         "обычный файл\n")
+        self.assertEqual((task_dir / "acceptance_tests" /
+                          "NOTE-analyst.md").read_text(), "вложенный\n")
+        self.assertEqual(artifact_branch.read_tree(self.TASK)[
+            prefix + "NOTE-analyst.md"], "чужая\n")
+
+    def test_checker_refuses_unreadable_source_file(self):
+        """Нечитаемый файл ссылки не превращается в неполную выкладку.
+
+        Ловит мутацию: ошибка чтения `show` молча пропускает документ,
+        после чего проверяющая роль стартует с неполной выкладкой.
+        """
+        self.commit_artifact({f"tasks/{self.TASK}/SPEC.md": "спецификация\n"},
+                             "документ")
+        dest = self.root / "unreadable_docs"
+        with mock.patch.object(artifact_branch.gitcmd, "show",
+                               return_value=(None, "сбой чтения")):
+            with self.assertRaises(OSError):
+                artifact_branch.materialize_task_dir(self.TASK, dest,
+                                                     role="spec_auditor")
 
 
 class ConflictGuardStateGuardTest(RealGitSandbox):

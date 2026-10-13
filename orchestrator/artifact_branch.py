@@ -33,6 +33,10 @@ from pathlib import Path
 from . import config, fixation, gitcmd, repo_context, store
 
 PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
+STEP_NOTE_NAMES = frozenset(
+    f"NOTE-{role}.md" for role in
+    ("analyst", "spec_auditor", "test_author", "developer", "reviewer"))
+CHECKING_ROLES = frozenset(("spec_auditor", "reviewer"))
 
 # Пустое прежнее значение `update-ref`: ссылки ещё нет, и заводит её только
 # тот, кто увидел её отсутствие (сверка прежнего значения и для первой
@@ -601,7 +605,32 @@ def read_tree(task_id: str) -> dict:
     return files
 
 
-def materialize_task_dir(task_id: str, dest_root: Path) -> str:
+def restrict_materialized_notes(task_id: str, dest_root: Path, role: str | None
+                                ) -> None:
+    """Убирает чужие записки первого уровня даже после неудачной выкладки.
+
+    Не меняет ссылку документов. Ошибка удаления или проверки состава
+    останавливает подготовку роли через существующий OSError-путь runner.
+    """
+    if role not in CHECKING_ROLES:
+        return
+    task_dir = dest_root / "tasks" / task_id
+    for name in STEP_NOTE_NAMES - {f"NOTE-{role}.md"}:
+        path = task_dir / name
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        path.unlink()
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        raise OSError(f"чужая записка осталась в выкладке: {path}")
+
+
+def materialize_task_dir(task_id: str, dest_root: Path,
+                         role: str | None = None) -> str:
     """Материализует `tasks/<id>/` каталога `dest_root` из ГОЛОВЫ
     артефактной ветки (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1): файлы
     ветки перезаписываются на диск как есть, файл на диске, отсутствующий
@@ -617,6 +646,9 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
     используется как ревизия для `ls_tree_files`/`show` — атомарный
     снимок, не гоняющаяся за движущимся именем ветки между вызовами.
 
+    Для проверяющих ролей чужие записки первого уровня убираются до
+    возврата вызывающему; одноимённые файлы в подкаталогах остаются.
+
     Возвращает sha использованной головы — конфликт-гвард автокоммита
     (`checkpoint._commit_external_step_artifacts`, AC-6/AC-7) хранит его
     как baseline, с которым потом сверяет диск и текущую голову ветки.
@@ -627,10 +659,12 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
     repo = task_repo(task_id)
     head = _head(task_id, repo)
     if not head:
+        restrict_materialized_notes(task_id, dest_root, role)
         return ""
     prefix = f"tasks/{task_id}/"
     paths = gitcmd.ls_tree_files(head, prefix.rstrip("/"), repo=repo)
     if paths is None:
+        restrict_materialized_notes(task_id, dest_root, role)
         return ""
     wanted = {}
     for rel in paths:
@@ -639,6 +673,8 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
         text, _ = gitcmd.show(head, rel, repo=repo)
         if text is not None:
             wanted[rel] = text
+        elif role in CHECKING_ROLES:
+            raise OSError(f"документ ссылки не прочитан: {rel}")
     task_dir = dest_root / "tasks" / task_id
     if task_dir.is_dir():
         for path in sorted(task_dir.rglob("*")):
@@ -651,6 +687,7 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
         dest = dest_root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
+    restrict_materialized_notes(task_id, dest_root, role)
     return head
 
 

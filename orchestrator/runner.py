@@ -1086,7 +1086,8 @@ def role_cwd_path(task_id: str, target: str) -> Path:
     return workspace.path(task_id, target)
 
 
-def role_cwd(conn, task_id: str, target: str) -> Path:
+def role_cwd(conn, task_id: str, target: str,
+             role: str | None = None) -> Path:
     """Рабочий каталог роли: worktree задачи для self/артели, workspace
     target'а — иначе.
 
@@ -1154,11 +1155,13 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
         # отдельный `mkdir` здесь завёл бы его и без ссылки — в том числе
         # песочницам тестов без подменённого `config.PROJECTS`.
         materialized_sha = artifact_branch.materialize_task_dir(
-            task_id, artifact_branch.docs_root(target))
+            task_id, artifact_branch.docs_root(target), role=role)
         store.update_task(conn, task_id,
                           materialized_artifact_sha=materialized_sha or None)
         if harvested and not materialized_sha:
             _place_harvested_docs(harvested, artifact_branch.docs_root(target))
+        artifact_branch.restrict_materialized_notes(
+            task_id, artifact_branch.docs_root(target), role)
     return path
 
 
@@ -1463,7 +1466,8 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     # Тот же принцип, что у окружения выше: рабочий каталог roли не создался —
     # шаг не стартует, тихого отката на ROOT нет (ADR-0003 §4).
     try:
-        cwd = role_cwd(conn, task_id, store.task_target(conn, task_id))
+        cwd = role_cwd(conn, task_id, store.task_target(conn, task_id),
+                       role=role)
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"рабочий каталог роли не создан: {exc}")
