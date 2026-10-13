@@ -16,7 +16,8 @@ class TestAuthorMissionPytestCommandRegressionTest(unittest.TestCase):
 
     def _mission(self):
         with mock.patch.object(brief, "test_author_answer_component",
-                               return_value=None):
+                               return_value=None), \
+                mock.patch.object(brief, "step_notes_block", return_value=""):
             mission, _, _ = role_prompt.mission_brief_package(
                 None, self.TASK_ID, {"branch": "task/fixture-branch"},
                 "test_author", "/tmp/fixture-cwd")
