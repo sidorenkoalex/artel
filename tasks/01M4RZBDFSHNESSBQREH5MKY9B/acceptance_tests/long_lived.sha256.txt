@@ -1,0 +1,1 @@
+71ba2daf3e8084d2fb43786366a4dc888fba0a8cdbc0d2a0787db0fd7485bfae  tests/test_01m4rzbdfshnessbqreh5mky9b_role_templates.py
