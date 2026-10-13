@@ -36,6 +36,11 @@ targets:
     no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini, knowledge/]
     project_skills: []
     merge_gate: operator
+    # Песочница пульта (ADR-0023 п.9, вопрос 2): у артели явно выключена;
+    # отсутствие поля у проекта означает required. Включение для артели —
+    # отдельная задача после B2 и канарейки под песочницей. До кода B3-1
+    # поле проверкой не читается (лишнее поле записи не отвергается).
+    sandbox: off
     knowledge: knowledge/artel.yaml
     test_profile:
       command: [python3, -m, pytest]
