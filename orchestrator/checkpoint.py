@@ -3,6 +3,8 @@
 артефактов успешного шага (SPEC T059). Перенесено из orchestrator/runner.py
 без изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
 """
+import hashlib
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -61,6 +63,105 @@ def _is_extraneous_task_root_file(rel: str) -> bool:
     if rel == "RETRO.md":
         return False
     return guard.is_extraneous_task_root_file(rel)
+
+
+# Записка шага `NOTE-<роль>.md` (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4, требования
+# 3-5): в ссылку документов попадает только записка роли этого шага, и только
+# написанная им. Предел хранения — отдельно от потолка брифа
+# (`brief.STEP_NOTE_MAX_BYTES`): записка крупнее не сохраняется вовсе.
+STEP_NOTE_STORE_MAX_BYTES = 65536
+STEP_NOTE_SAVED_ACTION = "записка шага сохранена"
+STEP_NOTE_FOREIGN_ACTION = "чужая записка отброшена"
+STEP_NOTE_TOO_BIG_ACTION = "записка слишком велика"
+STEP_NOTE_CODE_COPY_ACTION = ("записка из рабочей копии кода отброшена: автор "
+                              "не определён")
+_STEP_NOTE_AUTHORS = {guard.step_note_name(role): role
+                      for role in guard.STEP_NOTE_ROLES}
+_STEP_NOTE_SAVED_DETAIL_RE = re.compile(
+    r"^(?P<role>[a-z_]+): (?P<size>\d+) байт, sha256=(?P<sha256>[0-9a-f]{64})$")
+
+
+def step_note_saved_detail(role: str, content: bytes) -> str:
+    """Деталь записи «записка шага сохранена»: роль, размер в байтах и
+    sha256 байтов записки. Бриф доверяет тексту записки только по этому
+    sha256 и берёт автора и порядок записок только из разбора детали
+    (`parse_step_note_saved`), не из текста записки."""
+    return (f"{role}: {len(content)} байт, "
+            f"sha256={hashlib.sha256(content).hexdigest()}")
+
+
+def parse_step_note_saved(detail: str | None) -> dict | None:
+    """`{"role", "size", "sha256"}` из детали записи «записка шага
+    сохранена»; `None` — деталь не той формы или роль вне
+    `guard.STEP_NOTE_ROLES`."""
+    found = _STEP_NOTE_SAVED_DETAIL_RE.match(detail or "")
+    if found is None or found["role"] not in guard.STEP_NOTE_ROLES:
+        return None
+    return {"role": found["role"], "size": int(found["size"]),
+            "sha256": found["sha256"]}
+
+
+def _step_note_author(task_id: str, rel: str) -> str | None:
+    """Роль-автор записки по пути от корня ссылки (`tasks/<id>/NOTE-<роль>.md`
+    первого уровня); `None` — путь не записка шага."""
+    prefix = f"tasks/{task_id}/"
+    if not rel.startswith(prefix):
+        return None
+    return _STEP_NOTE_AUTHORS.get(rel[len(prefix):])
+
+
+def _note_written_by_step(task_id: str, rel: str, content: bytes,
+                          baseline_sha: str) -> bool:
+    """Записка «написана шагом»: её нет в выкладке начала шага или байты
+    расходятся с выкладкой; при пустой фиксации выкладки — с головой ссылки
+    (требование 3, AC-8). Сравнение — по sha объекта git, побайтно, без
+    декодирования. git не ответил — считается написанной: принять чужую
+    неизменённую выкладку за свою нельзя, а отброшенная чужая записка в
+    ссылке остаётся прежней."""
+    from . import artifact_branch
+    rev = baseline_sha or artifact_branch.branch_name(task_id)
+    res = artifact_branch.git(task_id, "rev-parse", "--verify", "-q",
+                              f"{rev}:{rel}")
+    if res is None or res.returncode != 0:
+        return True
+    blob = hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+    return res.stdout.strip() != blob
+
+
+def _filter_step_notes(conn, task_id: str, files: dict[str, bytes],
+                       role: str | None, baseline_sha: str
+                       ) -> dict[str, bytes]:
+    """Записки шага в `files` (требования 3-4): на старте шага (`role is
+    None`) роль неизвестна — отбрасывается любая; в конце шага неизменённая
+    выкладка остаётся без журнала (её дальше решает конфликт-гвард),
+    написанная шагом чужая и своя сверх `STEP_NOTE_STORE_MAX_BYTES` —
+    отбрасываются с записью журнала. Остальные файлы шага не задеты."""
+    kept: dict[str, bytes] = {}
+    from_code_copy, foreign = [], []
+    for rel, content in files.items():
+        author = _step_note_author(task_id, rel)
+        name = rel.rsplit("/", 1)[-1]
+        if author is None:
+            kept[rel] = content
+        elif role is None:
+            from_code_copy.append(name)
+        elif not _note_written_by_step(task_id, rel, content, baseline_sha):
+            kept[rel] = content
+        elif author != role:
+            foreign.append(name)
+        elif len(content) > STEP_NOTE_STORE_MAX_BYTES:
+            store.journal(conn, task_id, "orchestrator", STEP_NOTE_TOO_BIG_ACTION,
+                          f"{name}: роль {role}, {len(content)} байт > "
+                          f"{STEP_NOTE_STORE_MAX_BYTES}")
+        else:
+            kept[rel] = content
+    if from_code_copy:
+        store.journal(conn, task_id, "orchestrator", STEP_NOTE_CODE_COPY_ACTION,
+                      ", ".join(sorted(from_code_copy)))
+    if foreign:
+        store.journal(conn, task_id, "orchestrator", STEP_NOTE_FOREIGN_ACTION,
+                      f"{', '.join(sorted(foreign))} — написана шагом роли {role}")
+    return kept
 
 
 # Типы артефактов, для которых допустимо удаление правилом «последний
@@ -874,7 +975,8 @@ def _collect_step_artifact_files(workspace_root: Path, task_dir: Path,
     return files, existing
 
 
-def _journal_stray_step_artifacts(conn, task_id: str, files: dict[str, bytes]
+def _journal_stray_step_artifacts(conn, task_id: str, files: dict[str, bytes],
+                                  role: str | None, baseline_sha: str = ""
                                   ) -> dict[str, bytes]:
     """Фаза 2/5 `_commit_external_step_artifacts` (рефакторинг R7): журнал
     посторонних файлов планки приёмки и корня `tasks/<id>/`, исключение
@@ -901,6 +1003,11 @@ def _journal_stray_step_artifacts(conn, task_id: str, files: dict[str, bytes]
     `RETRO.md`, которого сам список guard не несёт): инцидент 06.09,
     рабочие файлы роли (копии карты кодовой базы) в корне `tasks/<id>/`
     доехали до артефактной ветки и main без единой проверки.
+
+    Записки шага (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4, требования 3-4) —
+    `_filter_step_notes` после фильтра посторонних файлов: `role` — роль
+    шага, `None` на старте шага (`harvest_code_copy_docs`); `baseline_sha` —
+    выкладка начала шага, против которой решается «написана шагом».
     """
     task_prefix = f"tasks/{task_id}/"
     stray = sorted(
@@ -924,7 +1031,7 @@ def _journal_stray_step_artifacts(conn, task_id: str, files: dict[str, bytes]
             conn, task_id, "orchestrator",
             "посторонние файлы в каталоге задачи",
             f"в каталоге задачи посторонние файлы: {', '.join(task_root_stray)}")
-    return files
+    return _filter_step_notes(conn, task_id, files, role, baseline_sha)
 
 
 def _apply_artifact_conflict_guard(conn, task_id: str, files: dict[str, bytes],
@@ -1124,7 +1231,10 @@ def harvest_code_copy_docs(conn, task_id: str, target: str
     branch = artifact_branch.branch_name(task_id)
     existing = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}") or []
     files = _take_code_copy_docs(conn, task_id, code_root, stray, existing)
-    files = _journal_stray_step_artifacts(conn, task_id, files)
+    # Роль шага здесь неизвестна: записка уходит в ссылку только
+    # автокоммитом шага своей роли (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4,
+    # требование 4).
+    files = _journal_stray_step_artifacts(conn, task_id, files, None)
     if not files:
         return {}
     if _docs_ref_drift(conn, task_id, "документы рабочей копии кода не "
@@ -1319,7 +1429,8 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     files = _merge_code_copy_docs(conn, task_id, files, stray_files,
                                   baseline_sha, existing, docs_dir_present)
 
-    files = _journal_stray_step_artifacts(conn, task_id, files)
+    files = _journal_stray_step_artifacts(conn, task_id, files, role,
+                                          baseline_sha)
 
     files = _apply_artifact_conflict_guard(conn, task_id, files, existing,
                                            baseline_sha, branch)
@@ -1330,8 +1441,18 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
         conn, task_id, role, t, files, existing, branch, own_commit_marker)
         if docs_dir_present else [])
 
-    return _commit_step_artifacts_to_branch(conn, task_id, files, removed,
-                                            message, task_dir)
+    # «Написана шагом» решается до коммита: при пустой выкладке сравнение
+    # идёт с головой ссылки, а коммит её сдвинет.
+    saved_notes = [content for rel, content in sorted(files.items())
+                   if _step_note_author(task_id, rel) == role
+                   and _note_written_by_step(task_id, rel, content, baseline_sha)]
+    detail = _commit_step_artifacts_to_branch(conn, task_id, files, removed,
+                                              message, task_dir)
+    if detail:
+        for content in saved_notes:
+            store.journal(conn, task_id, "orchestrator", STEP_NOTE_SAVED_ACTION,
+                          step_note_saved_detail(role, content))
+    return detail
 
 
 def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:

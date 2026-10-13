@@ -58,10 +58,12 @@ RunResult = namedtuple("RunResult", "tokens_by_type usd is_error text")
 # Одна строка вывода исполнителя как событие общего вида:
 #
 # - `log_text` — готовая строка лога шага («что показать Оператору»),
-#   пустая для служебного события. Формат строки знает провайдер: и
-#   отметка вызова инструмента, и сквозной проброс строки, не
-#   разобравшейся в событие (stderr, трейсбек CLI), — его знание, а не
-#   общее;
+#   пустая для служебного события. Формат строки знает провайдер: символ
+#   и предел отметки вызова инструмента, сквозной проброс строки, не
+#   разобравшейся в событие (stderr, трейсбек CLI). Общая у провайдеров
+#   только короткая форма пути файла в аргументе отметки —
+#   `short_log_path` ниже (задача 01M4RZB9287PXZ4Y7ZJG7HDR6Y): один путь
+#   обязан выглядеть в логе одинаково, кто бы его ни прочёл;
 # - `text` — текст, который исполнитель сказал словами (`None` — не
 #   говорил);
 # - `tool_calls` / `tool_results` — кортежи `ToolCall`/`ToolResult`:
@@ -82,6 +84,73 @@ FailureSignature = namedtuple("FailureSignature", "failure_class signatures")
 #: Событие, в котором нет ничего: служебная строка, которую провайдер
 #: разобрал и которой пульту сказать нечего.
 EMPTY_EVENT = StreamEvent("", None, (), (), None, None)
+
+# Короткая форма пути файла в строке лога шага (задача
+# 01M4RZB9287PXZ4Y7ZJG7HDR6Y): префикс абсолютного пути до рабочей копии
+# задачи длиннее девяноста символов, и без сокращения от пути после обрезки
+# до предела строки не оставалось ничего. Якорь — сегмент `/.artel/` и
+# имена каталогов под ним, а не `config.ROOT`: лог читают и на другой
+# машине, и под другим корнем пульта.
+WORKTREE_LOG_PREFIX = "wt:"
+DOCS_LOG_PREFIX = "docs:"
+ARTEL_DIR_SEGMENT = ".artel"
+WORKTREES_SEGMENT = "worktrees"
+PROJECTS_SEGMENT = "projects"
+DOCS_SEGMENT = "tasks"
+
+
+def _short_path_text(path):
+    """Строка пути -> короткая форма либо сама строка, если путь не лежит
+    в рабочей копии или каталоге документов задачи под `/.artel/`."""
+    # Импорт здесь, а не на уровне модуля: модуль обязан импортироваться
+    # без пакета пульта (докстринг модуля).
+    from .. import config
+    # Подстрока, по которой детектор утечки пула канарейки находит путь
+    # пула в логе роли (`doctor/canary_pool.py`), обязана остаться в строке.
+    if not path.startswith("/") or config.CANARY_POOL_DIRNAME in path:
+        return path
+    segments = path.split("/")
+    for index, segment in enumerate(segments):
+        if segment != ARTEL_DIR_SEGMENT:
+            continue
+        rest = segments[index + 1:]
+        if len(rest) >= 3 and rest[0] == WORKTREES_SEGMENT and rest[1]:
+            prefix, tail = WORKTREE_LOG_PREFIX, rest[2:]
+        elif (len(rest) >= 5 and rest[0] == PROJECTS_SEGMENT and rest[1]
+              and rest[2] in (WORKTREES_SEGMENT, DOCS_SEGMENT) and rest[3]):
+            prefix = (WORKTREE_LOG_PREFIX if rest[2] == WORKTREES_SEGMENT
+                      else DOCS_LOG_PREFIX)
+            tail = rest[4:]
+        else:
+            continue
+        tail_text = "/".join(tail)
+        if tail_text:
+            return prefix + tail_text
+    return path
+
+
+def short_log_path(value):
+    """Значение аргумента отметки вызова -> то же значение с путями файлов
+    в короткой форме `wt:<путь в рабочей копии>` /
+    `docs:<путь в каталоге документов задачи>`.
+
+    Строка — путь; перечень — правки файлов `file_change` Codex: у
+    элементов-словарей со строковым `path` он сокращается в копии
+    элемента, остальное не трогается. Любое иное значение, как и путь вне
+    якорей, отдаётся без изменений: строка лога не вправе уронить разбор
+    вывода исполнителя. Вызывающий решает, К ЧЕМУ применять, — сокращение
+    касается только пути файла, не команды и не шаблона поиска.
+    """
+    if isinstance(value, str):
+        return _short_path_text(value)
+    if isinstance(value, list):
+        shortened = []
+        for entry in value:
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                entry = dict(entry, path=_short_path_text(entry["path"]))
+            shortened.append(entry)
+        return shortened
+    return value
 
 
 class RoleExecutorProvider(object):

@@ -29,8 +29,9 @@ from pathlib import Path
 # такая подмена падает с `AttributeError`. Про отчёт целиком планка
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
-from . import agent_log, alerts, config, retro, spend, store  # noqa: F401
+from . import agent_log, alerts, config, explore_metric, retro, spend, store  # noqa: F401
 from .advance_gates import test_integrity, two_sided
+from .providers import base as provider_base
 from .providers import claude as claude_provider
 
 # Гейты, где решение принимает только Оператор, независимо от политики
@@ -56,6 +57,10 @@ GATE_TRANSITION_ACTION = "state -> merge_gate"
 GATE_RATIO_ACTORS = ("autogate", "operator")
 GATE_RATIO_WINDOW = 10
 OPERATOR_WINDOW_DAYS = 14
+# Окно блока «Разведка ролей» — своё, равное окну команды `explore-stats`
+# по умолчанию: на тех же данных блок и команда дают те же числа (SPEC
+# 01M4RZAYH3SWJW4WFBW4QW15FP, требование 8).
+EXPLORE_WINDOW_DAYS = explore_metric.DEFAULT_DAYS
 
 # Число последних задач, для которых блок метрики «трение» (tasks/T095/
 # SPEC.md, требование 3) показывает значения — «последние задачи», не
@@ -94,9 +99,16 @@ _PROVIDER_RE = re.compile(r"provider=([\w-]+)")
 _PYTEST_SECONDS_RE = re.compile(r" in (\d+(?:\.\d+)?)s\b")
 # Группы Write по видимому префиксу пути: `acceptance_tests/` может быть
 # виден лишь как `…/acceptance` (обрезка), `tests/` — отдельным сегментом,
-# иначе `acceptance_tests/` попал бы и сюда. Порядок — проверки.
-WRITE_GROUPS = (("acceptance_tests/", re.compile(r"(?:^|/)acceptance")),
-                ("tests/", re.compile(r"(?:^|/)tests/")))
+# иначе `acceptance_tests/` попал бы и сюда. Порядок — проверки. Слева от
+# сегмента допустимо и «:» — короткая форма пути `wt:tests/…`,
+# `docs:acceptance_tests/…` (`base.short_log_path`, задача
+# 01M4RZB9287PXZ4Y7ZJG7HDR6Y).
+WRITE_GROUPS = (("acceptance_tests/", re.compile(r"(?:^|[/:])acceptance")),
+                ("tests/", re.compile(r"(?:^|[/:])tests/")))
+# Короткая форма пути не называет корня, от которого её читать: число
+# строк по ней — «н/д», а не файл относительно рабочего каталога отчёта.
+SHORT_PATH_PREFIXES = (provider_base.WORKTREE_LOG_PREFIX,
+                       provider_base.DOCS_LOG_PREFIX)
 
 # Сводка наблюдения неослабления (требование 11): класс текстового
 # вердикта — по первому совпавшему маркеру; «покрыто мандатом» первым —
@@ -889,7 +901,8 @@ def _file_lines(path: str) -> int | None:
 def _write_groups(calls: list) -> dict:
     """{группа: (вызовов Write, файлов, строк, строк Write «н/д»)} —
     файлы по различным полным путям; путь, видимый целиком до предела
-    обрезки, или файл, которого нет на диске, — «н/д» (ANSWER-1, п.2)."""
+    обрезки, путь в короткой форме `wt:`/`docs:` или файл, которого нет на
+    диске, — «н/д» (ANSWER-1, п.2)."""
     groups = {}
     def group_of(arg: str):
         return next((g for g, p in WRITE_GROUPS if p.search(arg)), None)
@@ -900,7 +913,8 @@ def _write_groups(calls: list) -> dict:
         lines, unknown = {}, 0
         for arg in writes:
             count = None
-            if len(arg) < claude_provider.TOOL_ARGUMENT_LIMIT:
+            if (len(arg) < claude_provider.TOOL_ARGUMENT_LIMIT
+                    and not arg.startswith(SHORT_PATH_PREFIXES)):
                 count = lines[arg] if arg in lines else _file_lines(arg)
             if count is None:
                 unknown += 1
@@ -948,6 +962,17 @@ def _test_author_html(steps: list) -> str:
     rows = [_test_author_row_html(step) for step in _test_author_steps(steps)]
     return "".join(rows) or (f'<p class="empty">Шагов test_author за '
                              f'{OPERATOR_WINDOW_DAYS} дней нет.</p>')
+
+
+def _explore_html(steps: list, now: datetime) -> str:
+    """Блок «Разведка ролей» из уже прочитанного журнала — без своего
+    запроса к БД; те же строки, что печатает `explore-stats`."""
+    roles = explore_metric.DEFAULT_ROLES
+    summary = explore_metric.summarize(steps, now, EXPLORE_WINDOW_DAYS, roles)
+    return "".join(
+        f'<div class="metric-row">{_esc(line)}</div>'
+        for line in explore_metric.render_lines(summary, roles,
+                                                EXPLORE_WINDOW_DAYS))
 
 
 def _observation_class(verdict: str) -> str:
@@ -1157,7 +1182,7 @@ _STYLE = """
 
 def _render(tasks: list, steps: list, alerts: list, total_spent: float,
            total_estimate: float, divergence: dict | None = None,
-           map_growth_html: str = "") -> str:
+           map_growth_html: str = "", *, now: datetime) -> str:
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ru">\n'
@@ -1186,6 +1211,9 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         f'<section class="panel"><h2>Шаги test_author (последние '
         f'{OPERATOR_WINDOW_DAYS} дней)</h2>'
         f'<div class="metrics">{_test_author_html(steps)}</div></section>\n'
+        f'<section class="panel"><h2>Разведка ролей (последние '
+        f'{EXPLORE_WINDOW_DAYS} дней)</h2>'
+        f'<div class="metrics">{_explore_html(steps, now)}</div></section>\n'
         '<section class="panel"><h2>Двусторонний прогон (наблюдение '
         'неослабления)</h2>'
         f"{_observation_html(steps)}</section>\n"
@@ -1229,7 +1257,7 @@ def cmd_report() -> None:
     map_growth_html = _map_growth_html(conn, tasks)
 
     doc = _render(tasks, steps, open_alerts_, total_spent, total_estimate,
-                 divergence, map_growth_html)
+                 divergence, map_growth_html, now=datetime.now(timezone.utc))
 
     path = config.ROOT / ".artel" / "report.html"
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -209,6 +209,41 @@ def _has_mandate_lines(raw: str) -> bool:
                               mandate.MERGE_AFTER_MANDATE_MARKER))
 
 
+SPEC_GATE_REFUSED_MARKERS = (fsm_advance._ZONES_MANDATE_MARKER,
+                             mandate.MERGE_AFTER_MANDATE_MARKER)
+
+
+def _spec_gate_answer_text(conn, task_id: str, file_path: str,
+                           code_branch: str | None) -> str:
+    """Текст файла ответа на `spec_gate` (SPEC 01M4R4JQZEX2MBDB195SBJ8A7S,
+    требования 1-2): принимается только мандат тестов.
+
+    Строки зон и зависимостей отказывают раньше проверок формы и матрицы
+    и распознаются тем же `mandate.elements`, что у гейтов: строку,
+    которую гейт засчитал бы мандатом, здесь нельзя пропустить отступом.
+    Зоны и `merge_after` на этом гейте задаёт SPEC (approve перезаписывает
+    `merge_after` полем SPEC), поэтому мандат на них здесь бессмыслен."""
+    raw = _read_answer_file(task_id, file_path)
+    if any(mandate.elements(line, marker) is not None
+           for line in raw.splitlines()
+           for marker in SPEC_GATE_REFUSED_MARKERS):
+        sys.exit(f"[{task_id}] answer на spec_gate отказана — строки "
+                 f"«{fsm_advance._ZONES_MANDATE_MARKER} …» и "
+                 f"«{mandate.MERGE_AFTER_MANDATE_MARKER} …» здесь не "
+                 f"принимаются: зоны и зависимости мержа задаются полями "
+                 f"SPEC и reject; зависимость, заявленную строкой ТЗ, "
+                 f"снимает reject → эскалация аналитика → answer в "
+                 f"escalated. ANSWER не создан")
+    # Голый маркер без элементов — не «нет мандата», а ошибка строки:
+    # её называет `mandate.refusals` в `_read_checked_answer_file`.
+    if not any(mandate.elements(line, mandate.TEST_WEAKENING_MANDATE_MARKER)
+               is not None for line in raw.splitlines()):
+        sys.exit(f"[{task_id}] answer на spec_gate принимает только мандат "
+                 f"тестов — строку «{mandate.TEST_WEAKENING_MANDATE_MARKER} "
+                 f"…»; решения по SPEC передаются reject. ANSWER не создан")
+    return _read_checked_answer_file(conn, task_id, file_path, code_branch)
+
+
 def _instruction_text(conn, task_id: str, file_path: str) -> str | None:
     """Текст указания Оператора (SPEC 01M443BPQEA9ZMJ3R50THNB1MF,
     требования 1-3) — файл без строк мандатов в `in_dev`/`review`;
@@ -322,7 +357,12 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     гейт мержа отказал из-за убитой зависимости, не было бы штатного
     выхода, кроме `kill`. В `merge_gate` действует тот же рубеж окружения
     роли, а файл без этой строки отказывается, как раньше. Новое значение
-    пишется в БД после коммита ANSWER: проверено оно до коммита."""
+    пишется в БД после коммита ANSWER: проверено оно до коммита.
+
+    `spec_gate` (SPEC 01M4R4JQZEX2MBDB195SBJ8A7S) принимает только мандат
+    тестов (`_spec_gate_answer_text`) под lease задачи; состояние не
+    меняется, а перефиксация в `_commit_answer` даёт голому approve гейта
+    SPEC пройти сверку фиксации."""
     t = store.get_task(conn, task_id)
     state = t["state"]
     mandate_paths: list[str] = []
@@ -354,6 +394,15 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
             sys.exit(f"[{task_id}] answer в состоянии merge_gate принимает "
                      f"только строку «{mandate.MERGE_AFTER_MANDATE_MARKER} "
                      f"…» — ANSWER не создан")
+    elif state == "spec_gate":
+        # Мандат тестов на гейте SPEC (SPEC 01M4R4JQZEX2MBDB195SBJ8A7S):
+        # без этого канала SPEC, заранее требующий правки теста, обрекал
+        # разработчика на эскалацию ради мандата. Тот же рубеж окружения
+        # роли, что в `in_dev` и `merge_gate`, — до чтения файла.
+        if runner.in_role_environment():
+            sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
+        raw = _spec_gate_answer_text(conn, task_id, file_path, t["branch"])
+        test_elements = _test_mandate_marker_elements(raw)
     else:
         sys.exit(f"[{task_id}] answer доступна только для задачи в "
                  f"состоянии escalated (сейчас: {state})")
@@ -393,6 +442,10 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
         print(f"  дальше: artel.py approve {task_id} (снятие эскалации)")
     elif state == "merge_gate":
         print(f"  дальше: artel.py approve {task_id} (merge)")
+    elif state == "spec_gate":
+        print(f"  дальше: artel.py approve {task_id} (гейт SPEC; ANSWER "
+              f"перефиксировал документы — sha для approve бери заново "
+              f"или зови голый approve)")
 
 
 def cmd_zones_extend(task_id: str, paths_arg: str,

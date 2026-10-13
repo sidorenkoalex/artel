@@ -452,6 +452,69 @@ def _warn_pin_divergence(conn, task_id: str) -> None:
                  _pin_divergence_journal_detail(commits))
 
 
+PROJECT_LINE = "Проект:"
+_PROJECT_LINE_RE = re.compile(r"^Проект:(.*)$", re.M)
+
+
+def new_cli_target(flag: str | None) -> str | None:
+    """Проект задачи командной строки `new` (SPEC
+    01M4RRW7FT1EE77EY9Y462AZKC, требование 3): флаг `--target` — как есть;
+    без флага при нескольких записях `targets.yaml` — отказ «укажи
+    проект», при одной — `None` (артель, прежним вызовом `cmd_new`).
+    Нечитаемый `targets.yaml` здесь не отказ: задача уходит в артель, а о
+    пропущенной сверке предупреждает сам `cmd_new` (требование 2).
+
+    Правило живёт только здесь, не в `cmd_new`: `cmd_new(target=None)`
+    по-прежнему значит артель при любом числе записей — так её зовут
+    канарейка (`canary_drive`) и прочие вызыватели."""
+    if flag is not None:
+        return flag
+    try:
+        declared = list(targets.load())
+    except targets.TargetsError:
+        return None
+    if len(declared) > 1:
+        sys.exit(f"new: укажи проект: --target <одно из "
+                 f"{', '.join(declared)}> — задача не заведена")
+    return None
+
+
+def _checked_target(target: str | None) -> str:
+    """Проект задачи, сверенный с `targets.yaml` до любых побочных
+    эффектов `new` (требование 2): необъявленное имя или нечитаемый файл
+    при явном проекте — отказ с перечнем объявленных. Для `None` (артель)
+    нечитаемый файл — предупреждение, не отказ: артель разрешается и без
+    `targets.yaml` (`repo_context.resolve`)."""
+    name = target or config.DEFAULT_TARGET
+    try:
+        entries = targets.load()
+    except targets.TargetsError as exc:
+        if target is not None:
+            sys.exit(f"new: проект {name} не сверен: {exc} — задача не "
+                     f"заведена")
+        print(f"  ВНИМАНИЕ: сверка проекта с {config.TARGETS.name} "
+              f"пропущена ({exc}) — задача заводится в {name}")
+        return name
+    if name not in entries:
+        sys.exit(f"new: проект {name} не объявлен в {config.TARGETS.name} "
+                 f"(есть: {', '.join(entries)}) — задача не заведена")
+    return name
+
+
+def _project_line_reasons(tz_raw: str, target: str) -> list[str]:
+    """Причины отказа по строке ТЗ «Проект: <имя>» (требование 4): строки
+    нет — проверки нет; одна — обязана назвать проект задачи; две и
+    более — отказ, значение задаёт одна строка."""
+    values = [m.group(1).strip() for m in _PROJECT_LINE_RE.finditer(tz_raw)]
+    if len(values) > 1:
+        return [f"строка «{PROJECT_LINE}» повторена ({len(values)} раза) — "
+                f"проект задаёт одна строка"]
+    if values and values[0] != target:
+        return [f"«{PROJECT_LINE} {values[0]}» не совпадает с проектом "
+                f"задачи {target}"]
+    return []
+
+
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
            model_set: str | None = None) -> str:
@@ -499,6 +562,9 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     состав набора на момент `new` пишутся в строку задачи той же записью, что
     заводит саму строку (`store.insert_task`).
     """
+    # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
+    # 2): до ТЗ, клона, id, ссылки документов и строки БД.
+    target = _checked_target(target)
     conn = store.db()
     set_members = None
     if model_set is not None:
@@ -509,7 +575,6 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     # Файл ТЗ читается ДО побочных эффектов: нечитаемый путь не должен
     # оставлять после себя наполовину созданную задачу.
     tz_raw = None
-    target = target or config.DEFAULT_TARGET
     declared: list[str] = []
     if tz_path is not None:
         try:
@@ -525,15 +590,24 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         # обе причины печатаются одним заходом. Канарейка строку не
         # разбирает (требование 8): её ТЗ — учебный шаблон пула.
         order_reasons: list[str] = []
+        project_reasons: list[str] = []
         if not canary:
             declared, order_reasons = merge_after.declared_from_tz(
                 conn, tz_raw, target)
+            # Строка «Проект:» (требование 4) — тем же рубежом, до клона;
+            # канарейка её не разбирает, как и «Порядок:».
+            project_reasons = _project_line_reasons(tz_raw, target)
         if order_reasons:
             refusal = "\n".join(
                 ([refusal] if refusal else [])
                 + [f"ТЗ {tz_path}: «{merge_after.ORDER_LINE}»: {r}"
                    for r in order_reasons]
                 + ["new: зависимости мержа ТЗ не годны — задача не заведена"])
+        if project_reasons:
+            refusal = "\n".join(
+                ([refusal] if refusal else [])
+                + [f"ТЗ {tz_path}: {r}" for r in project_reasons]
+                + ["new: проект ТЗ не совпадает — задача не заведена"])
         if refusal is not None:
             sys.exit(refusal)
 
@@ -547,7 +621,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
-                 journal_detail=title, model_set=model_set,
+                 journal_detail=f"{title} (проект {target})",
+                 model_set=model_set,
                  set_members=set_members)
     _ensure_task_worktree(conn, task_id, target)
     if tz_raw is not None:

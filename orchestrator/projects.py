@@ -13,7 +13,7 @@
 import sys
 from pathlib import Path
 
-from . import config, targets
+from . import config, targets, workspace
 
 
 def project_dir(name: str) -> Path:
@@ -38,7 +38,13 @@ def init_project(name: str) -> list[str]:
 
 
 def cmd_target_init(name: str) -> None:
-    """Подключение target'а: каталог проекта по декларации targets.yaml."""
+    """Подключение target'а: каталог проекта по декларации targets.yaml и
+    клон проекта (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование 6).
+
+    Имя сверяется с декларацией ДО каталогов: необъявленный проект не
+    оставляет каталога-сироты. Клон — тем же `workspace.ensure_clone`, что
+    у `new`: существующий не трогается; неудача — отказ с причиной, а
+    созданные каталоги остаются (повтор `target-init` их доведёт)."""
     try:
         entry = targets.target(name)
     except targets.TargetsError as exc:
@@ -53,3 +59,8 @@ def cmd_target_init(name: str) -> None:
           f"гейт мержа {entry['merge_gate']}")
     for note in notes:
         print(f"  {note}")
+
+    clone, error = workspace.ensure_clone(name)
+    if error is not None:
+        sys.exit(f"target-init: {error}")
+    print(f"  клон проекта: {clone}")

@@ -407,6 +407,10 @@ def _task_docs_violations(task_id: str, rev: str, paths: list[str],
             continue
         if guard.is_task_passport(Path("tasks") / task_id / rel):
             continue
+        # Записка шага — свободный текст роли (SPEC
+        # 01M4RZBPG6EXM74MTBPTEGW2D4, требование 2), структурой не проверяется.
+        if guard.is_step_note(Path("tasks") / task_id / rel):
+            continue
         text, reason = artifact_branch.show(task_id, rev, prefix + rel)
         if text is None:
             violations.append(f"{prefix}{rel}: не прочитан: {reason}")

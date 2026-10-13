@@ -748,13 +748,16 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # 01M3YCHP14179R32SFJVKQB32G, требование 2) — решения Оператора по числам
 # канарейки (ADR-0019 п.5): роль, правящая файл в своей ветке, выдала бы
 # допуск сама себе.
+# knowledge/ — системные карточки знаний (SPEC 01M4S0JVB85W9TY1ESGNBH97FP,
+# требование 11): правило системы для ролей всех проектов; наполняет
+# Оператор через `doc-commit`, роль правкой своей ветки их не меняет.
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/",
                    "templates/", "skills/", "docs/invariants.md",
                    "tests/test_invariants.py", "docs/adr/", "CLAUDE.md",
                    "AGENTS.md", "targets.yaml", "models.yaml",
                    "model_sets.yaml",
                    "**/conftest.py", "pyproject.toml", "pytest.ini",
-                   "setup.cfg", "tox.ini")
+                   "setup.cfg", "tox.ini", "knowledge/")
 
 # Префикс записи-маски: `**/<имя файла>` покрывает путь, чей последний
 # компонент — ровно `<имя файла>`, в любом каталоге (включая корень).
@@ -954,3 +957,32 @@ ZONE_WAIT_MAX_SEC = 6 * 3600
 AUTO_STOP_WAVE_BREAKER = ("стоп-кран волны — решение Оператора",
                          "artel.py doctor  (открытый алерт первой строкой) "
                          "— `artel.py alert-ack <id> \"...\"` снимет блокировку")
+
+# Карточки знаний (SPEC 01M4S0JVB85W9TY1ESGNBH97FP, К-4а; ADR-0003 п. 3е):
+# лимиты класса ADR-0002 — меняет только Оператор. Предел размера
+# проверяется механически (исследование 2026-09-22, «Итог обсуждения»):
+# карточка — правило с причиной, а не документ. OUTPUT_MAX, HINT_MAX_KEYS,
+# JOURNAL_MAX_PER_TASK и STALE_FILE_MAX_BYTES читает часть Б (К-4б: команда
+# `knowledge`, подсказка в миссии, журнал обращений, проверка свежести).
+KNOWLEDGE_CARD_MAX_CHARS = 1200
+KNOWLEDGE_CARD_MAX_PER_FILE = 80
+KNOWLEDGE_CARD_QUERY_MAX_CHARS = 200
+KNOWLEDGE_CARD_SYSTEM_REL = "knowledge/system.yaml"
+KNOWLEDGE_CARD_OUTPUT_MAX = 12
+KNOWLEDGE_CARD_HINT_MAX_KEYS = 40
+KNOWLEDGE_CARD_JOURNAL_MAX_PER_TASK = 200
+KNOWLEDGE_CARD_STALE_FILE_MAX_BYTES = 2 * 1024 * 1024
+
+# Справочник ядра (SPEC 01M4S24963R9H18AN2XDP6R15B, К-3а; ADR-0003 п.3а,
+# п.3б): порог использования функции/класса в других файлах коммита и
+# пределы пакетного чтения коммита — лимиты класса ADR-0002. Генератор
+# `scripts/core_reference.py` пульт не импортирует в обратную сторону:
+# порог и пределы ему передаёт `orchestrator/reference_cache.py`, а
+# умолчание `--min-uses` командной строки генератора повторяет MIN_USES.
+# Срок — общий на оба вызова git и разбор одной сборки.
+CORE_REFERENCE_MIN_USES = 3
+CORE_REFERENCE_MAX_FILES = 2000
+CORE_REFERENCE_MAX_SOURCE_BYTES = 32 * 1024 * 1024
+CORE_REFERENCE_MAX_BLOB_BYTES = 1 * 1024 * 1024
+CORE_REFERENCE_MAX_LISTING_BYTES = 64 * 1024 * 1024
+CORE_REFERENCE_GIT_TIMEOUT_SEC = 60
