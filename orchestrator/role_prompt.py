@@ -40,16 +40,18 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"выписана в этом рабочем каталоге (собственный worktree "
             f"задачи, рабочая копия пульта его не видит). "
             f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
-            f"только после тебя. Карта кодовой базы — в БРИФЕ РОЛИ ниже.\n"
+            f"только после тебя. Карта кодовой базы и шаблоны "
+            f"templates/SPEC.md и templates/QUESTIONS.md — в БРИФЕ РОЛИ ниже.\n"
+            f"{_template_unread_note()}\n"
             f"1) Прочитай {task_ref}/TZ.md.\n"
-            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
-            f"templates/SPEC.md: критерии приёмки размечены AC-n строго "
+            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по шаблону SPEC "
+            f"из брифа: критерии приёмки размечены AC-n строго "
             f"из формулировок ТЗ, «не входит» — из его же границ, "
             f"budget_usd по классу задачи и только вниз от дефолта, "
             f"status: ready.\n"
             f"3) ТЗ неясно или неполно — не домысливай: один батч всех "
-            f"вопросов в {task_ref}/QUESTIONS.md по templates/QUESTIONS.md, "
-            f"отсортированный по блокирующести, каждый — с вариантами "
+            f"вопросов в {task_ref}/QUESTIONS.md по шаблону QUESTIONS из "
+            f"брифа, отсортированный по блокирующести, каждый — с вариантами "
             f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
             f"эскалирует задачу.\n"
             f"4) Прогони scripts/guard.py на своём файле. tasks/<id>/ "
@@ -97,10 +99,12 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
             f"уже выписана в этом рабочем каталоге (собственный worktree "
-            f"задачи). SPEC задачи, карта кодовой базы и конвенции проекта "
-            f"— целиком в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
+            f"задачи). SPEC задачи, карта кодовой базы, конвенции проекта "
+            f"и шаблон templates/PLAN.md — целиком в БРИФЕ РОЛИ ниже, "
+            f"отдельно их читать не нужно.\n"
+            f"{_template_unread_note()}\n"
             f"1) Изучи бриф.\n"
-            f"2) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
+            f"2) Напиши {task_ref}/PLAN.md по шаблону PLAN из брифа.\n"
             f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
             f"со статусом changes_requested — сначала закрой замечания. Если "
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
@@ -189,14 +193,16 @@ def _spec_auditor_mission(conn, task_id: str, t) -> str:
     return (
         f"Роль: аудитор SPEC. Задача {task_id}, ветка {t['branch']}. Ты — "
         f"независимая проверка SPEC аналитика до гейта SPEC: ТЗ, SPEC, ответы "
-        f"Оператора и карта кодовой базы — в БРИФЕ РОЛИ ниже, код — в "
+        f"Оператора, карта кодовой базы и шаблон "
+        f"templates/{spec_audit.ARTIFACT} — в БРИФЕ РОЛИ ниже, код — в "
         f"рабочем каталоге.\n"
+        f"{_template_unread_note()}\n"
         f"Проверяемая версия: sha содержимого {task_ref}/SPEC.md в ссылке "
         f"документов — {sha}.\n"
         f"Сработавшие сигналы глубины: {listed}.\n"
         f"Глубина: {depth}.\n"
-        f"1) Заполни {task_ref}/{spec_audit.ARTIFACT} по "
-        f"templates/{spec_audit.ARTIFACT}: в «Вердикте» — перечень отклонений "
+        f"1) Заполни {task_ref}/{spec_audit.ARTIFACT} по шаблону "
+        f"{spec_audit.ARTIFACT} из брифа: в «Вердикте» — перечень отклонений "
         f"со ссылками файл:строка; поля frontmatter — verdict (pass | "
         f"concerns | fail), signals (сигналы выше дословно) и spec_sha: "
         f"{sha}; status: ready.\n"
@@ -207,6 +213,16 @@ def _spec_auditor_mission(conn, task_id: str, t) -> str:
         f"tasks/<id>/ коммитить не нужно — автокоммит оркестратора сам "
         f"перенесёт {spec_audit.ARTIFACT} в артефактную ветку."
     )
+
+
+def _template_unread_note() -> str:
+    """Строка миссии об исключении (SPEC 01M4RZBDFSHNESSBQREH5MKY9B,
+    требование 5): шаблон артефакта лежит в брифе роли, файл с диска нужен
+    только там, где бриф вместо шаблона несёт пометку о неудаче чтения
+    (`brief._template_components`)."""
+    return ("Если вместо шаблона в брифе стоит пометка «шаблон "
+            "templates/<имя> не прочитан», прочитай этот файл templates/<имя> "
+            "с диска сам.")
 
 
 def suite_run_note(task_id: str) -> str:
