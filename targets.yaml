@@ -54,3 +54,6 @@ targets:
       modules: [orchestrator/store.py, orchestrator/config.py, tests/sandbox.py, orchestrator/fsm.py, orchestrator/runner.py, orchestrator/gitcmd.py]
       constants_module: orchestrator/config.py
       constants: [PROTECTED_PATHS, COMMON_ZONES, STATE_ROLE, DEFAULT_TARGET, PROJECT_DIRS, MAIN_BRANCH, ROOT, TASKS, PROJECTS, TARGETS, DB, LOGS]
+      # Порог использования (задача 01M4TVBT9Z, решение Оператора 13.10):
+      # 4 даёт 26 432 байта против 30 386 при умолчании 3 (предел 32 768).
+      min_uses: 4
