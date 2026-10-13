@@ -168,7 +168,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] [--detach] |
            --detach: отвязанный запуск штатный для сессии Оператора |
   canary pool-seal |
-  prune [--execute] |
+  prune [--execute] | explore-stats [--days N] [--role <роль>] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   artifact-history-snapshots [--dry-run] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
@@ -741,7 +741,7 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           budget, canary, catalog, ci_rerun, cleanup, doctor,
-                          docs_fetch, dry_run, fsm, lease,
+                          docs_fetch, dry_run, explore_metric, fsm, lease,
                           liveness, models, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
@@ -1965,6 +1965,9 @@ def main() -> None:
         "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
+        # Метрика разведки роли — инструмент Оператора, вне белого списка
+        # ролей (SPEC 01M4RZAYH3SWJW4WFBW4QW15FP, требование 7).
+        "explore-stats": lambda: explore_metric.cmd_explore_stats(rest),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "plank-run": lambda: plank_run.cmd_plank_run(
             rest[0], rest[1] if len(rest) > 1 else None),

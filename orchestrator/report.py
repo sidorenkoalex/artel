@@ -29,7 +29,7 @@ from pathlib import Path
 # такая подмена падает с `AttributeError`. Про отчёт целиком планка
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
-from . import agent_log, alerts, config, retro, spend, store  # noqa: F401
+from . import agent_log, alerts, config, explore_metric, retro, spend, store  # noqa: F401
 from .advance_gates import test_integrity, two_sided
 from .providers import base as provider_base
 from .providers import claude as claude_provider
@@ -57,6 +57,10 @@ GATE_TRANSITION_ACTION = "state -> merge_gate"
 GATE_RATIO_ACTORS = ("autogate", "operator")
 GATE_RATIO_WINDOW = 10
 OPERATOR_WINDOW_DAYS = 14
+# Окно блока «Разведка ролей» — своё, равное окну команды `explore-stats`
+# по умолчанию: на тех же данных блок и команда дают те же числа (SPEC
+# 01M4RZAYH3SWJW4WFBW4QW15FP, требование 8).
+EXPLORE_WINDOW_DAYS = explore_metric.DEFAULT_DAYS
 
 # Число последних задач, для которых блок метрики «трение» (tasks/T095/
 # SPEC.md, требование 3) показывает значения — «последние задачи», не
@@ -960,6 +964,17 @@ def _test_author_html(steps: list) -> str:
                              f'{OPERATOR_WINDOW_DAYS} дней нет.</p>')
 
 
+def _explore_html(steps: list, now: datetime) -> str:
+    """Блок «Разведка ролей» из уже прочитанного журнала — без своего
+    запроса к БД; те же строки, что печатает `explore-stats`."""
+    roles = explore_metric.DEFAULT_ROLES
+    summary = explore_metric.summarize(steps, now, EXPLORE_WINDOW_DAYS, roles)
+    return "".join(
+        f'<div class="metric-row">{_esc(line)}</div>'
+        for line in explore_metric.render_lines(summary, roles,
+                                                EXPLORE_WINDOW_DAYS))
+
+
 def _observation_class(verdict: str) -> str:
     for label, marker in OBSERVATION_CLASSES:
         if marker in verdict:
@@ -1167,7 +1182,7 @@ _STYLE = """
 
 def _render(tasks: list, steps: list, alerts: list, total_spent: float,
            total_estimate: float, divergence: dict | None = None,
-           map_growth_html: str = "") -> str:
+           map_growth_html: str = "", *, now: datetime) -> str:
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ru">\n'
@@ -1196,6 +1211,9 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         f'<section class="panel"><h2>Шаги test_author (последние '
         f'{OPERATOR_WINDOW_DAYS} дней)</h2>'
         f'<div class="metrics">{_test_author_html(steps)}</div></section>\n'
+        f'<section class="panel"><h2>Разведка ролей (последние '
+        f'{EXPLORE_WINDOW_DAYS} дней)</h2>'
+        f'<div class="metrics">{_explore_html(steps, now)}</div></section>\n'
         '<section class="panel"><h2>Двусторонний прогон (наблюдение '
         'неослабления)</h2>'
         f"{_observation_html(steps)}</section>\n"
@@ -1239,7 +1257,7 @@ def cmd_report() -> None:
     map_growth_html = _map_growth_html(conn, tasks)
 
     doc = _render(tasks, steps, open_alerts_, total_spent, total_estimate,
-                 divergence, map_growth_html)
+                 divergence, map_growth_html, now=datetime.now(timezone.utc))
 
     path = config.ROOT / ".artel" / "report.html"
     path.parent.mkdir(parents=True, exist_ok=True)
