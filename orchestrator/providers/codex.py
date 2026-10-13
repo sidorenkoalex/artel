@@ -40,6 +40,7 @@ import re
 from pathlib import Path
 
 from .. import suite_lock
+from . import base
 from .base import (CliTool, EMPTY_EVENT, HomeReference, RoleExecutorProvider,
                    RunResult, StreamEvent, ToolCall, ToolResult)
 
@@ -303,10 +304,14 @@ USAGE_OUTPUT_KEY = "output_tokens"
 
 # Отметка вызова инструмента в логе шага: префикс строки и срез ключевого
 # аргумента. Символ и число повторяют `claude.py`, а не импортируются из
-# него: формат строки лога — провайдерское знание (докстринг `base.py`), а у
-# Claude оно вдобавок заморожено требованием «ни один символ строки лога не
-# меняется» (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ) — общий адрес превратил бы
-# любую правку вида строки Codex в правку поведения Claude.
+# него: символ строки и предел — у каждого провайдера свои, и общий адрес
+# превратил бы правку вида строки Codex в правку поведения Claude, чья
+# строка заморожена (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 2). Общее
+# у провайдеров — только короткая форма пути файла `wt:`/`docs:`
+# (`base.short_log_path`, задача 01M4RZB9287PXZ4Y7ZJG7HDR6Y): ей подлежит
+# `path`/`changes`, ставший ключевым аргументом строки, до обрезки; прочее
+# в строке прежнее.
+PATH_ARGUMENT_KEYS = ("path", "changes")
 TOOL_CALL_LINE_PREFIX = "· "
 TOOL_ARGUMENT_LIMIT = 100
 
@@ -712,8 +717,8 @@ class CodexProvider(RoleExecutorProvider):
         name = self._tool_name(item)
         argument = self._argument(item)
         call = ToolCall(item.get("id"), name, argument)
-        return StreamEvent(self._call_line(name, argument), None, (call,), (),
-                           None, None)
+        return StreamEvent(self._call_line(name, self._log_argument(item)),
+                           None, (call,), (), None, None)
 
     def _item_completed_event(self, event):
         """`item.completed`: результат вызова либо сказанный текст."""
@@ -846,6 +851,20 @@ class CodexProvider(RoleExecutorProvider):
         for key in ITEM_ARGUMENT_KEYS:
             value = item.get(key)
             if value:
+                return cls._text_of(value)
+        return ""
+
+    @classmethod
+    def _log_argument(cls, item):
+        """Ключевой аргумент для строки лога: тот же ключ, что у
+        `_argument`, но путь файла (`PATH_ARGUMENT_KEYS`) — в короткой
+        форме. Отдельная сериализация, а не правка `_argument`: тот даёт
+        `ToolCall.argument` — ключ метрики трения, который не меняется."""
+        for key in ITEM_ARGUMENT_KEYS:
+            value = item.get(key)
+            if value:
+                if key in PATH_ARGUMENT_KEYS:
+                    value = base.short_log_path(value)
                 return cls._text_of(value)
         return ""
 

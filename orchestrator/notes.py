@@ -46,7 +46,9 @@ merge-окна либо задача в состоянии из `config.NOTE_SIL
 `_commit_and_push` (`_target_rel`, `_commit_message`); пути `note` не
 меняются (требование 9). Допустимые пути — `docs/**` кроме
 `BACKLOG_REL` (для него `note`) и конфигурация Оператора
-`DOC_COMMIT_CONFIG_PATHS` (требование 3); сверка базы (требование 5) —
+`DOC_COMMIT_CONFIG_PATHS` (требование 3), плюс файл карточек знаний
+`knowledge/<имя>.yaml` с проверкой формы до `_run` (SPEC
+01M4S0JVB85W9TY1ESGNBH97FP, требование 12); сверка базы (требование 5) —
 blob-sha пути в свежем `origin/<MAIN_BRANCH>` против того же пути в
 `origin/<MAIN_BRANCH>` клона, каким клон знал его ДО fetch этой команды
 (`_known_origin_main`; до SPEC 01M42PENCS26D0656X8FR7DFA7 — `HEAD:<путь>`
@@ -111,7 +113,8 @@ import uuid
 from datetime import date
 from pathlib import Path, PurePosixPath
 
-from . import acceptance, config, gitcmd, merge_lock, runner, store, workspace
+from . import (acceptance, config, gitcmd, knowledge_cards, merge_lock,
+               runner, store, workspace)
 
 BACKLOG_REL = "docs/backlog.md"
 
@@ -684,14 +687,19 @@ def _doc_commit_path_refusal(rel: str) -> str | None:
         return None
     if normalized in DOC_COMMIT_CONFIG_PATHS:
         return None
+    if knowledge_cards.is_card_file(normalized):
+        return None
     return f"{normalized}: {DOC_COMMIT_FOREIGN_REFUSAL}"
 
 
 def _doc_commit_prefix(rel: str) -> str:
-    """`docs` для `docs/**`, `config` для конфигурации Оператора
-    (требование 6). Зовётся только для путей, прошедших
-    `_doc_commit_path_refusal`."""
-    return "docs" if PurePosixPath(rel).parts[0] == "docs" else "config"
+    """`docs` для `docs/**`, `knowledge` для файла карточек знаний,
+    `config` для конфигурации Оператора (требование 6). Зовётся только для
+    путей, прошедших `_doc_commit_path_refusal`."""
+    head = PurePosixPath(rel).parts[0]
+    if head in ("docs", "knowledge"):
+        return head
+    return "config"
 
 
 def _blob_sha(repo: Path, revision_path: str) -> str | None:
@@ -1495,7 +1503,21 @@ def _doc_commit_request(rel: str, content: str, message: str,
                         accept_red: str | None = None) -> str | None:
     """Запись `doc-commit` уже проверенного пути — в `_run` (окно тишины,
     удержание, гейт полного набора) и строка итога. Общий хвост
-    `cmd_doc_commit` и `doc_commit_content`."""
+    `cmd_doc_commit` и `doc_commit_content`.
+
+    Файл карточек знаний `knowledge/<имя>.yaml` проверяется по форме
+    здесь, до `_run` (SPEC 01M4S0JVB85W9TY1ESGNBH97FP, требование 12): в
+    `_build_doc_commit` проверка не встала бы на ветке отказа `fetch` —
+    там запись удерживается без сборки, и неверный файл ушёл бы в origin
+    следующим флашем."""
+    if knowledge_cards.is_card_file(rel):
+        kind = (knowledge_cards.SYSTEM
+                if rel == config.KNOWLEDGE_CARD_SYSTEM_REL
+                else knowledge_cards.PROJECT)
+        checked = knowledge_cards.check_text(content, rel, kind)
+        if isinstance(checked, knowledge_cards.Refusal):
+            sys.exit(f"карточки не по форме, коммита нет: "
+                     f"{knowledge_cards.refusal_text(checked)}")
     request = {"kind": DOC_COMMIT_KIND, "path": rel, "content": content,
                "message": message}
     if accept_red is not None:

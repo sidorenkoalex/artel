@@ -10,6 +10,9 @@
 #   no_paths        пути целевого, которые задачам трогать нельзя
 #   project_skills  курируемый список проектных скилов (ADR-0003 3з)
 #   merge_gate      operator | target-human — кто исполняет гейт мержа (п.7)
+#   knowledge       необязательно: файл проектных карточек знаний — у artel
+#                   knowledge/<имя>.yaml, у внешнего проекта
+#                   .artel/projects/<имя>/knowledge/<имя>.yaml
 #
 # Каталог target'а (.artel/projects/<имя>/) заводит команда
 #   python3 orchestrator/artel.py target-init <имя>
@@ -30,9 +33,10 @@ targets:
     # совпадение держит сторож tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py.
     # Зеркало внесено в main вперёд кода задачи 01M45FK56DWMNBRKA1VWM12H19
     # (решение Оператора 06.10, коммит 09256315).
-    no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini]
+    no_paths: [gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml, models.yaml, model_sets.yaml, **/conftest.py, pyproject.toml, pytest.ini, setup.cfg, tox.ini, knowledge/]
     project_skills: []
     merge_gate: operator
+    knowledge: knowledge/artel.yaml
     test_profile:
       command: [python3, -m, pytest]
       long_lived_dir: tests

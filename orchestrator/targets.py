@@ -13,6 +13,8 @@
 targets.yaml» — свойство файла, и узнать о сломанной записи лучше
 на первом же чтении, чем на подключении того проекта через месяц.
 """
+import re
+
 from . import config, yamlmini
 
 FORGES = ("github", "gitlab")
@@ -50,6 +52,12 @@ PROFILE_FIELDS = {
 # исполняются — их отсутствие поведения пульта не меняет.
 PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec")
 PROFILE_REPORTS = ("junit-xml",)
+
+# Файл проектных карточек знаний — необязательное поле записи (SPEC
+# 01M4S0JVB85W9TY1ESGNBH97FP, требование 6); читает его
+# `knowledge_cards.read_cards`. Имя файла — один уровень каталога знаний.
+KNOWLEDGE_FIELD = "knowledge"
+KNOWLEDGE_FILE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.yaml")
 
 
 class TargetsError(Exception):
@@ -115,6 +123,37 @@ def check(name: str, entry: object) -> None:
                            f"ожидается {' | '.join(MERGE_GATES)}")
     if PROFILE_FIELD in entry:
         _check_profile(where, entry[PROFILE_FIELD])
+    if KNOWLEDGE_FIELD in entry:
+        reason = _knowledge_error(name, entry[KNOWLEDGE_FIELD])
+        if reason:
+            raise TargetsError(f"{where}: поле '{KNOWLEDGE_FIELD}' — {reason}")
+
+
+def _knowledge_error(name: str, value: object) -> str:
+    """Причина, по которой путь файла проектных карточек не годен; пусто —
+    годен. Форма точная: у артели — `knowledge/<имя>.yaml` (не системный
+    файл), у внешнего проекта — каталог знаний ЭТОГО проекта в области
+    пульта: не клон `repo/` (репозиторий целевого недоверенный), не кэш
+    `derived/`, не каталог другого проекта."""
+    if not isinstance(value, str):
+        return "не строка"
+    if ".." in value.split("/") or "//" in value or "\\" in value:
+        return f"'{value}' — путь с '..', '//' или обратной косой чертой"
+    if value.startswith("./"):
+        return f"'{value}' — путь с префиксом './'"
+    if not value.endswith(".yaml"):
+        return f"'{value}' — нет суффикса '.yaml'"
+    if name == config.DEFAULT_TARGET:
+        expected = "knowledge/<имя>.yaml (не системный файл)"
+        head, _, file_name = value.partition("/")
+        ok = (head == "knowledge" and KNOWLEDGE_FILE_NAME.fullmatch(file_name)
+              and value != config.KNOWLEDGE_CARD_SYSTEM_REL)
+    else:
+        expected = f".artel/projects/{name}/knowledge/<имя>.yaml"
+        prefix = f".artel/projects/{name}/knowledge/"
+        ok = (value.startswith(prefix)
+              and KNOWLEDGE_FILE_NAME.fullmatch(value[len(prefix):]))
+    return "" if ok else f"'{value}', ожидается ровно {expected}"
 
 
 def _check_profile(where: str, profile: object) -> None:
