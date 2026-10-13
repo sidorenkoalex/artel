@@ -972,3 +972,17 @@ KNOWLEDGE_CARD_OUTPUT_MAX = 12
 KNOWLEDGE_CARD_HINT_MAX_KEYS = 40
 KNOWLEDGE_CARD_JOURNAL_MAX_PER_TASK = 200
 KNOWLEDGE_CARD_STALE_FILE_MAX_BYTES = 2 * 1024 * 1024
+
+# Справочник ядра (SPEC 01M4S24963R9H18AN2XDP6R15B, К-3а; ADR-0003 п.3а,
+# п.3б): порог использования функции/класса в других файлах коммита и
+# пределы пакетного чтения коммита — лимиты класса ADR-0002. Генератор
+# `scripts/core_reference.py` пульт не импортирует в обратную сторону:
+# порог и пределы ему передаёт `orchestrator/reference_cache.py`, а
+# умолчание `--min-uses` командной строки генератора повторяет MIN_USES.
+# Срок — общий на оба вызова git и разбор одной сборки.
+CORE_REFERENCE_MIN_USES = 3
+CORE_REFERENCE_MAX_FILES = 2000
+CORE_REFERENCE_MAX_SOURCE_BYTES = 32 * 1024 * 1024
+CORE_REFERENCE_MAX_BLOB_BYTES = 1 * 1024 * 1024
+CORE_REFERENCE_MAX_LISTING_BYTES = 64 * 1024 * 1024
+CORE_REFERENCE_GIT_TIMEOUT_SEC = 60
