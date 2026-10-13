@@ -212,6 +212,12 @@ class FreshMapTextTest(BriefUnitTest):
 class DeveloperBriefTest(BriefUnitTest):
 
     def test_assembles_three_components_and_journals_their_hashes(self):
+        """Три компонента developer и запись шаблона PLAN — четыре записи журнала.
+
+        Ловит мутацию: developer_brief перестал читать templates/PLAN.md
+        (нет ни компонента, ни записи «не прочитан») или пропустил запись
+        одного из прежних компонентов — записей не 4, тест покраснеет.
+        """
         conn = store.db()
         with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.developer_brief(conn, "T001")
@@ -252,6 +258,12 @@ class DeveloperBriefStaleMapManifestTest(BriefUnitTest):
 class AnalystMapComponentTest(BriefUnitTest):
 
     def test_adds_only_the_map_and_journals_one_hash(self):
+        """Карта первой записью и по записи на SPEC и QUESTIONS — три записи.
+
+        Ловит мутацию: analyst_map_component читает только один из двух
+        шаблонов (SPEC без QUESTIONS или наоборот) или ставит шаблон перед
+        картой — записей не 3 или первая не карта, тест покраснеет.
+        """
         conn = store.db()
         with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.analyst_map_component(conn, "T001")
