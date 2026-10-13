@@ -1899,6 +1899,30 @@ def is_task_passport(path: Path) -> bool:
     проверяется как прежде (требование 2, AC-7)."""
     return path.name == TASK_PASSPORT_NAME and path.parent.parent.name == "tasks"
 
+
+# Записка шага `NOTE-<роль>.md` (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4, требования
+# 1-2): свободный текст роли следующему шагу, по одному файлу на роль. Один
+# перечень на guard, бриф, миссию и автокоммит — роли `roles.yaml` с
+# `executor: agent`.
+STEP_NOTE_ROLES = ("analyst", "spec_auditor", "test_author", "developer",
+                   "reviewer")
+STEP_NOTE_NAMES = tuple(f"NOTE-{role}.md" for role in STEP_NOTE_ROLES)
+STEP_NOTE_SKIP_NOTE = "записка шага, свободный текст роли — пропущена"
+
+
+def step_note_name(role: str) -> str:
+    """Имя записки шага роли `role` в каталоге задачи."""
+    return f"NOTE-{role}.md"
+
+
+def is_step_note(path: Path) -> bool:
+    """`True` — `path` есть записка шага: имя из `STEP_NOTE_NAMES` первым
+    уровнем каталога задачи (тот же признак уровня, что `is_task_passport`).
+    Записка в подкаталоге или в `acceptance_tests/` запиской не считается и
+    проверяется как прежде (требование 2, AC-3)."""
+    path = Path(path)
+    return path.name in STEP_NOTE_NAMES and path.parent.parent.name == "tasks"
+
 # Имя помощника пульта рядом с планкой (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
 # требования 3-5; источник — `orchestrator/plank_helper.py`, выкладка —
 # `acceptance.PLANK_HELPER_NAME`). Под `_*.py` подходит, но планке не
@@ -1998,9 +2022,14 @@ EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в ката�
 # SPEC-AUDIT.md — вердикт аудитора SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
 # требование 9): ровно это имя, не маска — соседние имена остаются
 # посторонними.
+# Записки шага (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4, требование 1) — точные имена
+# из `STEP_NOTE_ROLES`, не маска `NOTE-.*`: `NOTE.md` и `NOTE-<не роль>.md`
+# остаются посторонними.
 TASK_ROOT_ALLOWED_MD = re.compile(
     r"^(SPEC|SPEC-AUDIT|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|PASSPORT|"
-    r"ANSWER-\d+)\.md$")
+    r"ANSWER-\d+|"
+    + "|".join(re.escape(name[:-len(".md")]) for name in STEP_NOTE_NAMES)
+    + r")\.md$")
 
 
 def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
@@ -4400,7 +4429,8 @@ def main() -> int:
         task_root_extraneous = scan_extraneous_task_root_files(Path("tasks"))
         extraneous_set = set(extraneous) | set(task_root_extraneous)
         files = [f for f in files
-                 if f not in extraneous_set and not is_task_passport(f)]
+                 if f not in extraneous_set and not is_task_passport(f)
+                 and not is_step_note(f)]
         extraneous_errors = (
             [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}" for f in extraneous]
             + [f"{f}: {EXTRANEOUS_TASK_ROOT_FILE_REASON}"
@@ -4441,6 +4471,9 @@ def main() -> int:
             continue
         if is_task_passport(f):
             print(f"{f}: {PASSPORT_SKIP_NOTE}")
+            continue
+        if is_step_note(f):
+            print(f"{f}: {STEP_NOTE_SKIP_NOTE}")
             continue
         all_errors.extend(check(f))
         if args != ["--all"]:

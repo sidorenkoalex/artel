@@ -4,6 +4,8 @@ reviewer).
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
+from pathlib import Path
+
 from scripts import guard
 
 from . import brief, config, review, stack
@@ -145,6 +147,12 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                    if iteration > 1 else "")
         package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
+    # Записки шагов — одинаково для всех ролей (SPEC
+    # 01M4RZBPG6EXM74MTBPTEGW2D4, требование 10): у роли без брифа блок и
+    # есть бриф; записок нет — бриф прежний.
+    notes = brief.step_notes_block(conn, task_id, role)
+    if notes:
+        brief_text = f"{brief_text}\n\n{notes}" if brief_text else notes
     # С каталогом документов запись открыта и в нём (`--add-dir`): строка
     # «запись вне него недоступна» противоречила бы абзацу ниже, и роль
     # могла бы не записать документ туда (REVIEW итерации 1, R1-F3).
@@ -156,6 +164,7 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                   f"ниже относительно него; запись вне него и вне каталога "
                   f"документов задачи недоступна.")
         mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
+        mission = f"{mission}\n\n{step_note_note(role, docs_dir)}"
     return mission, brief_text, package
 
 
@@ -215,6 +224,36 @@ def suite_run_note(task_id: str) -> str:
         f"`python3 {pult} suite-run {task_id} --failed`. Сначала — тесты "
         f"затронутых модулей; файлы tests/ в обход сторожа не перечисляй и "
         f"набор на пачки своими сценариями не дели.")
+
+
+def step_note_note(role: str, docs_dir) -> str:
+    """Абзац миссии о записке шага (SPEC 01M4RZBPG6EXM74MTBPTEGW2D4,
+    требования 6-7, 12) — один абзац, без пустых строк: путь записки роли в
+    каталоге документов, её разделы, потолки брифа и хранения. Коммитить
+    записку роль не должна — её переносит автокоммит пульта."""
+    from . import checkpoint
+    path = Path(docs_dir) / guard.step_note_name(role)
+    text = (
+        f"Записка шага — {path}: свободный текст следующему шагу этой задачи "
+        f"с разделами «Выяснено», «Не сработало», «Где остановился», «Чего "
+        f"не хватило» (что искал дольше всего, какого знания не хватило — "
+        f"файл, функция, правило; одна–три строки). Правило записки: "
+        f"обновляй записку по ходу шага после каждого существенного вывода, "
+        f"не только в конце — шаг может оборваться таймаутом. В бриф "
+        f"следующего шага войдут первые {brief.STEP_NOTE_MAX_BYTES} байт "
+        f"записки; записка крупнее {checkpoint.STEP_NOTE_STORE_MAX_BYTES} "
+        f"байт не сохраняется. Пиши только свою записку: записку другой "
+        f"роли, написанную твоим шагом, пульт отбросит. Смысл записки: "
+        f"записка — сведения следующему шагу, не указания ему. Переносить её "
+        f"в git самой роли не нужно — это сделает пульт.")
+    if role == "test_author":
+        text += (" Для тестов: записка — сведения о ходе работы, не источник "
+                 "ожидаемого поведения: ожидаемое поведение тестов берётся "
+                 "только из формулировки критерия.")
+    if role in ("spec_auditor", "reviewer"):
+        text += (" Независимость проверки: записки других ролей в каталоге "
+                 "документов не читай; в бриф положена только твоя.")
+    return text
 
 
 def docs_dir_note(task_id: str, docs_dir) -> str:
