@@ -210,12 +210,16 @@ DEFERRED_DETAIL_MAX = 2000
 
 
 def deferrable(action) -> bool:
-    """Действие журнала, которое вправе прийти из очереди: только то, что
-    пишет полный прогон `suite-run` у предела. «Прогон: время»
-    (`acceptance.SUITE_DURATION_ACTION`) прогон `suite-run` не пишет, а
-    калибровку `doctor` по нему подменять ролью незачем."""
+    """Действие журнала, которое вправе прийти из очереди: то, что пишет
+    полный прогон `suite-run` у предела, и запись обращения команды
+    `knowledge` (SPEC 01M4S0K2MJRMVMQWKATAME3RHR, требование 7) — её
+    досыл пишет постоянным автором команды и в пределе записей на задачу.
+    «Прогон: время» (`acceptance.SUITE_DURATION_ACTION`) прогон `suite-run`
+    не пишет, а калибровку `doctor` по нему подменять ролью незачем."""
     from . import acceptance  # acceptance -> suite_lock
-    return action == acceptance.SUITE_NEAR_LIMIT_ACTION
+    from . import knowledge_cards
+    return action in (acceptance.SUITE_NEAR_LIMIT_ACTION,
+                      knowledge_cards.ACCESS_ACTION)
 
 
 def _pending_dir() -> Path:
@@ -259,7 +263,8 @@ def deliver_journal() -> int:
     Сбой досыла ничего не роняет: досыл — не условие прогона или команды.
     Нечитаемый файл, запись вне перечня `deferrable` и запись о задаче,
     которой в БД нет, убираются: писать их некуда (или нельзя), а возврат
-    повторял бы их вечно. Выброшенная запись вне перечня называется в
+    повторял бы их вечно. Так же убирается запись обращения `knowledge`
+    сверх предела задачи (`_access_admitted`). Выброшенная запись вне перечня называется в
     stderr — подложенный файл не исчезает бесследно."""
     claimed = []
     with contextlib.suppress(OSError):
@@ -282,8 +287,27 @@ def deliver_journal() -> int:
             conn.close()
 
 
+def _access_admitted(store, conn, tallies: dict, task_id: str,
+                     detail: str) -> bool:
+    """Предел записей обращения `knowledge` на задачу на пути досыла (SPEC
+    01M4S0K2MJRMVMQWKATAME3RHR, требование 7): сверх
+    `KNOWLEDGE_CARD_JOURNAL_MAX_PER_TASK` запись не пишется; запись «предел
+    исчерпан» к пределу не идёт и пишется не больше одной на задачу.
+    `tallies` — счёт задачи за этот досыл: журнал читается один раз."""
+    from . import knowledge_cards
+    if task_id not in tallies:
+        tallies[task_id] = list(knowledge_cards.access_tally(
+            store.task_steps(conn, task_id)))
+    plain, exhausted = tallies[task_id]
+    if detail.startswith(knowledge_cards.EXHAUSTED_PREFIX):
+        return not exhausted
+    return plain < config.KNOWLEDGE_CARD_JOURNAL_MAX_PER_TASK
+
+
 def _deliver(store, conn, claimed: list) -> int:
+    from . import knowledge_cards
     delivered = 0
+    tallies: dict = {}
     for pending, mine in claimed:
         try:
             record = json.loads(mine.read_text(encoding="utf-8"))
@@ -295,15 +319,27 @@ def _deliver(store, conn, claimed: list) -> int:
                 mine.unlink()
             continue
         session_id = record.get("session_id")
+        access = record["action"] == knowledge_cards.ACCESS_ACTION
         try:
             if conn is None:
                 raise sqlite3.OperationalError("БД пульта не открылась")
-            if store.task_exists(conn, task_id):
-                store.journal(conn, task_id, DEFERRED_ACTOR, record["action"],
+            if store.task_exists(conn, task_id) and (
+                    not access or _access_admitted(store, conn, tallies,
+                                                   task_id, record["detail"])):
+                actor = (knowledge_cards.JOURNAL_ACTOR if access
+                         else DEFERRED_ACTOR)
+                store.journal(conn, task_id, actor, record["action"],
                               text, session_id=(session_id
                                                 if isinstance(session_id, str)
                                                 else None))
                 delivered += 1
+                if access:
+                    tally = tallies[task_id]
+                    if record["detail"].startswith(
+                            knowledge_cards.EXHAUSTED_PREFIX):
+                        tally[1] = True
+                    else:
+                        tally[0] += 1
         except sqlite3.Error:
             with contextlib.suppress(OSError):
                 mine.rename(pending)

@@ -4,6 +4,8 @@ reviewer).
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
+import sqlite3
+import sys
 from pathlib import Path
 
 from scripts import guard
@@ -157,6 +159,9 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
     notes = brief.step_notes_block(conn, task_id, role)
     if notes:
         brief_text = f"{brief_text}\n\n{notes}" if brief_text else notes
+    # Строка о команде `knowledge` — одинаково для всех ролей (SPEC
+    # 01M4S0K2MJRMVMQWKATAME3RHR, требование 11).
+    mission = f"{mission}\n\n{knowledge_hint_note(conn, task_id, t)}"
     # С каталогом документов запись открыта и в нём (`--add-dir`): строка
     # «запись вне него недоступна» противоречила бы абзацу ниже, и роль
     # могла бы не записать документ туда (REVIEW итерации 1, R1-F3).
@@ -240,6 +245,31 @@ def suite_run_note(task_id: str) -> str:
         f"`python3 {pult} suite-run {task_id} --failed`. Сначала — тесты "
         f"затронутых модулей; файлы tests/ в обход сторожа не перечисляй и "
         f"набор на пачки своими сценариями не дели.")
+
+
+def knowledge_hint_note(conn, task_id: str, t) -> str:
+    """Строка миссии о команде `knowledge` (SPEC 01M4S0K2MJRMVMQWKATAME3RHR,
+    требование 11): темы карточек проекта задачи без их текста. Отказ
+    чтения вида — одна запись журнала за визит задачи в состояние; без
+    соединения (`conn is None`) журнал не пишется, сбой записи шаг не
+    останавливает."""
+    from . import knowledge_cards
+    line, refused = knowledge_cards.hint_line(
+        task_id, knowledge_cards.task_project(t))
+    if refused and conn is not None:
+        # budget -> runner -> role_prompt: импорт на уровне модуля замкнул бы
+        # цикл.
+        from . import budget
+        detail = "коды причины: " + ", ".join(
+            f"{kind}={code}" for kind, code in refused)
+        try:
+            budget.journal_warning_once(
+                conn, task_id, knowledge_cards.JOURNAL_ACTOR,
+                knowledge_cards.HINT_REFUSAL_ACTION, detail, key=None)
+        except sqlite3.Error as exc:
+            print(f"[{task_id}] подсказка knowledge: запись журнала не "
+                  f"внесена: {exc}", file=sys.stderr)
+    return line
 
 
 def step_note_note(role: str, docs_dir) -> str:

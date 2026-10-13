@@ -173,6 +173,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   artifact-history-snapshots [--dry-run] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
+  knowledge <id> <путь>[::<символ>]|::<символ> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
@@ -611,6 +612,9 @@ origin main или отставание ветки не определены; п
   preflight команда `preflight <id>`: предпроверка выхода из tests_writing
             по черновику test_author теми же ядрами guard, что переход;
             только чтение (SPEC 01M4P4ZP37WV81410YTZHKQC8D)
+  knowledge_cards команда `knowledge <id> <запрос>`: карточки знаний по
+            месту с пометкой свежести; только чтение, кроме одной записи
+            журнала обращения (SPEC 01M4S0K2MJRMVMQWKATAME3RHR)
   docs_fetch команда `docs <id> [файл]`/`docs --fetch-all`: ссылка
             документов задачи из origin её репозитория, только вперёд
             (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ)
@@ -741,8 +745,8 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           budget, canary, catalog, ci_rerun, cleanup, doctor,
-                          docs_fetch, dry_run, explore_metric, fsm, lease,
-                          liveness, models, notes, pause, pin, plank_run,
+                          docs_fetch, dry_run, explore_metric, fsm,
+                          knowledge_cards, lease, liveness, models, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
@@ -1834,20 +1838,26 @@ def _cmd_pause(rest: list) -> None:
     pause.cmd_pause(rest[0])
 
 
-#: Команды, которые процесс роли исполняет в любой форме: только чтение
-#: (SPEC 01M3XTF5506GF43HD51ECE230T, требование 5). Формы остальных
+#: Команды, которые процесс роли исполняет в любой форме: только чтение,
+#: кроме досыла очереди журнала у `suite-run` и одной записи журнала
+#: команды `knowledge` (SPEC 01M3XTF5506GF43HD51ECE230T, требование 5;
+#: SPEC 01M4S0K2MJRMVMQWKATAME3RHR, требование 12). Формы остальных
 #: читающих команд разбирает `_role_allowed_command`. `plank-run` пишет
 #: только временную выкладку `tasks/<id>/` рабочей копии кода и сам её
 #: убирает — состояния пульта не меняет (SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
-#: требование 2). `suite-run` пишет только в каталог логов пульта (лог,
-#: перечень упавших, итог базы, состояние прогона и замок) — состояния
-#: задачи, lease и журнала не трогает (SPEC 01M462QACEH29RPRD2RZHGHQFM,
-#: требование 14). `preflight` только читает: БД — `mode=ro`, без lease,
-#: журнала, коммитов и выкладки планки (SPEC 01M4P4ZP37WV81410YTZHKQC8D,
-#: требования 7, 9, 10).
+#: требование 2). `suite-run` пишет в каталог логов пульта (лог, перечень
+#: упавших, итог базы, состояние прогона и замок) и досылает очередь
+#: отложенных записей журнала (`suite_lock.deliver_journal`); состояния
+#: задачи и lease не меняет (SPEC 01M462QACEH29RPRD2RZHGHQFM, требование
+#: 14). `preflight` только читает: БД — `mode=ro`, без lease, записей,
+#: коммитов и выкладки планки (SPEC 01M4P4ZP37WV81410YTZHKQC8D,
+#: требования 7, 9, 10). `knowledge` читает БД `mode=ro` и пишет одну
+#: запись обращения постоянным автором `knowledge_cards.JOURNAL_ACTOR`,
+#: которому не доверяет ни один читатель журнала.
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
-     "acceptance-dry-run", "plank-run", "suite-run", "preflight"))
+     "acceptance-dry-run", "plank-run", "suite-run", "preflight",
+     "knowledge"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -1973,6 +1983,7 @@ def main() -> None:
             rest[0], rest[1] if len(rest) > 1 else None),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
         "preflight": lambda: preflight.cmd_preflight(rest[0]),
+        "knowledge": lambda: knowledge_cards.cmd_knowledge(rest),
         # `docs` и `artifact-branches-cleanup` ходят в сеть и переписывают
         # локальные ссылки — вне белого списка ролей.
         "docs": lambda: docs_fetch.cmd_docs(rest),

@@ -4,8 +4,8 @@
 from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint,
-                cycle_hint, fixation, github_adapter, gitcmd, repo_context,
-                store, workspace)
+                cycle_hint, fixation, github_adapter, gitcmd, knowledge_cards,
+                repo_context, store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
 from .refusal_classes import LONG_LIVED_GIT_REFUSAL_ACTION
@@ -178,6 +178,13 @@ def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | N
     записи планки и гейт молчал бы всегда, даже когда отброшенные файлы
     реально остались последней содержательной записью визита.
 
+    Так же исключаются записи автора `knowledge_cards.JOURNAL_ACTOR` с
+    действием обращения или отказа подсказки (SPEC
+    01M4S0K2MJRMVMQWKATAME3RHR, требование 8): команда роли `knowledge` и
+    сборка миссии пишут их в любой момент визита, досыл очереди — и
+    позже; без исключения такая запись заслонила бы маркер. Запись этого
+    автора с любым другим действием сравнивается как обычно.
+
     Зарезервированное имя помощника пульта (SPEC 01M44EP4Q927DJXVX9YMMZ0B7V,
     требование 5): `_pult.py` первого уровня планки в ссылке документов
     отклоняет выход своим действием; тот же файл черновика автокоммит
@@ -186,7 +193,12 @@ def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | N
     reserved = _reserved_plank_helper_refusal(task_id)
     if reserved is not None:
         return reserved
-    rows = [r for r in store.task_steps(conn, task_id) if r["actor"] != "lease"]
+    knowledge_actions = (knowledge_cards.ACCESS_ACTION,
+                         knowledge_cards.HINT_REFUSAL_ACTION)
+    rows = [r for r in store.task_steps(conn, task_id)
+            if r["actor"] != "lease"
+            and not (r["actor"] == knowledge_cards.JOURNAL_ACTOR
+                     and r["action"] in knowledge_actions)]
     marker = "state -> tests_writing"
     since = 0
     for i, row in enumerate(rows):
