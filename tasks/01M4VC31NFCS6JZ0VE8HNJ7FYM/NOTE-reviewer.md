@@ -1,12 +1,12 @@
 ## Выяснено
-- Итерация 1: changes_requested, одно major — R1-F1: связку `_run_one_task` → колонка `escalation_roles` держит только разовая планка. Мутация `escalation_roles=None` в `canary.py:2633` выжила в 6 файлах tests/ (172 passed).
-- Логика `escalation_roles`, `_escalation_roles_of`/`_excess_escalation_role`, миграция — без замечаний; планка 3 passed; карта свежая.
+- Итерация 1: changes_requested, R1-F1 — у связки `_run_one_task` → колонка `escalation_roles` не было сторожа в tests/.
+- Итерация 2: approved. R1-F1 → accepted. Новый `RunOneTaskRecordsEscalationRolesTest` краснеет на мутации `escalation_roles=None` (`canary.py:2633`). Планка — 3 passed, затронутые модули — 46 passed, карта свежая.
 
 ## Не сработало
-- `pytest tests/ -k …` блокирует сторож роли как полный прогон — нужно перечислять файлы.
+- `pytest tests/ -k …` сторож роли блокирует как полный прогон — файлы нужно перечислять.
 
 ## Где остановился
-- REVIEW.md записан. Следующей итерации: проверить новый тест в tests/ той же мутацией.
+- REVIEW.md итерации 2 записан со статусом approved.
 
 ## Чего не хватило
-- Ничего существенного.
+- Ничего.
