@@ -1051,7 +1051,8 @@ MODEL_SETS_HEADER = """\
 # canary_templates:  <title прогона канарейки>: быстрый | средний | трудный
 """
 
-ADMIT_USAGE = ('admit [--revoke] <роль> <модель> --basis "<основание: '
+ADMIT_USAGE = ('admit [--revoke] [--set <имя>] <роль> <модель> '
+               '[<роль> <модель> ...] --basis "<основание: '
                'прогоны канарейки или документ замера>"')
 
 
@@ -1866,20 +1867,49 @@ def _parse_admit_args(argv: list):
     parser = _Parser(prog="admit", add_help=False)
     parser.add_argument("--revoke", action="store_true")
     parser.add_argument("--basis")
-    parser.add_argument("role")
-    parser.add_argument("model")
-    return parser.parse_args(argv)
+    parser.add_argument("--set", dest="set_name")
+    parser.add_argument("pairs", nargs="*")
+    # Флаги допустимы и между парами: позиционные собираются в один список.
+    args = parser.parse_intermixed_args(argv)
+    if not args.pairs or len(args.pairs) % 2:
+        parser.error("нужны пары «<роль> <модель>»: число позиционных "
+                     f"аргументов {len(args.pairs)}")
+    args.pairs = list(zip(args.pairs[::2], args.pairs[1::2]))
+    return args
+
+
+def _pairs_text(pairs: list) -> str:
+    return ", ".join(f"{role} → {model}" for role, model in pairs)
+
+
+def _set_refusal(conn, document: dict, set_name: str) -> str | None:
+    """Почему набор `set_name` документа `document` после записи `admit`
+    несёт недопущенную пару; `None` — все пары допущены. Правило — пункт
+    (а) `set_admitted` по документу в памяти (до записи файла)."""
+    for role, model in document[SETS_KEY][set_name].items():
+        if model == _combat_model(role):
+            continue
+        refusal = (_pair_refusal(document, role, model)
+                   or pair_suspension_refusal(conn, role, model))
+        if refusal is not None:
+            return refusal
+    return None
 
 
 def cmd_admit(argv: list) -> None:
-    """`admit <роль> <модель> --basis <текст>` — допуск пары по числам
-    ADR-0019 п.5; `admit --revoke …` — снятие (требование 3).
+    """`admit <роль> <модель> [<роль> <модель> ...] --basis <текст>` —
+    допуск пар по числам ADR-0019 п.5; `admit --revoke …` — снятие
+    (требование 3); `--set <имя>` — тем же вызовом записать модели пар в
+    набор `sets.<имя>` (SPEC 01M4VKZR1VE6KS2HECJ05ABCYR).
 
-    Выдача печатает сводку прогонов пары; недобор — отказ с перечнем
-    недостающего до любой записи: файл и HEAD не трогаются, флага вопреки
-    недобору нет. Снятие чисел не сверяет. Запись — изолированный коммит
-    механизмом `doc-commit` (`notes.doc_commit_content`: окно тишины,
-    удержание, гейт полного набора на пути конфигурации).
+    Выдача печатает сводку прогонов каждой пары; недобор хотя бы одной —
+    отказ с перечнем недостающего по каждой недобравшей паре до любой
+    записи: файл и HEAD не трогаются, флага вопреки недобору нет. Снятие
+    чисел не сверяет. С `--set` набор после записи сверяется правилом (а)
+    `set_admitted`: недопущенная пара — отказ без записи. Запись — один
+    изолированный коммит на весь вызов механизмом `doc-commit`
+    (`notes.doc_commit_content`: окно тишины, удержание, гейт полного
+    набора на пути конфигурации).
     """
     from datetime import date
 
@@ -1889,12 +1919,23 @@ def cmd_admit(argv: list) -> None:
     if not basis:
         sys.exit(f"admit: --basis обязателен — основание решения входит в "
                  f"запись пары\n{ADMIT_USAGE}")
+    if args.set_name is not None:
+        named = [role for role, _ in args.pairs]
+        twice = sorted({role for role in named if named.count(role) > 1})
+        if twice:
+            sys.exit(f"admit: --set {args.set_name}: роль названа больше "
+                     f"одного раза ({', '.join(twice)}) — набор отображает "
+                     f"роль в одну модель\n{config.MODEL_SETS_REL} не изменён")
+    for role, model in args.pairs:
+        try:
+            roles.model_tier(role)
+        except roles.RolesError as exc:
+            sys.exit(f"admit: роль {role}: {exc}")
+        try:
+            catalog_model(model)
+        except ModelsError as exc:
+            sys.exit(f"admit: {exc}")
     try:
-        roles.model_tier(args.role)
-    except roles.RolesError as exc:
-        sys.exit(f"admit: роль {args.role}: {exc}")
-    try:
-        catalog_model(args.model)
         document = load_model_sets()
     except ModelsError as exc:
         sys.exit(f"admit: {exc}")
@@ -1902,28 +1943,55 @@ def cmd_admit(argv: list) -> None:
     if args.revoke:
         state, action = PAIR_SUSPENDED, "снятие допуска"
     else:
-        lines, missing = pair_admission(store.db(), args.role, args.model,
-                                        document)
-        print("\n".join(lines))
-        if missing:
+        shortfall = []
+        for role, model in args.pairs:
+            lines, missing = pair_admission(store.db(), role, model, document)
+            print("\n".join(lines))
+            if missing:
+                shortfall.append(((role, model), missing))
+        if len(args.pairs) == 1 and shortfall:
             sys.exit("admit: допуск пары не выдан — недостаёт:\n"
-                     + "\n".join(f"  - {item}" for item in missing)
+                     + "\n".join(f"  - {item}" for item in shortfall[0][1])
+                     + f"\n{config.MODEL_SETS_REL} не изменён")
+        if shortfall:
+            sys.exit("admit: допуск пар не выдан — недостаёт:\n"
+                     + "\n".join(
+                         f"  пара {role} → {model}:\n"
+                         + "\n".join(f"    - {item}" for item in missing)
+                         for (role, model), missing in shortfall)
                      + f"\n{config.MODEL_SETS_REL} не изменён")
         state, action = PAIR_ADMITTED, "допуск"
 
     pairs = document[PAIRS_KEY]
-    if not isinstance(pairs.get(args.role), dict):
-        pairs[args.role] = {}
-    pairs[args.role][args.model] = {PAIR_DATE_KEY: date.today().isoformat(),
-                                    PAIR_BASIS_KEY: basis,
-                                    PAIR_STATE_KEY: state}
+    for role, model in args.pairs:
+        if not isinstance(pairs.get(role), dict):
+            pairs[role] = {}
+        pairs[role][model] = {PAIR_DATE_KEY: date.today().isoformat(),
+                              PAIR_BASIS_KEY: basis,
+                              PAIR_STATE_KEY: state}
+    if args.set_name is not None:
+        sets = document[SETS_KEY]
+        if not isinstance(sets.get(args.set_name), dict):
+            sets[args.set_name] = {}
+        sets[args.set_name].update(dict(args.pairs))
+        refusal = _set_refusal(store.db(), document, args.set_name)
+        if refusal is not None:
+            sys.exit(f"admit: набор {args.set_name} после записи не допущен: "
+                     f"{refusal}\n{config.MODEL_SETS_REL} не изменён")
     try:
         current = model_sets_path().read_text(encoding="utf-8")
         text = render_model_sets(
             document, _leading_comments(current) or MODEL_SETS_HEADER)
     except (OSError, UnicodeDecodeError, ModelsError) as exc:
         sys.exit(f"admit: {exc}")
-    print(f"{action} пары {args.role} → {args.model}: state: {state}")
-    notes.doc_commit_content(
-        config.MODEL_SETS_REL, text,
-        f"{action} пары {args.role} → {args.model}: {basis}")
+    for role, model in args.pairs:
+        print(f"{action} пары {role} → {model}: state: {state}")
+    subject = (f"{action} пары" if len(args.pairs) == 1
+               else f"{action} пар")
+    subject += f" {_pairs_text(args.pairs)}"
+    if args.set_name is not None:
+        print(f"набор {args.set_name}: "
+              f"{_pairs_text(sets[args.set_name].items())}")
+        subject += f", набор {args.set_name}"
+    notes.doc_commit_content(config.MODEL_SETS_REL, text,
+                             f"{subject}: {basis}")
