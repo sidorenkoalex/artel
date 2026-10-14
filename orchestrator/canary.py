@@ -1849,6 +1849,50 @@ def _escalation_notes(steps) -> list:
     return [r["detail"] or "" for r in steps if r["action"] == "state -> escalated"]
 
 
+_STATE_PREFIX = "state -> "
+_ESCALATED_ACTION = _STATE_PREFIX + "escalated"
+UNKNOWN_ESCALATION_ROLE = "unknown"
+
+
+def escalation_roles(steps) -> list[str]:
+    """Роли эскалаций журнала задачи клона по порядку (SPEC
+    01M4VC31NFCS6JZ0VE8HNJ7FYM, требование 1): одна позиция на каждый
+    `state -> escalated`.
+
+    Роль — по состоянию, в которое задача вошла последним переходом до
+    эскалации (без перехода — начальное `spec_writing`: задачу заводят
+    сразу в нём, перехода журнал не пишет), и только если до следующего
+    перехода стоит маркер эскалации по артефакту роли. Маркер не соседний:
+    `store.set_state` сам пишет фиксацию за переходом, и лишь затем
+    вызывающий — маркер. Эскалация без маркера — эскалация пульта
+    (бюджет, инцидент, лимит ревью), её роль `unknown` из любого состояния.
+    """
+    actions = [r["action"] for r in steps]
+    roles_out = []
+    source = "spec_writing"
+    for i, action in enumerate(actions):
+        if not action.startswith(_STATE_PREFIX):
+            continue
+        if action != _ESCALATED_ACTION:
+            source = action[len(_STATE_PREFIX):]
+            continue
+        role = UNKNOWN_ESCALATION_ROLE
+        for later in actions[i + 1:]:
+            if later.startswith(_STATE_PREFIX):
+                break
+            if later == fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER:
+                role = _source_state_role(source)
+                break
+        roles_out.append(role)
+    return roles_out
+
+
+def _source_state_role(state: str) -> str:
+    if state == "spec_writing":
+        return "analyst"
+    return config.STATE_ROLE.get(state, UNKNOWN_ESCALATION_ROLE)
+
+
 def _dev_retry_count(steps) -> int:
     """Число повторов developer на красной планке (требование 5) —
     записи `_DEV_RETRY_ACTION`, журналируемые `_drive_task` ДО каждого
@@ -2365,7 +2409,8 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
                        target_sha: str, sha_label: str | None,
                        plan: CanarySetPlan,
                        acceptance_route: str | None = None,
-                       autogate_refusal: str | None = None) -> tuple:
+                       autogate_refusal: str | None = None,
+                       escalation_roles: list[str] | None = None) -> tuple:
     """Фаза 3 из 3 (требование 6) `_run_one_task`: закрывает целевой sha
     прогона (если он не был передан явно), вычисляет вердикт зелёности и
     пишет строку `canary_runs` СНАРУЖИ клона (требование 5, 9). Возвращает
@@ -2395,6 +2440,11 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
     расхождение фаза 1 уже сделала не штатным исходом, поэтому вердикт
     здесь считается прежней формулой. Метрики без `code_sha` (подмена
     фазы 1 в тестах) — прежнее поведение: проверяемый sha.
+
+    `escalation_roles` (SPEC 01M4VC31NFCS6JZ0VE8HNJ7FYM, требование 1) —
+    роли эскалаций, вычисленные пультом из `steps` результата клона
+    (`escalation_roles(steps)`), не из `metrics`: результат клона кода до
+    этой задачи ролей не несёт, а строка его прогона их получить обязана.
     """
     if explicit_target_sha is None:
         target_sha = gitcmd.head_sha()
@@ -2421,7 +2471,8 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
         actual, mismatch, main_sha=main_sha, verdict=verdict,
         set_name=plan.name, models_summary=plan.summary or None,
         acceptance_route=acceptance_route,
-        autogate_refusal=autogate_refusal)
+        autogate_refusal=autogate_refusal,
+        escalation_roles=escalation_roles)
     return main_sha, sha_label
 
 
@@ -2578,7 +2629,8 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     target_sha, _label = _record_canary_run(
         outer_conn, run_stamp, title, task_id, metrics, expected, actual,
         mismatch, normal_outcome, explicit_target_sha, target_sha, sha_label,
-        plan, acceptance_route, autogate_refusal)
+        plan, acceptance_route, autogate_refusal,
+        escalation_roles=escalation_roles(steps))
 
     note = _baseline_deviation_note(outer_conn, task_id, title, metrics,
                                     normal_outcome, mismatch, ratio, plan.name,

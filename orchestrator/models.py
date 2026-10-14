@@ -1133,6 +1133,35 @@ def expected_escalation_met(row) -> bool:
             and row["marker_mismatch"] == 0)
 
 
+# Роли, чья одна эскалация на шаблоне с ловушкой — верная работа (SPEC
+# 01M4VC31NFCS6JZ0VE8HNJ7FYM, требование 2): ловушку SPEC видят и analyst,
+# и аудитор SPEC (ADR-0022); любая другая роль, `unknown` или повтор — нет.
+_EXPECTED_ESCALATION_ROLES = ("analyst", "spec_auditor")
+
+
+def _escalation_roles_of(row) -> list[str] | None:
+    """Роли эскалаций строки `canary_runs`; `None` — данных о ролях нет
+    (`NULL` у строк до SPEC 01M4VC31NFCS6JZ0VE8HNJ7FYM либо ключа нет
+    вовсе — у `sqlite3.Row` это `IndexError`, у словаря `KeyError`)."""
+    try:
+        text = row["escalation_roles"]
+    except (KeyError, IndexError):
+        return None
+    if text is None:
+        return None
+    return text.split(",") if text else []
+
+
+def _excess_escalation_role(roles: list[str]) -> tuple[str, int] | None:
+    """Первая по порядку перечня роль сверх допуска ожидаемой эскалации и
+    число её эскалаций; `None` — нарушителей нет."""
+    for role in roles:
+        count = roles.count(role)
+        if role not in _EXPECTED_ESCALATION_ROLES or count > 1:
+            return role, count
+    return None
+
+
 def unclean_reason(row) -> str | None:
     """Почему строка `canary_runs` не чистый прогон (требование 5);
     `None` — чистый. Пустой счётчик — не ноль: чистоту без данных не
@@ -1143,10 +1172,17 @@ def unclean_reason(row) -> str | None:
         return f"итераций ревью {row['review_iterations']}"
     if row["escalations"] != 0 and not expected_escalation_met(row):
         return f"эскалаций {row['escalations']}, ожидаемой с верным исходом нет"
+    roles = _escalation_roles_of(row)
+    if roles is not None:
+        excess = _excess_escalation_role(roles)
+        if excess is not None:
+            role, count = excess
+            return f"эскалаций роли {role}: {count}"
     # «Без эскалаций, кроме ожидаемой» (решение Оператора 02.10.2026, SPEC
     # 01M3YCHVVEK14SK8GT4R0H7M2C, требование 8): выполненная ожидаемая
-    # покрывает ровно одну эскалацию, не любое их число.
-    if row["escalations"] is not None and row["escalations"] > 1:
+    # покрывает ровно одну эскалацию, не любое их число. Строка без данных о
+    # ролях (до SPEC 01M4VC31NFCS6JZ0VE8HNJ7FYM) — только по общему числу.
+    elif row["escalations"] is not None and row["escalations"] > 1:
         return (f"эскалаций {row['escalations']}, ожидаемая эскалация "
                 f"покрывает только одну")
     blame = autogate_refusal_blame(row["autogate_refusal"])
