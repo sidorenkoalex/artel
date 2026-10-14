@@ -192,9 +192,10 @@ def freshness_refusal(conn, task_id: str, branch: str) -> tuple[str, str] | None
     свежий вердикт этого визита (требование 12); `None` — свежий.
 
     Свежий — последний коммит файла в ссылке есть автокоммит шага
-    `spec_auditor` (префикс сообщения) и записан в журнал после последнего
-    входа задачи в `spec_audit`: файл прошлого визита и файл, записанный
-    любой другой ролью, задачу не продвигают."""
+    `spec_auditor` (префикс сообщения) и подтверждён событием автокоммита
+    артефактной ветки после последнего входа задачи в `spec_audit`: файл
+    прошлого визита и файл, записанный любой другой ролью, задачу не
+    продвигают."""
     rel = _rel(task_id, ARTIFACT)
     res = artifact_branch.git(task_id, "log", "-1", "--format=%H %s",
                               branch, "--", rel)
@@ -214,8 +215,16 @@ def freshness_refusal(conn, task_id: str, branch: str) -> tuple[str, str] | None
                 f"{ROLE}: «{subject}» — вердикт ждёт шага аудитора")
     rows = store.task_steps(conn, task_id)
     since = _last_entry_id(rows)
+    # Формат checkpoint._commit_step_artifacts_to_branch: SHA только в
+    # поле коммита, а не в произвольном тексте или списке удалённых файлов.
+    witness = re.compile(
+        re.escape(autocommit_prefix(task_id))
+        + r"(?:, WIP после таймаута)?\)"
+        + re.escape(f" (артефактная ветка, sha {sha})")
+        + r"(?:; удалено: .+)?", re.S)
     if not any(row["id"] > since and row["actor"] == "orchestrator"
-               and sha in (row["detail"] or "") for row in rows):
+               and row["action"] == "автокоммит артефактов шага (артефактная ветка)"
+               and witness.fullmatch(row["detail"] or "") for row in rows):
         return (NOT_FRESH_REFUSAL_ACTION,
                 f"{ARTIFACT} ({sha}) записан до последнего входа задачи в "
                 f"{STATE} — вердикт прошлого визита, ждёт шага аудитора")
