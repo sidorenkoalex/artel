@@ -1,12 +1,15 @@
-# Записка spec_auditor — 01M4VBTTH9TT5R74W2ZGKKYZK2 (аудит SPEC f9c9a5e8)
+# Записка spec_auditor — 01M4VBTTH9TT5R74W2ZGKKYZK2 (аудит SPEC 951f454b)
 
 ## Выяснено
-- Четыре отклонения прошлого аудита (фильтр suite-duration:<target>, journal_suite_metrics, имя test_gate_writes_workers_2_metrics, изолированные методы 8/9) в SPEC закрыты.
-- Ссылки на код подтверждены; 15 = 10 своих + 5 assertTrue(rows) из measured_run (guard.py:1094-1116); assertTrue(checks) ≡ assertTrue(rows) в нормальной форме; msg отбрасывается (guard.py:854-866).
-- Остались три concerns: AC-2 «медиана восьми нормальных» против «первая + семь» (SPEC.md:30); «высокая восьмая» без «выше порога» из ANSWER-1 п.3 (SPEC.md:19, 28); прямой doctor.all_checks вместо self.doctor_checks() с заглушкой live-smoke (SPEC.md:34, 45-53; тест :33-60).
+- Три concerns прошлого аудита (О-1 состав первых восьми workers=2, О-2 высокая восьмая 0.48 > 0.448, О-3 self.doctor_checks()) в SPEC закрыты: SPEC.md:19-22, 28-34, 45-53.
+- Арифметика сверена с suite_duration.py:36-68: все сценарии AC-1/AC-2 дают ожидаемые исходы; мутация `<=k`→`<k` ловится высокой восьмой.
+- Ссылки матрицы (suite_duration.py:36-40, 54-59, 65-68; acceptance.py:292-303; suite_observation:139-156; test_suite_duration:45-51) верны.
+- Нормальная форма: assertTrue(checks) ≡ assertTrue(rows) (guard.py:878-881), msg отбрасывается (guard.py:853-866); помощники первого уровня — guard.py:1094-1116.
+- docs/codebase-map.md и tests/ — в COMMON_ZONES (config.py:799).
+- Вердикт: pass, два замечания без статуса отклонения (regex процессов ловит «процессы: нет»; 4 с у workers=2 под нагрузкой — решение Оператора №2).
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready, guard ок. Шаг завершён.
+- SPEC-AUDIT.md записан, verdict pass, status ready; guard прогнан.
 
 ## Чего не хватило
-- Ничего существенного; карта нормальной формы — guard.py:780-908.
+- Ничего существенного.
