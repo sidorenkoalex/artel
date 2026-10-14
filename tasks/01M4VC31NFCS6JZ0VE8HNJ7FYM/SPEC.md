@@ -58,13 +58,22 @@ budget_usd: 45
      засчитывается только эскалация самой роли по её артефакту (батч
      `QUESTIONS.md` аналитика; `status: escalate` в `SPEC-AUDIT.md`
      аудитора; так же пометка `AC-n: escalate` автора тестов,
-     `status: escalate` в `PLAN.md` и `REVIEW.md`). Признак — запись
-     журнала, следующая сразу за этим `state -> escalated`, имеет действие,
-     равное `orchestrator/fsm.py::ARTIFACT_ESCALATION_ROLE_STEP_MARKER`:
-     пульт пишет её сразу после перехода только при эскалации по
-     артефакту роли (`orchestrator/fsm_advance.py::_mark_artifact_escalation`).
+     `status: escalate` в `PLAN.md` и `REVIEW.md`). Признак — среди записей
+     журнала после этого `state -> escalated` и до следующей записи
+     перехода `state -> …` (либо до конца журнала, если перехода дальше
+     нет) есть запись с действием, равным
+     `orchestrator/fsm.py::ARTIFACT_ESCALATION_ROLE_STEP_MARKER`: пульт
+     пишет её только при эскалации по артефакту роли
+     (`orchestrator/fsm_advance.py::_mark_artifact_escalation`), после
+     возврата из `store.set_state`. Маркер не обязан быть соседней
+     записью: `store.set_state` сам пишет после `state -> escalated`
+     запись `sha зафиксирован` (`orchestrator/store.py:827`, `:966`) либо
+     запись дрейфа ссылки документов (`store.py:829-830`), и только затем
+     вызывающий пишет маркер; между ними могут стоять и иные записи
+     (например actor `lease`) — на признак они не влияют. Маркер после
+     следующего перехода `state -> …` к этой эскалации не относится.
      Сравнивается только действие записи, не текст детали. Эскалация без
-     такой записи сразу за ней — эскалация пульта из того же состояния
+     маркера в этом промежутке — эскалация пульта из того же состояния
      (исчерпанный бюджет `orchestrator/budget.py:300`, инцидент фиксации
      `orchestrator/fixation.py:248`, инцидент целостности
      `orchestrator/runner.py:447`, лимит ревью и прочие), её роль —
@@ -117,24 +126,36 @@ budget_usd: 45
    ловушки — не чистый; строка без данных о ролях с двумя эскалациями при
    выполненной ожидаемой — не чистая, как раньше; роль определяется по
    последнему переходу до `escalated` при записях шага роли между ними;
+   маркер роли засчитывается через запись `sha зафиксирован` между
+   `state -> escalated` и ним и не засчитывается после следующего
+   перехода;
    эскалация пульта (бюджет исчерпан) из `spec_writing` и из `spec_audit`
    — роль `unknown`, прогон не чистый.
 
 ## Критерии приёмки
 
 Ниже «маркер роли» — запись журнала с действием
-`fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER`, стоящая сразу за
-`state -> escalated` (требование 1).
+`fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER`, стоящая после
+`state -> escalated` до следующего перехода `state -> …`
+(требование 1); «фиксация» — запись с действием `sha зафиксирован`
+(actor `fsm`), которую `store.set_state` пишет сразу за переходом. Во всех
+журналах критериев ниже за каждым `state -> …` сразу идёт фиксация, как у
+реального клона, а маркер роли — после неё, не соседней с переходом
+записью.
 
 AC-1. `canary.escalation_roles` на журнале как у реального клона, с
 записями шагов роли между переходами — `created`,
 `набор моделей задачи`, `agent run started`, `agent run finished`,
 `state -> escalated` (без предшествующего `state -> spec_writing`),
-маркер роли, `state -> spec_writing`, `agent run started`,
-`agent run finished`, `state -> spec_audit`, `agent run started`,
-`agent run finished`, `state -> escalated`, маркер роли — возвращает
+фиксация, маркер роли, `state -> spec_writing`, фиксация,
+`agent run started`, `agent run finished`, `state -> spec_audit`,
+фиксация, `agent run started`, `agent run finished`,
+`state -> escalated`, фиксация, маркер роли — возвращает
 `["analyst", "spec_auditor"]` (вторая эскалация — `spec_auditor`, хотя
-непосредственно перед ней стоит не переход, а `agent run finished`).
+непосредственно перед ней стоит не переход, а `agent run finished`, а
+сразу за ней — фиксация, не маркер). Реализация, требующая маркер
+строго следующей записью за `state -> escalated`, на этом журнале даёт
+`["unknown", "unknown"]` и критерий не проходит.
 Строка `canary_runs`, записанная прогоном `_run_one_task`, в котором
 подменён только процесс клона (`_drive_in_clone` либо разбор его файла
 `_read_drive_result` отдаёт результат с таким `steps`), несёт в колонке
@@ -147,7 +168,8 @@ AC-2. Роль эскалации самой роли берётся из пос
 `state -> X` до `escalated`, не из текста детали и не из непосредственно
 предыдущей записи: в каждом случае ниже между `state -> X` и
 `state -> escalated` стоят записи `agent run started` и
-`agent run finished`, а сразу за `state -> escalated` — маркер роли.
+`agent run finished`, а за `state -> escalated` — фиксация, затем
+маркер роли.
 `state -> escalated` после `state -> spec_audit` с деталью
 «analyst: батч вопросов по ТЗ» даёт `spec_auditor`; после
 `state -> in_dev` — `developer`; после `state -> tests_writing` —
@@ -217,22 +239,26 @@ AC-10. Сводка `pair_admission` для пары с прогоном
 
 AC-11. Эскалация пульта из `spec_writing` и из `spec_audit` ролью
 `analyst`/`spec_auditor` не засчитывается. На журналах ниже за
-`state -> escalated` с деталью «бюджет исчерпан: $1.00 из $1.00» сразу
-следует не маркер роли, а `state -> spec_writing` либо
-`agent run started`:
+`state -> escalated` с деталью «бюджет исчерпан: $1.00 из $1.00» идёт
+фиксация, а маркера роли до следующего перехода `state -> …` нет; маркер
+более поздней эскалации роли стоит уже после следующего перехода:
 - (а) из `spec_audit`: `created`, `agent run started`,
-  `agent run finished`, `state -> escalated` + маркер роли (ловушка
-  analyst), `state -> spec_writing`, `agent run started`,
-  `agent run finished`, `state -> spec_audit`, `agent run started`,
-  `agent run finished`, `state -> escalated` (бюджет, без маркера),
-  `state -> spec_audit` — `escalation_roles` возвращает
-  `["analyst", "unknown"]`;
+  `agent run finished`, `state -> escalated`, фиксация, маркер роли
+  (ловушка analyst), `state -> spec_writing`, фиксация,
+  `agent run started`, `agent run finished`, `state -> spec_audit`,
+  фиксация, `agent run started`, `agent run finished`,
+  `state -> escalated` (бюджет), фиксация, `state -> spec_audit`,
+  фиксация — `escalation_roles` возвращает `["analyst", "unknown"]`;
 - (б) из `spec_writing`: `created`, `agent run started`,
-  `agent run finished`, `state -> escalated` (бюджет, без маркера),
-  `state -> spec_writing`, `agent run started`, `agent run finished`,
-  `state -> spec_audit`, `agent run started`, `agent run finished`,
-  `state -> escalated` + маркер роли (ловушка аудитора) —
-  `["unknown", "spec_auditor"]`.
+  `agent run finished`, `state -> escalated` (бюджет), фиксация,
+  `state -> spec_writing`, фиксация, `agent run started`,
+  `agent run finished`, `state -> spec_audit`, фиксация,
+  `agent run started`, `agent run finished`, `state -> escalated`,
+  фиксация, маркер роли (ловушка аудитора) —
+  `["unknown", "spec_auditor"]`. Реализация, ищущая маркер где угодно
+  после `state -> escalated` без границы следующего перехода, засчитала
+  бы первой эскалации маркер второй (`["analyst", "spec_auditor"]`) и
+  критерий не проходит.
 Строка AC-5 с `escalation_roles`, равным перечню (а) либо (б) через
 запятую, и `escalations = 2` — не чистая, причина `unclean_reason`
 содержит `эскалаций роли unknown: 1`.
@@ -309,7 +335,12 @@ AC-11. Эскалация пульта из `spec_writing` и из `spec_audit` 
   (`ARTIFACT_ESCALATION_ROLE_STEP_MARKER`), `orchestrator/fsm_advance.py:67`
   (`_mark_artifact_escalation`, шесть точек вызова — `:180`, `:207`
   spec_writing; `:292` spec_audit; `:382` review; `:556` tests_writing;
-  `:650` in_dev); пишется сразу после `set_state(..., "escalated")`.
+  `:650` in_dev); пишется вызывающим после возврата из
+  `set_state(..., "escalated")`, то есть после записи `sha зафиксирован`
+  (`orchestrator/store.py:820-830`, `:852`, `:966`). Так же маркер читает
+  `auto._role_step_since_state_entry` (`orchestrator/auto.py:348-394`):
+  до следующего перехода, без требования соседства; то же видно по
+  `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py:168-170`.
 - Эскалации пульта без маркера: `orchestrator/budget.py:300`,
   `orchestrator/fixation.py:248`, `orchestrator/runner.py:447`, `:800`,
   `orchestrator/fsm_advance.py:347` (лимит ревью); канарейка переживает
