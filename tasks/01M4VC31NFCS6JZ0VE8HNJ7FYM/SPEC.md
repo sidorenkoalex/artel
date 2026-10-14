@@ -5,7 +5,7 @@ author_role: analyst
 status: ready
 schema_version: 5
 zones: orchestrator/models.py, orchestrator/canary.py, orchestrator/store.py, tests/
-budget_usd: 40
+budget_usd: 45
 ---
 
 # SPEC: Чистый прогон канарейки учитывает эскалацию аудитора SPEC по той же ловушке
@@ -54,7 +54,23 @@ budget_usd: 40
      `state -> escalated` или перед первым переходом, на
      состояние-источник не влияют — в журнале клона между ними всегда есть
      записи шага роли.
-   - Роль по состоянию-источнику: `spec_writing` — `analyst`, прочие —
+   - Эскалация самой роли и эскалация пульта. Ролью состояния-источника
+     засчитывается только эскалация самой роли по её артефакту (батч
+     `QUESTIONS.md` аналитика; `status: escalate` в `SPEC-AUDIT.md`
+     аудитора; так же пометка `AC-n: escalate` автора тестов,
+     `status: escalate` в `PLAN.md` и `REVIEW.md`). Признак — запись
+     журнала, следующая сразу за этим `state -> escalated`, имеет действие,
+     равное `orchestrator/fsm.py::ARTIFACT_ESCALATION_ROLE_STEP_MARKER`:
+     пульт пишет её сразу после перехода только при эскалации по
+     артефакту роли (`orchestrator/fsm_advance.py::_mark_artifact_escalation`).
+     Сравнивается только действие записи, не текст детали. Эскалация без
+     такой записи сразу за ней — эскалация пульта из того же состояния
+     (исчерпанный бюджет `orchestrator/budget.py:300`, инцидент фиксации
+     `orchestrator/fixation.py:248`, инцидент целостности
+     `orchestrator/runner.py:447`, лимит ревью и прочие), её роль —
+     `unknown`, из какого бы состояния она ни шла, в том числе из
+     `spec_writing` и `spec_audit`.
+   - Роль по состоянию-источнику (для эскалации самой роли): `spec_writing` — `analyst`, прочие —
      роль этого состояния по `orchestrator/config.py::STATE_ROLE`
      (`spec_audit` — `spec_auditor`, `tests_writing` — `test_author`,
      `in_dev` — `developer`, `review` — `reviewer`). Текст детали перехода
@@ -100,39 +116,52 @@ budget_usd: 40
    две эскалации `analyst` — не чистый; одна эскалация `spec_auditor` без
    ловушки — не чистый; строка без данных о ролях с двумя эскалациями при
    выполненной ожидаемой — не чистая, как раньше; роль определяется по
-   последнему переходу до `escalated` при записях шага роли между ними.
+   последнему переходу до `escalated` при записях шага роли между ними;
+   эскалация пульта (бюджет исчерпан) из `spec_writing` и из `spec_audit`
+   — роль `unknown`, прогон не чистый.
 
 ## Критерии приёмки
+
+Ниже «маркер роли» — запись журнала с действием
+`fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER`, стоящая сразу за
+`state -> escalated` (требование 1).
 
 AC-1. `canary.escalation_roles` на журнале как у реального клона, с
 записями шагов роли между переходами — `created`,
 `набор моделей задачи`, `agent run started`, `agent run finished`,
 `state -> escalated` (без предшествующего `state -> spec_writing`),
-`state -> spec_writing`, `agent run started`, `agent run finished`,
-`state -> spec_audit`, `agent run started`, `agent run finished`,
-`state -> escalated` — возвращает `["analyst", "spec_auditor"]` (вторая
-эскалация — `spec_auditor`, хотя непосредственно перед ней стоит не
-переход, а `agent run finished`). Строка `canary_runs`, записанная
-`_run_one_task` по результату клона с таким `steps`, несёт в колонке
+маркер роли, `state -> spec_writing`, `agent run started`,
+`agent run finished`, `state -> spec_audit`, `agent run started`,
+`agent run finished`, `state -> escalated`, маркер роли — возвращает
+`["analyst", "spec_auditor"]` (вторая эскалация — `spec_auditor`, хотя
+непосредственно перед ней стоит не переход, а `agent run finished`).
+Строка `canary_runs`, записанная прогоном `_run_one_task`, в котором
+подменён только процесс клона (`_drive_in_clone` либо разбор его файла
+`_read_drive_result` отдаёт результат с таким `steps`), несёт в колонке
 `escalation_roles` значение `analyst,spec_auditor` и `escalations = 2`.
+Где внутри пульта вычисляется перечень (до или внутри
+`_record_canary_run`), критерий не проверяет: подмена глубже результата
+процесса клона в его тесте не делается.
 
-AC-2. Роль эскалации берётся из последнего перехода `state -> X` до
-`escalated`, не из текста детали и не из непосредственно предыдущей
-записи: в каждом случае ниже между `state -> X` и `state -> escalated`
-стоят записи `agent run started` и `agent run finished`.
+AC-2. Роль эскалации самой роли берётся из последнего перехода
+`state -> X` до `escalated`, не из текста детали и не из непосредственно
+предыдущей записи: в каждом случае ниже между `state -> X` и
+`state -> escalated` стоят записи `agent run started` и
+`agent run finished`, а сразу за `state -> escalated` — маркер роли.
 `state -> escalated` после `state -> spec_audit` с деталью
 «analyst: батч вопросов по ТЗ» даёт `spec_auditor`; после
 `state -> in_dev` — `developer`; после `state -> tests_writing` —
 `test_author`; после `state -> review` — `reviewer`; после
 `state -> spec_writing` — `analyst`.
 
-AC-3. `state -> escalated`, перед которым в журнале нет ни одного
-перехода `state -> X`, но есть записи `created`, `набор моделей задачи`,
-`agent run started`, `agent run finished`, даёт `analyst` (источник —
-начальное `spec_writing`), а не `unknown`. `state -> escalated` после
-`state -> verifying` (состояния вне сопоставления ролей), между которыми
-стоит запись `agent run finished`, даёт `unknown`. Журнал без
-`state -> escalated` даёт пустой список.
+AC-3. `state -> escalated` с маркером роли, перед которым в журнале нет
+ни одного перехода `state -> X`, но есть записи `created`,
+`набор моделей задачи`, `agent run started`, `agent run finished`, даёт
+`analyst` (источник — начальное `spec_writing`), а не `unknown`.
+`state -> escalated` с маркером роли после `state -> verifying`
+(состояния вне сопоставления ролей), между которыми стоит запись
+`agent run finished`, даёт `unknown`. Журнал без `state -> escalated`
+даёт пустой список.
 
 AC-4. Результат клона без нового поля в `metrics` (набор полей как у
 кода до задачи: ровно `_DRIVE_METRIC_FIELDS` на main) принимается
@@ -186,10 +215,32 @@ AC-10. Сводка `pair_admission` для пары с прогоном
 `ADMIT_MIN_CLEAN_RUNS`, `ADMIT_MIN_TEMPLATES` и условие чистого прогона
 на шаблоне среднего класса не меняются.
 
+AC-11. Эскалация пульта из `spec_writing` и из `spec_audit` ролью
+`analyst`/`spec_auditor` не засчитывается. На журналах ниже за
+`state -> escalated` с деталью «бюджет исчерпан: $1.00 из $1.00» сразу
+следует не маркер роли, а `state -> spec_writing` либо
+`agent run started`:
+- (а) из `spec_audit`: `created`, `agent run started`,
+  `agent run finished`, `state -> escalated` + маркер роли (ловушка
+  analyst), `state -> spec_writing`, `agent run started`,
+  `agent run finished`, `state -> spec_audit`, `agent run started`,
+  `agent run finished`, `state -> escalated` (бюджет, без маркера),
+  `state -> spec_audit` — `escalation_roles` возвращает
+  `["analyst", "unknown"]`;
+- (б) из `spec_writing`: `created`, `agent run started`,
+  `agent run finished`, `state -> escalated` (бюджет, без маркера),
+  `state -> spec_writing`, `agent run started`, `agent run finished`,
+  `state -> spec_audit`, `agent run started`, `agent run finished`,
+  `state -> escalated` + маркер роли (ловушка аудитора) —
+  `["unknown", "spec_auditor"]`.
+Строка AC-5 с `escalation_roles`, равным перечню (а) либо (б) через
+запятую, и `escalations = 2` — не чистая, причина `unclean_reason`
+содержит `эскалаций роли unknown: 1`.
+
 ## Оценка объёма и деление
 Сработавшие сигналы: `budget_usd` ≥ $30 и число критериев приёмки ≥ 10
-(ставка $40 — класс «до 10 критериев и до 4 файлов зоны»: 10 критериев, зоны `orchestrator/models.py`,
-`orchestrator/canary.py`, `orchestrator/store.py`, `tests/`).
+(ставка $45 — класс «до 15 критериев и до 7 файлов зоны»: 11 критериев, зоны `orchestrator/models.py`,
+`orchestrator/canary.py`, `orchestrator/store.py`, `tests/`; в рамке ТЗ $50).
 
 Обоснование монолита: запись перечня ролей (`canary.py` — сбор из
 журнала, `store.py` — колонка и миграция `canary_runs`) и его чтение
@@ -210,6 +261,16 @@ AC-10. Сводка `pair_admission` для пары с прогоном
 - Правка кода клона (`orchestrator/canary_drive.py`, `canary._task_metrics`)
   и набора обязательных полей результата `_DRIVE_METRIC_FIELDS`: перечень
   ролей пульт вычисляет из `steps` результата (требование 1).
+- Правка мест эскалации и записи маркера роли
+  (`orchestrator/fsm_advance.py`, `orchestrator/fsm.py`,
+  `orchestrator/budget.py`, `orchestrator/fixation.py`,
+  `orchestrator/runner.py`): признак эскалации самой роли читается из
+  журнала как есть (требование 1).
+- Дыра main «одна эскалация пульта в прогоне шаблона с ловушкой
+  засчитывается ожидаемой» (`actual_escalation` — любая эскалация,
+  SPEC-AUDIT Е-1): `expected_escalation_met` не меняется. По новому правилу
+  такая эскалация даёт роль `unknown` и прогон не чистый только у строк с
+  данными о ролях.
 - Перекраска прежних строк `canary_runs` задним числом и восстановление
   ролей для них из журналов клонов (требование 4).
 - Смена чисел допуска ADR-0019 п.5 и прочих условий чистоты (вердикт,
@@ -244,3 +305,13 @@ AC-10. Сводка `pair_admission` для пары с прогоном
   `spec_writing` без записи `state -> spec_writing`; то же — докстринг
   `orchestrator/auto.py:400` (только чтение).
 - `orchestrator/models.py:996-998` — `BLAME_ROLE`/`BLAME_PULT`/`BLAME_UNKNOWN`.
+- Маркер эскалации по артефакту роли: `orchestrator/fsm.py:71`
+  (`ARTIFACT_ESCALATION_ROLE_STEP_MARKER`), `orchestrator/fsm_advance.py:67`
+  (`_mark_artifact_escalation`, шесть точек вызова — `:180`, `:207`
+  spec_writing; `:292` spec_audit; `:382` review; `:556` tests_writing;
+  `:650` in_dev); пишется сразу после `set_state(..., "escalated")`.
+- Эскалации пульта без маркера: `orchestrator/budget.py:300`,
+  `orchestrator/fixation.py:248`, `orchestrator/runner.py:447`, `:800`,
+  `orchestrator/fsm_advance.py:347` (лимит ревью); канарейка переживает
+  бюджетную — `orchestrator/canary.py:1734-1747`.
+- Аудит SPEC Е-1, В-1 — `tasks/01M4VC31NFCS6JZ0VE8HNJ7FYM/SPEC-AUDIT.md`.
