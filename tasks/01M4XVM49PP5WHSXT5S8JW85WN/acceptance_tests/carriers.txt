@@ -1,0 +1,208 @@
+{
+  "9": [
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "ReadonlyDbOutcomeTest",
+      "method": "test_ac4_readonly_db_run_reaches_same_outcome_and_report",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertNotIn', ctx=Load()), args=[Constant(value='исключением'), Name(id='report', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='near_records', ctx=Load())), List(ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Constant(value='зелёный прогон'), Name(id='report', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Name(id='code', ctx=Load()), Tuple(elts=[Constant(value=None), Constant(value=0)], ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Constant(value='красный прогон'), Name(id='report', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='code', ctx=Load()), Constant(value=1)])"
+      ]
+    }
+  ],
+  "10": [
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "JournalRedeliveryTest",
+      "method": "test_ac5_pult_process_delivers_journal_record",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Constant(value='зелёный прогон'), Name(id='report', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='near_records', ctx=Load())), List(ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertGreaterEqual', ctx=Load()), args=[Call(func=Name(id='len', ctx=Load()), args=[Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='near_records', ctx=Load()))]), Constant(value=1)])"
+      ]
+    }
+  ],
+  "11": [
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "SharedLockTest",
+      "method": "test_ac6_role_suite_run_and_gate_share_one_lock_file",
+      "assertions": []
+    },
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "SharedLockTest",
+      "method": "gate_holds_role_refused",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIsNone', ctx=Load()), args=[Call(func=Attribute(value=Name(id='suite_lock', ctx=Load()), attr='acquire', ctx=Load()), args=[Name(id='OTHER', ctx=Load())], keywords=[keyword(arg='kind', value=Attribute(value=Name(id='suite_lock', ctx=Load()), attr='KIND_GATE', ctx=Load()))])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='launched', ctx=Load()), List(ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Name(id='OTHER', ctx=Load()), Call(func=Name(id='str', ctx=Load()), args=[Attribute(value=Attribute(value=Name(id='refused', ctx=Load()), attr='exception', ctx=Load()), attr='code', ctx=Load())])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertRaises', ctx=Load()), args=[Name(id='SystemExit', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "SharedLockTest",
+      "method": "role_holds_gate_waits",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='gate', ctx=Load()), attr='outcome', ctx=Load()), Attribute(value=Name(id='acceptance', ctx=Load()), attr='FULL_SUITE_NOT_STARTED', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertFalse', ctx=Load()), args=[Call(func=Attribute(value=Attribute(value=Name(id='self', ctx=Load()), attr='marks', ctx=Load()), attr='exists', ctx=Load()))])"
+      ]
+    }
+  ],
+  "12": [
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "LimitUnchangedTest",
+      "method": "test_ac8_readonly_db_run_keeps_profile_limit_and_timeout_outcome",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Attribute(value=Name(id='spy', ctx=Load()), attr='call_args_list', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertRegex', ctx=Load()), args=[Name(id='report', ctx=Load()), JoinedStr(values=[Constant(value='не уложился в предел '), FormattedValue(value=Name(id='short', ctx=Load()), conversion=-1), Constant(value=' с')])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Name(id='short_source', ctx=Load()), Name(id='report', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='code', ctx=Load()), Constant(value=1)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Call(func=Name(id='passed_limit', ctx=Load()), args=[Name(id='call', ctx=Load())]), Tuple(elts=[Name(id='limit', ctx=Load()), Name(id='source', ctx=Load())], ctx=Load())])"
+      ]
+    }
+  ],
+  "13": [
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "LogPlacementTest",
+      "method": "test_ac9_suite_run_logs_live_under_suite_run_dir",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='code', ctx=Load()), Constant(value=1)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='outside', ctx=Load()), List(ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Call(func=Name(id='any', ctx=Load()), args=[GeneratorExp(elt=Compare(left=Constant(value='-base'), ops=[In()], comparators=[Attribute(value=Name(id='p', ctx=Load()), attr='name', ctx=Load())]), generators=[comprehension(target=Name(id='p', ctx=Store()), iter=Name(id='new', ctx=Load()), is_async=0)])])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Name(id='named', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Call(func=Name(id='is_within', ctx=Load()), args=[Call(func=Name(id='real', ctx=Load()), args=[Name(id='path', ctx=Load())]), Name(id='suite_dir', ctx=Load())])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Call(func=Attribute(value=Call(func=Name(id='Path', ctx=Load()), args=[Name(id='path', ctx=Load())]), attr='is_file', ctx=Load()))])"
+      ]
+    }
+  ],
+  "14": [
+    {
+      "file": "tests/test_suite_run.py",
+      "class": "GateArgvTest",
+      "method": "test_gate_call_argv_unchanged",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='argv', ctx=Load()), BinOp(left=Call(func=Attribute(value=Name(id='acceptance', ctx=Load()), attr='_pytest_command', ctx=Load()), args=[Constant(value='tests')]), op=Add(), right=List(elts=[Constant(value='-n'), Call(func=Name(id='str', ctx=Load()), args=[Attribute(value=Name(id='config', ctx=Load()), attr='FULL_SUITE_WORKERS', ctx=Load())]), Constant(value='-p'), Constant(value='xdist')], ctx=Load()))])"
+      ]
+    },
+    {
+      "file": "tests/test_full_suite_profile_timeout.py",
+      "class": "FullSuiteProfileTimeoutTest",
+      "method": "test_gate_runner_uses_profile_limit_and_names_source",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Subscript(value=Attribute(value=Attribute(value=Name(id='run', ctx=Load()), attr='call_args', ctx=Load()), attr='kwargs', ctx=Load()), slice=Constant(value='timeout'), ctx=Load()), Constant(value=1500)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='result', ctx=Load()), attr='outcome', ctx=Load()), Attribute(value=Name(id='acceptance', ctx=Load()), attr='FULL_SUITE_TIMEOUT', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Constant(value='превысил 1500с'), Attribute(value=Name(id='result', ctx=Load()), attr='detail', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Constant(value='профиль тестов проекта artel'), Attribute(value=Name(id='result', ctx=Load()), attr='detail', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py",
+      "class": "BaseTimeoutTest",
+      "method": "test_ac16_timed_out_gate_run_saves_nothing",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertFalse', ctx=Load()), args=[Attribute(value=Name(id='result', ctx=Load()), attr='green', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Call(func=Name(id='len', ctx=Load()), args=[Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='base_calls', ctx=Load()))]), Constant(value=1)])"
+      ]
+    },
+    {
+      "file": "tests/test_01m4araxf7vss5xz8c99bx8de2_suite_observation.py",
+      "class": "SuiteObservationTest",
+      "method": "test_ac1_gate_writes_each_outcome_with_metrics",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='result', ctx=Load()), attr='outcome', ctx=Load()), Subscript(value=Dict(keys=[Constant(value='green'), Constant(value='red'), Constant(value='timeout')], values=[Attribute(value=Name(id='acceptance', ctx=Load()), attr='FULL_SUITE_GREEN', ctx=Load()), Attribute(value=Name(id='acceptance', ctx=Load()), attr='FULL_SUITE_RED', ctx=Load()), Attribute(value=Name(id='acceptance', ctx=Load()), attr='FULL_SUITE_TIMEOUT', ctx=Load())]), slice=Name(id='outcome', ctx=Load()), ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Call(func=Name(id='len', ctx=Load()), args=[Name(id='after', ctx=Load())]), BinOp(left=Name(id='before', ctx=Load()), op=Add(), right=Constant(value=1))])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assert_record_fields', ctx=Load()), args=[Subscript(value=Name(id='after', ctx=Load()), slice=UnaryOp(op=USub(), operand=Constant(value=1)), ctx=Load()), Name(id='count', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_suite_near_limit.py",
+      "class": "FailedRerunTest",
+      "method": "test_failed_rerun_gives_no_signal_full_run_does",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertNotIn', ctx=Load()), args=[Attribute(value=Name(id='acceptance', ctx=Load()), attr='SUITE_NEAR_LIMIT_ACTION', ctx=Load()), Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='run_at_limit', ctx=Load()), args=[Tuple(elts=[Constant(value='tests/test_x.py::T::test_a')], ctx=Load())])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Attribute(value=Name(id='acceptance', ctx=Load()), attr='SUITE_NEAR_LIMIT_ACTION', ctx=Load()), Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='run_at_limit', ctx=Load()), args=[Tuple(elts=[Constant(value='tests')], ctx=Load())])])"
+      ]
+    },
+    {
+      "file": "tests/test_01m48wt5x7zc7332drh85vy19d_suite_reuse.py",
+      "class": "SuiteReuseTest",
+      "method": "test_ac4_same_uncommitted_tree_in_scratch_reuses_green_result",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='run', ctx=Load()), attr='call_count', ctx=Load()), Constant(value=1)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[BoolOp(op=And(), values=[Attribute(value=Name(id='first', ctx=Load()), attr='green', ctx=Load()), Attribute(value=Name(id='second', ctx=Load()), attr='green', ctx=Load())])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Constant(value='использован повторно'), Attribute(value=Name(id='second', ctx=Load()), attr='detail', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m48wt5x7zc7332drh85vy19d_suite_reuse.py",
+      "class": "SuiteReuseTest",
+      "method": "test_ac5_tracked_change_invalidates_result",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='run', ctx=Load()), attr='call_count', ctx=Load()), Constant(value=2)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Attribute(value=Name(id='result', ctx=Load()), attr='green', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m48wt5x7zc7332drh85vy19d_suite_reuse.py",
+      "class": "SuiteReuseTest",
+      "method": "test_ac6_command_change_invalidates_result",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='run', ctx=Load()), attr='call_count', ctx=Load()), Constant(value=2)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Attribute(value=Name(id='result', ctx=Load()), attr='green', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m48wt5x7zc7332drh85vy19d_suite_reuse.py",
+      "class": "SuiteReuseTest",
+      "method": "test_ac7_age_boundary",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='run', ctx=Load()), attr='call_count', ctx=Load()), Constant(value=2)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertTrue', ctx=Load()), args=[Attribute(value=Name(id='fresh', ctx=Load()), attr='green', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='run', ctx=Load()), attr='call_count', ctx=Load()), Constant(value=1)])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='same', ctx=Load()), attr='digest', ctx=Load()), Attribute(value=Name(id='first', ctx=Load()), attr='digest', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m48wt5x7zc7332drh85vy19d_suite_reuse.py",
+      "class": "SuiteReuseTest",
+      "method": "test_ac8_incomplete_runs_are_not_reused",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='run', ctx=Load()), attr='call_count', ctx=Load()), Constant(value=2)])"
+      ]
+    },
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "SharedLockTest",
+      "method": "test_ac6_role_suite_run_and_gate_share_one_lock_file",
+      "assertions": []
+    },
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "SharedLockTest",
+      "method": "gate_holds_role_refused",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIsNone', ctx=Load()), args=[Call(func=Attribute(value=Name(id='suite_lock', ctx=Load()), attr='acquire', ctx=Load()), args=[Name(id='OTHER', ctx=Load())], keywords=[keyword(arg='kind', value=Attribute(value=Name(id='suite_lock', ctx=Load()), attr='KIND_GATE', ctx=Load()))])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Name(id='launched', ctx=Load()), List(ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertIn', ctx=Load()), args=[Name(id='OTHER', ctx=Load()), Call(func=Name(id='str', ctx=Load()), args=[Attribute(value=Attribute(value=Name(id='refused', ctx=Load()), attr='exception', ctx=Load()), attr='code', ctx=Load())])])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertRaises', ctx=Load()), args=[Name(id='SystemExit', ctx=Load())])"
+      ]
+    },
+    {
+      "file": "tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py",
+      "class": "SharedLockTest",
+      "method": "role_holds_gate_waits",
+      "assertions": [
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertEqual', ctx=Load()), args=[Attribute(value=Name(id='gate', ctx=Load()), attr='outcome', ctx=Load()), Attribute(value=Name(id='acceptance', ctx=Load()), attr='FULL_SUITE_NOT_STARTED', ctx=Load())])",
+        "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='assertFalse', ctx=Load()), args=[Call(func=Attribute(value=Attribute(value=Name(id='self', ctx=Load()), attr='marks', ctx=Load()), attr='exists', ctx=Load()))])"
+      ]
+    }
+  ]
+}
