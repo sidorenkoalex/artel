@@ -1,0 +1,35 @@
+База: daec84553c0951b8ddb9c46573c0e308d7319057
+SHA256 файла регрессии: 3eec53364c8eac7cffbd77ffd693bf7f65c1790754b84732c5ccb533c8c562c9
+Команда: python3 -m pytest tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py::AuditFreshnessTest::test_ac1_deferred_old_sha_cannot_advance -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short
+.                                                                      [100%]
+=================================== FAILURES ===================================
+_ AuditFreshnessTest.test_ac1_deferred_old_sha_cannot_advance (form='точный', seed=1936958692) _
+tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py:144: in test_ac1_deferred_old_sha_cannot_advance
+    self.assert_refused(task)
+tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py:120: in assert_refused
+    self.assertEqual(self.state(task), "spec_audit",
+E   AssertionError: 'spec_gate' != 'spec_audit'
+E   - spec_gate
+E   ?      -  -
+E   + spec_audit
+E   ?       +++
+E    : зерно: 1936958692; старый/неподтверждённый аудит прошёл: [T501] -> spec_gate  (аудит SPEC: вердикт pass — SPEC ждёт approve)
+E   [T501] аудит SPEC: вердикт pass — гейт SPEC
+_ AuditFreshnessTest.test_ac1_deferred_old_sha_cannot_advance (form='в тексте', seed=1936958692) _
+tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py:144: in test_ac1_deferred_old_sha_cannot_advance
+    self.assert_refused(task)
+tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py:120: in assert_refused
+    self.assertEqual(self.state(task), "spec_audit",
+E   AssertionError: 'spec_gate' != 'spec_audit'
+E   - spec_gate
+E   ?      -  -
+E   + spec_audit
+E   ?       +++
+E    : зерно: 1936958692; старый/неподтверждённый аудит прошёл: [T502] -> spec_gate  (аудит SPEC: вердикт pass — SPEC ждёт approve)
+E   [T502] аудит SPEC: вердикт pass — гейт SPEC
+=========================== short test summary info ============================
+SUBFAILED(form='точный', seed=1936958692) tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py::AuditFreshnessTest::test_ac1_deferred_old_sha_cannot_advance
+SUBFAILED(form='в тексте', seed=1936958692) tests/test_01m4x4wfb01a18x6srs0jf3g2y_audit_freshness.py::AuditFreshnessTest::test_ac1_deferred_old_sha_cannot_advance
+2 failed, 1 passed in 5.38s
+
+Код выхода: 1
