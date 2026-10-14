@@ -1,16 +1,18 @@
 ## Выяснено
-SPEC пересмотрен по ANSWER-3: UNKNOWN/сбой удостоверения запрещает новый full, включая операторский; status/wait/разрешённый failed и внутренние гейты/CI сохраняются. Ровно один Unix socket, kernel peer обеих сторон, ancestry/start identity, актуальный process/lease; ENV/endpoint/один PGID не удостоверяют роль.
-ADR-0024/0025 прочитаны через git show main:docs/adr/0024-developer-full-suite-contract.md и main:docs/adr/0025-trusted-suite-context.md; в снимке worktree их нет. ANSWER-3 заменяет прежние ограничения ADR-0025 только для socket-допуска и UNKNOWN.
-19 AC, 14 точных зон: добавлены suite_context с macOS/Linux adapters, Codex/Claude provider, reference и doctor isolation, адресные тесты. Сохранена подробная матрица прежних маршрутов; пять замен readonly_db не расширены. Новая матрица называет проверки конфигурации/паритета/выключенных функций/doctor и предметные замены для IPC.
+После возврата аудита сдан QUESTIONS.md, status ready, два вопроса: (1) машинный мандат только на общий запрет true в tests/test_providers_codex.py::CuratedHomeTest::test_every_disabled_feature_is_false_in_the_curated_config; (2) адресная подготовка доверенного контекста положительных fixtures. ANSWER-1 требует эскалации общих helpers; ANSWER-3 не содержит машинной строки для provider assertions. UNKNOWN/socket и потолок $45 повторно не согласуются.
+Инвентаризация F2: SuiteRunSandbox в старом suite_run, SuiteRunStand в readonly_db, LockTest в test_suite_run.py, BaseReuseTest в base_reuse, ProgressCountTest в subtest_failures. Четыре дополнительные точные зоны; readonly_db уже в SPEC. Нужны изолированный broker/регистрации/cleanup до команды, без fallback, внешнего broker, зависимости от порядка, изменения assertions или общего ROLES. Пять старых смен области developer не расширяются.
+F3: QUESTIONS содержит раздельную пятиколоночную матрицу. Прежние parity/argv-тесты не доказывают эффективные approvals/файловые права; новые проверки обязательны по AC-17/19. Матрица готова для переноса после ответа.
+ADR-0024/0025 прочитаны из main через git show; PLAN и NOTE-developer подтверждают EPERM прежней пробы, а не готовность канала.
 
 ## Не сработало
-Реальная прежняя проба разработчика дала connect EPERM. Debug-опыт ANSWER-3 и процессные фикстуры прежней планки не доказывают настоящие Codex/Claude × macOS/Linux; четыре live-проверки обязательны. В этом шаге пробы и полный набор не запускались.
+В PATH нет cat (exit 127); чтение продолжено pathlib через штатный python3. apply_patch отказал delete+add одного пути; записка записана pathlib. Полный набор и IPC-пробы не запускались.
 
 ## Где остановился
-SPEC status ready; QUESTIONS отсутствует. БД show: spec_writing, нужная ветка; потрачено $22.08/$45, остаток $22.92 до текущего шага. Оценка штатных оставшихся ролей около $19.6 без независимого аудита/live-матрицы: запас узок, риск указан, потолок не повышен. Новый аудит/гейт SPEC предшествуют коду. Итоговый scripts/guard.py SPEC.md: GUARD: ок (1 файлов), exit 0. git status --short пустой; имя StepCommandTest сверено по AST. Код и чужие артефакты не менялись.
+QUESTIONS.md: GUARD ок (1 файлов), exit 0. SPEC не менялся: SHA 4a08c32089ebd79a1fc35f620cc5983340c49254 совпал до/после. git status --short пуст. Только собственные QUESTIONS и NOTE-analyst записаны; код/PLAN/чужие записки не менялись, коммитов нет. Требуется штатный ответ Оператора; после него пересмотр SPEC и независимый аудит.
+БД show: spec_writing, нужная ветка, $28.85/$45; остаток $16.15 до этого шага меньше прежней оценки ~$19.6 без аудита/live. Риск назван, потолок не поднят.
 
 ## Чего не хватило
-ADR в брифе отсутствовали на диске worktree, нашлись в main. Прежняя оценка до семи файлов и PGID-фикстуры не соответствуют новому IPC-мандату.
+Машинного мандата на конфигурационный assertion и явного разрешения подготовки общих fixtures. Поиск полного набора положительных вызывателей выявил ещё три файла помимо двух в аудите.
 
 ## Предложения системе
-Ранее отмеченное расхождение порога: шаблон SPEC $30, config.py $60. ADR из main не материализованы в старом worktree; источник чтения зафиксирован в SPEC.
+Содержательное разрешение ANSWER-3 не совпало с машинным форматом test_integrity._answer_mandate; нужна сверка до developer. При новом обязательном контексте нужно учитывать setup старых положительных тестов. В PATH роли отсутствует cat; чтение доступно через штатный python3.
