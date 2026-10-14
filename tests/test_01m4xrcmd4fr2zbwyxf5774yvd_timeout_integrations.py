@@ -7,6 +7,7 @@
 import contextlib
 import json
 import os
+import re
 import select
 import signal
 import subprocess
@@ -82,6 +83,11 @@ class SeparateSuiteScenarios(TmpRootTest):
         self.assertEqual(len(self.records()), before + 1)
         for cache in caches:
             self.assertFalse(cache.exists())
+        output = result.log_path.read_text(encoding="utf-8")
+        counts = {kind: int(count) for count, kind in
+                  re.findall(r"(\d+) (passed|failed|skipped)", output)}
+        self.assertEqual(counts, {"passed": 1, "failed": 1, "skipped": 1} if red
+                         else {"passed": 2, "skipped": 1}, output)
         return json.loads(self.records()[-1]["detail"])
 
     def assert_metrics(self, metrics, workers, timeout=False):
@@ -112,6 +118,7 @@ class SeparateSuiteScenarios(TmpRootTest):
         разовая планка наблюдает их совместно с этим дополнением.
         Ловит мутацию: таймаут засчитывается за RED, skipped теряется из
         счётчика или нормализация workers=2 перестаёт равняться duration/3.
+        Замена skipped на passed при прежней сумме 3 также проваливает тест.
         """
         for reverse in (False, True):
             with self.subTest(reverse=reverse):
