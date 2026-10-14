@@ -491,6 +491,30 @@ class RunLockedTest(TaskSeededTmpRootTest):
         self.assertIsNone(self.row(), "тело упало — lease, взятый с нуля, "
                                       "всё равно обязан быть отпущен")
 
+    def test_remote_parallel_lease_survives_body_exception(self):
+        """Разрешённое тело может упасть, не меняя remote lease своей сессии.
+
+        Ловит мутацию: продление только по PID переписывает remote строку
+        даже при исключении тела; снятие предсуществующего lease в finally
+        удаляет её вместо сохранения.
+        """
+        conn = store.db()
+        store.insert_lease(conn, self.TASK, "sess-a", os.getpid(),
+                           socket.gethostname() + "-remote", _ts_ago(5))
+        store.update_lease_pgid(conn, self.TASK, 12345)
+        before = dict(self.row())
+        steps_before = [dict(s) for s in store.task_steps(conn, self.TASK)]
+        body = mock.Mock(side_effect=ValueError("operation failed"))
+
+        with self.assertRaisesRegex(ValueError, "operation failed"):
+            lease.run_locked(conn, self.TASK, "sess-a", body, same_host_ok=True)
+
+        body.assert_called_once_with("sess-a")
+        self.assertEqual(dict(self.row()), before)
+        self.assertEqual([dict(s) for s in store.task_steps(conn, self.TASK)],
+                         steps_before)
+        self.assertFalse(conn.in_transaction)
+
 
 class ForeignLiveLeaseTest(TaskSeededTmpRootTest):
     """SPEC 01M1NEEYSP0QWPMXHG0BK591M7, требование 1: `foreign_live_lease`/
