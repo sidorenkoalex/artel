@@ -55,7 +55,7 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/canary.py:2633 | передачу ролей из `_run_one_task` в строку `canary_runs` проверяет только разовая планка, сторожа в `tests/` нет (мутация `escalation_roles=None` — 172 passed) | после мержа потеря аргумента молча вернёт все строки к `NULL` и старому правилу чистоты, `admit` на шаблонах с ловушкой снова блокируется без красного теста | тест в `tests/` на `_run_one_task` с подменённым результатом клона: строка несёт `analyst,spec_auditor`; проверить временной мутацией |
+| R1-F1 | fixed | orchestrator/canary.py:2633 | передачу ролей из `_run_one_task` в строку `canary_runs` проверяет только разовая планка, сторожа в `tests/` нет (мутация `escalation_roles=None` — 172 passed) | после мержа потеря аргумента молча вернёт все строки к `NULL` и старому правилу чистоты, `admit` на шаблонах с ловушкой снова блокируется без красного теста | developer: добавлен `tests/test_canary_escalation_roles_storage.py::RunOneTaskRecordsEscalationRolesTest::test_row_carries_roles_computed_from_clone_steps` — `_run_one_task` с подменённым `_run_task_in_ephemeral_clone` (steps с двумя эскалациями и маркерами за фиксацией) пишет строку `('analyst,spec_auditor', 2)`; мутация `escalation_roles=None` в `canary.py:2633` — тест красный, код возвращён |
 
 ## Вердикт
 changes_requested — закрыть R1-F1 (сторож в `tests/` для связки

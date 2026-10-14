@@ -42,12 +42,18 @@ schema_version: 5
    по умолчанию `NULL`) — свойство, не покрытое долгоживущим файлом;
    проверен мутацией `roles or None` (красный), код возвращён.
 5. Карта `python3 scripts/codebase_map.py`.
+6. Итерация 2 (R1-F1): сторож связки `_run_one_task` → колонка
+   `escalation_roles` в `tests/test_canary_escalation_roles_storage.py`
+   (`RunOneTaskRecordsEscalationRolesTest`): подменён только
+   `_run_task_in_ephemeral_clone`, строка несёт `analyst,spec_auditor`,
+   `escalations = 2`. Мутация `escalation_roles=None` в `canary.py:2633` —
+   тест красный, код возвращён.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1, 2, 4 |
+| 1 | 1, 2, 4, 6 |
 | 2 | 3 |
 | 3 | 3 (проверка `expected_escalation_met` стоит раньше ветки ролей) |
 | 4 | 1 (без DEFAULT), 3 (`None` → прежняя ветка) |
