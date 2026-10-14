@@ -1445,7 +1445,8 @@ def _ensure_canary_tables(conn) -> None:
         "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
         "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT,"
         "  main_sha TEXT, verdict TEXT, set_name TEXT, models_summary TEXT,"
-        "  acceptance_route TEXT, autogate_refusal TEXT);"
+        "  acceptance_route TEXT, autogate_refusal TEXT,"
+        "  escalation_roles TEXT);"
         "CREATE TABLE IF NOT EXISTS canary_baseline ("
         "  title TEXT, set_name TEXT, steps INTEGER, cost_usd REAL,"
         "  review_iterations INTEGER, updated_at TEXT,"
@@ -1472,6 +1473,11 @@ def _ensure_canary_tables(conn) -> None:
     add_column(conn, "canary_runs", "models_summary", "TEXT")
     add_column(conn, "canary_runs", "acceptance_route", "TEXT")
     add_column(conn, "canary_runs", "autogate_refusal", "TEXT")
+    # Роли эскалаций прогона (SPEC 01M4VC31NFCS6JZ0VE8HNJ7FYM, требование
+    # 1): без значения по умолчанию — у строк до этой задачи остаётся
+    # `NULL` («данных о ролях нет»), пустая строка значила бы «эскалаций не
+    # было» и перекрасила бы их вердикт чистоты задним числом (требование 4).
+    add_column(conn, "canary_runs", "escalation_roles", "TEXT")
     # Строки, заведённые до этой задачи, принадлежат набору по умолчанию
     # (требование 7, AC-8): `NULL` означал бы «прогон ничьего набора», и
     # `green_canary_runs` — вход гейта сдвига пина — перестал бы их видеть.
@@ -1523,7 +1529,8 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
                       set_name: str = config.CANARY_DEFAULT_SET,
                       models_summary: str | None = None,
                       acceptance_route: str | None = None,
-                      autogate_refusal: str | None = None) -> None:
+                      autogate_refusal: str | None = None,
+                      escalation_roles: list[str] | None = None) -> None:
     """Строка метрик одной канареечной задачи одного прогона (SPEC
     01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
     `canary._run_one_task`.
@@ -1535,18 +1542,25 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
     `set_name`/`models_summary` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
     требование 7) — набор ролей прогона и сводка «роль -> модель», по
     которой он шёл; значение по умолчанию — набор по умолчанию, тем же
-    приёмом совместимости, что `main_sha`/`verdict` выше."""
+    приёмом совместимости, что `main_sha`/`verdict` выше.
+
+    `escalation_roles` (SPEC 01M4VC31NFCS6JZ0VE8HNJ7FYM, требование 1) —
+    роли эскалаций по порядку, в колонку — через запятую без пробелов;
+    `[]` — пустая строка (эскалаций не было), `None` — `NULL` (данных о
+    ролях нет: прогон без результата клона)."""
     _ensure_canary_tables(conn)
+    roles_text = None if escalation_roles is None else ",".join(escalation_roles)
     conn.execute(
         "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
         " review_iterations, escalations, outcome, expected_escalation,"
         " actual_escalation, marker_mismatch, main_sha, verdict, set_name,"
-        " models_summary, acceptance_route, autogate_refusal, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " models_summary, acceptance_route, autogate_refusal,"
+        " escalation_roles, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (run_stamp, title, task_id, steps, cost_usd, review_iterations,
          escalations, outcome, expected_escalation, int(actual_escalation),
          int(marker_mismatch), main_sha, verdict, set_name, models_summary,
-         acceptance_route, autogate_refusal, now()))
+         acceptance_route, autogate_refusal, roles_text, now()))
     conn.commit()
 
 
