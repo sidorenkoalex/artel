@@ -6,8 +6,10 @@
 
 import contextlib
 import json
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -48,7 +50,37 @@ class SuiteObservationTest(TmpRootTest):
                 mock.patch.object(config, "FULL_SUITE_TIMEOUT_SEC", 4), \
                 mock.patch.object(project_profile, "full_suite_limit",
                                   return_value=(4, "config")):
+            if outcome in ("green", "red"):
+                return self.run_real_gate(outcome)
             return acceptance.full_suite(self.root, self.task, fresh=True)
+
+    def run_real_gate(self, outcome):
+        """Наблюдаем настоящий процесс, включая код выхода и состав итога."""
+        original_popen = subprocess.Popen
+        processes = []
+
+        def launch(argv, *args, **kwargs):
+            proc = original_popen(argv, *args, **kwargs)
+            if "pytest" in argv:
+                processes.append(proc)
+            return proc
+
+        with mock.patch.dict(os.environ, {
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": ""}), \
+                mock.patch.object(subprocess, "Popen", launch):
+            result = acceptance.full_suite(
+                self.root, self.task, fresh=True,
+                command=[sys.executable, "-m", "pytest", "-p", "xdist",
+                         "-p", "timeout"])
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].returncode, 0 if outcome == "green" else 1,
+                         result.detail)
+        output = result.log_path.read_text(encoding="utf-8")
+        counts = {kind: int(count) for count, kind in
+                  re.findall(r"(\d+) (passed|failed|skipped)", output)}
+        self.assertEqual(counts, {"passed": 2, "skipped": 1} if outcome == "green"
+                         else {"passed": 1, "failed": 1, "skipped": 1}, output)
+        return result
 
     def run_suite_command(self, outcome):
         """Фоновое тело команды на временном дереве с настоящим pytest."""
@@ -137,14 +169,15 @@ class SuiteObservationTest(TmpRootTest):
         self.fail("в записи нет списка трёх процессов с pid")
 
     def test_ac1_gate_writes_each_outcome_with_metrics(self):
-        """Три исхода полного гейта дают ровно одну запись измерения каждый.
+        """Завершённые исходы дают ровно одну запись измерения каждый.
 
-        Ловит мутацию: красный прогон или таймаут проходит мимо записи,
-        поэтому в журнале отсутствует измерение с пустым числом тестов.
+        Таймаут и неизвестные счётчики проверяются отдельно в
+        test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py.
+        Ловит мутацию: красный прогон проходит мимо записи либо skipped
+        заменён passed при неизменном общем числе трёх тестов.
         """
         for outcome, count, timeout in (
-                ("green", 3, False), ("red", 3, False),
-                ("timeout", None, True)):
+                ("green", 3, False), ("red", 3, False)):
             before = len(self.records())
             result = self.run_gate(outcome)
             self.assertEqual(result.outcome,
@@ -157,14 +190,15 @@ class SuiteObservationTest(TmpRootTest):
 
     def test_gate_writes_workers_2_metrics(self):
         """Ловит мутацию: реальный прогон workers=2 пишет неверное число
-        workers либо теряет равенство времени на тест длительности / 3."""
+        workers либо теряет равенство времени на тест длительности / 3;
+        skipped заменён passed без изменения общего счётчика."""
         self.write_scenario("green")
         before = len(self.records())
         with mock.patch.object(config, "FULL_SUITE_WORKERS", 2), \
                 mock.patch.object(config, "FULL_SUITE_TIMEOUT_SEC", 4), \
                 mock.patch.object(project_profile, "full_suite_limit",
                                   return_value=(4, "config")):
-            result = acceptance.full_suite(self.root, self.task, fresh=True)
+            result = self.run_real_gate("green")
         self.assertEqual(result.outcome, acceptance.FULL_SUITE_GREEN)
         after = self.records()
         self.assertEqual(len(after), before + 1)
