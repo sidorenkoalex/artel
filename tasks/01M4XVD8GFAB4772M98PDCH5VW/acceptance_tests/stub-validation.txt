@@ -1,0 +1,47 @@
+Временный стаб в памяти, НЕ продуктовая реализация. Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p plank_stub -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -s
+зерно: 4119473007
+uuuuuu.зерно: 1079362078
+uuuuuu.зерно: 3296684324
+uuuu.зерно: 2211475323
+.зерно: 1586598285
+воздействие: SIGTERM идентичности: [('drive', 53853, 0, 3855380677), ('suite-run', 53854, 53855, 1311640296), ('role', 53863, 53864, 327580261)] перед удалением: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpaqew7mjp/.artel/process-fixtures/artel-canary-tzkodmci'), [('drive', 53853, False), ('suite-run', 53854, False), ('suite-run', 53855, False), ('role', 53863, False), ('role', 53864, False)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpaqew7mjp/.artel/process-fixtures/artel-canary-origin-6krw9umy'), [('drive', 53853, False), ('suite-run', 53854, False), ('suite-run', 53855, False), ('role', 53863, False), ('role', 53864, False)])] после: [('drive', 53853, False), ('suite-run', 53854, False), ('suite-run', 53855, False), ('role', 53863, False), ('role', 53864, False)]
+uвоздействие: SIGHUP идентичности: [('drive', 53887, 0, 2166615805), ('suite-run', 53888, 53889, 3755668489), ('role', 53897, 53898, 3697412796)] перед удалением: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpaqew7mjp/.artel/process-fixtures/artel-canary-sc71y1av'), [('drive', 53887, False), ('suite-run', 53888, False), ('suite-run', 53889, False), ('role', 53897, False), ('role', 53898, False)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpaqew7mjp/.artel/process-fixtures/artel-canary-origin-g1ma7dwq'), [('drive', 53887, False), ('suite-run', 53888, False), ('suite-run', 53889, False), ('role', 53897, False), ('role', 53898, False)])] после: [('drive', 53887, False), ('suite-run', 53888, False), ('suite-run', 53889, False), ('role', 53897, False), ('role', 53898, False)]
+u.зерно: 1627682686
+uu.зерно: 1354102498
+uu.зерно: 882787491
+uuuuuu.зерно: 2158095861
+uu.зерно: 1798801217
+uu.зерно: 256133314
+uu.зерно: 2343826660
+uu.зерно: 3656770509
+uu.зерно: 2674345135
+uu.зерно: 465679774
+uuu.зерно: 400797778
+.зерно: 4067859037
+uuuuuuuu.зерно: 290885943
+uuuuuuuuuuuu.зерно: 4162669052
+uuuuu.зерно: 1770391672
+uuuu.зерно: 2905216031
+uuuuuuuuuu.зерно: 4190096319
+uu.зерно: 4244740198
+[01000000000000000000000001] лог шага: /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp_13ur5gi/.artel/logs/01000000000000000000000001-developer-1.log  (наблюдать: tail -f /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp_13ur5gi/.artel/logs/01000000000000000000000001-developer-1.log)
+[01000000000000000000000001] таймаут шага (45 мин) — разберись и перезапусти run
+u[01000000000000000000000002] лог шага: /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp_13ur5gi/.artel/logs/01000000000000000000000002-developer-1.log  (наблюдать: tail -f /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp_13ur5gi/.artel/logs/01000000000000000000000002-developer-1.log)
+[01000000000000000000000002] таймаут шага (45 мин) — разберись и перезапусти run
+u.зерно: 434077675
+uu.зерно: 2557497814
+uu.
+25 passed, 90 subtests passed in 48.73s
+
+Код выхода: 0
+
+Дополнение: reuse сохраняет числовую адресуемость kill(0) и getpgid. Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p plank_stub -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -k rechecks_identity
+.                                                                [100%]
+1 passed, 24 deselected, 8 subtests passed in 5.92s
+
+Код выхода: 0
+
+Контроль liveness без стаба: python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_liveness_contract.py -p no:cacheprovider -p timeout -o timeout=120 -q
+2 passed, 17 subtests passed in 0.05s; exit 0.
+SHA256 временного стаба: 54203e8ba8ab994f780ee46c4a36bca6cefc3a5d66a8016ad7c61f6957f2f406
+Временный код стаба, валидатора и кеш удалены после проверки.

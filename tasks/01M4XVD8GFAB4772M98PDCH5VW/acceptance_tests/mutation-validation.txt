@@ -1,0 +1,163 @@
+Временный стаб в памяти; НЕ продуктовая реализация.
+Контрольный прогон всего файла: 25 passed, 90 subtests passed, 47.18 с.
+Стаб меняет canary/runner/cleanup только в памяти pytest, наблюдает созданные группы через kqueue и узкий libproc(PROC_PGRP_ONLY).
+
+Мутация: omit-role
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -p plank_stub -k ac12
+Код: 1
+.                                                                    [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=3380356373, signal=<Signals.SIGTERM: 15>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 3380356373; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpy5gjxsm1/.artel/process-fixtures/artel-canary-xbvfjvdw'), [('drive', 49210, False), ('suite-run', 49211, False), ('suite-run', 49212, False), ('role', 49222, True), ('role', 49223, True)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=3380356373, signal=<Signals.SIGHUP: 1>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 3380356373; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpy5gjxsm1/.artel/process-fixtures/artel-canary-5aypgoqr'), [('drive', 49244, False), ('suite-run', 49245, False), ('suite-run', 49246, False), ('role', 49254, True), ('role', 49255, True)])
+=========================== short test summary info ============================
+SUBFAILED(seed=3380356373, signal=<Signals.SIGTERM: 15>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=3380356373, signal=<Signals.SIGHUP: 1>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+2 failed, 1 passed, 24 deselected, 2 subtests passed in 1.86s
+
+Мутация: omit-suite
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -p plank_stub -k ac12
+Код: 1
+.                                                                    [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=261006403, signal=<Signals.SIGTERM: 15>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 261006403; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpqdnn5wa5/.artel/process-fixtures/artel-canary-qhvjong4'), [('drive', 49344, False), ('suite-run', 49345, True), ('suite-run', 49346, True), ('role', 49356, False), ('role', 49357, False)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=261006403, signal=<Signals.SIGHUP: 1>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 261006403; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpqdnn5wa5/.artel/process-fixtures/artel-canary-y4xypm30'), [('drive', 49378, False), ('suite-run', 49379, True), ('suite-run', 49380, True), ('role', 49388, False), ('role', 49389, False)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=261006403, signal=<Signals.SIGTERM: 15>, early=True, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 261006403; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpqdnn5wa5/.artel/process-fixtures/artel-canary-pgwi3p6r'), [('drive', 49410, False), ('suite-run', 49411, True), ('suite-run', 49412, True)])
+=========================== short test summary info ============================
+SUBFAILED(seed=261006403, signal=<Signals.SIGTERM: 15>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=261006403, signal=<Signals.SIGHUP: 1>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=261006403, signal=<Signals.SIGTERM: 15>, early=True, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+3 failed, 1 passed, 24 deselected, 1 subtests passed in 1.86s
+
+Мутация: omit-drive
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -p plank_stub -k ac12
+Код: 1
+.                                                                    [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2786197813, signal=<Signals.SIGTERM: 15>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2786197813; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpmylyi29f/.artel/process-fixtures/artel-canary-t0hladjz'), [('drive', 49476, True), ('suite-run', 49477, False), ('suite-run', 49478, False), ('role', 49488, False), ('role', 49489, False)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2786197813, signal=<Signals.SIGHUP: 1>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2786197813; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpmylyi29f/.artel/process-fixtures/artel-canary-m3uatmjl'), [('drive', 49510, True), ('suite-run', 49511, False), ('suite-run', 49512, False), ('role', 49520, False), ('role', 49521, False)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2786197813, signal=<Signals.SIGTERM: 15>, early=True, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2786197813; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpmylyi29f/.artel/process-fixtures/artel-canary-nq_i01om'), [('drive', 49542, True), ('suite-run', 49543, False), ('suite-run', 49544, False)])
+=========================== short test summary info ============================
+SUBFAILED(seed=2786197813, signal=<Signals.SIGTERM: 15>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=2786197813, signal=<Signals.SIGHUP: 1>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=2786197813, signal=<Signals.SIGTERM: 15>, early=True, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+3 failed, 1 passed, 24 deselected, 1 subtests passed in 1.91s
+
+Мутация: early-remove
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -p plank_stub -k ac12
+Код: 1
+.                                                                    [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2968115854, signal=<Signals.SIGTERM: 15>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2968115854; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpm9llf7pc/.artel/process-fixtures/artel-canary-80cwjqsf'), [('drive', 49610, False), ('suite-run', 49611, True), ('suite-run', 49612, True), ('role', 49622, True), ('role', 49623, True)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2968115854, signal=<Signals.SIGHUP: 1>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2968115854; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpm9llf7pc/.artel/process-fixtures/artel-canary-6njs5ss9'), [('drive', 49646, False), ('suite-run', 49647, True), ('suite-run', 49648, True), ('role', 49656, True), ('role', 49657, True)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2968115854, signal=<Signals.SIGTERM: 15>, early=True, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2968115854; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpm9llf7pc/.artel/process-fixtures/artel-canary-_yzxqg3i'), [('drive', 49680, True), ('suite-run', 49681, True), ('suite-run', 49682, True)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2968115854, signal=<Signals.SIGHUP: 1>, early=False, fault='exception') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:428: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assertFalse(state["removals"], f"зерно: {self.seed}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpm9llf7pc/.artel/process-fixtures/artel-canary-yme4l4la'), [('drive', 49704, False), ('suite-run', 49705, True), ('suite-run', 49706, True), ('role', 49714, True), ('role', 49715, True)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpm9llf7pc/.artel/process-fixtures/artel-canary-origin-udsuj1rc'), [('drive', 49704, False), ('suite-run', 49705, True), ('suite-run', 49706, True), ('role', 49714, True), ('role', 49715, True)])] is not false : зерно: 2968115854
+=========================== short test summary info ============================
+SUBFAILED(seed=2968115854, signal=<Signals.SIGTERM: 15>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=2968115854, signal=<Signals.SIGHUP: 1>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=2968115854, signal=<Signals.SIGTERM: 15>, early=True, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=2968115854, signal=<Signals.SIGHUP: 1>, early=False, fault='exception') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+4 failed, 1 passed, 24 deselected in 1.95s
+
+Мутация: remove-after-error
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -p plank_stub -k ac12
+Код: 1
+.                                                                    [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2780492417, signal=<Signals.SIGHUP: 1>, early=False, fault='exception') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:428: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assertFalse(state["removals"], f"зерно: {self.seed}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpjj53ejfy/.artel/process-fixtures/artel-canary-7tbvxbss'), [('drive', 49842, False), ('suite-run', 49843, True), ('suite-run', 49844, True), ('role', 49852, True), ('role', 49853, True)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpjj53ejfy/.artel/process-fixtures/artel-canary-origin-ud37y8pj'), [('drive', 49842, False), ('suite-run', 49843, True), ('suite-run', 49844, True), ('role', 49852, True), ('role', 49853, True)])] is not false : зерно: 2780492417
+=========================== short test summary info ============================
+SUBFAILED(seed=2780492417, signal=<Signals.SIGHUP: 1>, early=False, fault='exception') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+1 failed, 1 passed, 24 deselected, 3 subtests passed in 1.86s
+
+Мутация: early-window
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -p plank_stub -k ac12
+Код: 1
+.                                                                    [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=2082715284, signal=<Signals.SIGTERM: 15>, early=True, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:432: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:366: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2082715284; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpi_dyrsve/.artel/process-fixtures/artel-canary-gmlxcbc3'), [('drive', 49960, True)])
+=========================== short test summary info ============================
+SUBFAILED(seed=2082715284, signal=<Signals.SIGTERM: 15>, early=True, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+1 failed, 1 passed, 24 deselected, 3 subtests passed in 1.87s
+
+Отдельная проверка AC-5, мутация early-window. Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p plank_stub -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short -k sigterm_before_drive_popen_returns
+.                                                                      [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac5_sigterm_before_drive_popen_returns (seed=2494434349, nonce=41354) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:715: in test_ac5_sigterm_before_drive_popen_returns
+    self.assertIsNotNone(removals[0][1],
+E   AssertionError: unexpectedly None : зерно: 2494434349; drive=57139 жив перед rmtree /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp5vwb5_jz/.artel/process-fixtures/artel-canary-0s3iygto
+_ EarlyDriveTest.test_ac5_sigterm_before_drive_popen_returns (seed=2494434349, nonce=51399) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:715: in test_ac5_sigterm_before_drive_popen_returns
+    self.assertIsNotNone(removals[0][1],
+E   AssertionError: unexpectedly None : зерно: 2494434349; drive=57152 жив перед rmtree /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp5vwb5_jz/.artel/process-fixtures/artel-canary-g23ktqk2
+=========================== short test summary info ============================
+SUBFAILED(seed=2494434349, nonce=41354) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_sigterm_before_drive_popen_returns
+SUBFAILED(seed=2494434349, nonce=51399) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_sigterm_before_drive_popen_returns
+2 failed, 1 passed, 24 deselected in 0.69s
+
+Код выхода: 1
