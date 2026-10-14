@@ -1,28 +1,31 @@
 # Записка spec_auditor 01M4VC31NFCS6JZ0VE8HNJ7FYM
 
 ## Выяснено
-- Третий визит (spec_sha 78a7664d…): Т-1 (промежуточные записи в AC-1..AC-3),
-  Т-2 (нет ключа = NULL, треб. 4 и AC-9), Ф-1 (адрес :2232 в
-  `_run_task_in_ephemeral_clone`) — закрыты.
-- Факты подтверждены заново: models.py:1128/1136/1149-1151/1174/1196-1197,
-  :996-998; canary.py:291, :1848, :2232, :2328-2343, :2416-2424, :2565-2581,
-  :2645, :2762; store.py:1442-1468 (`_ensure_canary_tables`, add_column);
-  config.py:805; catalog.py:667/:670; auto.py:400; canary_drive.py:67-87;
-  store.py:852 — set_state пишет `state -> X`.
-- Новая находка (concerns, Е-1): эскалации пульта идут тем же `state -> escalated`
-  из текущего состояния — `budget.enforce_budget` (budget.py:300, деталь «бюджет
-  исчерпан»), fixation.py:248. По правилу «роль = состояние» бюджетная эскалация
-  в `spec_audit`/`spec_writing` засчитается как эскалация spec_auditor/analyst:
-  analyst-ловушка + бюджет в spec_audit — чистый (на main — не чистый, 2 > 1).
-  ТЗ запрещает разбор детали — решать Оператору.
-- Мелкое (В-1): AC-1 «строка, записанная `_run_one_task`» — уровень подмены
-  в тесте может навязать место вычисления ролей.
+- Четвёртый визит (spec_sha 829d7807…). Решения гейта №1 (Т-1, Т-2, Ф-1) и
+  №2 (Е-1 — эскалация пульта = unknown по маркеру; В-1 — уровень подмены) в
+  SPEC отражены.
+- Главная находка Ф-1 (fail): SPEC требует, чтобы маркер
+  `ARTIFACT_ESCALATION_ROLE_STEP_MARKER` стоял записью СРАЗУ за
+  `state -> escalated`. В коде так не бывает: `store.set_state`
+  (store.py:820-827) после `_cas_state` (журнал `state -> escalated`, :852)
+  зовёт `record_fixation`, который пишет «sha зафиксирован» (store.py:966),
+  и только потом вызывающий пишет маркер (fsm_advance.py:290-292 и др.).
+  При дрейфе ссылки — `fixation.journal_drift` (store.py:829). Тест
+  tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py:168-170
+  фильтрует «sha зафиксирован» и actor lease, чтобы увидеть маркер «следующим».
+  Буквальная реализация: каждая эскалация роли → unknown, любой прогон с
+  ловушкой не чистый (хуже main). Синтетические журналы AC-1/2/3/11 без
+  «sha зафиксирован» этого не ловят.
+- Прочие адреса подтверждены: budget.py:300, fixation.py:248, runner.py:447/:800,
+  fsm_advance.py:347/:482 (verifying без маркера), models.py:1128/1136/1174,
+  config.py:805, catalog.py:667/670, canary.py:291/1734-1747/1848/2146/2232/2361/2504,
+  store.py:1442 (DDL), :1516 insert_canary_run, canary_drive.py:41 STEP_FIELDS.
 
 ## Не сработало
-- Bash: составные команды с `;`, `$n`, циклы — отклоняются; только одиночные grep/sed.
+- `ls` в Bash недоступен (command not found).
 
 ## Где остановился
-- SPEC-AUDIT.md написан: status ready, verdict concerns (Е-1, В-1).
+- SPEC-AUDIT.md: verdict fail (Ф-1 + следствия В-2, Е-1).
 
 ## Чего не хватило
-- Перечень всех мест `set_state(..., "escalated")` пульта — искал grep'ом по `"escalated", "fsm"`.
+- Порядок записей журнала внутри `store.set_state` (фиксация пишет свою запись после перехода) — нашёл чтением store.py:775-966.
