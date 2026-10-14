@@ -155,6 +155,26 @@ class SuiteObservationTest(TmpRootTest):
             self.assertEqual(len(after), before + 1, outcome)
             self.assert_record_fields(after[-1], count, timeout)
 
+    def test_gate_writes_workers_2_metrics(self):
+        """Ловит мутацию: реальный прогон workers=2 пишет неверное число
+        workers либо теряет равенство времени на тест длительности / 3."""
+        self.write_scenario("green")
+        before = len(self.records())
+        with mock.patch.object(config, "FULL_SUITE_WORKERS", 2), \
+                mock.patch.object(config, "FULL_SUITE_TIMEOUT_SEC", 4), \
+                mock.patch.object(project_profile, "full_suite_limit",
+                                  return_value=(4, "config")):
+            result = acceptance.full_suite(self.root, self.task, fresh=True)
+        self.assertEqual(result.outcome, acceptance.FULL_SUITE_GREEN)
+        after = self.records()
+        self.assertEqual(len(after), before + 1)
+        metrics = json.loads(after[-1]["detail"])
+        self.assertGreater(metrics["duration_seconds"], 0)
+        self.assertEqual(metrics["tests"], 3)
+        self.assertEqual(metrics["xdist_workers"], 2)
+        self.assertEqual(metrics["seconds_per_test"],
+                         metrics["duration_seconds"] / metrics["tests"])
+
     # AC-2: skip — решение Оператора 07.10 (вариант В): suite-run не пишет
     # запись в журнал задачи — это запрещает долгоживущий тест
     # tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py::FootprintTest::

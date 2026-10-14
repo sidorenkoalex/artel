@@ -6,7 +6,6 @@
 
 import contextlib
 import os
-import random
 import shutil
 import subprocess
 from pathlib import Path
@@ -89,6 +88,21 @@ class DoctorDurationTest(TmpRootTest):
                 if row["action"] == "прогон: время"]
         self.assertTrue(rows, "полный прогон не записал измерение")
 
+    def journal_measurement(self, duration, tests=4, workers=1):
+        acceptance.journal_suite_metrics(self.task, {
+            "duration_seconds": duration,
+            "tests": tests,
+            "seconds_per_test": duration / tests,
+            "xdist_workers": workers,
+            "load_start_1": 0.4,
+            "load_start_5": 0.5,
+            "load_end_1": 0.6,
+            "load_end_5": 0.7,
+            "cpu_cores": 8,
+            "top_processes": [{"pid": 98765, "cpu_percent": 12.5,
+                               "name": "loadhog", "age": "01:23"}],
+        })
+
     def test_ac6_machine_load_is_ok_or_warn_never_fail(self):
         """Свободная машина даёт ok, высокий load и процесс дают warn.
 
@@ -150,39 +164,91 @@ class DoctorDurationTest(TmpRootTest):
         k = config.SUITE_DURATION_CALIBRATION_RUNS
         ratio = config.SUITE_DURATION_RATIO
         self.assertEqual((k, ratio), (8, 0.6))
-        seed = random.randrange(2**32)
-        print(f"зерно: {seed}")
-        rng = random.Random(seed)
-        baseline = [rng.uniform(0.005, 0.015) for _ in range(k)]
-        for delay in baseline:
-            self.measured_run(delay)
-        self.doctor_checks()
-        self.assertFalse(self.triggers(), f"зерно: {seed}; окно ещё не закрыто")
-
-        self.measured_run(1.0, count=100, workers=1)
-        self.doctor_checks()
-        self.assertFalse(self.triggers(),
-                         f"зерно: {seed}; рост числа тестов сам не сигнал")
-
-        self.measured_run(4.0, count=4, workers=2)
-        self.doctor_checks()
-        self.assertFalse(self.triggers(),
-                         f"зерно: {seed}; новое число xdist открывает окно")
-
         for _ in range(k):
-            self.measured_run(0.01, count=4, workers=2)
-        self.doctor_checks()
-        self.assertFalse(self.triggers(), f"зерно: {seed}; ровно k записей")
+            self.journal_measurement(1.12)
+        target = config.DEFAULT_TARGET
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{target}"]
+        self.assertTrue(checks)
+        self.assertFalse(self.triggers(), "окно ещё не закрыто")
 
-        self.measured_run(4.0, count=4, workers=2)
-        self.doctor_checks()
+        self.journal_measurement(28, tests=100)
+        target = config.DEFAULT_TARGET
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{target}"]
+        self.assertTrue(checks)
+        self.assertFalse(self.triggers(), "рост числа тестов сам не сигнал")
+
+        self.journal_measurement(4, workers=2)
+        target = config.DEFAULT_TARGET
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{target}"]
+        self.assertTrue(checks)
+        self.assertFalse(self.triggers(), "новое число xdist открывает окно")
+
+        for _ in range(k - 1):
+            self.journal_measurement(1.12, workers=2)
+        target = config.DEFAULT_TARGET
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{target}"]
+        self.assertTrue(checks)
+        self.assertFalse(self.triggers(), "ровно k записей")
+
+        # Диагностические 0.8 с за четыре теста добавляют 0.2 с на тест.
+        self.journal_measurement(1.92, workers=2)
+        target = config.DEFAULT_TARGET
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{target}"]
+        self.assertTrue(checks)
         found = self.triggers()
-        self.assertEqual(len(found), 1, f"зерно: {seed}")
+        self.assertEqual(len(found), 1)
         message = found[0]["message"]
         self.assertRegex(message, r"(?i)(на тест|per.test)")
         self.assertRegex(message, r"(?i)(медиан|median)")
         self.assertRegex(message, r"(?i)(load|нагрузк)")
         self.assertRegex(message, r"(?i)(pid|процесс)")
+
+    def test_duration_high_eighth_has_no_signal(self):
+        """Ловит мутацию: doctor открывает сигнал на высокой восьмой записи
+        до завершения калибровочного окна."""
+        for _ in range(7):
+            self.journal_measurement(1.12)  # 0.28 с на тест
+        self.journal_measurement(1.92)  # 0.48 с на тест
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{config.DEFAULT_TARGET}"]
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0].status, "ok")
+        self.assertFalse(self.triggers())
+
+    def test_duration_delayed_ninth_triggers(self):
+        """Ловит мутацию: doctor теряет превышение 0.48 с на девятой
+        записи после восьми нормальных 0.28 с на тест."""
+        for _ in range(8):
+            self.journal_measurement(1.12)  # 0.28 с на тест
+        self.journal_measurement(1.92)  # 0.48 с на тест
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{config.DEFAULT_TARGET}"]
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0].status, "warn")
+        self.assertEqual(len(self.triggers()), 1)
+
+    def test_duration_normal_ninth_then_delayed_tenth_triggers(self):
+        """Ловит мутацию: doctor теряет сигнал на десятой записи после
+        нормальной девятой 0.28 с и задержанной десятой 0.48 с на тест."""
+        for _ in range(8):
+            self.journal_measurement(1.12)
+        self.journal_measurement(1.12)  # девятая, 0.28 с на тест
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{config.DEFAULT_TARGET}"]
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0].status, "ok")
+        self.assertFalse(self.triggers())
+        self.journal_measurement(1.92)  # десятая, 0.48 с на тест
+        checks = [check for check in self.doctor_checks()
+                  if check.name == f"suite-duration:{config.DEFAULT_TARGET}"]
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0].status, "warn")
+        self.assertEqual(len(self.triggers()), 1)
 
     def test_ac8_ack_restarts_calibration_after_signal(self):
         """Подтверждение сигнала переносит точку отсчёта на новые записи.
