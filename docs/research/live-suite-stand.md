@@ -279,3 +279,97 @@ RunLoop.main.run()
 <plist version="1.0"><dict><key>com.apple.security.virtualization</key><true/></dict></plist>
 
 ```
+
+## Проверка загрузки VM (15.10, 06:20 UTC)
+
+VM загрузилась с ядром 6.12.111+deb13-arm64, отдельный собственный root.raw 6 GiB. От UID 1000 реально выполнен preflight: Codex 0.157.1, Claude 2.1.283, Python 3.13.15, bubblewrap 0.12.0, socat 1.8.0.3; unshare NEWUSER rc=0 и bubblewrap smoke rc=0 без ослабленного Docker/seccomp. Это проверка зависимостей, не production/live evidence: ready_for_live=false.
+
+При экспорте rootfs Docker оставил /.dockerenv и пустой /etc/resolv.conf. В собственном госте marker удалён, resolv.conf заменён стандартной ссылкой systemd-resolved; изменения добавлены в build-vm.py для повторения. Для диагностики использовалась локальная serial-консоль через временный root autologin; он удалён после диагностики. SSH с хоста к выданному гостю DHCP адресу 192.168.64.2 пока завершился timeout, причина не установлена. Консоль работает. Маршрут нельзя считать готовым для ролей до проверки транспорта, сети, политики, учёта стоимости и четырёх реальных CLI результатов.
+
+### Актуальная версия vm/build-vm.py
+
+```
+import subprocess,uuid,json
+from pathlib import Path
+root=Path(__file__).resolve().parent
+cid=None
+def run(args,timeout=180):
+ p=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
+ if p.returncode:raise RuntimeError((p.stderr or p.stdout)[-2500:])
+ return p.stdout.strip()
+try:
+ cid=run(['docker','create','--user','root','--label','artel.operator.live-stand=true','--name','artel-live-vm-'+uuid.uuid4().hex[:8],'artel-live-stand:codex-0.157.1-claude-2.1.283','sleep','1800'])
+ run(['docker','start',cid]);print('own_vm_builder_started',flush=True)
+ run(['docker','exec',cid,'apt-get','-o','Acquire::Retries=0','-o','Acquire::https::Timeout=15','update'])
+ run(['docker','exec',cid,'env','DEBIAN_FRONTEND=noninteractive','apt-get','install','-y','--no-install-recommends','linux-image-arm64','initramfs-tools','systemd-sysv','systemd-resolved','openssh-server','e2fsprogs'],600)
+ print('guest_kernel_installed',flush=True)
+ run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(root/'id_ed25519')])
+ pub=(root/'id_ed25519.pub').read_text().strip()
+ setup="""from pathlib import Path
+import subprocess
+Path('/.dockerenv').unlink(missing_ok=True)
+Path('/etc/resolv.conf').unlink(missing_ok=True)
+Path('/etc/resolv.conf').symlink_to('/run/systemd/resolve/stub-resolv.conf')
+Path('/etc/fstab').write_text('/dev/vda / ext4 defaults 0 1\\n')
+Path('/etc/systemd/network/20-wired.network').write_text('[Match]\\nName=en* eth*\\n[Network]\\nDHCP=yes\\n')
+Path('/etc/ssh/sshd_config.d/stand.conf').write_text('PasswordAuthentication no\\nPermitRootLogin no\\n')
+p=Path('/home/agent/.ssh');p.mkdir(mode=0o700,exist_ok=True)
+(p/'authorized_keys').write_text(PUB+'\\n');(p/'authorized_keys').chmod(0o600)
+subprocess.run(['chown','-R','1000:1000',str(p)],check=True)
+subprocess.run(['systemctl','enable','systemd-networkd','systemd-resolved','ssh'],check=True)
+""".replace('PUB',repr(pub))
+ run(['docker','exec',cid,'python3','-c',setup])
+ run(['docker','cp',str(root.parent/'preflight.py'),cid+':/work/preflight.py'])
+ kernel=run(['docker','exec',cid,'sh','-c','ls /boot/vmlinuz-*']).splitlines()[-1]
+ initrd=run(['docker','exec',cid,'sh','-c','ls /boot/initrd.img-*']).splitlines()[-1]
+ run(['docker','cp',cid+':'+kernel,str(root/'vmlinuz')])
+ run(['docker','cp',cid+':'+initrd,str(root/'initrd.img')])
+ run(['docker','exec',cid,'mkdir','-p','/vm-export/root'])
+ # Export from outside the source tree; no mounts or elevated container capabilities.
+ subprocess.run(['docker','export','-o',str(root/'rootfs.tar'),cid],check=True,timeout=120)
+ run(['docker','cp',str(root/'rootfs.tar'),cid+':/vm-export/rootfs.tar'])
+ run(['docker','exec',cid,'tar','-xf','/vm-export/rootfs.tar','-C','/vm-export/root'],120)
+ run(['docker','exec',cid,'truncate','-s','6G','/vm-export/root.raw'])
+ run(['docker','exec',cid,'mkfs.ext4','-q','-F','-d','/vm-export/root','/vm-export/root.raw'],180)
+ run(['docker','cp',cid+':/vm-export/root.raw',str(root/'root.raw')],180)
+ print('guest_disk_ready',flush=True)
+finally:
+ if cid:print('own_vm_builder_removed='+str(subprocess.run(['docker','rm','-f',cid],capture_output=True,timeout=30).returncode==0),flush=True)
+
+```
+
+### Актуальная версия vm/run-vm.swift
+
+```
+import Foundation
+import Virtualization
+
+let root = URL(fileURLWithPath: CommandLine.arguments[1])
+let config = VZVirtualMachineConfiguration()
+let boot = VZLinuxBootLoader(kernelURL: root.appendingPathComponent("vmlinuz"))
+boot.initialRamdiskURL = root.appendingPathComponent("initrd.img")
+boot.commandLine = "root=/dev/vda rw console=hvc0 net.ifnames=0" + (CommandLine.arguments.contains("--repair") ? " init=/bin/sh" : "")
+config.bootLoader = boot
+config.cpuCount = 2
+config.memorySize = 2 * 1024 * 1024 * 1024
+let attachment = try VZDiskImageStorageDeviceAttachment(url: root.appendingPathComponent("root.raw"), readOnly: false)
+config.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: attachment)]
+let network = VZVirtioNetworkDeviceConfiguration()
+network.macAddress = VZMACAddress(string: "02:7a:17:00:00:17")!
+network.attachment = VZNATNetworkDeviceAttachment()
+config.networkDevices = [network]
+let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
+serial.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: FileHandle.standardInput, fileHandleForWriting: FileHandle.standardOutput)
+config.serialPorts = [serial]
+config.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+try config.validate()
+let machine = VZVirtualMachine(configuration: config)
+machine.start { result in
+    switch result {
+    case .success: print("ARTEL_VM_STARTED")
+    case .failure(let error): print("ARTEL_VM_ERROR: \(error)"); exit(1)
+    }
+}
+RunLoop.main.run()
+
+```
