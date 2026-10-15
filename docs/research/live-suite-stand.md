@@ -648,3 +648,13 @@ with tempfile.TemporaryDirectory(prefix='artel-exec-config-') as directory:
  print(json.dumps({'rc':result.returncode,'stdout':result.stdout[-2500:],'stderr':result.stderr[-2500:],'auth_isolated':True,'api_credentials_supplied':False}))
 
 ```
+
+## Независимая сверка и передача решения
+
+Независимый two_test_tz_audit подтвердил диагноз проверенного профиля: tag0.157.1 Restricted запрещает connect/getsockopt, ProxyRouted не учитывает точечный Unix-path при разрешении socket(AF_UNIX). EPERM согласуется с этой ветвью, но без трассировки активного фильтра нельзя приписать errno исключительно ей; общий вывод о невозможности всех решений не делается. server=[] без join не самостоятельное доказательство отсутствия accept: решающий отказ клиента случился до connect.
+
+npm latest на этой проверке — 0.162.1. Проверен [исходник тега 0.162.1](https://raw.githubusercontent.com/openai/codex/rust-v0.162.1/codex-rs/linux-sandbox/src/landlock.rs): релевантная ветвь по-прежнему содержит только dangerously_allow_all_unix_sockets для AF_UNIX. Новую версию не устанавливали, постоянный CLI/пин не меняли. Это не полный аудит версии.
+
+Офлайн-загрузка guest keyring пакетов превысила120с; собственный builder удалён finally, пакеты/секреты гостя не менялись. Повтор остановлен до решения о блокере канала. Оператору передан выбор: новый ADR/SPEC Linux-совместимого доверенного канала без ослабления ограничений/четырёх реальных маршрутов/$45 либо ожидание поставщика. Самостоятельный all Unix или новый transport не применены. Старое обязательство A и AC17 сохраняется.
+
+Параллельная уборка: ANSWER-5 адресно разрешил адаптацию suite-setup и новые проверки с сохранением27методов/assertions/предела100; эскалация снята, test_author5 запущен под наблюдением. Это не мандат на ослабление проверок либо изменение product scope.
