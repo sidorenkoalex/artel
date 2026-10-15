@@ -585,3 +585,66 @@ systemctl reload ssh
 printf 'STAND_NETWORK_SETUP_OK\n'
 
 ```
+
+## Linux Codex: адресный Unix-допуск пока не реализуем проверенным профилем
+
+Бесплатная проба установленного native codex0.157.1 в VM с именованным профилем, network_proxy, domains={} и единственным unix_sockets path=allow отклоняет socket(AF_UNIX) до connect с EPERM. Сервер не получил подключения. Это debug-диагностика, не четыре live-provider доказательства и не заключение о невозможности любых будущих решений.
+
+[Исходник точного тега rust-v0.157.1](https://raw.githubusercontent.com/openai/codex/rust-v0.157.1/codex-rs/linux-sandbox/src/landlock.rs), ветви NetworkSeccompMode: Restricted запрещает connect/getsockopt; ProxyRouted допускает AF_UNIX только при dangerously_allow_all_unix_sockets. Путь unix_sockets allow сам по себе не снимает запрет создания socket в этой ветви. Это согласуется с фактическим отказом. Blanket-допуск Unix не применялся: он противоречит принятому адресу одного сокета. Нужна независимая сверка и решение о совместимом CLI/новом дизайне, без удаления AC17 либо ослабления ограничений.
+
+Отдельная startup-проба codex exec в изолированном CODEX_HOME без входа завершена таймаутом15с, compatibility профиля этим не доказана. Платных моделей не запускали. Linux keyring ещё без Secret Service, Claude без входа; запрос офлайн-пакетов гостевого keyring начат, секретов не переносили.
+
+### linux-socket-preflight.py
+
+```
+"""Free diagnostic of the installed native sandbox; never live evidence."""
+import json,os,socket,struct,subprocess,tempfile,threading
+from pathlib import Path
+with tempfile.TemporaryDirectory(prefix='stand-peer-') as root:
+ listener=socket.socket(socket.AF_UNIX);path=root+'/broker.sock';listener.bind(path);listener.listen(1);listener.settimeout(12)
+ server=[]
+ def accept():
+  try:
+   peer,_=listener.accept();peer.settimeout(3)
+   server.append({'kernel_client':struct.unpack('3i',peer.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12)),'client_report':peer.recv(1024).decode()});peer.close()
+  except Exception as e:server.append({'error':type(e).__name__})
+ threading.Thread(target=accept,daemon=True).start()
+ code="import socket,struct,os,json,sys;s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);r={'pid_in_client_ns':os.getpid(),'kernel_server':struct.unpack('3i',s.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))};s.sendall(json.dumps(r).encode());print(json.dumps(r))"
+ client=Path(root)/'client.py';client.write_text(code)
+ cmd=['codex','sandbox','-P','stand','-c','permissions.stand.extends=":read-only"','-c','permissions.stand.network.enabled=true','--enable','network_proxy','-c','permissions.stand.network.domains={}','-c','permissions.stand.network.mode="limited"','-c','permissions.stand.network.unix_sockets={"'+path+'"="allow"}','-C',root,'--','python3',str(client),path]
+ try:
+  p=subprocess.run(cmd,capture_output=True,text=True,timeout=15)
+  print(json.dumps({'rc':p.returncode,'stdout':p.stdout[-2500:],'stderr':p.stderr[-2500:],'server':server,'real_provider_exec':False,'model_calls':0}))
+ except subprocess.TimeoutExpired as e:print(json.dumps({'timeout':15,'stdout':str(e.stdout)[-1000:],'stderr':str(e.stderr)[-1000:],'model_calls':0}))
+ listener.close()
+
+```
+
+### linux-socket-result.json
+
+```
+{"rc": 1, "stdout": "", "stderr": "Traceback (most recent call last):\n  File \"/tmp/stand-peer-7csfg_et/client.py\", line 1, in <module>\n    import socket,struct,os,json,sys;s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);r={'pid_in_client_ns':os.getpid(),'kernel_server':struct.unpack('3i',s.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))};s.sendall(json.dumps(r).encode());print(json.dumps(r))\n                                       ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/socket.py\", line 233, in __init__\n    _socket.socket.__init__(self, family, type, proto, fileno)\n    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n", "server": [], "real_provider_exec": false, "model_calls": 0}
+
+```
+
+### exec-config-preflight.py
+
+```
+import json,os,subprocess,tempfile
+from pathlib import Path
+import sys
+sys.path.insert(0,'/Users/al.sidorenko/projects/artel')
+from orchestrator.providers.codex import DISABLED_FEATURES,CONFIG_OVERRIDES
+with tempfile.TemporaryDirectory(prefix='artel-exec-config-') as directory:
+ root=Path(directory);home=root/'home';home.mkdir();codexhome=home/'.codex';codexhome.mkdir()
+ cmd=['/opt/homebrew/bin/codex']
+ for feature in DISABLED_FEATURES:cmd+=['--disable',feature]
+ for key,value in CONFIG_OVERRIDES:cmd+=['-c',key+'='+value]
+ cmd+=['-c','default_permissions="stand"','-c','permissions.stand.extends=":read-only"','-c','permissions.stand.network.enabled=true','--enable','network_proxy','-c','permissions.stand.network.domains={}','-c','permissions.stand.network.mode="limited"','-c','permissions.stand.network.unix_sockets={"/tmp/artel-stand-broker.sock"="allow"}','exec','--json','--sandbox','workspace-write','--ephemeral','--ignore-rules','--skip-git-repo-check','-']
+ env={'HOME':os.environ['HOME'],'CODEX_HOME':str(codexhome),'PATH':'/opt/homebrew/bin:/usr/bin:/bin','LANG':'en_US.UTF-8'}
+ status=subprocess.run(['/opt/homebrew/bin/codex','-c','cli_auth_credentials_store="keyring"','login','status'],env=env,capture_output=True,text=True,timeout=10)
+ assert 'Not logged in' in status.stderr+status.stdout, 'isolated auth must be absent'
+ result=subprocess.run(cmd,input='No operation.\n',capture_output=True,text=True,cwd=root,env=env,timeout=15)
+ print(json.dumps({'rc':result.returncode,'stdout':result.stdout[-2500:],'stderr':result.stderr[-2500:],'auth_isolated':True,'api_credentials_supplied':False}))
+
+```
