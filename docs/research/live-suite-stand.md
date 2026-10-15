@@ -373,3 +373,109 @@ machine.start { result in
 RunLoop.main.run()
 
 ```
+
+## Транспорт vsock и оставшийся сетевой блокер
+
+SSH через ProxyCommand nc -U control.sock успешно выполнил preflight UID1000. Swift launcher добавляет VZVirtioSocketDeviceConfiguration, control.sock chmod0600, connect guest port2222; гостевой socat VSOCK-LISTEN:2222,fork соединяет localhost:22. Команда: ssh -i vm/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=vm/known_hosts -o 'ProxyCommand=nc -U vm/control.sock' agent@stand-vsock python3 /work/preflight.py. Из двух swift-исходников собирается main.swift конкатенацией, затем swiftc -framework Virtualization main.swift -o run-vm-next и codesign с прежним entitlement.
+
+route -n get 192.168.64.2 показал interface utun4/default. Привязанный к bridge100 диагностический сокет хоста также не подключился. У гостя DHCP/шлюз/DNS назначены, но gethostbyname завершился EAI_AGAIN, connect_ex к разрешённому хостом адресу registry.npmjs.org:443 завершился 11 после таймаута. Host VPN, маршруты и production-env/guards не изменялись. Предоставление сети VM либо другого Linux-хоста вынесено на решение Оператора; ANSWER-5 не снимает AC17.
+
+Гостевой systemd unit stand-vsock-ssh.service: After=ssh.service; ExecStart=/usr/bin/socat VSOCK-LISTEN:2222,reuseaddr,fork TCP:127.0.0.1:22; Restart=on-failure; WantedBy=multi-user.target. Он подготовлен в собственном госте. Временный root autologin удалён; сетевой SSH по паролю/root запрещён. Учётных данных провайдеров в VM нет.
+
+### vsock vm/vsock-relay.swift
+
+```swift
+import Foundation
+import Virtualization
+import Darwin
+
+// Runs beside the launcher, uses only a local AF_UNIX control endpoint.
+func relay(_ a: Int32, _ b: Int32) {
+ for pair in [(a,b),(b,a)] {
+  DispatchQueue.global().async {
+   var buffer=[UInt8](repeating:0,count:65536)
+   while true {
+    let count=read(pair.0,&buffer,buffer.count)
+    if count<=0 { shutdown(pair.1,SHUT_WR); break }
+    var offset=0
+    while offset<count {
+     let sent=buffer.withUnsafeBytes { write(pair.1,$0.baseAddress!.advanced(by:offset),count-offset) }
+     if sent<=0 { return }; offset += sent
+    }
+   }
+  }
+ }
+}
+
+```
+
+### vsock vm/run-vm.swift
+
+```swift
+import Foundation
+import Virtualization
+import Darwin
+
+let root = URL(fileURLWithPath: CommandLine.arguments[1])
+let config = VZVirtualMachineConfiguration()
+let boot = VZLinuxBootLoader(kernelURL: root.appendingPathComponent("vmlinuz"))
+boot.initialRamdiskURL = root.appendingPathComponent("initrd.img")
+boot.commandLine = "root=/dev/vda rw console=hvc0 net.ifnames=0" + (CommandLine.arguments.contains("--repair") ? " init=/bin/sh" : "")
+config.bootLoader = boot
+config.cpuCount = 2
+config.memorySize = 2 * 1024 * 1024 * 1024
+let attachment = try VZDiskImageStorageDeviceAttachment(url: root.appendingPathComponent("root.raw"), readOnly: false)
+config.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: attachment)]
+let network = VZVirtioNetworkDeviceConfiguration()
+network.macAddress = VZMACAddress(string: "02:7a:17:00:00:17")!
+network.attachment = VZNATNetworkDeviceAttachment()
+config.networkDevices = [network]
+let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
+serial.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: FileHandle.standardInput, fileHandleForWriting: FileHandle.standardOutput)
+config.serialPorts = [serial]
+config.socketDevices = [VZVirtioSocketDeviceConfiguration()]
+config.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+try config.validate()
+let machine = VZVirtualMachine(configuration: config)
+machine.start { result in
+    switch result {
+    case .success: print("ARTEL_VM_STARTED")
+    case .failure(let error): print("ARTEL_VM_ERROR: \(error)"); exit(1)
+    }
+}
+let controlPath = root.appendingPathComponent("control.sock").path
+unlink(controlPath)
+let server = socket(AF_UNIX, SOCK_STREAM, 0)
+var address = sockaddr_un()
+address.sun_family = sa_family_t(AF_UNIX)
+let pathBytes = controlPath.utf8CString
+precondition(pathBytes.count < MemoryLayout.size(ofValue: address.sun_path))
+withUnsafeMutableBytes(of: &address.sun_path) { destination in
+ pathBytes.withUnsafeBytes { source in destination.copyBytes(from: source) }
+}
+let bound = withUnsafePointer(to: &address) { pointer in
+ pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(server, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+}
+precondition(bound == 0)
+chmod(controlPath, 0o600)
+listen(server, 4)
+DispatchQueue.global().async {
+ while true {
+  let client = accept(server, nil, nil)
+  if client < 0 { break }
+  DispatchQueue.main.async {
+   let device = machine.socketDevices[0] as! VZVirtioSocketDevice
+   device.connect(toPort: 2222) { result in
+    switch result {
+    case .success(let connection):
+     let remote = dup(connection.fileDescriptor)
+     relay(client,remote)
+    case .failure(let error): print("VSOCK_CONNECT_ERROR: \(error)"); close(client)
+    }
+   }
+  }
+ }
+}
+RunLoop.main.run()
+
+```
