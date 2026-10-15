@@ -1,0 +1,7 @@
+Сверка AST/исходных сегментов с HEAD: прежние 25 test-методов и assert_stopped идентичны. Изменённые: []. Оба метода liveness_contract и весь файл идентичны HEAD. Это локальная машинная сверка, не независимый вердикт.
+
+Контроль прежнего liveness: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_liveness_contract.py -p no:cacheprovider -p timeout -o timeout=120 -q
+..                                                      [100%]
+2 passed, 17 subtests passed in 0.06s
+
+exit 0

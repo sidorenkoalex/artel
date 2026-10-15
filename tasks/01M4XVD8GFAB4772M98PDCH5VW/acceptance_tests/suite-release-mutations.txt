@@ -1,0 +1,100 @@
+Мутации через публичную зависимость suite_lock.release; временная подмена только в памяти, продуктовые файлы не меняются.
+
+Пропуск release; test_ac11_background_releases_before_next_acquire_on_each_outcome; successful=False
+test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome)
+Normal, red, timeout и exception проходят настоящий background при живом holder. ... зерно: 3810270663
+
+  test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='normal')
+Normal, red, timeout и exception проходят настоящий background при живом holder. ... FAIL
+  test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='red')
+Normal, red, timeout и exception проходят настоящий background при живом holder. ... FAIL
+  test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='timeout')
+Normal, red, timeout и exception проходят настоящий background при живом holder. ... FAIL
+  test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='exception')
+Normal, red, timeout и exception проходят настоящий background при живом holder. ... FAIL
+
+======================================================================
+FAIL: test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='normal')
+Normal, red, timeout и exception проходят настоящий background при живом holder.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/projects/artel/worktrees/01M4XVD8GFAB4772M98PDCH5VW/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py", line 72, in test_ac11_background_releases_before_next_acquire_on_each_outcome
+    self.assertIsNone(suite_lock.holder(), f"зерно: {self.seed}; release пропущен")
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'task_id': '01AAAAAAAAAAAAAAAAAAAAAAAA', 'pid': 66674, 'run': 1} is not None : зерно: 3810270663; release пропущен
+
+======================================================================
+FAIL: test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='red')
+Normal, red, timeout и exception проходят настоящий background при живом holder.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/projects/artel/worktrees/01M4XVD8GFAB4772M98PDCH5VW/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py", line 58, in test_ac11_background_releases_before_next_acquire_on_each_outcome
+    self.assertIsNone(suite_lock.acquire(self.task, run_no))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'task_id': '01AAAAAAAAAAAAAAAAAAAAAAAA', 'pid': 66674, 'run': 1} is not None
+
+======================================================================
+FAIL: test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='timeout')
+Normal, red, timeout и exception проходят настоящий background при живом holder.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/projects/artel/worktrees/01M4XVD8GFAB4772M98PDCH5VW/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py", line 58, in test_ac11_background_releases_before_next_acquire_on_each_outcome
+    self.assertIsNone(suite_lock.acquire(self.task, run_no))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'task_id': '01AAAAAAAAAAAAAAAAAAAAAAAA', 'pid': 66674, 'run': 1} is not None
+
+======================================================================
+FAIL: test_ac11_background_releases_before_next_acquire_on_each_outcome (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_background_releases_before_next_acquire_on_each_outcome) (seed=3810270663, outcome='exception')
+Normal, red, timeout и exception проходят настоящий background при живом holder.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/projects/artel/worktrees/01M4XVD8GFAB4772M98PDCH5VW/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py", line 58, in test_ac11_background_releases_before_next_acquire_on_each_outcome
+    self.assertIsNone(suite_lock.acquire(self.task, run_no))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'task_id': '01AAAAAAAAAAAAAAAAAAAAAAAA', 'pid': 66674, 'run': 1} is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.143s
+
+FAILED (failures=4)
+
+Пропуск release; test_ac11_spawn_error_releases_before_next_acquire; successful=False
+test_ac11_spawn_error_releases_before_next_acquire (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_spawn_error_releases_before_next_acquire)
+Ошибка ОС в spawn оставляет живой CLI, но не оставляет его замок. ... зерно: 1117951600
+
+  test_ac11_spawn_error_releases_before_next_acquire (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_spawn_error_releases_before_next_acquire) (seed=1117951600, error='OSError')
+Ошибка ОС в spawn оставляет живой CLI, но не оставляет его замок. ... FAIL
+  test_ac11_spawn_error_releases_before_next_acquire (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_spawn_error_releases_before_next_acquire) (seed=1117951600, error='PermissionError')
+Ошибка ОС в spawn оставляет живой CLI, но не оставляет его замок. ... FAIL
+
+======================================================================
+FAIL: test_ac11_spawn_error_releases_before_next_acquire (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_spawn_error_releases_before_next_acquire) (seed=1117951600, error='OSError')
+Ошибка ОС в spawn оставляет живой CLI, но не оставляет его замок.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/projects/artel/worktrees/01M4XVD8GFAB4772M98PDCH5VW/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py", line 104, in test_ac11_spawn_error_releases_before_next_acquire
+    self.assertIsNone(suite_lock.holder(), f"зерно: {self.seed}; release пропущен")
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'task_id': '01AAAAAAAAAAAAAAAAAAAAAAAA', 'pid': 66674, 'run': 1} is not None : зерно: 1117951600; release пропущен
+
+======================================================================
+FAIL: test_ac11_spawn_error_releases_before_next_acquire (tests.test_01m4xvd8gfab4772m98pdch5vw_suite_release.SuiteReleaseTest.test_ac11_spawn_error_releases_before_next_acquire) (seed=1117951600, error='PermissionError')
+Ошибка ОС в spawn оставляет живой CLI, но не оставляет его замок.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/projects/artel/worktrees/01M4XVD8GFAB4772M98PDCH5VW/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py", line 103, in test_ac11_spawn_error_releases_before_next_acquire
+    self.assertEqual(seen, [True], f"зерно: {self.seed}; acquire после spawn")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != [True]
+
+Second list contains 1 additional elements.
+First extra element 0:
+True
+
+- []
++ [True] : зерно: 1117951600; acquire после spawn
+
+----------------------------------------------------------------------
+Ran 1 test in 0.048s
+
+FAILED (failures=2)

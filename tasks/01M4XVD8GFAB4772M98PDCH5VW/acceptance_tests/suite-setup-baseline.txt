@@ -1,0 +1,315 @@
+Команда: /Users/al.sidorenko/projects/artel/.artel/venv/bin/python3 -m pytest tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py -p no:cacheprovider -p timeout -o timeout=120 -q --tb=short
+...............F.............                  [100%]
+=================================== FAILURES ===================================
+_ EarlyDriveTest.test_ac10_non_signal_outcomes_preserve_cleanup_contract (seed=2838255722, outcome='normal', fault='permission') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:612: in test_ac10_non_signal_outcomes_preserve_cleanup_contract
+    self.assertFalse(state["removals"], f"зерно: {self.seed}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp1uu5cykl/.artel/process-fixtures/artel-canary-l1g__62c'), [('drive', 52855, False), ('suite-run', 52862, True), ('suite-run', 52867, True), ('role', 52880, False), ('role', 52882, False)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp1uu5cykl/.artel/process-fixtures/artel-canary-origin-uzbwapfc'), [('drive', 52855, False), ('suite-run', 52862, True), ('suite-run', 52867, True), ('role', 52880, False), ('role', 52882, False)])] is not false : зерно: 2838255722
+_ EarlyDriveTest.test_ac10_non_signal_outcomes_preserve_cleanup_contract (seed=2838255722, outcome='timeout', fault='permission') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:612: in test_ac10_non_signal_outcomes_preserve_cleanup_contract
+    self.assertFalse(state["removals"], f"зерно: {self.seed}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp1uu5cykl/.artel/process-fixtures/artel-canary-adoh0s_n'), [('drive', 52995, False), ('suite-run', 53001, True), ('suite-run', 53008, True), ('role', 53020, False), ('role', 53022, False)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp1uu5cykl/.artel/process-fixtures/artel-canary-origin-81b536h8'), [('drive', 52995, False), ('suite-run', 53001, True), ('suite-run', 53008, True), ('role', 53020, False), ('role', 53022, False)])] is not false : зерно: 2838255722
+_ EarlyDriveTest.test_ac10_non_signal_outcomes_preserve_cleanup_contract (seed=2838255722, outcome='exception', fault='permission') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:612: in test_ac10_non_signal_outcomes_preserve_cleanup_contract
+    self.assertFalse(state["removals"], f"зерно: {self.seed}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp1uu5cykl/.artel/process-fixtures/artel-canary-4i2as58w'), [('drive', 53130, False), ('suite-run', 53138, True), ('suite-run', 53143, True), ('role', 53155, False), ('role', 53158, False)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp1uu5cykl/.artel/process-fixtures/artel-canary-origin-n62y01te'), [('drive', 53130, False), ('suite-run', 53138, True), ('suite-run', 53143, True), ('role', 53155, False), ('role', 53158, False)])] is not false : зерно: 2838255722
+_ EarlyDriveTest.test_ac10_original_signal_record_survives_cleanup_failure (seed=2646357629, fault='exception', signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:723: in test_ac10_original_signal_record_survives_cleanup_failure
+    self.assertIsInstance(state.get("exception"), SystemExit,
+E   AssertionError: RuntimeError('fixture: cleanup failed') is not an instance of <class 'SystemExit'> : зерно: 2646357629; fixture: cleanup failed
+_ EarlyDriveTest.test_ac10_original_signal_record_survives_cleanup_failure (seed=2646357629, fault='exception', signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:723: in test_ac10_original_signal_record_survives_cleanup_failure
+    self.assertIsInstance(state.get("exception"), SystemExit,
+E   AssertionError: RuntimeError('fixture: cleanup failed') is not an instance of <class 'SystemExit'> : зерно: 2646357629; fixture: cleanup failed
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=1221493614, signal=<Signals.SIGTERM: 15>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:586: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 1221493614; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp854hjinb/.artel/process-fixtures/artel-canary-a8vhph1t'), [('drive', 53686, False), ('suite-run', 53694, False), ('suite-run', 53699, False), ('role', 53711, True), ('role', 53713, True)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=1221493614, signal=<Signals.SIGHUP: 1>, early=False, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:586: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 1221493614; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp854hjinb/.artel/process-fixtures/artel-canary-he68h79x'), [('drive', 53752, False), ('suite-run', 53759, False), ('suite-run', 53765, False), ('role', 53777, True), ('role', 53780, True)])
+_ EarlyDriveTest.test_ac12_real_process_matrix_exposes_each_cleanup_omission (seed=1221493614, signal=<Signals.SIGTERM: 15>, early=True, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:586: in test_ac12_real_process_matrix_exposes_each_cleanup_omission
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 1221493614; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp854hjinb/.artel/process-fixtures/artel-canary-705mqsm1'), [('drive', 53819, True)])
+_ EarlyDriveTest.test_ac1_causal_role_leak_reproduction (seed=67146886, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:547: in test_ac1_causal_role_leak_reproduction
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 67146886; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpn198om2t/.artel/process-fixtures/artel-canary-ut1rxhvn'), [('drive', 53966, False), ('suite-run', 53973, False), ('suite-run', 53978, False), ('role', 53989, True), ('role', 53991, True)])
+_ EarlyDriveTest.test_ac1_causal_role_leak_reproduction (seed=67146886, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:547: in test_ac1_causal_role_leak_reproduction
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 67146886; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpn198om2t/.artel/process-fixtures/artel-canary-97u3p7ij'), [('drive', 54041, False), ('suite-run', 54049, False), ('suite-run', 54056, False), ('role', 54068, True), ('role', 54070, True)])
+_ EarlyDriveTest.test_ac2_all_groups_finish_before_first_removal (seed=37569855, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:630: in test_ac2_all_groups_finish_before_first_removal
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 37569855; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpjn7thjxe/.artel/process-fixtures/artel-canary-qe8eq_ld'), [('drive', 54120, False), ('suite-run', 54126, False), ('suite-run', 54130, False), ('role', 54141, True), ('role', 54143, True)])
+_ EarlyDriveTest.test_ac2_all_groups_finish_before_first_removal (seed=37569855, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:630: in test_ac2_all_groups_finish_before_first_removal
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 37569855; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpjn7thjxe/.artel/process-fixtures/artel-canary-h5j5814d'), [('drive', 54184, False), ('suite-run', 54191, False), ('suite-run', 54195, False), ('role', 54208, True), ('role', 54210, True)])
+_ EarlyDriveTest.test_ac3_stubborn_role_requires_escalation_and_observed_death (seed=1248909308, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:668: in test_ac3_stubborn_role_requires_escalation_and_observed_death
+    self.assertIn(signal.SIGTERM, delivered, f"зерно: {self.seed}")
+E   AssertionError: <Signals.SIGTERM: 15> not found in [] : зерно: 1248909308
+_ EarlyDriveTest.test_ac3_stubborn_role_requires_escalation_and_observed_death (seed=1248909308, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:668: in test_ac3_stubborn_role_requires_escalation_and_observed_death
+    self.assertIn(signal.SIGTERM, delivered, f"зерно: {self.seed}")
+E   AssertionError: <Signals.SIGTERM: 15> not found in [] : зерно: 1248909308
+_ EarlyDriveTest.test_ac4_cleanup_failures_preserve_directories_and_signal (seed=2280377013, fault='permission', signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:647: in test_ac4_cleanup_failures_preserve_directories_and_signal
+    self.assertFalse(state["removals"], f"зерно: {self.seed}; rmtree после {fault}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-fqpbl8h6'), [('drive', 54404, False), ('suite-run', 54411, True), ('suite-run', 54416, True), ('role', 54429, True), ('role', 54431, True)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-origin-6c3x3sgc'), [('drive', 54404, False), ('suite-run', 54411, True), ('suite-run', 54416, True), ('role', 54429, True), ('role', 54431, True)])] is not false : зерно: 2280377013; rmtree после permission
+_ EarlyDriveTest.test_ac4_cleanup_failures_preserve_directories_and_signal (seed=2280377013, fault='permission', signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:647: in test_ac4_cleanup_failures_preserve_directories_and_signal
+    self.assertFalse(state["removals"], f"зерно: {self.seed}; rmtree после {fault}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-b7_kl087'), [('drive', 54470, False), ('suite-run', 54479, True), ('suite-run', 54484, True), ('role', 54497, True), ('role', 54499, True)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-origin-jup_n6mi'), [('drive', 54470, False), ('suite-run', 54479, True), ('suite-run', 54484, True), ('role', 54497, True), ('role', 54499, True)])] is not false : зерно: 2280377013; rmtree после permission
+_ EarlyDriveTest.test_ac4_cleanup_failures_preserve_directories_and_signal (seed=2280377013, fault='exception', signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:644: in test_ac4_cleanup_failures_preserve_directories_and_signal
+    self.assertIsInstance(state.get("exception"), SystemExit,
+E   AssertionError: RuntimeError('fixture: cleanup failed') is not an instance of <class 'SystemExit'> : зерно: 2280377013; fixture: cleanup failed
+_ EarlyDriveTest.test_ac4_cleanup_failures_preserve_directories_and_signal (seed=2280377013, fault='exception', signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:644: in test_ac4_cleanup_failures_preserve_directories_and_signal
+    self.assertIsInstance(state.get("exception"), SystemExit,
+E   AssertionError: RuntimeError('fixture: cleanup failed') is not an instance of <class 'SystemExit'> : зерно: 2280377013; fixture: cleanup failed
+_ EarlyDriveTest.test_ac4_cleanup_failures_preserve_directories_and_signal (seed=2280377013, fault='unconfirmed', signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:647: in test_ac4_cleanup_failures_preserve_directories_and_signal
+    self.assertFalse(state["removals"], f"зерно: {self.seed}; rmtree после {fault}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-xv4ofb7i'), [('drive', 54668, False), ('suite-run', 54675, True), ('suite-run', 54680, True), ('role', 54692, True), ('role', 54694, True)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-origin-wgtggvsl'), [('drive', 54668, False), ('suite-run', 54675, True), ('suite-run', 54680, True), ('role', 54692, True), ('role', 54694, True)])] is not false : зерно: 2280377013; rmtree после unconfirmed
+_ EarlyDriveTest.test_ac4_cleanup_failures_preserve_directories_and_signal (seed=2280377013, fault='unconfirmed', signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:647: in test_ac4_cleanup_failures_preserve_directories_and_signal
+    self.assertFalse(state["removals"], f"зерно: {self.seed}; rmtree после {fault}")
+E   AssertionError: [(PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-t7_1o1e_'), [('drive', 54737, False), ('suite-run', 54744, True), ('suite-run', 54751, True), ('role', 54761, True), ('role', 54763, True)]), (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmptwguxhuh/.artel/process-fixtures/artel-canary-origin-kv5c00p6'), [('drive', 54737, False), ('suite-run', 54744, True), ('suite-run', 54751, True), ('role', 54761, True), ('role', 54763, True)])] is not false : зерно: 2280377013; rmtree после unconfirmed
+_ EarlyDriveTest.test_ac5_early_drive_failure_preserves_both_directories (seed=2148067695, fault='permission') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:559: in test_ac5_early_drive_failure_preserves_both_directories
+    self.assertTrue(state["fault_seen"], f"зерно: {self.seed}; ранний drive потерян")
+E   AssertionError: False is not true : зерно: 2148067695; ранний drive потерян
+_ EarlyDriveTest.test_ac5_early_drive_failure_preserves_both_directories (seed=2148067695, fault='unconfirmed') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:559: in test_ac5_early_drive_failure_preserves_both_directories
+    self.assertTrue(state["fault_seen"], f"зерно: {self.seed}; ранний drive потерян")
+E   AssertionError: False is not true : зерно: 2148067695; ранний drive потерян
+_ EarlyDriveTest.test_ac5_early_role_spawn_is_not_lost (seed=668023561, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:739: in test_ac5_early_role_spawn_is_not_lost
+    self.assert_stopped(self.scenario(sig, early_role=True), sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 668023561; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp5_u3gs0w/.artel/process-fixtures/artel-canary-rsa2pmyg'), [('drive', 54910, False), ('suite-run', 54918, False), ('suite-run', 54925, False), ('role', 54941, True), ('role', 54944, True)])
+_ EarlyDriveTest.test_ac5_early_role_spawn_is_not_lost (seed=668023561, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:739: in test_ac5_early_role_spawn_is_not_lost
+    self.assert_stopped(self.scenario(sig, early_role=True), sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 668023561; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp5_u3gs0w/.artel/process-fixtures/artel-canary-yqb5ku58'), [('drive', 54984, False), ('suite-run', 54990, False), ('suite-run', 54994, False), ('role', 55007, True), ('role', 55010, True)])
+_ EarlyDriveTest.test_ac5_sigterm_before_drive_popen_returns (seed=3729481528, nonce=36426) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:847: in test_ac5_sigterm_before_drive_popen_returns
+    self.assertIsNotNone(removals[0][1],
+E   AssertionError: unexpectedly None : зерно: 3729481528; drive=55059 жив перед rmtree /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp8vi_v_ua/.artel/process-fixtures/artel-canary-tux5f5uq
+_ EarlyDriveTest.test_ac5_sigterm_before_drive_popen_returns (seed=3729481528, nonce=52569) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:847: in test_ac5_sigterm_before_drive_popen_returns
+    self.assertIsNotNone(removals[0][1],
+E   AssertionError: unexpectedly None : зерно: 3729481528; drive=55094 жив перед rmtree /private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp8vi_v_ua/.artel/process-fixtures/artel-canary-4770p54k
+_ EarlyDriveTest.test_ac6_dead_leader_does_not_hide_live_child (seed=1687161716, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:749: in test_ac6_dead_leader_does_not_hide_live_child
+    self.assert_stopped(self.scenario(sig, leader_gone=True), sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 1687161716; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp5irmcw1b/.artel/process-fixtures/artel-canary-4ppiuqu5'), [('drive', 55141, False), ('suite-run', 55148, False), ('suite-run', 55153, False), ('role', 55166, False), ('role', 55169, True)])
+_ EarlyDriveTest.test_ac6_dead_leader_does_not_hide_live_child (seed=1687161716, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:749: in test_ac6_dead_leader_does_not_hide_live_child
+    self.assert_stopped(self.scenario(sig, leader_gone=True), sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 1687161716; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmp5irmcw1b/.artel/process-fixtures/artel-canary-wojo_gh7'), [('drive', 55210, False), ('suite-run', 55218, False), ('suite-run', 55223, False), ('role', 55235, False), ('role', 55238, True)])
+_ EarlyDriveTest.test_ac7_vanished_role_and_reused_number_do_not_target_replacement (seed=3824835658, reused=False) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:705: in test_ac7_vanished_role_and_reused_number_do_not_target_replacement
+    self.assertEqual(state["exception"].code, 143, f"зерно: {self.seed}")
+E   AssertionError: 129 != 143 : зерно: 3824835658
+_ EarlyDriveTest.test_ac7_vanished_role_and_reused_number_do_not_target_replacement (seed=3824835658, reused=True) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:705: in test_ac7_vanished_role_and_reused_number_do_not_target_replacement
+    self.assertEqual(state["exception"].code, 143, f"зерно: {self.seed}")
+E   AssertionError: 129 != 143 : зерно: 3824835658
+_ EarlyDriveTest.test_ac9_repeated_stop_after_cleanup_result_is_idempotent (seed=2092812600, fault=None) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:773: in test_ac9_repeated_stop_after_cleanup_result_is_idempotent
+    self.assert_stopped(state, signal.SIGTERM)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:518: in assert_stopped
+    self.assertEqual(state["exception"].code, 128 + signum, f"зерно: {self.seed}")
+E   AssertionError: 129 != 143 : зерно: 2092812600
+_ EarlyDriveTest.test_ac9_repeated_stop_after_cleanup_result_is_idempotent (seed=2092812600, fault='permission') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:771: in test_ac9_repeated_stop_after_cleanup_result_is_idempotent
+    self.assertTrue(state.get("repeat_seen"), f"зерно: {self.seed}")
+E   AssertionError: None is not true : зерно: 2092812600
+_ EarlyDriveTest.test_ac9_repeated_stop_after_cleanup_result_is_idempotent (seed=2092812600, fault='unconfirmed') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:771: in test_ac9_repeated_stop_after_cleanup_result_is_idempotent
+    self.assertTrue(state.get("repeat_seen"), f"зерно: {self.seed}")
+E   AssertionError: None is not true : зерно: 2092812600
+_________ EarlyDriveTest.test_ac9_second_signal_keeps_original_sigterm _________
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:759: in test_ac9_second_signal_keeps_original_sigterm
+    self.assert_stopped(state, signal.SIGTERM)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:518: in assert_stopped
+    self.assertEqual(state["exception"].code, 128 + signum, f"зерно: {self.seed}")
+E   AssertionError: 129 != 143 : зерно: 3779616986
+----------------------------- Captured stdout call -----------------------------
+зерно: 3779616986
+_ ConsumerGroupsTest.test_ac14_kill_rechecks_identity_after_observation (seed=3459380349, terminal=False, race='holder-reused') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1093: in test_ac14_kill_rechecks_identity_after_observation
+    self.consumer("kill", terminal=terminal, race=race)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:994: in consumer
+    self.assertTrue(self.live(control["pid"]), f"зерно: {self.seed}; {path}")
+E   AssertionError: False is not true : зерно: 3459380349; kill
+_ ConsumerGroupsTest.test_ac14_kill_rechecks_identity_after_observation (seed=3459380349, terminal=False, race='group-reused') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1093: in test_ac14_kill_rechecks_identity_after_observation
+    self.consumer("kill", terminal=terminal, race=race)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:994: in consumer
+    self.assertTrue(self.live(control["pid"]), f"зерно: {self.seed}; {path}")
+E   AssertionError: False is not true : зерно: 3459380349; kill
+_ ConsumerGroupsTest.test_ac14_kill_rechecks_identity_after_observation (seed=3459380349, terminal=True, race='holder-reused') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1093: in test_ac14_kill_rechecks_identity_after_observation
+    self.consumer("kill", terminal=terminal, race=race)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:994: in consumer
+    self.assertTrue(self.live(control["pid"]), f"зерно: {self.seed}; {path}")
+E   AssertionError: False is not true : зерно: 3459380349; kill
+_ ConsumerGroupsTest.test_ac14_kill_rechecks_identity_after_observation (seed=3459380349, terminal=True, race='group-reused') _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1093: in test_ac14_kill_rechecks_identity_after_observation
+    self.consumer("kill", terminal=terminal, race=race)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:994: in consumer
+    self.assertTrue(self.live(control["pid"]), f"зерно: {self.seed}; {path}")
+E   AssertionError: False is not true : зерно: 3459380349; kill
+_ ConsumerGroupsTest.test_ac14_lease_guards_prevent_group_signals (seed=3475100630, path='kill', options={'local': False}) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1149: in test_ac14_lease_guards_prevent_group_signals
+    self.assertFalse(any(pgid == role["pgid"] and sig for pgid, sig in sent),
+E   AssertionError: True is not false : зерно: 3475100630
+_ ConsumerGroupsTest.test_ac14_lease_guards_prevent_group_signals (seed=3475100630, path='kill', options={'holder_live': False}) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1149: in test_ac14_lease_guards_prevent_group_signals
+    self.assertFalse(any(pgid == role["pgid"] and sig for pgid, sig in sent),
+E   AssertionError: True is not false : зерно: 3475100630
+_ ConsumerGroupsTest.test_ac14_public_kill_uses_original_lease_for_both_states (seed=2085326126, terminal=False, options={'local': False}) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1026: in test_ac14_public_kill_uses_original_lease_for_both_states
+    self.assertFalse(any(pgid == role["pgid"] and sig for pgid, sig in sent),
+E   AssertionError: True is not false : зерно: 2085326126; исходный допуск {'local': False}
+_ ConsumerGroupsTest.test_ac14_public_kill_uses_original_lease_for_both_states (seed=2085326126, terminal=False, options={'holder_live': False}) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1026: in test_ac14_public_kill_uses_original_lease_for_both_states
+    self.assertFalse(any(pgid == role["pgid"] and sig for pgid, sig in sent),
+E   AssertionError: True is not false : зерно: 2085326126; исходный допуск {'holder_live': False}
+_ ConsumerGroupsTest.test_ac14_public_kill_uses_original_lease_for_both_states (seed=2085326126, terminal=True, options={'local': False}) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1026: in test_ac14_public_kill_uses_original_lease_for_both_states
+    self.assertFalse(any(pgid == role["pgid"] and sig for pgid, sig in sent),
+E   AssertionError: True is not false : зерно: 2085326126; исходный допуск {'local': False}
+_ ConsumerGroupsTest.test_ac14_public_kill_uses_original_lease_for_both_states (seed=2085326126, terminal=True, options={'holder_live': False}) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1026: in test_ac14_public_kill_uses_original_lease_for_both_states
+    self.assertFalse(any(pgid == role["pgid"] and sig for pgid, sig in sent),
+E   AssertionError: True is not false : зерно: 2085326126; исходный допуск {'holder_live': False}
+_ SuiteRegistrationTest.test_ac4_unregistered_suite_pid_preserves_directories (seed=600867943, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1305: in test_ac4_unregistered_suite_pid_preserves_directories
+    self.assertFalse(any(pgid == group["pgid"] and sent
+E   AssertionError: True is not false : зерно: 600867943
+_ SuiteRegistrationTest.test_ac4_unregistered_suite_pid_preserves_directories (seed=600867943, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1305: in test_ac4_unregistered_suite_pid_preserves_directories
+    self.assertFalse(any(pgid == group["pgid"] and sent
+E   AssertionError: True is not false : зерно: 600867943
+_ SuiteRegistrationTest.test_ac5_suite_created_before_popen_returns (seed=2976838163, window='before-return', signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1248: in assert_suite_window
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2976838163; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpr6u362v8/.artel/process-fixtures/artel-canary-34w8f2sz'), [('drive', 58941, True), ('suite-run', 58944, True), ('suite-run', 58945, True)])
+_ SuiteRegistrationTest.test_ac5_suite_created_before_popen_returns (seed=2976838163, window='before-return', signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1248: in assert_suite_window
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2976838163; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpr6u362v8/.artel/process-fixtures/artel-canary-6v794qib'), [('drive', 58962, True), ('suite-run', 58965, True), ('suite-run', 58969, True)])
+_ SuiteRegistrationTest.test_ac5_suite_popen_returned_before_publication (seed=4057528796, window='after-return', signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1248: in assert_suite_window
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 4057528796; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpned_hsrx/.artel/process-fixtures/artel-canary-7io025sc'), [('drive', 59029, True), ('suite-run', 59036, True), ('suite-run', 59050, True)])
+_ SuiteRegistrationTest.test_ac5_suite_popen_returned_before_publication (seed=4057528796, window='after-return', signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1248: in assert_suite_window
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 4057528796; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpned_hsrx/.artel/process-fixtures/artel-canary-ahmsnwqq'), [('drive', 59091, True), ('suite-run', 59099, True), ('suite-run', 59105, True)])
+_ SuiteRegistrationTest.test_ac6_suite_dead_leader_does_not_hide_child (seed=2245007209, signal=<Signals.SIGTERM: 15>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1327: in test_ac6_suite_dead_leader_does_not_hide_child
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2245007209; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpk5bn0bdn/.artel/process-fixtures/artel-canary-7vwhn89y'), [('drive', 59159, False), ('suite-run', 59167, False), ('suite-run', 59175, False), ('role', 59196, True), ('role', 59198, True)])
+_ SuiteRegistrationTest.test_ac6_suite_dead_leader_does_not_hide_child (seed=2245007209, signal=<Signals.SIGHUP: 1>) _
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:1327: in test_ac6_suite_dead_leader_does_not_hide_child
+    self.assert_stopped(state, sig)
+tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py:520: in assert_stopped
+    self.assertFalse(any(alive for _, _, alive in state["removals"][0][1]),
+E   AssertionError: True is not false : зерно: 2245007209; живы при первом удалении: (PosixPath('/private/var/folders/4_/y_4xfkg56gd1d_zvk99ntvx00000gq/T/tmpk5bn0bdn/.artel/process-fixtures/artel-canary-md52i2e6'), [('drive', 59243, False), ('suite-run', 59250, False), ('suite-run', 59256, False), ('role', 59268, True), ('role', 59270, True)])
+=========================== short test summary info ============================
+SUBFAILED(seed=2838255722, outcome='normal', fault='permission') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac10_non_signal_outcomes_preserve_cleanup_contract
+SUBFAILED(seed=2838255722, outcome='timeout', fault='permission') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac10_non_signal_outcomes_preserve_cleanup_contract
+SUBFAILED(seed=2838255722, outcome='exception', fault='permission') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac10_non_signal_outcomes_preserve_cleanup_contract
+SUBFAILED(seed=2646357629, fault='exception', signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac10_original_signal_record_survives_cleanup_failure
+SUBFAILED(seed=2646357629, fault='exception', signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac10_original_signal_record_survives_cleanup_failure
+SUBFAILED(seed=1221493614, signal=<Signals.SIGTERM: 15>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=1221493614, signal=<Signals.SIGHUP: 1>, early=False, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=1221493614, signal=<Signals.SIGTERM: 15>, early=True, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac12_real_process_matrix_exposes_each_cleanup_omission
+SUBFAILED(seed=67146886, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac1_causal_role_leak_reproduction
+SUBFAILED(seed=67146886, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac1_causal_role_leak_reproduction
+SUBFAILED(seed=37569855, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac2_all_groups_finish_before_first_removal
+SUBFAILED(seed=37569855, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac2_all_groups_finish_before_first_removal
+SUBFAILED(seed=1248909308, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac3_stubborn_role_requires_escalation_and_observed_death
+SUBFAILED(seed=1248909308, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac3_stubborn_role_requires_escalation_and_observed_death
+SUBFAILED(seed=2280377013, fault='permission', signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac4_cleanup_failures_preserve_directories_and_signal
+SUBFAILED(seed=2280377013, fault='permission', signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac4_cleanup_failures_preserve_directories_and_signal
+SUBFAILED(seed=2280377013, fault='exception', signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac4_cleanup_failures_preserve_directories_and_signal
+SUBFAILED(seed=2280377013, fault='exception', signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac4_cleanup_failures_preserve_directories_and_signal
+SUBFAILED(seed=2280377013, fault='unconfirmed', signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac4_cleanup_failures_preserve_directories_and_signal
+SUBFAILED(seed=2280377013, fault='unconfirmed', signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac4_cleanup_failures_preserve_directories_and_signal
+SUBFAILED(seed=2148067695, fault='permission') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_early_drive_failure_preserves_both_directories
+SUBFAILED(seed=2148067695, fault='unconfirmed') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_early_drive_failure_preserves_both_directories
+SUBFAILED(seed=668023561, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_early_role_spawn_is_not_lost
+SUBFAILED(seed=668023561, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_early_role_spawn_is_not_lost
+SUBFAILED(seed=3729481528, nonce=36426) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_sigterm_before_drive_popen_returns
+SUBFAILED(seed=3729481528, nonce=52569) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac5_sigterm_before_drive_popen_returns
+SUBFAILED(seed=1687161716, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac6_dead_leader_does_not_hide_live_child
+SUBFAILED(seed=1687161716, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac6_dead_leader_does_not_hide_live_child
+SUBFAILED(seed=3824835658, reused=False) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac7_vanished_role_and_reused_number_do_not_target_replacement
+SUBFAILED(seed=3824835658, reused=True) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac7_vanished_role_and_reused_number_do_not_target_replacement
+SUBFAILED(seed=2092812600, fault=None) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac9_repeated_stop_after_cleanup_result_is_idempotent
+SUBFAILED(seed=2092812600, fault='permission') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac9_repeated_stop_after_cleanup_result_is_idempotent
+SUBFAILED(seed=2092812600, fault='unconfirmed') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac9_repeated_stop_after_cleanup_result_is_idempotent
+FAILED tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::EarlyDriveTest::test_ac9_second_signal_keeps_original_sigterm
+SUBFAILED(seed=3459380349, terminal=False, race='holder-reused') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_kill_rechecks_identity_after_observation
+SUBFAILED(seed=3459380349, terminal=False, race='group-reused') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_kill_rechecks_identity_after_observation
+SUBFAILED(seed=3459380349, terminal=True, race='holder-reused') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_kill_rechecks_identity_after_observation
+SUBFAILED(seed=3459380349, terminal=True, race='group-reused') tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_kill_rechecks_identity_after_observation
+SUBFAILED(seed=3475100630, path='kill', options={'local': False}) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_lease_guards_prevent_group_signals
+SUBFAILED(seed=3475100630, path='kill', options={'holder_live': False}) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_lease_guards_prevent_group_signals
+SUBFAILED(seed=2085326126, terminal=False, options={'local': False}) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_public_kill_uses_original_lease_for_both_states
+SUBFAILED(seed=2085326126, terminal=False, options={'holder_live': False}) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_public_kill_uses_original_lease_for_both_states
+SUBFAILED(seed=2085326126, terminal=True, options={'local': False}) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_public_kill_uses_original_lease_for_both_states
+SUBFAILED(seed=2085326126, terminal=True, options={'holder_live': False}) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::ConsumerGroupsTest::test_ac14_public_kill_uses_original_lease_for_both_states
+SUBFAILED(seed=600867943, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac4_unregistered_suite_pid_preserves_directories
+SUBFAILED(seed=600867943, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac4_unregistered_suite_pid_preserves_directories
+SUBFAILED(seed=2976838163, window='before-return', signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac5_suite_created_before_popen_returns
+SUBFAILED(seed=2976838163, window='before-return', signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac5_suite_created_before_popen_returns
+SUBFAILED(seed=4057528796, window='after-return', signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac5_suite_popen_returned_before_publication
+SUBFAILED(seed=4057528796, window='after-return', signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac5_suite_popen_returned_before_publication
+SUBFAILED(seed=2245007209, signal=<Signals.SIGTERM: 15>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac6_suite_dead_leader_does_not_hide_child
+SUBFAILED(seed=2245007209, signal=<Signals.SIGHUP: 1>) tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py::SuiteRegistrationTest::test_ac6_suite_dead_leader_does_not_hide_child
+52 failed, 28 passed, 47 subtests passed in 50.20s
+
+Код выхода: 1

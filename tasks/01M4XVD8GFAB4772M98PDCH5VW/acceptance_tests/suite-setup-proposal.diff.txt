@@ -1,0 +1,382 @@
+diff --git a/tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py b/tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py
+index d16cd790..1241c3bc 100644
+--- a/tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py
++++ b/tests/test_01m4xvd8gfab4772m98pdch5vw_early_drive.py
+@@ -26,7 +26,8 @@ from pathlib import Path
+ from unittest import mock
+ 
+ from orchestrator import (canary, catalog, checkpoint, cleanup, config, doctor,
+-                          lease, liveness, pause, release, runner, stack, store)
++                          lease, liveness, pause, release, runner, stack, store,
++                          repo_context, suite_run, suite_lock, workspace)
+ from tests.sandbox import (ALL_CONFIG_ATTRS, RealGitSandbox, capture,
+                           patch_pult_sleep, _stub_check_stack, _dead_pid, capture_new_task_id)
+ 
+@@ -177,6 +178,143 @@ class ProcessFixture:
+         return {"name": name, "proc": proc, "pid": proc.pid,
+                 "pgid": proc.pid, "child": handshake[2], "nonce": nonce}
+ 
++    def launch_suite(self, clone, state, real_popen):
++        """Настоящие cmd_suite_run и background; подменяется только нагрузка набора.
++
++        Служебный канал фикстуры сообщает экземпляры до воздействия, но не
++        передаёт продукту удостоверение: продукт проходит свою регистрацию.
++        argv, env и pass_fds продукта сохраняются при добавлении bootstrap.
++        """
++        task = "01" + "E" * 24
++        conn = store.db()
++        store.create_schema(conn)
++        store.insert_task(conn, task, "Локальный suite", "in_dev", "fixture-suite",
++                          config.DEFAULT_TARGET, 1, is_canary=True)
++        options = getattr(self, "suite_options", {})
++        state["suite_task"] = task
++        state["suite_folder"] = suite_lock.directory() / task
++        if options.get("unregistered"):
++            group = self.group("suite-run", spawn=real_popen, cwd=clone)
++            state["groups"].append(group)
++            state["suite_folder"].mkdir(parents=True, exist_ok=True)
++            (state["suite_folder"] / "run.json").write_text(json.dumps({
++                "pid": group["pid"], "started": 1.0}))
++            return
++        profile = SimpleNamespace(outcome=repo_context.PROFILE_PRESENT,
++                                  values={"command": [sys.executable, "-m", "pytest"]})
++        source = Path(suite_run.__file__).resolve().parent.parent
++        original_trace = sys.gettrace()
++
++        def impact():
++            group = state["suite"]
++            state["suite_impact"] = {
++                "window": options["window"],
++                "alive": self.live(group["pid"]) and self.live(group["child"]),
++                "run_published": (state["suite_folder"] / "run.json").exists(),
++            }
++            os.kill(os.getpid(), options.get("signal", signal.SIGTERM))
++
++        def after_return(frame, event, arg):
++            if (event == "line" and frame.f_code is suite_run.cmd_suite_run.__code__
++                    and state.get("suite_popen_returned")
++                    and not state.get("suite_impact")):
++                impact()
++            return after_return
++
++        def launch(argv, *args, **kwargs):
++            # Перехват существует только в динамической области cmd_suite_run;
++            # прочие subprocess (например, адресное наблюдение ps) не меняются.
++            if list(argv[:2]) != [sys.executable, "-c"]:
++                return real_popen(argv, *args, **kwargs)
++            state["suite_lock_at_spawn"] = suite_lock.holder()
++            read_fd, write_fd = os.pipe()
++            life_read, life_write = os.pipe()
++            work_read, work_write = os.pipe()
++            state["suite_work_read"] = work_read
++            self.addCleanup(os.close, work_read)
++            self.lifelines.append(life_write)
++            nonce = random.Random(self.seed + len(self.processes)).randrange(2**32)
++            paths = {name: str(getattr(config, name)) for name in ALL_CONFIG_ATTRS}
++            bootstrap = "import os, sys, json, signal, threading\n"
++            bootstrap += "from pathlib import Path\nfrom types import SimpleNamespace\n"
++            bootstrap += "from contextlib import nullcontext\n"
++            bootstrap += ("from orchestrator import config, acceptance, appendix_tree, "
++                          "repo_context, workspace, project_profile\n")
++            bootstrap += f"for name, value in {paths!r}.items(): setattr(config, name, Path(value))\n"
++            bootstrap += ("def parent_gone():\n"
++                          f"    os.read({life_read}, 1)\n"
++                          "    os.kill(os.getpid(), signal.SIGKILL)\n"
++                          "child = os.fork()\n"
++                          "if child == 0:\n"
++                          f"    os.close({write_fd})\n"
++                          f"    os.close({work_write})\n"
++                          f"    for fd in {tuple(kwargs.get("pass_fds", ()))!r}: os.close(fd)\n"
++                          "    threading.Thread(target=parent_gone, daemon=True).start()\n"
++                          "    while True: signal.pause()\n"
++                          "threading.Thread(target=parent_gone, daemon=True).start()\n"
++                          f"os.write({write_fd}, (json.dumps([os.getpid(), os.getpgrp(), child, {nonce}])+'\\n').encode())\n"
++                          f"os.close({write_fd})\n")
++            bootstrap += ("repo_context.profile_of = lambda target: SimpleNamespace("
++                          "outcome=repo_context.PROFILE_PRESENT, values={'command': [sys.executable, '-m', 'pytest']})\n"
++                          f"workspace.path = lambda *args: Path({str(clone)!r})\n"
++                          "appendix_tree.suite_tree = lambda *args: nullcontext(SimpleNamespace("
++                          f"root=Path({str(clone)!r}), note='', warning=''))\n"
++                          "def workload(*args, **kwargs):\n"
++                          f"    os.write({work_write}, b'running\\n')\n"
++                          "    while True: signal.pause()\n"
++                          "acceptance.run_full_suite = workload\n")
++            env = dict(kwargs.get("env", os.environ))
++            env["PYTHONPATH"] = str(source) + os.pathsep + env.get("PYTHONPATH", "")
++            kwargs["env"] = env
++            kwargs["pass_fds"] = tuple(kwargs.get("pass_fds", ())) + (write_fd, life_read, work_write)
++            try:
++                proc = real_popen([*argv[:2], bootstrap + argv[2], *argv[3:]], *args, **kwargs)
++                self.processes.append(proc)
++                self.waiters[proc.pid] = proc.wait
++            finally:
++                os.close(write_fd)
++                os.close(life_read)
++                os.close(work_write)
++            with os.fdopen(read_fd) as ready:
++                handshake = json.loads(ready.readline())
++            self.assertEqual(handshake[:2], [proc.pid, proc.pid], f"зерно: {self.seed}")
++            self.assertEqual(handshake[3], nonce, f"зерно: {self.seed}")
++            self.watch_pid(proc.pid)
++            self.watch_pid(handshake[2])
++            self.members[proc.pid] = (handshake[2],)
++            self.child_pids.append(handshake[2])
++            group = {"name": "suite-run", "proc": proc, "pid": proc.pid,
++                     "pgid": proc.pid, "child": handshake[2], "nonce": nonce}
++            state["suite"] = group
++            state["groups"].append(group)
++            if options.get("window") == "before-return":
++                impact()
++            if options.get("window") == "after-return":
++                state["suite_popen_returned"] = True
++            return proc
++
++        try:
++            if options.get("window") == "after-return":
++                sys.settrace(after_return)
++            with mock.patch.object(repo_context, "profile_of", return_value=profile), \
++                 mock.patch.object(workspace, "path", return_value=clone), \
++                 mock.patch.object(subprocess, "Popen", side_effect=launch):
++                suite_run.cmd_suite_run([task])
++                # Только штатный setup ждёт входа нагрузки; ранние окна
++                # воздействуют до возвращения команды и этого барьера.
++                ready = select.select([state["suite_work_read"]], [], [], 5)[0]
++                self.assertTrue(ready, f"зерно: {self.seed}; background не вошёл в нагрузку")
++                self.assertEqual(os.read(state["suite_work_read"], 32), b"running\n",
++                                 f"зерно: {self.seed}; background завершился до нагрузки")
++                state["suite_background_entered"] = True
++                if options.get("leader_gone"):
++                    group = state["suite"]
++                    os.kill(group["pid"], signal.SIGKILL)
++                    group["proc"].wait(timeout=5)
++                    self.assertTrue(self.live(group["child"]), f"зерно: {self.seed}")
++        finally:
++            sys.settrace(original_trace)
++
+     def scenario(self, signum=signal.SIGTERM, *, fault=None, early_role=False,
+                  leader_gone=False, second_signal=False, stubborn=False, vanished=False,
+                  reused=False, early_drive=False, outcome=None, repeat_cleanup=False):
+@@ -309,11 +447,7 @@ class ProcessFixture:
+             if early_drive:
+                 state["early_drive_live"] = self.live(drive["pid"])
+                 os.kill(os.getpid(), signum)
+-            suite = self.group("suite-run", spawn=real_popen, cwd=clone)
+-            state["groups"].append(suite)
+-            run = config.LOGS / "suite-run" / "fixture" / "run.json"
+-            run.parent.mkdir(parents=True, exist_ok=True)
+-            run.write_text(json.dumps({"pid": suite["pid"]}))
++            self.launch_suite(clone, state, real_popen)
+             conn = store.db()
+             store.create_schema(conn)
+             store.insert_task(conn, task, "Локальная роль", "in_dev", "fixture", config.DEFAULT_TARGET, 1,
+@@ -1096,3 +1230,99 @@ class ConsumerGroupsTest(ProcessFixture, RealGitSandbox):
+                 self.assertTrue(self.live(control["child"]), f"зерно: {self.seed}")
+                 text = "\n".join(row["detail"] for row in store.task_steps(conn, task))
+                 self.assert_group_record(text, role["pgid"])
++
++
++class SuiteRegistrationTest(ProcessFixture, RealGitSandbox):
++    def assert_suite_window(self, window):
++        for sig in (signal.SIGTERM, signal.SIGHUP):
++            with self.subTest(seed=self.seed, window=window, signal=sig):
++                self.suite_options = {"window": window, "signal": sig}
++                state = self.scenario(sig)
++                impact = state.get("suite_impact", {})
++                self.assertEqual(impact.get("window"), window, f"зерно: {self.seed}; {state}")
++                self.assertTrue(impact["alive"], f"зерно: {self.seed}")
++                self.assertFalse(impact["run_published"], f"зерно: {self.seed}")
++                self.assertIsInstance(state.get("exception"), SystemExit,
++                                      f"зерно: {self.seed}; {state.get('exception')}")
++                self.assertEqual(state["exception"].code, 128 + sig, f"зерно: {self.seed}")
++                if state["removals"]:
++                    self.assert_stopped(state, sig)
++                else:
++                    self.assert_preserved(state)
++                for control in state["controls"]:
++                    for pid in (control["pid"], control["child"]):
++                        self.assertTrue(self.live(pid), f"зерно: {self.seed}; чужой PID={pid}")
++                print("окно suite:", window, "сигнал:", signal.Signals(sig).name,
++                      "экземпляр:", {k: v for k, v in state["suite"].items() if k != "proc"},
++                      "воздействие:", impact, "до удаления:", state["removals"],
++                      "после:", state["snapshot"])
++
++    def assert_preserved(self, state):
++        self.assertFalse(state["removals"], f"зерно: {self.seed}; {state['removals']}")
++        for path in (state["clone"], state["origin"]):
++            self.assertTrue(path.exists(), f"зерно: {self.seed}; {path}")
++        self.assertRegex(state["output"].lower(),
++                         r"(ошиб|отказ|не.*подтвер|не.*удал|неопредел|cleanup|регистрац)",
++                         f"зерно: {self.seed}")
++        for _, pid, alive in state["snapshot"]:
++            if alive:
++                self.assertIn(str(pid), state["output"], f"зерно: {self.seed}; нет идентичности")
++
++    def test_ac5_suite_created_before_popen_returns(self):
++        """ОС создала suite с потомком, но объект ещё не возвращён cmd_suite_run.
++
++        Оба сигнала приходят по отдельности до возврата Popen; handshake
++        наблюдателя доказывает принадлежность, но не подменяет регистрацию продукта.
++        Ловит мутацию: снята защита окна до возврата Popen — живой suite
++        оказывается в первом снимке rmtree вместо остановки или сохранения каталогов.
++        """
++        self.assert_suite_window("before-return")
++
++    def test_ac5_suite_popen_returned_before_publication(self):
++        """После возврата Popen остановка опережает публикацию регистрации/run.json.
++
++        Trace действует на первой строке публичной команды после возврата;
++        имя закрытого регистратора и способ handshake не фиксируются.
++        Ловит мутацию: защита заканчивается сразу после Popen — suite
++        ещё не опубликован и остаётся живым при первом rmtree.
++        """
++        self.assert_suite_window("after-return")
++
++    def test_ac4_unregistered_suite_pid_preserves_directories(self):
++        """Числовой PID в run.json не удостоверяет принадлежность экземпляра.
++
++        Два реальных запуска содержат только PID/started; сама группа известна
++        наблюдателю, но продукт не получил удостоверенной регистрации.
++        Ловит мутацию: номер из run.json принимается как разрешение сигнала —
++        группа погибает либо clone/origin удаляются вместо диагностики.
++        """
++        for sig in (signal.SIGTERM, signal.SIGHUP):
++            with self.subTest(seed=self.seed, signal=sig):
++                self.suite_options = {"unregistered": True}
++                state = self.scenario(sig)
++                self.assertIsInstance(state.get("exception"), SystemExit, f"зерно: {self.seed}")
++                self.assertEqual(state["exception"].code, 128 + sig, f"зерно: {self.seed}")
++                group = next(g for g in state["groups"] if g["name"] == "suite-run")
++                self.assertFalse(any(pgid == group["pgid"] and sent
++                                     for pgid, sent in state["signals"]), f"зерно: {self.seed}")
++                self.assertTrue(self.live(group["pid"]), f"зерно: {self.seed}")
++                self.assertTrue(self.live(group["child"]), f"зерно: {self.seed}")
++                self.assert_preserved(state)
++                for control in state["controls"]:
++                    self.assertTrue(self.live(control["pid"]), f"зерно: {self.seed}")
++                    self.assertTrue(self.live(control["child"]), f"зерно: {self.seed}")
++
++    def test_ac6_suite_dead_leader_does_not_hide_child(self):
++        """Настоящий background уже запущен и зарегистрирован, лидер затем завершён.
++
++        Его отдельный потомок остаётся живым до остановки канарейки; оба
++        сигнала должны завершать группу до удаления clone/origin.
++        Ловит мутацию: исчезновение PID background считается смертью группы —
++        живой потомок появляется в снимке первого rmtree.
++        """
++        for sig in (signal.SIGTERM, signal.SIGHUP):
++            with self.subTest(seed=self.seed, signal=sig):
++                self.suite_options = {"leader_gone": True}
++                state = self.scenario(sig)
++                self.assertTrue(state.get("suite_background_entered"), f"зерно: {self.seed}")
++                self.assert_stopped(state, sig)
+diff --git a/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py b/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py
+new file mode 100644
+index 00000000..41d2c0b4
+--- /dev/null
++++ b/tests/test_01m4xvd8gfab4772m98pdch5vw_suite_release.py
+@@ -0,0 +1,105 @@
++"""Освобождение замка именно на публичных маршрутах suite.
++
++Группа: долгоживущий
++Зелёный с рождения: background освобождает замок на всех исходах, cmd_suite_run — при ошибке spawn; новые пути регистрации проверяются отдельно.
++"""
++
++import json
++import os
++import random
++import subprocess
++import sys
++from contextlib import nullcontext
++from types import SimpleNamespace
++from unittest import mock
++
++from orchestrator import (acceptance, appendix_tree, config,
++                          repo_context, store, suite_lock, suite_run, workspace)
++from tests.sandbox import SchemaConnTmpRootTest
++
++
++class SuiteReleaseTest(SchemaConnTmpRootTest):
++    def setUp(self):
++        super().setUp()
++        self.seed = random.randrange(2**32)
++        print(f"зерно: {self.seed}")
++        self.task = "01" + "A" * 24
++        store.insert_task(self.conn, self.task, "Освобождение suite", "in_dev",
++                          "fixture-suite", config.DEFAULT_TARGET, 1)
++        profile = SimpleNamespace(outcome=repo_context.PROFILE_PRESENT,
++                                  values={"command": [sys.executable, "-m", "pytest"]})
++        for patcher in (
++            mock.patch.object(repo_context, "profile_of", return_value=profile),
++            mock.patch.object(workspace, "path", return_value=self.root),
++            mock.patch.object(workspace, "repo", return_value=self.root),
++            mock.patch.object(appendix_tree, "suite_tree", side_effect=lambda *args:
++                              nullcontext(appendix_tree.SuiteTree(self.root, "", "", ""))),
++        ):
++            patcher.start()
++            self.addCleanup(patcher.stop)
++
++    def test_ac11_background_releases_before_next_acquire_on_each_outcome(self):
++        """Normal, red, timeout и exception проходят настоящий background при живом holder.
++
++        Связка background — БД задачи — файл замка: отсутствие замка
++        проверяется до следующего acquire, поэтому перехват мёртвого PID
++        не может выдать пропущенный release за успех.
++        Ловит мутацию: пропущен release в finally background — после
++        возврата остаётся lock.json с живым текущим держателем.
++        """
++        cases = (
++            ("normal", True, "1 passed in 0.1s"),
++            ("red", False, "1 failed in 0.1s"),
++            ("timeout", False, f"прогон полного набора tests/ превысил {config.FULL_SUITE_TIMEOUT_SEC}с — завис"),
++            ("exception", False, None),
++        )
++        for run_no, (outcome, green, output) in enumerate(cases, 1):
++            with self.subTest(seed=self.seed, outcome=outcome):
++                self.assertIsNone(suite_lock.acquire(self.task, run_no))
++                suite_lock.hand(self.task, run_no, os.getpid())
++                observed = []
++
++                def workload(*args, **kwargs):
++                    observed.append(suite_lock.held_by_me())
++                    if outcome == "exception":
++                        raise RuntimeError("fixture: suite workload failed")
++                    return green, output
++
++                with mock.patch.object(acceptance, "run_full_suite", side_effect=workload):
++                    suite_run.background(self.task, str(run_no), suite_run.MODE_FULL)
++                self.assertTrue(observed, f"зерно: {self.seed}; нагрузка не запущена")
++                self.assertTrue(all(observed), f"зерно: {self.seed}; adopt не состоялся")
++                self.assertIsNone(suite_lock.holder(), f"зерно: {self.seed}; release пропущен")
++                self.assertFalse(suite_lock.path().exists(), f"зерно: {self.seed}; замок остался")
++                result = json.loads((suite_lock.directory() / self.task / "result.json").read_text())
++                self.assertEqual(result["green"], green, f"зерно: {self.seed}; {result}")
++                if outcome == "timeout":
++                    self.assertEqual(suite_run.parse(green, output).outcome, acceptance.FULL_SUITE_TIMEOUT)
++                    self.assertIn("предел", result["report"])
++                if outcome == "exception":
++                    self.assertIn("fixture: suite workload failed", result["report"])
++
++    def test_ac11_spawn_error_releases_before_next_acquire(self):
++        """Ошибка ОС в spawn оставляет живой CLI, но не оставляет его замок.
++
++        Связка cmd_suite_run — БД — замок проверяется до любого нового
++        acquire; оба класса ошибки приходят после наблюдения замка в Popen.
++        Ловит мутацию: пропущен release в обработке ошибки spawn —
++        holder остаётся текущим PID и блокирует будущие прогоны.
++        """
++        for error in (OSError, PermissionError):
++            with self.subTest(seed=self.seed, error=error.__name__):
++                seen = []
++
++                def spawn(*args, **kwargs):
++                    seen.append(suite_lock.held_by_me())
++                    raise error("fixture: suite spawn denied")
++
++                with mock.patch.object(subprocess, "Popen", side_effect=spawn):
++                    try:
++                        suite_run.cmd_suite_run([self.task])
++                    except (OSError, SystemExit):
++                        pass
++                self.assertEqual(seen, [True], f"зерно: {self.seed}; acquire после spawn")
++                self.assertIsNone(suite_lock.holder(), f"зерно: {self.seed}; release пропущен")
++                self.assertFalse(suite_lock.path().exists(), f"зерно: {self.seed}; замок остался")
