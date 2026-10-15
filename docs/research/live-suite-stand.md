@@ -479,3 +479,109 @@ DispatchQueue.global().async {
 RunLoop.main.run()
 
 ```
+
+## Решение Оператора и сеть VM (15.10, 06:34 UTC)
+
+Оператор разрешил настроить сеть только этой VM, сохранив VPN и запреты ролей. Подготовлены отдельные гостевые nftables table ip stand_transport, redsocks TCP→SOCKS и DNS UDP→локальный TCP relay. SSH через vsock несёт remote dynamic SOCKS 127.0.0.1:1080 и reverse 127.0.0.1:5353→host127.0.0.1:33553. Хостовый DNS relay слушает только loopback и использует обычный host getaddrinfo. Ни VPN, ни host routes, ни role-env/профили/guards не менялись. Корневой SSH-доступ гостя был временно открыт только по эфемерному ключу для установки пакетов и закрыт самим setup: PermitRootLogin no, ключ root удалён. Учётных данных провайдеров в VM нет.
+
+Проверка от UID1000: HTTPS к https://registry.npmjs.org/@openai/codex/0.157.1 вернул HTTP200. Повторный preflight: native CLI версии прежние, unshare NEWUSER rc0, bwrap smoke rc0; внутри bwrap --unshare-all прямой TCP вернул101 (network unreachable). Это только проверка зависимостей/транспорта и отдельного сетевого запрета; не доказательство production-политики либо четырёх live-provider-маршрутов. ready_for_live остаётся false.
+
+Восстановление сети после перезапуска VM требует поднять DNS relay и SSH remote forwards, затем заново применить гостевой отдельный nft table (таблица не записана в глобальный nftables.conf). Остановка сети: остановить эти два host-процесса; удалить только table ip stand_transport в госте, остановить stand-dns/stand-redsocks и восстановить systemd-resolved resolv.conf. Глобальный firewall не сбрасывается. Для SSH нужен предписанный own control.sock, эфемерный ключ и known_hosts.
+
+### Сеть: vm/fetch-network-debs.py
+
+```
+import subprocess,uuid,json
+from pathlib import Path
+root=Path(__file__).resolve().parent
+cid=None
+def run(args,timeout=120):
+ p=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
+ if p.returncode:raise RuntimeError((p.stderr or p.stdout)[-1500:])
+ return p.stdout.strip()
+try:
+ cid=run(['docker','create','--user','root','--label','artel.operator.live-stand=true','--name','artel-vm-net-'+uuid.uuid4().hex[:8],'artel-live-stand:codex-0.157.1-claude-2.1.283','sleep','900'])
+ run(['docker','start',cid]);run(['docker','exec',cid,'apt-get','-o','Acquire::Retries=0','-o','Acquire::https::Timeout=15','update'])
+ run(['docker','exec',cid,'apt-get','--download-only','install','-y','nftables','redsocks'])
+ dest=root/'network-debs';dest.mkdir(exist_ok=True)
+ run(['docker','cp',cid+':/var/cache/apt/archives/.',str(dest)])
+ print('network_debs_ready',flush=True)
+finally:
+ if cid:print('own_builder_removed='+str(subprocess.run(['docker','rm','-f',cid],capture_output=True,timeout=20).returncode==0),flush=True)
+
+```
+
+### Сеть: vm/dns-relay.py
+
+```
+"""Stand-only DNS over one loopback TCP stream per UDP query; host resolver."""
+import socket,socketserver,struct
+class Handler(socketserver.BaseRequestHandler):
+ def handle(self):
+  self.request.settimeout(5)
+  try:
+   data=self.request.recv(4096)
+   if len(data)<12 or struct.unpack('!H',data[4:6])[0]!=1:return
+   labels=[];at=12
+   while at<len(data) and data[at]:
+    size=data[at];at+=1
+    if size>63 or at+size>len(data):return
+    labels.append(data[at:at+size].decode('ascii'));at+=size
+   at+=1
+   if at+4>len(data):return
+   kind,cls=struct.unpack('!HH',data[at:at+4]);question=data[12:at+4]
+   answers=[];rcode=0
+   if cls==1 and kind in (1,28):
+    family=socket.AF_INET if kind==1 else socket.AF_INET6
+    try:
+     for ip in sorted({row[4][0] for row in socket.getaddrinfo('.'.join(labels),None,family,socket.SOCK_STREAM)}):
+      packed=socket.inet_pton(family,ip)
+      answers.append(b'\xc0\x0c'+struct.pack('!HHIH',kind,1,60,len(packed))+packed)
+    except socket.gaierror:rcode=3
+   result=data[:2]+struct.pack('!HHHHH',0x8180|rcode,1,len(answers),0,0)+question+b''.join(answers)
+   self.request.sendall(result)
+  except (OSError,ValueError,UnicodeError):return
+class Server(socketserver.ThreadingTCPServer):
+ allow_reuse_address=True;daemon_threads=True
+with Server(('127.0.0.1',33553),Handler) as server:server.serve_forever()
+
+```
+
+### Сеть: vm/guest-network-setup.sh
+
+```
+set -eu
+dpkg -i /work/network-debs/*.deb
+cat > /etc/redsocks.conf <<'EOF'
+base { log_debug=off; log_info=off; daemon=off; redirector=iptables; }
+redsocks { local_ip=127.0.0.1; local_port=12345; ip=127.0.0.1; port=1080; type=socks5; }
+EOF
+cat > /etc/systemd/system/stand-redsocks.service <<'EOF'
+[Service]
+ExecStart=/usr/sbin/redsocks -c /etc/redsocks.conf
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/stand-dns.service <<'EOF'
+[Service]
+ExecStart=/usr/bin/socat UDP4-RECVFROM:53,bind=127.0.0.1,reuseaddr,fork TCP:127.0.0.1:5353
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now stand-redsocks stand-dns
+# A separate table in this disposable guest only; no host or role namespace changes.
+nft add table ip stand_transport
+nft 'add chain ip stand_transport output { type nat hook output priority dstnat; policy accept; }'
+nft add rule ip stand_transport output ip daddr 127.0.0.0/8 return
+nft add rule ip stand_transport output ip protocol tcp redirect to :12345
+rm -f /etc/resolv.conf
+printf 'nameserver 127.0.0.1\noptions timeout:3 attempts:1\n' > /etc/resolv.conf
+printf 'PermitRootLogin no\nPasswordAuthentication no\n' > /etc/ssh/sshd_config.d/stand.conf
+rm -f /root/.ssh/authorized_keys
+systemctl reload ssh
+printf 'STAND_NETWORK_SETUP_OK\n'
+
+```
