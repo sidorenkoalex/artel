@@ -33,31 +33,60 @@ budget_usd: 25
    `targets.check` отказывает абсолютному пути и пути, содержащему `..`.
 4. `env` — блочное отображение строк (новый вид подполя `mapping` в
    проверке профиля; `orchestrator/yamlmini.py` не меняется).
-   `targets.check` отказывает имени переменной из точного перечня
-   секретов: имена `secret_env_names()` провайдеров
-   (`orchestrator/providers/`), `GITHUB_TOKEN`, `GH_TOKEN`. Сверка — по
-   точному имени.
+   `targets.check` отказывает, называя в тексте отказа `test_profile` и
+   `env`: значению `env`, не являющемуся отображением; значению
+   переменной, не являющемуся строкой (в том числе int, bool и `None`,
+   которые даёт разбор `yamlmini.scalar`, `orchestrator/yamlmini.py:57-62`);
+   имени переменной из точного перечня секретов. Перечень секретов —
+   имена `secret_env_names()` всех провайдеров реестра
+   `orchestrator/providers/__init__.py::PROVIDERS` на момент проверки (не
+   литералы имён), плюс `GITHUB_TOKEN`, `GH_TOKEN`. Сверка — по точному
+   имени.
 5. `workdir` и `env` допустимы только при `runner: pytest-own`:
    `targets.check` отказывает им при `runner: pult-pytest`, в том числе
    когда `runner` не задан (значение по умолчанию).
 6. Подполя `runner`, `workdir`, `env` доходят до потребителей полями
-   `project_profile.Profile` (`orchestrator/project_profile.py`);
-   при отсутствии подполя `runner` поле `Profile.runner` равно
-   `pult-pytest`. Потребителей в этой части не меняют.
+   `project_profile.Profile` (`orchestrator/project_profile.py`). При
+   отсутствии подполя: `Profile.runner` = `"pult-pytest"`,
+   `Profile.workdir` = `""` (корень репозитория), `Profile.env` — пустое
+   отображение. Существующие построения `Profile` через именованные
+   аргументы без новых полей (`tests/test_project_profile_gates.py:210`,
+   `tests/test_network_address_gate.py:178`) остаются рабочими без правки
+   этих тестов. Потребителей в этой части не меняют.
 7. Тестами в `tests/` зафиксированы argv, `cwd` и окружение каждого из
    восьми мест запуска тестов для артели на текущем коде:
    `acceptance.run`, `acceptance.collect`, `acceptance.run_repeat`,
    `acceptance.run_plank`, `acceptance._run_full_suite_now` с `observe` и
-   без него, `acceptance._run_full_suite_to_log`, `two_sided._run_side` —
-   по обоим путям команды: `command=None` и
-   `command=[python3, -m, pytest]` (профиль артели, `targets.yaml:46`).
+   без него, `acceptance._run_full_suite_to_log`, `two_sided._run_side`.
+   Пути команды:
+   - `acceptance.run`, `acceptance.collect`, `acceptance.run_repeat` —
+     оба пути: `command=None` и `command=[python3, -m, pytest]` (профиль
+     артели, `targets.yaml:46`);
+   - `acceptance._run_full_suite_now` (с `observe` и без) и
+     `acceptance._run_full_suite_to_log` — путь `command=None` и путь
+     `command=[python3, -m, pytest]`, поданный через
+     `acceptance.run_full_suite` (`orchestrator/acceptance.py:1115`):
+     сами эти функции параметра `command` не имеют;
+   - `acceptance.run_plank` (`orchestrator/acceptance.py:923`) и
+     `two_sided._run_side` (`orchestrator/advance_gates/two_sided.py:222`)
+     параметра `command` не имеют — фиксируется их единственный
+     сегодняшний путь.
+8. Текст отказа `targets.check` для неверного `runner`, `workdir` или
+   `env` называет `test_profile` и имя подполя — по образцу
+   `orchestrator/targets.py:281` («подполе 'test_profile.<подполе>' — …»).
 
 ## Критерии приёмки
 
 AC-1. `targets.check` отказывает записи, у которой `test_profile.env`
 (при `runner: pytest-own`) содержит имя из перечня секретов — любое из
-`secret_env_names()` провайдеров, `GITHUB_TOKEN`, `GH_TOKEN`; сверка идёт
-по точному имени.
+`secret_env_names()` провайдеров реестра
+`orchestrator/providers/__init__.py::PROVIDERS`, `GITHUB_TOKEN`,
+`GH_TOKEN`; сверка идёт по точному имени (имя, отличающееся от секретного
+регистром или суффиксом, проходит). Перечень берётся из реестра: при
+подменённом в тесте наборе имён провайдера (`secret_env_names()`
+возвращает новое имя) `targets.check` отказывает этому новому имени, а
+имени, исключённому из подменённого набора, — нет (если оно не
+`GITHUB_TOKEN`/`GH_TOKEN` и не названо другим провайдером).
 
 AC-2. `targets.check` отказывает записи, у которой `test_profile.workdir`
 (при `runner: pytest-own`) — абсолютный путь или путь, содержащий `..`.
@@ -71,18 +100,46 @@ AC-4. `targets.check` отказывает записи, у которой за�
 
 AC-5. Профиль без подполей `runner`, `workdir`, `env` проходит
 `targets.check` и даёт `project_profile.Profile` с `runner` =
-`pult-pytest`.
+`"pult-pytest"`, `workdir` = `""` и пустым `env`; `Profile`, построенный
+именованными аргументами без новых полей (как в
+`tests/test_project_profile_gates.py:210`), строится без ошибки и несёт
+те же значения по умолчанию.
 
 AC-6. Профиль с `runner: pytest-own`, относительным `workdir` без `..` и
-`env` из строк без имён секретов проходит `targets.check`, и
-`project_profile.Profile` несёт заданные значения `runner`, `workdir`,
-`env`.
+`env` — отображением строк без имён секретов — проходит `targets.check`,
+и `project_profile.Profile` несёт заданные значения `runner`, `workdir`,
+`env`. `targets.check` отказывает при `runner: pytest-own` записи, у
+которой `env` — не отображение (строка, список), и записи, у которой
+значение переменной `env` — не строка (int, bool, `None` после разбора
+`yamlmini`); текст отказа называет `test_profile` и `env`.
 
 AC-7. Фиксирующие тесты argv, `cwd` и окружения восьми мест запуска
-(`acceptance.run`, `collect`, `run_repeat`, `run_plank`,
-`_run_full_suite_now` с `observe` и без, `_run_full_suite_to_log`,
-`two_sided._run_side`) по обоим путям команды (`command=None` и
-`command=[python3, -m, pytest]`) зелёные на текущем коде этих мест.
+зелёные на текущем коде этих мест, по путям команды требования 7:
+оба пути (`command=None` и `command=[python3, -m, pytest]`) у
+`acceptance.run`, `collect`, `run_repeat`; путь `command=None` и путь с
+`command` через `acceptance.run_full_suite` у `_run_full_suite_now` (с
+`observe` и без) и `_run_full_suite_to_log`; единственный сегодняшний
+путь у `run_plank` и `two_sided._run_side`. argv и `cwd` сравниваются на
+точное равенство с ожидаемыми значениями. Окружение сравнивается как
+разница с `os.environ` пульта на момент вызова: добавленные и
+изменённые переменные — `PYTHONPYCACHEPREFIX`
+(`orchestrator/acceptance.py:86`), `PYTHONUNBUFFERED`
+(`orchestrator/acceptance.py:1372`), у `two_sided._run_side` — также
+`PYTHONPATH` и `REPORT_ENV`
+(`orchestrator/advance_gates/two_sided.py:230-232`) — и отсутствие
+удалённых.
+
+AC-8. Отказ `targets.check` для неверных `runner`, `workdir` и `env`
+несёт в тексте `test_profile` и имя подполя;
+`tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py` (случай
+неизвестного подполя `runner` со значением `"x"`, строки 103, 151-152)
+остаётся зелёным без правки.
+
+## Матрица неослабления
+
+| Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
+|---|---|---|---|---|
+| `runner` становится известным подполем `test_profile` (`orchestrator/targets.py`) | Отказ `targets.check` неизвестному подполю `runner` со значением `"x"` с текстом, называющим `test_profile` и `runner` — `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:103`, `:151-152` | остаётся: `"x"` — неверное значение `runner`, отказ требования 2 называет `test_profile` и `runner` (требование 8) | `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:151-152` без правки; AC-3, AC-8 | ок |
 
 ## Не входит
 
