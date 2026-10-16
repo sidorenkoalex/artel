@@ -1,19 +1,18 @@
-# Записка spec_auditor
+# Записка spec_auditor (визит 2, spec_sha 58e64fef…)
 
 ## Выяснено
-- SPEC-AUDIT.md сдан: status ready, verdict concerns, spec_sha 32c4ccb8…; guard ок.
-- Вызывающие с `command` вне зон: `orchestrator/fsm_advance.py:594-596`, `orchestrator/advance_gates/tests_writing.py:557-563` (сухой сбор tests_writing).
-- `two_sided.run` (`two_sided.py:284`) команды не принимает; вызывающие — `test_integrity.py:1429,1527` вне зон.
-- `acceptance_suite` (`acceptance.py:1807-1848`) теряет команду; в делении не принадлежит ни D0-2, ни D0-3 (D0-3 запрещает правку acceptance.py).
-- `run_plank` без параметра `command`; `plank_run.py:187`, `pull.py:664-666`, `amend.py:545-549,715-718` команды не передают.
-- Профиль артели несёт `command: [python3,-m,pytest]` (`targets.yaml:46`).
-- Порог деления по бюджету — `config.SPLIT_SIGNAL_BUDGET_USD = 60`, а не $30, как в SPEC; строка бэклога — :186, не :185.
+- Все 10 решений Оператора 16.10 внесены в SPEC (зоны, req 1/7/8/9, AC-2..AC-12, матрица, факты :186, :587, :1343-1350).
+- Новые находки: `suite-run --failed` — id упавших из вывода pytest (`acceptance.failed_entries`, :1452) отсчитаны от rootdir pytest, не от корня репозитория; req 4 велит переводить их от корня -> поломка при workdir.
+- `run_full_suite` проверяет `root/"tests"` (`acceptance.py:1172-1174`) — SPEC не говорит, что проверка идёт по long_lived_dir.
+- `amend.py:715-718` зовёт collect/run без cwd -> `config.ROOT`; AC-9 требует cwd=workdir при «только передаче профиля».
+- `run_plank` (:923) и `two_sided._run_side` (:222) параметра command не имеют — фиксация AC-1 по пути command=[python3,-m,pytest] на текущем коде для них не определена.
+- preflight.py/dry_run.py pytest не запускают — подтверждено.
 
 ## Не сработало
-- grep с `cd`/`$W`/пайпами требует подтверждения — только абсолютные пути, одна команда.
+- Bash с `W=…;` требует подтверждения — только `cd … && grep`.
 
 ## Где остановился
-- Работа завершена.
+- SPEC-AUDIT.md сдан: status ready, verdict concerns, spec_sha 58e64fef…, guard ок. Работа завершена.
 
 ## Чего не хватило
-- Карта не показывает вызывающих по функциям (кто зовёт `two_sided.run`, `acceptance.collect`) — искал grep'ом.
+- Карта не даёт вызывающих по функциям — grep по `acceptance\.<fn>(`.
