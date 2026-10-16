@@ -62,3 +62,14 @@ targets:
       # Порог использования (задача 01M4TVBT9Z, решение Оператора 13.10):
       # 4 даёт 26 432 байта против 30 386 при умолчании 3 (предел 32 768).
       min_uses: 4
+  # Внешний доверенный проект (ADR-0023, вторая поправка 16.10.2026): sandbox
+  # не объявляется до D1а; профиль тестов (test_profile) вносится после мержа
+  # D0-1 (подполя runner, workdir, env).
+  sled:
+    forge: github
+    url: https://github.com/sledproject/sled
+    base: main
+    token_slot: artel-token
+    no_paths: [.claude/, .codex/, .agents/, CLAUDE.md, AGENTS.md, frontend/.claude/, frontend/CLAUDE.md, .devcontainer/, .github/, CODEOWNERS, .pre-commit-config.yaml, backend/pyproject.toml, backend/uv.lock, backend/.python-version, **/conftest.py, frontend/package.json, frontend/package-lock.json, frontend/vitest.config.js]
+    project_skills: []
+    merge_gate: operator
