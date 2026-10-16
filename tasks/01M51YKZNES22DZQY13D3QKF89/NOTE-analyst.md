@@ -1,22 +1,30 @@
 # Записка analyst — 01M51YKZNES22DZQY13D3QKF89
 
 ## Выяснено
-- ТЗ достаточно для SPEC, вопросов нет.
-- Зона ТЗ — 8 элементов (sandbox.py, acceptance.py, targets.py, config.py,
-  fsm_autogate.py, fsm.py, orchestrator/doctor/, tests/) → уровень
-  BUDGET_CALIBRATION_TABLE $85 (config.py:629) > рамки ТЗ $60 → по самому ТЗ
-  деление на D1а-1 (пп. 1–4, 8 для run/collect/run_repeat/run_plank) и
-  D1а-2 (полный набор, пп. 5–7).
-- Подраздел D1а-2 без targets.py (поля профиля проверяет D1а-1) → 7 зон,
-  уровень $45. Фиксация argv/cwd/env всех семи мест артели (п.1) — в D1а-1.
-
-## Не сработало
-- Составные bash-команды (`;`, `|`, `cd &&`) требуют подтверждения — звать по одной.
+- Возврат аудита (SPEC-AUDIT fail, 1 из 2). Часть отклонений требует правки
+  вне зон ТЗ (ТЗ: «Правка вне зон — эскалация до SPEC») → шаг 2 пишет
+  QUESTIONS.md, SPEC.md не трогает.
+- Подтверждено кодом: вызывающие мест запуска вне зон — pull.py:664/666,
+  plank_run.py:187, amend.py:545/549/715/718, advance_gates/acceptance.py:169/402/405,
+  advance_gates/tests_writing.py:560/563, suite_run.py:524/564, notes.py:1040,
+  fsm_merge_gate.py:962-967. Сигнатуры: run(tdir,cwd,…) :384, run_plank(targets,cwd) :923,
+  full_suite(root, task_id) :1697 (task_id есть), acceptance_suite :1807 → full_suite без command :1847.
+- fsm_autogate.py:326 и fsm.py:1294 зовут acceptance.acceptance_suite — п.6 ложится в acceptance.py.
+- Носитель профиля project_profile.Profile (project_profile.py:63-74) вне зон.
+- Фикстуры без sandbox/image: tests/sandbox.py:1057 (_PROJECT_TARGET_ENTRY), :1074 (ARTEL_TEST_PROFILE),
+  :1097 artel_target_entry, :1117 declared_without_profile; external_flow TARGET_ENTRY/PROFILE :45-61;
+  test_profile base_entry :31 + метод :107. 27 файлов tests/ используют фикстуры sandbox.py.
+- test_profile.py:103 — «неизвестное подполе» может выпасть `runner` со значением "x":
+  после правки отказ останется (неверное значение), смены ожидания нет.
+- Пункты аудита 5–7 (AC-5 «ровно», AC-7 -e NAME/--env-file, AC-3 realpath в прогоне) —
+  прямые следствия ТЗ п.3/п.2, решаются в SPEC без вопроса.
 
 ## Где остановился
-- SPEC.md (15 AC, status: ready, budget_usd 60) с секцией «## Деление»
-  (D1а-1 $45, D1а-2 $45 после части 1) написан; guard: ок.
+- QUESTIONS.md (5 вопросов: зоны/доставка проекта, гейт мержа, image+фикстуры,
+  том кэша в D1а-1, «полный набор зелёный»), guard: ок. SPEC.md не тронут.
+- После ANSWER: переписать SPEC с закрытием всех 9 отклонений аудита (5–7, 9 —
+  без вопроса: AC-5 точный набор флагов, AC-7 только -e ИМЯ=значение без
+  --env-file, AC-3 realpath в прогоне, адрес п.6 = acceptance.py:1847), удалить QUESTIONS.md.
 
 ## Чего не хватило
-- Формат деления пришлось искать в scripts/guard.py:3912-4050 и
-  docs/operator-gates.md:136-152 — в брифе примера готового SPEC с делением нет.
+- Как launch-функции узнают проект/задачу — сигнатуры без них, вызывающие вне зон.
