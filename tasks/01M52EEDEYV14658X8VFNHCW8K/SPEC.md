@@ -30,7 +30,9 @@ budget_usd: 25
    умолчанию при отсутствии подполя) и `pytest-own`; любое иное значение
    — отказ `targets.check`.
 3. `workdir` — каталог прогона относительно корня репозитория;
-   `targets.check` отказывает абсолютному пути и пути, содержащему `..`.
+   `targets.check` отказывает абсолютному пути и пути, в котором `..` —
+   сегмент пути (как у вида `dir`, `orchestrator/targets.py:300-301`):
+   `a/../b` — отказ, `a..b` — проходит.
 4. `env` — блочное отображение строк (новый вид подполя `mapping` в
    проверке профиля; `orchestrator/yamlmini.py` не меняется).
    `targets.check` отказывает, называя в тексте отказа `test_profile` и
@@ -89,7 +91,8 @@ AC-1. `targets.check` отказывает записи, у которой `test
 `GITHUB_TOKEN`/`GH_TOKEN` и не названо другим провайдером).
 
 AC-2. `targets.check` отказывает записи, у которой `test_profile.workdir`
-(при `runner: pytest-own`) — абсолютный путь или путь, содержащий `..`.
+(при `runner: pytest-own`) — абсолютный путь или путь с сегментом `..`
+(`a/../b` — отказ); `workdir` `a..b`, где `..` — не сегмент, проходит.
 
 AC-3. `targets.check` отказывает записи, у которой `test_profile.runner`
 — значение, отличное от `pult-pytest` и `pytest-own`.
@@ -105,7 +108,8 @@ AC-5. Профиль без подполей `runner`, `workdir`, `env` прох
 `tests/test_project_profile_gates.py:210`), строится без ошибки и несёт
 те же значения по умолчанию.
 
-AC-6. Профиль с `runner: pytest-own`, относительным `workdir` без `..` и
+AC-6. Профиль с `runner: pytest-own`, относительным `workdir` без сегмента
+`..` (в том числе `a..b`) и
 `env` — отображением строк без имён секретов — проходит `targets.check`,
 и `project_profile.Profile` несёт заданные значения `runner`, `workdir`,
 `env`. `targets.check` отказывает при `runner: pytest-own` записи, у
@@ -120,14 +124,27 @@ AC-7. Фиксирующие тесты argv, `cwd` и окружения вос
 `command` через `acceptance.run_full_suite` у `_run_full_suite_now` (с
 `observe` и без) и `_run_full_suite_to_log`; единственный сегодняшний
 путь у `run_plank` и `two_sided._run_side`. argv и `cwd` сравниваются на
-точное равенство с ожидаемыми значениями. Окружение сравнивается как
-разница с `os.environ` пульта на момент вызова: добавленные и
-изменённые переменные — `PYTHONPYCACHEPREFIX`
-(`orchestrator/acceptance.py:86`), `PYTHONUNBUFFERED`
-(`orchestrator/acceptance.py:1372`), у `two_sided._run_side` — также
-`PYTHONPATH` и `REPORT_ENV`
-(`orchestrator/advance_gates/two_sided.py:230-232`) — и отсутствие
-удалённых.
+точное равенство с ожидаемыми значениями. Ожидаемые argv и `cwd` —
+литералы теста; вычисляемые части ожидания — только интерпретатор
+(`stack.pytest_python_executable()`) и временные каталоги теста.
+Строить ожидание вызовом `acceptance._pytest_command` или
+`acceptance._pytest_env` запрещено.
+Окружение сравнивается как разница с `os.environ` пульта на момент
+вызова, по значениям, и без удалённых переменных; набор добавленных и
+изменённых переменных у каждого места — ровно такой:
+- `acceptance.run`, `acceptance.collect`, `acceptance.run_repeat`,
+  `acceptance.run_plank`, `acceptance._run_full_suite_now` (с `observe` и
+  без) — `PYTHONPYCACHEPREFIX` = каталог вне `cwd` прогона
+  (`orchestrator/acceptance.py:86`);
+- `acceptance._run_full_suite_to_log` — `PYTHONPYCACHEPREFIX` = каталог
+  вне `cwd` прогона и `PYTHONUNBUFFERED` = `"1"`
+  (`orchestrator/acceptance.py:1372`);
+- `two_sided._run_side` — `PYTHONPYCACHEPREFIX` = каталог вне `cwd`
+  прогона, `REPORT_ENV` (`ARTEL_TWO_SIDED_REPORT`) = путь отчёта этого
+  вызова, `PYTHONPATH` начинается с `plugin_dir`
+  (`orchestrator/advance_gates/two_sided.py:230-232`).
+`PYTHONUNBUFFERED` = `"1"` — только у `_run_full_suite_to_log`;
+`REPORT_ENV` и `PYTHONPATH` — только у `two_sided._run_side`.
 
 AC-8. Отказ `targets.check` для неверных `runner`, `workdir` и `env`
 несёт в тексте `test_profile` и имя подполя;
