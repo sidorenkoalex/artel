@@ -1,30 +1,27 @@
 # Записка analyst — 01M51YKZNES22DZQY13D3QKF89
 
 ## Выяснено
-- Возврат аудита (SPEC-AUDIT fail, 1 из 2). Часть отклонений требует правки
-  вне зон ТЗ (ТЗ: «Правка вне зон — эскалация до SPEC») → шаг 2 пишет
-  QUESTIONS.md, SPEC.md не трогает.
-- Подтверждено кодом: вызывающие мест запуска вне зон — pull.py:664/666,
-  plank_run.py:187, amend.py:545/549/715/718, advance_gates/acceptance.py:169/402/405,
-  advance_gates/tests_writing.py:560/563, suite_run.py:524/564, notes.py:1040,
-  fsm_merge_gate.py:962-967. Сигнатуры: run(tdir,cwd,…) :384, run_plank(targets,cwd) :923,
-  full_suite(root, task_id) :1697 (task_id есть), acceptance_suite :1807 → full_suite без command :1847.
-- fsm_autogate.py:326 и fsm.py:1294 зовут acceptance.acceptance_suite — п.6 ложится в acceptance.py.
-- Носитель профиля project_profile.Profile (project_profile.py:63-74) вне зон.
-- Фикстуры без sandbox/image: tests/sandbox.py:1057 (_PROJECT_TARGET_ENTRY), :1074 (ARTEL_TEST_PROFILE),
-  :1097 artel_target_entry, :1117 declared_without_profile; external_flow TARGET_ENTRY/PROFILE :45-61;
-  test_profile base_entry :31 + метод :107. 27 файлов tests/ используют фикстуры sandbox.py.
-- test_profile.py:103 — «неизвестное подполе» может выпасть `runner` со значением "x":
-  после правки отказ останется (неверное значение), смены ожидания нет.
-- Пункты аудита 5–7 (AC-5 «ровно», AC-7 -e NAME/--env-file, AC-3 realpath в прогоне) —
-  прямые следствия ТЗ п.3/п.2, решаются в SPEC без вопроса.
+- ANSWER-1: по всем 5 вопросам вариант A. Зоны + orchestrator/project_profile.py;
+  гейт мержа входит в п.6 без правки fsm_merge_gate.py; image обязателен только при
+  required И test_profile; фикстуры → sandbox: off, утверждения не меняются; том кэша
+  и XDG_CACHE_HOME/UV_CACHE_DIR уже в D1а-1; «полный набор зелёный» → «Не входит».
+- Поправка к числу файлов фикстур: в вопросе 3 я назвал 2 файла, на деле записей с
+  `test_profile:` без `sandbox` — 35 файлов tests/ (sandbox.py + 34 своих литерала:
+  большинство записи артели, есть внешние, напр. merge_gate.py PROFILE_TEMPLATE).
+  Правило ответа (вход фикстур → sandbox: off, утверждения те же) применено ко всем,
+  в SPEC это сказано явно, список файлов — в требовании о фикстурах.
+- Прямые вызовы run/collect/run_repeat/run_plank в tests/ с произвольным tmp-cwd
+  (test_acceptance_collect.py:57, test_acceptance_seed_repeat.py:82, ...). Значит,
+  «cwd вне раскладки → отказ» буквально сломало бы утверждения. Прочтение, согласное
+  с обоими пунктами ответа: проект — из `.artel/projects/<проект>/…`; cwd вне области
+  проектов → запись артели (off, как сейчас); внутри области проекта, но не рабочая
+  копия по раскладке, при required → именованный отказ. Вынесено в SPEC явно.
+- merge gate гонит full_suite на scratch (fsm_merge_gate.py:962-967) — проект из task_id.
 
 ## Где остановился
-- QUESTIONS.md (5 вопросов: зоны/доставка проекта, гейт мержа, image+фикстуры,
-  том кэша в D1а-1, «полный набор зелёный»), guard: ок. SPEC.md не тронут.
-- После ANSWER: переписать SPEC с закрытием всех 9 отклонений аудита (5–7, 9 —
-  без вопроса: AC-5 точный набор флагов, AC-7 только -e ИМЯ=значение без
-  --env-file, AC-3 realpath в прогоне, адрес п.6 = acceptance.py:1847), удалить QUESTIONS.md.
+- SPEC.md сдан (status ready, 17 AC, деление D1а-1/D1а-2 по $45, родитель $60),
+  QUESTIONS.md удалён, guard: ок. Закрыты отклонения аудита 1–9.
 
 ## Чего не хватило
-- Как launch-функции узнают проект/задачу — сигнатуры без них, вызывающие вне зон.
+- Число затронутых фикстур — надо было считать grep'ом `test_profile:` по tests/, а
+  не по ссылкам аудита.
