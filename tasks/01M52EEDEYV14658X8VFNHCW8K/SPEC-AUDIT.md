@@ -4,166 +4,128 @@ type: spec_audit
 author_role: spec_auditor
 status: ready
 verdict: concerns
-signals: в) пути-признаки (тесты): tests/; в) пути-признаки (песочница ролей): orchestrator/providers/; д) ТЗ ссылается на ADR: ADR-0023
-spec_sha: f8e9c02153c9cd57b6368cb96c403edc94df88c5
+signals: в) пути-признаки (тесты): tests/, tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py, tests/test_network_address_gate.py, tests/test_project_profile_gates.py; в) пути-признаки (гейты): orchestrator/advance_gates/two_sided.py; в) пути-признаки (песочница ролей): orchestrator/providers/__init__.py; д) ТЗ ссылается на ADR: ADR-0023
+spec_sha: 3ba65faceeea412e64a245cdba26d30850d8c80a
 schema_version: 5
 ---
 
 # SPEC-AUDIT: D0-1: профиль test_profile — подполя runner, workdir, env и фиксация мест запуска
 
 ## ТЗ и SPEC
-ANSWER-n.md у задачи нет, решений Оператора на гейте SPEC в брифе нет.
+ANSWER-n.md у задачи нет; есть «Решение Оператора на гейте SPEC №1» (16.10,
+шесть пунктов). Сверка:
 
-ТЗ → SPEC: все пункты ТЗ перенесены. ТЗ п.1 → требования 1–5 (SPEC.md:27–42);
-ТЗ п.2 → требование 6 (SPEC.md:43–46); ТЗ п.3 → требование 7 (SPEC.md:47–53);
-критерии приёмки ТЗ → AC-1…AC-5, AC-7; «Не входит» ТЗ (acceptance.py,
-two_sided.py, вызывающие модули, targets.yaml, sandbox, yamlmini) — в «Не входит» SPEC.
-
-SPEC → ТЗ: сверх ТЗ только AC-6 (SPEC.md:76) — положительный случай
-`pytest-own` + доставка значений в `Profile`; он следует из ТЗ п.1–2, нового
-требования не вносит. Строка «Правка `orchestrator/providers/` — только
-читается» — уточнение, не новое требование.
-
-Расхождение, перенесённое из ТЗ без уточнения: ТЗ п.3 и требование 7
-(SPEC.md:47–53) требуют «по обоим путям команды» для КАЖДОГО из восьми мест,
-а у части мест второго пути нет в коде (см. «Факты против кода», п.1).
-Аналитик скопировал формулировку ТЗ, не сверив её с сигнатурами.
+- ТЗ п.1 → требования 1-5 SPEC: `runner` (`pult-pytest` по умолчанию |
+  `pytest-own`), `workdir` (отказ абсолютному и с `..`), `env` (вид
+  `mapping`, `yamlmini` не меняется, перечень секретов по
+  `secret_env_names()` + `GITHUB_TOKEN`/`GH_TOKEN`, точное имя), запрет
+  `workdir`/`env` при `pult-pytest` и при умолчании, `sandbox` не вводится
+  («Не входит») — всё перенесено.
+- ТЗ п.2 → требование 6, ТЗ п.3 → требование 7; «Не входит» ТЗ (правка
+  `acceptance.py`, `two_sided.py`, вызывающих модулей; `targets.yaml` только
+  чтение) — раздел «Не входит» SPEC.
+- Решение гейта №1: п.1 → требование 7 (пути команды по местам); п.2 →
+  AC-7 (точное равенство argv/cwd, окружение как разница с `os.environ`);
+  п.3 → требование 4 и AC-1 (реестр, подменённый набор); п.4 → требование
+  4 и AC-6 (не-строка, не-отображение); п.5 → требование 6 и AC-5
+  (умолчания, kwargs-построения без правки); п.6 → требование 8, AC-8 и
+  строка матрицы. Все шесть внесены.
+- Сверх ТЗ: «Правка `orchestrator/providers/` — не входит» и «отказ называет
+  подполе» (требование 8) — следствие ТЗ (зоны) и решения №1 п.6, не новое
+  требование. Расхождений нет.
 
 ## Факты против кода
-1. **Не подтвердилось — «оба пути команды» у каждого из восьми мест**
-   (SPEC.md:52–53, SPEC.md:84–85):
-   - `acceptance.run_plank(targets, cwd)` — параметра `command` нет, команда
-     всегда `_pytest_command(*targets)` (orchestrator/acceptance.py:923, :933);
-   - `two_sided._run_side(tree, nodes, plugin_dir, report, timeout)` —
-     параметра `command` нет, команда всегда пульта
-     (orchestrator/advance_gates/two_sided.py:222, :227);
-   - `_run_full_suite_now`/`_run_full_suite_to_log` принимают готовый `argv`
-     (orchestrator/acceptance.py:1313, :1361); `command` входит в него только
-     через `run_full_suite(root, command=…)` (orchestrator/acceptance.py:1115,
-     :1175).
-   Буквально оба пути есть только у `run` (:384–386), `collect` (:512–514),
-   `run_repeat` (:649–650). Править эти модули задача не может («Не входит»),
-   так что для `run_plank` и `_run_side` второй путь записать нельзя, а для
-   `_run_full_suite_*` он означает вызов через `run_full_suite`. Требование
-   допускает два прочтения: тест-автор может зафиксировать только
-   существующий путь, а может решить, что AC-7 невыполним.
-2. Подтвердилось: `PROFILE_FIELDS`, `PROFILE_OPTIONAL`, `_check_profile`,
-   `_profile_value_error` (orchestrator/targets.py:41, :53, :262, :284);
-   неизвестное подполе — отказ (orchestrator/targets.py:268–272).
-3. Подтвердилось: `secret_env_names()` у `base.py:256` (пусто), `claude.py:213`
-   → `SECRET_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")`
-   (claude.py:50), `codex.py:500` → `()` (codex.py:514). Ключи Codex
-   (`FORBIDDEN_KEY_ENV_NAMES`, codex.py:114: OPENAI_API_KEY, CODEX_API_KEY,
-   CODEX_ACCESS_TOKEN) в перечень, названный ТЗ и SPEC, не входят.
-4. Подтвердилось с оговоркой — «`yamlmini.mapping` уже разбирает блочное
-   отображение третьего уровня» (SPEC.md:Материалы): разбор образца
-   `test_profile.env` даёт словарь. Но `yamlmini.scalar` типизирует значения
-   (orchestrator/yamlmini.py:42–63): `PYTHONHASHSEED: 0` → `int 0`,
-   `FLAG: true` → `bool`, пустое `env:` → `None` (проверено разбором). SPEC об
-   этом молчит (см. «Проверяемость», AC-1/AC-6).
-5. Подтвердилось: места запуска и флаг `observe` есть
-   (orchestrator/acceptance.py:179 `observed_full_suite`, :1316, :1321, :1364);
-   `targets.yaml:46` — `command: [python3, -m, pytest]`.
-6. Подтвердилось: `Profile` — frozen dataclass
-   (orchestrator/project_profile.py:63–85). Его строят именованными
-   аргументами без новых полей tests/test_project_profile_gates.py:210,
-   tests/test_network_address_gate.py:178 — новым полям нужны умолчания. SPEC
-   умолчание называет только для `runner` (SPEC.md:44–45); для `workdir` и
-   `env` при отсутствии подполя его нет (None? `""`? `{}`?), хотя на это поле
-   опираются следующие части D0.
-7. Импорт реестра провайдеров из `targets.py` на уровне модуля даёт цикл
-   targets → providers → roles → models → store → targets (карта:
-   providers/__init__ импортирует roles.py, roles — models.py, models —
-   store.py, store — targets.py). Годен только ленивый импорт. SPEC это не
-   запрещает и не предписывает; сказано для разработчика.
+Подтвердилось:
+- `targets.py`: `PROFILE_FIELDS` :41-50, `PROFILE_OPTIONAL` :53,
+  `_check_profile` :262, `_profile_value_error` :284; образец текста отказа
+  `подполе 'test_profile.<sub>' — …` — :281; неизвестное подполе — :269-272.
+- `project_profile.Profile` — frozen dataclass :63-74, `from_values` :77-85;
+  построения kwargs-ами без новых полей — `tests/test_project_profile_gates.py:210`,
+  `tests/test_network_address_gate.py:178`.
+- `yamlmini.scalar` :54-62: пусто/`null`/`~` → None, `true/false` → bool,
+  целое → int.
+- `targets.yaml:46` — `command: [python3, -m, pytest]` профиля артели.
+- `providers/__init__.py:36` `PROVIDERS`; `secret_env_names()` — base.py:256
+  (пусто), claude.py:213, codex.py:500 (пусто).
+- Места запуска: `run` acceptance.py:384 (`command`), `collect` :512
+  (`command`), `run_repeat` :649 (`command`), `run_plank` :923 (без
+  `command`), `run_full_suite` :1115 (`command` → argv :1175),
+  `_run_full_suite_now` :1313 (ветви `observe` :1321 и без :1343),
+  `_run_full_suite_to_log` :1361 (`PYTHONUNBUFFERED` :1372),
+  `_pytest_env` :69 (`PYTHONPYCACHEPREFIX` :86), `two_sided._run_side`
+  :222 (`PYTHONPATH`, `REPORT_ENV` :230-232).
+- `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:103` — `runner`
+  среди «неизвестных» со значением `"x"`; :151-152 проверяют, что текст
+  называет `test_profile` и подполе.
+
+Наблюдение без отклонения: `_pytest_command` заменяет `python3` на
+интерпретатор venv (acceptance.py:61-62), поэтому argv путей
+`command=None` и `command=[python3, -m, pytest]` у артели совпадают —
+фиксация обоих путей законна, но различить их сегодня нечем.
 
 ## Проверяемость критериев
+
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да, с пробелом | Поймает: проверка имён секретов в `env` удалена либо сверка ведётся без учёта регистра или по подстроке. Не поймает: перечень записан литералом `("CLAUDE_CODE_OAUTH_TOKEN","ANTHROPIC_API_KEY","GITHUB_TOKEN","GH_TOKEN")`, а не взят из `secret_env_names()` реестра. Тест на текущие имена литерал от реестра не отличит; нужен тест, где провайдер возвращает новое имя (подмена `secret_env_names`) и оно получает отказ. AC-1 этого не требует. |
-| AC-2 | да | `workdir` абсолютный или с `..` проходит (например, проверка `startswith("/")` удалена). |
-| AC-3 | да | `runner` не сверяется с перечнем значений. |
-| AC-4 | да | Запрет `workdir`/`env` срабатывает только при явном `runner: pult-pytest`, а при умолчании — нет. |
-| AC-5 | да | `Profile.runner` при отсутствии подполя — `None`/`""`; новые подполя стали обязательными. |
-| AC-6 | да, с пробелом | Поймает: `Profile` не несёт `workdir`/`env`. Не поймает: `env` со значением не-строкой (`PYTHONHASHSEED: 0` → int, `true` → bool, `env:` → None, `env` списком) принимается. Требование 4 говорит «отображение строк» (SPEC.md:34), но ни один AC не требует отказа не-строке или не-отображению, и SPEC не решает, отказывать ли такому значению или приводить его к строке. |
-| AC-7 | слабо | Строгость фиксации не названа: «зафиксированы argv, cwd и окружение» (SPEC.md:81–85) выполняет и тест, сверяющий только тип или наличие ключей. Мутация «убрать `PYTHONPYCACHEPREFIX` из `_pytest_env` (acceptance.py:86)», «убрать `PYTHONUNBUFFERED` (acceptance.py:1372)» или «сменить `cwd=run_cwd` на `cwd=tdir`» поймается, только если тест сравнивает argv целиком на равенство, `cwd` на равенство и окружение как разницу с `os.environ` (добавленные и изменённые ключи по имени; значение временного каталога — по форме). AC этого не требует. Кроме того, «по обоим путям» неисполним для `run_plank` и `_run_side` (см. «Факты», п.1). |
+| AC-1 | да | перечень секретов литералом или кэшем на импорте (подменённый набор провайдера); сверка без учёта регистра или по префиксу/подстроке; пропущен `GH_TOKEN` |
+| AC-2 | да, с оговоркой | `workdir` не проверяется или пропускает `/abs` / `a/../b`; см. вердикт п.2 — «содержит `..`» не определено (подстрока или сегмент) |
+| AC-3 | да | `runner` принимает любую строку |
+| AC-4 | да | запрет `workdir`/`env` проверяется только при явном `runner: pult-pytest`, умолчание пропускает |
+| AC-5 | да | новые поля `Profile` без умолчаний (падают kwargs-построения); `from_values` не подставляет `pult-pytest` |
+| AC-6 | да | `from_values` не переносит `workdir`/`env`; `env` значения int/bool/None принимаются; отказ без имени `env` |
+| AC-7 | частично — см. вердикт п.1 | мутация флагов или cwd в местах запуска ловится только при ожидании-литерале; при ожидании из `_pytest_command`/`_pytest_env` — не ловится; значения переменных окружения не названы |
+| AC-8 | да | текст отказа нового правила без `test_profile`/подполя — краснеет существующий тест :151-152 |
 
 ## Зоны
-Зоны SPEC: `orchestrator/targets.py, orchestrator/project_profile.py, tests/`
-совпадают с ТЗ и покрывают то, что заставляют менять требования: проверку в
-targets.py, поля в project_profile.py, тесты в tests/. Защищённые пути
-(`targets.yaml`, `templates/`, `skills/`…) не меняются: `targets.yaml`
-только читается (SPEC «Не входит»). Песочница ролей не расширяется:
-`orchestrator/providers/` только читается (сигнал «песочница ролей»
-сработал по упоминанию, правки там нет). Поле `sandbox` записи
-(`targets.yaml:43`) задача не трогает. Карта кодовой базы при правке `*.py`
-регенерируется по conventions-core — это не зона, а обязанность разработчика.
+Зоны SPEC: `orchestrator/targets.py`, `orchestrator/project_profile.py`,
+`tests/` — покрывают требования 1-8. Ленивый импорт реестра провайдеров —
+внутри `targets.py`. Карта `docs/codebase-map.md` — в
+`config.COMMON_ZONES` (config.py:799). Защищённые пути не трогаются;
+`orchestrator/providers/` только читается — песочница ролей не
+расширяется. Отклонений нет.
 
 ## Матрица неослабления
+
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `PROFILE_FIELDS` получает `runner`, `workdir`, `env` (targets.py:41) | Отказ неизвестному подполю профиля — targets.py:268–272; tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:103–104, :132–152 (случайный выбор из `timeout`, `runner`, `lang`, `paths`) | Да, но для `runner` оно сменится: `runner: "x"` получит отказ уже по новому правилу (AC-3), а не как неизвестное подполе | Тот же тест останется зелёным, только если отказ нового правила называет `test_profile` и `runner` (:151–152); SPEC этого не требует. Ветку «неизвестное подполе» тест при выборе `runner` больше не проходит: охват — 3 из 4 запусков | Concerns: требовать, чтобы отказ `runner` называл `test_profile.runner` (как targets.py:281) |
-| `_check_profile` получает вид `mapping` и проверки связок (targets.py:262–312) | Профиль без новых подполей проходит, как сейчас: tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:107–130 | Да | Тот же тест + AC-5 | Остаётся |
-| Новые поля `Profile` (project_profile.py:63–85) | Построение `Profile` именованными аргументами в tests/test_project_profile_gates.py:210, tests/test_network_address_gate.py:178; `from_values` в tests/test_project_profile.py:27 | Да, если у новых полей есть умолчания | Существующие тесты; умолчания `workdir`/`env` SPEC не называет | Concerns (см. «Факты», п.6) |
-| Места запуска (acceptance.py, two_sided.py) | Не меняются: задача только добавляет фиксирующие тесты | Да | AC-7 (новые тесты) | Остаётся |
+| `runner` становится известным подполем `test_profile` | отказ неизвестному подполю `runner: "x"` с `test_profile` и `runner` в тексте — tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:103, :151-152 | остаётся: отказ по неверному значению `runner` (требования 2, 8) | тот же тест без правки; AC-3, AC-8 | ок (строка есть в SPEC) |
+| `PROFILE_FIELDS` расширяется (`workdir`, `env`) | отказ прочим неизвестным подполям — targets.py:269-272, тест :103 (`timeout`, `lang`, `paths`) | остаётся | тот же тест | ок |
 
-Раздела «Меняемое поведение» в SPEC нет, и он не нужен: ожидания
-существующих тестовых методов задача не меняет.
+Раздела «Меняемое поведение» в SPEC нет — смены ожиданий существующих
+тестов нет. Отклонений нет.
 
 ## Пути обхода гейтов
-1. AC-1, литерал вместо реестра. Перечень секретов можно записать в
-   targets.py константой из текущих четырёх имён (ленивый импорт реестра
-   неудобен из-за цикла, «Факты», п.7). Тесты AC-1 пройдут, а секрет
-   следующего провайдера проверка не увидит. Требование 4 («имена
-   `secret_env_names()` провайдеров») такой подход запрещает, но AC-1 его
-   не ловит.
-2. AC-7, пустая фиксация. Тест «зелёный на текущем коде», сверяющий
-   argv/cwd/env нестрого, буквально выполняет AC-7. Тогда следующие части D0
-   смогут менять места запуска ненаблюдаемо, а ради наблюдаемости фиксация и
-   вводилась (SPEC «Контекст»).
-3. AC-7, «оба пути» для `run_plank`/`_run_side`. Пути `command=[python3, -m,
-   pytest]` там нет. Исполнитель может «зафиксировать» его тестом, который
-   зовёт `_pytest_command(command=…)` напрямую, мимо места запуска, и
-   формально закрыть пункт без фиксации самого места.
-4. `env` с не-строкой. `PYTHONHASHSEED: 0` уйдёт в `Profile.env` числом, и
-   потребитель следующей части получит в окружении процесса int. AC это не
-   ловит.
-
-Для Оператора, не отклонение SPEC: перечень секретов, как его задало ТЗ
-(«`secret_env_names()` провайдеров»), не включает ключи Codex
-`FORBIDDEN_KEY_ENV_NAMES` (codex.py:114), потому что `CodexProvider.secret_env_names()`
-пуст (codex.py:514). Имя `OPENAI_API_KEY` в `env` пройдёт `targets.check`.
+1. AC-7 (SPEC.md:116-130) требует точного равенства argv/cwd «с ожидаемыми
+   значениями», но не запрещает вычислять ожидание тем же кодом:
+   `expected = acceptance._pytest_command(...)` и env-разница из
+   `acceptance._pytest_env()`. Такой тест зелёный на текущем коде и
+   останется зелёным, когда следующая часть D0 поменяет флаги в
+   `_pytest_command` или окружение в `_pytest_env` — фиксация, ради
+   которой требование 7 введено («чтобы следующие части D0 меняли их
+   наблюдаемо», SPEC.md:20-22), буквально выполнена и смысла не несёт.
+2. Окружение в AC-7 названо именами переменных, без значений: тест,
+   сверяющий только набор имён, пропустит `PYTHONUNBUFFERED="0"`,
+   `REPORT_ENV` на другой файл, `PYTHONPATH` без каталога плагина
+   (two_sided.py:230-232), `PYTHONPYCACHEPREFIX` внутри `cwd`.
 
 ## Вердикт
-**concerns** — SPEC соответствует ТЗ и зонам, защищённые пути и песочница не
-затронуты. Есть отклонения проверяемости и одна неточность о коде; их может
-снять Оператор на гейте (уточнением SPEC или решением):
+concerns — отклонения решаемы Оператором на гейте:
 
-1. Требование 7 / AC-7 (SPEC.md:47–53, :81–85): «по обоим путям команды» для
-   каждого из восьми мест не соответствует коду. У `run_plank` нет `command`
-   (orchestrator/acceptance.py:923), у `two_sided._run_side` тоже нет
-   (orchestrator/advance_gates/two_sided.py:222); `_run_full_suite_now`/
-   `_run_full_suite_to_log` принимают готовый argv (orchestrator/acceptance.py:1313,
-   :1361), второй путь у них — через `run_full_suite` (:1115). Нужно указание:
-   у мест без `command` фиксируется единственный путь, а `_run_full_suite_*`
-   по `command` фиксируются через `run_full_suite`.
-2. AC-7 (SPEC.md:81): строгость фиксации не названа. Нужно требовать
-   равенство argv и cwd и сверку окружения как разницы с `os.environ`
-   (`PYTHONPYCACHEPREFIX` acceptance.py:86, `PYTHONUNBUFFERED` acceptance.py:1372,
-   `PYTHONPATH`/`REPORT_ENV` two_sided.py:230–232).
-3. AC-1 (SPEC.md:57): критерий не отличает перечень из реестра
-   `secret_env_names()` от литерала. Нужен случай с подменённым набором имён
-   провайдера.
-4. Требование 4 / AC-6 (SPEC.md:34, :76): `env` как «отображение строк» без
-   критерия отказа не-строке и не-отображению. При этом `yamlmini`
-   типизирует значения (orchestrator/yamlmini.py:57–62): `0` → int,
-   `true` → bool, пустое → None.
-5. Требование 6 (SPEC.md:43–46): умолчания `Profile.workdir`/`Profile.env`
-   при отсутствии подполя не названы (orchestrator/project_profile.py:63–85;
-   kwargs-построение — tests/test_project_profile_gates.py:210,
-   tests/test_network_address_gate.py:178).
-6. Матрица: tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:103 берёт
-   `runner` как неизвестное подполе. После задачи этот случай проходит по
-   правилу AC-3 и остаётся зелёным, только если отказ называет `test_profile`
-   и `runner` (:151–152). SPEC не требует такого текста отказа (образец —
-   orchestrator/targets.py:281).
+1. SPEC.md:116-130 (AC-7): ожидание argv/cwd/окружения не обязано быть
+   независимым от фиксируемого кода — путь обхода №1. Предлагаемое
+   уточнение: ожидаемые argv и cwd — литералы теста; переменные из
+   окружения пульта (интерпретатор `stack.pytest_python_executable()`,
+   временные каталоги) — единственные вычисляемые части; вызов
+   `_pytest_command`/`_pytest_env` для построения ожидания не допускается.
+2. SPEC.md:124-130 (AC-7): разница окружения перечислена именами, без
+   значений — путь обхода №2. Предлагаемое уточнение: `PYTHONUNBUFFERED`
+   = `"1"`, `REPORT_ENV` = путь отчёта вызова, `PYTHONPATH` начинается с
+   `plugin_dir`, `PYTHONPYCACHEPREFIX` — каталог вне `cwd`; и явно, у
+   какого места какой набор (`PYTHONUNBUFFERED` — только
+   `_run_full_suite_to_log`).
+3. SPEC.md:32-33, :91-92, :108 (требование 3, AC-2, AC-6): «путь,
+   содержащий `..`» — два прочтения: подстрока (`a..b` — отказ) или
+   сегмент (`a..b` проходит, как у вида `dir`, targets.py:300-301). Автор
+   тестов и разработчик могут выбрать разное. Предлагаемое прочтение —
+   сегмент `..`, как у существующего `dir`. Тип `workdir` (не-строка)
+   ТЗ не оговаривает — не отклонение.
