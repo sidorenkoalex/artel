@@ -1,27 +1,24 @@
-# Записка analyst — 01M51YKZNES22DZQY13D3QKF89
+# Записка analyst — 01M51YKZNES22DZQY13D3QKF89 (визит 3, после возврата аудита 2 из 2)
 
 ## Выяснено
-- ANSWER-1: по всем 5 вопросам вариант A. Зоны + orchestrator/project_profile.py;
-  гейт мержа входит в п.6 без правки fsm_merge_gate.py; image обязателен только при
-  required И test_profile; фикстуры → sandbox: off, утверждения не меняются; том кэша
-  и XDG_CACHE_HOME/UV_CACHE_DIR уже в D1а-1; «полный набор зелёный» → «Не входит».
-- Поправка к числу файлов фикстур: в вопросе 3 я назвал 2 файла, на деле записей с
-  `test_profile:` без `sandbox` — 35 файлов tests/ (sandbox.py + 34 своих литерала:
-  большинство записи артели, есть внешние, напр. merge_gate.py PROFILE_TEMPLATE).
-  Правило ответа (вход фикстур → sandbox: off, утверждения те же) применено ко всем,
-  в SPEC это сказано явно, список файлов — в требовании о фикстурах.
-- Прямые вызовы run/collect/run_repeat/run_plank в tests/ с произвольным tmp-cwd
-  (test_acceptance_collect.py:57, test_acceptance_seed_repeat.py:82, ...). Значит,
-  «cwd вне раскладки → отказ» буквально сломало бы утверждения. Прочтение, согласное
-  с обоими пунктами ответа: проект — из `.artel/projects/<проект>/…`; cwd вне области
-  проектов → запись артели (off, как сейчас); внутри области проекта, но не рабочая
-  копия по раскладке, при required → именованный отказ. Вынесено в SPEC явно.
-- merge gate гонит full_suite на scratch (fsm_merge_gate.py:962-967) — проект из task_id.
+- Все 7 отклонений SPEC-AUDIT (spec_sha f6631082) подтверждены по коду.
+- two_sided.py:227-235 `_run_side` — subprocess pytest с _pytest_env, зовётся из
+  test_integrity.py:1527 (гейт) и :1429 (наблюдение). Вне зон ТЗ → вопрос 1.
+- amend.py:715,718 зовут collect/run без cwd; tdir = wt_path/tasks/<id> — проект выводим из tdir.
+- full suite: task — suite_lock.my_task_id() (suite_lock.py:155); suite_run.py:524,564 без task.
+- suite_result_key (acceptance.py:1609) без sandbox/runner/workdir/image.
+- Фикстуры: 8 файлов «своя запись + ARTEL_TEST_PROFILE» (grep ARTEL_TEST_PROFILE tests/*.py);
+  dict-запись только в test_profile.py:120-124 (grep `test_profile=`). test_invariants.py
+  правки не требует (только комментарий :187).
+- test_profile.py::test_ac1_each_profile_defect... — `runner` там как «неизвестное подполе»
+  со значением "x": после введения runner отказ по неверному значению всё равно должен
+  называть `runner` и `test_profile`; image-проверку ставить после проверки подполей,
+  иначе текст отказа не назовёт поле дефекта. Учесть в SPEC/для разработчика.
 
 ## Где остановился
-- SPEC.md сдан (status ready, 17 AC, деление D1а-1/D1а-2 по $45, родитель $60),
-  QUESTIONS.md удалён, guard: ок. Закрыты отклонения аудита 1–9.
+- QUESTIONS.md (батч 2, 7 вопросов, дефолты A) записан, guard ок. SPEC.md не трогал.
+- После ANSWER-2: переписать SPEC по дефолтам/ответам, удалить QUESTIONS.md.
 
 ## Чего не хватило
-- Число затронутых фикстур — надо было считать grep'ом `test_profile:` по tests/, а
-  не по ссылкам аудита.
+- Полного перечня мест запуска subprocess pytest: надо было grep `_pytest_command|_pytest_env`
+  по orchestrator/ ещё в визите 1.
