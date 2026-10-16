@@ -36,7 +36,9 @@ FIELDS = {
 # SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 1). Вид подполя: "list" —
 # непустой список строк, "list0" — список строк, возможно пустой, "dir" —
 # относительный путь каталога, "template" — шаблон имени с `<id>` и
-# `<name>`, "report" — одно из `PROFILE_REPORTS`, "positive_int" — целое > 0.
+# `<name>`, "report" — одно из `PROFILE_REPORTS`, "positive_int" — целое > 0,
+# "runner" — одно из `PROFILE_RUNNERS`, "mapping" — отображение строк без
+# имён секретов (SPEC 01M52EEDEYV14658X8VFNHCW8K, требования 2-4).
 PROFILE_FIELD = "test_profile"
 PROFILE_FIELDS = {
     "command": "list",               # начало команды прогона тестов
@@ -47,11 +49,23 @@ PROFILE_FIELDS = {
     "report": "report",              # формат отчёта прогона
     "install": "list0",              # команда установки зависимостей
     "full_suite_timeout_sec": "positive_int",  # предел полного набора tests/
+    "runner": "runner",              # чей раннер гоняет тесты
+    "workdir": "dir",                # каталог прогона от корня репозитория
+    "env": "mapping",                # окружение прогона
 }
 # `report` и `install` описываются и проверяются, но пультом не
-# исполняются — их отсутствие поведения пульта не меняет.
-PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec")
+# исполняются — их отсутствие поведения пульта не меняет. Так же пока
+# `runner`, `workdir`, `env`: потребители — следующие части D0.
+PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec", "runner",
+                    "workdir", "env")
 PROFILE_REPORTS = ("junit-xml",)
+PROFILE_RUNNER_DEFAULT = "pult-pytest"
+PROFILE_RUNNER_OWN = "pytest-own"
+PROFILE_RUNNERS = (PROFILE_RUNNER_DEFAULT, PROFILE_RUNNER_OWN)
+# Подполя, осмысленные только у собственного раннера проекта.
+PROFILE_OWN_RUNNER_ONLY = ("workdir", "env")
+# Токены форжа — вне реестра провайдеров, но тоже секреты окружения.
+FORGE_SECRET_ENV_NAMES = ("GITHUB_TOKEN", "GH_TOKEN")
 
 # Файл проектных карточек знаний — необязательное поле записи (SPEC
 # 01M4S0JVB85W9TY1ESGNBH97FP, требование 6); читает его
@@ -279,11 +293,45 @@ def _check_profile(where: str, profile: object) -> None:
         reason = _profile_value_error(kind, profile[sub])
         if reason:
             raise TargetsError(f"{where}: подполе {name} — {reason}")
+    runner = profile.get("runner", PROFILE_RUNNER_DEFAULT)
+    if runner != PROFILE_RUNNER_OWN:
+        for sub in PROFILE_OWN_RUNNER_ONLY:
+            if sub in profile:
+                raise TargetsError(
+                    f"{where}: подполе '{PROFILE_FIELD}.{sub}' — допустимо "
+                    f"только при 'runner: {PROFILE_RUNNER_OWN}' (runner — "
+                    f"'{runner}')")
+
+
+def secret_env_names() -> set[str]:
+    """Имена переменных-секретов, которых не может задать `env` профиля:
+    `secret_env_names()` всех провайдеров реестра на момент вызова плюс
+    токены форжа. Реестр, а не литералы: новый провайдер со своим
+    секретом не придётся дописывать сюда."""
+    # Импорт здесь: providers → claude → runner → store → targets — на
+    # уровне модуля это цикл.
+    from .providers import PROVIDERS
+    names = set(FORGE_SECRET_ENV_NAMES)
+    for provider in PROVIDERS.values():
+        names.update(provider.secret_env_names())
+    return names
 
 
 def _profile_value_error(kind: str, value: object) -> str:
     """Причина, по которой значение подполя профиля не годно; пусто —
     годно."""
+    if kind == "mapping":
+        if not isinstance(value, dict):
+            return "не отображение имён переменных в строки"
+        for key, item in value.items():
+            # bool, int, float и None — то, что `yamlmini.scalar` даёт из
+            # значения без кавычек; окружению процесса нужны строки.
+            if not isinstance(item, str):
+                return f"значение '{key}' — {item!r}, не строка"
+        secrets = sorted(set(value) & secret_env_names())
+        if secrets:
+            return f"имя секрета {', '.join(secrets)} — секреты в env не задаются"
+        return ""
     if kind == "positive_int":
         return "не положительное целое число секунд" if (
             type(value) is not int or value <= 0) else ""
@@ -309,4 +357,6 @@ def _profile_value_error(kind: str, value: object) -> str:
             return f"'{value}' — шаблон имени файла, не путь"
     elif kind == "report" and value not in PROFILE_REPORTS:
         return f"'{value}', ожидается {' | '.join(PROFILE_REPORTS)}"
+    elif kind == "runner" and value not in PROFILE_RUNNERS:
+        return f"'{value}', ожидается {' | '.join(PROFILE_RUNNERS)}"
     return ""
