@@ -4,187 +4,203 @@ type: spec_audit
 author_role: spec_auditor
 status: ready
 verdict: fail
-signals: "в) пути-признаки (тесты): tests/; в) пути-признаки (гейты): orchestrator/fsm_autogate.py; г) budget_usd 60 ≥ 45; д) ТЗ ссылается на ADR: ADR-0002, ADR-0023"
-spec_sha: e62360ef5694108e07d33e6010ad5e997b0667cc
+signals: "в) пути-признаки (тесты): tests/, tests/sandbox.py, tests/test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py, tests/test_01m42nb9gkxnp74hayej7c7ca8_class_mandate.py, tests/test_01m42nbcadgsgtcbzb8nkbvdvh_amend_cleanup.py, tests/test_01m443bpqea9zmj3r50thnb1mf_operator_instruction.py, tests/test_01m44enqcrk02t2mwzb9hc3xhh_origin_push.py, tests/test_01m45fjd46bx45vhc36s4vs9qn_declared_change.py, tests/test_01m45fjvgqt1k0p8hdexzx6hs7_profile_refusals.py, tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py, tests/test_01m45fk56dwmnbrka1vwm12h19_draft_mr.py, tests/test_01m45fk56dwmnbrka1vwm12h19_in_dev_gates.py, tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py, tests/test_01m45fk56dwmnbrka1vwm12h19_no_paths_mirror.py, tests/test_01m45fk56dwmnbrka1vwm12h19_spec_zones.py, tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py, tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py, tests/test_01m46c776szemypbqgpnjn1txy_suite_run_appendix.py, tests/test_01m46d5t8sz9d6s34tzfx8s46v_full_suite_lock.py, tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py, tests/test_01m48frd9rjdbbvt2sn0fy5g2a_seed_repeats.py, tests/test_01m48wre8bhfdy011q0hqgq91b_full_suite_limit_runs.py, tests/test_01m48wre8bhfdy011q0hqgq91b_profile_limit_field.py, tests/test_01m48wt5x7zc7332drh85vy19d_profile_timeout.py, tests/test_01m4jd36367e5cg3gxdv429xte_amend_pult.py, tests/test_01m4jd3srn66sd6bm63xaghb11_in_dev_appendix.py, tests/test_01m4jd3srn66sd6bm63xaghb11_suite_tree_ci_in_base.py, tests/test_01m4k2767fxkz8ew7ame81sz9n_suite_near_limit.py, tests/test_01m4kaj0bj9ec37rwxnfkqn7dw_amend_network_scope.py, tests/test_01m4kg7vhhxtvtw5ttx2pgy5ry_suite_run_readonly_db.py, tests/test_01m4nz5kt0px0rywtstn1xefs5_approve_behavior_literals.py, tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py, tests/test_01m4r4jqzex2mbdb195sbj8a7s_spec_gate_mandate_flow.py, tests/test_full_suite_profile_timeout.py, tests/test_invariants.py, tests/test_project_profile_gates.py, tests/test_sandbox.py; в) пути-признаки (гейты): orchestrator/fsm_autogate.py; в) защищённые пути: tests/test_invariants.py; г) budget_usd 60 ≥ 45; д) ТЗ ссылается на ADR: ADR-0002, ADR-0023"
+spec_sha: f66310826d16763be4918533fefca061a87f0134
 schema_version: 5
 ---
 
 # SPEC-AUDIT: D1а: код проекта в одноразовом контейнере Docker (круг 2)
 
 ## ТЗ и SPEC
-Требования ТЗ 1–8 перенесены в SPEC почти дословно; деление на D1а-1/D1а-2
-сделано ровно по формуле ТЗ («Рамка: $60…»). ANSWER-n.md у задачи нет,
-решений Оператора на гейте SPEC в брифе нет.
+Решения ANSWER-1 (ответы 1–5 и «закрыть в SPEC» отклонения аудита) в SPEC
+перенесены: `project_profile.py` в зонах, вывод проекта/задачи из `cwd` и
+`task_id`, гейт мержа в п.6/AC-14, `image` только при `required` с
+`test_profile`, фикстуры на `sandbox: off` отдельным требованием 9,
+том кэша в D1а-1, «полный набор зелёный» — в «Не входит» с пометкой
+«держит пульт», точный набор флагов (AC-7), `-e ИМЯ=значение` (AC-9),
+`realpath(workdir)` в момент прогона (AC-4). Отклонения 1–9 прошлого
+визита закрыты по существу, кроме указанного ниже.
 
 Расхождения:
-1. Критерий ТЗ «полный набор `tests/` зелёный» (ТЗ, «Критерии приёмки», п.1)
-   в SPEC не стал AC, а прямо вынесен в «Не входит» («Полный зелёный набор
-   `tests/` — её держит пульт», SPEC «Не входит», последний пункт). При этой
-   задаче это не формальность: требование 1 SPEC («отсутствие — `required`
-   для любого проекта») опрокидывает существующие фикстуры (см. «Матрица
-   неослабления»), и именно зелень набора — единственное место, где это
-   всплыло бы.
-2. ТЗ п.8 перечисляет «повтор установки только при смене хеша» среди
-   проверок набора — в SPEC есть (AC-10). ТЗ п.4 «наблюдение, замок полных
-   прогонов» — в SPEC требование 4 есть, AC на него нет (не отклонение по
-   существу: «как сейчас» держат существующие тесты `suite_lock`).
-Требований сверх ТЗ не найдено.
+1. **ТЗ п.4 «прогон на хосте вместо контейнера запрещён (fail-closed)»
+   против правила SPEC требования 3 «`cwd`, не заданный … — путь артели,
+   как сейчас».** По коду `cwd` не задают `orchestrator/amend.py:715`
+   (`acceptance.collect(tdir)`) и `:718` (`acceptance.run(tdir)`) —
+   путь `_amend_plank_only`, который проходит любая задача без перечня
+   долгоживущих файлов, в том числе задача внешнего проекта
+   (`amend.py:620-686`; `tdir = wt_path / "tasks" / task_id`, `:626`).
+   При `cwd=None` прогон идёт с `config.ROOT` (`acceptance.py:439`,
+   `:550`) — по правилу SPEC это «путь артели», т.е. планка внешнего
+   `required`-проекта исполняется на хосте с полным окружением пульта.
+   Буквальное выполнение SPEC нарушает п.4 ТЗ. Чинится без правки
+   вызывающих (например, проект/задача из `tdir`, когда `cwd` не задан),
+   но SPEC обязан это сказать.
+2. **ТЗ п.4/цель задачи против неполного перечня мест запуска.** Восьмое
+   место исполнения кода проекта — `orchestrator/advance_gates/two_sided.py:227-235`
+   (`subprocess.run(acceptance._pytest_command(...), cwd=tree,
+   env=acceptance._pytest_env())`), двусторонний прогон смены ожидания;
+   зовётся для внешних проектов с профилем (`advance_gates/test_integrity.py:1495-1528`,
+   `two_sided.run(workspace.task_repo(task_id), …)`) и в наблюдении
+   (`test_integrity.py:1429`). Дерево — `git worktree` клона проекта во
+   временном каталоге: код проекта на хосте, окружение пульта целиком,
+   интерпретатор пульта. ТЗ перечисляет семь мест и утверждает, что гейты
+   «сами процессов не запускают» — это неверно для `two_sided.py`; SPEC
+   повторяет перечень, файла нет ни в зонах, ни в «Не входит». Решать
+   Оператору (зона или явное «не входит» с fail-closed отказом при
+   `required`), но SPEC обязан это место назвать.
+Требований сверх ТЗ не найдено (п.9 о фикстурах — из ANSWER-1, ответ 3).
 
 ## Факты против кода
-Подтвердилось:
-- `_pytest_command` — `orchestrator/acceptance.py:35-65`, ставит
-  интерпретатор venv и `-p timeout` (`:61-65`); `_pytest_env` —
-  `:69-89`, `env = dict(os.environ)` (`:85`).
-- Семь мест запуска: `subprocess.run` в `run` `:448`, `collect` `:556`,
-  `run_repeat` `:665`, `run_plank` `:932`; `Popen`/`run` в
-  `_run_full_suite_now` `:1324`/`:1345`; `Popen` в `_run_full_suite_to_log`
-  `:1373`. Других запусков pytest в `acceptance.py` нет (`:192` — `/bin/ps`,
-  `:1563` — git).
-- `tests_dir = root / "tests"` — `:1172`; `-n … -p xdist` — `:1176`.
-- `PROFILE_FIELDS` — `orchestrator/targets.py:41-50`; «`report` и `install`
-  … пультом не исполняются» — `:51-53`; поля `sandbox` в `FIELDS`/`check`
-  нет (`targets.py:25-33`, `:139-168`); лишнее поле записи не отвергается.
-- `targets.yaml` артели несёт `sandbox: off`; `yamlmini.scalar` вернёт
-  строку `'off'`, не `False` (`orchestrator/yamlmini.py:42-63`) — сравнение
-  со строкой корректно.
-- `secret_env_names` — у провайдеров (`orchestrator/providers/base.py:256`,
-  `claude.py:213`, `codex.py:500`).
-- `docs/backlog.md:185` — строка 07.10 об автогейте и `approve` без
-  команды профиля.
+Подтвердилось: `acceptance.py:35-65`, `:69-89`, места `:448`, `:556`,
+`:665`, `:932`, `:1324`, `:1345`, `:1373`, `:1172`, `:1176`, `:1847-1848`;
+`fsm_autogate.py:326`; `fsm.py:1294`; `fsm_merge_gate.py:962-967`;
+`project_profile.py:63-74` (`Profile` без новых полей); `workspace.py:146-150`
+(`path` = `projects_root()/<target>/worktrees/<id>`); `targets.py:41-53`,
+`:99-100` (`load` проверяет каждую запись); `targets.yaml:43` —
+`sandbox: off`; `tests/test_acceptance_collect.py:57`,
+`tests/test_acceptance_seed_repeat.py:82` — временный `cwd`; перечень 35
+файлов требования 9 совпадает с `grep -l "test_profile:" tests/*.py`.
 
 Не подтвердилось / неточно:
-- Автогейт приёмки уже не зовёт `acceptance.full_suite` из
-  `fsm_autogate.py` напрямую: он вызывает `acceptance.acceptance_suite(...)`
-  (`orchestrator/fsm_autogate.py:323-325`), а тот —
-  `full_suite(root, task_id)` без `command` (`acceptance.py:1847-1848`).
-  Т.е. правка п.6 SPEC по существу ложится в `acceptance.py`, а адреса
-  строки бэклога (`fsm_autogate.py:306`, `fsm.py:1141`) устарели. Не
-  ломает SPEC, но разработчик будет искать не там.
-- Гейт мержа тоже гонит полный набор (`orchestrator/fsm_merge_gate.py:962-967`,
-  передаёт только `command`), и та же строка бэклога называет его третьим
-  гейтом. В SPEC п.6/AC-12 гейта мержа нет; при `runner: pytest-own`
-  он получит `runner`/`workdir`, только если `full_suite` сам резолвит
-  профиль по `task_id`. SPEC этого не фиксирует.
-- Сигнатуры мест запуска не несут ни проекта, ни задачи:
-  `run(tdir, cwd, extra, command, file_times)` (`acceptance.py:384`),
-  `run_plank(targets, cwd)` (`:923`), `_run_full_suite_now(argv, root, log,
-  limit, observe)` (`:1313`). Требование 3 («первое условие внутри каждой
-  из семи функций», имя `artel-<проект>-<задача или run>-…`) требует их
-  знать — откуда, SPEC не говорит (см. «Зоны»).
+1. **Перечень фикстур требования 9 («сверено по коду main») неполон.**
+   Запись `test_profile` без `sandbox` строят и файлы без литерала
+   `test_profile:`:
+   - своя запись проекта + `ARTEL_TEST_PROFILE` из `tests/sandbox.py`:
+     `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py:43-52,110-112`,
+     `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py:168`,
+     `tests/test_01m409ynswacnfknje2x263zsd_project_docs_ref.py:43`,
+     `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py:202`,
+     `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py:117`,
+     `tests/test_01m4jd3srn66sd6bm63xaghb11_merge_gate_in_base.py:91`,
+     `tests/test_01m4jmmh70nwjg72g422bfy1kc_postmerge_map_interpreter.py:107`,
+     `tests/test_01m4p4zp37wv81410ytzhkqc8d_preflight.py:311`. После
+     правки такая запись — `required` с профилем без `image`, и
+     `targets.load` (`targets.py:99-100`) отказывает всему файлу. Правило
+     SPEC «файл, берущий запись из `tests/sandbox.py` (`ARTEL_TEST_PROFILE`/
+     `artel_target_entry`), правится, только если пишет `test_profile`
+     сам» эти файлы из правки исключает. Дописать `sandbox: off` в сам
+     `ARTEL_TEST_PROFILE` нельзя без двойного ключа в `artel_target_entry`
+     (`tests/sandbox.py:1097-1104`: `_PROJECT_TARGET_ENTRY`, который по
+     требованию 9 тоже получает `sandbox: off`, + `ARTEL_TEST_PROFILE`).
+   - dict-записи: `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:120`
+     (`targets.check(name, dict(base_entry(name), test_profile=profile))`
+     ждёт успеха) и `:123-124` (тот же профиль в файл, затем
+     `targets.load()`); `base_entry` (`:31-34`) — без `sandbox`, профиль
+     `random_profile` — без `image`. По новому правилу — отказ; SPEC
+     запрещает править `base_entry` и утверждения, а правка входа внутри
+     тела метода (`:120`, `:124`) по букве требования 9 («входные строки
+     фикстур») не названа. Строка 3 матрицы ANSWER-1 («тот же тест без
+     правки») этим фактом опровергается.
+2. `tests/test_invariants.py` (защищённый путь, `config.py:756`) стоит в
+   перечне требования 9, но `test_profile:` в нём только в комментарии
+   (`:187`); запись он берёт `seed_artel_targets()` (`:189`). Правка ему не
+   нужна, а перечень приглашает править защищённый файл без оговорки
+   о приложении PLAN.
+3. «Полный набор — из своего `task_id`» (SPEC требование 3; D1а-2,
+   требование 1): у `_run_full_suite_now` (`acceptance.py:1313`),
+   `_run_full_suite_to_log` (`:1361`) и `run_full_suite` (`:1115`)
+   параметра `task_id` нет; `suite_run.py:524`, `:564` зовут
+   `run_full_suite` без задачи, база `suite-run` идёт во временной копии
+   (`suite_run.py:474`, `mkdtemp`). Источник есть —
+   `suite_lock.my_task_id()` (`suite_lock.py:155-163`), — но SPEC его не
+   называет; «из `cwd`» для полного набора не годится (корни — временные
+   каталоги `appendix_tree.py:272`, `fsm_merge_gate` scratch).
+4. Поведение прогона у `sandbox: required` записи без `test_profile` (нет
+   `image`) не определено. Сегодня такой внешний проект гоняет планку
+   командой пульта (`advance_gates/acceptance.py:387-405`, `command=None`);
+   отсутствие `sandbox` теперь значит `required`, а образа нет. Отказ —
+   меняет поведение сценариев с записями без профиля (не в перечне
+   требования 9); прогон на хосте — нарушает ТЗ п.4.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да | `entry.get("sandbox", "off")`; исключение по имени `artel`; отказ без имени поля |
-| AC-2 | да | при `off` argv/cwd/env меняются (например, `env` очищается или `-p timeout` пропал); запуск `docker` при `off` |
-| AC-3 | частично | сверка секрета подстрокой; `image` не требуется. Не ловит: `workdir` — симлинк в рабочей копии, уводящий наружу: `targets.check` рабочей копии не видит (проверяет файл, не дерево), `realpath` на нём лексический — побег через симлинк недоверенного репозитория AC-3 не покрыт; проверка `realpath` в момент прогона (`sandbox.py`/`acceptance.py`) ни одним AC не требуется |
-| AC-4 | да | интерпретатор пульта подставлен вместо `python3` при `pytest-own`; `-p timeout` оставлен |
-| AC-5 | частично | пропуск `--network none`/`--cap-drop ALL`. Не ловит: дописанные флаги сверх перечня (`--network host` после `--network none` — побеждает последний; `--privileged`, `--pid host`, `--ipc host`, `--env-file`, `--volumes-from`) — AC требует «несёт», не «ровно» |
-| AC-6 | да | лишний `-v`/`--mount` (сокет, `~/.ssh`); `.git` без `:ro` |
-| AC-7 | частично | `-e` со значением переменной пульта. Не ловит: `-e NAME` без `=значение` — docker берёт значение из окружения процесса `docker` CLI (а это `os.environ` пульта, если `subprocess` зовётся без `env=`). Формулировка «переменная… в argv не попадает» проверяется по значению, имя может и не попасть в argv при `--env-file`/`-e NAME`; нужно требование «каждый `-e` несёт `ИМЯ=значение` из разрешённого перечня, процесс `docker` CLI получает окружение без переменных пульта» |
-| AC-8 | да | нет `docker kill` в `except`/по таймауту; нет проверки отсутствия контейнера |
-| AC-9 | да | код 125 трактуется как красные тесты; фолбэк на хостовый `subprocess.run(pytest)` |
-| AC-10 | да | хеш пишется до успешной установки; установка при неизменном хеше; `--network none` у установки |
-| AC-11 | да | полный набор берёт `root/tests` при `pytest-own` |
-| AC-12 | да | автогейт/`approve` без команды профиля. Гейт мержа не входит (см. выше) |
-| AC-13 | да | проверки Docker выполняются при `off`; нет команды сборки в выводе |
-| AC-14 | ручной | — (живой Docker, PLAN) |
-| AC-15 | ручной | — (живой Docker, PLAN) |
+| AC-1 | да | `entry.get("sandbox", "off")`; исключение по имени `artel`; отказ без имени записи/поля |
+| AC-2 | да | при `off` очищено/урезано окружение, пропал `-p timeout`, сменён `cwd`; вызов `docker` при `off`. Не ловит: место запуска вне семи (`amend.py:715,718` с `cwd=None` для внешнего проекта, `two_sided.py:234`) — см. «ТЗ и SPEC» 1–2 |
+| AC-3 | да | сверка секрета подстрокой; `image` не требуется при `required`+профиль; `image` требуется без профиля; лексический `workdir` с `..` |
+| AC-4 | да | `realpath` только в `targets.check`; симлинк в рабочей копии уводит `workdir` наружу и прогон идёт |
+| AC-5 | частично | имя контейнера без проекта; `cwd` в области проекта вне раскладки идёт на хост. Не ловит: `cwd=None` при планке внешнего проекта (`amend.py:715-718`) — AC прямо относит его к пути артели |
+| AC-6 | да | интерпретатор пульта/`-p timeout` при `pytest-own`; пропал `--junitxml`/`-p no:cacheprovider` |
+| AC-7 | да | лишний флаг (`--privileged`, второй `--network`, `--env-file`); пропуск `--cap-drop ALL` |
+| AC-8 | да | лишнее монтирование (сокет, `~/.ssh`); `.git` без `ro` |
+| AC-9 | да | `-e ИМЯ` без значения; имя вне перечня; значение переменной пульта |
+| AC-10 | да | нет `docker kill` в `except`/по таймауту; нет проверки отсутствия |
+| AC-11 | да | код 125 как красные тесты; хостовый фолбэк |
+| AC-12 | да | хеш пишется до успешной установки; установка при неизменном хеше; `--network none` у установки |
+| AC-13 | да | `root/tests` при `pytest-own`; `-n/-p xdist` дописан |
+| AC-14 | да | автогейт/`approve`/гейт мержа без `runner`/`workdir` профиля |
+| AC-15 | да | проверки Docker при `off`; нет команды сборки |
+| AC-16 | ручной | — (живой Docker, PLAN) |
+| AC-17 | ручной | — (живой Docker, PLAN) |
 
 ## Зоны
-1. **`orchestrator/project_profile.py` вне зон.** Профиль тестов до
-   потребителей доходит одним путём — `project_profile.Profile`
-   (`orchestrator/project_profile.py:63-74`: `command`, `long_lived_dir`, …,
-   `install`, `full_suite_timeout_sec`); через него берут команду
-   `suite_run`, `preflight`, `fsm_merge_gate`. Требование 6 («тем же путём,
-   что `suite-run`, `plank-run`, `preflight`, `acceptance-dry-run`») и
-   передача `runner`/`workdir`/`env`/`image` естественно требуют новых полей
-   `Profile` — файл не в зонах ни SPEC, ни частей. Обход «читать
-   `targets.target()` прямо из `acceptance.py`» создаёт второй источник
-   профиля — ровно то, что п.6 устраняет.
-2. **Вызывающие мест запуска вне зон.** Проект/задача/профиль для решения
-   `required` и имени контейнера должны прийти в `run`/`collect`/
-   `run_repeat`/`run_plank`; вызывают их `orchestrator/plank_run.py:187`
-   (только `code_dir`), `orchestrator/amend.py:545,549,715,718`,
-   `orchestrator/pull.py:664,666`,
-   `orchestrator/advance_gates/acceptance.py:169,402,405`,
-   `orchestrator/advance_gates/tests_writing.py:560,563`; полный набор —
-   `orchestrator/suite_run.py:524,564`, `orchestrator/notes.py:1040`,
-   `orchestrator/fsm_merge_gate.py:962-967`. ТЗ утверждает, что они «сами
-   процессов не запускают», и SPEC их в зоны не берёт; но если сигнатуры
-   мест запуска меняются, правка уходит за зоны. SPEC обязан либо задать
-   механизм без смены вызывающих (например, проект и задача выводятся
-   внутри `acceptance.py` из `cwd`/`task_id` — и назвать, как для `run_plank`
-   с одним `cwd`), либо включить эти файлы в зоны.
-3. `orchestrator/fsm_autogate.py` и `orchestrator/fsm.py` в зонах, но по
-   коду правка п.6, вероятно, им не нужна (`acceptance_suite` в
-   `acceptance.py:1847-1848`). Не отклонение, лишняя широта.
-4. Защищённые пути: `targets.yaml` — только чтение, верно; `tests/sandbox.py`
-   и фикстуры `tests/` не защищены (`orchestrator/config.py:754-760`).
-   Песочница ролей не расширяется.
+1. `orchestrator/project_profile.py` в зонах — отклонение 3 прошлого
+   визита закрыто; вызывающие вне зон по ответу 1 ANSWER-1.
+2. `orchestrator/advance_gates/two_sided.py` — место исполнения кода
+   проекта (см. «ТЗ и SPEC» 2) — ни в зонах, ни в «Не входит».
+3. Перечень требования 9 не покрывает 9 файлов `tests/` («Факты против
+   кода» 1): зона `tests/` их включает, но правило требования 9 правку
+   запрещает — разработчик либо нарушит SPEC, либо эскалирует.
+4. Защищённый `tests/test_invariants.py` в перечне без оговорки
+   «только приложением PLAN» (`config.py:754-760`); по коду правка ему не
+   нужна.
+5. Песочница ролей не расширяется; `targets.yaml`, `docs/backlog.md`,
+   `fsm_merge_gate.py`, `targets.py` (в D1а-2) — только чтение, верно.
 
 ## Матрица неослабления
-SPEC не содержит ни раздела «Меняемое поведение», ни разбора затрагиваемых
-тестов, хотя требования 1 и 2 (отсутствие `sandbox` → `required`;
-`required` без `image` → отказ `targets.check`) опрокидывают существующие
-тесты и фикстуры:
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| Запись без `sandbox` и без `image` перестаёт проходить `targets.check` | «запись без профиля и с профилем без новых полей годна» — `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:107-121` (`base_entry` без `sandbox`, `:31-34`) | нет — по требованиям 1–2 такая запись теперь отказ | не покрыто; SPEC не называет ни замену, ни правку фикстуры | вопрос Оператору: правка входа долгоживущего теста (добавить `sandbox: off`) меняет то, что он проверяет |
-| Фикстура песочницы: запись артели и внешних проектов без `sandbox` | `tests/sandbox.py:1057-1065` (`_PROJECT_TARGET_ENTRY`), `:1097-1104` (`artel_target_entry`), `:1117-1130` (`declared_without_profile`) — на них стоят все сценарии с `config.TARGETS` песочницы; файлов `tests/` со своими записями target'ов — 143 (`grep -l merge_gate tests`) | нет: `targets.load` проверяет все записи файла (`targets.py:99-100`) — первая же запись без `image` роняет загрузку; артель песочницы без поля станет `required` («без исключения по имени») | не покрыто | SPEC обязан сказать, что фикстуры получают `sandbox: off`, и перечислить затронутые долгоживущие файлы |
-| Сквозной поток внешнего проекта | `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py:45-61` (запись без `sandbox`, `test_profile` без `image`), методы `:346-474` | под вопросом: либо `sandbox: off` во фикстуре (сценарий внешнего проекта уходит на путь, которого у внешних проектов больше не бывает), либо `required` (нужен подставной `docker`) | не покрыто | вопрос Оператору |
-| Точное множество монтирований/переменных D1а-1 → D1а-2 | тест D1а-1 «других монтирований нет», окружение «только `env`, `HOME`, `PYTHONPYCACHEPREFIX`» (SPEC «D1а-1», требование 3) | D1а-2 добавляет том кэша и `XDG_CACHE_HOME`/`UV_CACHE_DIR` в прогоны (SPEC «D1а-2», требование 2) — утверждения части 1 опрокидываются частью 2, и это не смена скалярного литерала (контейнер) | не покрыто | SPEC должен либо внести том кэша и переменные уже в D1а-1, либо заранее объявить смену для D1а-2 |
-| argv/`cwd`/env семи мест артели | фиксируется новыми тестами D1а-1 (AC-2) | да | AC-2 | ок |
+| Фикстуры перечня требования 9 получают `sandbox: off` | сценарии артели и внешних проектов, `tests/sandbox.py:1057-1104` | да, путь `off` | те же тесты без правки утверждений | ок (ANSWER-1, ответ 3) |
+| Сквозной сценарий внешнего проекта идёт путём `off` | `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py:346-474` | для `off`; `required` — модульно | новые тесты с подставным `docker` (AC-7…AC-11) | ок, ослабление названо в SPEC (требование 9) |
+| Проверка: `required` + профиль без `image` — отказ | «запись с профилем годна»: `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:120`, `:123-128` | нет без правки входа внутри тела метода (`base_entry` + профиль без `image` и без `sandbox`) | не покрыто: SPEC запрещает правку `base_entry`, ANSWER-1 считает тест неизменным | вопрос Оператору / правка требования 9 |
+| Запись своя + `ARTEL_TEST_PROFILE` без `sandbox` | 8 файлов, «Факты против кода» 1 (напр. `merge_gate_applied.py:110-112`) | нет: `targets.load` отказывает (`targets.py:99-100`) | не покрыто: файлов нет в перечне, правило требования 9 исключает их правку | правка требования 9 |
+| Внешний проект без профиля: прогон планки | `advance_gates/acceptance.py:387-405` (`command=None`) | не определено (`required` без `image`) | не покрыто | вопрос Оператору |
 
 ## Пути обхода гейтов
-1. **Утечка окружения через `-e NAME`** (AC-7): исполнитель передаёт
-   `-e FOO` без значения или `--env-file`, а `docker` CLI запускает
-   с `os.environ` пульта — тест «значение переменной пульта не в argv»
-   зелёный, контейнер видит переменную. Требование 3 «переменные пульта
-   не передаются» буквально не нарушено проверкой argv.
-2. **Флаги сверх перечня** (AC-5): `--network host` после `--network none`,
-   `--privileged`, `--pid host` проходят «argv несёт …».
-3. **`workdir` через симлинк** (AC-3): проверка в `targets.check`
-   лексическая; репозиторий проекта недоверенный, симлинк `backend → /…`
-   проходит. В контейнере вреда мало (смонтирована только рабочая копия),
-   но при `sandbox: off`/`pytest-own` это `cwd` прогона на хосте.
-4. **Фикстуры на `sandbox: off`**: самый дешёвый способ вернуть зелень
-   набора — дописать `sandbox: off` всем фикстурам, включая сценарии
-   внешнего проекта; путь `required` тогда покрыт только новыми тестами
-   `sandbox.py`, а сквозные сценарии внешнего проекта молча переедут на
-   хостовый путь. SPEC это не запрещает и не разрешает.
-5. **Профиль в обход `project_profile`** (см. «Зоны» п.1): чтение
-   `targets` прямо в `acceptance.py` выполняет AC-12 буквально, но
-   создаёт второй источник профиля, против смысла п.6.
+1. **Хостовый прогон через `cwd=None`.** Разработчик, исполняя правило
+   «`cwd` не задан — путь артели» буквально, оставляет
+   `amend.py:715-718` (`amend-tests` внешнего проекта без долгоживущих
+   файлов) на хосте; AC-5 это прямо разрешает, AC-2 зелёный.
+2. **Двусторонний прогон** (`two_sided.py:227-235`) остаётся хостовым для
+   внешнего `required`-проекта: ни одно AC его не трогает.
+3. **Повторное использование итога полного набора.** Ключ
+   `suite_result_key` (`acceptance.py:1609-1640`) строится из
+   `_pytest_command` пульта, `tests`, `-n/-p xdist` и не несёт ни
+   `image`, ни режима `sandbox`/`runner`; `full_suite` отдаёт сохранённый
+   итог «gate» без прогона (`acceptance.py:1740-1758`). Итог, полученный
+   до смены образа (или вне контейнера), засчитывается гейту. Для D1а-2
+   SPEC должен сказать, входят ли `image`/`runner`/`workdir` в ключ.
 
 ## Вердикт
-fail — SPEC в таком виде заводит разработчика в гарантированную
-эскалацию (зоны, опрокинутые тесты) и оставляет непокрытыми два пути утечки
-в критериях безопасности. Отклонения:
-1. Требования 1–2 опрокидывают существующие тесты и фикстуры без раздела
-   «Меняемое поведение»/решения о фикстурах: `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:107-121`,
-   `tests/sandbox.py:1057-1065,1097-1104,1117-1130`,
-   `tests/test_01m484rnv3qbdy3b0m16j916zp_external_flow.py:45-61`; не решено,
-   обязателен ли `image` у `required`-записи без `test_profile`.
-2. Критерий ТЗ «полный набор `tests/` зелёный» вынесен в «Не входит»
-   (SPEC «Не входит», последний пункт).
-3. Зоны не покрывают `orchestrator/project_profile.py:63-74` (носитель
-   профиля для п.6) и вызывающих мест запуска (`plank_run.py:187`,
-   `amend.py:545-718`, `pull.py:664-666`, `advance_gates/acceptance.py:169-405`,
-   `advance_gates/tests_writing.py:560-563`, `suite_run.py:524-564`,
-   `fsm_merge_gate.py:962-967`), а механизм доставки проекта/задачи в
-   `run_plank(targets, cwd)` (`acceptance.py:923`) не задан.
-4. Гейт мержа (`fsm_merge_gate.py:962-967`) — третий потребитель команды
-   профиля из той же строки `docs/backlog.md:185` — не назван ни в п.6,
-   ни в AC-12.
-5. AC-7 не ловит `-e NAME`/`--env-file` и окружение процесса `docker` CLI.
-6. AC-5 не требует отсутствия флагов сверх перечня.
-7. AC-3 проверяет `workdir` только в `targets.check`; `realpath` на
-   рабочей копии в момент прогона не требуется.
-8. Деление: точные множества монтирований и переменных D1а-1
-   опрокидываются D1а-2 (том кэша, `XDG_CACHE_HOME`, `UV_CACHE_DIR`).
-9. Мелкое: адреса автогейта/`approve` из бэклога устарели — правка п.6
-   ложится в `acceptance.acceptance_suite` (`acceptance.py:1847-1848`), не в
-   `fsm_autogate.py:323`.
+fail — SPEC в нынешнем виде ведёт к прогону кода внешнего `required`-проекта
+на хосте (против ТЗ п.4) и к гарантированной эскалации разработчика из-за
+неполного перечня фикстур. Отклонения:
+1. Правило «`cwd` не задан — путь артели» (SPEC требование 3, AC-5) при
+   `orchestrator/amend.py:715,718` гоняет планку внешнего проекта на хосте
+   (`acceptance.py:439,550`) — нарушение ТЗ п.4.
+2. Восьмое место запуска `orchestrator/advance_gates/two_sided.py:227-235`
+   (зовётся из `advance_gates/test_integrity.py:1429,1527`) не названо ни
+   в требованиях, ни в зонах, ни в «Не входит» — нужно решение Оператора.
+3. Перечень файлов фикстур требования 9 неполон:
+   `tests/test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py:120,123-124`
+   (dict-записи; опровергает строку 3 матрицы ANSWER-1) и 8 файлов со
+   своей записью + `ARTEL_TEST_PROFILE` (`merge_gate_applied.py:110-112`,
+   `main_ci.py:168`, `project_docs_ref.py:43`, `project_area.py:202`,
+   `merge_gate_merge_after.py:117`, `merge_gate_in_base.py:91`,
+   `postmerge_map_interpreter.py:107`, `preflight.py:311`); правило
+   «файл, берущий запись из `tests/sandbox.py`, не правится» их правку
+   запрещает.
+4. Поведение прогона у `required`-записи без `test_profile` (нет `image`)
+   не определено (`advance_gates/acceptance.py:387-405`).
+5. Источник задачи для `_run_full_suite_now`/`_run_full_suite_to_log`
+   (`acceptance.py:1313,1361`) не назван: параметра `task_id` нет,
+   `suite_run.py:524,564` зовут без задачи; годится
+   `suite_lock.my_task_id()` (`suite_lock.py:155`).
+6. Ключ повторного использования итога полного набора
+   (`acceptance.py:1609-1640`, `:1740-1758`) не учитывает `image`/
+   `runner`/`workdir` — сохранённый итог прошлого образа засчитывается.
+7. Мелкое: защищённый `tests/test_invariants.py` в перечне требования 9
+   без оговорки о приложении PLAN, хотя `test_profile:` в нём только
+   в комментарии (`:187`).
