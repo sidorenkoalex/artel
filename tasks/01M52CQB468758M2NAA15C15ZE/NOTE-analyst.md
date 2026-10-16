@@ -1,17 +1,21 @@
 # NOTE analyst — 01M52CQB468758M2NAA15C15ZE
 
 ## Выяснено
-- ТЗ достаточно для SPEC. Места запуска pytest: acceptance.py:447 (run), :555 (collect), :664 (run_repeat), :931 (run_plank), :1323/:1344 (_run_full_suite_now, два пути), :1371 (_run_full_suite_to_log), two_sided.py:227-229 (_run_side).
-- preflight.py и dry_run.py pytest не запускают (grep subprocess/_pytest пусто); их модулей нет в зонах ТЗ — в SPEC требование 5 для них записано как «без правки модуля».
-- secret_env_names — метод провайдеров (providers/claude.py:213), набор чужих — runner.foreign_secret_env_names.
-- Сигналы объёма: зон 14 (≥5), budget 50 (≥30) — предложена нарезка на 3 части (профиль+фиксация argv / раннер pytest-own в acceptance+two_sided / передача Profile вызывающими).
+- Возврат с spec_gate 16.10: десять замечаний Оператора внесены в SPEC (итерация 2), guard: ок.
+- Зоны родителя 17: добавлены fsm_advance.py, advance_gates/tests_writing.py, advance_gates/test_integrity.py (в D0-3, только передача профиля).
+- workdir/env только при runner: pytest-own (targets.check отказывает при pult-pytest и по умолчанию) — требование 1, AC-13.
+- acceptance_suite (acceptance.py:1807-1848) — в D0-2, берёт профиль задачи сама; fsm.py:1294 и fsm_autogate.py:326 зовут её.
+- Перевод целей полного набора — в месте запуска (D0-2); suite_run.py передаёт targets=("tests",) (:525,:565), его логика не меняется.
+- AC 15 штук: AC-1 оба пути команды (None и [python3,-m,pytest]); AC-2/3/4/6 по восьми местам; AC-7 сверка с профилем; AC-8..12 plank-run, amend-tests, pull, two-sided, сухой сбор tests_writing.
+- Раздел «## Матрица неослабления» (заголовки mandate.MATRIX_HEADERS) — строка про снятие -p timeout у pytest-own.
+- Порог бюджета деления — config.py:587 = 60, сигнал по бюджету не срабатывает; бэклог — :186.
+- Рамки частей: $25 / $45 / $40 (сумма выше рамки ТЗ $50 — сказано в SPEC).
 
 ## Не сработало
-- cat/ls в Bash недоступны (command not found) — читать Read/grep.
-- Команда с `$?` в Bash отклонена («simple_expansion») — guard звать без `echo rc=$?`.
+- ls в Bash недоступен; читать Read/sed/grep.
 
 ## Где остановился
-- SPEC.md написан (status: ready, 10 требований, AC-1..AC-10, деление на 3 части без строк «Рамка:» — рамки за Оператором), guard: ок.
+- SPEC.md сдан, status: ready, guard: ок.
 
 ## Чего не хватило
-- Нет готовой справки «какие команды пульта реально исполняют pytest» — собирал grep'ом по вызовам acceptance.*.
+- Формат «матрицы неослабления» искал в mandate.py/operator-gates.md:53 — в шаблоне SPEC раздела нет.
