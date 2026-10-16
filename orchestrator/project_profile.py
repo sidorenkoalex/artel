@@ -17,7 +17,9 @@ SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования 2-5).
   ни в одном месте.
 """
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from scripts import guard
 
@@ -72,6 +74,12 @@ class Profile:
     report: str = ""
     install: tuple = ()
     full_suite_timeout_sec: int | None = None
+    runner: str = targets.PROFILE_RUNNER_DEFAULT
+    workdir: str = ""
+    # Неизменяемое отображение под стать frozen; `dict` нехэшируем, поэтому
+    # поле вне хэша (равенство его по-прежнему сравнивает).
+    env: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({}), hash=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -82,7 +90,10 @@ class Profile:
                    mutation_claim_scope=tuple(values["mutation_claim_scope"]),
                    report=values.get("report") or "",
                    install=tuple(values.get("install") or ()),
-                   full_suite_timeout_sec=values.get("full_suite_timeout_sec"))
+                   full_suite_timeout_sec=values.get("full_suite_timeout_sec"),
+                   runner=values.get("runner") or targets.PROFILE_RUNNER_DEFAULT,
+                   workdir=values.get("workdir") or "",
+                   env=MappingProxyType(dict(values.get("env") or {})))
 
     def in_weakening_scope(self, path: str | None) -> bool:
         return bool(path) and any(mask_matches(mask, path)
