@@ -10,7 +10,7 @@
 - suite-run №1: 4 красных подтеста `launch_places::test_ac7_full_suite_to_log_argv_cwd_env` — тест считает разницу env с os.environ, а полный прогон пульта уже несёт `PYTHONUNBUFFERED=1` (acceptance.py:1372). Воспроизводится `PYTHONUNBUFFERED=1 python3 -m pytest tests/test_01m52eed…_launch_places.py`. Код задачи ни при чём.
 
 ## Где остановился
-- Код готов, PLAN `status: escalate` (вариант А — amend-tests: `os.environ.pop("PYTHONUNBUFFERED", None)` в `AcceptancePlacesTest.call`). После ответа — снять escalate, сдать ready, кода не править.
+- ANSWER-1 (вариант А): тест поправлен amend-tests, код не менялся. Долгоживущие файлы зелёны с `PYTHONUNBUFFERED=1`; suite-run №2 зелёный (5525 прошло, 0 упало, 2 пропущено). Раздел «Эскалация» из PLAN убран, PLAN `status: ready`, guard ок.
 
 ## Чего не хватило
 - Предпроверка test_author не гоняет долгоживущие файлы в окружении полного прогона.

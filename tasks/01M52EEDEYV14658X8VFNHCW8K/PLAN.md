@@ -2,7 +2,7 @@
 task: 01M52EEDEYV14658X8VFNHCW8K
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -44,6 +44,13 @@ schema_version: 5
    `test_project_profile_gates.py`, `test_network_address_gate.py`,
    `test_targets*.py`), полный набор — `suite-run`.
 
+Итог: эскалация расхождения с долгоживущим `..._launch_places.py`
+(`PYTHONUNBUFFERED` из окружения полного прогона) закрыта ANSWER-1,
+вариант А — тест поправлен `amend-tests` (планка 68a5addc → 155dfad3),
+код задачи не менялся. Оба долгоживущих файла зелёны с
+`PYTHONUNBUFFERED=1`; `suite-run` №2 — зелёный: прошло 5525, упало 0,
+пропущено 2.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -80,47 +87,3 @@ schema_version: 5
   тест зелёный в одиночку и красный внутри `suite-run`/гейта. Предпроверке
   test_author стоило бы гонять долгоживущие файлы с окружением полного
   прогона (`PYTHONUNBUFFERED=1`) — `orchestrator/preflight.py`.
-
-## Эскалация
-
-**Вопросы**
-
-1. (блокирующий; код причины: расхождение с долгоживущим файлом задачи)
-   `tests/test_01m52eedeyv14658x8vfnhcw8k_launch_places.py::AcceptancePlacesTest::test_ac7_full_suite_to_log_argv_cwd_env`
-   красен в полном прогоне пульта (`suite-run` №1: 4 подтеста,
-   `AssertionError: Lists differ: ['PYTHONPYCACHEPREFIX'] !=
-   ['PYTHONPYCACHEPREFIX', 'PYTHONUNBUFFERED']`). Причина — в тесте, не в
-   коде: полный набор пульт сам запускает через
-   `acceptance._run_full_suite_to_log` с `PYTHONUNBUFFERED=1`
-   (`orchestrator/acceptance.py:1372`), эта переменная уже есть в
-   `os.environ` процесса тестов, и разница «env вызова − os.environ»
-   (`check_call`, строки 160-165 теста) её не видит. Воспроизведение:
-   `PYTHONUNBUFFERED=1 python3 -m pytest
-   tests/test_01m52eedeyv14658x8vfnhcw8k_launch_places.py` — 4 failed;
-   без переменной — зелёный. Код задачи (`targets.py`,
-   `project_profile.py`) к `acceptance` не прикасается. Тест залочен —
-   правка только `amend-tests`.
-   - Вариант А (дефолт при молчании): `amend-tests` — в
-     `AcceptancePlacesTest.call` после входа в `mock.patch.dict(os.environ,
-     …)` снять `PYTHONUNBUFFERED` из `os.environ`
-     (`os.environ.pop("PYTHONUNBUFFERED", None)`, тем же приёмом, что
-     строка 454 теста снимает `PYTHONPATH`); ожидания теста не меняются.
-   - Вариант Б: принять красный тест в полном прогоне (`approve
-     --accept-red`) — не рекомендую: гейт приёмки и CI пульта будут красны
-     на каждом прогоне после мержа.
-
-**Контекст**
-- Реализация по PLAN закончена: шаги 1-2 сделаны, карта регенерирована.
-  Локально зелёны оба долгоживущих файла задачи (вне окружения полного
-  прогона), `test_01m45fjvgqt1k0p8hdexzx6hs7_test_profile.py`,
-  `test_project_profile_gates.py`, `test_network_address_gate.py`,
-  `test_01m4s0jvb85w9ty1esgnbh97fp_targets_knowledge.py`,
-  `test_01m4s24963r9h18an2xdp6r15b_targets_field.py`,
-  `test_multitarget.py`, `test_project_profile.py`, `test_repo_context.py`,
-  `test_01m4rrw7ft1ee77ey9y462azkc_project_target.py`.
-- `suite-run` №1: прошло 5525, упало 4 — все 4 этот случай, прочих
-  новых падений нет.
-
-**Блокирует**
-- Зелёный полный прогон ветки и переход `in_dev -> verifying`; после
-  `amend-tests` по варианту А шаг сдаётся `ready` без правок кода.
