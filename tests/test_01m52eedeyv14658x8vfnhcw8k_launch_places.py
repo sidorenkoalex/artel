@@ -211,6 +211,9 @@ class AcceptancePlacesTest(PlaceCheck, TmpDirTest):
         with mock.patch.dict(os.environ, self.probe_environ()), \
                 mock.patch.object(tempfile, "mkdtemp", temp), \
                 mock.patch.object(acceptance, "subprocess", fake):
+            # Полный прогон пульта сам ставит PYTHONUNBUFFERED: без снятия
+            # разница «окружение вызова − os.environ» её не увидит.
+            os.environ.pop("PYTHONUNBUFFERED", None)
             invoke()
         return self.single_call(fake, label), temp
 
