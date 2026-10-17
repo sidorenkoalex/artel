@@ -1,18 +1,19 @@
 # Записка analyst
 
 ## Выяснено
-- Отказ «другому проекту»: `orchestrator/artel.py:1150-1160` (`_validated_observation_tasks`), зовётся из register (:1045) и add/remove (:1120, с `row["target"]`).
-- `register`: проект = проект первой задачи, `--project` сверяется с ним (`artel.py:1041-1044`).
-- Именованное `--observation`: сверка `observer["target"] != target` в `artel.py:882` — снимается в зоне.
-- Без флага: `store.matching_observation` (`store.py:223-234`, `o.target=?`) — store.py только на чтение. То же в `store.session_observations` (`store.py:237`), через неё `cycle_hint.launch_hint` (`cycle_hint.py:17-21`, вне зон).
-- Фильтр алертов дозора: `watch.py:297` — `item["target"] in task_ids or item["target"] == row["target"]`; шаги идут по набору задач (`store.observation_steps_since`), проект там не участвует.
+- ANSWER-1: по обоим вопросам вариант A. Требование 4 касается только явного `--observation`, автоподбор (`store.matching_observation`) не входит. Проект наблюдения — `--project`, без него проект первой задачи; отказ, только если ни одна задача не из `--project`.
+- Отказ «другому проекту»: `orchestrator/artel.py:1150-1160` (`_validated_observation_tasks`). Его зовут register (:1045) и add/remove (:1120, с `row["target"]`).
+- Сверка проекта у именованного `--observation`: `artel.py:882`.
+- Фильтр алертов дозора: `watch.py:297`.
+- Строка `status`: `catalog.py:970-977`. Плитка `report`: `report.py:544` (`_tile_html`).
+- `tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py::test_ac8_…`: T003 чужого проекта не входит в набор, отказ по членству остаётся. «Меняемое поведение» не нужно.
+- `test_launch_observation_refusals.py:64` ищет подстроку «другой сессии» в отказе — её стоит сохранить в тексте.
 
 ## Не сработало
-- —
+- `ls`/`rm`/`sed` в Bash не находятся по PATH, или их отклоняет правило; удалял через `python3 -c`, читал файлы через `git grep` и Read.
 
 ## Где остановился
-- QUESTIONS.md записан, guard ок: (1) объём требования 4 (A — только `--observation` / B — дубль запроса в artel.py / C — расширить зоны на store.py+cycle_hint.py), дефолт A; (2) правило проекта наблюдения при register, дефолт A (`--project` = проект по умолчанию). SPEC.md не писал.
-- Метку `[проект]` в status для задач не артели (без новой колонки) аналитик выбирает сам, это не вопрос.
+- SPEC.md написан (9 AC, budget 30, монолит с обоснованием: сигналы «5 элементов зоны» и «budget ≥ 30»), guard ок. QUESTIONS.md удалён.
 
 ## Чего не хватило
-- Нужно было знать, что подбор наблюдения без флага живёт в store.py, а не в artel.py: из ТЗ это не видно, нашёл grep'ом `matching_observation`.
+- Явного правила, меняет ли добавка алертов артели у наблюдения sled (требование 2) «прежнее поведение» из требования 5. Принял: добавка разрешена требованием 2, у наблюдения артели вывод прежний.
