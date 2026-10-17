@@ -1,21 +1,18 @@
-# Записка spec_auditor
+# Записка spec_auditor (визит 2, SPEC sha ebf23d4a)
 
 ## Выяснено
-- sha SPEC = fc88e2b3 (сверено git hash-object).
-- Адреса SPEC верны: misc_checks.py:92 (gh repo view), artifact_branches.py:126-146 (_push_closing_sha, push на :137 через gitcmd.in_repo → git("-C", source)), brief.project_skills_refusal(target, entry) brief.py:593, repo_context.clone_path :75-79, keychain.token(slot).
-- orchestrator/config.py — в config.COMMON_ZONES (config.py:799), отсутствие в zones не отклонение.
-- Порога FETCH_HEAD в config.py нет — новая константа.
-- Опыт git 2.50: сброс через GIT_CONFIG_COUNT (credential.helper= + помощник пульта) убирает и глобальный, и URL-помощник для `git credential fill`, но `git config --get-all credential.helper` всё равно печатает чужой глобальный помощник → буквальный AC-3 п.1 требует подмены GIT_CONFIG_GLOBAL.
-- Артель: рабочие копии/клон лежат в .artel/projects/artel/, у записи артели token_slot artel-token (токен модели, Ф-4 родителя) — AC-1 не фиксирует этот путь.
-- ci.gh знает проект только по repo= (URL); trigger_rerun/find_run_id/stuck (ci.py:1148,1207,1240) зовут gh без repo.
-
-- tests/test_doctor.py:670-692 (BaseBranchCheckTest, plain TestCase, EXTERNAL_ENTRY без token_slot) ждут ok/warn от check_base_branch("sled") — по треб. 1-2 покраснеют или полезут в настоящий keychain; tests/sandbox.py keychain.token не подменяет.
+- sha SPEC = ebf23d4a (git hash-object) — совпадает с миссией.
+- config.PROJECTS = ROOT/.artel/projects (config.py:50): «пути под config.ROOT исключены» буквально накрывает и клоны внешних проектов → противоречие с треб.1/8, AC-11/13.
+- doctor/artifact_branches.py:171-174: главная копия как source — только для артели (is_artel); для внешнего source всегда клон (тест test_doctor_closed_ref_fix::test_external_project_does_not_search_main_copy). Второй признак (URL) реального вызывающего у внешнего проекта не имеет.
+- ci.verifying_status (ci.py:586-657) и trigger_rerun (ci.py:1221-1257) НЕ зовут gh с repo= ни разу (check_runs, run_list, _commit_workflow_runs, find_run_id, rerun, watch — без repo) → AC-15 пуст.
+- Фикстура tests/sandbox.py:1057-1065 _PROJECT_TARGET_ENTRY несёт token_slot {name}-token; десятки тестов внешних проектов с реальным git/gh-заглушкой; SPEC не говорит, что отдаёт общая подмена keychain.token для этих слотов.
+- BaseBranchCheckTest (tests/test_doctor.py:629) — plain TestCase, EXTERNAL_ENTRY без token_slot.
 
 ## Не сработало
-- rm/ls в оболочке шага недоступны (command not found) — удалял через python3 os.unlink.
+- awk/цепочки `;` с переменными в Bash требуют подтверждения — по одной команде.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. Отклонения О-1…О-5, Ф-1.
+- SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Чего не хватило
-- Родительский SPEC читается только `git show refs/artifacts/01M53B45XW3J56RJHGD70TD8A2:tasks/.../SPEC.md`.
+- Нет быстрого способа увидеть, какие ci.gh-вызовы идут с repo= — grep "repo=" по ci.py.
