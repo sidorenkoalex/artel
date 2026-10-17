@@ -1298,7 +1298,8 @@ def _full_suite_detail(outcome: str, digest: str,
 def run_full_suite(root: Path, command: list[str] | None = None,
                    targets: tuple = ("tests",), extra: tuple = (),
                    log: Path | None = None,
-                   limit: tuple[int, str] | None = None) -> tuple[bool, str]:
+                   limit: tuple[int, str] | None = None,
+                   test_ids: tuple = ()) -> tuple[bool, str]:
     """(зелено, ПОЛНЫЙ вывод прогона) — прогон ПОЛНОГО пакета `tests/`
     каталога `root` через pytest (SPEC T066, требование 2в; переход раннера —
     SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
@@ -1353,20 +1354,24 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     прочие пути от корня переведены к `workdir`, id тестов — как есть;
     каталога `long_lived_dir` нет — «тестов нет»; `workdir` вне дерева —
     «прогон не начат» без прогона.
+
+    `test_ids` — id упавших тестов (`suite-run --failed`, ANSWER-1 SPEC
+    01M52EEFNA1WH31962HVNT0YZ9) в той форме, в какой их напечатал pytest:
+    идут в argv после целей без перевода к `workdir`.
     """
     global _last_full_suite_metrics, _last_process_snapshot, _last_run_completed_at
     observe = _observe_full_suite
     _last_full_suite_metrics = None
     _last_process_snapshot = None
     _last_run_completed_at = None
-    full_run = tuple(targets) == ("tests",)
+    full_run = tuple(targets) == ("tests",) and not test_ids
     own = _own(command)
     run_cwd = root
     if own is None:
         tests_dir = root / "tests"
         if not tests_dir.is_dir():
             return False, FULL_SUITE_NO_TESTS_NOTE
-        argv = _pytest_command(*targets, command=_head(command)) + [
+        argv = _pytest_command(*targets, *test_ids, command=_head(command)) + [
             "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist", *extra]
     else:
         run_cwd, refusal = _own_cwd(own, root)
@@ -1374,9 +1379,9 @@ def run_full_suite(root: Path, command: list[str] | None = None,
             return False, f"{FULL_SUITE_NOT_STARTED}: {refusal}"
         if not (root / own.long_lived_dir).is_dir():
             return False, FULL_SUITE_NO_TESTS_NOTE
-        args = ([own.long_lived_dir] if full_run else list(targets))
+        args = [own.long_lived_dir if t == "tests" else t for t in targets]
         argv = _place_command(own, *(_own_target(own, a) for a in args),
-                              *extra)
+                              *test_ids, *extra)
     limit = limit or (config.FULL_SUITE_TIMEOUT_SEC, "config")
     with _machine_lock(None, limit) as holder:
         if holder is not None:

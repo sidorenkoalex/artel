@@ -227,8 +227,8 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
 
     `profile` `pytest-own` (SPEC 01M52EEFNA1WH31962HVNT0YZ9): команда
     профиля в `workdir` дерева стороны, пути узлов переведены к нему
-    (`--rootdir` — по-прежнему дерево: id узлов отчёта — от его корня),
-    чистое окружение без `PYTHONPATH` пульта, свой сеанс; `workdir` вне
+    (`--rootdir` — по-прежнему дерево: id узлов отчёта — от его корня;
+    id от `workdir` приводит к корню `_root_form`), чистое окружение без `PYTHONPATH` пульта, свой сеанс; `workdir` вне
     дерева — сбой стороны без прогона."""
     own = acceptance._own(profile)
     cwd = tree
@@ -269,7 +269,25 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
         # (ошибка аргументов, плагина, конфигурации): причина — его вывод.
         tail = " ".join(((res.stdout or "") + (res.stderr or "")).split())
         return [], f"pytest не отчитал ни одного узла: {tail[-300:]}"
+    if own is not None:
+        for record in records:
+            record["nodeid"] = _root_form(record.get("nodeid") or "", tree, cwd)
+            location = record.get("location")
+            if isinstance(location, dict) and location.get("path"):
+                location["path"] = _root_form(location["path"], tree, cwd)
     return records, ""
+
+
+def _root_form(nodeid: str, tree: Path, cwd: Path) -> str:
+    """id узла (или путь) отчёта в форме от корня дерева `tree` (ANSWER-1
+    SPEC 01M52EEFNA1WH31962HVNT0YZ9, п.2): команда профиля, сама задавшая
+    pytest свой корень (`workdir`), даёт id от него — такой id, чей файл
+    есть от `cwd`, но не от корня, переводится; прочие — как есть."""
+    path, sep, rest = nodeid.partition("::")
+    if not path or os.path.isabs(path) or (tree / path).exists() \
+            or not (cwd / path).exists():
+        return nodeid
+    return os.path.relpath(cwd / path, tree).replace(os.sep, "/") + sep + rest
 
 
 def _failed(methods: list, reason: str, head_sha: str,
