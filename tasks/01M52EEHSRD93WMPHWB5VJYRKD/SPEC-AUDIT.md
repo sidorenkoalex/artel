@@ -4,176 +4,169 @@ type: spec_audit
 author_role: spec_auditor
 status: ready
 verdict: concerns
-signals: "в) пути-признаки (тесты): tests/; в) пути-признаки (гейты): orchestrator/advance_gates/acceptance.py, orchestrator/advance_gates/test_integrity.py, orchestrator/advance_gates/tests_writing.py, orchestrator/fsm_advance.py, orchestrator/fsm_autogate.py, orchestrator/fsm_merge_gate.py; д) ТЗ ссылается на ADR: ADR-0023."
-spec_sha: 7ba92245224ca0bc03397e3da9d3ce8e00a46e5e
+signals: "в) пути-признаки (тесты): tests/; в) пути-признаки (гейты): orchestrator/advance_gates/acceptance.py, orchestrator/advance_gates/test_integrity.py, orchestrator/advance_gates/tests_writing.py, orchestrator/advance_gates/two_sided.py, orchestrator/fsm_advance.py, orchestrator/fsm_autogate.py, orchestrator/fsm_merge_gate.py; д) ТЗ ссылается на ADR: ADR-0023."
+spec_sha: c1f992105c7662a09da6e0fdc872753f614444b2
 schema_version: 5
 ---
 
 # SPEC-AUDIT: D0-3: один источник профиля у вызывающих прогон
 
 ## ТЗ и SPEC
-ANSWER-n.md у задачи нет; решений Оператора на гейте SPEC в брифе нет.
+ANSWER-n.md у задачи нет. В брифе есть решение Оператора на гейте SPEC №1
+(17.10.2026), шесть пунктов. Сверил, как каждый внесён в SPEC:
+1. Прогон планки `in_dev -> verifying` и повторы seed вошли в требование 1
+   (SPEC.md:~44-48) и в новый AC-12 (SPEC.md:121-125). Внесено.
+2. `amend.py:715-718`: `cwd=wt_path` и отсчёт `workdir` от рабочей копии
+   только у `pytest-own`, у `pult-pytest` поведение прежнее — требование 1
+   (SPEC.md:~52-58) и AC-6 (SPEC.md:95-99). Внесено.
+3. Каждая из двух точек в AC-3, AC-6, AC-7, AC-8, у AC-3 вместе с условием
+   «после применённого приложения» (SPEC.md:82-108). Внесено.
+4. Ключ итога `suite-run` в AC-4 (SPEC.md:87-90). Внесено.
+5. Канал `profile` у `run_plank` и `two_sided.run`, а в точках, где сегодня
+   ничего не передаётся, — профиль. Это есть в «Контексте» и в требовании 1.
+   Внесено.
+6. `pult-pytest` у внешних проектов — «поведение прежнее (команда пульта)»:
+   требование 4 (SPEC.md:69-71), AC-10 (SPEC.md:113-115), «Не входит»
+   (SPEC.md:157-159). Внесено дословно, но скобка «команда пульта»
+   расходится с кодом — см. «Факты против кода» и отклонение 1.
 
-ТЗ → SPEC: все пункты перенесены дословно — перечень вызывающих (ТЗ п.1 →
-SPEC.md:29-43), `acceptance_suite` для автогейта и `approve` (SPEC.md:44-45),
-«только передача профиля» (SPEC.md:46-47), прогоны без задачи и артель
-(SPEC.md:48-49), `preflight`/`acceptance-dry-run` (SPEC.md:50), критерии
-приёмки ТЗ разложены на AC-1…AC-11, «Не входит» (SPEC.md:111-117), рамка $40,
-`merge_after` по строке «Порядок: после части 2». Требований сверх ТЗ нет.
-
-Расхождение, унаследованное от ТЗ: в зонах ТЗ и SPEC (frontmatter `zones`)
-стоит `orchestrator/advance_gates/acceptance.py`, но ни одно требование и ни
-один AC этот файл не называет. Как раз в нём лежит главный прогон планки —
-переход `in_dev -> verifying` (`_acceptance_run_refuses`,
-`orchestrator/advance_gates/acceptance.py:387-405`, вызов из
-`orchestrator/fsm_advance.py:803`) и повторы с другим seed
-(`_seed_repeats_escalate`, `:169`, `:425-426`). Оба передают
-`list(decision.profile.command)` (`:393`), то есть `pytest-own` на них не
-доходит. Часть 2 этот файл не меняла (`git diff 3f47d31d d2806c69 --stat`
-показывает только `orchestrator/acceptance.py` и `two_sided.py`). Заголовок ТЗ
-говорит «один источник профиля у вызывающих прогон». Если этот гейт не войдёт
-в задачу, у внешнего проекта планка на рубеже `in_dev` по-прежнему пойдёт
-интерпретатором пульта в корне дерева и с окружением пульта. Отклонение 1.
+ТЗ → SPEC: перечень вызывающих, `acceptance_suite`, «только передача
+профиля», прогоны без задачи, `preflight`/`acceptance-dry-run`, «Не входит»
+(`acceptance.py`, `two_sided.py`, sled), рамка $40 и `merge_after` по строке
+«Порядок: после части 2» — всё перенесено. Сверх ТЗ добавлены только
+пункты из решения Оператора (AC-12, `cwd=wt_path`, `pult-pytest`). Других
+лишних требований нет.
 
 ## Факты против кода
-Подтвердилось (рабочий каталог, ветка задачи от main с вмёржённой частью 2,
-d2806c69):
-- `fsm_merge_gate._full_suite_command` возвращает `list(decision.profile.command)`
-  — `orchestrator/fsm_merge_gate.py:819-820`; вызовы `full_suite` —
-  `:962-967`.
-- `suite_run.py:511` — `suite_result_key(tree, command, base=True)`;
-  `:533` — `save_suite_result` по этому ключу; команда берётся из
-  `_profile_command` (`:270-285`) списком.
-- `plank_run.py:187` — `acceptance.run_plank([target_arg], code_dir)` без профиля.
-- `amend.py:545`, `:549` (с долгоживущими), `:715`, `:718` (только планка) —
-  `collect`/`run` без `command`.
-- `pull.py:664`, `:666` — `acceptance.run(tdir, cwd=wt_path[, extra])` без `command`.
-- `fsm_advance.py:594-596` и `advance_gates/tests_writing.py:558-563` —
-  список `command`.
-- `advance_gates/test_integrity.py:1429` (наблюдение `_observe_methods`) и
-  `:1527` (гейт) — `two_sided.run` без профиля.
-- `notes.py:1040` — `run_full_suite(work_dir, **_suite_limit_kwargs())` без команды.
-- `acceptance_suite` сам берёт профиль (`orchestrator/acceptance.py:2098-2103`,
-  `_task_own_profile` `:2106-2126`); его зовут `fsm_autogate.py:326` и
-  `fsm.py:1294`.
+Рабочий каталог — ветка задачи на `d2806c69` (main с вмёржённой частью 2).
+Подтвердилось:
+- `fsm_merge_gate.py:962-967`: `full_suite` в двух ветвях `fresh_suite`.
+  `_full_suite_command` возвращает `None` для артели и
+  `list(decision.profile.command)` для внешнего проекта
+  (`fsm_merge_gate.py:816-820`).
+- `advance_gates/acceptance.py:169`: `run_repeat(..., command=command)`.
+  `:387-405`: `command = list(decision.profile.command)` (`:393`), затем
+  `acceptance.run` в двух ветвях (`:399-402`); `command` уходит в
+  `_seed_repeats_escalate` (`:425-426`).
+- `suite_run.py:511`: ключ `suite_result_key(tree, command, base=True)`;
+  `:533`: `save_suite_result`. Команда — список из `_profile_command`
+  (`:268-283`) с проверкой `_is_pytest`. Тот же `command` уходит в прогон
+  базы (`:524-526`) и в основной прогон (`:565-566`).
+- `plank_run.py:187`: `run_plank([target_arg], code_dir)` без профиля.
+- `amend.py:545`, `:549`: `collect`/`run` с `cwd` без `command`. `:715`,
+  `:718`: `collect(tdir)`/`run(tdir)` без `cwd`, то есть с `config.ROOT`, где
+  `tdir = wt_path/tasks/<id>` (`amend.py:695`).
+- `pull.py:664`, `:666`: `run(tdir, cwd=wt_path[, extra])` без `command`.
+- `fsm_advance.py:594-596`: `list(profile.command)` → `_tests_writing_dry_collect_gate`.
+  `advance_gates/tests_writing.py:557`: `{"command": list(command)}`.
+  `list(Profile)` упадёт, так что эту строку придётся менять (она в зонах).
+- `test_integrity.py:1429` (наблюдение) и `:1527` (гейт): `two_sided.run`
+  без `profile`. Сигнатура — `two_sided.py:319-320` (`profile=None`),
+  `run_plank` — `acceptance.py:1096-1097`.
+- `notes.py:1040`: `run_full_suite(work_dir, **_suite_limit_kwargs())`.
+- `acceptance_suite` берёт профиль сам (`acceptance.py:2098-2126`). AC-1 и
+  AC-2 на main уже выполнены частью 2, их тесты будут зелёными с рождения
+  и стерегут регресс.
 
-Неточно:
-- SPEC.md:18-20: «научила … `run_plank` … и `two_sided.run` принимать профиль
-  каналом `command`». У `run_plank` и `two_sided.run` это параметр `profile`
-  (`orchestrator/acceptance.py:97`, `:1096-1097`;
-  `orchestrator/advance_gates/two_sided.py:319-320`). Значит, формула
-  требования 1 «тем же каналом, которым сегодня передаётся `command`»
-  (SPEC.md:30-31) для `plank_run.py:187`, `amend.py`, `pull.py` и
-  `test_integrity.py` ничего не определяет: там сегодня не передаётся ничего.
-  Это не блокер, канал выводится из сигнатур, но формулировка ложная.
-  Отклонение 5.
-- SPEC.md:22-25: «остальные вызывающие … передают либо список, либо ничего»
-  дан как исчерпывающий перечень, а в нём нет
-  `advance_gates/acceptance.py:169`, `:393-405` (см. отклонение 1).
-- AC-1 и AC-2 на main уже выполнены частью 2 (`acceptance.py:2098-2101`).
-  У требования 2 нет правки кода, тесты на AC-1/AC-2 будут зелёными с
-  рождения. Это не ошибка: они стерегут регресс.
+Не подтвердилось:
+- Требование 4 (SPEC.md:69-71), AC-10 (SPEC.md:115) и «Не входит»
+  (SPEC.md:158-159) называют сегодняшнее поведение внешнего проекта с
+  `runner: pult-pytest` «командой пульта». В половине мест это не так:
+  гейт мержа (`fsm_merge_gate.py:819-820`), `suite-run`
+  (`suite_run.py:277-283`), прогон планки в `in_dev`
+  (`advance_gates/acceptance.py:393`) и сухой сбор `tests_writing`
+  (`fsm_advance.py:594`) сегодня запускают внешний проект **командой
+  профиля** (`_head`, `acceptance.py:126-131` → `_pytest_command`
+  `:60-63`). Командой пульта они идут только в `pull`, `amend`,
+  `plank-run` и двустороннем прогоне. Это поведение закрепляет тест
+  `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py:456`
+  (`test_ac9_external_profile_runs_profile_command_red_refuses_merge`): в нём
+  мутация «прогон идёт командой пульта, а не командой профиля» названа
+  ловимой. Отклонение 1.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да (зелёный с рождения) | `acceptance_suite` перестаёт передавать `_task_own_profile` → argv с `-p timeout`/`-n`, `cwd` = корень, окружение пульта. Тест должен уводить приёмку в локальный прогон: при принятом итоге CI (`:2087-2094`) pytest не запускается |
+| AC-1 | да (зелёный с рождения) | `acceptance_suite` не передаёт `_task_own_profile` → argv с `-p timeout`, `cwd` = корень, окружение пульта. Тест должен уводить приёмку в локальный прогон: при принятом итоге CI (`acceptance.py:2087-2094`) pytest не запускается |
 | AC-2 | да (зелёный с рождения) | то же для `fsm.py:1294` |
-| AC-3 | да, с оговоркой | `_full_suite_command` оставлен со списком → прогон без `workdir`, с окружением пульта. Полный прогон в гейте мержа идёт только после применённого приложения PLAN (`fsm_merge_gate.py:958-960`), а AC это условие не называет. Профиль передан только в одной из ветвей `fresh_suite` (`:965` и `:967`) — тест, гоняющий одну ветвь, такое не поймает |
-| AC-4 | частично | Список вместо профиля в `_run` (`:564-566`) ловится. Ключ итога (`:511`, `:533`), который требование 1 называет отдельно, критерий не проверяет: мутация «прогон с профилем, ключ базы по списку» не согласует ключ `suite-run` с ключом базы гейта (`acceptance.py:2041`), а AC-4 остаётся зелёным. Отклонение 4 |
+| AC-3 | да | профиль передан только в одной ветви `fresh_suite` (`fsm_merge_gate.py:965`/`:967`); `_full_suite_command` оставлен со списком → нет `workdir`, окружение пульта |
+| AC-4 | да | прогон с профилем, а ключ базы `:511` считается по списку → ключ `suite-run` расходится с ключом гейта (`acceptance.py:2041`); `_profile_command` по-прежнему отдаёт список |
 | AC-5 | да | `run_plank` без `profile` → `cwd` = `code_dir`, окружение пульта |
-| AC-6 | да, с оговоркой | Две точки: `:545-549` и `:715-718`. Тест на одну пропускает мутацию в другой. Для `:715-718` см. отклонение 2: одной передачи профиля мало |
-| AC-7 | да, с оговоркой | Две ветви: `:664` (с долгоживущими) и `:666`. Тест на одну пропускает другую |
-| AC-8 | да, с оговоркой | Два вызова: наблюдение `:1429` и гейт `:1527`. Формулировка «двусторонний прогон» в единственном числе позволяет тест только на гейт, и тогда наблюдение остаётся без профиля |
+| AC-6 | да | профиль только в одной из точек `:545-549`/`:715-718`; в `:715-718` профиль передан, но без `cwd=wt_path` → `workdir` отсчитан от `config.ROOT` |
+| AC-7 | да | профиль только в одной ветви `pull.py:664`/`:666` |
+| AC-8 | да | профиль только у одного вызывающего `test_integrity.py:1429`/`:1527` |
 | AC-9 | да | `fsm_advance.py:594` по-прежнему `list(profile.command)` → `collect` без `workdir` |
-| AC-10 | да | Для артели подставлен `Profile`, у которого сменились `cwd` или окружение. Пример: `amend.py:715-718` получил `cwd=wt_path` вместо `config.ROOT` (`acceptance.py:593`) |
-| AC-11 | да | В `notes.py:1040` добавлен профиль артели или проекта → argv/`cwd` расходятся с main |
-
-Отклонение 3 (AC-3, AC-6, AC-7, AC-8): критерии не требуют покрыть каждую
-точку вызова и каждую ветвь, а их по две. Достаточно оговорки «в каждой
-точке требования 1» или перечня точек в AC.
+| AC-10 | да, с оговоркой | `cwd=wt_path` в `amend.py:715-718` добавлен безусловно → у артели сменился `cwd`. Безусловная передача `Profile` в `pull`/`amend`/`plank-run`/`two_sided` у внешнего `pult-pytest` меняет argv с команды пульта на команду профиля. Тест увидит это, только если команда профиля в нём **отличается** от `python3 -m pytest`: у артели команда `[python3, -m, pytest]` (`targets.yaml:46`), а `_pytest_command` подменяет `python3` интерпретатором venv (`acceptance.py:62-63`), поэтому на артели такая мутация невидима. Отклонение 2 |
+| AC-11 | да | в `notes.py:1040` добавлен профиль → argv/`cwd` расходятся с main |
+| AC-12 | да | `advance_gates/acceptance.py:393` оставлен списком, или профиль передан в `run`, но не в `_seed_repeats_escalate` (`:169`, `:425-426`) |
 
 ## Зоны
-Все места, которые меняют требования, в зонах есть. Защищённые пути
+Все места, которые меняют требования, в зонах есть: `advance_gates/acceptance.py`
+(AC-12), `advance_gates/tests_writing.py:557` (`list(command)` придётся
+менять), `fsm_merge_gate.py`, `suite_run.py`, `plank_run.py`, `amend.py`,
+`pull.py`, `fsm_advance.py`, `test_integrity.py`, `tests/`. Защищённые пути
 (`skills/`, `templates/`, `gates.yaml`, `roles.yaml`, `.github/`) не
-затронуты, песочница ролей не расширяется. В зонах лишние для требований
-файлы: `fsm.py` и `fsm_autogate.py` (требование 2 правки не требует),
-`notes.py` (требование 4 запрещает менять поведение). Эти зоны задал
-Оператор в ТЗ, отклонением это не считаю. `advance_gates/acceptance.py` в
-зонах есть, но без требования — см. отклонение 1.
+затронуты, песочница ролей не расширяется. `fsm.py`, `fsm_autogate.py` и
+`notes.py` правки не требуют (требования 2 и 4). Эти зоны задал Оператор в
+ТЗ, отклонением не считаю.
 
 ## Матрица неослабления
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| Раннер мест запуска у `pytest-own` (merge gate, suite-run, plank-run, amend, pull, two_sided, dry collect) | Таймаут отдельного теста `-p timeout -o timeout=…` — `orchestrator/acceptance.py:64-66` | для артели да; у `pytest-own` нет | общий предел `ACCEPTANCE_TIMEOUT_SEC` / предел полного набора профиля (`acceptance.py:610`, `:1385`); решение ADR-0023 (`docs/adr/0023-role-step-sandbox.md:851`) | решено ADR, не ослабление; в SPEC не названо |
-| Полный набор гейта мержа и `suite-run` у `pytest-own` | Параллель `-n … -p xdist`, каталог `tests` — `acceptance.py:1374-1375` | для артели да; у `pytest-own` каталог из профиля, без параллели | ADR-0023 `:852`; AC-3, AC-4 | решено ADR |
-| Красный полный прогон после приложений — отказ мержа | `fsm_merge_gate.py:968-1000`; `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py:456` | да (логика гейта не меняется, требование 3) | тот же тест; AC-3 | сохранить |
-| Повтор итога полного набора по ключу | `acceptance.suite_result_key` `:1829-1869`, ключ `pytest-own` `:1872-1890` | да, ключ строже (runner/workdir/env) | ключ `suite-run` не покрыт (отклонение 4) | дополнить AC-4 |
-| Прогон планки `in_dev -> verifying` и повторы seed у внешнего `pytest-own` | `advance_gates/acceptance.py:387-405`, `:169` | не меняется: идёт командой профиля в форме пульта (без `workdir`, окружение пульта) | не покрыто | отклонение 1 |
-| Окружение и argv артели во всех местах | `_pytest_command`/`_pytest_env` — `acceptance.py:36-91` | да | AC-10, AC-11 | сохранить |
+| Раннер мест запуска у `pytest-own` (все точки требования 1) | Таймаут отдельного теста `-p timeout -o timeout=…` — `orchestrator/acceptance.py:64-66` | у артели и `pult-pytest` да; у `pytest-own` его заменяет снятие группы процессов | общий предел прогона (`ACCEPTANCE_TIMEOUT_SEC`, предел полного набора профиля); ADR-0023, вторая поправка | решено ADR, не ослабление |
+| Полный набор гейта мержа и `suite-run` у `pytest-own` | Параллель `-n … -p xdist` — `acceptance.py:1320-1327` | у артели да; у `pytest-own` по профилю (часть 2) | ADR-0023; AC-3, AC-4 | решено ADR |
+| Красный полный прогон после приложений → отказ мержа | `fsm_merge_gate.py:968-1000`; `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py:456` | да (требование 3) | тот же тест; AC-3 | сохранить |
+| Внешний `pult-pytest` в гейте мержа идёт командой профиля | `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py:456` | да при чтении «как на main» (AC-10); нет при буквальном «команда пульта» (требование 4, SPEC.md:71) | тот же тест | отклонение 1 |
+| Ключ итога полного набора | `acceptance.suite_result_key` / ключ `pytest-own` (часть 2) | да | AC-4 | сохранить |
+| Прогон планки `in_dev -> verifying` и повторы seed | `advance_gates/acceptance.py:387-405`, `:169` | да, у `pytest-own` строже (по профилю) | AC-12 | сохранить |
+| argv, `cwd` и окружение артели во всех местах | `_pytest_command`/`_pytest_env` — `acceptance.py:36-91` | да | AC-10, AC-11 | сохранить |
 
-Раздела «Меняемое поведение» в SPEC нет. Он и не нужен: тестов, которые
-закрепляли бы канал списком через `assert_called_with`, в `tests/` нет (grep
-по `command=`/`profile=`). Моки `suite_run._profile_command` списком
-(`tests/test_suite_run.py:243`, `:380`) остаются валидными: список
-`acceptance` принимает (`_head`, `acceptance.py:126-131`).
+Раздела «Меняемое поведение» в SPEC нет, и он не нужен. Тестов, которые
+закрепляли бы канал списком через `assert_called_with`/`call_args`, в
+`tests/` нет (grep по `command=`, `profile=`, `call_args`). Моки
+`suite_run._profile_command` (`tests/test_suite_run.py:243`, `:380`) и
+`fsm_merge_gate._full_suite_command` (`tests/test_worktree_db_files.py:94`)
+подменяют возврат функции. Они остаются валидными, если сигнатуры этих
+помощников сохранятся.
 
 ## Пути обхода гейтов
-- Буквальное исполнение требования 1 для `amend.py:715-718` — передать
-  профиль, `cwd` не трогать. Тогда `run`/`collect` берут `cwd=config.ROOT`
-  (`acceptance.py:593`), и `workdir` профиля отсчитывается от корня пульта,
-  а не от рабочей копии задачи (`tdir = wt_path/tasks/<id>`, `amend.py:695`).
-  Итог — отказ `WORKDIR_REFUSAL` либо прогон не в том дереве. Чтобы прогон
-  шёл «по профилю», нужно ещё передать `cwd=wt_path`, а это уже не «только
-  передача профиля» (требование 3). Если же передать `cwd=wt_path`
-  безусловно, изменится `cwd` артели (против AC-10). Какое дерево здесь
-  считать базой `workdir`, SPEC не говорит. Отклонение 2.
-- Внешние проекты с `runner: pult-pytest` (профиль есть, раннер по
-  умолчанию). Сегодня `pull.py:664-666`, `amend.py`, `plank_run.py:187` и
-  `test_integrity.py:1429/:1527` гоняют их командой пульта. После передачи
-  профиля они пойдут командой профиля (`_head`, `acceptance.py:126-131`;
-  `_pytest_command` `:60-63`). Если команда профиля не `python3 -m pytest`
-  (пример в `tests/test_project_profile.py:89` — `["npx", "jest"]`), argv
-  сломается. Требование 4 и AC-10 защищают только артель и прогоны без
-  задачи, а поведение для `pult-pytest`-внешних проектов SPEC не задаёт:
-  исполнитель может как сменить его, так и оставить, и оба варианта
-  формально соответствуют SPEC. Отклонение 6.
-- Без отклонения 1 внешний `pytest-own` проходит главный гейт планки
-  (`in_dev -> verifying`) в окружении пульта: требование ADR-0023 о чистом
-  окружении тестов на этом рубеже обходится, хотя все AC SPEC зелёные.
+- Буквальное исполнение требования 4 и AC-10 «(команда пульта)» для внешнего
+  `pult-pytest` позволяет перевести гейт мержа, `suite-run`, планку `in_dev`
+  и сухой сбор на команду пульта. Тогда внешний проект в гейте мержа
+  проверяется не своей командой, а это ослабление гейта, закреплённое
+  тестом `test_merge_gate.py:456`. Сам тест такую правку отклонит, и
+  исполнитель окажется между SPEC и тестом. Отклонение 1.
+- Безусловная передача профиля в `pull.py:664-666`, `amend.py`,
+  `plank_run.py:187` и `test_integrity.py:1429/:1527` меняет argv внешнего
+  `pult-pytest` с команды пульта на команду профиля. Это нарушение AC-10,
+  а тест на AC-10 поймает его, только если команда профиля в тесте
+  отличается от `python3 -m pytest`. Отклонение 2.
+- Других путей не нашёл: каждая точка требования 1 названа в своём AC, у
+  двухточечных критериев — обе точки.
 
 ## Вердикт
-`concerns`: SPEC верно переносит ТЗ, факты о местах вызова подтверждены. Ниже
-отклонения, решение по ним — за Оператором на гейте SPEC.
+`concerns`: все шесть пунктов решения Оператора внесены, адреса требования 1
+сверены с кодом. Осталось два отклонения, оба решаются на гейте без
+возврата аналитику.
 
-1. Прогон планки `in_dev -> verifying` и повторы seed
-   (`orchestrator/advance_gates/acceptance.py:387-405`, `:169`) передают
-   список `command`. Файл в зонах (SPEC.md frontmatter `zones`), но в
-   требовании 1 (SPEC.md:29-43) и в AC его нет, и часть 2 его не правила.
-   Оператору решить: добавить в требование 1 и AC, либо явно вынести в «Не
-   входит» (SPEC.md:111-117) с адресом будущей задачи.
-2. `orchestrator/amend.py:715-718` зовёт `collect`/`run` без `cwd` (→
-   `config.ROOT`, `orchestrator/acceptance.py:593`). AC-6 (SPEC.md:69-71)
-   нельзя выполнить «только передачей профиля» (SPEC.md:46-47). Нужно
-   решение: от какого дерева отсчитывается `workdir` (рабочая копия задачи
-   `wt_path` только для `pytest-own`).
-3. AC-3, AC-6, AC-7, AC-8 (SPEC.md:60, :69, :72, :75) не требуют проверить
-   каждую из двух точек или ветвей (`fsm_merge_gate.py:965`/`:967`;
-   `amend.py:545-549`/`:715-718`; `pull.py:664`/`:666`;
-   `test_integrity.py:1429`/`:1527`). Мутация в непроверенной точке
-   проходит. У AC-3 не названо условие «после применённого приложения»
-   (`fsm_merge_gate.py:958-960`).
-4. Ключ итога `suite-run` (`orchestrator/suite_run.py:511`, `:533`)
-   требование 1 называет (SPEC.md:34-35), а AC-4 (SPEC.md:63-64) его не
-   проверяет.
-5. SPEC.md:18-20 и :30-31: у `run_plank` и `two_sided.run` канал профиля —
-   параметр `profile` (`orchestrator/acceptance.py:1096-1097`,
-   `orchestrator/advance_gates/two_sided.py:319-320`), а не `command`. В
-   точках, где сегодня ничего не передаётся, формула «тем же каналом, что
-   `command`» пуста.
-6. Поведение внешних проектов с `runner: pult-pytest` в `pull`, `amend`,
-   `plank-run` и двустороннем прогоне (сегодня — команда пульта) SPEC не
-   задаёт. Требование 4 и AC-10 (SPEC.md:48-49, :81-82) защищают только
-   артель.
+1. Требование 4 (SPEC.md:69-71), AC-10 (SPEC.md:113-115) и «Не входит»
+   (SPEC.md:157-159) называют сегодняшнее поведение внешнего проекта с
+   `runner: pult-pytest` «командой пульта». В гейте мержа
+   (`orchestrator/fsm_merge_gate.py:819-820`), `suite-run`
+   (`orchestrator/suite_run.py:277-283`), планке `in_dev`
+   (`orchestrator/advance_gates/acceptance.py:393`) и сухом сборе
+   `tests_writing` (`orchestrator/fsm_advance.py:594`) это сегодня команда
+   **профиля**, и тест закрепляет её:
+   `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py:456`. Предлагаю
+   считать главным «не изменились относительно main» (AC-10), а скобку
+   «команда пульта» — верной только для `pull`, `amend`, `plank-run` и
+   двустороннего прогона.
+2. AC-10 (SPEC.md:113-115): мутацию «`Profile` передаётся безусловно» в
+   `pull`, `amend`, `plank-run` и двустороннем прогоне ловит только тест,
+   где у внешнего `pult-pytest` команда профиля отличается от
+   `python3 -m pytest`. На артели такая мутация невидима: её профиль —
+   `[python3, -m, pytest]` (`targets.yaml:46`), а `python3` подменяется
+   (`orchestrator/acceptance.py:62-63`). Это указание автору тестов, не
+   правка SPEC.
