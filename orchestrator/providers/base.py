@@ -186,14 +186,18 @@ class RoleExecutorProvider(object):
     #: провайдеров вместе с разбором вывода.
     live_smoke_in_doctor = True
 
-    def command(self, model=None, docs_dir=None):
+    def command(self, model=None, docs_dir=None, project=None):
         """Argv шага роли. `model` — идентификатор модели роли либо
         `None` (дефолт CLI): аргумент, а не поле объекта, потому что
         модель у каждой роли своя, а провайдер один на пульт.
 
         `docs_dir` — каталог документов задачи, открываемый роли на запись
         дополнительно к рабочему каталогу (`--add-dir`, ADR-0021 пп. 2, 7,
-        этап 1); `None` — без флага (офлайн-смок изоляции, `role_cmd()`)."""
+        этап 1); `None` — без флага (офлайн-смок изоляции, `role_cmd()`).
+
+        `project` — проект задачи шага (SPEC 01M545EB0A9F191WTDSPCH36GA,
+        требование 7): провайдер вправе сузить права роли задачи внешнего
+        проекта; `None` — вне пути шага (`role_cmd()`, офлайн-смок)."""
         raise NotImplementedError
 
     def environment(self, role=None, task_id=None):

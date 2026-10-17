@@ -111,6 +111,17 @@ MODEL_REQUIRED_VERSION_RE = re.compile(
     r"version\s+(\d+\.\d+\.\d+)\s+or newer is required", re.IGNORECASE)
 
 
+def external_allowed_tools() -> str:
+    """Белый список шага роли задачи внешнего проекта: git и только
+    `python3 <корень пульта>/orchestrator/artel.py` — ровно та строка,
+    которую печатают миссии шага (`role_prompt`, `knowledge_cards`):
+    роли проекта нужны `knowledge`, `suite-run` и `plank-run`, а не
+    произвольный `python3` (ADR-0023, вторая поправка 16.10, п.3)."""
+    from .. import config
+    artel_py = config.ROOT / "orchestrator" / "artel.py"
+    return f"Bash(git:*),Bash(python3 {artel_py}:*)"
+
+
 class ClaudeProvider(RoleExecutorProvider):
     """Claude Code CLI как исполнитель роли."""
 
@@ -119,7 +130,7 @@ class ClaudeProvider(RoleExecutorProvider):
     def cli_tool(self):
         return CliTool(CLI_NAME, CLI_MINIMUM, CLI_VERSION_COMMAND)
 
-    def command(self, model=None, docs_dir=None):
+    def command(self, model=None, docs_dir=None, project=None):
         """Argv шага роли: сборка без побочных эффектов, один источник
         истины для реального запуска (`runner._spawn_and_wait`), для
         зеро-арг `runner.role_cmd()` и для офлайн-сверки
@@ -150,8 +161,17 @@ class ClaudeProvider(RoleExecutorProvider):
         1): рабочий каталог шага — рабочая копия кода, документы задачи
         лежат вне её, и без флага `acceptEdits` не дал бы роли записать
         свой артефакт. Флаг — до `--model`: тот остаётся последним.
+
+        `project` — проект задачи шага: роли задачи внешнего проекта
+        `python3` открыт только на команды пульта `artel.py` по
+        абсолютному пути (`external_allowed_tools`, SPEC
+        01M545EB0A9F191WTDSPCH36GA, требование 5); артели и вызову без
+        проекта — прежний `ALLOWED_TOOLS` (требование 6).
         """
-        from .. import config, runner
+        from .. import config, repo_context, runner
+        allowed = (ALLOWED_TOOLS
+                   if project is None or repo_context.is_artel(project)
+                   else external_allowed_tools())
         cmd = [
             # `claude -p` без аргумента читает промпт со стандартного входа.
             runner.declared_tool_path(CLI_NAME),
@@ -162,7 +182,7 @@ class ClaudeProvider(RoleExecutorProvider):
             # иначе CLI выходит с rc=1.
             "--output-format", "stream-json", "--verbose",
             # белый список вместо полного Bash
-            "--allowedTools", ALLOWED_TOOLS,
+            "--allowedTools", allowed,
             # изоляция от project-/local-слоя клиентских настроек
             # репозитория (хуки, MCP) — SPEC T058, инцидент T046
             "--setting-sources", config.AGENT_SETTING_SOURCES,
