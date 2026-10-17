@@ -29,7 +29,8 @@ from xml.etree import ElementTree
 
 from scripts import guard
 
-from . import agent_log, artifact_branch, ci, config, gitcmd, stack, suite_lock
+from . import (agent_log, artifact_branch, ci, config, gitcmd, stack,
+               suite_lock, targets)
 
 
 def _pytest_command(*args: str, command: list[str] | None = None) -> list[str]:
@@ -87,6 +88,157 @@ def _pytest_env() -> Iterator[dict[str, str]]:
         yield env
     finally:
         _remove_cache_dir(cache_dir)
+
+
+# ------------------------------------------------ раннер `pytest-own`
+#
+# Профиль тестов проекта с `runner: pytest-own` (ADR-0023, вторая поправка
+# 16.10.2026; SPEC 01M52EEFNA1WH31962HVNT0YZ9) приходит в места запуска
+# каналом `command` (`run_plank` и `two_sided.run` — параметром `profile`):
+# команда профиля как есть в `workdir`, чистое окружение, свой сеанс и
+# снятие группы процессов вместо `-p timeout`. Профиль `pult-pytest` —
+# только его команда: путь артели не меняется ни argv, ни `cwd`, ни
+# окружением.
+
+# Начало текста отказа запуска: `workdir` профиля не каталог внутри дерева
+# прогона (требование 3) — pytest не запускается.
+WORKDIR_REFUSAL = "отказ запуска pytest-own: workdir профиля"
+
+# Переменные окружения пульта, которые прогон `pytest-own` наследует
+# (требование 5); `TMPDIR` — всегда, `HOME` — свой на каждый прогон.
+_OWN_INHERITED_VARS = ("PATH", "LANG", "LC_ALL")
+
+# Предел дочитывания вывода после снятия группы: потомок, ушедший в
+# собственный сеанс, держал бы канал вывода открытым бесконечно.
+_OWN_DRAIN_SEC = 10
+
+# Код выхода `run_plank` на отказе запуска: прогона не было, и это не
+# таймаут (`None`) и не зелёный 0; 4 — код pytest «ошибка запуска».
+REFUSED_EXIT_CODE = 4
+
+
+def _own(command):
+    """Профиль `pytest-own`, переданный каналом `command`; иначе `None`."""
+    return command if getattr(command, "runner", None) == \
+        targets.PROFILE_RUNNER_OWN else None
+
+
+def _head(command) -> list[str] | None:
+    """Начало команды раннера пульта: у профиля `pult-pytest` — его
+    команда, у списка и `None` — они сами (`_pytest_command`)."""
+    if command is None or isinstance(command, (list, tuple)):
+        return command
+    return list(command.command)
+
+
+def _place_command(command, *args: str) -> list[str]:
+    """argv места запуска: у `pytest-own` — команда профиля как есть,
+    аргументы места и `-p no:cacheprovider` (без интерпретатора пульта и
+    без `-p timeout`); иначе `_pytest_command`."""
+    own = _own(command)
+    if own is None:
+        return _pytest_command(*args, command=_head(command))
+    return [*own.command, *args, "-p", "no:cacheprovider"]
+
+
+def _place_env(command):
+    """Окружение прогона места: `_own_env` у `pytest-own`, иначе
+    `_pytest_env` (копия окружения пульта)."""
+    own = _own(command)
+    return _pytest_env() if own is None else _own_env(own)
+
+
+@contextlib.contextmanager
+def _own_env(profile) -> Iterator[dict[str, str]]:
+    """Чистое окружение прогона `pytest-own` (требование 5): `PATH`,
+    `LANG`/`LC_ALL` пульта (если заданы), `TMPDIR`, `test_profile.env`,
+    затем свой `HOME` и `PYTHONPYCACHEPREFIX` (ADR-0023: обязателен на
+    каждом прогоне) — оба новые каталоги на этот прогон, убираются на
+    выходе из блока, в том числе по таймауту и исключению. Служебные
+    переменные места (`PYTHONUNBUFFERED`, плагин двустороннего прогона)
+    дописывает вызывающий, как и у `_pytest_env`."""
+    home = tempfile.mkdtemp(prefix="artel-own-home-")
+    cache_dir = tempfile.mkdtemp(prefix="artel-pycache-")
+    try:
+        env = {name: os.environ[name] for name in _OWN_INHERITED_VARS
+               if name in os.environ}
+        env["TMPDIR"] = os.environ.get("TMPDIR") or tempfile.gettempdir()
+        env.update(profile.env)
+        env["HOME"] = home
+        env["PYTHONPYCACHEPREFIX"] = cache_dir
+        yield env
+    finally:
+        _remove_cache_dir(cache_dir)
+        _remove_cache_dir(home)
+
+
+def _own_cwd(profile, tree: Path) -> tuple[Path, str]:
+    """(рабочий каталог прогона, текст отказа) — `workdir` профиля в
+    дереве `tree`. Сверка по `realpath` в момент вызова (требование 3):
+    ссылка, ведущая из дерева наружу, — отказ, как и не каталог."""
+    tree = Path(tree)
+    cwd = tree / profile.workdir if profile.workdir else tree
+    real_tree = os.path.realpath(tree)
+    real = os.path.realpath(cwd)
+    if real != real_tree and not real.startswith(real_tree.rstrip(os.sep) + os.sep):
+        return cwd, (f"{WORKDIR_REFUSAL} «{profile.workdir}» ведёт за пределы "
+                     f"дерева прогона {tree} (realpath: {real}) — pytest не "
+                     f"запускался")
+    if not os.path.isdir(real):
+        return cwd, (f"{WORKDIR_REFUSAL} «{profile.workdir}» — не каталог в "
+                     f"дереве прогона {tree} — pytest не запускался")
+    return cwd, ""
+
+
+def _own_target(profile, arg: str, *, node: bool = False) -> str:
+    """Путь `arg` от корня дерева — тот же путь из `workdir` (требование
+    4). Абсолютный путь и флаг — как есть; id теста (`::`) — как есть
+    (его печатает pytest из `workdir`), а при `node` (узел, собранный
+    пультом из пути от корня) переводится его часть пути."""
+    path, sep, rest = arg.partition("::")
+    if not profile.workdir or os.path.isabs(path) or arg.startswith("-") \
+            or (sep and not node):
+        return arg
+    return os.path.relpath(path, profile.workdir) + sep + rest
+
+
+def _run_in_session(argv: list[str], cwd: Path, env: dict,
+                    timeout: float) -> subprocess.CompletedProcess:
+    """Прогон `pytest-own` в собственном сеансе (требование 6) — замена
+    `subprocess.run(…, capture_output=True, timeout=…)` с тем же
+    контрактом исходов, но по таймауту и на любом исключении снимается
+    вся группа процессов: дочерние процессы команды профиля не
+    переживают прогон."""
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc.pid)
+        try:
+            stdout, stderr = proc.communicate(timeout=_OWN_DRAIN_SEC)
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            stdout = stderr = ""
+            proc.kill()
+            proc.wait()
+        raise subprocess.TimeoutExpired(argv, timeout, output=stdout,
+                                        stderr=stderr) from None
+    except BaseException:
+        _kill_group(proc.pid)
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def _run_pytest(command, argv: list[str], cwd: Path, env: dict,
+                timeout: float) -> subprocess.CompletedProcess:
+    """Вызов pytest места запуска: у `pytest-own` — `_run_in_session`,
+    иначе прежний `subprocess.run`."""
+    if _own(command) is not None:
+        return _run_in_session(argv, cwd, env, timeout)
+    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True,
+                          text=True, timeout=timeout)
 
 
 # Попытки уборки каталога кеша: на таймауте `subprocess.run` убивает
@@ -430,25 +582,32 @@ def run(tdir: Path, cwd: Path | None = None,
     исполняются тем же вызовом pytest, и при пустой планке тоже.
 
     `command` — начало команды из профиля тестов проекта
-    (`_pytest_command`).
+    (`_pytest_command`) либо сам профиль (`pytest-own`: команда профиля в
+    `workdir`, пути от `cwd` переведены к нему; `workdir` вне дерева —
+    отказ без прогона).
     """
     tests_dir = tdir / "acceptance_tests"
     targets = _run_targets(tests_dir, extra)
     if not targets:
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
     run_cwd = cwd if cwd is not None else config.ROOT
+    own, refusal = _own(command), ""
+    if own is not None:
+        run_cwd, refusal = _own_cwd(own, run_cwd)
+        targets = [_own_target(own, t) for t in targets]
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
+    if refusal:
+        return False, f"{location_note}\n{refusal}"
     with tempfile.TemporaryDirectory(prefix="artel-file-times-") as tmp:
         report = Path(tmp) / "junit.xml"
         report_args = [f"--junitxml={report}"] if file_times is not None else []
         try:
-            with _pytest_env() as env:
-                res = subprocess.run(
-                    _pytest_command(*targets, *report_args, command=command),
-                    cwd=run_cwd, env=env, capture_output=True, text=True,
-                    timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+            with _place_env(command) as env:
+                res = _run_pytest(
+                    command, _place_command(command, *targets, *report_args),
+                    run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
         except subprocess.TimeoutExpired as exc:
             if file_times is not None:
                 file_times.update(_junit_file_times(report, extra))
@@ -548,16 +707,21 @@ def collect(tdir: Path, cwd: Path | None = None,
     if not targets:
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
     run_cwd = cwd if cwd is not None else config.ROOT
+    own, refusal = _own(command), ""
+    if own is not None:
+        run_cwd, refusal = _own_cwd(own, run_cwd)
+        targets = [_own_target(own, t) for t in targets]
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
+    if refusal:
+        return False, f"{location_note}\n{refusal}"
     try:
-        with _pytest_env() as env:
-            res = subprocess.run(
-                _pytest_command(*targets, "--collect-only", "-q",
-                                command=command),
-                cwd=run_cwd, env=env, capture_output=True, text=True,
-                timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+        with _place_env(command) as env:
+            res = _run_pytest(
+                command, _place_command(command, *targets, "--collect-only",
+                                        "-q"),
+                run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
         return False, (f"{location_note}\nсбор превысил "
@@ -657,17 +821,26 @@ def run_repeat(files: list[str], cwd: Path,
     связывает зерно с тестом. Прогон ограничен
     `config.ACCEPTANCE_TIMEOUT_SEC`; истёкший предел и красный исход без
     названных отчётом тестов — красный повтор по каждому файлу с пометкой
-    причины: повтор, исход которого неизвестен, зелёным не считается."""
+    причины: повтор, исход которого неизвестен, зелёным не считается.
+
+    `command` — тот же контракт, что у `run()`: отказ запуска `pytest-own`
+    — красный повтор каждого файла с текстом отказа."""
+    run_cwd, args = cwd, list(files)
+    own = _own(command)
+    if own is not None:
+        run_cwd, refusal = _own_cwd(own, cwd)
+        if refusal:
+            return [RedTest(rel, (), refusal) for rel in files]
+        args = [_own_target(own, rel) for rel in files]
     with tempfile.TemporaryDirectory(prefix="artel-seed-repeat-") as tmp:
         report = Path(tmp) / "junit.xml"
         try:
-            with _pytest_env() as env:
-                res = subprocess.run(
-                    _pytest_command(*files, f"--junitxml={report}",
-                                    "-o", "junit_logging=system-out",
-                                    command=command),
-                    cwd=cwd, env=env, capture_output=True, text=True,
-                    timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+            with _place_env(command) as env:
+                res = _run_pytest(
+                    command, _place_command(command, *args,
+                                            f"--junitxml={report}", "-o",
+                                            "junit_logging=system-out"),
+                    run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
         except subprocess.TimeoutExpired as exc:
             seeds = tuple(dict.fromkeys(_SEED_LINE.findall(
                 _timeout_text(exc.stdout) + _timeout_text(exc.stderr))))
@@ -920,19 +1093,29 @@ def plank_in_code_copy(task_id: str, branch: str, code_dir: Path,
         drop_from_code_copy(task_id, code_dir)
 
 
-def run_plank(targets: list[str], cwd: Path) -> tuple[int | None, str]:
+def run_plank(targets: list[str], cwd: Path,
+              profile=None) -> tuple[int | None, str]:
     """(код выхода pytest, весь вывод) — прогон `targets` тем же раннером
     (`_pytest_command`, `_pytest_env`) и тем же таймаутом
     (`config.ACCEPTANCE_TIMEOUT_SEC`), что `run()` пульта, но для человека
     или роли, а не гейта: вывод не обрезается, код выхода не сворачивается
     в «зелёно/красно» (`plank-run`, SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
-    требование 1). `None` — прогон превысил таймаут."""
+    требование 1). `None` — прогон превысил таймаут.
+
+    `profile` — профиль тестов проекта (контракт канала `command` у
+    `run()`); не передан — раннер пульта. Отказ запуска `pytest-own` —
+    `REFUSED_EXIT_CODE` и текст отказа."""
+    run_cwd, args = cwd, list(targets)
+    own = _own(profile)
+    if own is not None:
+        run_cwd, refusal = _own_cwd(own, cwd)
+        if refusal:
+            return REFUSED_EXIT_CODE, refusal
+        args = [_own_target(own, t) for t in targets]
     try:
-        with _pytest_env() as env:
-            res = subprocess.run(
-                _pytest_command(*targets),
-                cwd=cwd, env=env, capture_output=True, text=True,
-                timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+        with _place_env(profile) as env:
+            res = _run_pytest(profile, _place_command(profile, *args),
+                              run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         return None, (_timeout_text(exc.stdout) + _timeout_text(exc.stderr)
                       + f"\nпрогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с "
@@ -1115,7 +1298,8 @@ def _full_suite_detail(outcome: str, digest: str,
 def run_full_suite(root: Path, command: list[str] | None = None,
                    targets: tuple = ("tests",), extra: tuple = (),
                    log: Path | None = None,
-                   limit: tuple[int, str] | None = None) -> tuple[bool, str]:
+                   limit: tuple[int, str] | None = None,
+                   test_ids: tuple = ()) -> tuple[bool, str]:
     """(зелено, ПОЛНЫЙ вывод прогона) — прогон ПОЛНОГО пакета `tests/`
     каталога `root` через pytest (SPEC T066, требование 2в; переход раннера —
     SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
@@ -1163,24 +1347,55 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     без задачи (`notes`) пишет ожидание в вывод; процесс, уже держащий
     замок (`full_suite` гейта, фоновый процесс `suite-run`), идёт без
     второго взятия.
+
+    `command` — профиль `pytest-own` (SPEC 01M52EEFNA1WH31962HVNT0YZ9,
+    требования 2-4): команда профиля без параллели пульта, в `workdir`;
+    цель полного набора — `long_lived_dir` (и когда передано `tests`),
+    прочие пути от корня переведены к `workdir`, id тестов — как есть;
+    каталога `long_lived_dir` нет — «тестов нет»; `workdir` вне дерева —
+    «прогон не начат» без прогона.
+
+    `test_ids` — id упавших тестов (`suite-run --failed`, ANSWER-1 SPEC
+    01M52EEFNA1WH31962HVNT0YZ9) в той форме, в какой их напечатал pytest:
+    идут в argv после целей без перевода к `workdir`.
     """
     global _last_full_suite_metrics, _last_process_snapshot, _last_run_completed_at
     observe = _observe_full_suite
     _last_full_suite_metrics = None
     _last_process_snapshot = None
     _last_run_completed_at = None
-    tests_dir = root / "tests"
-    if not tests_dir.is_dir():
-        return False, FULL_SUITE_NO_TESTS_NOTE
-    argv = _pytest_command(*targets, command=command) + [
-        "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist", *extra]
+    full_run = tuple(targets) == ("tests",) and not test_ids
+    own = _own(command)
+    run_cwd = root
+    if own is None:
+        tests_dir = root / "tests"
+        if not tests_dir.is_dir():
+            return False, FULL_SUITE_NO_TESTS_NOTE
+        argv = _pytest_command(*targets, *test_ids, command=_head(command)) + [
+            "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist", *extra]
+    else:
+        run_cwd, refusal = _own_cwd(own, root)
+        if refusal:
+            return False, f"{FULL_SUITE_NOT_STARTED}: {refusal}"
+        if not (root / own.long_lived_dir).is_dir():
+            return False, FULL_SUITE_NO_TESTS_NOTE
+        args = [own.long_lived_dir if t == "tests" else t for t in targets]
+        argv = _place_command(own, *(_own_target(own, a) for a in args),
+                              *test_ids, *extra)
     limit = limit or (config.FULL_SUITE_TIMEOUT_SEC, "config")
     with _machine_lock(None, limit) as holder:
         if holder is not None:
             return False, _not_started_note(holder)
+        if own is not None:
+            # Ожидание замка бывает долгим: `realpath` сверяется заново
+            # перед самим прогоном (требование 3, «в момент прогона»).
+            run_cwd, refusal = _own_cwd(own, root)
+            if refusal:
+                return False, f"{FULL_SUITE_NOT_STARTED}: {refusal}"
         start = time.monotonic()
         load_start = os.getloadavg() if observe else (0.0, 0.0)
-        green, output = _run_full_suite_now(argv, root, log, limit, observe)
+        green, output = _run_full_suite_now(argv, run_cwd, log, limit, observe,
+                                            profile=own)
         duration = time.monotonic() - start
         timed_out = output.startswith("прогон полного набора tests/ превысил ")
         if observe:
@@ -1190,7 +1405,7 @@ def run_full_suite(root: Path, command: list[str] | None = None,
             duration = _last_full_suite_metrics["duration_seconds"]
         # Повтор упавших (`suite-run --failed`) — не полный прогон: его
         # длительность с пределом полного набора не сравнивается.
-        if tuple(targets) == ("tests",):
+        if full_run:
             _signal_near_limit(root, duration, limit, _last_full_suite_metrics)
         if observe and timed_out:
             head, newline, rest = output.partition("\n")
@@ -1313,14 +1528,19 @@ def _journal_lock_wait(task_id: str | None, holder: dict,
 def _run_full_suite_now(argv: list[str], root: Path,
                         log: Path | None,
                         limit: tuple[int, str],
-                        observe: bool = False) -> tuple[bool, str]:
+                        observe: bool = False,
+                        profile=None) -> tuple[bool, str]:
     """Сам прогон `run_full_suite` — замок уже взят; предел
-    `config.FULL_SUITE_TIMEOUT_SEC` отсчитывается отсюда."""
+    `config.FULL_SUITE_TIMEOUT_SEC` отсчитывается отсюда. `root` — `cwd`
+    прогона (у `pytest-own` — `workdir`); `profile` — профиль
+    `pytest-own`: его окружение и снятие группы процессов и без
+    наблюдения (`_run_pytest`)."""
     if log is not None:
-        return _run_full_suite_to_log(argv, root, log, limit, observe)
+        return _run_full_suite_to_log(argv, root, log, limit, observe,
+                                      profile=profile)
     if observe:
         global _last_process_snapshot, _last_run_completed_at
-        with _pytest_env() as env:
+        with _place_env(profile) as env:
             proc = subprocess.Popen(
                 argv, cwd=root, env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -1341,10 +1561,8 @@ def _run_full_suite_now(argv: list[str], root: Path,
         _last_process_snapshot = _process_snapshot(proc.pid)
         return proc.returncode == 0, stdout + stderr
     try:
-        with _pytest_env() as env:
-            res = subprocess.run(
-                argv, cwd=root, env=env, capture_output=True, text=True,
-                timeout=limit[0])
+        with _place_env(profile) as env:
+            res = _run_pytest(profile, argv, root, env, limit[0])
     except subprocess.TimeoutExpired as exc:
         output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
         return False, f"{_full_suite_timeout_note(limit)}\n{output}"
@@ -1361,14 +1579,16 @@ def _kill_group(pgid: int) -> None:
 def _run_full_suite_to_log(argv: list[str], root: Path,
                            log: Path,
                            limit: tuple[int, str],
-                           observe: bool = False) -> tuple[bool, str]:
+                           observe: bool = False,
+                           profile=None) -> tuple[bool, str]:
     """Прогон `run_full_suite` с выводом прямо в файл `log`. Вывод
     читается из файла байтами с заменой не-UTF-8: чужой проект вправе
     печатать что угодно, а разбор не имеет права уронить фоновый прогон.
     `PYTHONUNBUFFERED` — иначе на пределе времени SIGKILL съел бы
-    неслитый буфер, и числа успевшей части пропали бы (требование 6)."""
+    неслитый буфер, и числа успевшей части пропали бы (требование 6).
+    `root`/`profile` — тот же контракт, что у `_run_full_suite_now`."""
     timed_out = False
-    with _pytest_env() as env, open(log, "wb") as fh:
+    with _place_env(profile) as env, open(log, "wb") as fh:
         env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(argv, cwd=root, env=env, stdout=fh,
                                 stderr=subprocess.STDOUT,
@@ -1608,9 +1828,19 @@ def _with_tree_db_files(root: Path, tree: str) -> str:
 
 def suite_result_key(tree: str, command: list[str] | None = None,
                      *, base: bool = False) -> str | None:
-    """Дерево плюс Python, установленные пакеты и команда pytest."""
+    """Дерево плюс Python, установленные пакеты и команда pytest.
+
+    `command` — и профиль (канал `run_full_suite`): у `pult-pytest` ключ
+    — ключ его команды, байт в байт прежний; у `pytest-own` — argv его
+    прогона (цель `long_lived_dir` из `workdir`, base-ключ её вычищает)
+    плюс `runner`, `workdir` и `env` (SPEC 01M52EEFNA1WH31962HVNT0YZ9,
+    требование 7)."""
     if not isinstance(tree, str) or not re.fullmatch(r"[0-9a-f]{40}", tree):
         return None
+    own = _own(command)
+    if own is not None:
+        return _own_suite_result_key(tree, own, base)
+    command = _head(command)
     try:
         argv = _pytest_command(command=command) if base else (
             _pytest_command("tests", command=command) + [
@@ -1633,6 +1863,27 @@ def suite_result_key(tree: str, command: list[str] | None = None,
                           for d in importlib.metadata.distributions())
         data = {"tree": tree, "python": sys.version, "packages": packages,
                 "command": argv}
+        return hashlib.sha256(json.dumps(data, sort_keys=True,
+                                         ensure_ascii=False).encode()).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _own_suite_result_key(tree: str, profile, base: bool) -> str | None:
+    """Ключ итога полного набора `pytest-own` (`suite_result_key`)."""
+    try:
+        target = _own_target(profile, profile.long_lived_dir)
+        argv = _place_command(profile) if base else \
+            _place_command(profile, target)
+        if base:
+            inside = target.rstrip("/") + "/"
+            argv = [arg for arg in argv
+                    if arg != target and not arg.startswith(inside)]
+        packages = sorted((d.metadata["Name"].lower(), d.version)
+                          for d in importlib.metadata.distributions())
+        data = {"tree": tree, "python": sys.version, "packages": packages,
+                "command": argv, "runner": profile.runner,
+                "workdir": profile.workdir, "env": dict(profile.env)}
         return hashlib.sha256(json.dumps(data, sort_keys=True,
                                          ensure_ascii=False).encode()).hexdigest()
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
@@ -1844,8 +2095,35 @@ def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
     if isinstance(conn, sqlite3.Connection):
         store.journal(conn, task_id, actor, "полный набор локально",
                       " ".join(reason.splitlines()))
+    own = _task_own_profile(conn, task_id)
+    if own is not None:
+        return (full_suite(root, task_id, command=own, fresh=True) if fresh
+                else full_suite(root, task_id, command=own))
     return (full_suite(root, task_id, fresh=True) if fresh
             else full_suite(root, task_id))
+
+
+def _task_own_profile(conn, task_id: str):
+    """Профиль `pytest-own` проекта задачи для полного набора приёмки
+    (SPEC 01M52EEFNA1WH31962HVNT0YZ9, требование 1); `None` — у проекта
+    `pult-pytest`, профиля нет или он не прочитан: тогда `full_suite`
+    зовётся прежней формой. Строка задачи не прочитана — проект артели,
+    тот же откат, что у `store.task_target` для строки без проекта."""
+    from . import project_profile, repo_context, store  # store -> ... -> acceptance
+    target = config.DEFAULT_TARGET
+    if isinstance(conn, sqlite3.Connection):
+        try:
+            target = store.task_target(conn, task_id)
+        except (sqlite3.Error, TypeError, IndexError, KeyError):
+            pass
+    answer = repo_context.profile_of(target)
+    if answer.outcome != repo_context.PROFILE_PRESENT:
+        return None
+    try:
+        profile = project_profile.Profile.from_values(answer.values)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return _own(profile)
 
 
 def summary(tdir: Path, branch: str | None = None,

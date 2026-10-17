@@ -220,19 +220,36 @@ def _location(records: list, nodeid: str) -> dict:
 
 
 def _run_side(tree: Path, nodes: list, plugin_dir: Path,
-              report: Path, timeout: float) -> tuple:
+              report: Path, timeout: float, profile=None) -> tuple:
     """(записи отчёта, причина сбоя) одного прогона pytest по `nodes` в
     дереве `tree`. Команда и окружение — те же, что у прогона планки
-    (`acceptance._pytest_command`/`_pytest_env`)."""
-    cmd = acceptance._pytest_command(*nodes, f"--rootdir={tree}",
-                                     "-p", PLUGIN_MODULE)
-    with acceptance._pytest_env() as env:
+    (`acceptance._pytest_command`/`_pytest_env`).
+
+    `profile` `pytest-own` (SPEC 01M52EEFNA1WH31962HVNT0YZ9): команда
+    профиля в `workdir` дерева стороны, пути узлов переведены к нему
+    (`--rootdir` — по-прежнему дерево: id узлов отчёта — от его корня;
+    id от `workdir` приводит к корню `_root_form`), чистое окружение без `PYTHONPATH` пульта, свой сеанс; `workdir` вне
+    дерева — сбой стороны без прогона."""
+    own = acceptance._own(profile)
+    cwd = tree
+    if own is not None:
+        cwd, refusal = acceptance._own_cwd(own, tree)
+        if refusal:
+            return [], refusal
+        nodes = [acceptance._own_target(own, n, node=True) for n in nodes]
+    cmd = acceptance._place_command(profile, *nodes, f"--rootdir={tree}",
+                                    "-p", PLUGIN_MODULE)
+    with acceptance._place_env(profile) as env:
         env["PYTHONPATH"] = os.pathsep.join(
             p for p in (str(plugin_dir), env.get("PYTHONPATH", "")) if p)
         env[REPORT_ENV] = str(report)
         try:
-            res = subprocess.run(cmd, cwd=tree, env=env, capture_output=True,
-                                 text=True, timeout=timeout)
+            if own is not None:
+                res = acceptance._run_in_session(cmd, cwd, env, timeout)
+            else:
+                res = subprocess.run(cmd, cwd=cwd, env=env,
+                                     capture_output=True, text=True,
+                                     timeout=timeout)
         except subprocess.TimeoutExpired:
             return [], f"{TIMEOUT} прогона pytest ({timeout:g} с)"
         except OSError as exc:
@@ -252,7 +269,25 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
         # (ошибка аргументов, плагина, конфигурации): причина — его вывод.
         tail = " ".join(((res.stdout or "") + (res.stderr or "")).split())
         return [], f"pytest не отчитал ни одного узла: {tail[-300:]}"
+    if own is not None:
+        for record in records:
+            record["nodeid"] = _root_form(record.get("nodeid") or "", tree, cwd)
+            location = record.get("location")
+            if isinstance(location, dict) and location.get("path"):
+                location["path"] = _root_form(location["path"], tree, cwd)
     return records, ""
+
+
+def _root_form(nodeid: str, tree: Path, cwd: Path) -> str:
+    """id узла (или путь) отчёта в форме от корня дерева `tree` (ANSWER-1
+    SPEC 01M52EEFNA1WH31962HVNT0YZ9, п.2): команда профиля, сама задавшая
+    pytest свой корень (`workdir`), даёт id от него — такой id, чей файл
+    есть от `cwd`, но не от корня, переводится; прочие — как есть."""
+    path, sep, rest = nodeid.partition("::")
+    if not path or os.path.isabs(path) or (tree / path).exists() \
+            or not (cwd / path).exists():
+        return nodeid
+    return os.path.relpath(cwd / path, tree).replace(os.sep, "/") + sep + rest
 
 
 def _failed(methods: list, reason: str, head_sha: str,
@@ -282,14 +317,17 @@ def _side_timeout(deadline: float | None) -> float:
 
 
 def run(repo: Path, code_branch: str, base_sha: str, methods: list,
-        deadline: float | None = None) -> Outcome:
+        deadline: float | None = None, profile=None) -> Outcome:
     """Двусторонний прогон `methods` (список `Method`) на деревьях базы
     сравнения `base_sha` и головы `code_branch` в клоне `repo`.
 
     `deadline` (`time.monotonic()`) — предел наблюдения (SPEC
     01M4NZ5W9ZTKGTW7DGZQGMP2GP, требование 6): сторона, для которой
     остатка нет, не запускается и получает исход `SIDE_LIMIT`. Гейт зовёт
-    без него — таймаут стороны прежний."""
+    без него — таймаут стороны прежний.
+
+    `profile` — профиль тестов проекта от вызывающего (`_run_side`); не
+    передан — раннер пульта, как до SPEC 01M52EEFNA1WH31962HVNT0YZ9."""
     head_sha = gitcmd.branch_head_sha(code_branch, repo=repo)
     if not head_sha:
         return _failed(methods, f"git не ответил на голову ветки {code_branch}",
@@ -332,7 +370,7 @@ def run(repo: Path, code_branch: str, base_sha: str, methods: list,
             else:
                 records, failure = _run_side(
                     tree, sorted(set(nodes.values())), plugin_dir, report,
-                    timeout)
+                    timeout, profile)
             for method in methods:
                 if failure:
                     reason = failure
