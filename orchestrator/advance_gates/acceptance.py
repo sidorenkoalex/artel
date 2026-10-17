@@ -146,7 +146,7 @@ def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
 
 
 def _seed_repeats_escalate(conn, task_id: str, t, long_lived: list[str],
-                           run_cwd: Path, command: list[str] | None) -> bool:
+                           run_cwd: Path, command) -> bool:
     """Повторы долгоживущих файлов задачи, несущих случайное зерно, после
     ЗЕЛЁНОГО первого прогона (SPEC 01M48FRD9RJDBBVT2SN0FY5G2A, требование
     2): каждый файл с импортом `random` гоняется ещё
@@ -390,7 +390,10 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
                                      project_profile.CHECK_LONG_LIVED_RUN,
                                      decision)
     else:
-        command = list(decision.profile.command)
+        # `pytest-own` — профилем целиком, и в прогон, и в повторы с
+        # зерном (SPEC 01M52EEHSRD93WMPHWB5VJYRKD); `pult-pytest` — список.
+        command = (acceptance._own(decision.profile)
+                   or list(decision.profile.command))
         digests, _reason = long_lived_manifest(task_id, t, target)
         if digests is not None and t["tests_locked_sha"]:
             long_lived = sorted(digests)

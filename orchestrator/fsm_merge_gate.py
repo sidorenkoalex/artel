@@ -817,7 +817,10 @@ def _full_suite_command(conn, task_id: str, paths: list[str], scratch: Path,
         return _appendix_needs_full_suite(paths), None
     decision = project_profile.decide(ctx.target)
     if decision.profile is not None:
-        return True, list(decision.profile.command)
+        # `pytest-own` — профилем целиком (argv, `cwd`, окружение по нему,
+        # SPEC 01M52EEHSRD93WMPHWB5VJYRKD); `pult-pytest` — прежний список.
+        return True, (acceptance._own(decision.profile)
+                      or list(decision.profile.command))
     if decision.refusal:
         store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
                       decision.refusal)

@@ -13,7 +13,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import acceptance, appendix_tree, config, store, suite_run
+from orchestrator import (acceptance, appendix_tree, config, project_profile,
+                          store, suite_run, targets)
 from tests.sandbox import RealGitSandbox, TmpRootTest
 
 XDIST_PARTIAL = """\
@@ -397,6 +398,53 @@ class SuiteRunJournalTest(TmpRootTest):
                 self.assertEqual("нагрузка: load average" in report, timeout)
                 if timeout:
                     self.assertIn("pid 42 410.0% foreign", report)
+
+
+class FailedIdsByProfileTest(TmpRootTest):
+
+    def test_failed_rerun_ids_go_as_test_ids_only_for_own_profile(self):
+        """Повтор упавших у `pytest-own` передаёт id каналом `test_ids`, у
+        списка команды — прежними целями.
+
+        Ловит мутацию: у `pytest-own` id упавших идут целями `targets` —
+        `run_full_suite` переводит их пути к `workdir`, хотя pytest
+        напечатал их уже из `workdir`; либо `test_ids` уходят и списку
+        команды — меняется вызов `pult-pytest`.
+        """
+        store.create_schema(store.db())
+        task_id = "T001"
+        store.insert_task(store.db(), task_id, "Прогон", "in_dev",
+                          "task/t001-progon", config.DEFAULT_TARGET, 25.0)
+        tree = appendix_tree.SuiteTree(self.root, "", "", "")
+        failed = ["checks/test_x.py::test_x", "checks/test_y.py::test_y"]
+        own = project_profile.Profile(
+            command=("python3", "-m", "pytest"), long_lived_dir="sub/checks",
+            long_lived_name="test_<id>_<name>.py", weakening_scope=(),
+            mutation_claim_scope=(), runner=targets.PROFILE_RUNNER_OWN,
+            workdir="sub")
+        cases = ((own, (), tuple(failed)), (["pytest"], tuple(failed), None))
+        for number, (command, targets_seen, ids_seen) in enumerate(cases, 1):
+            with self.subTest(command=command):
+                with mock.patch.object(suite_run, "_profile_command",
+                                       return_value=(command, "")), \
+                        mock.patch.object(suite_run.project_profile,
+                                          "full_suite_limit",
+                                          return_value=(10, "config")), \
+                        mock.patch.object(suite_run.appendix_tree, "suite_tree",
+                                          return_value=contextlib.nullcontext(tree)), \
+                        mock.patch.object(acceptance, "run_full_suite",
+                                          return_value=(True, "2 passed in 0.1s")
+                                          ) as run, \
+                        mock.patch.object(suite_run, "_base",
+                                          return_value=(None, "base unavailable")), \
+                        mock.patch.object(suite_run, "_read_failed",
+                                          return_value=failed):
+                    suite_run._run(task_id, number, suite_run.MODE_FAILED,
+                                   self.root / f"run-{number}.log")
+                kwargs = run.call_args.kwargs
+                self.assertIs(kwargs["command"], command)
+                self.assertEqual(tuple(kwargs["targets"]), targets_seen)
+                self.assertEqual(kwargs.get("test_ids"), ids_seen)
 
 
 if __name__ == "__main__":

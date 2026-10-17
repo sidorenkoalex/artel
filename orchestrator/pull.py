@@ -660,10 +660,15 @@ def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
             print(f"[{task_id}] переход отклонён: {detail}")
             return Refused(detail)
         long_lived = sorted(digests) if t["tests_locked_sha"] else []
+        # Профиль `pytest-own` проекта задачи — каналом `command` (SPEC
+        # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — прежний вызов без него.
+        own = acceptance._task_own_profile(conn, task_id)
+        kwargs = {"command": own} if own is not None else {}
         if long_lived:
-            green, tail = acceptance.run(tdir, cwd=wt_path, extra=long_lived)
+            green, tail = acceptance.run(tdir, cwd=wt_path, extra=long_lived,
+                                         **kwargs)
         else:
-            green, tail = acceptance.run(tdir, cwd=wt_path)
+            green, tail = acceptance.run(tdir, cwd=wt_path, **kwargs)
         if not green:
             detail = (f"приёмочные тесты красные после подтяжки {source_branch} "
                       f"(слияние сохранено, откат не выполняется):\n{tail}")
