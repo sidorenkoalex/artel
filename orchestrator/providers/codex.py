@@ -376,7 +376,7 @@ class CodexProvider(RoleExecutorProvider):
     def cli_tool(self):
         return CliTool(CLI_NAME, CLI_MINIMUM, CLI_VERSION_COMMAND)
 
-    def command(self, model=None, docs_dir=None):
+    def command(self, model=None, docs_dir=None, project=None):
         """Argv шага роли (требования 2-3).
 
         Порядок обязателен и проверяется тестом: 0.155.1 разбирает
@@ -421,6 +421,10 @@ class CodexProvider(RoleExecutorProvider):
         рядом лежат итоги полного прогона, по которым approve принимает
         набор. Каталог заводится здесь же: создать его из песочницы роль не
         сможет — его родитель ей закрыт.
+
+        `project` (проект задачи шага) argv Codex не меняет: параметр —
+        общая сигнатура провайдеров (SPEC 01M545EB0A9F191WTDSPCH36GA,
+        требование 7, О-4).
         """
         from .. import runner
         cmd = [runner.declared_tool_path(CLI_NAME)]

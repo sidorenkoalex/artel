@@ -15,8 +15,9 @@ from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
-              liveness, models, parallel_limit, pause, providers, review,
-              role_prompt, roles, spend, stack, store, workspace, zone_lock)
+              liveness, models, parallel_limit, pause, providers,
+              repo_context, review, role_prompt, roles, spend, stack, store,
+              targets, workspace, zone_lock)
 from scripts import guard
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
@@ -303,7 +304,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> bool | None:
 
     journaled_before = len(store.task_steps(conn, task_id))
     attempt, reason, failure_class = _run_attempts(conn, task_id, t, role,
-                                                    prompt)
+                                                    prompt, target)
     if attempt is None:
         # Успех шага для `cmd_run_and_advance` — завершение роли этим
         # вызовом, не таймаут и не остановка потолком бюджета (оба тоже
@@ -363,7 +364,16 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
                       WAVE_BREAKER_REFUSAL_ACTION, detail)
         return "exit", f"[{task_id}] run отклонён: {detail}"
 
-    target = t["target"] or config.DEFAULT_TARGET
+    # Проект задачи — явно, с отказом (SPEC 01M545EB0A9F191WTDSPCH36GA,
+    # требование 9): откат на артель дал бы шагу внешнего проекта белый
+    # список и окружение артели и не доставил бы его проектные скилы.
+    try:
+        target, project_entry = _step_project(t)
+    except StepProjectError as exc:
+        store.journal(conn, task_id, role, STEP_PROJECT_REFUSAL_ACTION,
+                      str(exc))
+        return "exit", (f"[{task_id}] run отклонён: проект задачи не "
+                        f"определён — {exc}")
 
     # Провайдер исполнителя роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
     # требование 4): имя из `roles.yaml`, которого нет в реестре, —
@@ -476,6 +486,19 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     skills, reason = brief.skills_text(conn, task_id, role, skill_names)
     if skills is None:
         return "exit", f"[{task_id}] скил роли {role} не прочитан: {reason}"
+
+    # Проектные скилы — после скилов роли, в порядке поля, из той же головы
+    # main (SPEC 01M545EB0A9F191WTDSPCH36GA, требования 1-3). У артели
+    # записи нет: её бриф не меняется.
+    if project_entry is not None:
+        project_skills, refusal = brief.project_skills_text(
+            conn, task_id, role, target, project_entry)
+        if project_skills is None:
+            store.journal(conn, task_id, role, PROJECT_SKILLS_REFUSAL_ACTION,
+                          refusal)
+            return "exit", f"[{task_id}] run отклонён: {refusal}"
+        if project_skills:
+            skills = f"{skills}\n\n{project_skills}"
 
     # Модель шага — разрешением цепочки «роль -> ярус -> модель ->
     # провайдер» (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требования 8-9): ярус
@@ -606,6 +629,38 @@ MODEL_UNRESOLVED_REFUSAL_ACTION = "run отклонён: модель роли �
 # отказ — шаг идёт, но молчать о смене модели нельзя.
 SET_PAIR_WITHDRAWN_ACTION = "модель набора снята: шаг на боевой модели"
 
+# Проект задачи на пути шага не определён и `project_skills` его записи не
+# годны (SPEC 01M545EB0A9F191WTDSPCH36GA, требования 2, 9): отказы до
+# старта агента, тем же приёмом именованного отказа.
+STEP_PROJECT_REFUSAL_ACTION = "run отклонён: проект задачи не определён"
+PROJECT_SKILLS_REFUSAL_ACTION = "run отклонён: project_skills проекта не годны"
+
+# Системный git-конфиг машины в шаге роли внешнего проекта не читается
+# (ADR-0023, поправка 16.10, п.6).
+GIT_CONFIG_NOSYSTEM_ENV = "GIT_CONFIG_NOSYSTEM"
+
+
+class StepProjectError(Exception):
+    """Проект задачи на пути шага не определён; текст — причина."""
+
+
+def _step_project(t) -> tuple[str, dict | None]:
+    """(имя проекта задачи, запись `targets.yaml`) для пути запуска шага
+    (SPEC 01M545EB0A9F191WTDSPCH36GA, требование 9). У артели записи нет:
+    `targets.yaml` не читается (ANSWER-1 п.2, как `repo_context.resolve`) —
+    пульт работает над собой и при сломанном файле. Пустая колонка
+    `target`, нечитаемый файл или необъявленный проект — `StepProjectError`,
+    без отката на артель (`store.task_target`, ANSWER-1 п.3)."""
+    name = t["target"]
+    if not name:
+        raise StepProjectError(f"у задачи {t['id']} пустая колонка target")
+    if repo_context.is_artel(name):
+        return name, None
+    try:
+        return name, targets.target(name)
+    except targets.TargetsError as exc:
+        raise StepProjectError(str(exc)) from exc
+
 
 def _step_provider(t, role: str):
     """Провайдер шага роли с учётом набора задачи (SPEC
@@ -700,7 +755,7 @@ def _build_prompt(conn, task_id: str, t, role: str, target: str,
     cwd_for_prompt = role_cwd_path(task_id, target)
     mission, brief_text, package = role_prompt.mission_brief_package(
         conn, task_id, t, role, cwd_for_prompt,
-        docs_dir=_step_docs_dir(conn, task_id))
+        docs_dir=_step_docs_dir(conn, task_id, target))
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
     if brief_text is not None:
         prompt = f"{prompt}\n\n{brief_text}"
@@ -735,19 +790,21 @@ def _build_prompt(conn, task_id: str, t, role: str, target: str,
     return prompt
 
 
-def _run_attempts(conn, task_id: str, t, role: str, prompt: str):
+def _run_attempts(conn, task_id: str, t, role: str, prompt: str,
+                  project: str):
     """Цикл попыток агента: `run_agent_once` + бэкофф между попытками
     (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-4/AC-6). Возвращает `(attempt,
     reason, failure_class)`; `attempt is None` — шаг обязан завершиться
     без эскалации (потолок бюджета либо исход, отличный от "failed") —
     тот же ранний `return`, что раньше стоял прямо в теле
     `_run_developer_step`; иначе `attempt` — номер последней попытки, как
-    в прежнем теле цикла (AC-6)."""
+    в прежнем теле цикла (AC-6). `project` — проект задачи, определённый
+    `_step_project` до сборки промпта."""
     reason = ""
     failure_class = None
     for attempt in range(1, config.AGENT_ATTEMPTS + 1):
         outcome, reason, failure_class = run_agent_once(
-            conn, task_id, role, prompt, attempt)
+            conn, task_id, role, prompt, attempt, project=project)
         # Потолок проверяем после каждой попытки, до решения о ретрае: иначе
         # три попытки подряд потратят бюджет, исчерпанный ещё первой.
         if budget.enforce_budget(conn, task_id, t["state"]):
@@ -962,7 +1019,7 @@ def _venv_interpreter_bin() -> str:
 
 
 def role_env(role: str | None = None, task_id: str | None = None,
-             *, provider=None) -> dict:
+             *, provider=None, project: str | None = None) -> dict:
     """Окружение процесса роли: PATH и переменные — из манифеста, не копия
     `os.environ` Оператора (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3).
 
@@ -1024,6 +1081,12 @@ def role_env(role: str | None = None, task_id: str | None = None,
     результата», что и у `_resolve_declared_tools` выше): его `bin/`
     встаёт ПЕРВЫМ в PATH роли, раньше каталога `sys.executable` пульта —
     голый `python3`/`pytest` внутри шага роли резолвится в venv.
+
+    `project` — проект задачи, определённый на пути шага (`_step_project`):
+    шагу внешнего проекта — `GIT_CONFIG_NOSYSTEM=1` у любого провайдера
+    (SPEC 01M545EB0A9F191WTDSPCH36GA, требование 4), системный git-конфиг
+    машины в его шаг не попадает. Артель и вызовы без проекта (doctor,
+    офлайн-смоки) — без изменений (требование 6).
     """
     resolved = _resolve_declared_tools()
     venv_bin = _venv_interpreter_bin()
@@ -1038,6 +1101,8 @@ def role_env(role: str | None = None, task_id: str | None = None,
     for name in foreign_secret_env_names(provider):
         env.pop(name, None)
     env.update(provider.environment(role, task_id))
+    if project is not None and not repo_context.is_artel(project):
+        env[GIT_CONFIG_NOSYSTEM_ENV] = "1"
     env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
     if role:
         env[config.ARTEL_ROLE_ENV] = role
@@ -1176,12 +1241,15 @@ def _place_harvested_docs(files: dict[str, bytes], docs_root: Path) -> None:
         dest.write_bytes(content)
 
 
-def _step_docs_dir(conn, task_id: str) -> Path:
+def _step_docs_dir(conn, task_id: str, project: str | None = None) -> Path:
     """Каталог документов задачи шага (`artifact_branch.docs_dir`) — тот
     же адрес, куда `role_cwd` выкладывает документы и откуда их забирает
-    автокоммит шага."""
+    автокоммит шага. `project` — проект, определённый на пути шага
+    (`_step_project`); `None` — вне пути шага, по колонке задачи."""
     from . import artifact_branch
-    return artifact_branch.docs_dir(task_id, store.task_target(conn, task_id))
+    if project is None:
+        project = store.task_target(conn, task_id)
+    return artifact_branch.docs_dir(task_id, project)
 
 
 def role_cmd() -> list[str]:
@@ -1355,7 +1423,8 @@ def _cost_partial_expected(role: str, pump, t=None) -> bool:
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
-                   attempt: int) -> tuple[str, str, str | None]:
+                   attempt: int, project: str | None = None
+                   ) -> tuple[str, str, str | None]:
     """Один запуск агента: исход попытки, пояснение и класс отказа.
 
     Исход — "ok" | "failed" | "timeout" | "skipped"; ретраится в `cmd_run`
@@ -1369,11 +1438,25 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     Разбит на фазы `_prepare_step`/`_spawn_and_wait`/`_account_step` и
     функции исходов `_finish_*` (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) —
     значение и тип возврата не меняются.
+
+    `project` — проект задачи, определённый `_step_project` до сборки
+    промпта; без него (прямой вызов) проект определяется здесь той же
+    функцией и с тем же отказом — без отката на артель (SPEC
+    01M545EB0A9F191WTDSPCH36GA, требование 9).
     """
     # Модель, её источник и провайдер — с учётом набора задачи (SPEC
     # 01M3YCHS4F08VTV6XX10VF92H3, требования 4, 8). `provider is None` —
     # провайдер роли, как до набора: его разрешают сами фазы ниже.
     t = store.get_task(conn, task_id)
+    if project is None:
+        try:
+            project, _ = _step_project(t)
+        except StepProjectError as exc:
+            store.journal(conn, task_id, role, STEP_PROJECT_REFUSAL_ACTION,
+                          str(exc))
+            print(f"[{task_id}] run отклонён: проект задачи не определён — "
+                  f"{exc}")
+            return "skipped", f"проект задачи не определён: {exc}", None
     step = _resolved_task_model(role, t)
     model_id = step.resolution.model if step is not None else None
     source = step.source if step is not None else None
@@ -1381,7 +1464,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                 if step is not None and step.from_set else None)
 
     skip, ctx = _prepare_step(conn, task_id, role, prompt, attempt, model_id,
-                              source, provider)
+                              project, source, provider)
     if skip is not None:
         return skip
     log_path, prompt_path, env, cwd, numbered = ctx
@@ -1391,7 +1474,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
     skip, spawn_ctx = _spawn_and_wait(
         conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
-        model_id, provider)
+        model_id, project, provider)
     if skip is not None:
         return skip
     proc, pump, rc, timed_out, killed_group = spawn_ctx
@@ -1409,7 +1492,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                               log_path, watch)
 
     missing_artifact = _missing_required_artifact(
-        role, cwd, task_id, _step_docs_dir(conn, task_id))
+        role, cwd, task_id, _step_docs_dir(conn, task_id, project))
     if missing_artifact is not None:
         return _finish_missing_artifact(conn, task_id, role,
                                         missing_artifact, cwd, numbered,
@@ -1419,8 +1502,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
 
 def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
-                  model_id: str | None, source: str | None = None,
-                  provider=None):
+                  model_id: str | None, project: str,
+                  source: str | None = None, provider=None):
     """Подготовка попытки шага: лог/промпт на диске, окружение и рабочий
     каталог роли (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-2/AC-3) — три из
     пяти исходов SKIPPED (промпт не записан; окружение роли не создано;
@@ -1433,7 +1516,7 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     `source` — источник модели шага (набор задачи, `role_models` либо
     ярус) для записи старта шага; `provider` — провайдер модели набора,
     `None` — провайдер роли (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требования
-    4, 8)."""
+    4, 8). `project` — проект задачи шага (`_step_project`)."""
     numbered = f"попытка {attempt}/{config.AGENT_ATTEMPTS}"
     log_path = agent_log.new_agent_log(task_id, role)
     # Промпт уходит агенту файлом на stdin, а не аргументом командной строки
@@ -1454,7 +1537,7 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
     # Оператора было бы молчаливой сменой периметра (ADR-0003 п.14).
     try:
-        env = role_env(role, task_id, provider=provider)
+        env = role_env(role, task_id, provider=provider, project=project)
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"каталог окружения роли не создан: {exc}")
@@ -1466,8 +1549,7 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     # Тот же принцип, что у окружения выше: рабочий каталог roли не создался —
     # шаг не стартует, тихого отката на ROOT нет (ADR-0003 §4).
     try:
-        cwd = role_cwd(conn, task_id, store.task_target(conn, task_id),
-                       role=role)
+        cwd = role_cwd(conn, task_id, project, role=role)
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"рабочий каталог роли не создан: {exc}")
@@ -1509,7 +1591,7 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
 
 def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
                     prompt_path: Path, cwd: Path, env: dict, numbered: str,
-                    model_id: str | None, provider=None):
+                    model_id: str | None, project: str, provider=None):
     """Запуск агента и ожидание завершения: открытие промпта, `spawn_
     agent`, перекачка вывода, таймаут и снятие группы процессов (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — оставшиеся два из пяти исходов
@@ -1517,7 +1599,7 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     `(skip, ctx)`: `skip` — то, что `run_agent_once` обязан вернуть
     немедленно (`None` при успехе); `ctx` — `(proc, pump, rc, timed_out,
     killed_group)`. `provider` — провайдер модели набора задачи, `None` —
-    провайдер роли."""
+    провайдер роли; `project` — проект задачи шага (`_step_project`)."""
     if provider is None:
         provider = providers.for_role(role)
     # Открытие файла держится вне `try` вокруг Popen: там ловится
@@ -1547,8 +1629,13 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
         # Каталог документов задачи — вне рабочей копии кода и открыт
         # роли на запись флагом `--add-dir` (ADR-0021 пп. 2, 7, этап 1):
         # его место в argv (флаг подкоманды у codex) знает провайдер.
+        #
+        # Проект задачи — тоже параметром: белый список роли задачи
+        # внешнего проекта уже, чем у артели (SPEC
+        # 01M545EB0A9F191WTDSPCH36GA, требование 5).
         cmd = provider.command(model_id,
-                               docs_dir=_step_docs_dir(conn, task_id))
+                               docs_dir=_step_docs_dir(conn, task_id, project),
+                               project=project)
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся

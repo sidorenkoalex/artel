@@ -550,6 +550,67 @@ def skills_text(conn, task_id: str, role: str,
     return "\n\n".join(text for _, text in texts), ""
 
 
+PROJECT_SKILLS_FIELD = "project_skills"
+
+
+def _project_skill_name_error(name: str) -> str:
+    """Причина, по которой имя проектного скила не указывает на файл прямо
+    в `skills/`; пусто — имя годно (SPEC 01M545EB0A9F191WTDSPCH36GA,
+    требование 2). Существование файла проверяет чтение головы main."""
+    if not name.strip():
+        return "пустое имя"
+    if "/" in name or "\\" in name:
+        return ("имя с разделителем пути — допустим только файл прямо в "
+                "skills/, без подкаталогов и выхода из него")
+    if name in (".", ".."):
+        return "не имя файла"
+    return ""
+
+
+def _project_skills_read(target: str, entry: dict) -> tuple[list, str | None]:
+    """([(путь, текст)] в порядке поля, None) либо ([], текст отказа) —
+    один проход по `project_skills` записи проекта для брифа и для
+    отдельной проверки: источник и текст отказа у них общие (требование 2,
+    ANSWER-1 п.1). Текст — из головы `main` пульта тем же чтением, что
+    `skills_text`: незакоммиченный файл `skills/` проектным скилом не
+    считается. Отказ — одной строкой и называет проект, поле и имя."""
+    texts = []
+    for name in entry.get(PROJECT_SKILLS_FIELD) or []:
+        rel = f"skills/{name}.md"
+        reason = _project_skill_name_error(name)
+        if not reason:
+            text, why = gitcmd.show(config.MAIN_BRANCH, rel, repo=config.ROOT)
+            if text is None:
+                reason = (f"файла {rel} нет в голове {config.MAIN_BRANCH} "
+                          f"пульта ({' '.join(why.split())})")
+        if reason:
+            return [], (f"проект {target}: поле {PROJECT_SKILLS_FIELD} — скил "
+                        f"'{name}' не годен: {reason}")
+        texts.append((rel, text))
+    return texts, None
+
+
+def project_skills_refusal(target: str, entry: dict) -> str | None:
+    """Проверка `project_skills` записи проекта `target` без сборки брифа
+    (её зовёт `doctor`): `None` — отказа нет, строка — тот же текст, с
+    которым отказывает шаг роли задачи этого проекта."""
+    return _project_skills_read(target, entry)[1]
+
+
+def project_skills_text(conn, task_id: str, role: str, target: str,
+                        entry: dict) -> tuple[str | None, str]:
+    """Тексты проектных скилов для брифа роли задачи проекта `target` — в
+    порядке поля, фингерпринт каждого в журнал, как у `skills_text`.
+    (None, текст отказа) — поле не годно, шаг не начинается."""
+    texts, refusal = _project_skills_read(target, entry)
+    if refusal is not None:
+        return None, refusal
+    for rel, text in texts:
+        store.journal(conn, task_id, role, "бриф: компонент",
+                      f"{rel}: sha256={component_hash(text)}")
+    return "\n\n".join(text for _, text in texts), ""
+
+
 def _artifact_source_branch(conn, task_id: str) -> tuple[str, bool]:
     """(ветка-источник `tasks/<id>/`, foreign) — общая точка входа для
     всех читателей брифа (SPEC T094, требование 10, AC-11 — реестр AC-1).
