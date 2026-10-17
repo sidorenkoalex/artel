@@ -30,11 +30,30 @@ D2 (Т-5); D2-2 (01M545EDTHS47HSB59AKC1EZ9C) закрыл токен, но не 
    адресован репозиторию проекта (`url` его записи `targets.yaml`) и несёт
    токен его слота `token_slot` (переменной `GH_TOKEN`, как сейчас у
    `ci.gh(repo=…)`):
-   - для `gh api` — через переменную окружения `GH_REPO=<владелец>/<имя>`
-     (владелец и имя — из `url` проекта), без `--repo` в argv;
+   - для `gh api` — через переменную окружения `GH_REPO=<владелец>/<имя>`,
+     без `--repo` в argv. Владелец и имя берутся из `url` проекта по
+     правилу `gitcmd.url_key` (`gitcmd.py:44-46`): завершающие `/` и `.git`
+     сняты, `GH_REPO` — два последних сегмента пути адреса;
    - для `gh run`/`gh pr` — флагом `--repo <url>`, как сейчас.
+
+   `GH_REPO` ставится у задачи внешнего проекта и тогда, когда у его
+   записи `targets.yaml` нет `token_slot` (токена нет, `gitcmd.py:133-135`):
+   окружение такого вызова `gh api` всё равно несёт `GH_REPO` проекта,
+   `GH_TOKEN` в нём не появляется.
 2. У артели argv, окружение и `cwd` вызовов `gh` функций перечня
-   требования 3 не меняются ни на байт относительно main.
+   требования 3 не меняются ни на байт относительно main. Сверх того у
+   артели вызовы `ci.gh`, `head_sha`, `check_runs`, `run_list`,
+   `find_run_id`, `trigger_rerun` идут прежней формой — без новых
+   именованных аргументов (приём `ci._repo_kwargs`, `ci.py:83-95`: для
+   клона артели и `None` — вызов без `repo`). Подмены этих функций в
+   существующих тестах, написанные под прежнюю форму, не ломаются:
+   `tests/test_invariants.py:326-328` (защищённый; `ci.gh` как
+   `lambda *a:`, `ci.head_sha` как `lambda branch:`),
+   `tests/test_ci_status.py:160` (`fake_gh(*args)`), `:367` (`check_runs`
+   как `lambda sha:`), `:372` (`run_list` как `lambda branch:`), `:798`
+   (`find_run_id` как `lambda sha:`), `tests/test_main_ci_line.py:62`
+   (`gh(self, *args, timeout=None)`), `tests/test_merge_gate_ci_wait.py:82`
+   (`trigger_rerun` как `lambda branch:`).
 3. Репозиторий проекта доходит до всех функций CI на пути `verifying`,
    `ci-rerun`, автогейта приёмки и гейта мержа (проверка CI ветки и CI
    main после мержа) для задачи внешнего проекта. Перечень, сверенный по
@@ -100,16 +119,33 @@ D2 (Т-5); D2-2 (01M545EDTHS47HSB59AKC1EZ9C) закрыл токен, но не 
 
 AC-1. У артели argv, окружение (в том числе отсутствие `GH_REPO`) и `cwd`
 вызовов `gh` функций перечня требования 3 — `verifying_status`,
-`branch_status`, `failed_check_names`, `main_line_status`, `find_run_id`,
-`check_run_workflow_run`, `trigger_rerun` — совпадают с main.
+`branch_status`, `accepted_full_suite`, `failed_check_names`,
+`main_line_status`, `find_run_id`, `check_run_workflow_run`,
+`trigger_rerun` — совпадают с main; подмены из требования 2
+(`tests/test_invariants.py:326-328`, `tests/test_ci_status.py:160`, `:367`,
+`:372`, `:798`, `tests/test_main_ci_line.py:62`,
+`tests/test_merge_gate_ci_wait.py:82`) работают без правки.
 
-AC-2. У учебного внешнего проекта каждый вызов `gh api` функций перечня
-требования 3 получает в окружении `GH_REPO=<владелец>/<имя>` из `url`
-проекта и `GH_TOKEN` — токен его слота, а в argv нет `--repo`.
+AC-2. У учебного внешнего проекта, `url` которого оканчивается на `.git`
+или `/` (например `https://github.com/<владелец>/<имя>.git`), каждый
+вызов `gh api` функций перечня требования 3 получает в окружении
+`GH_REPO=<владелец>/<имя>` (без `.git` и `/` в конце) и `GH_TOKEN` —
+токен его слота, а в argv нет `--repo`. «Каждый вызов» проверяется в
+сценариях, доходящих до всех мест `gh api`:
+- красный путь `verifying_status`/`branch_status` со сверкой с main —
+  `_inherited_from_main` → `failed_check_names(main_sha)` (`ci.py:660`,
+  `:814`);
+- проверки коммита с `check_suite.id` (или ссылкой на прогон) — запрос
+  `_commit_workflow_runs` (`ci.py:379-383`);
+- `find_run_id` при двух и более красных прогонах коммита — `gh api
+  …/actions/runs` и `check_runs` (`ci.py:1162`, `:1180-1181`);
+- `check_run_workflow_run` (`ci.py:1221`).
 
 AC-3. У учебного внешнего проекта каждый вызов `gh run` (`run list`,
 `run rerun`, `run watch`) и `gh pr` функций перечня требования 3 несёт в
-argv `--repo <url>` проекта и `GH_TOKEN` — токен его слота.
+argv `--repo <url>` проекта и `GH_TOKEN` — токен его слота. В том числе
+в сценарии без проверок коммита — `_no_checks_by_branch` → `run_list`
+(`ci.py:627`, `:638`, `:678`).
 
 AC-4. `verifying_status` ветки задачи учебного внешнего проекта, у
 головного коммита которой в репозитории проекта все проверки зелёные,
@@ -130,6 +166,11 @@ AC-7. Вызовы `check_run_workflow_run` и `failed_check_names` из
 `ci-rerun` (`orchestrator/ci_rerun.py`) и `trigger_rerun` из
 `ci-rerun` и гейта мержа (`orchestrator/fsm_merge_gate.py`) для задачи
 учебного внешнего проекта адресуют `gh` репозиторию проекта.
+
+AC-8. У учебного внешнего проекта без `token_slot` в записи
+`targets.yaml` вызов `gh api` функций перечня требования 3 (например
+`check_runs` из `verifying_status`) получает в окружении `GH_REPO` проекта,
+`GH_TOKEN` в нём не выставлен пультом, в argv нет `--repo`.
 
 ## Оценка объёма и деление
 Сработавшие сигналы: число файлов зоны ≥ 5 (шесть элементов зоны из ТЗ);
@@ -172,10 +213,12 @@ AC-7. Вызовы `check_run_workflow_run` и `failed_check_names` из
   «unknown flag: --repo».
 - `url` учебного проекта в `targets.yaml` — вида
   `https://github.com/<владелец>/<имя>` (так записан sled, `targets.yaml:70`).
-- Подмены `ci.head_sha`/`ci.check_runs` в существующих тестах написаны под
-  прежнюю форму вызова у артели (`ci._repo_kwargs`, `ci.py:83-95`;
-  `tests/test_invariants.py::MergeNeedsGreenCiTest`,
-  `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py::…::test_ac13_ci_repo_row19_uses_predicate`)
-  — требование 2 держит и её.
+- Подмены, написанные под прежнюю форму вызова у артели (приём
+  `ci._repo_kwargs`, `ci.py:83-95`), — перечень требования 2:
+  `tests/test_invariants.py:326-328` (защищённый, `ci.gh` и `ci.head_sha`),
+  `tests/test_ci_status.py:160`, `:367`, `:372`, `:798`,
+  `tests/test_main_ci_line.py:62`, `tests/test_merge_gate_ci_wait.py:82`.
+- Правило разбора адреса — `gitcmd.url_key` (`gitcmd.py:44-46`, только
+  чтение): снимает завершающие `/` и `.git`.
 - Тестов, утверждающих `--repo` у `gh api`, в `tests/` main нет (grep
   `--repo` по `tests/`): раздел «Меняемое поведение» не нужен.
