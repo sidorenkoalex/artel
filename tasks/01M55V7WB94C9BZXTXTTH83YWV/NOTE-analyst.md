@@ -1,19 +1,18 @@
 # Записка analyst
 
 ## Выяснено
-- Итерация 3 (возврат из spec_gate 18.10, шесть решений Оператора по аудиту) — все внесены в SPEC:
-  (1) требование 2 — на все функции перечня и вызывающих из ci_rerun.py/fsm_merge_gate.py; перечень подмен дополнен находками аудита (test_ci_rerun_command.py:238/:242, test_ci_stuck_check_run.py:220, test_main_ci_fetched_repo.py:64) и test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203 (head_sha("main")); AC-1 — «ни одна подмена не правится»;
-  (2) внешний проект — по записи targets.yaml клона (требование 1); main_line_status(repo=config.ROOT) pin.py:86 / doctor/main_ci.py:33 — артель, в требовании 2 и AC-1;
-  (3) сценарий main_line_status с клоном проекта — в AC-2;
-  (4) ci_rerun.py:272 _origin_main_sha(repo=клон) — требование 5, AC-10;
-  (5) _inherited_from_main: base проекта, origin/<base> клона — требование 4, AC-9; ТОЛЬКО для внешнего проекта: у артели head_sha("main") держит подмена долгоживущего теста 01m4pmq…:203, а AC-1 запрещает правку подмен — записано в «Не входит» (моё согласование двух решений, Оператор может поправить);
-  (6) flake-rate «повтор не запущен» при rerun_started ложь (ci.py:1274) — требование 7, AC-11; тестов на прежний текст в этом случае нет (test_merge_gate_ci_wait.py:82 возвращает «запущен»).
+- Итерация 4 (возврат из spec_gate 18.10, третий аудит, К-1..К-4) — внесено в SPEC:
+  К-1 — требование 7 и AC-11: незапущенный повтор + зелёный branch_status → flake-rate «повтор не запущен» с причиной, без «флейк» (fsm_merge_gate.py:297-302);
+  К-2 — требование 3, подраздел «Форма передачи»: check_runs/failed_check_names/find_run_id/check_run_workflow_run/trigger_rerun получают repo: Path | None (путь клона), url/GH_REPO выводятся внутри ci.py; repo у ci.gh/check_runs_page/run_list остаётся URL (github_adapter gh pr без правки);
+  К-3 — требование 1: https и scp git@хост:владелец/имя(.git); иной вид — именованный отказ без запуска gh (канал как отказ токена ci.py:66-69); AC-2 проверяет оба вида, новый AC-12 — отказ;
+  К-4 — требование 1: сопоставление пути клона с записью через repo_context.clone_path/resolve, признак артели только repo_context.is_artel; repo_context.py read-only — сопоставление в зонах задачи.
+- Прежние решения итерации 3 (требования 2, 4, 5; AC-1, AC-9, AC-10) сохранены.
 
 ## Не сработало
 - Bash с `;`/xargs/$(…) просит подтверждения — команды по одной.
 
 ## Где остановился
-- SPEC.md: status ready, 11 AC, budget_usd 35 (рамка ТЗ), монолит; guard ок.
+- SPEC.md: status ready, 12 AC, budget_usd 35 (рамка ТЗ), монолит; guard ок.
 
 ## Чего не хватило
-- Ничего.
+- Помощника «путь клона → запись targets.yaml» в коде нет (repo_context.clone_path только имя→путь) — разработчику писать его в ci.py.
