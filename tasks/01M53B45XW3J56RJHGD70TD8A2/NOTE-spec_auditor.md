@@ -1,17 +1,23 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 2 (SPEC sha 22488aeb…, после решения Оператора О-1…О-6). Ссылки SPEC на код снова подтверждены: gitcmd.py:22/32-45/232-241, ci.py:56-66, misc_checks.py:91-94, claude.py:45/155-175, runner.py:964-1048, brief.py:519-550, role_prompt.py:238-246/323, knowledge_cards.py:953-956, workspace.py:111.
-- gitcmd.git всегда cwd=config.ROOT (gitcmd.py:43) — ветка «или по рабочему каталогу» мертва; carpentry — только локальные операции.
-- Клон проекта — `.artel/projects/<имя>/repo` (repo_context.py:75-79), не сам каталог проекта; клон артели тоже под .artel/projects/artel/.
-- `git clone` не пишет FETCH_HEAD — у клона без fetch пульта 8.1 не определена.
-- artel-token (targets.yaml:28) = token_fallback подписки модели (roles.yaml:46) — 8.5 сравнит PAT проекта с токеном подписки.
-- doctor/artifact_branches.py:137 пушит из `source` (может быть главная копия) в url клона — механизм «проект по -C» его не узнает.
-- Скилы читаются с main пульта (brief.py:543), не с диска.
-- Вердикт: concerns.
+- Визит 3 (SPEC sha add88b4d…, после второго решения гейта). Оба решения
+  Оператора внесены полностью. Вердикт: concerns, новые находки Т-1…Т-5.
+- Т-5: `ci.gh` узнаёт внешний проект только по `repo=` (ci.py:57).
+  Вызовы без `repo`: ci.py:369 (`_commit_workflow_runs`, из
+  `verifying_status`), :1148 (`find_run_id`), :1207, :1240-1253
+  (`trigger_rerun`).
+- Т-4: `_push_closing_sha` из главной копии (artifact_branches.py:137,
+  :174) — механизм «по `-C`» проект не узнаёт.
+- Т-1: `ls-remote` (gitcmd.py:524, :538; artifact_cleanup.py:30;
+  doctor/artifact_branches.py:22) и `push --delete` (artifact_cleanup.py:99)
+  в перечне хостинговых операций SPEC не названы.
+- Т-2: `in_role_environment` узнаёт роль и по `HOME` (runner.py:1067),
+  AC-12 проверяет только `ARTEL_ROLE`.
+- Т-3: `workspace.py:111` делает clone с `-C .artel/projects/<имя>`.
 
 ## Где остановился
-SPEC-AUDIT.md написан, guard прогнан.
+SPEC-AUDIT.md написан, guard: ок.
 
 ## Чего не хватило
-Карты «хостинговый git-вызов → откуда -C»; собирал grep по "push"/"fetch".
+Перечня вызовов `gh` с признаком проекта: собирал grep по `gh(`.
