@@ -1,15 +1,15 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Диф ТЗ применяется к main 6fbeaa8d (`git apply --check` через stdin — «Checking patch skills/test-authoring.md...», без ошибок); абзац skills/test-authoring.md:114-126 совпадает с «Было»; «Стало» в SPEC «Материалы» совпадает со SPEC 01M551W0 (refs/artifacts/01M551W0TFCT2XRQ71XFXJDKB9, SPEC.md:242-259).
-- Диф ТЗ без строки `diff --git a/skills/test-authoring.md b/skills/test-authoring.md`: guard `plan_appendices` (scripts/guard.py:380-450, ошибка APPENDIX_NO_HEADER_ERROR guard.py:283) такой блок НЕ считает приложением. Нужен и заголовок раздела `## Приложение…` (guard.py:265). templates/PLAN.md про приложения молчит. Прецедент 01M41VH0Z3CQ0WY039SV1ERGMB PLAN.md:102-105 — с `diff --git`.
-- Код уже ведёт каталог по профилю: project_profile.py:70-114, role_prompt.py:183, checkpoint.py:393.
+- Визит 2 (spec_sha 2588f97b…). SPEC внёс решение Оператора №1: в требовании 1 стоит `diff --git` и раздел «## Приложение: …», AC-1 сформулирован через `guard.plan_appendices`.
+- Прогон: диф ТЗ + строка `diff --git a/skills/test-authoring.md b/skills/test-authoring.md` в разделе «## Приложение: …». `guard.plan_appendices` → `[('skills/test-authoring.md',)]`, ошибок нет; `git apply --check` на 6fbeaa8d — код 0. Результат наложения содержит «Стало» из SPEC байт в байт.
+- Вердикт pass.
 
 ## Не сработало
-- `cd … && git` в одной команде — отказ по правилу Read deny; запускать git без cd.
+- Составная bash-команда (присваивание переменной + несколько команд) требует подтверждения. Выручают отдельные вызовы.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns (два отклонения: заголовок diff --git; AC-1 не привязан к разбору пульта).
+- SPEC-AUDIT.md готов (pass, status ready), guard прогнан.
 
 ## Чего не хватило
-- Правило «блок приложения обязан нести `diff --git`» живёт только в scripts/guard.py, ни в skills/conventions-core.md, ни в templates/PLAN.md.
+- Ничего существенного.
