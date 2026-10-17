@@ -15,9 +15,11 @@ budget_usd: 40
 Часть 3 из 3 задачи D0 (родитель 01M52CQB468758M2NAA15C15ZE; основание —
 ADR-0023, вторая поправка 16.10.2026). Часть 2 (01M52EEFNA1WH31962HVNT0YZ9)
 научила места запуска в `orchestrator/acceptance.py` (`run`, `run_repeat`,
-`run_plank`, `run_full_suite`, `full_suite`) и `two_sided.run` принимать
-профиль `pytest-own` (`project_profile.Profile`) каналом `command` и
-запускать pytest с argv, `cwd` и окружением по профилю; `acceptance_suite`
+`run_plank`, `run_full_suite`, `full_suite`, `collect`) и `two_sided.run`
+принимать профиль `pytest-own` (`project_profile.Profile`) — каналом
+`command`, а у `run_plank` и `two_sided.run` параметром `profile`
+(`orchestrator/acceptance.py:1096-1097`,
+`orchestrator/advance_gates/two_sided.py:319-320`) — и запускать pytest с argv, `cwd` и окружением по профилю; `acceptance_suite`
 уже сам берёт профиль проекта задачи (`acceptance._task_own_profile`).
 Остальные вызывающие по-прежнему передают либо список `command`
 (гейт мержа: `fsm_merge_gate._full_suite_command` отдаёт
@@ -27,14 +29,33 @@ ADR-0023, вторая поправка 16.10.2026). Часть 2 (01M52EEFNA1WH
 
 ## Требования
 1. Вызывающие прогона вне `orchestrator/acceptance.py` передают профиль
-   проекта задачи (`command`, `runner`, `workdir`, `env`) тем же каналом,
-   которым сегодня передаётся `command` (`Profile` вместо списка):
+   проекта задачи (`command`, `runner`, `workdir`, `env`) каналом профиля
+   места запуска: у `acceptance.run`, `run_repeat`, `collect`,
+   `full_suite` — тем же каналом `command`, которым сегодня передаётся
+   список (`Profile` вместо списка); у `acceptance.run_plank` и
+   `two_sided.run` — параметром `profile`
+   (`orchestrator/acceptance.py:1096-1097`,
+   `orchestrator/advance_gates/two_sided.py:319-320`). В точках, где
+   сегодня не передаётся ничего, передаётся профиль тем же каналом.
+   Точки:
    - гейт мержа — `orchestrator/fsm_merge_gate.py:962-967` (вызовы
-     `acceptance.full_suite`);
+     `acceptance.full_suite`; обе ветви `:965` и `:967` — со свежим
+     прогоном и без, — в прогоне после применённого приложения,
+     `:958-960`);
+   - прогон планки на переходе `in_dev -> verifying` —
+     `orchestrator/advance_gates/acceptance.py:387-405` (`acceptance.run`,
+     сегодня `command = list(decision.profile.command)`), и повторы
+     долгоживущих файлов с зерном — там же `:169`
+     (`acceptance.run_repeat` в `_seed_repeats_escalate`);
    - `suite-run` — `orchestrator/suite_run.py`, в том числе ключ итога
      (`:511`, `:533`);
    - `plank-run` — `orchestrator/plank_run.py:187` (`acceptance.run_plank`);
-   - `amend-tests` — `orchestrator/amend.py:545-549`, `:715-718`;
+   - `amend-tests` — `orchestrator/amend.py:545-549`, `:715-718`; у
+     `pytest-own` сухой сбор и прогон `:715-718` идут с `cwd` рабочей
+     копии задачи (`wt_path`), и `workdir` профиля отсчитывается от неё
+     (сегодня `cwd` не передаётся — корень пульта); у задач с
+     `runner: pult-pytest` (артель и внешние) поведение `:715-718`
+     прежнее;
    - прогоны `pull` — `orchestrator/pull.py:664-666`;
    - сухой сбор `tests_writing` — `orchestrator/fsm_advance.py:594-596`,
      `orchestrator/advance_gates/tests_writing.py:557-563`;
@@ -45,8 +66,9 @@ ADR-0023, вторая поправка 16.10.2026). Часть 2 (01M52EEFNA1WH
    `acceptance.acceptance_suite` (механика части 2).
 3. Задача — только передача профиля: логика гейтов и логика
    `orchestrator/suite_run.py` не меняются.
-4. Прогоны без задачи (в том числе `orchestrator/notes.py:1040`) и прогоны
-   задач артели сохраняют сегодняшнее поведение.
+4. Прогоны без задачи (в том числе `orchestrator/notes.py:1040`), прогоны
+   задач артели и прогоны задач внешнего проекта с `runner: pult-pytest`
+   сохраняют сегодняшнее поведение (команда пульта).
 5. `preflight` и `acceptance-dry-run` pytest не запускают и не правятся.
 
 ## Критерии приёмки
@@ -57,37 +79,54 @@ AC-1. Автогейт приёмки для задачи учебного пр�
 AC-2. `approve` на acceptance для задачи учебного проекта с профилем
 `pytest-own` запускает полный набор с argv, `cwd` и окружением по профилю.
 
-AC-3. Гейт мержа для задачи учебного проекта с профилем `pytest-own`
-запускает полный набор с argv, `cwd` и окружением по профилю.
+AC-3. Гейт мержа для задачи учебного проекта с профилем `pytest-own` в
+прогоне после применённого приложения (`orchestrator/fsm_merge_gate.py:958-960`)
+запускает полный набор с argv, `cwd` и окружением по профилю — в каждой из
+двух точек: со свежим прогоном (`:965`) и без него (`:967`).
 
 AC-4. `suite-run` для задачи учебного проекта с профилем `pytest-own`
-запускает полный набор с argv, `cwd` и окружением по профилю.
+запускает полный набор с argv, `cwd` и окружением по профилю, и ключ
+итога прогона (`orchestrator/suite_run.py:511`, `:533`) вычисляется по
+тому же профилю.
 
 AC-5. `plank-run` для задачи учебного проекта с профилем `pytest-own`
 запускает pytest с argv, `cwd` и окружением по профилю.
 
 AC-6. `amend-tests` для задачи учебного проекта с профилем `pytest-own`
-запускает pytest с argv, `cwd` и окружением по профилю.
+запускает pytest с argv, `cwd` и окружением по профилю — в каждой из двух
+точек: `orchestrator/amend.py:545-549` и `:715-718`; в точке `:715-718`
+сухой сбор и прогон идут с `cwd` от рабочей копии задачи (`wt_path`),
+`workdir` профиля отсчитан от неё.
 
 AC-7. Прогоны `pull` для задачи учебного проекта с профилем `pytest-own`
-запускают pytest с argv, `cwd` и окружением по профилю.
+запускают pytest с argv, `cwd` и окружением по профилю — в каждой из двух
+точек: `orchestrator/pull.py:664` и `:666`.
 
 AC-8. Двусторонний прогон для задачи учебного проекта с профилем
-`pytest-own` запускает pytest с argv, `cwd` и окружением по профилю.
+`pytest-own` запускает pytest с argv, `cwd` и окружением по профилю — у
+каждого из двух вызывающих: `orchestrator/advance_gates/test_integrity.py:1429`
+и `:1527`.
 
 AC-9. Сухой сбор `tests_writing` для задачи учебного проекта с профилем
 `pytest-own` запускает pytest с argv, `cwd` и окружением по профилю.
 
-AC-10. Для задачи артели argv, `cwd` и окружение каждого из мест запуска
-AC-1 — AC-9 не изменились относительно main.
+AC-10. Для задачи артели и для задачи внешнего проекта с
+`runner: pult-pytest` argv, `cwd` и окружение каждого из мест запуска
+AC-1 — AC-9 и AC-12 не изменились относительно main (команда пульта).
 
 AC-11. Прогон без задачи (`orchestrator/notes.py:1040`,
 `acceptance.run_full_suite`) запускается с теми же argv, `cwd` и
 окружением, что на main.
 
+AC-12. На переходе `in_dev -> verifying` для задачи учебного проекта с
+профилем `pytest-own` прогон планки
+(`orchestrator/advance_gates/acceptance.py:387-405`) и повторы
+долгоживущих файлов с зерном (там же `:169`) запускают pytest с argv,
+`cwd` и окружением по профилю.
+
 ## Оценка объёма и деление
 Сработавшие сигналы: файлов зоны ≥ 5 (12 файлов `orchestrator/` и
-`tests/`); критериев приёмки ≥ 10 (11); `budget_usd` ≥ $30 ($40 — рамка
+`tests/`); критериев приёмки ≥ 10 (12); `budget_usd` ≥ $30 ($40 — рамка
 Оператора из ТЗ).
 
 Обоснование монолита (материал для решения Оператора): задача уже
@@ -115,6 +154,9 @@ reviewer — ~$14 на задачу) кратно превысит объём п
   (`orchestrator/dry_run.py`) — они pytest не запускают.
 - Изменение логики гейтов и логики `orchestrator/suite_run.py` сверх
   передачи профиля.
+- Чистое окружение тестов и запуск командой проекта для внешнего проекта
+  с `runner: pult-pytest`: они — только при `runner: pytest-own`; у
+  `pult-pytest` прогоны идут, как сегодня, командой пульта.
 
 ## Материалы
 - ADR-0023, вторая поправка 16.10.2026.
