@@ -4,84 +4,183 @@ type: spec_audit
 author_role: spec_auditor
 status: ready
 verdict: concerns
-signals: "в) пути-признаки (тесты): tests/, tests/test_ci_status.py, tests/test_invariants.py, tests/test_main_ci_line.py, tests/test_merge_gate_ci_wait.py; в) пути-признаки (гейты): orchestrator/advance_gates/, orchestrator/fsm_advance.py, orchestrator/fsm_autogate.py, orchestrator/fsm_merge_gate.py; в) защищённые пути: tests/test_invariants.py"
-spec_sha: 05cad0f2d7e02ffce76c8aa6d90daf565e53d413
+signals: "в) пути-признаки (тесты): tests/, tests/test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py, tests/test_ci_rerun_command.py, tests/test_ci_status.py, tests/test_ci_stuck_check_run.py, tests/test_invariants.py, tests/test_main_ci_fetched_repo.py, tests/test_main_ci_line.py, tests/test_merge_gate_ci_wait.py; в) пути-признаки (гейты): orchestrator/advance_gates/, orchestrator/fsm_advance.py, orchestrator/fsm_autogate.py, orchestrator/fsm_merge_gate.py; в) защищённые пути: tests/test_invariants.py"
+spec_sha: 924d3943c06bcac9dabe1b87d05f0a1325b82761
 schema_version: 5
 ---
 
 # SPEC-AUDIT: CI ветки внешнего проекта: запросы gh к репозиторию проекта
 
 ## ТЗ и SPEC
-Сверка ТЗ → SPEC:
-- ТЗ «Требуется» 1 → SPEC требование 1 (SPEC.md:28-42): адресация `gh api` через `GH_REPO`, `gh run`/`gh pr` через `--repo`, токен слота. Отражено.
-- ТЗ «Требуется» 1, последняя фраза («у артели … ни на байт») → SPEC требование 2 (SPEC.md:43-56). Отражено.
-- ТЗ «Требуется» 2 (полный перечень функций и вызывающих) → SPEC требование 3 (SPEC.md:57-110). Отражено, перечень сверен ниже.
-- ТЗ «Требуется» 3 (фиксация до правки) → требование 4 (SPEC.md:111-112). ТЗ «Требуется» 4 (подставной `gh`, учебный проект) → требование 5 и AC-4..AC-6. Отражено.
-- Критерии ТЗ → AC-1, AC-2/AC-3, AC-4. Зоны, «Только чтение» и «Не входит» перенесены дословно (SPEC.md:6, :196-209).
+ТЗ → SPEC:
+- ТЗ «Требуется» 1 (gh api через `GH_REPO` без `--repo`, gh run/pr — `--repo`,
+  токен слота, артель без изменений) → требования 1-2 SPEC. Есть.
+- ТЗ 2 (репозиторий доходит до всех функций пути verifying/ci-rerun/автогейт/
+  гейт мержа, перечень по коду) → требование 3, перечень функций и вызывающих.
+  Есть; перечень сверен ниже («Факты против кода») — полон.
+- ТЗ 3 (фиксация артели тестами до правки) → требование 6, AC-1. Есть.
+- ТЗ 4 (подставной `gh`, учебный проект, `verifying_status`/`branch_status`
+  зелёные, `trigger_rerun`) → требование 8, AC-4, AC-5, AC-6. Есть.
+- Три критерия ТЗ → AC-1, AC-2/AC-3, AC-4. Есть.
+- Зоны и «только чтение» ТЗ → frontmatter `zones` и «Не входит» SPEC
+  дословно. «Не входит» ТЗ перенесено.
 
-Решение Оператора на гейте SPEC №1 (пять пунктов):
-- (1) прежняя форма вызовов у артели и перечень подмен — SPEC.md:44-56, :215-220. Перенесено, но перечень неполон: см. «Факты против кода», пункт Ф-1.
-- (2) `accepted_full_suite` в AC-1 — SPEC.md:122. Есть.
-- (3) `GH_REPO` без `token_slot` — SPEC.md:39-42 и AC-8 (SPEC.md:170-173). Есть.
-- (4) правило `gitcmd.url_key`, `url` учебного проекта на `.git` или `/` — SPEC.md:33-36, AC-2 (SPEC.md:129-131). Есть.
-- (5) сценарии в AC-2/AC-3 — SPEC.md:133-148. Есть.
+Решения Оператора на гейте SPEC:
+- №1 (1) прежняя форма вызовов артели + подмены → требование 2 (перечень
+  подмен расширен); (2) `accepted_full_suite` в AC-1 → есть; (3) `GH_REPO` без
+  `token_slot` → требование 1, AC-8; (4) правило `gitcmd.url_key`, url на
+  `.git`/`/` → требование 1, AC-2; (5) сценарии AC-2/AC-3 → перечислены. Все
+  перенесены.
+- №2 (1) требование 2 на все функции перечня и вызывающих, «ни одна подмена
+  не правится» → требование 2, AC-1; (2) признак по записи `targets.yaml`,
+  `main_line_status(repo=config.ROOT)` — артель → требование 1 (абзац 3),
+  требование 2, AC-1; (3) `main_line_status` с клоном проекта в AC-2 → есть;
+  (4) `ci_rerun.py:272` `repo=` → требование 5, AC-10; (5)
+  `_inherited_from_main` по `origin/<base>` → требование 4, AC-9; (6)
+  flake-rate «повтор не запущен» → требование 7, AC-11. Все перенесены.
 
-Требований сверх ТЗ и решения Оператора в SPEC нет.
+SPEC → ТЗ: требования 4, 5, 7 вне текста ТЗ, но каждое — прямое решение
+Оператора №2 (5), (4), (6). Лишних требований нет. Расхождений нет.
 
 ## Факты против кода
-Подтвердилось (в рабочем каталоге, main):
-- `ci.gh` — `ci.py:39`; `--repo` дописывается к любому argv (`ci.py:64`), `env` с `GH_TOKEN` ставится только при непустом токене (`ci.py:65-71`), `cwd=config.ROOT` — `ci.py:72` (в SPEC сказано `:73`, а ТЗ называет `:72`; на смысл не влияет).
-- `_repo_kwargs` — `ci.py:83-95`; `check_runs_page` — `:118`, передаёт `repo` как kwarg `gh` (`:127-129`); `check_runs` — `:143`, без `repo`, зовёт `check_runs_page(sha, page)` (`:169`); `run_list` — `:198`; `_commit_workflow_runs` — `:371`, `gh api` на `:383`, без запроса при отсутствии связки `:380-382`; `_inherited_from_main` — `:474`, `failed_check_names(main_sha)` без репозитория на `:481`; `verifying_status` — `:600`, вызов `_inherited_from_main` на `:660`; `_no_checks_by_branch` — `:674`, `run_list(branch)` на `:678`; `failed_check_names` — `:732`; `branch_status` — `:767`, `:814`; `accepted_full_suite` — `:823`, ранний отказ для внешнего клона на `:829-830`; `_main_line_runs` — `:974`; `main_line_status` — `:1029`; `find_run_id` — `:1136`, `gh api` на `:1162`, `check_runs` при `len(failed) > 1` на `:1180-1181`; `check_run_workflow_run` — `:1211`, `gh api` на `:1221`; `trigger_rerun` — `:1235`, `head_sha(branch)` без клона на `:1256`, `gh run rerun`/`watch` на `:1254`, `:1262`, `:1267`.
-- Вызывающие: `ci_rerun.py:123`, `:158`, `:224`, `:232`, `:244`, `:267`, `:279`, `:298`; `fsm_merge_gate.py:290`, `:293`, `:341`, `:579`, `:618`, ранний выход `is_artel` на `:571`, `:614`; `acceptance.py:2069`, `:2087`, `:2184`; `github_adapter.py:168`, `:193`, `:306`; `fsm_advance.py:453`, `fsm_autogate.py:287`. Других вызовов перечисленных функций `ci` в `orchestrator/` и `scripts/` нет, кроме названных в «Не входит» (`pin.py:86`, `doctor/main_ci.py:33`). `advance_gates/` функций `ci` не зовёт. Совпадает.
-- Утверждение «тестов, утверждающих `--repo` у `gh api`, нет» (SPEC.md:223-224) верно: `--repo` упоминается только в `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py:166-198`, и там речь о `gh pr ready` (`undraft_mr`), который требование 1 не меняет.
+Сверено по рабочему каталогу (ветка задачи = main на момент аудита):
+- `ci.gh` `ci.py:39-80`, `cwd=config.ROOT` — `ci.py:73`; `--repo` дописывается
+  к любому argv (`:63`), токен — `gitcmd.project_by_url` + `hosting_token`
+  (`:65-71`). Подтверждено.
+- `_repo_kwargs` `ci.py:83-95`: `None` и `is_artel(repo)` → `{}`; `config.ROOT`
+  не клон артели (`repo_context.py:170-171`) → `{"repo": ROOT}`. Подтверждено;
+  отсюда верна оговорка требования 2 про `pin.py:86`/`doctor/main_ci.py:33`.
+- `check_runs_page :118` (repo как `--repo`), `check_runs :143` (repo нет),
+  `run_list :198`, `_commit_workflow_runs :371` (gh api `:383`), `_inherited_from_main
+  :474-488` (`head_sha("main")` `:478`, `failed_check_names(main_sha)` `:481`),
+  `verifying_status :600`, `_no_checks_by_branch :674` (`run_list(branch)` `:678`),
+  `failed_check_names :732`, `branch_status :767`, `accepted_full_suite :823`
+  (отказ внешнему `:829`), `_main_line_runs :974`, `main_line_status :1029`,
+  `find_run_id :1136` (gh `:1162`, `check_runs` `:1180-1181`),
+  `check_run_workflow_run :1211` (gh `:1221`), `trigger_rerun :1235`
+  (`head_sha(branch)` `:1256`), `rerun_started :1274-1289`, тексты «не запущен»
+  `:1258`, `:1261`, `:1265`. Все подтверждены.
+- Вызывающие: `ci_rerun.py:123, :158, :224, :232, :244, :267, :272, :279, :298`;
+  `fsm_merge_gate.py:290, :293, :341, :571, :579, :614, :618`, узел
+  `_ci_confirm_red_or_flake :280-309`; `acceptance.py:2069, :2087, :2184`;
+  `github_adapter.py:168, :193, :306`; `fsm_advance.py:453`;
+  `fsm_autogate.py:287`; `pin.py:86`; `doctor/main_ci.py:33`. Полный поиск
+  `ci.<функция gh>(` по `orchestrator/` и `scripts/` других вызывающих не дал;
+  `advance_gates/` функций `ci` не зовёт. Подтверждено.
+- `fsm._origin_main_sha(target, *, repo=None)` `fsm.py:166`, образец `:264-269`;
+  при `repo=None` фетч по адресу проекта в `config.ROOT` (`:207-208`).
+  Подтверждено.
+- `gitcmd.url_key` `gitcmd.py:44-46`; `token_slot` нет → `(None, None)`
+  `gitcmd.py:133-135`; sled `url` — `targets.yaml:70`. Подтверждено.
+- Подмены требования 2: `test_invariants.py:326-328`, `test_ci_status.py:160,
+  :367, :372, :798`, `test_main_ci_line.py:62`, `test_merge_gate_ci_wait.py:82`,
+  `test_ci_rerun_command.py:238, :242`, `test_ci_stuck_check_run.py:220`,
+  `test_main_ci_fetched_repo.py:64`, `test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203`.
+  Подтверждены (форма как названа). Перечень помечен «среди них» — не
+  исчерпывающий: ещё `test_ci_status.py:793` и `:846` (`head_sha` как
+  `lambda branch:` под `trigger_rerun`), `test_merge_gate_ci_wait.py:78`
+  (`branch_status` как `lambda branch, repo=None:`), `test_ci_rerun_command.py:254`
+  (`_origin_main_sha` как `lambda *a, **kw:`) — все держит общее правило AC-1.
+- «Тестов, утверждающих `--repo` у gh api, нет»: литерала `--repo` в `tests/`
+  нет; `test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py:191` проверяет
+  `repo` у `gh pr ready` — форма `gh pr` остаётся. «Подтверждённый красный» —
+  только `test_merge_gate_ci_wait.py:163` с запущенным повтором. Подтверждено.
 
-Не подтвердилось / неполно:
-- **Ф-1. Перечень функций с прежней формой вызова и перечень подмен в требовании 2 неполны.** Требование 2 (SPEC.md:44-56) закрепляет прежнюю форму только для `ci.gh`, `head_sha`, `check_runs`, `run_list`, `find_run_id`, `trigger_rerun`, а AC-1 (SPEC.md:124-127) проверяет только закрытый перечень подмен. При этом на main есть подмены, написанные под прежнюю форму, которых нет в перечне:
-  - `tests/test_ci_rerun_command.py:242` — `failed_check_names` как `failed_names(sha)`, `:238` — `trigger_rerun` как `trigger(branch)`. Задача там — артель, путь `_red_rerun` (`ci_rerun.py:267`, `:279`, `:298`);
-  - `tests/test_ci_stuck_check_run.py:219-220` — `check_run_workflow_run` как `lambda cid:` (`ci_rerun.py:224`);
-  - `tests/test_main_ci_fetched_repo.py:63-64` — `check_runs` как `lambda sha:` под `main_line_status(…, repo=config.ROOT)` из `pin`/`doctor` (см. Ф-2);
-  - функции того же вида, что уже в перечне: `tests/test_ci_status.py:35`, `:134`, `:457`, `:489`, `:511`, `:521`, `:533`, `:550`, `:553`, `:658-659`, `:794`, `:830`. Правило «прежней формой» на уровне функции их покрывает, но закрытый список AC-1 — нет.
-
-  `failed_check_names` и `check_run_workflow_run` в правило «прежней формой» не входят. Разработчик, который в `ci_rerun.py` всегда передаёт `repo=` (например, `repo=workspace.task_repo(task_id)` для любой задачи), сломает эти подмены. Требование 2 и AC-1 при этом формально выполнены.
-- **Ф-2. Приём `_repo_kwargs`, на который SPEC ссылается как на механизм различения «артель или нет», не отличает главную копию пульта от клона внешнего проекта.** `_repo_kwargs(config.ROOT)` возвращает `{"repo": config.ROOT}`: `is_artel` для пути сравнивает его с `clone_path(DEFAULT_TARGET)` (`repo_context.py:170-171`), а `pin.py:86` и `doctor/main_ci.py:33` зовут `main_line_status(sha, repo=config.ROOT)`. Если разработчик отправит `gh` в репозиторий проекта по признаку «`_repo_kwargs` не пуст», то вызовы `check_runs`/`_commit_workflow_runs` из `main_line_status` у артели (pin-update, `doctor main-ci`) пойдут в новой форме: `check_runs(commit, repo=…)`, возможно с `GH_REPO`. Это ломает `tests/test_main_ci_fetched_repo.py:64` и меняет argv/окружение вызовов артели. SPEC выводит вызывающих `pin.py`/`doctor` из зоны (SPEC.md:206-207), но не говорит, что `main_line_status(repo=config.ROOT)` — случай артели, у которого `gh` не меняется. AC-1 этот случай не называет.
+Несовпадений нет.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да, но закрытым перечнем | В `gh` артели появился `GH_REPO` или `env=`; `cwd` ≠ `config.ROOT`; внутренний вызов артели получил kwarg `repo=None` (ломает подмену `lambda sha:`). **Не ловит** (Ф-1, Ф-2): `ci_rerun` всегда передаёт `repo=` в `failed_check_names`/`check_run_workflow_run`; `main_line_status(repo=config.ROOT)` уходит в новую форму — этих подмен нет в перечне AC-1 |
-| AC-2 | да | `check_runs_page` оставил `--repo` у `gh api`; `_inherited_from_main` не передал репозиторий в `failed_check_names(main_sha)`; `_commit_workflow_runs`/`find_run_id`/`check_run_workflow_run` без `GH_REPO`; `GH_REPO` взят из `url` без снятия `.git`/`/`. Слабее для `main_line_status`/`_main_line_runs`: их сценария в списке AC-2 (SPEC.md:133-143) нет, а оба вызывающих в проде рано выходят для внешнего проекта (`fsm_merge_gate.py:571`, `:614`) |
-| AC-3 | да | `run_list` из `_no_checks_by_branch` без `--repo`; `gh run rerun`/`watch` без `--repo`; без `GH_TOKEN` |
-| AC-4 | да | `verifying_status` не передал репозиторий в `check_runs` — подставной `gh` без `GH_REPO` отвечает 422, исход «голова ветки не в origin» |
-| AC-5 | да | `branch_status` не передал репозиторий в `check_runs` |
-| AC-6 | да | `trigger_rerun` читает голову в клоне артели (`ci.py:1256`); `find_run_id` без `GH_REPO`; `rerun`/`watch` без `--repo` |
-| AC-7 | да | `ci_rerun.py:224`/`:267`/`:279`/`:232`/`:298` или `fsm_merge_gate.py:290` не передают репозиторий проекта |
-| AC-8 | да | `GH_REPO` ставится только вместе с токеном (как сейчас `env` на `ci.py:69-71`); при отсутствии токена `GH_TOKEN` всё же выставлен пультом |
+| AC-1 | да | артель получает `GH_REPO`/`--repo`/`GH_TOKEN`; признак внешнего — «не клон артели» (ловит `main_line_status(repo=config.ROOT)`); новый именованный аргумент в вызове артели (ломает подмены `lambda sha:`/`lambda branch:`) |
+| AC-2 | да | `gh api` внешнего с `--repo` либо без `GH_REPO`; `GH_REPO` с `.git`/`/`; пропуск репозитория в одном из мест (`_inherited_from_main`, `_commit_workflow_runs`, `find_run_id`→`check_runs`, `check_run_workflow_run`, `_main_line_runs`) |
+| AC-3 | да | `_no_checks_by_branch` зовёт `run_list(branch)` без репозитория; `gh run` внешнего через `GH_REPO` вместо `--repo` |
+| AC-4 | да | `verifying_status` не передаёт репозиторий в `check_runs` — исход 422 «голова ветки не в origin» |
+| AC-5 | да | то же для `branch_status` |
+| AC-6 | да, с оговоркой К-2 | `trigger_rerun` читает голову в клоне артели; `gh run rerun/watch` без `--repo`; поиск прогона без `GH_REPO` |
+| AC-7 | да | вызывающий в `ci_rerun.py`/`fsm_merge_gate.py` не передаёт репозиторий |
+| AC-8 | да | `GH_REPO` ставится только вместе с токеном |
+| AC-9 | да | вершина — локальная `refs/heads/main`/`<base>` вместо `origin/<base>`; литерал `main` вместо `base` |
+| AC-10 | да | `_origin_main_sha` без `repo=` у внешнего; `repo=` появился у артели |
+| AC-11 | частично (К-1) | при незапущенном повторе и красном — прежние «ре-ран тоже красный»/«подтверждённый красный»; при запущенном — пропала «подтверждённый красный». НЕ ловит: незапущенный повтор + зелёный повторный статус → прежняя запись «флейк: … ре-ран зелёный» |
 
 ## Зоны
-Зоны SPEC (`ci.py`, `ci_rerun.py`, `acceptance.py`, `fsm_merge_gate.py`, `github_adapter.py`, `tests/`) покрывают все места правки по перечню требования 3. `fsm_advance.py:453`, `fsm_autogate.py:287` и `acceptance.py` уже передают клон. Отображение «клон → `url`/слот» читает `targets.py`/`gitcmd.py`/`repo_context.py`, импорт без правки допустим. Защищённый `tests/test_invariants.py` меняться не должен, его подмены (`:326-328`) закреплены требованием 2. Защищённых путей (`skills/`, `templates/`, `gates.yaml`, `roles.yaml`, `.github/`) требования не касаются. Песочница ролей не расширяется. Отклонений нет.
+- Требования меняют `orchestrator/ci.py` (адресация, параметр репозитория,
+  `_inherited_from_main`), `orchestrator/ci_rerun.py` (передача репозитория,
+  `:272`), `orchestrator/fsm_merge_gate.py` (передача в `trigger_rerun :290`,
+  текст flake-rate `:298-306`), `tests/` — все в зонах. `acceptance.py`,
+  `github_adapter.py` в зонах с запасом (правки могут не понадобиться — SPEC
+  это говорит).
+- `docs/codebase-map.md` регенерируется при правке `*.py` — входит в
+  `config.COMMON_ZONES` (`config.py:803`).
+- Помощник «клон → запись `targets.yaml`» строится из `repo_context.clone_path`
+  и `targets.load` без правки `repo_context.py`/`targets.py`/`gitcmd.py` (только
+  чтение) — вне зон менять ничего не требуется.
+- `fsm.py`, `fsm_advance.py`, `fsm_autogate.py` вне зон: правки не нужны
+  (сверено — клон передают, `_origin_main_sha` принимает `repo`).
+- Защищённые пути: `tests/test_invariants.py` — только чтение, подмена
+  `:326-328` должна работать без правки (требование 2). Правок `skills/`,
+  `templates/`, `gates.yaml`, `roles.yaml`, `.github/` нет. Песочница ролей не
+  расширяется.
 
 ## Матрица неослабления
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `ci.gh` для `gh api` внешнего проекта: `--repo` → `GH_REPO` | Токен слота внешнего проекта в `GH_TOKEN` (`ci.py:65-71`; `tests/test_01m545edths47hsb59akc1ez9c_project_token.py`) | да | AC-2, AC-8; существующий тест токена | ок |
-| Внутренние вызовы `ci` у артели | Прежняя форма вызова — подмены `tests/test_invariants.py:326-328` (инвариант 19), `test_ci_status.py`, `test_main_ci_line.py:62`, `test_merge_gate_ci_wait.py:82` | да | AC-1 + требование 4 | ок |
-| То же, подмены вне перечня | `tests/test_ci_rerun_command.py:238`, `:242`; `tests/test_ci_stuck_check_run.py:220`; `tests/test_main_ci_fetched_repo.py:64` | да, если разработчик не поменяет форму вызова | не покрыто закрытым перечнем AC-1 (Ф-1, Ф-2); ловит только полный прогон, а «починка» подмены правкой теста выглядит как не-ослабление | concerns |
-| `main_line_status` у `pin`/`doctor` (`repo=config.ROOT`) | Красный main под документной головой виден (`tests/test_main_ci_fetched_repo.py:68-86`) | да при верной реализации | не названо в SPEC (Ф-2) | concerns |
-| `gh pr` из `github_adapter` | `--repo` у внешнего проекта, нет `--repo` у артели (`tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py:165-198`) | да | не меняется | ок |
-| Инвариант 19 (неизвестное не зелёное) в `check_runs`/`failed_check_names`/`main_line_status` | `tests/test_invariants.py:326-328`, `tests/test_ci_status.py` | да, логика не меняется | существующие тесты | ок |
+| `ci.gh`: `gh api` внешнего без `--repo`, с `GH_REPO` | токен слота у `gh` внешнего (D2-2) — `tests/test_01m545edths47hsb59akc1ez9c_project_token.py:517-544` (gh pr) | да | тот же тест + AC-2, AC-8 | остаётся |
+| признак артели в `ci` | `_repo_kwargs`/`is_artel` — `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py:200-229`, `:165-198` | да (форма `head_sha`, `gh pr` не меняется) | те же тесты + AC-1 | остаётся |
+| адресация `check_runs` в `branch_status` | инвариант 19 (неизвестный CI не зелёный) — `tests/test_invariants.py:320-330` | да | тот же тест (без правки, требование 2) | остаётся |
+| `_inherited_from_main` у внешнего | вершина main артели — `tests/test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203` | да (артель не меняется) | тот же тест + AC-9 | остаётся |
+| текст flake-rate `_ci_confirm_red_or_flake` | «подтверждённый красный» при запущенном повторе — `tests/test_merge_gate_ci_wait.py:154-163`; без flake-rate для не-красного — `tests/test_ci_status_kind_gate.py:99-140` | да | те же тесты + AC-11 | остаётся |
+| `ci_rerun` вершина главной ветки | сверка флейка с main — `tests/test_ci_rerun_command.py:236-258` | да | тот же тест + AC-10 | остаётся |
+| `trigger_rerun` поиск прогона | выбор упавшего прогона — `tests/test_ci_status.py:787-850`, `tests/test_01m49b90t16ar81etfeyy164h1_full_suite_once.py:570-610` | да | те же тесты + AC-6 | остаётся |
 
-Раздела «Меняемое поведение» в SPEC нет, обоснование (SPEC.md:223-224) верно: утверждений о `--repo` у `gh api` в `tests/` нет.
+Раздел «Меняемое поведение» в SPEC отсутствует и не нужен: утверждений,
+литерал «было» которых меняется, на main нет (сверено выше).
 
 ## Пути обхода гейтов
-- **О-1 (из Ф-1).** Разработчик всегда передаёт `repo=` из `ci_rerun.py` в `failed_check_names`/`check_run_workflow_run`/`trigger_rerun` и «чинит» сломанные подмены `tests/test_ci_rerun_command.py:238,242` и `tests/test_ci_stuck_check_run.py:220`, дописав в лямбды `repo=None`/`**kw`. Утверждения тестов при этом не меняются, и гейт неослабления такую правку может не увидеть. AC-1 выполнен, потому что этих подмен в перечне нет. Итог: форма вызова у артели меняется, хотя требование 2 по смыслу это запрещает.
-- **О-2 (из Ф-2).** Различение «внешний или артель» по `_repo_kwargs` (как называет SPEC) переводит `main_line_status(repo=config.ROOT)` у `pin`/`doctor` в новую форму. AC-1 проверяет `main_line_status` только для клона артели или `None`, так что регресс артели в pin-update/`doctor main-ci` проходит AC-1. Его поймает лишь `tests/test_main_ci_fetched_repo.py:64` — а это опять «починка» подмены.
-- **О-3.** Сценарии AC-2 не доходят до `main_line_status`/`_main_line_runs` с внешним клоном. Невыполненное требование 3 для них («репозиторий доходит до всех функций») AC не ловит. В проде путь закрыт ранним выходом (`fsm_merge_gate.py:571`, `:614`), поэтому это мелочь.
+- П-1 (= К-1). Требование 7 исполняется буквально для красного повторного
+  статуса, а при незапущенном повторе и зелёном статусе (`fsm_merge_gate.py:297-302`)
+  остаётся запись «флейк: первый статус красный, ре-ран зелёный» — ложный флейк
+  в метрике flake-rate, AC-11 это пропускает.
+- Прочие очевидные обходы закрыты критериями: признак «не клон артели» ловит
+  AC-1 (`repo=config.ROOT`); сохранение `--repo` рядом с `GH_REPO` ловит «в argv
+  нет `--repo`» AC-2/AC-8; передача репозитория только в `verifying_status` без
+  `_inherited_from_main`/`find_run_id`/`check_run_workflow_run` ловят сценарии
+  AC-2; локальная ветка вместо `origin/<base>` — AC-9.
 
 ## Вердикт
-**concerns.** SPEC выполняет ТЗ и все пять пунктов решения Оператора №1. Факты о коде подтверждены, расхождение в номере строки одно (`ci.py:73` вместо `:72`) и на смысл не влияет. Возврат аналитику не нужен: все отклонения Оператор может снять на гейте одной фразой.
+concerns — отклонения есть, все решаемы Оператором на гейте; SPEC можно вести
+дальше.
 
-1. **Ф-1 / О-1.** Правило «прежней формой» (SPEC.md:44-48) не называет `failed_check_names` и `check_run_workflow_run`. В закрытом перечне подмен (SPEC.md:48-56, :124-127, :215-220) нет `tests/test_ci_rerun_command.py:238`, `:242`, `tests/test_ci_stuck_check_run.py:219-220`, `tests/test_main_ci_fetched_repo.py:63-64`. Предложение: распространить требование 2 на все функции перечня требования 3 и на всех вызывающих из `ci_rerun.py`/`fsm_merge_gate.py`, а AC-1 записать как «ни одна существующая подмена в `tests/` не правится».
-2. **Ф-2 / О-2.** Не определено, по какому признаку `ci.py` отличает внешний проект от артели. Названный приём `ci._repo_kwargs` (SPEC.md:47, `ci.py:83-95`) считает главную копию `config.ROOT` не артелью (`repo_context.py:170-171`), а её передают `pin.py:86` и `doctor/main_ci.py:33`. Предложение: в требовании 2 и AC-1 явно — `main_line_status(…, repo=config.ROOT)` (pin-update, `doctor main-ci`) остаётся вызовом артели без изменения `gh`, а внешний проект узнаётся по записи `targets.yaml` клона, не по «не клон артели».
-3. **О-3 (мелочь).** В AC-2 (SPEC.md:133-143) нет сценария `main_line_status` с клоном внешнего проекта, хотя требование 3 (SPEC.md:80-81) требует довести до неё репозиторий.
+- К-1 (проверяемость, обход). AC-11 не ловит незапущенный повтор с зелёным
+  повторным статусом: требование 7 велит писать «повтор не запущен», но ветка
+  `if rerun_green:` (`orchestrator/fsm_merge_gate.py:297-302`) может остаться
+  прежней («флейк: … ре-ран зелёный»), и критерий пройдёт. Предложение:
+  дополнить AC-11 сценарием «повтор не запущен + `branch_status` зелёный» —
+  запись flake-rate «повтор не запущен» с причиной, без «флейк».
+- К-2 (проверяемость/интерфейс). SPEC не задаёт, в каком виде репозиторий
+  проекта доходит до `check_runs`, `failed_check_names`, `find_run_id`,
+  `check_run_workflow_run`, `trigger_rerun` (имя и тип параметра: путь клона, как
+  у `head_sha`/`verifying_status` `ci.py:98`, `:600`, или URL, как у `gh`/
+  `check_runs_page`/`run_list` `ci.py:39`, `:118`, `:198` — `repo` в модуле уже
+  значит и то и другое). AC-6 описан как прямой вызов `trigger_rerun` внешней
+  задачи: автор тестов угадывает сигнатуру → риск эскалации
+  `тест-навязывает-устройство` в `in_dev`. Предложение: назвать форму
+  (например, `repo=<путь клона>` — как у `verifying_status`) либо проверять
+  AC-6 только через `ci-rerun`/гейт мержа.
+- К-3 (полнота правила). «`GH_REPO` — два последних сегмента пути адреса»
+  (требование 1) не определено для scp-адреса `git@github.com:<владелец>/<имя>.git`:
+  разбиение по `/` даёт `git@github.com:<владелец>/<имя>`. Поле `url`
+  (`orchestrator/targets.py:27`) — свободный текст; сейчас в `targets.yaml:26,
+  :70` только https. Низкая важность; ответ Оператора — либо «только https»,
+  либо правило для scp-формы.
+
+Замечания без отклонения: перечень подмен требования 2 не исчерпывающий
+(названы ещё `tests/test_ci_status.py:793`, `:846`, `tests/test_merge_gate_ci_wait.py:78`,
+`tests/test_ci_rerun_command.py:254`), но правило AC-1 «ни одна подмена не
+правится» их покрывает. Признак внешнего по записи `targets.yaml` (решение
+Оператора №2 (2)) — второй признак рядом с `repo_context.is_artel`
+(`repo_context.py:154-158`, «единственный признак»); как они сочетаются при
+подмене `is_artel` (`tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py:226`),
+SPEC не говорит; текущие тесты это не ломает.

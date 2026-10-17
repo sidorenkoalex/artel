@@ -1,15 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Аудит SPEC sha 05cad0f2: пять пунктов решения Оператора №1 перенесены; номера строк ci.py/ci_rerun.py/fsm_merge_gate.py/acceptance.py/github_adapter.py верны (ci.py:73 → фактически :72).
-- Подмены вне перечня требования 2: tests/test_ci_rerun_command.py:238 (trigger_rerun `trigger(branch)`), :242 (failed_check_names `failed_names(sha)`), tests/test_ci_stuck_check_run.py:220 (check_run_workflow_run `lambda cid:`), tests/test_main_ci_fetched_repo.py:64 (check_runs `lambda sha:` под main_line_status(repo=config.ROOT)).
-- `_repo_kwargs(config.ROOT)` → {"repo": ROOT}: is_artel(Path) сравнивает с clone_path артели (repo_context.py:170-171); pin.py:86 и doctor/main_ci.py:33 — артель, но не «клон артели».
+- Аудит SPEC sha 924d3943: все ссылки файл:строка SPEC (ci.py, ci_rerun.py, fsm_merge_gate.py, acceptance.py, github_adapter.py, fsm.py:166/264, gitcmd.py:44-46/133-135, pin.py:86, doctor/main_ci.py:33, targets.yaml:70, подмены в tests/) сверены — совпадают.
+- Решения Оператора №1 (1-5) и №2 (1-6) перенесены полностью.
+- Тестов с литералом `--repo` в tests/ нет; test_merge_gate_ci_wait.py:82 подмена «ре-ран (тест)» — повтор запущен, :163 держит «подтверждённый красный».
+- Отклонения (concerns, не fail): К-1 AC-11 не ловит «флейк: … ре-ран зелёный» при незапущенном повторе (fsm_merge_gate.py:297-302); К-2 форма передачи репозитория в check_runs/failed_check_names/find_run_id/check_run_workflow_run/trigger_rerun не задана (`repo` в ci.py уже значит и URL, и путь клона) — риск «тест-навязывает-устройство» на AC-6; К-3 правило GH_REPO «два последних сегмента» не определено для scp-адреса.
 
 ## Не сработало
-- grep с `--include=*.py` и сложные пайпы в Bash режет песочница — простые grep по абсолютному пути проходят.
+- `==` как разделитель в zsh-команде и `awk`/`$var` в Bash — песочница/zsh режут; использовать `--`.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns (Ф-1 неполный перечень подмен/функций, Ф-2 признак артели для config.ROOT, О-3 нет сценария main_line_status в AC-2); guard ок.
+- SPEC-AUDIT.md написан, verdict concerns, guard прогнан.
 
 ## Чего не хватило
-- Нет помощника «путь клона → запись targets.yaml» в ci.py; SPEC механизм различения не задаёт.
+- Помощника «путь клона → запись targets.yaml» в коде нет (repo_context.clone_path только имя→путь).
