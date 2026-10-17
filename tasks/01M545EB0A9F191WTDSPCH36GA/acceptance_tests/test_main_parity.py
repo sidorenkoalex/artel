@@ -42,11 +42,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _pult import CODE_ROOT, DIFF_BASE  # noqa: E402
 
-# AC-7: escalate — SPEC не называет точку вызова проверки project_skills без сборки брифа (модуль, имя, аргументы, форма исхода), тест без неё не написать; варианты: А) публичная функция brief.project_skills_refusal(target: str, entry: dict) -> str | None — None нет отказа, строка — текст отказа, тот же, что входит в отказ шага; Б) иное имя/форма — назовите; В) снять AC-7 до части 2 (doctor). Дефолт при молчании — А.
-#
-# Остальные критерии: AC-1 — здесь и в долгоживущем файле
+# Критерии: AC-1 — здесь и в долгоживущем файле
 # tests/test_01m545eb0a9f191wtdspch36ga_project_role_step.py (там же AC-2,
-# AC-3, AC-4, AC-6, AC-8); AC-5 — здесь.
+# AC-3, AC-4, AC-6, AC-7, AC-8); AC-5 — здесь; AC-7 (вариант А ответа
+# Оператора 17.10, `brief.project_skills_refusal`) — в долгоживущем файле
+# и в test_main_head_skills.py (скил только на диске пульта).
 
 SCENARIO = Path(__file__).resolve().parent / "_parity_scenario.py"
 STATES = ("tests_writing", "review")
