@@ -542,11 +542,15 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
     не прочитаны): зелёный долгоживущий файл рядом с ещё красной планкой —
     обычное состояние задачи в разработке, не повод для отказа."""
     extra = sorted(long_lived)
-    collected, tail = acceptance.collect(acc_tdir, cwd, extra=extra)
+    # Профиль `pytest-own` проекта задачи — каналом `command` (SPEC
+    # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — прежний вызов без него.
+    own = acceptance._task_own_profile(conn, task_id)
+    kwargs = {"command": own} if own is not None else {}
+    collected, tail = acceptance.collect(acc_tdir, cwd, extra=extra, **kwargs)
     if not collected:
         _refuse(conn, task_id, "сухой сбор планки и долгоживущих файлов "
                 f"({', '.join(extra)}) не прошёл", [tail])
-    green, tail = acceptance.run(acc_tdir, cwd=cwd, extra=extra)
+    green, tail = acceptance.run(acc_tdir, cwd=cwd, extra=extra, **kwargs)
     if not green:
         failed = acceptance.failed_test_lines(tail)
         suspects = [(rel, text) for rel, text in sorted(long_lived.items())
@@ -712,10 +716,15 @@ def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
     # правки, маркер красноты его не покрывает (SPEC
     # 01M4JD36367E5CG3GXDV429XTE, требование 4) — тем же отказом, что путь
     # с долгоживущими файлами (`_collect_and_run`).
-    collected, collect_tail = acceptance.collect(tdir)
+    # `pytest-own` — профилем и с `cwd` рабочей копии задачи: `workdir`
+    # профиля отсчитывается от неё (SPEC 01M52EEHSRD93WMPHWB5VJYRKD); у
+    # `pult-pytest` — прежний вызов от корня пульта.
+    own = acceptance._task_own_profile(conn, task_id)
+    kwargs = {"cwd": wt_path, "command": own} if own is not None else {}
+    collected, collect_tail = acceptance.collect(tdir, **kwargs)
     if not collected:
         _refuse(conn, task_id, "сухой сбор планки не прошёл", [collect_tail])
-    green, tail = acceptance.run(tdir)
+    green, tail = acceptance.run(tdir, **kwargs)
     if not green:
         # Обязательный прогон (ТЗ п.6, инцидент опечатки 03.09) — не «OK»
         # блокирует, КРОМЕ падений, промаркированных «Красен до

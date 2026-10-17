@@ -591,7 +591,9 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         gates.append(lambda: _tests_writing_long_lived_gate(
             task_id, t["branch"], code_diff, long_lived, profile,
             network_addresses=network_addresses))
-    command = list(profile.command) if profile is not None else None
+    # `pytest-own` — профилем целиком (SPEC 01M52EEHSRD93WMPHWB5VJYRKD).
+    command = (acceptance._own(profile) or list(profile.command)
+               if profile is not None else None)
     gates.append(lambda: _tests_writing_dry_collect_gate(
         acc_tdir, run_cwd, task_id, extra=long_lived_paths, command=command))
     if code_diff is not None:
