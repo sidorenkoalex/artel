@@ -70,10 +70,17 @@ budget_usd: 25
    разработчик) при условии:
    - подменяется только источник времени или таймаута, который читает код
      копии пульта; сам обрыв выполняет код копии пульта по переданному ему
-     пределу — место подмены не выше `orchestrator/acceptance.py:1548`
-     (`proc.communicate(timeout=limit[0])`); заменять заглушкой
-     `acceptance.run_full_suite`, `_run_full_suite_now` или иной код
-     между `suite_run._run` и этой строкой нельзя;
+     пределу. Фоновый `suite-run` передаёт `log=log`
+     (`orchestrator/suite_run.py:579-581`), поэтому `_run_full_suite_now`
+     уходит в `_run_full_suite_to_log` (`orchestrator/acceptance.py:1538-1540`),
+     и обрыв происходит в `proc.wait(timeout=limit[0])`
+     (`orchestrator/acceptance.py:1598`) — место подмены не выше этой
+     строки. Заменять заглушкой `acceptance.run_full_suite`,
+     `_run_full_suite_now`, `_run_full_suite_to_log`
+     (`orchestrator/acceptance.py:1579-1610`) или иной код между
+     `suite_run._run` и строкой `:1598` нельзя: функция
+     `_run_full_suite_to_log` и её `proc.wait` исполняются настоящими,
+     подменяется только источник времени или таймаута;
    - подмена — только в копии пульта в песочнице теста; код пульта
      рабочего дерева (`orchestrator/`) не меняется.
 2. Утверждения метода не удаляются и не ослабляются — все пять:
@@ -115,9 +122,13 @@ AC-2. Исход теста не зависит от нагрузки машин
 
 AC-3. Обрыв выполняет код копии пульта по переданному ему пределу:
 подменён только источник времени или таймаута, место подмены не выше
-`orchestrator/acceptance.py:1548`; `acceptance.run_full_suite`,
-`_run_full_suite_now` и код между `suite_run._run` и этой строкой в копии
-заглушкой не заменены (требование 1).
+`proc.wait(timeout=limit[0])` (`orchestrator/acceptance.py:1598`, путь
+`orchestrator/suite_run.py:579-581` → `orchestrator/acceptance.py:1538-1540`);
+`acceptance.run_full_suite`, `_run_full_suite_now`,
+`_run_full_suite_to_log` (`orchestrator/acceptance.py:1579-1610`) и код
+между `suite_run._run` и строкой `:1598` в копии заглушкой не заменены —
+`_run_full_suite_to_log` и её `proc.wait` исполняются настоящими
+(требование 1).
 
 AC-4. В методе по-прежнему есть все пять утверждений `:612`, `:617`,
 `:619`, `:620`, `:621-622` (на main): запуск фона, старт пробника,
@@ -131,9 +142,11 @@ AC-5. При любом зерне фикстуры id задачи, имя пр
 
 AC-6. Мутация «фоновый `suite-run` берёт `config.FULL_SUITE_TIMEOUT_SEC`,
 а не предел профиля» (докстринг теста `:601-604`) — тест краснеет, в
-том числе когда предел config подставлен в
-`proc.communicate(timeout=…)` (`orchestrator/acceptance.py:1548`) вместо
-переданного предела.
+том числе когда предел config подставлен в `proc.wait(timeout=…)`
+(`orchestrator/acceptance.py:1598`) вместо переданного `limit[0]`, а
+строка отчёта по-прежнему называет N (`orchestrator/suite_run.py:593`).
+Подмена времени/таймаута в тесте чувствительна к N: обрыв по любому
+пределу, отличному от N, делает тест красным.
 
 AC-7. Мутация «отчёт о таймауте печатает значение config, а не N»
 (докстринг теста `:601-604`) — тест краснеет.
@@ -160,14 +173,21 @@ AC-8. 50 прогонов теста подряд под нагрузкой из
 ## Материалы
 - ТЗ: `tasks/01M55VG9Q5A5341ZED8NRJKVTC/TZ.md`; аудит:
   `tasks/01M55VG9Q5A5341ZED8NRJKVTC/SPEC-AUDIT.md` (Т-1, О-1, П-1, Ф-1 —
-  решения Оператора 18.10 внесены).
+  решения Оператора 18.10 внесены; повторный аудит: якорь обрыва
+  `:1548` → `:1598`, запрет заглушки на `_run_full_suite_to_log`,
+  N-чувствительная мутация AC-6 — внесены по решению Оператора 18.10).
 - Копилка: `docs/backlog.md:49` (17.10), `:72` (13.10), `:68` (класс
   ошибки «межзадачный amend-tests»); строка 07.10 — коммит `8f6a4e4a`
   («N=4; отчёт (код 1)», прогон 37564791553).
 - Строка отчёта: `orchestrator/suite_run.py:423-464` (`render`); коды
   выхода `--wait` — `:717-740`; предел —
-  `orchestrator/project_profile.py:166-174` (`full_suite_limit`); обрыв —
-  `orchestrator/acceptance.py:1548`.
+  `orchestrator/project_profile.py:166-174` (`full_suite_limit`); обрыв
+  фонового `suite-run` — `orchestrator/acceptance.py:1598`
+  (`proc.wait(timeout=limit[0])` в `_run_full_suite_to_log`,
+  `:1579-1610`), путь `orchestrator/suite_run.py:579-581` →
+  `orchestrator/acceptance.py:1538-1540` (`log=log`). Строка `:1548` —
+  ветка без лога, фоновым `suite-run` не исполняется (решение Оператора
+  18.10, уточнение якоря).
 - Замечание аудита О-2: 50/50 под нагрузкой статистически слепы к 1%-му
   дефекту id (≈60% пройти и без требования 3) — требование 3 держит AC-5
   на ревью, не AC-8.
