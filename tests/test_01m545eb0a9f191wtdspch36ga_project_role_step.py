@@ -3,7 +3,7 @@
 
 Группа: долгоживущий
 
-Красен до реализации: бриф шага несёт только скилы роли из `roles.yaml` — текстов `project_skills` в нём нет (AC-2), а неверное имя скила не отказывает (AC-3); argv роли Claude задачи внешнего проекта несёт `Bash(python3:*)`, а окружение шага любого провайдера — без `GIT_CONFIG_NOSYSTEM=1` (AC-4, AC-6); шаг задачи с необъявленным проектом или при нечитаемом `targets.yaml` не отказывает именованным отказом, называющим задачу и причину (AC-8).
+Красен до реализации: бриф шага несёт только скилы роли из `roles.yaml` — текстов `project_skills` в нём нет (AC-2), а неверное имя скила не отказывает (AC-3); функции `brief.project_skills_refusal` нет — вызов падает `AttributeError` (AC-7); argv роли Claude задачи внешнего проекта несёт `Bash(python3:*)`, а окружение шага любого провайдера — без `GIT_CONFIG_NOSYSTEM=1` (AC-4, AC-6); шаг задачи с необъявленным проектом или при нечитаемом `targets.yaml` не отказывает именованным отказом, называющим задачу и причину (AC-8).
 
 Файл провалидирован временным стабом реализации в `runner`: проект задачи
 — `targets.target(t["target"])` с отказом `run отклонён: проект задачи не
@@ -12,7 +12,11 @@
 задачи не артели. Все методы зелёные в нескольких прогонах с разными
 зёрнами. Мутации стаба: меры для всех задач красят AC-1 и контроль AC-6;
 проверка имени только по существованию красит AC-3 (родительский каталог,
-абсолютный путь, подкаталог). Стаб удалён, код репозитория не тронут.
+абсолютный путь, подкаталог). AC-7 — вторым стабом
+`brief.project_skills_refusal` (её строка — в отказе шага): зелёный;
+мутации «проверка только по существованию файла» и «отказ шага своим
+текстом, не строкой проверки» красят его. Стабы удалены, код репозитория
+не тронут.
 
 Публичная поверхность, которую читает файл:
 
@@ -27,7 +31,10 @@
   голове main» — файл `config.ROOT/skills/<имя>.md` песочницы. Различие
   «голова main / только диск пульта» (SPEC, требование 2) этому файлу
   недоступно — его держит разовая планка задачи;
-- скилы роли — `roles.skills(role)` карты-фикстуры (`use_role_map`).
+- скилы роли — `roles.skills(role)` карты-фикстуры (`use_role_map`);
+- проверка `project_skills` без брифа — `brief.project_skills_refusal(
+  target, entry) -> str | None` (решение Оператора 17.10, ANSWER-1 п.1):
+  `None` — отказа нет, строка — текст отказа, входящий в отказ шага.
 
 Окружение — `tests/sandbox.py` (`LightTransitionSandbox`,
 `use_catalog_fixture`, `use_role_map`, `seed_developer_brief_fixtures`).
@@ -46,8 +53,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (catalog, config, keychain, models, roles, runner,
-                          store, targets)
+from orchestrator import (brief, catalog, config, keychain, models, roles,
+                          runner, store, targets)
 from tests.sandbox import (FIXTURE_CODEX_MODEL, FIXTURE_TIER, FakeProc,
                            LightTransitionSandbox, TimeWithSleep,
                            capture_new_task_id, event,
@@ -359,6 +366,54 @@ class ProjectSkillsBriefSandbox(ProjectStepSandbox):
         self.assertTrue(good_text in call["prompt"], self.note(
             f"{why}: нет скила {good} в брифе {good_project}"))
 
+    def assert_check_matches_brief(self, kind: str, bad: str) -> None:
+        """Проект с неверным именем `bad` среди верных проектных скилов:
+        `brief.project_skills_refusal` по его записи `targets.load()` —
+        непустая строка с `bad`, и она целиком входит в отказ шага его
+        задачи (агент не запущен); по записи соседнего проекта с верным
+        полем и по записи артели — `None`."""
+        good, _ = self.project_skill("verno")
+        good_project = f"verno{word(self.rnd)}"
+        self.declare_project(good_project, [good])
+        field = [self.project_skill(f"o{i}")[0]
+                 for i in range(self.rnd.randint(0, 2))]
+        field.insert(self.rnd.randint(0, len(field)), bad)
+        project = f"slom{word(self.rnd)}"
+        self.declare_project(project, field)
+        why = f"{kind}: проект {project}, поле {field}"
+        entries = targets.load()
+
+        check = brief.project_skills_refusal(project, entries[project])
+
+        self.assertIsInstance(check, str, self.note(f"{why}: {check!r}"))
+        self.assertTrue(check.strip(), self.note(f"{why}: пустой отказ"))
+        self.assertIn(bad, check, self.note(f"{why}: {check!r}"))
+        step = self.run_step(self.new_task(project))
+        self.assert_not_launched(step, why)
+        self.assertIn(check.strip(), step["text"], self.note(
+            f"{why}: отказ проверки {check!r} не входит в отказ шага:\n"
+            f"{step['text']}"))
+        for name in (good_project, config.DEFAULT_TARGET):
+            self.assertIsNone(
+                brief.project_skills_refusal(name, entries[name]),
+                self.note(f"{why}: отказ по верному полю проекта {name}"))
+
+    def invalid_names(self) -> dict:
+        """Виды неверного имени AC-3 → имя; файлы первых трёх видов в
+        голове main песочницы есть — отказ обязан следовать из имени."""
+        sub = f"pod{word(self.rnd)}/imya{word(self.rnd)}"
+        self.place_in_main(f"skills/{sub}.md", "# скил в подкаталоге\n")
+        outside = self.rnd.choice(["CLAUDE", "templates/PLAN"])
+        absolute = str(self.root / outside)
+        # Абсолютное имя в форме `skills/<имя>.md` — путь внутри `skills/`.
+        self.place_in_main(f"skills/{absolute.lstrip('/')}.md", "# абс\n")
+        return {
+            "родительский каталог": f"../{outside}",
+            "абсолютный путь": absolute,
+            "подкаталог skills/": sub,
+            "нет файла": f"net{word(self.rnd)}",
+        }
+
 
 class ProjectSkillsBriefTest(ProjectSkillsBriefSandbox):
 
@@ -398,21 +453,32 @@ class ProjectSkillsBriefTest(ProjectSkillsBriefSandbox):
         проект или поле; проверка перенесена в `targets.py` и делает
         `targets.yaml` негодным для всех проектов (`targets.load()`
         отказывает, соседний проект не стартует)."""
-        sub = f"pod{word(self.rnd)}/imya{word(self.rnd)}"
-        self.place_in_main(f"skills/{sub}.md", "# скил в подкаталоге\n")
-        outside = self.rnd.choice(["CLAUDE", "templates/PLAN"])
-        absolute = str(self.root / outside)
-        # Абсолютное имя в форме `skills/<имя>.md` — путь внутри `skills/`.
-        self.place_in_main(f"skills/{absolute.lstrip('/')}.md", "# абс\n")
-        kinds = {
-            "родительский каталог": f"../{outside}",
-            "абсолютный путь": absolute,
-            "подкаталог skills/": sub,
-            "нет файла": f"net{word(self.rnd)}",
-        }
-        for kind, bad in kinds.items():
+        for kind, bad in self.invalid_names().items():
             with self.subTest(kind=kind, name=bad):
                 self.assert_invalid_name_refused(kind, bad)
+
+    def test_ac7_project_skills_check_by_entry_same_text_as_brief(self):
+        """Проверка `project_skills` по записи проекта, без брифа, — тот же отказ, что у шага.
+
+        Сценарий (`subTest` на вид неверного имени AC-3: родительский
+        каталог, абсолютный путь, подкаталог `skills/`, нет файла): для
+        каждого вида свой внешний проект, неверное имя — среди верных.
+        `brief.project_skills_refusal(<проект>, <запись targets.load()>)`
+        зовётся без задачи и без сборки брифа и возвращает непустую строку
+        с неверным именем; шаг задачи этого проекта не запускает агента,
+        и эта строка целиком входит в его отказ. По записи соседнего
+        проекта с верным полем и по записи артели (`project_skills: []`)
+        проверка возвращает `None`.
+
+        Ловит мутацию: у брифа и у отдельной проверки разные правила —
+        проверка смотрит только на существование файла (`../CLAUDE`,
+        абсолютный путь, `sub/name` дают `None`) или бриф отказывает
+        своим текстом, а не текстом проверки (строки нет в отказе шага);
+        проверка отказывает и по верному полю (пустой список артели или
+        имя существующего скила)."""
+        for kind, bad in self.invalid_names().items():
+            with self.subTest(kind=kind, name=bad):
+                self.assert_check_matches_brief(kind, bad)
 
 
 class ProjectRoleMeasuresTest(ProjectStepSandbox):
