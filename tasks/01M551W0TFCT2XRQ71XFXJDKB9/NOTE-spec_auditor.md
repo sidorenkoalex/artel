@@ -1,15 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Ссылки SPEC на код сходятся: role_prompt.py:36/78-80/94/114, checkpoint.py:376/384/412/497, runner.py:1310-1346.
-- Находка: коммит test_author идёт через `_commit_worktree_change` с зонным фильтром `_stray_staged_paths(_zone_paths)` (checkpoint.py:1731, 1550): COMMON_ZONES несёт `tests/` артели, `backend/tests/` внешнего проекта вне зон задачи снимается со стейджа — SPEC это место не называет.
-- SPEC не говорит, что делать при Decision без профиля (refusal/skip, project_profile.py:140-159) в задании/чекпоинте/проверке артефакта.
+- Визит 2 (SPEC sha 9a7625b7): решения гейта №1 (Ф-1 (б), Ф-2, П-1, О-4) отражены в требованиях 3, 5 и AC-3..AC-7.
+- Новая находка Ф-3: гейт зон in_dev->review у внешнего проекта без COMMON_ZONES (advance_gates/zones.py:274) — файл роли backend/tests/…, закоммиченный чекпоинтом по требованию 3 при зонах backend/src/, гейт отклонит; advance_gates/ — только чтение.
+- П-2: при Decision.skip проверка артефакта runner.py критерием не задана (AC-7 только задание и отбор).
+- Фикстуры тестов несут профиль артели (tests/sandbox.py:1099-1107, 1606, 1925) — ветка refusal прежние тесты не ломает.
 
 ## Не сработало
-- sed после cd в Bash отклоняется — читать через Read.
+- Составные Bash-команды (переменные, `;`, `-e`) требуют подтверждения — по одной команде.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. Отклонения: Ф-1 (зонный фильтр), Ф-2 (Decision без профиля), П-1 (части требований 2-3 без AC: checkpoint.py:384/412/497, runner.py:1319).
+- SPEC-AUDIT.md сдан: verdict concerns, status ready (Ф-3, П-2).
 
 ## Чего не хватило
-- Связь чекпоинта test_author с зонным фильтром нашёл только чтением `_commit_worktree_change`.
+- Связь «коммит чекпоинта → гейт зон на in_dev» нашёл только чтением zones.py:_zones_gate.
