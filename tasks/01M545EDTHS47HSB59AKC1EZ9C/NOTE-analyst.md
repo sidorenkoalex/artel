@@ -1,16 +1,16 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ ссылается на SPEC родителя 01M53B45XW3J56RJHGD70TD8A2: читается `git show refs/artifacts/01M53B45XW3J56RJHGD70TD8A2:tasks/01M53B45XW3J56RJHGD70TD8A2/SPEC.md` (команда `artel.py docs` роли недоступна).
-- Часть 1 = 01M545EB0A9F191WTDSPCH36GA, уже смержена в main (c0ff4953). Дала `brief.project_skills_refusal(target, entry)` — её зовёт doctor (п.2.7 ТЗ).
-- `spawn_subtask` не пишет заявленный merge_after из «Порядок: после части 1» — в SPEC поставлен полный id части 1 с разделом обоснования.
-- `misc_checks.py:92` — `subprocess.run(["gh","repo","view",...])` в `check_base_branch`; `artifact_branches.py:126-138` — `_push_closing_sha` через `gitcmd.in_repo(source, "push", url, ...)`.
+- ТЗ ссылается на SPEC родителя 01M53B45XW3J56RJHGD70TD8A2: `git show refs/artifacts/01M53B45XW3J56RJHGD70TD8A2:tasks/01M53B45XW3J56RJHGD70TD8A2/SPEC.md`.
+- Шаг 2 (возврат с spec_gate 17.10): внесены О-1…О-5, Ф-1, Т-1…Т-5. Добавлены AC-12 (только remote-подкоманды; -C каталога проекта без токена), AC-13 (URL push = url записи), AC-14 (check_base_branch), AC-15 (verifying_status/trigger_rerun с repo=), AC-16 (запись без token_slot — прежняя авторизация, warn «нет токена проекта», sandbox-подмена keychain.token). AC-1 расширен исключением .artel/projects/artel/ и config.ROOT; AC-3 — без `git config --get-all`, GIT_CONFIG_GLOBAL не подменяется; AC-10 — два случая распознавания роли (ARTEL_ROLE и HOME дома роли, runner.py:1116-1133).
+- trigger_rerun (ci.py:1221) сейчас вовсе не передаёт repo= в gh — AC-15 сформулирован «в вызовах ci.gh с repo=», буквально по решению Оператора.
+- _push_closing_sha — artifact_branches.py:126-146 (push на :137, вызов из главной копии :174).
 
 ## Не сработало
-- `ls` в Bash нет; `artel.py docs` недоступна роли.
+- Bash с `$`-подстановками в команде шагу запрещён («Contains expansion»).
 
 ## Где остановился
-- SPEC написан, status: ready, guard прогнан.
+- SPEC переписан, status: ready, guard ок. 16 AC, budget 45 оставлен (рамка ТЗ).
 
 ## Чего не хватило
-- Пути чтения SPEC родителя из роли (нашёл через refs/artifacts).
+- Ничего существенного; номера строк runner.py в причине возврата (1067-1068) не совпали с main — функция на 1116.
