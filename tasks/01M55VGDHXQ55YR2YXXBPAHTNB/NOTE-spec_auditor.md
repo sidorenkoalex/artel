@@ -1,14 +1,14 @@
 # Записка spec_auditor — 01M55VGDHXQ55YR2YXXBPAHTNB
 
 ## Выяснено
-- Визит 2, SPEC sha 1c29cb69: решения Оператора 18.10 (Д1–Д4) перенесены полностью. Ссылки на код верны (HEAD 0180d1df).
-- Новое отклонение Д5 (мелкое) → вердикт concerns. Защищённые пути проверяются раньше зон (zones.py:265-272). Маска `**/conftest.py` (config.py:788-791, sled no_paths targets.yaml:74) даёт пути `backend/tests/test_<id>_x/conftest.py` отказ «защищённый путь», а не «гейт зон». Мутацию «префикс» ловит только вариант AC-7 с `…_x.json`; учебному проекту нужен `no_paths` без маски conftest.
+- Визит 3, SPEC sha 4f1ebd1d: Д1–Д5 перенесены; факты верны (HEAD 0180d1df).
+- Новое О-1 → concerns: чекпоинты developer (checkpoint.py:231, 895, 1531) не передают own_zones; _zone_paths (1583) у внешнего проекта не покрывает backend/tests → незакоммиченный новый файл developer по шаблону (паритет Д1) снимается как stray, гейт зон при этом зелёный (довесок untracked). Тр.4 SPEC разбирает только test_author.
 
 ## Не сработало
-- grep с относительным путём после cd требует подтверждения — нужны абсолютные пути.
+- grep | xargs требует подтверждения — использовать прямые grep с абсолютными путями.
 
 ## Где остановился
-- SPEC-AUDIT.md записан (status: ready, verdict: concerns), guard ок.
+- SPEC-AUDIT.md записан (status: ready, verdict: concerns), guard прогнан.
 
 ## Чего не хватило
-- Нет карточек по zones.py; связь «защищённые пути раньше зон» ↔ AC-7 увидел только по сигналу «защищённые пути: _x/conftest.py».
+- Нет карточек по checkpoint.py: какие чекпоинты получают own_zones — читал _commit_worktree_change и вызовы вручную.
