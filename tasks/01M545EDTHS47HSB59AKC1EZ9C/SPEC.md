@@ -340,6 +340,13 @@ AC-16. В песочнице тестов `keychain.token` подменён: т�
   `.github/workflows/*.yml` в клоне внешнего проекта.
 - Полный зелёный набор `tests/` и CI ветки — их держит пульт.
 
+### Только чтение
+
+Каталоги, которые механизм требования 1 исключает из признака проекта
+по пути `-C`, а не меняет: `.artel/projects/artel/` (клон и рабочие копии
+артели), `config.ROOT` (`.artel/`) вне `config.PROJECTS`
+(`.artel/projects`), сам каталог проекта `.artel/projects/<имя>`.
+
 ## Материалы
 
 - SPEC родителя: `refs/artifacts/01M53B45XW3J56RJHGD70TD8A2:tasks/01M53B45XW3J56RJHGD70TD8A2/SPEC.md`
