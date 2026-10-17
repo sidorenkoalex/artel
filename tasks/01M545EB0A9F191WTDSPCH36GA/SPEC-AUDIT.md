@@ -4,167 +4,127 @@ type: spec_audit
 author_role: spec_auditor
 status: ready
 verdict: concerns
-signals: в) пути-признаки (тесты): tests/; в) пути-признаки (песочница ролей): orchestrator/providers/base.py, orchestrator/providers/claude.py, orchestrator/providers/codex.py, orchestrator/runner.py; в) защищённые пути: skills/; д) ТЗ ссылается на ADR: ADR-0023.
-spec_sha: aed7b40f6f28c94890303b3d27e6138ef0e8dfea
+signals: "в) пути-признаки (тесты): tests/; в) пути-признаки (песочница ролей): orchestrator/providers/base.py, orchestrator/providers/claude.py, orchestrator/providers/codex.py, orchestrator/runner.py; в) защищённые пути: skills/; д) ТЗ ссылается на ADR: ADR-0023."
+spec_sha: 7182268f84fa75786e57cdbbc03d36fac41788bc
 schema_version: 5
 ---
 
 # SPEC-AUDIT: D2-1 — проектные скилы и меры для роли внешнего проекта
 
 ## ТЗ и SPEC
-ТЗ → SPEC: пп.1–6 ТЗ отражены требованиями 1–8 SPEC; «Не входит» ТЗ
-(обходы через `git -c alias`/`core.fsmonitor`, правка `skills/`,
-`roles.yaml`, `targets.py`) перенесено в «Не входит» SPEC.
-
-Решение Оператора на гейте SPEC №1 (шесть пунктов) — все внесены:
-- п.1 (П-2) → требование 9 и AC-8; AC-1/AC-4 сформулированы «на пути
-  запуска шага роли (требование 9)».
-- п.2 (А-1) → требование 2: источник — голова `main` пульта
-  (`brief.py:521-526`, `:543`), решение Ф-5 родителя заменено. Это
-  расходится с буквой ТЗ п.2 («файл на диске пульта,
-  `config.ROOT/skills/<имя>.md`»), но решение Оператора имеет силу
-  ANSWER и прямо заменяет это место — не отклонение.
-- п.3 (П-1) → AC-1 и AC-4 сверяют значение `--allowedTools` целиком.
-- п.4 (П-3) → AC-7.
-- п.5 (П-4) → AC-3, второй пункт (`sub/name`).
-- п.6 (П-5) → AC-6.
-
-SPEC → ТЗ: требование 9 распространено и на сборку брифа
-(`runner.py:476`), хотя решение Оператора называло только
-`runner.py:1550` и `runner.py:964`. Это следствие требования 1 (бриф
-должен знать проект, чтобы взять его `project_skills`), не новое
-требование — не отклонение. Иных требований сверх ТЗ и решений не
-найдено.
+- ТЗ п.1 → треб. 1, AC-2; ТЗ п.2 → треб. 2, AC-3, AC-7; ТЗ п.3 → треб. 3, AC-1;
+  ТЗ п.4 → треб. 4, AC-4, AC-6; ТЗ п.5 → треб. 5–7, AC-4, AC-5; ТЗ п.6 → треб. 8.
+  «Не входит» ТЗ перенесено полностью.
+- Расхождение с ТЗ п.2 («файл на диске пульта») — санкционировано решением
+  Оператора на гейте №1, п.2: треб. 2 берёт голову `main`. Не отклонение.
+- Решение на гейте №1 (пп.1–6): внесено — треб. 9, AC-1/AC-4 на пути шага,
+  AC-4 сверяет значение `--allowedTools` целиком, AC-7, подкаталог в AC-3, AC-6.
+- Решение на гейте №2 (пп.1–2): внесено — AC-8 без случая «задачи нет в БД»;
+  треб. 9 называет `store.task_target` fail-open источником, `store.py` не меняется.
+- Требований вне ТЗ и вне решений Оператора нет. Треб. 9 — из решений Оператора.
+  Решения №1 и №2 друг другу не противоречат.
 
 ## Факты против кода
 Подтвердилось:
-- `orchestrator/targets.py:31` — `project_skills` проверяется только как
-  `list`.
-- `orchestrator/brief.py:519` `skills_text`; `:541-543` читает
-  `skills/<имя>.md` через `gitcmd.show(config.MAIN_BRANCH, rel,
-  repo=config.ROOT)` — голова `main`, не диск.
-- `orchestrator/providers/claude.py:45` `ALLOWED_TOOLS =
-  "Bash(git:*),Bash(python3:*)"`, используется в argv на `:165`.
-- `orchestrator/runner.py:964` `def role_env(role, task_id, *, provider)`;
-  `GIT_CONFIG*` в `orchestrator/` не встречается нигде.
-- `orchestrator/runner.py:476` — вызов `brief.skills_text`;
-  `:1457` — `env = role_env(role, task_id, provider=provider)`;
-  `:1550` — `provider.command(model_id, docs_dir=…)`.
-- `command(self, model=None, docs_dir=None)` — `providers/base.py:189`,
-  `providers/claude.py:122`, `providers/codex.py:379`.
-- Строка миссий `config.ROOT / "orchestrator" / "artel.py"` —
-  `orchestrator/role_prompt.py:238`, `orchestrator/knowledge_cards.py:953`.
-- Вызовы вне пути запуска: `runner.py:1204` (`role_cmd`),
-  `orchestrator/doctor/isolation.py:201` (`provider.command()`),
-  `tests/test_multitarget.py:702` (`runner.role_env("developer",
-  "01ABCDEF")`) — на месте; также `providers/codex.py:652` и
-  `providers/claude.py:309` зовут `self.command()` без аргументов (смок),
-  SPEC их не перечисляет, но новый параметр со значением по умолчанию
-  их не ломает.
+- `orchestrator/targets.py:31` — `project_skills` объявлен как `"list"`, проверяется только тип.
+- `orchestrator/brief.py:519` `skills_text`; `:543` — `gitcmd.show(config.MAIN_BRANCH, rel, repo=config.ROOT)`.
+  Ссылка SPEC `brief.py:521-526` указывает на docstring `skills_text` (правило «с головы main»), это верно.
+- `orchestrator/providers/claude.py:45` `ALLOWED_TOOLS = "Bash(git:*),Bash(python3:*)"`; `:165` — флаг в argv.
+- `orchestrator/runner.py:964` `role_env`: `GIT_CONFIG_NOSYSTEM` нет (`:1028-1048`).
+- `orchestrator/runner.py:476` (бриф, внутри `_refuse_before_start`), `:1457` (`role_env`), `:1550` (`provider.command`).
+- `orchestrator/store.py:701-707` `task_target` — откат на `config.DEFAULT_TARGET`. Вызывается в `runner.py:1184` и `:1469`.
+- `orchestrator/targets.py:117-125` `target()` — `TargetsError` «не объявлен».
+- `orchestrator/providers/base.py:189`, `codex.py:379`, `claude.py:122` — `command(self, model=None, docs_dir=None)`.
+- `orchestrator/role_prompt.py:238`, `orchestrator/knowledge_cards.py:953` — `config.ROOT / "orchestrator" / "artel.py"`.
+- «Не входит»: `runner.py:1204` `role_cmd`, `doctor/isolation.py:201` `provider.command()`,
+  `tests/test_multitarget.py:702` `runner.role_env("developer", "01ABCDEF")` — всё на месте.
 
-Не названо SPEC, но существенно для требования 9 (см. «Проверяемость»,
-AC-8):
-- `orchestrator/store.py:701-707` `task_target` — нынешний источник
-  проекта на пути шага (`runner.py:1469` для `role_cwd`, `runner.py:1184`
-  для каталога документов) — сам по себе fail-open: задачи нет в БД →
-  `config.DEFAULT_TARGET` (артель). `store.py` вне зон SPEC и вне
-  `config.COMMON_ZONES` (`config.py:799`).
-- `orchestrator/runner.py:208` (`_cmd_run`) и `:1376` (`run_agent_once`)
-  зовут `store.get_task`, который при отсутствии задачи делает
-  `sys.exit` (`store.py:1010-1015`) раньше `:476`/`:1457`/`:1550`.
-- Колонка `tasks.target` — `NOT NULL` (`orchestrator/schema.py:47`).
+Не названо в SPEC:
+- На пути шага проект задачи сейчас определяется не только через `store.task_target`.
+  Есть ещё `orchestrator/runner.py:366`: `target = t["target"] or config.DEFAULT_TARGET`.
+  От него зависят бриф (`:476`), предполёт (`:418`) и `_build_prompt` (`:302`).
+  Это тот же приём отката на артель. Колонка `tasks.target` — `NOT NULL`
+  (`orchestrator/schema.py:47`), поэтому откат срабатывает только на пустой строке.
+  Пустую колонку `repo_context.is_artel` считает артелью по умолчанию
+  (`orchestrator/repo_context.py:160-162`). Треб. 9 этот источник не называет (см. В-3).
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да | `project_skills` артели/признак внешнего проекта применён к артели: в argv `--allowedTools` ≠ `Bash(git:*),Bash(python3:*)`, в env появился `GIT_CONFIG_NOSYSTEM`, бриф получил лишний блок. Замечание: бриф несёт случайный `run_id` границ (`brief.new_run_id`) — «совпадает с main» проверяемо только с подменой `new_run_id` либо сравнением блока скилов; это вопрос формы теста, не отклонение. |
-| AC-2 | да | проектные скилы не добавлены / добавлены до скилов роли / в обратном порядке / прочитаны с диска вместо `main` (тест с расхождением диск≠main). |
-| AC-3 | да | нет проверки `..`/абсолютного пути; разрешён подкаталог; проверка по диску (`Path.exists`) вместо `main`; текст отказа без проекта/поля/имени; `targets.check` начинает отказывать по полю (`targets.yaml` негоден); отказ одного проекта ломает бриф другого. |
-| AC-4 | да | правило с относительным путём, с `str(config.ROOT)` иной формы, `python3:*` оставлен рядом, `git:*` потерян; `GIT_CONFIG_NOSYSTEM` не выставлен или ≠ `1`. |
-| AC-5 | да | Codex начал менять argv по проекту задачи. |
-| AC-6 | да | `GIT_CONFIG_NOSYSTEM` выставлен в `claude.environment`, а не в общей части `role_env` — шаг Codex его не получает. |
-| AC-7 | да | проверка существует только внутри сборки брифа; у отдельной проверки другой источник (диск) или другой текст отказа. |
-| AC-8 | частично — отклонение | см. ниже. |
-
-**Отклонение В-1 (AC-8).** Пример «задачи нет в БД» на публичном пути
-запуска шага недостижим: `store.get_task` в `runner.py:208` и
-`runner.py:1376` завершает процесс `sys.exit` до сборки брифа, окружения
-и argv. Тест AC-8 через `cmd_run`/`run_agent_once` с отсутствующей
-задачей зелёный и на main, и на коде, который определяет проект
-fail-open через `store.task_target` (`store.py:701-707`, возврат
-`DEFAULT_TARGET`) — мутацию «правила артели по умолчанию» он не ловит.
-Ловит её только тест, зовущий внутренние `_prepare_step`/`_spawn_and_wait`
-напрямую, — а это навязывание устройства. Реально достижимые случаи
-сбоя определения проекта на этом пути SPEC не называет: в строке задачи
-`target`, не объявленный в `targets.yaml` (`targets.target` →
-`TargetsError`, `orchestrator/targets.py:117-125`), и `targets.yaml`,
-который не читается. «Чтение проекта задачи падает» — без указания, что
-именно падает, автор тестов выберет инъекцию по своему вкусу.
+| AC-1 | да | `GIT_CONFIG_NOSYSTEM` ставится всем задачам; правило `artel.py:*` ставится и артели; проектные скилы читаются у артели и меняют бриф. Сверка с main для брифа и окружения сформулирована нестрого («совпадают с main»), но на артели ловит любую из этих мутаций. Значение `--allowedTools` сверяется точно. |
+| AC-2 | да | скилы проекта не добавлены; вставлены до скилов `roles.yaml`; порядок поля потерян. Чтение с диска вместо main ловит AC-3, случай 4. |
+| AC-3 | да | нет проверки `..`/абсолютного пути/подкаталога; несуществующий файл пропускается; источник — диск, а не main; проверка встроена в `targets.check` (тогда `targets.yaml` негоден для всех); текст отказа без проекта, поля или имени. |
+| AC-4 | да | `Bash(python3:*)` остаётся; путь относительный или собран иначе, чем `config.ROOT / "orchestrator" / "artel.py"`; `Bash(git:*)` потерян; `GIT_CONFIG_NOSYSTEM` не ставится. |
+| AC-5 | да | у Codex меняется argv для внешнего проекта. |
+| AC-6 | да | `GIT_CONFIG_NOSYSTEM` ставится только в `claude.environment`, а не в общем `role_env`. |
+| AC-7 | условно (В-2) | проверку можно вызвать только изнутри сборки брифа; текст расходится с текстом брифа. Но точка вызова (модуль, имя, аргументы, форма исхода) не названа — тесту нечего вызывать, не выдумав устройство. |
+| AC-8 | да | откат на артель (`store.task_target`/`or DEFAULT_TARGET`) при необъявленном target или нечитаемом `targets.yaml`; агент стартует. |
 
 ## Зоны
-Зоны SPEC: `orchestrator/brief.py`, `orchestrator/runner.py`,
-`orchestrator/providers/{claude,base,codex}.py`, `tests/`; плюс
-`config.COMMON_ZONES` (`orchestrator/config.py:799`: `config.py`,
-`docs/codebase-map.md`, `tests/`). Требования 1–9 реализуемы в этих
-файлах: проверка имени и сборка проектных скилов — `brief.py`;
-определение проекта, `GIT_CONFIG_NOSYSTEM`, проброс проекта в
-`command` — `runner.py`; белый список — `claude.py`; сигнатура — `base.py`,
-`codex.py`. Вставка скилов в промпт возможна без `role_prompt.py`
-(вне зон и в «Не входит»): текст скилов уходит из `runner.py:476`.
-Чтение проекта задачи без fail-open должно идти мимо
-`store.task_target` и не может править `store.py` (вне зон) — выполнимо
-в `runner.py` (строка `t` уже есть на `runner.py:208`/`:1376`).
-Защищённые пути (`skills/`, `roles.yaml`, `templates/`) не трогаются —
-«Не входит». Песочница ролей сужается (внешний проект), для артели не
-меняется — расширения нет.
+- Зоны SPEC: `orchestrator/brief.py`, `runner.py`, `providers/{claude,base,codex}.py`, `tests/`.
+  Этого хватает:
+  - проектные скилы — `brief.py`;
+  - определение проекта с отказом — `runner.py`;
+  - `GIT_CONFIG_NOSYSTEM` — общий `role_env` (`runner.py:1040-1048`);
+  - белый список — `claude.py`;
+  - сигнатура `command` — `base.py`/`codex.py`.
+- Остальные вызывающие `command()` — `runner.py:1204`, `claude.py:309`, `codex.py:652`,
+  `doctor/isolation.py:201`. Они без аргументов, правка не нужна, если новый
+  параметр необязательный.
+- Подмен `command` в `tests/` с жёсткой сигнатурой провайдера не нашёл:
+  `tests/test_observation_acceptance_return.py:39` и соседние — это `*args` чужих классов.
+- Защищённые пути (`skills/`, `roles.yaml`) не меняются — «Не входит».
+- Песочница ролей сужается, а не расширяется: `Bash(python3:*)` → `Bash(python3 <ROOT>/orchestrator/artel.py:*)`.
+  Подкоманды под этим правилом ограничены кодом CLI (`orchestrator/artel.py:1877-1906`, `_ROLE_ALLOWED_COMMANDS`).
 
 ## Матрица неослабления
+В SPEC нет ни матрицы, ни раздела «Меняемое поведение». Смены литералов
+утверждений на main задача не требует: значение `ALLOWED_TOOLS` для артели прежнее.
+Свойства, которые задача трогает:
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `ALLOWED_TOOLS`/argv Claude (`providers/claude.py:45`, `:165`) | хвост argv артели — `tests/test_providers.py:55-61` (`Bash(git:*),Bash(python3:*)`) | да, для артели (требование 6) | тот же тест + AC-1 | остаётся |
-| то же | ревьювер артели может запускать тесты — `tests/test_review_package.py:1302` | да (задача на `DEFAULT_TARGET`) | тот же тест | остаётся |
-| сигнатура `command` (`providers/base.py:189`, `codex.py:379`) | смок изоляции Codex — `doctor/isolation.py:201` зовёт `command()` без аргументов | да, при значении параметра по умолчанию | существующие тесты смока + AC-5 | остаётся |
-| `role_env` (`runner.py:964`) | `ARTEL_ROLE`/`ARTEL_TASK` — `tests/test_multitarget.py:702` | да (вне пути шага, «Не входит») | тот же тест | остаётся |
-| `Bash(python3 <корень>/orchestrator/artel.py:*)` для внешнего проекта | допуск команд CLI роли — `orchestrator/artel.py:1877-1901` `_ROLE_ALLOWED_COMMANDS` | да, не трогается; становится единственным рубежом подкоманд `artel.py` | существующие тесты рубежа | остаётся |
-
-Раздела «Меняемое поведение» в SPEC нет — и не нужно: ни одно
-ожидание существующего метода `tests/` не меняется (артель — как на
-main).
+| белый список Claude | `providers/claude.py:45` — `Bash(git:*),Bash(python3:*)` для всех задач | у артели — да; у внешнего проекта сужается | AC-1, AC-4 | сужение, не ослабление |
+| окружение роли | `runner.py:1028-1048` — белый список манифеста, без `GIT_CONFIG_NOSYSTEM` | да, плюс переменная у внешнего проекта | AC-1, AC-4, AC-6 | усиление |
+| определение проекта на пути шага | `runner.py:366`, `:1184`, `:1469` — откат на артель | заменяется отказом | AC-8 | усиление |
+| артель работает при сломанном `targets.yaml` | `repo_context.py:82-89`, `tests/test_repo_context.py:29` (SPEC 01M484RNV3QBDY3B0M16J916ZP) | неясно: треб. 9 и AC-8, случай 2, не ограничены внешним проектом | не покрыто | В-1, вопрос Оператору |
+| запреты дома роли | `docs/reference/role-home/claude/settings.json:9-10` — `deny` в форме `python3 orchestrator/artel.py init`/`doctor --restore` | не ослабляется: абсолютный путь эти правила не ловили и при `Bash(python3:*)`; держит `artel.py:1877-1906` | существующие тесты `artel.py` (не задача) | наблюдение, не отклонение |
 
 ## Пути обхода гейтов
-- **О-1 (= В-1).** Буквальное исполнение требования 9 через
-  `store.task_target` (fail-open на артель) проходит тест AC-8,
-  написанный на пример «задачи нет в БД» через публичный вход шага, —
-  смысл требования (не уходить с правилами артели) не проверен.
-- Проверено, обхода нет: проверка имени на диске вместо `main` (ловит
-  AC-3 п.4, AC-7); два разных источника у брифа и `doctor` (AC-7 «тем же
-  текстом»); `GIT_CONFIG_NOSYSTEM` только у Claude (AC-6); правило
-  `artel.py:*` открывающее опасные подкоманды — их режет
-  `_ROLE_ALLOWED_COMMANDS` (`artel.py:1877`), это не меняется.
-- Остаточный риск кода, исполняемого `suite-run`/`plank-run`, и
-  `git -c alias` — принят ADR-0023 (вторая поправка, п.5), не отклонение.
+- В-1. Буквальное исполнение треб. 9 + AC-8 «`targets.yaml` не читается»: единое
+  `targets.target(t["target"])` для всех задач. Тогда шаги задач артели
+  отказывают при сломанном `targets.yaml`. Это противоречит проектному
+  правилу «пульт работает над собой при сломанном файле, задача артели его
+  чинит» (`repo_context.py:83-86`). AC-1 этого не ловит: он проверяет
+  только исправный `targets.yaml`. Обратное прочтение — «для артели файл не
+  читается» — оставляет вопрос, откуда у артели проектные скилы (треб. 3).
+- В-2. AC-7 без названной точки вызова. Тест-автор назовёт функцию сам
+  (`тест-навязывает-устройство`) либо проверит её через бриф. Второе AC-7
+  по смыслу не проверяет: doctor части 2 получит не тот вход или не тот
+  текст отказа.
+- Других путей не нашёл. Обходы через `git -c alias`/`core.fsmonitor` и через
+  код команд пульта — принятый остаточный риск (ADR-0023, вторая поправка, п.5).
 
 ## Вердикт
-concerns. Все шесть замечаний прошлого аудита по решению Оператора
-внесены; факты о коде подтвердились. Отклонения:
+concerns. Отклонения:
 
-1. **В-1 / О-1 — AC-8 не ловит fail-open** (SPEC.md, AC-8; требование 9).
-   Пример «задачи нет в БД» недостижим на публичном пути шага
-   (`orchestrator/runner.py:208`, `:1376` → `store.get_task` с `sys.exit`,
-   `orchestrator/store.py:1010-1015`). Тест на этот пример зелёный и при
-   определении проекта через `store.task_target`, который возвращает
-   артель (`orchestrator/store.py:701-707`). Реальные случаи —
-   `target` задачи не объявлен в `targets.yaml`
-   (`orchestrator/targets.py:117-125`) или `targets.yaml` не читается —
-   в SPEC не названы. Предложение Оператору на гейте: в AC-8 заменить
-   пример на «`target` задачи не объявлен в `targets.yaml` / `targets.yaml`
-   не читается», убрать «задачи нет в БД» и назвать
-   `store.task_target` (fail-open) как недопустимый источник на пути
-   шага.
-2. **Мелкое (не блокирует).** SPEC не называет `store.task_target`
-   (`orchestrator/store.py:701`) нынешним fail-open источником проекта на
-   пути шага (`runner.py:1184`, `:1469`). `store.py` вне зон, так что
-   обход должен лечь в `runner.py`. Это выполнимо, но разработчику
-   придётся догадаться самому.
+- **В-1** (главное): не задано поведение задачи артели при нечитаемом `targets.yaml` на пути шага.
+  - Где в SPEC: треб. 9 («Сбой определения проекта — именованный отказ шага»,
+    без ограничения внешним проектом) и AC-8, случай 2.
+  - С чем сталкивается: `orchestrator/repo_context.py:82-89` (артель
+    разрешается без чтения `targets.yaml`) и `tests/test_repo_context.py:29`.
+  - Буквальное исполнение запрещает артели чинить сломанный `targets.yaml`
+    своей задачей. Неясно и треб. 3: откуда для артели читается `project_skills` — из файла или считается `[]`.
+  - Решение Оператора нужно одной строкой: «для артели `targets.yaml` на пути
+    шага не читается, `project_skills` артели — `[]`, отказ AC-8 — только у
+    внешнего проекта», либо обратное.
+- **В-2**: AC-7 и треб. 2 не называют точку вызова отдельной проверки
+  `project_skills`. Не заданы модуль, имя, аргументы (имя проекта или запись) и
+  форма исхода (текст отказа/`None` или исключение). Пример: `brief.project_skills_refusal(target_name, entry) -> str | None`.
+  Без этого тест AC-7 либо навязывает устройство, либо не отделён от брифа.
+- **В-3** (мелкое): треб. 9 называет fail-open источником только `store.task_target`
+  (`runner.py:1184`, `:1469`). Тот же откат стоит в `orchestrator/runner.py:366`
+  (`t["target"] or config.DEFAULT_TARGET`), а от него зависят бриф `:476` и
+  предполёт `:418`. Не сказано, считать ли пустую колонку `target` «проект не определён».
+  Колонка `NOT NULL` (`schema.py:47`), а пустую строку `is_artel` считает артелью (`repo_context.py:160-162`).

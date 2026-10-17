@@ -1,18 +1,18 @@
-# Записка spec_auditor — 01M545EB0A9F191WTDSPCH36GA (визит 2, spec_sha aed7b40f)
+# Записка spec_auditor — 01M545EB0A9F191WTDSPCH36GA (визит 3, spec_sha 7182268f)
 
 ## Выяснено
-- Все 6 пунктов решения Оператора на гейте SPEC внесены (треб. 2, 9; AC-1, AC-3..AC-8).
-- Факты SPEC о коде подтвердились (brief.py:519/543, claude.py:45/165, runner.py:476/964/1457/1550, base/codex command, role_prompt.py:238, knowledge_cards.py:953).
-- store.task_target (store.py:701-707) — fail-open на артель; используется runner.py:1184, :1469. store.py вне зон.
-- runner.py:208 и :1376 зовут store.get_task → sys.exit при отсутствии задачи раньше брифа/env/argv: пример AC-8 «задачи нет в БД» недостижим на публичном пути, тест не ловит fail-open.
-- artel.py:1877 _ROLE_ALLOWED_COMMANDS — рубеж подкоманд для правила artel.py:*.
-- Вердикт: concerns (В-1 AC-8; мелкое — не назван task_target).
+- Оба решения Оператора на гейте SPEC (№1 пп.1–6, №2 пп.1–2) внесены; факты SPEC о коде подтвердились.
+- В-1: треб. 9/AC-8 «targets.yaml не читается» не ограничены внешним проектом; repo_context.py:82-89 + tests/test_repo_context.py:29 — артель разрешается без targets.yaml (SPEC 01M484RNV3QBDY3B0M16J916ZP). Буквально — артель не починит сломанный targets.yaml.
+- В-2: AC-7 не называет точку вызова проверки project_skills (модуль/имя/форма исхода).
+- В-3: runner.py:366 `t["target"] or DEFAULT_TARGET` — второй fail-open источник на пути шага, в SPEC не назван (tasks.target NOT NULL, schema.py:47).
+- Запреты role-home settings.json:9-10 в относительной форме; подкоманды держит artel.py:1877-1906 — не ослабление.
+- Вердикт concerns, status ready, guard ок.
 
 ## Не сработало
-- Bash с awk/пайпами просит подтверждения — только grep/sed.
+- `cd ... && cmd`, пайпы, `$D` в cd-команде просят подтверждения — только абсолютные пути, одна команда.
 
 ## Где остановился
 - SPEC-AUDIT.md записан, guard прогнан.
 
 ## Чего не хватило
-- Как на пути шага определяется проект (task_target vs get_task) — искал по runner.py.
+- Где на пути шага берётся target брифа/предполёта: runner.py:366 в _refuse_before_start, не store.task_target.
