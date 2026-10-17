@@ -13,7 +13,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import config, fixation, gitcmd, store, workspace, yamlmini, zone_lock
+from . import (config, fixation, gitcmd, project_profile, store, workspace,
+               yamlmini, zone_lock)
 
 # Критерий допустимости файла первого уровня `acceptance_tests/` (SPEC
 # 01M1SAA01YRRTWAVADT2F81RRQ, AC-1): планка приёмки несёт только эти
@@ -345,7 +346,8 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
 TEST_AUTHOR_NOT_COMMITTED_ACTION = "долгоживущие тесты не закоммичены пультом"
 
 
-def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
+def _test_author_own_paths(conn, task_id: str, wt: Path,
+                           profile) -> set[str] | None:
     """Пути worktree, которые test_author вправе закоммитить в кодовую
     ветку (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 1; ADR-0020, п. 7):
     изменённые на этом шаге файлы `tests/test_<префикс задачи>_<имя>.py`
@@ -361,7 +363,14 @@ def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
 
     `None` — git не ответил на статус, базу ветки или её дерево: тогда
     чекпоинт не трогает worktree вовсе (та же тихая деградация, что у
-    остального модуля), а не откатывает свою работу роли вслепую."""
+    остального модуля), а не откатывает свою работу роли вслепую.
+
+    Каталог и шаблон своих файлов — из профиля проекта задачи `profile`
+    (SPEC 01M551W0TFCT2XRQ71XFXJDKB9, требование 2); `None` — профиля нет
+    (проект без `test_profile`): своих файлов нет, умолчания артели не
+    подставляются."""
+    if profile is None:
+        return set()
     t = store.get_task(conn, task_id)
     if t["state"] != "tests_writing":
         return set()
@@ -373,7 +382,7 @@ def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
     for line in status.stdout.splitlines():
         rel = line[3:]
         paths = rel.split(" -> ", 1) if line[:1] == "R" and " -> " in rel else [rel]
-        if all(guard.is_long_lived_test_path(task_id, p) for p in paths):
+        if all(profile.is_long_lived(task_id, p) for p in paths):
             candidates.update(paths)
     if not candidates:
         return set()
@@ -381,7 +390,7 @@ def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
     base = gitcmd.diff_base(t["branch"], repo=repo)
     if base is None:
         return None
-    in_base = gitcmd.ls_tree_files(base, "tests", repo=repo)
+    in_base = gitcmd.ls_tree_files(base, profile.long_lived_dir, repo=repo)
     if in_base is None:
         return None
     return candidates - set(in_base)
@@ -404,12 +413,27 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
     `TEST_AUTHOR_NOT_COMMITTED_ACTION` (SPEC 01M3NMHHAMTFN2BNKBN209E15M,
     дефект А): файл, оставшийся только в рабочей копии, выход из
     `tests_writing` не видит, и отказ «AC-n: нет теста» без этой записи
-    не объясним по журналу."""
-    own = _test_author_own_paths(conn, task_id, wt)
+    не объясним по журналу.
+
+    Каталог и шаблон своих файлов — профиль проекта задачи (SPEC
+    01M551W0TFCT2XRQ71XFXJDKB9, требования 2, 5): отказ профиля — тот же
+    выход, что молчание git (запись с причиной, worktree не тронут);
+    проект без профиля — своих файлов нет, вся правка вне `tasks/<id>/`
+    откатывается."""
+    decision = project_profile.for_task(conn, task_id)
+    if decision.refusal:
+        store.journal(conn, task_id, "orchestrator",
+                      TEST_AUTHOR_NOT_COMMITTED_ACTION,
+                      f"{task_id}: свои долгоживущие файлы роли {role} "
+                      f"{discard_detail} не отобраны — {decision.refusal}; "
+                      f"worktree не тронут")
+        return ""
+    own = _test_author_own_paths(conn, task_id, wt, decision.profile)
     if own is None:
         store.journal(conn, task_id, "orchestrator",
                       TEST_AUTHOR_NOT_COMMITTED_ACTION,
-                      f"{task_id}: свои файлы tests/ роли {role} "
+                      f"{task_id}: свои файлы "
+                      f"{decision.profile.long_lived_dir}/ роли {role} "
                       f"{discard_detail} не отобраны — git не ответил на "
                       f"статус worktree, базу ветки или её дерево; worktree "
                       f"не тронут")
@@ -421,8 +445,13 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
                       f"{discard_detail} откачен — {discarded}")
     if not own:
         return ""
+    # Свои отобранные файлы — зона роли в фильтре коммита пульта (SPEC
+    # 01M551W0TFCT2XRQ71XFXJDKB9, требование 3): у артели их и так покрывает
+    # `tests/` из `config.COMMON_ZONES`, у внешнего проекта каталог профиля
+    # может лежать вне зон задачи.
     committed, sha, _stray, error, _mandated = _commit_worktree_change(
-        conn, task_id, wt, message, exclude=f"tasks/{task_id}")
+        conn, task_id, wt, message, exclude=f"tasks/{task_id}",
+        own_zones=sorted(own))
     if not committed:
         # Без операции и текста git запись не объяснима по журналу (SPEC
         # 01M3VFYP4RXBY0BG8D3A0B18HD, требование 4).
@@ -483,18 +512,20 @@ def _deleted_tracked_paths(wt: Path) -> list[str] | None:
 
 
 def _role_may_delete(task_id: str, role: str, rel: str,
-                     zones: list[str]) -> bool:
+                     zones: list[str], profile=None) -> bool:
     """Путь, удаление которого шагом роли не восстанавливается: свой
     каталог задачи — любой роли; зоны задачи с общими (`_zone_paths`) —
     developer (задача без заявленных зон фильтра не имеет, тот же довод,
-    что у `_stray_staged_paths`); свои долгоживущие файлы — test_author
-    (их судьбу решает `_test_author_checkpoint`)."""
+    что у `_stray_staged_paths`); свои долгоживущие файлы по профилю
+    проекта `profile` — test_author (их судьбу решает
+    `_test_author_checkpoint`; SPEC 01M551W0TFCT2XRQ71XFXJDKB9,
+    требование 2). Профиля нет — своих долгоживущих файлов нет."""
     if zone_lock._paths_overlap(rel, task_dir_zone(task_id)):
         return True
     if role == "developer":
         return not zones or any(zone_lock._paths_overlap(rel, z) for z in zones)
     if role == "test_author":
-        return guard.is_long_lived_test_path(task_id, rel)
+        return profile is not None and profile.is_long_lived(task_id, rel)
     return False
 
 
@@ -522,8 +553,10 @@ def restore_out_of_bounds_deletions(conn, task_id: str, role: str,
     if not deleted:
         return []
     zones = _zone_paths(conn, task_id) if role == "developer" else []
+    profile = (project_profile.for_task(conn, task_id).profile
+               if role == "test_author" else None)
     doomed = [rel for rel in deleted
-              if not _role_may_delete(task_id, role, rel, zones)]
+              if not _role_may_delete(task_id, role, rel, zones, profile)]
     if zones:
         # Удаление developer по мандату Оператора — правка в пределах
         # разрешённого ему, как удаление в зонах (SPEC
@@ -1676,7 +1709,8 @@ def pult_commit_failed_paths(conn, task_id: str) -> list[str] | None:
 
 def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
                             exclude: str | None = None,
-                            refuse_on_stray: bool = False
+                            refuse_on_stray: bool = False,
+                            own_zones=()
                             ) -> tuple[bool, str, list[str], str, list[str]]:
     """(закоммичено, sha, посторонние, отказ git, по мандату) — `add -A` +
     фильтр по зонам задачи + `commit` служебной идентичностью В ЗАДАННОМ
@@ -1718,6 +1752,11 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     непустом списке посторонних коммита не происходит ВООБЩЕ (весь стейдж
     снимается `git reset -q` без пути): вызывающий код обязан отказать
     переходу целиком, не просто исключить файл.
+
+    `own_zones` — пути, которые фильтр считает зоной сверх `_zone_paths`:
+    свои долгоживущие файлы test_author по профилю проекта (SPEC
+    01M551W0TFCT2XRQ71XFXJDKB9, требование 3). Задача без заявленных зон
+    фильтра не имеет и так — тогда они ничего не меняют.
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
@@ -1728,7 +1767,10 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
         if reset.returncode != 0:
             return False, "", [], _journal_git_failure(conn, task_id, "reset",
                                                        reset), []
-    stray = _stray_staged_paths(wt, _zone_paths(conn, task_id))
+    zones = _zone_paths(conn, task_id)
+    if zones:
+        zones += list(own_zones)
+    stray = _stray_staged_paths(wt, zones)
     if stray is None:
         return False, "", [], "", []
     mandated = _mandate_covered(task_id, stray)

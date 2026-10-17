@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import brief, config, review, stack
+from . import brief, config, project_profile, review, stack, store
 from .advance_gates import spec_audit
 
 
@@ -31,9 +31,6 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
     миссия называет его буквальной строкой (`docs_dir_note`); `None` —
     абзаца нет."""
     task_ref = f"tasks/{task_id}"
-    # Префикс имени долгоживущего файла своей задачи — конкретный, не
-    # шаблон (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 10, Р1).
-    long_lived_prefix = guard.long_lived_path_prefix(task_id)
     package = None
     brief_text = None
     if role == "analyst":
@@ -62,6 +59,7 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         )
         brief_text = brief.analyst_map_component(conn, task_id)
     elif role == "test_author":
+        long_lived = _long_lived_paths(conn, task_id)
         mission = (
             f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
             f"{t['branch']} — уже выписана в этом рабочем каталоге "
@@ -73,14 +71,7 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"2) Для каждого AC-n напиши unittest в "
             f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
             f"ТОЛЬКО из формулировки критерия.\n"
-            f"2а) Долгоживущий файл (`Группа: долгоживущий`, "
-            f"skills/test-authoring.md) пиши не в каталог приёмочных тестов, "
-            f"а в каталог tests/ кодовой ветки, с именем "
-            f"{long_lived_prefix}<имя>.py (<имя> — строчные латинские буквы, "
-            f"цифры, подчёркивание). Существующие файлы tests/ не трогай — "
-            f"их правку, переименование и удаление, как и любую другую "
-            f"правку вне {task_ref}/, пульт откатит; свои новые файлы с этим "
-            f"префиксом он сам закоммитит в ветку на чекпоинте шага.\n"
+            f"{_long_lived_author_note(task_ref, long_lived)}"
             f"3) Критерий нельзя проверить тестом напрямую — пометь "
             f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
             f"или `# AC-n: skip — <причина>`.\n"
@@ -90,14 +81,14 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"каталоге документов ниже): она сама выложит черновик и выполнит "
             f"`python3 -m pytest {task_ref}/acceptance_tests -p "
             f"no:cacheprovider -p timeout -o "
-            f"timeout={stack.PER_TEST_TIMEOUT_SEC}`; долгоживущие файлы "
-            f"tests/ — тем же pytest с теми же флагами по их путям из рабочего "
-            f"каталога. tasks/<id>/ коммитить "
+            f"timeout={stack.PER_TEST_TIMEOUT_SEC}`"
+            f"{_long_lived_run_note(long_lived)}. tasks/<id>/ коммитить "
             f"не нужно — автокоммит оркестратора сам перенесёт написанное в "
             f"артефактную ветку. Остальной код репозитория и SPEC.md НЕ трогай."
         )
         brief_text = brief.test_author_answer_component(conn, task_id)
     elif role == "developer":
+        long_lived = _long_lived_paths(conn, task_id)
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
             f"уже выписана в этом рабочем каталоге (собственный worktree "
@@ -110,10 +101,8 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
             f"со статусом changes_requested — сначала закрой замечания. Если "
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
-            f"код чинится под них, их правка — эскалация, не правка. "
-            f"Долгоживущие файлы задачи в tests/ ({long_lived_prefix}*.py) "
-            f"зафиксированы так же, как приёмочные тесты, — перечнем сумм под "
-            f"тем же локом: их не правь, расхождение с ними эскалируй.\n"
+            f"код чинится под них, их правка — эскалация, не правка."
+            f"{_long_lived_developer_note(long_lived)}\n"
             f"4) Прогони scripts/guard.py на своих артефактах, поставь "
             f"PLAN.md status: ready. НЕ мержи. Коммитить код самому не "
             f"обязательно: код, оставленный в worktree незакоммиченным, по "
@@ -175,6 +164,57 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
         mission = f"{mission}\n\n{step_note_note(role, docs_dir)}"
     return mission, brief_text, package
+
+
+def _long_lived_paths(conn, task_id: str) -> tuple[str, str] | None:
+    """(каталог, префикс имени) долгоживущих файлов задачи по профилю её
+    проекта — тем же источником, что гейт выхода из `tests_writing`
+    (SPEC 01M551W0TFCT2XRQ71XFXJDKB9, требования 1, 5). Префикс конкретный,
+    не шаблон (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 10, Р1).
+    `None` — профиля нет (отказ или пропуск): умолчания артели не
+    подставляются, и задание каталог долгоживущих тестов не называет.
+    `conn=None` — проект артели (тот же ответ, что `store.task_target` у
+    задачи без строки)."""
+    target = (store.task_target(conn, task_id) if conn is not None
+              else config.DEFAULT_TARGET)
+    profile = project_profile.decide(target).profile
+    if profile is None:
+        return None
+    return profile.long_lived_dir, profile.long_lived_prefix(task_id)
+
+
+def _long_lived_author_note(task_ref: str, long_lived) -> str:
+    """Пункт 2а задания test_author; пустая строка — профиля нет."""
+    if long_lived is None:
+        return ""
+    directory, prefix = long_lived
+    return (
+        f"2а) Долгоживущий файл (`Группа: долгоживущий`, "
+        f"skills/test-authoring.md) пиши не в каталог приёмочных тестов, "
+        f"а в каталог {directory}/ кодовой ветки, с именем "
+        f"{prefix}<имя>.py (<имя> — строчные латинские буквы, "
+        f"цифры, подчёркивание). Существующие файлы {directory}/ не трогай — "
+        f"их правку, переименование и удаление, как и любую другую "
+        f"правку вне {task_ref}/, пульт откатит; свои новые файлы с этим "
+        f"префиксом он сам закоммитит в ветку на чекпоинте шага.\n")
+
+
+def _long_lived_run_note(long_lived) -> str:
+    """Хвост пункта 5 задания test_author о прогоне долгоживущих файлов."""
+    if long_lived is None:
+        return ""
+    return (f"; долгоживущие файлы {long_lived[0]}/ — тем же pytest с теми "
+            f"же флагами по их путям из рабочего каталога")
+
+
+def _long_lived_developer_note(long_lived) -> str:
+    """Фраза пункта 3 задания developer о долгоживущих файлах задачи."""
+    if long_lived is None:
+        return ""
+    directory, prefix = long_lived
+    return (f" Долгоживущие файлы задачи в {directory}/ ({prefix}*.py) "
+            f"зафиксированы так же, как приёмочные тесты, — перечнем сумм под "
+            f"тем же локом: их не правь, расхождение с ними эскалируй.")
 
 
 def _spec_auditor_mission(conn, task_id: str, t) -> str:

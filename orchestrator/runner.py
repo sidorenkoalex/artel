@@ -15,8 +15,8 @@ from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
-              liveness, models, parallel_limit, pause, providers,
-              repo_context, review, role_prompt, roles, spend, stack, store,
+              liveness, models, parallel_limit, pause, project_profile,
+              providers, repo_context, review, role_prompt, roles, spend, stack, store,
               targets, workspace, zone_lock)
 from scripts import guard
 
@@ -1273,7 +1273,8 @@ def role_cmd() -> list[str]:
 
 
 def _missing_required_artifact(role: str, cwd: Path, task_id: str,
-                               docs_dir: Path | None = None) -> str | None:
+                               docs_dir: Path | None = None,
+                               conn=None) -> str | None:
     """Имя обязательного артефакта роли, отсутствующего в РЕАЛЬНОМ рабочем
     каталоге шага (`cwd`, где роль пишет инструментом Write) — `None`,
     если артефакт на месте либо роль не несёт обязательного выхода этого
@@ -1290,7 +1291,11 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str,
     `tasks/<id>/` рабочей копии кода засчитывается и при `docs_dir`: его
     оставляет роль на прежнем правиле путей, и автокоммит шага забирает
     его в ссылку документов (`checkpoint._commit_external_step_artifacts`).
-    Долгоживущий файл test_author по-прежнему ищется в `cwd`."""
+    Долгоживущий файл test_author по-прежнему ищется в `cwd`.
+
+    `conn` — БД пульта: по ней проверка находит проект задачи и его профиль
+    тестов; `None` — проект артели (тот же ответ, что `store.task_target`
+    у задачи без строки)."""
     code_copy_dir = cwd / "tasks" / task_id
     task_dirs = [code_copy_dir] if docs_dir is None else [docs_dir, code_copy_dir]
 
@@ -1312,17 +1317,38 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str,
             acc = task_dir / "acceptance_tests"
             if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
                 return None
-        if _has_own_long_lived_test(cwd, task_id):
+        # Каталог и шаблон долгоживущего файла — из профиля проекта задачи
+        # (SPEC 01M551W0TFCT2XRQ71XFXJDKB9, требования 4, 5); без профиля
+        # умолчания артели не подставляются, и файл не засчитывается.
+        target = (store.task_target(conn, task_id) if conn is not None
+                  else config.DEFAULT_TARGET)
+        decision = project_profile.decide(target)
+        profile = decision.profile
+        if profile is None:
+            if decision.refusal and conn is not None:
+                store.journal(conn, task_id, "orchestrator",
+                              LONG_LIVED_NOT_COUNTED_ACTION,
+                              f"{task_id}: {decision.refusal}")
+            return (f"acceptance_tests/ (файл в "
+                    f"tasks/{task_id}/acceptance_tests/)")
+        if _has_own_long_lived_test(cwd, task_id, profile):
             return None
         return (f"acceptance_tests/ (файл в tasks/{task_id}/acceptance_tests/ "
                 f"либо долгоживущий файл "
-                f"{guard.long_lived_path_prefix(task_id)}<имя>.py)")
+                f"{profile.long_lived_prefix(task_id)}<имя>.py)")
     return None
 
 
-def _has_own_long_lived_test(cwd: Path, task_id: str) -> bool:
-    """В рабочем каталоге роли есть долгоживущий файл задачи
-    (`guard.is_long_lived_test_path`), новый или изменённый относительно
+# Действие журнала: долгоживущий файл test_author не засчитан проверкой
+# обязательного артефакта, потому что профиль тестов проекта не дал ответа
+# (SPEC 01M551W0TFCT2XRQ71XFXJDKB9, требование 5).
+LONG_LIVED_NOT_COUNTED_ACTION = ("долгоживущий файл не засчитан: профиль "
+                                 "тестов проекта")
+
+
+def _has_own_long_lived_test(cwd: Path, task_id: str, profile) -> bool:
+    """В рабочем каталоге роли есть долгоживущий файл задачи по профилю
+    проекта (`profile.is_long_lived`), новый или изменённый относительно
     базы ветки (SPEC 01M3Y8570H9Y57YTP3M7E1AMHG, требование 1; ADR-0020):
     планка может быть целиком долгоживущей, а перечень сумм в
     `acceptance_tests/` пульт пишет уже после шага.
@@ -1335,14 +1361,15 @@ def _has_own_long_lived_test(cwd: Path, task_id: str) -> bool:
     base = gitcmd.diff_base("HEAD", repo=cwd)
     if base is None:
         return False
-    changed = gitcmd.in_repo(cwd, "diff", "--name-only", base, "--", "tests")
+    directory = profile.long_lived_dir
+    changed = gitcmd.in_repo(cwd, "diff", "--name-only", base, "--", directory)
     untracked = gitcmd.in_repo(cwd, "ls-files", "--others",
-                               "--exclude-standard", "--", "tests")
+                               "--exclude-standard", "--", directory)
     if (changed is None or untracked is None
             or changed.returncode != 0 or untracked.returncode != 0):
         return False
     paths = changed.stdout.splitlines() + untracked.stdout.splitlines()
-    return any(guard.is_long_lived_test_path(task_id, rel)
+    return any(profile.is_long_lived(task_id, rel)
                and (cwd / rel).is_file() for rel in paths)
 
 
@@ -1492,7 +1519,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                               log_path, watch)
 
     missing_artifact = _missing_required_artifact(
-        role, cwd, task_id, _step_docs_dir(conn, task_id, project))
+        role, cwd, task_id, _step_docs_dir(conn, task_id, project), conn=conn)
     if missing_artifact is not None:
         return _finish_missing_artifact(conn, task_id, role,
                                         missing_artifact, cwd, numbered,
