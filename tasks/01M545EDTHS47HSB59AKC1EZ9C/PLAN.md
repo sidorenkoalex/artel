@@ -45,6 +45,21 @@ git-вызовов пульта; сигнатура `gitcmd.git(*args)` не м�
   подмена `keychain.token` на `test-token-<слот>`, снятие `ARTEL_ROLE` и
   замена `HOME`, если он — дом роли.
 
+### ANSWER-1 (17.10.2026)
+- П-2: `tests/test_doctor.py::BaseBranchCheckTest` переведён на песочницу
+  правкой `setUp` — подмена `config.ROLE_HOME` временным каталогом и
+  `isolate_keychain_and_role` (снятие `ARTEL_ROLE`, подмена слота), как в
+  `TmpRootTest`; утверждения не менялись, приёмочные тесты не правились.
+- Ф-2: уже так — `gitcmd.git` и `ci.gh(repo=)` берут запись из
+  `targets.load()` по имени проекта из пути `-C` или по URL
+  (`gitcmd._hosting_project`, `gitcmd.project_by_url`); `entry`
+  вызывающего — только у `check_base_branch` и проверок п.5.
+- Р-1: уже так — в процессе роли `check_base_branch` даёт `skip` с текстом
+  отказа `gitcmd.hosting_token` (`misc_checks.py:104-106`), 5.4 — строка
+  «защита базовой ветки: недоступно — <отказ>» (`project_checks.py:185`).
+- Ф-3: уже так — признак по пути `-C` берётся только под `config.PROJECTS`
+  (`gitcmd._project_of_path`): весь `config.ROOT` вне него исключён.
+
 ## Шаги
 1. `gitcmd.py`: разбор аргументов, определение проекта, `hosting_token`,
    окружение помощника, отказ; `config.PROJECT_CLONE_STALE_HOURS`.
@@ -99,13 +114,18 @@ git-вызовов пульта; сигнатура `gitcmd.git(*args)` не м�
 - Свой тест `tests/test_hosting_token_units.py` проверен временной мутацией
   (`count = 0` в `gitcmd.hosting_env`) — красный, код возвращён.
 
+- ANSWER-1, П-2: `BaseBranchCheckTest` из шага роли — 5 passed; с
+  временно снятым `isolate_keychain_and_role` в его `setUp` — 2 failed
+  (`test_matching_base_branch_is_ok`, `test_diverging_base_branch_is_warn`),
+  возвращено. `tests/test_doctor.py`, `tests/test_hosting_token_units.py`,
+  долгоживущий файл — 135 passed; планка — 1 passed; `suite-run` №3 —
+  зелёный (5601 прошло, 0 упало, 2 пропущено).
+
 ## Предложения системе
-- `tests/test_doctor.py::BaseBranchCheckTest` (не песочница) краснеет при
-  локальном `pytest` из шага роли: процесс роли несёт `ARTEL_ROLE` и `HOME`
-  дома роли, а `check_base_branch` теперь отказывает хостингу в процессе
-  роли (требование 7). В `suite-run` зелёный. Класс «тест вне песочницы
-  видит признак роли» — кандидат на снятие признака в `conftest.py`
-  (защищённый путь, решение Оператора).
+- Класс «тест вне песочницы видит признак роли» (`ARTEL_ROLE`/`HOME` дома
+  роли при локальном `pytest` из шага роли) закрыт для `BaseBranchCheckTest`
+  точечно; общий кандидат — снятие признака в `conftest.py` (защищённый
+  путь, решение Оператора).
 - Фасад `orchestrator/doctor/__init__.py` делает `from .x import x`: функция
   с именем подмодуля затеняет сам подмодуль (`from orchestrator.doctor
   import <подмодуль>` отдаёт функцию) — наступил на это с `project_checks`.
