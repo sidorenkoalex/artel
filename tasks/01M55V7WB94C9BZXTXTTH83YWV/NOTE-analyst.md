@@ -1,19 +1,19 @@
 # Записка analyst
 
 ## Выяснено
-- Итерация 2 (возврат из spec_gate 18.10, пять решений Оператора по аудиту) — все пять внесены в SPEC:
-  (1) требование 2: прежняя форма вызовов ci.gh/head_sha/check_runs/run_list/find_run_id/trigger_rerun у артели (ci._repo_kwargs, ci.py:83-95), перечень подмен в тестах (test_invariants.py:326-328, test_ci_status.py:160/367/372/798, test_main_ci_line.py:62, test_merge_gate_ci_wait.py:82); «Материалы» исправлены;
-  (2) accepted_full_suite в AC-1;
-  (3) GH_REPO и без token_slot — в требовании 1, новый AC-8;
-  (4) разбор url по gitcmd.url_key (gitcmd.py:44-46), учебный проект AC-2 с url на .git или /;
-  (5) сценарии AC-2/AC-3: _inherited_from_main, _commit_workflow_runs с check_suite.id, find_run_id при ≥2 красных, check_run_workflow_run; run_list без проверок.
-- Ссылки на код сверены по рабочему каталогу (ci.py:39-95, gitcmd.py:44-46, тесты).
+- Итерация 3 (возврат из spec_gate 18.10, шесть решений Оператора по аудиту) — все внесены в SPEC:
+  (1) требование 2 — на все функции перечня и вызывающих из ci_rerun.py/fsm_merge_gate.py; перечень подмен дополнен находками аудита (test_ci_rerun_command.py:238/:242, test_ci_stuck_check_run.py:220, test_main_ci_fetched_repo.py:64) и test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203 (head_sha("main")); AC-1 — «ни одна подмена не правится»;
+  (2) внешний проект — по записи targets.yaml клона (требование 1); main_line_status(repo=config.ROOT) pin.py:86 / doctor/main_ci.py:33 — артель, в требовании 2 и AC-1;
+  (3) сценарий main_line_status с клоном проекта — в AC-2;
+  (4) ci_rerun.py:272 _origin_main_sha(repo=клон) — требование 5, AC-10;
+  (5) _inherited_from_main: base проекта, origin/<base> клона — требование 4, AC-9; ТОЛЬКО для внешнего проекта: у артели head_sha("main") держит подмена долгоживущего теста 01m4pmq…:203, а AC-1 запрещает правку подмен — записано в «Не входит» (моё согласование двух решений, Оператор может поправить);
+  (6) flake-rate «повтор не запущен» при rerun_started ложь (ci.py:1274) — требование 7, AC-11; тестов на прежний текст в этом случае нет (test_merge_gate_ci_wait.py:82 возвращает «запущен»).
 
 ## Не сработало
-- Bash с несколькими cat по каталогу документов просит подтверждения — читать Read'ом.
+- Bash с `;`/xargs/$(…) просит подтверждения — команды по одной.
 
 ## Где остановился
-- SPEC.md: status ready, 8 AC, budget_usd 35 (рамка ТЗ), обоснование монолита; guard ок.
+- SPEC.md: status ready, 11 AC, budget_usd 35 (рамка ТЗ), монолит; guard ок.
 
 ## Чего не хватило
 - Ничего.

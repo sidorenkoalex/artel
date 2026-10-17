@@ -40,20 +40,40 @@ D2 (Т-5); D2-2 (01M545EDTHS47HSB59AKC1EZ9C) закрыл токен, но не 
    записи `targets.yaml` нет `token_slot` (токена нет, `gitcmd.py:133-135`):
    окружение такого вызова `gh api` всё равно несёт `GH_REPO` проекта,
    `GH_TOKEN` в нём не появляется.
-2. У артели argv, окружение и `cwd` вызовов `gh` функций перечня
-   требования 3 не меняются ни на байт относительно main. Сверх того у
-   артели вызовы `ci.gh`, `head_sha`, `check_runs`, `run_list`,
-   `find_run_id`, `trigger_rerun` идут прежней формой — без новых
-   именованных аргументов (приём `ci._repo_kwargs`, `ci.py:83-95`: для
-   клона артели и `None` — вызов без `repo`). Подмены этих функций в
-   существующих тестах, написанные под прежнюю форму, не ломаются:
+
+   Внешний проект узнаётся по записи `targets.yaml`, клоном которой
+   является переданный репозиторий (решение Оператора 18.10), а не по
+   признаку «не клон артели». Репозиторий, не являющийся клоном ни одной
+   записи внешнего проекта, — вызов артели, в том числе главная копия
+   пульта `config.ROOT`.
+2. У артели argv, окружение и `cwd` вызовов `gh` всех функций перечня
+   требования 3 — в том числе `failed_check_names` и
+   `check_run_workflow_run` — и всех их вызывающих из
+   `orchestrator/ci_rerun.py` и `orchestrator/fsm_merge_gate.py` не
+   меняются ни на байт относительно main. Сверх того у артели вызовы
+   функций перечня идут прежней формой — без новых именованных
+   аргументов (приём `ci._repo_kwargs`, `ci.py:83-95`: для клона артели и
+   `None` — вызов без `repo`). Вызовы `ci.main_line_status(…,
+   repo=config.ROOT)` из `orchestrator/pin.py:86` и
+   `orchestrator/doctor/main_ci.py:33` остаются вызовами артели: `gh` в них
+   не меняется (ни `GH_REPO`, ни `--repo`, ни `GH_TOKEN` не появляются).
+   Существующие подмены функций перечня в `tests/`, написанные под
+   прежнюю форму, работают без правки; среди них:
    `tests/test_invariants.py:326-328` (защищённый; `ci.gh` как
    `lambda *a:`, `ci.head_sha` как `lambda branch:`),
    `tests/test_ci_status.py:160` (`fake_gh(*args)`), `:367` (`check_runs`
    как `lambda sha:`), `:372` (`run_list` как `lambda branch:`), `:798`
    (`find_run_id` как `lambda sha:`), `tests/test_main_ci_line.py:62`
    (`gh(self, *args, timeout=None)`), `tests/test_merge_gate_ci_wait.py:82`
-   (`trigger_rerun` как `lambda branch:`).
+   (`trigger_rerun` как `lambda branch:`),
+   `tests/test_ci_rerun_command.py:238` (`trigger_rerun` как
+   `trigger(branch)`), `:242` (`failed_check_names` как
+   `failed_names(sha)`), `tests/test_ci_stuck_check_run.py:220`
+   (`check_run_workflow_run` как `lambda cid:`),
+   `tests/test_main_ci_fetched_repo.py:64` (`check_runs` как `lambda sha:`
+   под `main_line_status(repo=config.ROOT)`),
+   `tests/test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203`
+   (`head_sha` как `lambda branch, **_k:`, вершина main — `head_sha("main")`).
 3. Репозиторий проекта доходит до всех функций CI на пути `verifying`,
    `ci-rerun`, автогейта приёмки и гейта мержа (проверка CI ветки и CI
    main после мержа) для задачи внешнего проекта. Перечень, сверенный по
@@ -70,8 +90,9 @@ D2 (Т-5); D2-2 (01M545EDTHS47HSB59AKC1EZ9C) закрыл токен, но не 
      репозитория не принимает;
    - `_no_checks_by_branch` (`:674`) — зовёт `run_list(branch)` без
      репозитория;
-   - `_inherited_from_main` (`:474`) — голову main читает в клоне проекта,
-     но `failed_check_names(main_sha)` зовёт без репозитория;
+   - `_inherited_from_main` (`:474`) — вершину главной ветки читает как
+     `head_sha("main")` (литерал `main`, локальная `refs/heads/main`),
+     `failed_check_names(main_sha)` зовёт без репозитория;
    - `failed_check_names` (`:732`) — репозитория не принимает;
    - `verifying_status` (`:600`), `branch_status` (`:767`) — клон проекта
      передают только в `head_sha`;
@@ -91,8 +112,9 @@ D2 (Т-5); D2-2 (01M545EDTHS47HSB59AKC1EZ9C) закрыл токен, но не 
    - `orchestrator/ci_rerun.py`: `:224` `check_run_workflow_run(check_id)`,
      `:232` `trigger_rerun(branch, run_id=…)`, `:267` и `:279`
      `failed_check_names(…)`, `:298` `trigger_rerun(branch)` — без
-     репозитория проекта; `:123`, `:158` `verifying_status(…, repo=…)` и
-     `:244` `head_sha(…, repo=…)` — клон проекта уже передают;
+     репозитория проекта; `:272` `fsm._origin_main_sha(target)` — без
+     `repo=` (см. требование 5); `:123`, `:158` `verifying_status(…,
+     repo=…)` и `:244` `head_sha(…, repo=…)` — клон проекта уже передают;
    - `orchestrator/fsm_merge_gate.py`: `:290` `trigger_rerun(branch)` — без
      репозитория проекта; `:293`, `:341` `branch_status(…, repo=…)` и
      `:579`, `:618` `main_line_status(…, repo=ctx.path)` — клон передают
@@ -108,12 +130,32 @@ D2 (Т-5); D2-2 (01M545EDTHS47HSB59AKC1EZ9C) закрыл токен, но не 
    - `orchestrator/advance_gates/` функций `ci` не зовёт.
 
    В вызывающих модулях — только передача репозитория проекта, без
-   изменения логики гейтов.
-4. До правки кода argv, окружение и `cwd` вызовов `gh` артели для функций
+   изменения логики гейтов (исключение — запись журнала требования 7).
+4. `_inherited_from_main` (`ci.py:474-488`) у задачи внешнего проекта
+   берёт вершину базовой ветки проекта — `base` его записи `targets.yaml`
+   (`ctx.base`), а не литерал `main`, — как вершину `origin/<base>` клона
+   проекта, а не локальной `refs/heads/main` (её push мержа не двигает), и
+   спрашивает её проверки у репозитория проекта по требованию 1. У артели
+   путь не меняется (требование 2: подмена `head_sha("main")` в
+   `tests/test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203`).
+5. `orchestrator/ci_rerun.py:272` у задачи внешнего проекта зовёт
+   `fsm._origin_main_sha(target, repo=<клон проекта>)` — `git fetch` по
+   адресу проекта идёт в клоне проекта, а не в главной копии пульта без
+   токена. Функция параметр `repo` уже принимает (`fsm.py:166`); образец
+   передачи — `fsm.py:264`. Правка — только вызова в `ci_rerun.py`. У
+   артели вызов прежний.
+6. До правки кода argv, окружение и `cwd` вызовов `gh` артели для функций
    перечня требования 3 зафиксированы тестами.
-5. Тесты детерминированы и без сети: подставной исполняемый `gh`,
+7. `fsm_merge_gate._ci_confirm_red_or_flake` (`fsm_merge_gate.py:281-309`):
+   когда повтор не запущен (`ci.rerun_started(<note trigger_rerun>)` ложь,
+   `ci.py:1274`), запись журнала `flake-rate` не говорит «ре-ран тоже
+   красный» и «подтверждённый красный», а записывает «повтор не запущен» с
+   причиной — `note`, которую вернула `trigger_rerun`. Когда повтор
+   запущен, записи `flake-rate` прежние; прочий исход узла (возврат
+   зелёного, отказ мержа `sys.exit` с прежним текстом) не меняется.
+8. Тесты детерминированы и без сети: подставной исполняемый `gh`,
    записывающий argv и переменные `GH_REPO`/`GH_TOKEN`; учебный внешний
-   проект — запись `targets.yaml` со своим `url` и слотом токена.
+   проект — запись `targets.yaml` со своим `url`, `base` и слотом токена.
 
 ## Критерии приёмки
 
@@ -121,10 +163,11 @@ AC-1. У артели argv, окружение (в том числе отсут�
 вызовов `gh` функций перечня требования 3 — `verifying_status`,
 `branch_status`, `accepted_full_suite`, `failed_check_names`,
 `main_line_status`, `find_run_id`, `check_run_workflow_run`,
-`trigger_rerun` — совпадают с main; подмены из требования 2
-(`tests/test_invariants.py:326-328`, `tests/test_ci_status.py:160`, `:367`,
-`:372`, `:798`, `tests/test_main_ci_line.py:62`,
-`tests/test_merge_gate_ci_wait.py:82`) работают без правки.
+`trigger_rerun` — и их вызовов из `orchestrator/ci_rerun.py` и
+`orchestrator/fsm_merge_gate.py` совпадают с main; `main_line_status(…,
+repo=config.ROOT)` (вызов `pin.py:86` и `doctor/main_ci.py:33`) зовёт `gh`
+без `GH_REPO`, без `--repo` и без `GH_TOKEN`, как на main. Ни одна
+существующая подмена в `tests/` не правится.
 
 AC-2. У учебного внешнего проекта, `url` которого оканчивается на `.git`
 или `/` (например `https://github.com/<владелец>/<имя>.git`), каждый
@@ -132,14 +175,16 @@ AC-2. У учебного внешнего проекта, `url` которог�
 `GH_REPO=<владелец>/<имя>` (без `.git` и `/` в конце) и `GH_TOKEN` —
 токен его слота, а в argv нет `--repo`. «Каждый вызов» проверяется в
 сценариях, доходящих до всех мест `gh api`:
-- красный путь `verifying_status`/`branch_status` со сверкой с main —
-  `_inherited_from_main` → `failed_check_names(main_sha)` (`ci.py:660`,
-  `:814`);
+- красный путь `verifying_status`/`branch_status` со сверкой с главной
+  веткой — `_inherited_from_main` → `failed_check_names(<вершина>)`
+  (`ci.py:660`, `:814`);
 - проверки коммита с `check_suite.id` (или ссылкой на прогон) — запрос
   `_commit_workflow_runs` (`ci.py:379-383`);
 - `find_run_id` при двух и более красных прогонах коммита — `gh api
   …/actions/runs` и `check_runs` (`ci.py:1162`, `:1180-1181`);
-- `check_run_workflow_run` (`ci.py:1221`).
+- `check_run_workflow_run` (`ci.py:1221`);
+- `main_line_status(<sha>, repo=<клон проекта>)` — `check_runs` и
+  `_commit_workflow_runs` через `_main_line_runs` (`ci.py:974`, `:1029`).
 
 AC-3. У учебного внешнего проекта каждый вызов `gh run` (`run list`,
 `run rerun`, `run watch`) и `gh pr` функций перечня требования 3 несёт в
@@ -172,22 +217,46 @@ AC-8. У учебного внешнего проекта без `token_slot` в
 `check_runs` из `verifying_status`) получает в окружении `GH_REPO` проекта,
 `GH_TOKEN` в нём не выставлен пультом, в argv нет `--repo`.
 
+AC-9. У учебного внешнего проекта с `base`, отличной от `main`, клон
+которого несёт `origin/<base>` на коммите A и локальную ветку `main`
+(или `<base>`) на другом коммите B, красный путь `verifying_status`/
+`branch_status` со сверкой с главной веткой спрашивает упавшие проверки
+коммита A (`gh api …/commits/<A>/check-runs` с `GH_REPO` проекта), а не B,
+и фраза «красный унаследован от …» называет sha A.
+
+AC-10. `ci-rerun` задачи учебного внешнего проекта зовёт
+`fsm._origin_main_sha` с `repo=` — клоном проекта задачи; у задачи
+артели вызов прежний (без `repo=`).
+
+AC-11. Гейт мержа (`_ci_confirm_red_or_flake`) при красном статусе ветки и
+`trigger_rerun`, вернувшей `note` отказа запуска («ре-ран CI не запущен: …»
+или «ре-ран прогона <id> не запущен: …»), пишет запись журнала
+`flake-rate` с текстом «повтор не запущен» и этой причиной; ни одна
+запись `flake-rate` этого прохода не содержит «ре-ран тоже красный» и
+«подтверждённый красный». При запущенном повторе и красном статусе запись
+`flake-rate` по-прежнему содержит «подтверждённый красный».
+
 ## Оценка объёма и деление
 Сработавшие сигналы: число файлов зоны ≥ 5 (шесть элементов зоны из ТЗ);
+число критериев приёмки ≥ 10 (11); `budget_usd` ≥ $30 (рамка ТЗ $35);
 зона задевает механизм инварианта 19 `docs/invariants.md` (неизвестный
 статус CI не зелёный — `ci.py`).
 
 Обоснование монолита (решение — за Оператором на гейте SPEC): правка
 одна по смыслу — адресация `gh` репозиторием проекта внутри `ci.py` и
 передача этого репозитория из двух вызывающих (`ci_rerun.py`,
-`fsm_merge_gate.py`, по одному–пяти местам вызова). Часть «только
+`fsm_merge_gate.py`, по одному–шести местам вызова). Часть «только
 `ci.py`» без передачи из вызывающих оставляет `ci-rerun` и ре-ран гейта
 мержа бьющими в репозиторий артели — дефект ТЗ не закрыт; часть «только
 вызывающие» без `ci.py` не имеет куда передать репозиторий. Тесты
-фиксации поведения артели (требование 4) — сторож требования 2 этой же
+фиксации поведения артели (требование 6) — сторож требования 2 этой же
 правки: отдельной задачей они мержились бы без изменения, которое
-сторожат. Логика гейтов не меняется, правки в `acceptance.py` и
-`github_adapter.py` по перечню требования 3 могут не понадобиться вовсе.
+сторожат. Требования 4, 5, 7 — решения Оператора 18.10 по тем же местам
+вызова (`_inherited_from_main`, `ci_rerun.py:272`, ре-ран гейта мержа);
+вынесенные отдельно, они правили бы те же строки параллельно. Логика
+гейтов не меняется (кроме текста записи `flake-rate` требования 7),
+правки в `acceptance.py` и `github_adapter.py` по перечню требования 3
+могут не понадобиться вовсе.
 
 ## Не входит
 - Мерж через `gh pr merge` для внешних проектов.
@@ -196,29 +265,37 @@ AC-8. У учебного внешнего проекта без `token_slot` в
 - Изменение логики гейтов в вызывающих модулях, в том числе включение
   сверки CI main после мержа (`fsm_merge_gate._check_main_ci`/
   `_await_main_ci`) для внешнего проекта: она остаётся только для артели;
-  здесь — лишь передача репозитория проекта.
+  здесь — лишь передача репозитория проекта (и текст записи требования 7).
+- Смена источника вершины главной ветки `_inherited_from_main` у артели
+  (`head_sha("main")`): её держит подмена долгоживущего теста
+  `tests/test_01m4pmqsypr2kd6n1jcvg9zabv_branch_verdict.py:203`, а AC-1
+  запрещает правку подмен; требование 4 — только для внешнего проекта.
 - Правка `orchestrator/advance_gates/`, `orchestrator/gitcmd.py`,
   `orchestrator/repo_context.py`, `orchestrator/targets.py`,
   `targets.yaml`, `docs/backlog.md` — только чтение; потребность в правке
   вне зон — эскалация.
-- Правка `orchestrator/fsm_advance.py` и `orchestrator/fsm_autogate.py`
-  (вне зон): клон проекта в `verifying_status` они уже передают.
-- Вызовы `ci.main_line_status` из `orchestrator/pin.py:86` и
-  `orchestrator/doctor/main_ci.py:33` (артель, вне зон).
+- Правка `orchestrator/fsm.py`, `orchestrator/fsm_advance.py` и
+  `orchestrator/fsm_autogate.py` (вне зон): клон проекта в
+  `verifying_status` последние две уже передают, `fsm._origin_main_sha`
+  параметр `repo` уже принимает.
+- Правка вызовов `ci.main_line_status` в `orchestrator/pin.py:86` и
+  `orchestrator/doctor/main_ci.py:33` (артель, вне зон) — их поведение
+  держит требование 2.
 
 ## Материалы
-- ТЗ: `tasks/01M55V7WB94C9BZXTXTTH83YWV/TZ.md`.
+- ТЗ: `tasks/01M55V7WB94C9BZXTXTTH83YWV/TZ.md`; решения Оператора по
+  аудиту SPEC 18.10 (причина возврата из spec_gate, пункты 1-6).
 - Ручная проверка Оператора 18.10: `GH_REPO=sledproject/sled gh api
   'repos/{owner}/{repo}'` → `sledproject/sled`; `gh api … --repo …` →
   «unknown flag: --repo».
 - `url` учебного проекта в `targets.yaml` — вида
   `https://github.com/<владелец>/<имя>` (так записан sled, `targets.yaml:70`).
-- Подмены, написанные под прежнюю форму вызова у артели (приём
-  `ci._repo_kwargs`, `ci.py:83-95`), — перечень требования 2:
-  `tests/test_invariants.py:326-328` (защищённый, `ci.gh` и `ci.head_sha`),
-  `tests/test_ci_status.py:160`, `:367`, `:372`, `:798`,
-  `tests/test_main_ci_line.py:62`, `tests/test_merge_gate_ci_wait.py:82`.
 - Правило разбора адреса — `gitcmd.url_key` (`gitcmd.py:44-46`, только
   чтение): снимает завершающие `/` и `.git`.
-- Тестов, утверждающих `--repo` у `gh api`, в `tests/` main нет (grep
-  `--repo` по `tests/`): раздел «Меняемое поведение» не нужен.
+- Признак «повтор запущен» — `ci.rerun_started` (`ci.py:1274-1289`):
+  подстрока «не запущен» в `note` `trigger_rerun` (`ci.py:1258`, `:1261`,
+  `:1265`).
+- Тестов, утверждающих `--repo` у `gh api` или «подтверждённый красный»
+  при незапущенном повторе, в `tests/` main нет (подмена
+  `tests/test_merge_gate_ci_wait.py:82` возвращает «ре-ран (тест)» —
+  повтор запущен): раздел «Меняемое поведение» не нужен.
