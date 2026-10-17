@@ -1,17 +1,17 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ достаточно; пишу SPEC без батча.
-- Часть 1 (01M52EEDEYV14658X8VFNHCW8K) в done, смержена (fe3abfd6): поля Profile runner/workdir/env — orchestrator/project_profile.py:66-96; константы targets.PROFILE_RUNNER_DEFAULT/OWN (targets.py:62-64).
-- Фиксация части 1 — tests/test_01m52eedeyv14658x8vfnhcw8k_launch_places.py (8 мест, оба пути command) — она и есть критерий «у артели ничего не изменилось».
-- Строка ТЗ «Порядок: после части 1» без id — в БД merge_after не заявлен; в SPEC поставлен 01M52EEDEYV14658X8VFNHCW8K с обоснованием.
-- two_sided._run_side (two_sided.py:222) берёт команду/окружение от acceptance._pytest_command/_pytest_env.
+- Возврат из spec_gate 17.10: десять правок Оператора внесены в SPEC (требования 1, 3, 4, 5; AC-1..AC-7; контекст про acceptance.py:59-64).
+- `_pytest_command` (acceptance.py:35-64): команда профиля как есть, кроме головы `python3` (подменяется интерпретатором пульта); `-p timeout`/`-o timeout` дописываются всегда.
+- `acceptance_suite` зовёт `full_suite(root, task_id)` без command (:1847-1848); test_acceptance.py:437-458 проверяет именно эту форму.
+- Прецедент исхода «не запущен» без лога — БД в дереве (acceptance.py:1731-1735).
+- Часть 1 — 01M52EEDEYV14658X8VFNHCW8K (done, fe3abfd6), в merge_after с обоснованием.
 
 ## Не сработало
-- Bash с несколькими командами через `;` на путях каталога документов требует подтверждения — читать через Read.
+- Bash со `;`/`$(…)` требует подтверждения — по одной команде.
 
 ## Где остановился
-- SPEC.md написан (status: ready, 8 AC, budget 40, merge_after часть 1), guard: ок. Сработал сигнал budget ≥ $30 — в SPEC материал для решения «монолит» Оператору.
+- SPEC.md переписан, status: ready, 8 AC, budget 40; guard: ок.
 
 ## Чего не хватило
-- id части 1 пришлось искать по git log main — в ТЗ только «после части 1».
+- Номера строк base-ключа (:1626) пришлось сверять вручную по acceptance.py.
