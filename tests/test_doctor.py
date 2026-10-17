@@ -40,6 +40,7 @@ from tests.sandbox import (FakeStream, InitializedTmpRootTest, init_bare_origin,
                            capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, is_claude_call,
+                           isolate_keychain_and_role,
                            make_project_repo, network_guarded_real_run,
                            sync_spec_from_worktree)
 
@@ -634,6 +635,18 @@ class BaseBranchCheckTest(unittest.TestCase):
         "url": "file:///nonexistent/sled",
         "base": "main",
     }
+
+    def setUp(self):
+        # Признак процесса роли снят, как в `TmpRootTest` (ANSWER-1 SPEC
+        # 01M545EDTHS47HSB59AKC1EZ9C, П-2): из шага роли `check_base_branch`
+        # иначе отказывает хостингу внешнего проекта (требование 7).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(config, "ROLE_HOME",
+                                    Path(tmp.name) / ".artel" / "home")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        isolate_keychain_and_role(self)
 
     def test_artel_uses_the_generic_path_not_a_dogfood_skip(self):
         """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
