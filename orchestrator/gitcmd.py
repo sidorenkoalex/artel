@@ -5,7 +5,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from . import config
+from . import config, keychain
 
 # Маркер пульта (SPEC 01M2XMCC837R5CX9M58VARK85G, требования 6-7): git-хуки
 # главной копии (`scripts/git-hooks/pre-commit`, `pre-push`) отказывают
@@ -29,6 +29,136 @@ def pult_env(base: dict | None = None) -> dict:
     return env
 
 
+# Токен хостинга внешнего проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C,
+# требования 1-3, 7): подкоманды git, говорящие с remote, — только они
+# получают помощник учётных данных пульта; локальные связку ключей не читают.
+HOSTING_SUBCOMMANDS = ("fetch", "push", "pull", "ls-remote")
+HOSTING_TOKEN_ENV = "ARTEL_HOSTING_TOKEN"
+# Помощник читает пароль из окружения, а не из своего текста: значение
+# токена не попадает ни в argv git, ни в argv помощника (`GIT_TRACE`).
+HOSTING_CREDENTIAL_HELPER = (
+    '!f() { test "$1" = get || exit 0; echo username=x-access-token; '
+    f'echo "password=${{{HOSTING_TOKEN_ENV}}}"; }}; f')
+
+
+def url_key(url: str) -> str:
+    """Адрес remote для сравнения: без завершающей черты и `.git`."""
+    return url.strip().rstrip("/").removesuffix(".git")
+
+
+def _under(path: Path, root: Path) -> tuple | None:
+    """Части `path` относительно `root` (абсолютный вид, затем с
+    раскрытыми ссылками — временный каталог macOS живёт под `/private`);
+    `None` — `path` не под `root`."""
+    for a, b in ((Path(os.path.abspath(path)), Path(os.path.abspath(root))),
+                 (path.resolve(), root.resolve())):
+        try:
+            return a.relative_to(b).parts
+        except ValueError:
+            continue
+    return None
+
+
+def _project_of_path(path: Path) -> str | None:
+    """Внешний проект, в области которого (`.artel/projects/<имя>/<…>`)
+    лежит `path`; сам каталог проекта и область артели — не проект."""
+    parts = _under(path, config.PROJECTS)
+    if not parts or len(parts) < 2 or parts[0] == config.DEFAULT_TARGET:
+        return None
+    return parts[0]
+
+
+def project_by_url(url: str, entries: dict | None = None) -> tuple | None:
+    """(имя, запись) внешнего проекта, чей `url` — `url`; `None` — такого
+    нет или `targets.yaml` не читается (прежнее поведение)."""
+    if entries is None:
+        entries = _declared_targets()
+    key = url_key(url)
+    for name, entry in entries.items():
+        if (name != config.DEFAULT_TARGET and isinstance(entry, dict)
+                and entry.get("url") and url_key(str(entry["url"])) == key):
+            return name, entry
+    return None
+
+
+def _declared_targets() -> dict:
+    from . import targets
+    try:
+        return targets.load()
+    except targets.TargetsError:
+        return {}
+
+
+def _hosting_project(args: tuple) -> tuple | None:
+    """(имя, запись) внешнего проекта, с хостингом которого говорит
+    git-вызов `args`; `None` — вызов локальный, артели или вне проектов."""
+    cwd = Path(config.ROOT)
+    i = 0
+    while i + 1 < len(args) and args[i] in ("-C", "-c"):
+        if args[i] == "-C":
+            cwd = cwd / args[i + 1]
+        i += 2
+    rest = args[i:]
+    if not rest or rest[0] not in HOSTING_SUBCOMMANDS:
+        return None
+    name = _project_of_path(cwd)
+    if name is not None:
+        entry = _declared_targets().get(name)
+        if isinstance(entry, dict):
+            return name, entry
+    if rest[0] == "push":
+        entries = _declared_targets()
+        for arg in rest[1:]:
+            if not arg.startswith("-"):
+                found = project_by_url(arg, entries)
+                if found is not None:
+                    return found
+    return None
+
+
+def hosting_token(name: str, entry: dict) -> tuple[str | None, str | None]:
+    """(токен, отказ) операции хостинга проекта `name` по записи `entry`.
+
+    (None, None) — прежняя авторизация: артель либо запись без поля
+    `token_slot` вне процесса роли (требования 2, 4). Процесс роли —
+    именованный отказ без чтения связки ключей, для записи с полем и без
+    (требование 7). Слот пуст — отказ с именем слота (требование 2)."""
+    from . import runner
+    if name == config.DEFAULT_TARGET:
+        return None, None
+    if runner.in_role_environment():
+        return None, (f"операция хостинга проекта {name} отказана: процесс "
+                      f"роли — токен хостинга проекта читается только в "
+                      f"сессии Оператора")
+    slot = entry.get("token_slot")
+    if not slot:
+        return None, None
+    token = keychain.token(slot)
+    if not token:
+        return None, (f"слот {slot} связки ключей пуст — операция хостинга "
+                      f"проекта {name} отказана (token_slot записи проекта)")
+    return token, None
+
+
+def hosting_env(env: dict, token: str) -> dict:
+    """Окружение хостингового git-вызова: чужие помощники сброшены пустым
+    `credential.helper`, следом — помощник пульта (как `-c
+    credential.helper= -c credential.helper=<пульт>`); конфигурация клона и
+    `GIT_CONFIG_GLOBAL` не трогаются."""
+    env = dict(env)
+    try:
+        count = int(env.get("GIT_CONFIG_COUNT") or 0)
+    except ValueError:
+        count = 0
+    for value in ("", HOSTING_CREDENTIAL_HELPER):
+        env[f"GIT_CONFIG_KEY_{count}"] = "credential.helper"
+        env[f"GIT_CONFIG_VALUE_{count}"] = value
+        count += 1
+    env["GIT_CONFIG_COUNT"] = str(count)
+    env[HOSTING_TOKEN_ENV] = token
+    return env
+
+
 def git(*args: str) -> subprocess.CompletedProcess:
     """git в корне репозитория; исход разбирает вызывающий.
 
@@ -38,9 +168,21 @@ def git(*args: str) -> subprocess.CompletedProcess:
     Дочерний процесс получает окружение пульта плюс маркер
     `ARTEL_PULT_GIT=1` (`pult_env`, требования 6-7): прочие переменные не
     меняются — git-идентичность, PATH, `GIT_*` Оператора доходят как есть.
+
+    Хостинговая операция внешнего проекта (`_hosting_project`) идёт с
+    токеном слота `token_slot` его записи (`hosting_env`) либо отказывает
+    без запуска git (`hosting_token`; SPEC 01M545EDTHS47HSB59AKC1EZ9C).
     """
+    env = pult_env()
+    project = _hosting_project(args)
+    if project is not None:
+        token, refusal = hosting_token(*project)
+        if refusal is not None:
+            return subprocess.CompletedProcess(args, 1, "", refusal)
+        if token is not None:
+            env = hosting_env(env, token)
     try:
-        return subprocess.run(["git", *args], cwd=config.ROOT, env=pult_env(),
+        return subprocess.run(["git", *args], cwd=config.ROOT, env=env,
                               capture_output=True, text=True)
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))

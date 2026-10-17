@@ -51,9 +51,9 @@ subprocess-вызовов», см. `preflight_checks`).
 `orchestrator/doctor.py` (1856 строк) разъехались по подмодулям этого
 пакета — один раздел (граница комментария-разделителя) на файл, тело
 функций не переписано, только перенесено. Этот файл (фасад) — ЕДИНСТВЕННОЕ
-место, где коллаборанты (`alerts`, `artifact_branch`, `canary`, `ci`,
+место, где коллаборанты (`alerts`, `artifact_branch`, `brief`, `canary`, `ci`,
 `coldstart`, `config`, `fixation`, `gitcmd`, `liveness`, `pool_seal`,
-`projects`, `providers`, `roles`, `runner`, `snapshot`, `spend`, `stack`, `store`,
+`project_profile`, `projects`, `providers`, `roles`, `runner`, `snapshot`, `spend`, `stack`, `store`,
 `targets`, `workspace`, `zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
 их не импортируют (AC-9: сканирующий тест красит любой прямой
 `import subprocess`/`import shutil`/`from orchestrator import gitcmd` в
@@ -93,10 +93,12 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from .. import (acceptance, alerts, artifact_branch, canary, ci, coldstart, config,
+from .. import (acceptance, alerts, artifact_branch, brief, canary, ci, coldstart,
+                config,
                 cycle_hint,
                 fixation, gitcmd, keychain, liveness, merge_lock, models,
-                notes, pool_seal, projects, providers, repo_context, roles,
+                notes, pool_seal, project_profile, projects, providers,
+                repo_context, roles,
                 runner, snapshot, spend, stack, store, targets, workspace,
                 zone_lock)
 # Провайдер `codex` — ЕДИНСТВЕННЫЙ провайдер, чьи проверки этот пакет
@@ -171,7 +173,8 @@ from .hung_test_watchdog import (_HUNG_TEST_CMD_RE, _ETIME_RE,
                                  check_hung_test_runs, _fix_hung_test_runs,
                                  _fix_dead_lease_groups, check_zone_waits)
 from .misc_checks import (check_backup_age, check_pending_notes,
-                          check_task_counters, check_base_branch)
+                          check_task_counters, gh_env, check_base_branch)
+from .project_checks import project_entry_checks
 from .root_pin import (check_root_pin, fetch_origin_main_sha,
                        unpushed_commits, check_pin_unpushed)
 from .main_ci import MAIN_CI_CHECK, check_main_ci

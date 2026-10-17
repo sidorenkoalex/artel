@@ -10,6 +10,7 @@
 упавшую 31-ю проверку невидимой.
 """
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -52,13 +53,26 @@ def gh(*args: str, timeout: int | None = None,
     <repo>` в конец argv, `gh` резолвит владельца/репозиторий по нему,
     не по remote `cwd`. `None` (по умолчанию, self) — argv и `cwd`
     байт-в-байт как до этой задачи, флаг не добавляется вовсе.
+
+    `repo` — `url` записи внешнего проекта: `gh` получает токен слота
+    `token_slot` этой записи переменной `GH_TOKEN` своего окружения либо не
+    запускается вовсе — отказ `gitcmd.hosting_token` возвращается текстом
+    ошибки вызова (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 1-3, 7).
     """
     timeout_sec = config.GH_TIMEOUT_SEC if timeout is None else timeout
     full_args = (*args, "--repo", repo) if repo else args
+    extra = {}
+    project = gitcmd.project_by_url(repo) if repo else None
+    if project is not None:
+        token, refusal = gitcmd.hosting_token(*project)
+        if refusal is not None:
+            return subprocess.CompletedProcess(args, 1, "", refusal)
+        if token is not None:
+            extra["env"] = dict(os.environ, GH_TOKEN=token)
     try:
         return subprocess.run(["gh", *full_args], cwd=config.ROOT,
                               capture_output=True, text=True,
-                              timeout=timeout_sec)
+                              timeout=timeout_sec, **extra)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             args, 1, "", f"gh молчал дольше {timeout_sec} с")

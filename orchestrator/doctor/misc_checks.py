@@ -3,6 +3,7 @@
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
+import os
 import time
 
 from orchestrator import doctor
@@ -76,22 +77,39 @@ def check_task_counters(conn) -> doctor.Check:
                  "основной генератор, SPEC T094) — счётчик не движется")
 
 
+def gh_env(name: str, entry: dict) -> tuple[dict | None, str | None]:
+    """(окружение, отказ) прямого вызова `gh` проекта `name`: `None`
+    окружения — окружение процесса, прежняя авторизация (артель, запись
+    без `token_slot`); иначе — с `GH_TOKEN` слота проекта."""
+    token, refusal = doctor.gitcmd.hosting_token(name, entry)
+    if refusal is not None or token is None:
+        return None, refusal
+    return dict(os.environ, GH_TOKEN=token), None
+
+
 def check_base_branch(name: str, entry: dict) -> doctor.Check:
     """Сверка базовой ветки/merge-политики — по возможностям forge, иначе
     честный skip с причиной (SPEC требование 9 явно это допускает).
     Единая логика для ЛЮБОГО объявленного target, включая артель (A7,
-    требование 2, AC-2)."""
+    требование 2, AC-2).
+
+    `gh` внешнего проекта — с токеном слота `token_slot` его записи
+    (`gh_env`, SPEC 01M545EDTHS47HSB59AKC1EZ9C, требование 1)."""
     if entry.get("forge") != "github":
         return doctor.Check("base-branch", "skip",
                      f"forge {entry.get('forge')} — сверка не реализована")
     gh = doctor.shutil.which("gh")
     if gh is None:
         return doctor.Check("base-branch", "skip", "gh CLI не найден — сверка пропущена")
+    env, refusal = gh_env(name, entry)
+    if refusal is not None:
+        return doctor.Check("base-branch", "skip", refusal)
     try:
         res = doctor.subprocess.run(
             ["gh", "repo", "view", entry["url"], "--json", "defaultBranchRef",
              "-q", ".defaultBranchRef.name"],
-            capture_output=True, text=True, timeout=doctor.config.GH_TIMEOUT_SEC)
+            capture_output=True, text=True, timeout=doctor.config.GH_TIMEOUT_SEC,
+            env=env)
     except (OSError, doctor.subprocess.TimeoutExpired) as exc:
         return doctor.Check("base-branch", "skip", f"gh не ответил: {exc}")
     if res.returncode != 0:

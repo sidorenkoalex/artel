@@ -95,6 +95,10 @@ def all_checks(conn) -> list[doctor.Check]:
         checks.append(doctor.check_target_layout(name))
         checks.append(doctor.check_target_wrapper(name))
         checks.append(doctor.check_base_branch(name, entry))
+        # Клон, пуш, CI, защита ветки, токен, no_paths и project_skills
+        # записи проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7)
+        # — рядом с base-branch: предмет тот же, хостинг проекта.
+        checks.extend(doctor.project_entry_checks(name, entry))
         checks.extend(doctor.recovery_check(conn, name))
 
     checks.extend(doctor.check_orphans(conn))

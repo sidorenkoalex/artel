@@ -68,6 +68,7 @@ import functools
 import importlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -81,8 +82,8 @@ from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (catalog, config, fsm, gitcmd, models, runner, stack,
-                          store, workspace)
+from orchestrator import (catalog, config, fsm, gitcmd, keychain, models,
+                          runner, stack, store, workspace)
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -650,6 +651,33 @@ def isolate_orphan_sweep(testcase: unittest.TestCase) -> None:
     patcher = mock.patch.object(orphans, "tempfile", TempfileInTestRoot(testcase))
     patcher.start()
     testcase.addCleanup(patcher.stop)
+
+
+def fake_keychain_token(slot: str) -> str:
+    """Подмена `keychain.token` песочницы (SPEC 01M545EDTHS47HSB59AKC1EZ9C,
+    требование 9, AC-16): тестовый токен, производный от имени слота, без
+    запуска `security` — ни один тест не читает настоящую связку ключей."""
+    return f"test-token-{slot}"
+
+
+def isolate_keychain_and_role(testcase: unittest.TestCase) -> None:
+    """Слот связки ключей — `fake_keychain_token`; признак процесса роли
+    (`runner.in_role_environment`) снят: `ARTEL_ROLE` убран, `HOME`, равный
+    дому роли, заменён временным каталогом теста (SPEC
+    01M545EDTHS47HSB59AKC1EZ9C, требование 9). Тест, которому нужен процесс
+    роли, выставляет признак сам. Зовётся после подмены путей `config`:
+    дом роли — `config.ROLE_HOME` песочницы."""
+    patcher = mock.patch.object(keychain, "token", fake_keychain_token)
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+    env = mock.patch.dict(os.environ)
+    env.start()
+    testcase.addCleanup(env.stop)
+    os.environ.pop(config.ARTEL_ROLE_ENV, None)
+    if runner.in_role_environment():
+        home = tempfile.mkdtemp(prefix="artel-operator-home-")
+        testcase.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        os.environ["HOME"] = home
 
 
 class TmpDirTest(unittest.TestCase):
@@ -1559,6 +1587,7 @@ class TmpRootTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
             patcher.start()
             self.addCleanup(patcher.stop)
+        isolate_keychain_and_role(self)
 
         # Клон артели (ADR-0021 п.1, этап 2; SPEC 01M42PENCS26D0656X8FR7DFA7):
         # с этапа 2 ветки, рабочие копии и ссылки документов задач артели
@@ -1876,6 +1905,7 @@ class RealGitSandbox(TmpRootTest):
             patcher = mock.patch.object(config, attr, path)
             patcher.start()
             self.addCleanup(patcher.stop)
+        isolate_keychain_and_role(self)
 
         # Схема БД (SPEC T090, `store.migrate`: «БД ещё не создана — схему
         # ставит init») — `CREATE TABLE IF NOT EXISTS` идемпотентна, так что
