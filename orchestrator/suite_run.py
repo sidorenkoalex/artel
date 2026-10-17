@@ -49,6 +49,7 @@ from typing import NamedTuple
 from . import (acceptance, appendix_tree, config, gitcmd, liveness,
                project_profile, repo_context, session, store, suite_lock,
                workspace)
+from .targets import PROFILE_RUNNER_OWN
 
 # Вид в имени лога прогона: `.artel/logs/suite-run/<id>/<id>-suiterun-<n>.log`
 # — имя прежнее, каталог — хозяйство команды (`_new_log`).
@@ -267,8 +268,13 @@ def _is_pytest(command: list[str]) -> bool:
                for flag, module in zip(command, command[1:]))
 
 
-def _profile_command(target: str) -> tuple[list[str] | None, str]:
-    """(команда профиля тестов проекта, причина отказа) — требование 2."""
+def _profile_command(target: str) -> tuple:
+    """(команда профиля тестов проекта, причина отказа) — требование 2.
+
+    У `runner: pytest-own` команда — сам профиль (`project_profile.Profile`):
+    прогоны и ключ итога базы идут каналом профиля `run_full_suite` и
+    `suite_result_key` (SPEC 01M52EEHSRD93WMPHWB5VJYRKD); у `pult-pytest` —
+    список, как прежде."""
     answer = repo_context.profile_of(target)
     if answer.outcome == repo_context.PROFILE_UNREAD:
         return None, (f"профиль тестов проекта «{target}» не прочитан "
@@ -282,7 +288,13 @@ def _profile_command(target: str) -> tuple[list[str] | None, str]:
         return None, (f"команда профиля тестов проекта «{target}» "
                       f"({' '.join(command) or 'пусто'}) — не запуск pytest: "
                       f"флаги параллели pytest (-n) к ней неприменимы")
-    return command, ""
+    if answer.values.get("runner") != PROFILE_RUNNER_OWN:
+        return command, ""
+    try:
+        return project_profile.Profile.from_values(answer.values), ""
+    except (KeyError, TypeError, ValueError) as exc:
+        return None, (f"профиль тестов проекта «{target}» не прочитан "
+                      f"(test_profile в targets.yaml): {exc}")
 
 
 # -------------------------------------------------------- разбор прогона
@@ -496,7 +508,7 @@ def _base_copy(clone: Path, sha: str):
         gitcmd.in_repo(clone, "worktree", "prune")
 
 
-def _base(task_id: str, target: str, branch: str, command: list[str],
+def _base(task_id: str, target: str, branch: str, command,
           run_no: int, mode: str,
           limit: tuple[int, str] | None = None) -> tuple[set | None, str]:
     """(упавшие на базе, пояснение) — `None` вместо множества: база не
@@ -546,11 +558,16 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         return f"[{task_id}] suite-run №{run_no}: отказ — {refusal}", False
     limit = project_profile.full_suite_limit(target)
     targets = ("tests",)
+    test_ids: tuple = ()
     if mode == MODE_FAILED:
         targets = tuple(_read_failed(task_id) or ())
         if not targets:
             return (f"[{task_id}] suite-run №{run_no}: отказ — перечня "
                     f"упавших прошлого прогона нет"), False
+        if acceptance._own(command) is not None:
+            # id упавших `pytest-own` напечатаны из `workdir` — идут как
+            # есть каналом `test_ids`, без перевода путей целей.
+            targets, test_ids = (), targets
     wt = workspace.path(task_id, target)
     # Рабочая копия с незакоммиченными правками плюс приложения PLAN (SPEC
     # 01M46C776SZEMYPBQGPNJN1TXY) — тем же узлом, что у автогейта и
@@ -563,7 +580,7 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         with acceptance.observed_full_suite():
             green, output = acceptance.run_full_suite(
                 tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
-                log=log, limit=limit)
+                log=log, limit=limit, **({"test_ids": test_ids} if test_ids else {}))
     metrics = acceptance._last_full_suite_metrics
     parsed = parse(green, output)
     # Повтор — по id тестов: единицу подтеста `<id> <метка>` pytest не найдёт.

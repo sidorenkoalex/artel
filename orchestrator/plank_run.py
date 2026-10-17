@@ -184,7 +184,12 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
         # отказывает прогону в шаге роли (SPEC 01M41W15BK20WBTD9TMBTSXNZA).
         tests_rel = (tdir / "acceptance_tests").relative_to(code_dir).as_posix()
         target_arg = f"{tests_rel}/{selected}" if selected else tests_rel
-        code, output = acceptance.run_plank([target_arg], code_dir)
+        # Профиль `pytest-own` проекта задачи (SPEC
+        # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — раннер пульта, как прежде.
+        own = acceptance._task_own_profile(conn, task_id)
+        code, output = (acceptance.run_plank([target_arg], code_dir, profile=own)
+                        if own is not None
+                        else acceptance.run_plank([target_arg], code_dir))
     print(output)
     summary = acceptance.run_summary_line(output) or "итоговой строки нет"
     if code is None:

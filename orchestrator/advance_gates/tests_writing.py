@@ -528,8 +528,7 @@ def _tests_writing_manifest_gate(conn, task_id: str, code_branch: str,
 
 def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
                                     extra: list[str] = (),
-                                    command: list[str] | None = None
-                                    ) -> GateRefusal | None:
+                                    command=None) -> GateRefusal | None:
     """Требование 2/AC-4/AC-5: сухой сбор материализованной планки
     (`acceptance.collect`) ПОСЛЕ трассируемости AC и гейта AC-8, ДО
     перевода задачи в `in_dev` — отказ сбора (импорт/синтаксис планки)
@@ -550,12 +549,16 @@ def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
     требование 3).
 
     `command` — начало команды прогона из профиля тестов проекта (SPEC
-    01M45FJVGQT1K0P8HDEXZX6HS7, требование 6); `None` — команда пульта
-    (проект без профиля)."""
+    01M45FJVGQT1K0P8HDEXZX6HS7, требование 6) либо сам профиль
+    `pytest-own` — он идёт в сбор как есть, не сворачиваясь в список (SPEC
+    01M52EEHSRD93WMPHWB5VJYRKD); `None` — команда пульта (проект без
+    профиля)."""
     refusal = _tests_writing_artifact_source_gate(acc_tdir, task_id)
     if refusal is not None:
         return refusal
-    kwargs = {"command": list(command)} if command else {}
+    own = acceptance._own(command)
+    kwargs = ({"command": own} if own is not None
+              else {"command": list(command)} if command else {})
     if extra:
         collected, tail = acceptance.collect(acc_tdir, run_cwd, extra=list(extra),
                                              **kwargs)

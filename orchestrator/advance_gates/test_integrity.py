@@ -59,6 +59,7 @@ from scripts import guard
 from .. import artifact_branch as docs_ref
 from .. import config, gitcmd, project_profile, store, workspace
 from . import two_sided
+from ..targets import PROFILE_RUNNER_OWN
 from ._base import GateRefusal, _run_gates
 # Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -1405,8 +1406,15 @@ def _same_sides(outcome: str) -> dict:
             for label in (two_sided.NEW_ON_BASE, two_sided.OLD_ON_BRANCH)}
 
 
+def _own_profile(profile):
+    """Профиль проекта задачи для двустороннего прогона: `pytest-own` —
+    он сам (стороны идут по профилю, SPEC 01M52EEHSRD93WMPHWB5VJYRKD);
+    `pult-pytest` — `None`, стороны идут раннером пульта, как прежде."""
+    return profile if profile.runner == PROFILE_RUNNER_OWN else None
+
+
 def _observe_methods(conn, task_id: str, branch: str, ev: _Evaluation,
-                     methods: list) -> None:
+                     methods: list, profile=None) -> None:
     repo = workspace.task_repo(task_id)
     head_sha = gitcmd.branch_head_sha(branch, repo=repo)
     if not head_sha:
@@ -1426,8 +1434,11 @@ def _observe_methods(conn, task_id: str, branch: str, ev: _Evaluation,
             sides = _same_sides(two_sided.SIDE_LIMIT)
         else:
             try:
-                result = two_sided.run(repo, branch, ev.cmp.base, [target],
-                                       deadline=deadline)
+                result = (two_sided.run(repo, branch, ev.cmp.base, [target],
+                                        deadline=deadline, profile=profile)
+                          if profile is not None else
+                          two_sided.run(repo, branch, ev.cmp.base, [target],
+                                        deadline=deadline))
                 sides = (result.sides or {}).get(target.address) or {}
             except Exception as exc:  # noqa: BLE001 — наблюдение не роняет переход
                 sides = _same_sides(f"сбой наблюдения: {exc!r}")
@@ -1437,21 +1448,24 @@ def _observe_methods(conn, task_id: str, branch: str, ev: _Evaluation,
                                           sides, time.monotonic() - began))
 
 
-def _observe(conn, task_id: str, t, ev: _Evaluation) -> None:
+def _observe(conn, task_id: str, t, ev: _Evaluation, profile=None) -> None:
     """Наблюдение неослабления (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP,
     требования 2-6): двусторонний прогон КАЖДОГО изменённого метода —
     объявленного или нет — и запись «двусторонний прогон (наблюдение)» на
     метод. Ничего не возвращает: гейт итог наблюдения не читает, сбой
     наблюдения — запись с причиной, не отказ и не исключение. Метод с
     одинаковыми текстами файла base и head (вызывающий изменённого
-    помощника) не прогоняется: его версии не различаются."""
+    помощника) не прогоняется: его версии не различаются.
+
+    `profile` — профиль `pytest-own` проекта задачи для сторон прогона
+    (`_own_profile`); `None` — раннер пульта."""
     if not config.TWO_SIDED_OBSERVATION:
         return
     methods = [m for m in ev.cmp.changes if m.base_source != m.head_source]
     if not methods:
         return
     try:
-        _observe_methods(conn, task_id, t["branch"], ev, methods)
+        _observe_methods(conn, task_id, t["branch"], ev, methods, profile)
     except Exception as exc:  # noqa: BLE001 — наблюдение не роняет переход
         store.journal(conn, task_id, "fsm", OBSERVATION_ACTION,
                       f"наблюдение не выполнено: сбой {exc!r}; методы: "
@@ -1506,7 +1520,8 @@ def _test_integrity_gate(conn, task_id: str, t,
     # Наблюдение — здесь, не в общем `_journal_pass` (его зовут и гейт
     # мержа, и `uncovered`): только на этом переходе и до ветвления, чтобы
     # запись была и при отказе (решение Оператора на гейте SPEC, Е4).
-    _observe(conn, task_id, t, ev)
+    own = _own_profile(decision.profile)
+    _observe(conn, task_id, t, ev, own)
     if ev.rest is None:
         hint = (f"разберись, почему git не отвечает, и повтори "
                f"artel.py advance {task_id}")
@@ -1524,8 +1539,11 @@ def _test_integrity_gate(conn, task_id: str, t,
         _journal_outcome(conn, task_id, outcomes)
         return None
     methods = _two_sided_methods(ev)
-    result = two_sided.run(workspace.task_repo(task_id), t["branch"],
-                           ev.cmp.base, methods)
+    result = (two_sided.run(workspace.task_repo(task_id), t["branch"],
+                            ev.cmp.base, methods, profile=own)
+              if own is not None else
+              two_sided.run(workspace.task_repo(task_id), t["branch"],
+                            ev.cmp.base, methods))
     for method in methods:
         outcomes[f"{method.base_path}{guard.TEST_NAME_SEP}{method.name}"] += (
             f"; двусторонний прогон: {result.results.get(method.address, '')}")
