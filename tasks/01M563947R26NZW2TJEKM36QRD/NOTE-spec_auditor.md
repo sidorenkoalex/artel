@@ -1,13 +1,13 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Аудит SPEC bb0e13b1: вердикт concerns, одно отклонение. Факты SPEC верны: notes.py:266-282, config.py:509, repo_context.is_artel (172-173), resolve (82-96), store.task_target (701-707).
-- Отклонение: колонка tasks.target nullable (schema.py:115); resolve("")/resolve(None) -> None, а is_artel пустую колонку считает артелью. Буквальное «resolve по target = None -> неизвестный» поменяет текст удержания у артели с пустым target; AC-3 этого не ловит. Прочтение: is_artel первым.
-- Все стенды окна в tests/ заводят задачу с DEFAULT_TARGET/ARTEL — ожидания не меняются; config.TARGETS патчится песочницей (tests/sandbox.py:91).
-- docs/codebase-map.md в COMMON_ZONES (config.py:803).
+- Аудит SPEC a15b6b6d: вердикт concerns, одно отклонение — нет AC на сочетание триггеров (внешний держатель/внешняя задача + задача артели в in_dev); досрочный `return None` проходит все AC.
+- Факты SPEC верны: notes.py:266-282, config.py:509, schema.py:115 (target nullable), repo_context.is_artel 172-173, resolve 82-96, store.task_target 701-707, all_tasks ORDER BY id (696-698).
+- Все стенды окна в tests/ — DEFAULT_TARGET; T-LOCK тест (test_notes.py:326-334) только assertIsNotNone — «Меняемое поведение» не нужно.
+- store.get_task делает sys.exit на отсутствующей строке (store.py:1010-1015) — ловушка для строки держателя.
 
 ## Не сработало
-- Bash с `cd ... &&`/переменной в составной команде требует подтверждения — использовать абсолютные пути.
+- Bash с `cd ... ;`/переменными требует подтверждения — только абсолютные пути.
 
 ## Где остановился
 - SPEC-AUDIT.md сдан, guard прогнан.
