@@ -286,24 +286,36 @@ def _ci_confirm_red_or_flake(conn, task_id: str, branch: str,
     зелёный) — возврат зелёного исхода ре-рана вызывающему коду; красный
     статус, подтверждённый ре-раном, — `sys.exit` тем же текстом, что и
     раньше (не возвращается).
+
+    Повтор не запущен (`ci.rerun_started`) — запись `flake-rate` называет
+    это и причину: перечитанный статус тогда не исход повтора, и ни
+    «подтверждённый красный», ни «флейк» о нём не правда (SPEC
+    01M55V7WB94C9BZXTXTTH83YWV, требование 7). Исход узла тот же.
     """
-    rerun_trigger_note = ci.trigger_rerun(branch)
+    repo = workspace.task_repo(task_id)
+    rerun_trigger_note = ci.trigger_rerun(branch, **ci._repo_kwargs(repo))
     store.journal(conn, task_id, "orchestrator", "ре-ран CI запущен",
                   rerun_trigger_note)
-    rerun_green, rerun_note = ci.branch_status(
-        branch, repo=workspace.task_repo(task_id))
+    rerun_green, rerun_note = ci.branch_status(branch, repo=repo)
     store.journal(conn, task_id, "orchestrator",
                   "статус CI ветки (ре-ран)", rerun_note)
-    if rerun_green:
+    if not ci.rerun_started(rerun_trigger_note):
+        store.journal(
+            conn, task_id, "orchestrator", "flake-rate",
+            f"повтор не запущен: {rerun_trigger_note}; первый статус "
+            f"красный, статус после — {rerun_note} ({note})")
+    elif rerun_green:
         store.journal(
             conn, task_id, "orchestrator", "flake-rate",
             f"флейк: первый статус красный, ре-ран зелёный "
             f"({note} -> {rerun_note})")
+    else:
+        store.journal(
+            conn, task_id, "orchestrator", "flake-rate",
+            f"подтверждённый красный: первый статус красный, ре-ран "
+            f"тоже красный ({note} -> {rerun_note})")
+    if rerun_green:
         return rerun_green, rerun_note
-    store.journal(
-        conn, task_id, "orchestrator", "flake-rate",
-        f"подтверждённый красный: первый статус красный, ре-ран "
-        f"тоже красный ({note} -> {rerun_note})")
     sys.exit(f"[{task_id}] merge отклонён: {rerun_note}\n"
              f"  задача осталась на гейте merge; почини CI ветки "
              f"{branch} и повтори: artel.py approve {task_id}")
