@@ -141,18 +141,55 @@ def _place_command(command, *args: str) -> list[str]:
     return [*own.command, *args, "-p", "no:cacheprovider"]
 
 
-def _place_env(command):
+def _place_env(command, run_dir: Path | None = None):
     """Окружение прогона места: `_own_env` у `pytest-own`, иначе
-    `_pytest_env` (копия окружения пульта)."""
+    `_pytest_env` (копия окружения пульта). `run_dir` — каталог прогона
+    (`cwd` процесса) для каталога относительной команды профиля в PATH."""
     own = _own(command)
-    return _pytest_env() if own is None else _own_env(own)
+    return _pytest_env() if own is None else _own_env(own, run_dir)
+
+
+# Системные каталоги в хвосте PATH прогона `pytest-own` (SPEC
+# 01M56KCVCTW5BV9TWTH54TW9Q9, требование 1): PATH роли — только каталоги
+# объявленных инструментов, и обёртка проекта без них не находит `bash`/`date`.
+_OWN_SYSTEM_PATH_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+
+
+def _own_path(profile, run_dir: Path | None) -> str:
+    """PATH прогона `pytest-own`: PATH вызывающего без изменений, затем
+    каталог `command[0]` и `_OWN_SYSTEM_PATH_DIRS`, которых в нём ещё нет.
+    Хвост одинаков для гейтов пульта и шага роли и ничего уже найденного
+    не затеняет. Каталог команды: абсолютный путь — его каталог;
+    относительный с `/` — от `run_dir` (оттуда его разрешит запуск), без
+    `run_dir` пропускается; голое имя — каталог найденного поиском по PATH
+    вызывающего, не найдено — пропускается (запуск даст `CommandNotFound`)."""
+    caller = os.environ.get("PATH")
+    parts = caller.split(os.pathsep) if caller else []
+    head = profile.command[0] if profile.command else ""
+    command_dir = None
+    if os.path.isabs(head):
+        command_dir = os.path.dirname(head)
+    elif "/" in head:
+        if run_dir is not None:
+            command_dir = os.path.dirname(
+                os.path.normpath(os.path.join(str(run_dir), head)))
+    elif head and caller:
+        found = shutil.which(head, path=caller)
+        if found:
+            command_dir = os.path.dirname(found)
+    tail = [command_dir] if command_dir else []
+    for directory in (*tail, *_OWN_SYSTEM_PATH_DIRS):
+        if directory not in parts:
+            parts.append(directory)
+    return os.pathsep.join(parts)
 
 
 @contextlib.contextmanager
-def _own_env(profile) -> Iterator[dict[str, str]]:
-    """Чистое окружение прогона `pytest-own` (требование 5): `PATH`,
-    `LANG`/`LC_ALL` пульта (если заданы), `TMPDIR`, `test_profile.env`,
-    затем свой `HOME` и `PYTHONPYCACHEPREFIX` (ADR-0023: обязателен на
+def _own_env(profile, run_dir: Path | None = None) -> Iterator[dict[str, str]]:
+    """Чистое окружение прогона `pytest-own` (требование 5): `PATH`
+    (`_own_path`), `LANG`/`LC_ALL` пульта (если заданы), `TMPDIR`,
+    `test_profile.env` (его `PATH` перекрывает собранный), затем свой
+    `HOME` и `PYTHONPYCACHEPREFIX` (ADR-0023: обязателен на
     каждом прогоне) — оба новые каталоги на этот прогон, убираются на
     выходе из блока, в том числе по таймауту и исключению. Служебные
     переменные места (`PYTHONUNBUFFERED`, плагин двустороннего прогона)
@@ -162,6 +199,7 @@ def _own_env(profile) -> Iterator[dict[str, str]]:
     try:
         env = {name: os.environ[name] for name in _OWN_INHERITED_VARS
                if name in os.environ}
+        env["PATH"] = _own_path(profile, run_dir)
         env["TMPDIR"] = os.environ.get("TMPDIR") or tempfile.gettempdir()
         env.update(profile.env)
         env["HOME"] = home
@@ -202,16 +240,40 @@ def _own_target(profile, arg: str, *, node: bool = False) -> str:
     return os.path.relpath(path, profile.workdir) + sep + rest
 
 
+class CommandNotFound(OSError):
+    """Исполняемого файла команды профиля `pytest-own` нет — запуск процесса
+    отказал (SPEC 01M56KCVCTW5BV9TWTH54TW9Q9, требование 3). Наследник
+    `OSError`, но не `FileNotFoundError`: `two_sided._run_side` ловит
+    `OSError` и сохраняет свой текст отказа, а места `acceptance` ловят
+    только этот тип — `FileNotFoundError` прочих операций места (файл лога,
+    временные каталоги) отказом о команде не становится."""
+
+
+def _launch(argv: list[str], cwd: Path, own: bool,
+            **kwargs) -> subprocess.Popen:
+    """`subprocess.Popen` места запуска. У `pytest-own` (`own`) отсутствие
+    `argv[0]` — `CommandNotFound` с текстом «команда профиля <имя> не
+    найдена»; `FileNotFoundError` о несуществующем `cwd` Popen называет
+    именем каталога — он проходит как есть, как и у `pult-pytest` любой."""
+    try:
+        return subprocess.Popen(argv, cwd=cwd, **kwargs)
+    except FileNotFoundError as exc:
+        if not own or exc.filename != argv[0]:
+            raise
+        raise CommandNotFound(
+            f"команда профиля {argv[0]} не найдена") from exc
+
+
 def _run_in_session(argv: list[str], cwd: Path, env: dict,
                     timeout: float) -> subprocess.CompletedProcess:
     """Прогон `pytest-own` в собственном сеансе (требование 6) — замена
     `subprocess.run(…, capture_output=True, timeout=…)` с тем же
     контрактом исходов, но по таймауту и на любом исключении снимается
     вся группа процессов: дочерние процессы команды профиля не
-    переживают прогон."""
-    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True)
+    переживают прогон. Нет команды профиля — `CommandNotFound`."""
+    proc = _launch(argv, cwd, True, env=env, stdin=subprocess.DEVNULL,
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                   text=True, start_new_session=True)
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -288,9 +350,11 @@ def _timeout_text(value: bytes | str | None) -> str:
 # N passed in Xs», в любом порядке категорий (failed/passed/skipped/error/
 # xfailed/xpassed/warning) через запятую, завершается «in <секунды>s» — тем
 # же местом, где pytest печатает сводку независимо от порядка
-# category-групп в конкретном прогоне.
-_RUN_CATEGORY = (r"(?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|"
-                 r"warnings?|subtests? (?:passed|failed))")
+# category-групп в конкретном прогоне. `deselected` (SPEC
+# 01M56KCVCTW5BV9TWTH54TW9Q9, требование 2): без него разбор брал хвост
+# «13 warnings in 52s» и показывал «прошло: 0, упало: 0» красному прогону.
+_RUN_CATEGORY = (r"(?:passed|failed|error(?:s)?|skipped|deselected|xfailed|"
+                 r"xpassed|warnings?|subtests? (?:passed|failed))")
 _RUN_SUMMARY = re.compile(
     rf"\d+ {_RUN_CATEGORY}(?:, \d+ {_RUN_CATEGORY})* in [\d.]+s")
 
@@ -604,10 +668,12 @@ def run(tdir: Path, cwd: Path | None = None,
         report = Path(tmp) / "junit.xml"
         report_args = [f"--junitxml={report}"] if file_times is not None else []
         try:
-            with _place_env(command) as env:
+            with _place_env(command, run_cwd) as env:
                 res = _run_pytest(
                     command, _place_command(command, *targets, *report_args),
                     run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
+        except CommandNotFound as exc:
+            return False, f"{location_note}\n{exc}"
         except subprocess.TimeoutExpired as exc:
             if file_times is not None:
                 file_times.update(_junit_file_times(report, extra))
@@ -717,11 +783,13 @@ def collect(tdir: Path, cwd: Path | None = None,
     if refusal:
         return False, f"{location_note}\n{refusal}"
     try:
-        with _place_env(command) as env:
+        with _place_env(command, run_cwd) as env:
             res = _run_pytest(
                 command, _place_command(command, *targets, "--collect-only",
                                         "-q"),
                 run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
+    except CommandNotFound as exc:
+        return False, f"{location_note}\n{exc}"
     except subprocess.TimeoutExpired as exc:
         tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
         return False, (f"{location_note}\nсбор превысил "
@@ -835,12 +903,14 @@ def run_repeat(files: list[str], cwd: Path,
     with tempfile.TemporaryDirectory(prefix="artel-seed-repeat-") as tmp:
         report = Path(tmp) / "junit.xml"
         try:
-            with _place_env(command) as env:
+            with _place_env(command, run_cwd) as env:
                 res = _run_pytest(
                     command, _place_command(command, *args,
                                             f"--junitxml={report}", "-o",
                                             "junit_logging=system-out"),
                     run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
+        except CommandNotFound as exc:
+            return [RedTest(rel, (), str(exc)) for rel in files]
         except subprocess.TimeoutExpired as exc:
             seeds = tuple(dict.fromkeys(_SEED_LINE.findall(
                 _timeout_text(exc.stdout) + _timeout_text(exc.stderr))))
@@ -1113,9 +1183,11 @@ def run_plank(targets: list[str], cwd: Path,
             return REFUSED_EXIT_CODE, refusal
         args = [_own_target(own, t) for t in targets]
     try:
-        with _place_env(profile) as env:
+        with _place_env(profile, run_cwd) as env:
             res = _run_pytest(profile, _place_command(profile, *args),
                               run_cwd, env, config.ACCEPTANCE_TIMEOUT_SEC)
+    except CommandNotFound as exc:
+        return REFUSED_EXIT_CODE, str(exc)
     except subprocess.TimeoutExpired as exc:
         return None, (_timeout_text(exc.stdout) + _timeout_text(exc.stderr)
                       + f"\nпрогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с "
@@ -1394,8 +1466,12 @@ def run_full_suite(root: Path, command: list[str] | None = None,
                 return False, f"{FULL_SUITE_NOT_STARTED}: {refusal}"
         start = time.monotonic()
         load_start = os.getloadavg() if observe else (0.0, 0.0)
-        green, output = _run_full_suite_now(argv, run_cwd, log, limit, observe,
-                                            profile=own)
+        try:
+            green, output = _run_full_suite_now(argv, run_cwd, log, limit,
+                                                observe, profile=own)
+        except CommandNotFound as exc:
+            # Не красный прогон: pytest не запускался, итог не кешируется.
+            return False, f"{FULL_SUITE_NOT_STARTED}: {exc}"
         duration = time.monotonic() - start
         timed_out = output.startswith("прогон полного набора tests/ превысил ")
         if observe:
@@ -1540,10 +1616,11 @@ def _run_full_suite_now(argv: list[str], root: Path,
                                       profile=profile)
     if observe:
         global _last_process_snapshot, _last_run_completed_at
-        with _place_env(profile) as env:
-            proc = subprocess.Popen(
-                argv, cwd=root, env=env, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, start_new_session=True)
+        with _place_env(profile, root) as env:
+            proc = _launch(
+                argv, root, profile is not None, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True)
             try:
                 stdout, stderr = proc.communicate(timeout=limit[0])
             except subprocess.TimeoutExpired as exc:
@@ -1561,7 +1638,7 @@ def _run_full_suite_now(argv: list[str], root: Path,
         _last_process_snapshot = _process_snapshot(proc.pid)
         return proc.returncode == 0, stdout + stderr
     try:
-        with _place_env(profile) as env:
+        with _place_env(profile, root) as env:
             res = _run_pytest(profile, argv, root, env, limit[0])
     except subprocess.TimeoutExpired as exc:
         output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
@@ -1588,12 +1665,11 @@ def _run_full_suite_to_log(argv: list[str], root: Path,
     неслитый буфер, и числа успевшей части пропали бы (требование 6).
     `root`/`profile` — тот же контракт, что у `_run_full_suite_now`."""
     timed_out = False
-    with _place_env(profile) as env, open(log, "wb") as fh:
+    with _place_env(profile, root) as env, open(log, "wb") as fh:
         env["PYTHONUNBUFFERED"] = "1"
-        proc = subprocess.Popen(argv, cwd=root, env=env, stdout=fh,
-                                stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL,
-                                start_new_session=True)
+        proc = _launch(argv, root, profile is not None, env=env, stdout=fh,
+                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                       start_new_session=True)
         try:
             code = proc.wait(timeout=limit[0])
         except subprocess.TimeoutExpired:
