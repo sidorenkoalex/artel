@@ -100,3 +100,7 @@ targets:
         DB__PASSWORD: test
         DB__NAME: sled
         UV_CACHE_DIR: /Users/al.sidorenko/projects/artel/.artel/projects/sled/cache/uv
+        UV_PYTHON_INSTALL_DIR: /Users/al.sidorenko/projects/artel/.artel/projects/sled/cache/uv-python
+        # OpenSSL из Homebrew впереди системного /usr/bin/openssl (LibreSSL 3.3.6):
+        # скрипты выпуска TLS sled (tests/test_release_scripts.py) требуют OpenSSL.
+        PATH: /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
