@@ -930,6 +930,153 @@ def resolved_skip_markers(source, modules: "TestModules | None" = None) -> dict:
     return found
 
 
+# Параметризация тестового метода (SPEC 01M56TNZ3E72XY9XSTAVS99CN2,
+# требования 3-5): узел сравнения гейта неослабления сверяет варианты
+# `parametrize` метода, сохранившего имя, — удалённый или изменённый
+# вариант выключает проверку так же, как пропуск. Марка опознаётся
+# последним сегментом имени (`pytest.mark.parametrize`, `mark.parametrize`),
+# вариант с маркой — `pytest.param(…, marks=…)` последним сегментом `param`.
+PARAMETRIZE_NAME = "parametrize"
+PARAMETRIZE_PARAM_NAME = "param"
+
+
+class ParametrizeMark(NamedTuple):
+    """Одна марка `parametrize`, действующая на тестовый метод: `place` —
+    где она стоит («декоратор метода #1», «декоратор класса C #1»,
+    «pytestmark класса C #1», «pytestmark модуля #1»), `signature` — имена
+    аргументов и прочие именованные аргументы марки текстом, `variants` —
+    тексты вариантов (`ast.unparse` элемента; аргумент-константа модуля
+    раскрыт до присвоенного значения), `skipped` — те из них, что несут
+    марку пропуска в `pytest.param(…, marks=…)`."""
+
+    place: str
+    signature: str
+    variants: tuple
+    skipped: frozenset
+
+
+def _is_parametrize(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and \
+        _called_dotted_name(node.func).rsplit(".", 1)[-1] == PARAMETRIZE_NAME
+
+
+def _module_constants(tree: ast.Module) -> dict:
+    """{имя: узел значения} присваиваний верхнего уровня `имя = …`
+    (требование 5); последнее присваивание побеждает. Имя, импортированное
+    из другого модуля, сюда не попадает — известный пробел SPEC."""
+    constants: dict = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = value
+    return constants
+
+
+def _pytestmark_marks(body: list) -> list:
+    """Элементы последнего присваивания `pytestmark = …` тела `body`
+    (модуля или класса) — одна марка либо элементы списка/кортежа."""
+    value = None
+    for node in body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == PYTESTMARK_NAME
+                for t in node.targets):
+            value = node.value
+    if value is None:
+        return []
+    return value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+
+
+def _argnames_text(node) -> str:
+    """Имена аргументов марки — нормальной формой: строка `"k, v"` и список
+    `["k", "v"]` дают один текст."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        names = [n.strip() for n in node.value.split(",") if n.strip()]
+        return ", ".join(names)
+    if isinstance(node, (ast.List, ast.Tuple)) and all(
+            isinstance(e, ast.Constant) and isinstance(e.value, str)
+            for e in node.elts):
+        return ", ".join(e.value.strip() for e in node.elts)
+    return "" if node is None else ast.unparse(node)
+
+
+def _variant_skipped(node: ast.AST) -> bool:
+    """Вариант `pytest.param(…, marks=…)` несёт марку пропуска или
+    ожидаемого провала (`_is_skip_mark`) в `marks`."""
+    if not isinstance(node, ast.Call) or \
+            _called_dotted_name(node.func).rsplit(".", 1)[-1] != \
+            PARAMETRIZE_PARAM_NAME:
+        return False
+    return any(_is_skip_mark(sub) for kw in node.keywords if kw.arg == "marks"
+               for sub in ast.walk(kw.value))
+
+
+def _parametrize_mark(call: ast.Call, place: str,
+                      constants: dict) -> ParametrizeMark:
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    argnames = call.args[0] if call.args else keywords.pop("argnames", None)
+    argvalues = call.args[1] if len(call.args) > 1 \
+        else keywords.pop("argvalues", None)
+    if isinstance(argvalues, ast.Name) and argvalues.id in constants:
+        argvalues = constants[argvalues.id]
+    if isinstance(argvalues, (ast.List, ast.Tuple)):
+        elements = list(argvalues.elts)
+    else:
+        elements = [] if argvalues is None else [argvalues]
+    rest = [f"{name}={ast.unparse(value)}"
+            for name, value in sorted(keywords.items())]
+    rest += [f"**{ast.unparse(kw.value)}" for kw in call.keywords
+             if kw.arg is None]
+    rest += [ast.unparse(arg) for arg in call.args[2:]]
+    variants = tuple(ast.unparse(e) for e in elements)
+    skipped = frozenset(ast.unparse(e) for e in elements if _variant_skipped(e))
+    return ParametrizeMark(place, "; ".join([_argnames_text(argnames)] + rest),
+                           variants, skipped)
+
+
+def parametrize_variants(source) -> dict:
+    """{квалифицированное имя тестового метода: (ParametrizeMark, …)} —
+    марки `parametrize`, задающие варианты метода, во всех формах
+    требования 5: `pytestmark` модуля, декоратор класса, `pytestmark` тела
+    класса, декоратор метода. Метод без параметризации в результат не
+    попадает; пусто — текста нет либо он не парсится.
+
+    Литералы вариантов здесь только сравниваются как текст и в позиции
+    литералов утверждений (`method_literal_keys`) не входят: смену строки
+    `parametrize` «Меняемым поведением» не объявить (требование 2)."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return {}
+    constants = _module_constants(tree)
+
+    def marks(nodes, place: str) -> list:
+        return [_parametrize_mark(call, f"{place} #{index}", constants)
+                for index, call in enumerate(
+                    (n for n in nodes if _is_parametrize(n)), 1)]
+
+    module_marks = marks(_pytestmark_marks(tree.body), "pytestmark модуля")
+    class_marks: dict = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            class_marks[node.name] = (
+                marks(node.decorator_list, f"декоратор класса {node.name}")
+                + marks(_pytestmark_marks(node.body),
+                        f"pytestmark класса {node.name}"))
+    found: dict = {}
+    for name, node in _collect_qualified_test_functions(tree).items():
+        owner = name.split(TEST_NAME_SEP)[0] if TEST_NAME_SEP in name else None
+        own = module_marks + class_marks.get(owner, []) + \
+            marks(node.decorator_list, "декоратор метода")
+        if own:
+            found[name] = tuple(own)
+    return found
+
+
 # Утверждения тестового метода (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требования
 # 1-2): гейт неослабления тестов наблюдает замену и удаление утверждения
 # внутри метода, сохранившего имя. Утверждение — оператор `assert`, вызов

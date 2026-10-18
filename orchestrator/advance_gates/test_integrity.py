@@ -52,6 +52,7 @@ import ast
 import difflib
 import re
 import time
+from collections import Counter
 from typing import Callable, NamedTuple
 
 from scripts import guard
@@ -96,6 +97,14 @@ ASSERTION_UNOBSERVED_ACTION = "утверждения тестов: наблюд
 ASSERTION_UNOBSERVED_PREFIX = "наблюдение не выполнено"
 ASSERTIONS_CHANGED = "утверждения изменены в"
 ASSERTIONS_COVERED = "покрыто мандатом"
+# Параметризация метода, сохранившего имя (SPEC 01M56TNZ3E72XY9XSTAVS99CN2,
+# требования 3-4): смена — находка тем же каналом, что изменённое
+# утверждение без объявления; добавленные варианты — запись журнала и
+# строка ревью-пакета без находки.
+PARAMETRIZE_CHANGED = "параметризация изменена в"
+PARAMETRIZE_GROWN = "добавлены варианты параметризации в"
+PARAMETRIZE_GROWN_ACTION = "добавлены варианты параметризации тестов"
+PARAMETRIZE_CHANGED_ACTION = "изменена параметризация тестов"
 # Сколько утверждений одного метода называет текст находки (требование 4).
 ASSERTION_TEXTS_SHOWN = 3
 # Помощник вне своего класса и своего модуля в тексте находки (SPEC
@@ -500,6 +509,84 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
     return found, passed
 
 
+def _variants_text(variants) -> str:
+    return ", ".join(variants)
+
+
+def _mark_problems(base, head) -> tuple:
+    """(что в марке `head` изменено против `base` — находка требования 3,
+    добавленные варианты — требование 4). Варианты сравниваются по
+    значению с учётом повторов, не по позиции: вставка нового варианта в
+    начало списка прежних не меняет."""
+    problems, added = [], []
+    if base.signature != head.signature:
+        problems.append(f"{base.place}: аргументы `{base.signature}` → "
+                        f"`{head.signature}`")
+    gone = list((Counter(base.variants) - Counter(head.variants)).elements())
+    new = list((Counter(head.variants) - Counter(base.variants)).elements())
+    if gone:
+        problems.append(f"{base.place}: удалены или изменены варианты "
+                        f"{_variants_text(gone)}")
+    skipped = [v for v in new if v in head.skipped]
+    if skipped:
+        problems.append(f"{base.place}: марка пропуска на вариантах "
+                        f"{_variants_text(skipped)}")
+    added += [v for v in new if v not in head.skipped]
+    return problems, added
+
+
+def _parametrize_findings(base_path, head_path, renamed_to, base_source,
+                          head_source) -> tuple:
+    """(находки о смене параметризации методов, сохранивших имя, находки
+    о добавленных вариантах) одного файла (SPEC 01M56TNZ3E72XY9XSTAVS99CN2,
+    требования 3-5).
+
+    Находка — снятая марка, смена имён и прочих аргументов марки,
+    удалённый или изменённый вариант, вариант с маркой пропуска в
+    `pytest.param(…, marks=…)`, марка, появившаяся у метода, который в
+    базе ею не параметризован (прежний единственный вариант исчез). Она
+    идёт в `found` — тем же каналом, что изменённое утверждение без
+    объявления, и объявление литерала метода её не снимает. Добавленный
+    вариант при неизменных прежних — не находка, а строка журнала и
+    ревью-пакета (второй элемент)."""
+    if base_path is None or head_path is None:
+        return [], []
+    base = guard.parametrize_variants(base_source)
+    head = guard.parametrize_variants(head_source)
+    if not base and not head:
+        return [], []
+    head_methods = guard.qualified_test_methods(head_source)
+    alias = renamed_to or ""
+    found, grown = [], []
+    for name in guard.qualified_test_methods(base_source):
+        if name not in head_methods:
+            continue
+        before = {m.place: m for m in base.get(name, ())}
+        after = {m.place: m for m in head.get(name, ())}
+        problems, added = [], []
+        for place, mark in before.items():
+            if place not in after:
+                problems.append(f"{place}: марка снята (варианты "
+                                f"{_variants_text(mark.variants)})")
+                continue
+            mark_problems, mark_added = _mark_problems(mark, after[place])
+            problems += mark_problems
+            added += mark_added
+        for place, mark in after.items():
+            if place not in before:
+                problems.append(f"{place}: марка добавлена методу (варианты "
+                                f"{_variants_text(mark.variants)})")
+        if problems:
+            found.append(Finding(base_path, name,
+                                 f"{PARAMETRIZE_CHANGED} {name}: "
+                                 f"{'; '.join(problems)}", alias))
+        elif added:
+            grown.append(Finding(base_path, name,
+                                 f"{PARAMETRIZE_GROWN} {name}: "
+                                 f"{_variants_text(added)}", alias))
+    return found, grown
+
+
 class MethodChange(NamedTuple):
     """Метод, сохранивший имя, с изменёнными утверждениями: путь в базе
     (`path`), второй путь пары переименования (`alias`), путь в голове,
@@ -609,6 +696,11 @@ class Comparison(NamedTuple):
     base: str
     git_detail: str
     modules: tuple = (None, None)
+    # Находки о смене параметризации (они же — в `found`) и о добавленных
+    # вариантах (не отказ) — `_parametrize_findings`: обе идут записью
+    # журнала и строкой ревью-пакета.
+    reparametrized: tuple = ()
+    grown: tuple = ()
 
 
 def _git_failure(detail: str) -> Comparison:
@@ -732,6 +824,8 @@ def _compare(code_branch: str, repo=None, scope=None,
     changes: list = []
     files: list = []
     renames: list = []
+    reparametrized: list = []
+    grown: list = []
     side_sources: tuple = ({}, {})
     for status, first, second in entries:
         base_path, head_path, renamed_to = _pair(status, first, second)
@@ -774,6 +868,11 @@ def _compare(code_branch: str, repo=None, scope=None,
             modules)
         found += file_found
         passed += file_passed
+        file_found, file_grown = _parametrize_findings(
+            base_path, head_path, renamed_to, base_source, head_source)
+        found += file_found
+        reparametrized += file_found
+        grown += file_grown
         file_observed, reason, file_changes = _assertion_observation(
             base_path, head_path, renamed_to, base_source, head_source,
             modules)
@@ -874,7 +973,7 @@ def _compare(code_branch: str, repo=None, scope=None,
     if read_failures:
         return _git_failure(_git_silence(read_failures[0]))
     return Comparison(found, passed, observed, unobserved, changes, files,
-                      base, "", modules)
+                      base, "", modules, tuple(reparametrized), tuple(grown))
 
 
 def findings(code_branch: str, repo=None, scope=None) -> tuple:
@@ -1302,6 +1401,13 @@ def _journal_pass(conn, task_id: str, ev: _Evaluation) -> None:
         store.journal(conn, task_id, "fsm",
                       TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION,
                       "; ".join(skip.line for skip in cmp.passed))
+    if cmp.reparametrized:
+        store.journal(conn, task_id, "fsm", PARAMETRIZE_CHANGED_ACTION,
+                      "; ".join(_observation_lines(cmp.reparametrized,
+                                                   ev.mandate)))
+    if cmp.grown:
+        store.journal(conn, task_id, "fsm", PARAMETRIZE_GROWN_ACTION,
+                      "; ".join(finding.line for finding in cmp.grown))
     _journal_observation(conn, task_id,
                          _observation_lines(cmp.observed, ev.mandate),
                          cmp.unobserved)
@@ -1387,6 +1493,14 @@ def review_lines(conn, task_id: str, code_branch: str,
         if item is not None:
             parts.append(_declared_text(item))
         lines.append(" — ".join(parts))
+    # Параметризация (SPEC 01M56TNZ3E72XY9XSTAVS99CN2, требования 3-4):
+    # смена — с исходом находки либо отметкой мандата, добавление — без.
+    for finding, line in zip(cmp.reparametrized, _observation_lines(
+            cmp.reparametrized, ev.mandate)):
+        covered = _covering_source(finding, ev.mandate) is not None
+        lines.append(line if covered
+                     else f"{line} — исход рубежа: {OUTCOME_FINDING}")
+    lines += [f"{finding.line} — без находки" for finding in cmp.grown]
     return lines, cmp.unobserved, ""
 
 
