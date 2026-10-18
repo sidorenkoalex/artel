@@ -1,17 +1,17 @@
 # Записка developer
 
 ## Выяснено
-- Код задачи (ci.py, ci_rerun.py, fsm_merge_gate.py) — в 6fe01626, по ANSWER-2 (вариант а) не менялся.
-- Шаг 3 (после ANSWER-2): правка только фикстур. `tests/sandbox.py`: константа `PROJECT_URL = "https://localhost/artel-tests/{name}"` (localhost — инвариант 35), `make_project_repo` пишет её в запись проекта; помощник `route_url_to_bare(test, url, bare)` — `url.<bare>.insteadOf` через `GIT_CONFIG_COUNT/KEY/VALUE` в os.environ (mock.patch.dict). `tests/test_01m42…_project_area.py::add_external_project` — url = PROJECT_URL + route_url_to_bare.
-- Три красных теста (01M42 test_ac5, 01M4M67 ExternalMergeTest×2) зелёные; оба файла целиком + файлы задачи — 59 зелёных.
-- Прочие тесты с `file:///nonexistent/<имя>` в своих записях (много файлов) — не трогал: красных от них в прогоне №1 не было.
+- Итерация 2 (R1-F1): код задачи не менялся. Добавлен `tests/test_ci_callers_project_repo.py` (5 тестов, 12 подтестов): запись flake-rate при незапущенном повторе / запущенном; repo=<клон> у trigger_rerun гейта мержа; у _red_rerun (failed_check_names ×2, fsm._origin_main_sha, trigger_rerun) и _stuck_rerun (check_run_workflow_run, trigger_rerun run_id); у артели — без repo.
+- Подмены: workspace.task_repo → repo_context.clone_path(<имя>), store.journal → список; признак артели — настоящий через ci._repo_kwargs.
+- 8 мутаций (те, что делал ревьювер, плюс по каждому вызову) — каждая красит файл; код восстановлен, git status orchestrator/ чистый.
+- 7 файлов модулей — 141 passed; планка 4/4; карта регенерирована; guard на PLAN/REVIEW — ок. R1-F1 в реестре размечен fixed.
 
 ## Не сработало
-- `pytest -n 4` — воркеры падают; гонять последовательно.
-- `ls`/`rm`/цепочки `;` в Bash требуют подтверждения.
+- pytest -n — воркеры падают; гонять -p no:xdist.
+- ls/cat/rm в Bash нет; цепочки с `;` требуют подтверждения.
 
 ## Где остановился
-- suite-run №2: 5718 прошло, 1 красный того же класса (`test_01m484…_artel_docs_ref.py::FetchAllClonesTest` подменял буквальную заглушку `file:///nonexistent/<имя>`) — переведён на `PROJECT_URL`; №3 (повтор упавших) зелёный. Планка 4/4. Карта регенерирована. PLAN status: ready. Фикстурная правка не закоммичена — закоммитит пульт.
+- Всё сделано, PLAN status: ready. Новый файл тестов и карта не закоммичены — закоммитит пульт. Полный suite-run в этой итерации не запускался (добавлен только изолированный тестовый файл).
 
 ## Чего не хватило
-- Машина перегружена — полный набор долго.
+- Ничего существенного.

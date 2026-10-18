@@ -73,6 +73,16 @@ schema_version: 5
    `make_project_repo` на путь bare — теперь подменяет `PROJECT_URL`).
    `ExternalMergeTest` 01M4M67… правки не потребовал — его чинит
    `make_project_repo`. Утверждения и докстринги тестов не тронуты.
+5. Ревью, итерация 1 (R1-F1): сторожа вызывающих в `tests/` —
+   `tests/test_ci_callers_project_repo.py` (новый файл разработчика):
+   `FlakeRateNotStartedTest` — запись `flake-rate` при незапущенном повторе
+   (красный и зелёный исход, обе формы отказа) и прежние записи при
+   запущенном; `MergeGateRerunRepoTest` — `_ci_confirm_red_or_flake` зовёт
+   `trigger_rerun(branch, repo=<клон>)` у проекта и без `repo` у артели;
+   `CiRerunRepoTest` — `_red_rerun` (`failed_check_names` ×2,
+   `fsm._origin_main_sha`, `trigger_rerun`) и `_stuck_rerun`
+   (`check_run_workflow_run` каждой проверки, `trigger_rerun(…, run_id=…)`)
+   передают `repo=<клон>` у проекта и не передают `repo` у артели.
 
 ## Покрытие требований
 
@@ -80,11 +90,11 @@ schema_version: 5
 |---|---|
 | 1 | 1, 3 (Н-2, Н-3, Н-4; AC-2, AC-8, AC-12 — долгоживущий файл) |
 | 2 | 1, 2 (AC-1: долгоживущий файл и планка; Н-1) |
-| 3 | 1, 2 |
+| 3 | 1, 2, 5 (сторож передачи клона из вызывающих, AC-7) |
 | 4 | 1 (AC-9) |
-| 5 | 2 (AC-10) |
+| 5 | 2, 5 (AC-10; сторож — `CiRerunRepoTest`) |
 | 6 | долгоживущий файл задачи `tests/test_01m55v7wb94c9bzxtxtth83ywv_project_gh.py` (AC-1, написан test_author до правки) |
-| 7 | 2 (AC-11) |
+| 7 | 2, 5 (AC-11; сторож — `FlakeRateNotStartedTest`) |
 | 8 | 3 |
 | ANSWER-2 (фикстуры) | 4 |
 
@@ -118,6 +128,15 @@ schema_version: 5
   тот же класс — подмена буквальной заглушки), исправлен; `suite-run` №3
   (повтор упавших) — зелёный. Планка 4/4, файлы 01M42…/01M4M67…/файлы
   задачи — 59 зелёных; `test_invariants` сеть (инвариант 35) — зелёный.
+- Итерация 2 (R1-F1): код не менялся, добавлен один файл тестов
+  `tests/test_ci_callers_project_repo.py` (5 тестов, 12 подтестов).
+  Временной мутацией проверено: каждая из восьми мутаций — `if not
+  ci.rerun_started(...)` → `if False`, снятие клона у `trigger_rerun`
+  гейта мержа, у `fsm._origin_main_sha`, у обоих `failed_check_names`, у
+  `trigger_rerun` красного пути, у `check_run_workflow_run` и у
+  `trigger_rerun(…, run_id=…)` в `ci_rerun.py` — красит файл; код
+  восстановлен. Файлы затронутых модулей (7 файлов) — 141 зелёный; карта
+  регенерирована.
 - Откат — revert коммита задачи.
 
 ## Риски
