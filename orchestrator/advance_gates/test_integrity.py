@@ -52,12 +52,13 @@ import ast
 import difflib
 import re
 import time
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 from scripts import guard
 
 from .. import artifact_branch as docs_ref
-from .. import config, gitcmd, project_profile, store, workspace
+from .. import (config, gitcmd, project_profile, repo_context, store,
+               workspace)
 from . import two_sided
 from ..targets import PROFILE_RUNNER_OWN
 from ._base import GateRefusal, _run_gates
@@ -580,7 +581,7 @@ def _git_failure(detail: str) -> Comparison:
 
 
 def _side_modules(base: str, code_branch: str, repo, in_diff: set,
-                  sources: tuple) -> tuple:
+                  sources: tuple, helpers=None) -> tuple:
     """(модули base, модули head, чтение файла вне диффа, сбои чтения) —
     источники унаследованных помощников и функций `tests/sandbox.py` (SPEC
     01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1).
@@ -597,7 +598,10 @@ def _side_modules(base: str, code_branch: str, repo, in_diff: set,
     попадает в список сбоев, и вызывающий отвечает `_git_failure`, как на
     любое другое чтение узла. Иначе сбой на стороне base прятал бы
     помощников модуля только в базе — ослабление в них не дало бы
-    находки."""
+    находки.
+
+    `helpers` — режим внешнего проекта (`_ExternalHelpers`); `None` —
+    правило артели."""
     unchanged: dict = {}
     failures: list = []
 
@@ -623,13 +627,19 @@ def _side_modules(base: str, code_branch: str, repo, in_diff: set,
             return read_unchanged(path)
         return load
 
-    return (guard.TestModules(loader(base, sources[0])),
-            guard.TestModules(loader(code_branch, sources[1])),
+    mode = {} if helpers is None else {
+        "external": True, "workdir": helpers.workdir,
+        "in_scope": helpers.scope}
+    return (guard.TestModules(loader(base, sources[0]), **mode),
+            guard.TestModules(loader(code_branch, sources[1]), **mode),
             read_unchanged, failures)
 
 
-def _helper_callers(code_branch: str, names: set, repo) -> list | None:
-    """Пути файлов `tests/` головы, где встречается слово из `names` —
+def _helper_callers(code_branch: str, names: set, repo,
+                    everywhere: bool = False) -> list | None:
+    """Пути файлов `tests/` головы (`everywhere` — всего дерева: у
+    внешнего проекта область отсеивает вызывающий, SPEC
+    01M56TNTY7HEC85MC940KZR1ZJ), где встречается слово из `names` —
     кандидаты в вызывающих помощника, потерявшего утверждения, и в
     наследников класса с изменённой цепочкой помощников (требование 2);
     точный разбор вызова — за `guard.test_assertions`. `None` — git не
@@ -637,7 +647,9 @@ def _helper_callers(code_branch: str, names: set, repo) -> list | None:
     args = ["grep", "-l", "-w", "-F"]
     for name in sorted(names):
         args += ["-e", name]
-    args += [code_branch, "--", f"{guard.TESTS_PACKAGE}/"]
+    args.append(code_branch)
+    if not everywhere:
+        args += ["--", f"{guard.TESTS_PACKAGE}/"]
     # Репозиторий назван явно и без клона проекта (ADR-0021 п.1, этап 2):
     # `None` — главная копия пульта, то же, что у `gitcmd.show(repo=None)`.
     res = gitcmd.in_repo(repo or config.ROOT, *args)
@@ -650,7 +662,8 @@ def _helper_callers(code_branch: str, names: set, repo) -> list | None:
             for line in res.stdout.splitlines() if line.endswith(".py")]
 
 
-def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
+def _compare(code_branch: str, repo=None, scope=None,
+             helpers=None) -> Comparison:
     """Один проход по диффу `tests/` для всех наблюдателей узла.
 
     `repo` — клон проекта задачи, в котором живёт `code_branch` (ADR-0021
@@ -660,8 +673,12 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
     `scope` — область узла: `weakening_scope` профиля тестов проекта
     (`project_profile.Profile.in_weakening_scope`, SPEC
     01M45FJVGQT1K0P8HDEXZX6HS7, требование 5); не названа — `_in_scope`
-    (область артели) для вызовов вне рубежей."""
-    in_scope = scope or _in_scope
+    (область артели) для вызовов вне рубежей.
+
+    `helpers` — режим внешнего проекта (`_ExternalHelpers`, SPEC
+    01M56TNTY7HEC85MC940KZR1ZJ): область узла, модулей помощников и поиска
+    вызывающих — его область; `None` — правило артели."""
+    in_scope = helpers.scope if helpers is not None else scope or _in_scope
     base = gitcmd.diff_base(code_branch, repo=repo)
     if base is None:
         return _git_failure(_git_silence(
@@ -712,7 +729,8 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
     in_diff = {p for _status, first, second in entries
                for p in (first, second) if p}
     base_modules, head_modules, read_unchanged, read_failures = \
-        _side_modules(base, code_branch, repo, in_diff, side_sources)
+        _side_modules(base, code_branch, repo, in_diff, side_sources,
+                      helpers)
     modules = (base_modules, head_modules)
     for (base_path, head_path, base_source, head_source), renamed_to in \
             zip(files, renames):
@@ -754,7 +772,8 @@ def _compare(code_branch: str, repo=None, scope=None) -> Comparison:
                                              base_path, base_modules)
     pending, searched, visited = weakened | classes, set(), set()
     while pending:
-        callers = _helper_callers(code_branch, pending, repo)
+        callers = _helper_callers(code_branch, pending, repo,
+                                  everywhere=helpers is not None)
         if callers is None:
             return _git_failure(_git_silence(
                 f"поиск вызывающих помощников ({', '.join(sorted(pending))}) "
@@ -1071,6 +1090,31 @@ class _Evaluation(NamedTuple):
     cmp: Comparison
 
 
+class _ExternalHelpers(NamedTuple):
+    """Режим помощников внешнего проекта (SPEC 01M56TNTY7HEC85MC940KZR1ZJ):
+    `workdir` профиля и предикат области, по которой ищутся помощники и их
+    вызывающие."""
+
+    workdir: str
+    scope: Callable
+
+
+def _external_helpers(conn, task_id: str, scope) -> _ExternalHelpers | None:
+    """Режим помощников проекта задачи — по признаку артели и профилю,
+    прочитанным здесь, на общем узле, чтобы его получили все три входа
+    (требование 3). `None` — артель (или задача без строки в БД): прежнее
+    правило. Внешний проект без профиля остаётся на переданной области."""
+    if conn is None:
+        return None
+    target = store.task_target(conn, task_id)
+    if repo_context.is_artel(target):
+        return None
+    profile = project_profile.decide(target).profile
+    if profile is None:
+        return _ExternalHelpers("", scope or _in_scope)
+    return _ExternalHelpers(profile.workdir, profile.in_weakening_scope)
+
+
 def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
               merge_route: bool = False, scope=None) -> _Evaluation:
     """Сравнение, различение и сверка с объявленным (требования 4-7, 11-12)
@@ -1082,7 +1126,8 @@ def _evaluate(conn, task_id: str, code_branch: str, artifact_branch: str,
     иных непокрытых находок в проходе нет: иначе отказ уже стоит и
     адресно называет причину убыли."""
     repo = workspace.task_repo(task_id)
-    cmp = _compare(code_branch, repo=repo, scope=scope)
+    cmp = _compare(code_branch, repo=repo, scope=scope,
+                   helpers=_external_helpers(conn, task_id, scope))
     declared = declared_changes(conn, task_id) if conn is not None else {}
     if cmp.found is None:
         return _Evaluation(None, [], {}, [], declared, {}, cmp)

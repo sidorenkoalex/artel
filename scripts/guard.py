@@ -970,11 +970,20 @@ class _Module(NamedTuple):
     bindings: dict
 
 
-def _module_entry(path, source: str, tree: ast.Module) -> _Module:
+def _tests_module_path(dotted: str) -> str | None:
+    """Путь модуля `tests.<…>` артели; модуль вне пакета `tests` — `None`."""
+    if dotted.split(".", 1)[0] != TESTS_PACKAGE:
+        return None
+    return dotted.replace(".", "/") + ".py"
+
+
+def _module_entry(path, source: str, tree: ast.Module,
+                  modules: "TestModules | None" = None) -> _Module:
     defs = {node.name: node for node in tree.body
             if isinstance(node, (*_FUNCTION_NODES, ast.ClassDef))}
+    package_path = modules.import_path(path) if modules and path else path
     return _Module(path, source, _module_imports(tree), defs,
-                   _tests_import_bindings(tree, path))
+                   _tests_import_bindings(tree, package_path))
 
 
 class TestModules:
@@ -982,21 +991,52 @@ class TestModules:
     (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 1): `load(путь)` отдаёт
     текст модуля этой стороны либо `None` (модуля нет, текст не прочитан).
     Разбор кэшируется: один `TestModules` на сторону обслуживает все файлы
-    прохода гейта."""
+    прохода гейта.
+
+    `external` — режим внешнего проекта (SPEC 01M56TNTY7HEC85MC940KZR1ZJ):
+    имя модуля импорта переводится в путь от корня проекта под `workdir`
+    профиля, модуль виден, только если путь входит в область `in_scope`
+    (`weakening_scope` профиля), и его функции — помощники. Режим не
+    выводится из `workdir`: без `external` — правило артели (пакет `tests`,
+    функции только `tests/sandbox.py`) при любом `workdir`."""
 
     __test__ = False  # имя на `Test…` — не тестовый класс для pytest
 
-    def __init__(self, load):
+    def __init__(self, load, external: bool = False, workdir: str = "",
+                 in_scope=None):
         self._load = load
         self._cache: dict = {}
+        self.external = external
+        self._workdir = workdir.strip("/") if external else ""
+        self._in_scope = in_scope
 
     def module(self, path: str) -> _Module | None:
         if path not in self._cache:
             source = self._load(path)
             tree = _parse_or_none(source)
             self._cache[path] = None if tree is None else \
-                _module_entry(path, source, tree)
+                _module_entry(path, source, tree, self)
         return self._cache[path]
+
+    def module_path(self, dotted: str) -> str | None:
+        """Путь модуля `dotted` от корня репозитория; `None` — модуль вне
+        видимого режиму: у артели — вне пакета `tests`, у внешнего проекта
+        — вне области."""
+        if not self.external:
+            return _tests_module_path(dotted)
+        rel = dotted.replace(".", "/") + ".py"
+        path = f"{self._workdir}/{rel}" if self._workdir else rel
+        if self._in_scope is not None and not self._in_scope(path):
+            return None
+        return path
+
+    def import_path(self, path: str) -> str:
+        """Путь файла, от которого разрешается его относительный импорт: у
+        внешнего проекта — без префикса `workdir` (имена модулей импорта
+        считаются от `workdir`), иначе — сам путь."""
+        prefix = f"{self._workdir}/" if self._workdir else ""
+        return path[len(prefix):] if prefix and path.startswith(prefix) \
+            else path
 
 
 class _HelperScope:
@@ -1011,9 +1051,10 @@ class _HelperScope:
         self.modules = modules
 
     def _module(self, dotted: str) -> _Module | None:
-        if dotted.split(".", 1)[0] != TESTS_PACKAGE:
+        path = self.modules.module_path(dotted) if self.modules else \
+            _tests_module_path(dotted)
+        if path is None:
             return None
-        path = dotted.replace(".", "/") + ".py"
         if path == self.own.path:
             return self.own
         return self.modules.module(path) if self.modules else None
@@ -1073,7 +1114,8 @@ class _HelperScope:
     def function(self, callee: ast.AST) -> tuple | None:
         """(модуль, узел, происхождение) вызываемой функции: голое имя
         функции своего модуля без префикса `test_` (происхождение `None`)
-        либо функция `tests/sandbox.py` по импорту."""
+        либо функция `tests/sandbox.py` по импорту; у внешнего проекта —
+        функция любого модуля его области по импорту."""
         if isinstance(callee, ast.Name):
             node = self.own.defs.get(callee.id)
             if isinstance(node, _FUNCTION_NODES):
@@ -1084,7 +1126,9 @@ class _HelperScope:
         if found is None:
             return None
         module, node = found
-        if module is self.own or module.path != SANDBOX_MODULE_PATH or \
+        external = self.modules is not None and self.modules.external
+        if module is self.own or \
+                (not external and module.path != SANDBOX_MODULE_PATH) or \
                 not isinstance(node, _FUNCTION_NODES) or \
                 node.name.startswith("test_"):
             return None
@@ -1146,7 +1190,7 @@ def _assertion_records(source, path=None,
     tree = _parse_or_none(source)
     if tree is None:
         return None
-    own = _module_entry(path, source, tree)
+    own = _module_entry(path, source, tree, modules)
     scope = _HelperScope(own, modules)
 
     result: dict[str, list] = {}
@@ -1201,7 +1245,7 @@ def changed_classes(base_source, head_source, path=None,
                  if head.get(name) != shape}
     else:
         names = set(base)
-    own = _module_entry(path, base_source, base_tree)
+    own = _module_entry(path, base_source, base_tree, modules)
     scope = _HelperScope(own, modules)
     return {name for name in names if any(
         _own_assertions(sub, module.source, module.imports)
