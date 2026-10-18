@@ -1,13 +1,16 @@
 # NOTE analyst
 
 ## Выяснено
-- ТЗ достаточно: SPEC.md написан, status: ready, guard ок. AC-1 = AC-9 родителя, AC-2 = AC-10 родителя.
-- Факты ТЗ сверены по коду: `guard.py:1013-1019` (перевод `tests.x` → `tests/x.py`), `guard.py:1087` (импорт только из SANDBOX_MODULE_PATH), `test_integrity.py:631-650` (`_helper_callers`, git grep по `tests/`), `project_profile.py:72-100` (`weakening_scope`, `workdir`), `repo_context.py:154` (`is_artel`).
-- Сигнал деления — инвариант 38 (`docs/invariants.md`); в SPEC дан материал на монолит (задача уже часть нарезки родителя).
-- SPEC родителя читается `git show refs/artifacts/01M56P60XS9AP4BH01YK35220D:tasks/01M56P60XS9AP4BH01YK35220D/SPEC.md`.
+- Итерация 2 (возврат со spec_gate 18.10, решения О1–О4): SPEC переписан, status: ready, guard ок.
+- О1 → требование 2 (режим отдельно от workdir, без аргумента — артель) + AC-2 (внешний, пустой workdir, `tests/x.py` — находка).
+- О2 → требование 3 (режим/профиль на общем узле `_evaluate` по task_id) + AC-1 на трёх входах (рубеж, merge_gate_escalates, review_lines).
+- О3 → требование 4 + AC-3 (`from .x import f` → `backend/tests/x.py`); причина — `guard.py:936,950-952` берёт пакет от пути от корня, `_module` (:1014) режет по первому сегменту.
+- О4 → требование 5 + AC-4 (`backend/app/x.py` вне области — не помощник).
+- Артель — AC-5 (бывший AC-2). Критериев 5, зон 3 → budget 25 (= рамка ТЗ).
+- SPEC родителя: `git show refs/artifacts/01M56P60XS9AP4BH01YK35220D:tasks/01M56P60XS9AP4BH01YK35220D/SPEC.md`.
 
 ## Не сработало
-- Чтение каталога документов родителя напрямую — нет прав; помогла ссылка артефактов.
+- Составные bash-команды (`;`) требуют подтверждения — только одиночные команды/Read.
 
 ## Где остановился
 - Шаг завершён.
