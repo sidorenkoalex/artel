@@ -3,8 +3,8 @@
 `orchestrator/fsm_advance.py`."""
 from scripts import guard
 
-from .. import (artifact_branch, checkpoint, config, gitcmd, repo_context,
-                store, workspace)
+from .. import (artifact_branch, checkpoint, config, gitcmd, project_profile,
+                repo_context, store, workspace)
 from ._base import GateRefusal, _run_gates
 # Маркер мандата и разбор строк через запятую живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -274,6 +274,22 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     common = list(config.COMMON_ZONES) if repo_context.is_artel(ctx) else []
     zones = declared + common
     out_of_zone = [f for f in files if not _touches_zone(f, zones)]
+    # Собственные долгоживущие файлы задачи внешнего проекта (SPEC
+    # 01M55VGDHXQ55YR2YXXBPAHTNB, требования 1-2): у артели их покрывает
+    # `tests/` из COMMON_ZONES, у внешнего проекта — профиль тестов, тем же
+    # источником, что у выхода из `tests_writing`. Сверка — полным шаблоном
+    # имени (`is_long_lived`), не префиксом; новый файл developer по шаблону
+    # своей задачи признаётся так же (паритет с артелью, решение Оператора
+    # 18.10). Отказ профиля зону не расширяет, но его причина попадает в
+    # текст отказа; проект без профиля — без расширения и без фолбэка.
+    profile_refusal = ""
+    if out_of_zone and not repo_context.is_artel(ctx):
+        decision = project_profile.decide(target)
+        if decision.profile is not None:
+            out_of_zone = [f for f in out_of_zone
+                           if not decision.profile.is_long_lived(task_id, f)]
+        elif decision.refusal:
+            profile_refusal = decision.refusal
     if not out_of_zone:
         return None
 
@@ -305,6 +321,9 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES "
              f"(база сравнения {base} от {source}): "
              f"{', '.join(out_of_zone)}")
+    if profile_refusal:
+        detail = (f"{detail} — свои долгоживущие файлы задачи зоной не "
+                  f"признаны: {profile_refusal}")
 
     # Мандат Оператора покрывает ВСЕ оставшиеся пути вне зон (та же
     # формула префикса, что у исключения AC-3 выше), не хватает только
