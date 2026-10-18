@@ -1,13 +1,13 @@
-# Записка spec_auditor — 01M58FNWBV25FF26E7AZ9Q9912
+# Записка spec_auditor — 01M58FNWBV25FF26E7AZ9Q9912 (аудит SPEC f65ba288, второй визит)
 
 ## Выяснено
-- `targets.yaml` разбирает `orchestrator/yamlmini.py` (`targets.load`, targets.py:111): нет блочных списков `- `, потоковых отображений `{}`, вложенных списков `[[ ]]`, кавычек в потоковом списке (yamlmini.py:16-20, 147-148, 177-195). `components:` (список отображений), `depends_on`, `install: [[...]]`, regex `paths` с `[...]`/кавычками в файл не записать. `yamlmini.py` не в зонах ТЗ/SPEC и делится с guard — главная находка (fail).
-- `suite_tree_hash` (acceptance.py:2029-2078) — git write-tree рабочего дерева: отслеживаемые lock-файлы (у sled `backend/uv.lock`, `frontend/package-lock.json` — в no_paths, т.е. в git) уже входят в `tree` ключа; AC-12 по lock-файлу через смену дерева проходит и без правки.
-- `profile_of` читают вне `decide`: acceptance.py:2393 (`_task_own_profile`, вне разрешённой части acceptance.py), suite_run.py:278 (вне зон), project_profile.full_suite_limit:181 и doctor/cli.py:13. SPEC не говорит, что они делают с записью из нескольких компонентов.
-- Формы новых полей (tools "22 (frontend/.nvmrc)", test_support — глоб, paths — regex, knowledge — список, install/checks_local — список списков в ADR) в SPEC не заданы.
+- SPEC второй редакции учёл ANSWER-1 (вариант B yamlmini, деление на часть 1). Ссылки на код в основном верны; неточности: `PROFILE_OWN_RUNNER_ONLY` — targets.py:73 (не :71); стр. «77-80» теста — на деле 71-74 (tests/test_acceptance_suite_profile.py).
+- `_task_own_profile` (acceptance.py:2380) зовут pull.py:665, plank_run.py:220, amend.py:548/723 и `drop_from_code_copy` (acceptance.py:1298), а его — runner.py:1218 на старте КАЖДОГО шага роли, checkpoint.py:1237, fsm_advance.py:607, amend.py:765. Форма «отказа» требования 9 не задана: raise уронит старт шага, возврат не-None сломает `command=own`.
+- doctor/cli.py:94 зовёт `full_suite_limit` без try: после требования 8 запись с двумя компонентами роняет весь `doctor` (cli.py вынесен из зон SPEC, хотя в зонах ТЗ).
+- yamlmini: ключ режется по первому `:` (yamlmini.py:146) — имя с `:` из файла не записать, только словарём; повтор ключа молча перезаписывает.
 
 ## Где остановился
-SPEC-AUDIT.md записан, verdict fail.
+SPEC-AUDIT.md записан, verdict concerns, guard прогнан.
 
 ## Чего не хватило
-Сразу не видно, что targets.yaml читает не PyYAML, а yamlmini с узким подмножеством — нашёл по targets.py:8.
+Карты вызывающих `drop_from_code_copy` — искал grep'ом по orchestrator/.
