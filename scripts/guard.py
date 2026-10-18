@@ -175,7 +175,10 @@ TEST_AC = re.compile(r"def\s+test_ac(\d+)_\w*\s*\(")
 # для test_*.py разных задач) падает ImportError «incorrectly imported
 # from» — collect-only обязан быть статическим, не только по духу guard'а,
 # но и чтобы не зависеть от истории вызовов процесса.
-TEST_METHOD = re.compile(r"^\s*def\s+(test_\w+)\s*\(", re.M)
+# `async def test_…` — тестовый метод наравне с `def test_…` (SPEC
+# 01M56TNX1WWKV8PVQ94FT4ZJQB, требование 6): ast-сборщик
+# `_collect_qualified_test_functions` их уже не различает.
+TEST_METHOD = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)\s*\(", re.M)
 # Пометка критерия без прямого теста: `# AC-n: manual|skip|escalate|ci —
 # причина`. `ci` (01M1SHJTT0V516BWHYXWS50F3G, требование 1): критерий
 # исполняется зелёным CI кодовой ветки (orchestrator/fsm_autogate.py),
@@ -752,6 +755,181 @@ def test_skip_markers(source) -> dict[str, set]:
     return markers
 
 
+# Пропуск через имя-метку и модульные пропуски (SPEC
+# 01M56TNX1WWKV8PVQ94FT4ZJQB, требования 1, 3, 4). Имя модульной марки
+# pytest и вызовы пропуска уровня модуля: `pytest.skip` — тем же точным
+# именем, что в теле метода; `importorskip` — последним сегментом, имя
+# однозначно.
+PYTESTMARK_NAME = "pytestmark"
+MODULE_SKIP_CALL_NAMES = frozenset(("pytest.skip",))
+MODULE_IMPORTORSKIP_NAME = "importorskip"
+MODULE_LEVEL_NOTE = "уровня модуля"
+
+
+class SkipOccurrence(NamedTuple):
+    """Вхождение пропуска, которого не видит `test_skip_markers`: `marker`
+    — текст маркера (для метки и `pytestmark` — со значением, чтобы смена
+    значения при прежнем имени была новым маркером), `node` — узел марки
+    (значение метки, элемент `pytestmark`) либо вызов пропуска уровня
+    модуля, `inside_if` — `None` у формы декоратора, у вызова — стоит ли
+    он в ветке `if`/`else`."""
+
+    marker: str
+    node: ast.AST
+    inside_if: bool | None
+
+
+def _is_skip_mark(node: ast.AST) -> bool:
+    """Узел — марка пропуска либо ожидаемого провала тем же правилом
+    последнего сегмента, что у прямого декоратора."""
+    dotted = _called_dotted_name(node)
+    return bool(dotted) and dotted.rsplit(".", 1)[-1] in SKIP_DECORATOR_NAMES
+
+
+def _module_labels(tree: ast.Module) -> dict:
+    """{имя: узел значения} имён-меток модуля — присваивание верхнего
+    уровня `имя = <марка пропуска>` (форма (а) требования 1). Последнее
+    присваивание имени побеждает: переприсваивание не-меткой метку снимает.
+    `pytestmark` меткой не считается — у него своё правило."""
+    labels: dict = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) or \
+                    target.id == PYTESTMARK_NAME:
+                continue
+            if _is_skip_mark(node.value):
+                labels[target.id] = node.value
+            else:
+                labels.pop(target.id, None)
+    return labels
+
+
+def skip_label_values(source) -> dict:
+    """{имя-метка: текст значения} модуля `source` — по нему узел
+    сравнения видит метки, сменившие значение, и ищет их импортёров вне
+    диффа (требование 3). Пусто — текста нет либо он не парсится."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return {}
+    return {name: ast.unparse(value)
+            for name, value in _module_labels(tree).items()}
+
+
+def _imported_labels(tree: ast.Module, modules: "TestModules | None") -> dict:
+    """{имя: узел значения} меток, импортированных `from <модуль> import
+    имя` (форма (б) требования 1) из модуля области тестов проекта —
+    `modules.module_path` решает, виден ли модуль режиму."""
+    if modules is None:
+        return {}
+    labels: dict = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or node.level or \
+                not node.module:
+            continue
+        path = modules.module_path(node.module)
+        if path is None:
+            continue
+        for alias in node.names:
+            if alias.asname is not None:
+                continue
+            value = modules.labels(path).get(alias.name)
+            if value is not None:
+                labels[alias.name] = value
+    return labels
+
+
+def _module_level_calls(node: ast.AST, inside_if: bool = False):
+    """(вызов, точечное имя, внутри ли ветки `if`/`else`) пропусков уровня
+    модуля: любой оператор вне тел функций и классов на любой глубине
+    (`try`/`except`/`with` в том числе). Условие самого `if` условным не
+    считается — оно вычисляется всегда."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                         ast.ClassDef, ast.Lambda)):
+        return
+    if isinstance(node, ast.If):
+        yield from _module_level_calls(node.test, inside_if)
+        for sub in node.body + node.orelse:
+            yield from _module_level_calls(sub, True)
+        return
+    if isinstance(node, ast.Call):
+        dotted = _called_dotted_name(node.func)
+        if dotted in MODULE_SKIP_CALL_NAMES or (
+                dotted and dotted.rsplit(".", 1)[-1] ==
+                MODULE_IMPORTORSKIP_NAME):
+            yield node, dotted, inside_if
+    for child in ast.iter_child_nodes(node):
+        yield from _module_level_calls(child, inside_if)
+
+
+def _pytestmark_elements(tree: ast.Module) -> list:
+    """Марки пропуска последнего присваивания `pytestmark = …` верхнего
+    уровня: одна марка либо элементы списка/кортежа."""
+    value = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == PYTESTMARK_NAME
+                for t in node.targets):
+            value = node.value
+    if value is None:
+        return []
+    elements = value.elts if isinstance(value, (ast.List, ast.Tuple)) \
+        else [value]
+    return [e for e in elements if _is_skip_mark(e)]
+
+
+def resolved_skip_markers(source, modules: "TestModules | None" = None) -> dict:
+    """{имя: [SkipOccurrence]} пропусков, которых не видит
+    `test_skip_markers` (SPEC 01M56TNX1WWKV8PVQ94FT4ZJQB): декоратор-метка
+    метода или класса (имя, связанное в этом модуле либо импортированное
+    из модуля `modules`), `pytestmark` и вызовы `pytest.skip(`/
+    `pytest.importorskip(` уровня модуля — последние два на каждом
+    тестовом методе файла. Ключи — те же, что у `test_skip_markers`.
+
+    Маркер метки несёт её значение (`@requires_pg = pytest.mark.skip()`):
+    смена значения при прежнем тексте декоратора — новый маркер на том же
+    имени (требование 3)."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return {}
+    labels = {**_imported_labels(tree, modules), **_module_labels(tree)}
+    methods = _collect_qualified_test_functions(tree)
+    found: dict = {}
+
+    def label_occurrences(node) -> list:
+        out = []
+        for decorator in getattr(node, "decorator_list", []):
+            if isinstance(decorator, ast.Name) and decorator.id in labels:
+                value = labels[decorator.id]
+                out.append(SkipOccurrence(
+                    f"@{decorator.id} = {ast.unparse(value)}", value, None))
+        return out
+
+    for name, node in methods.items():
+        occurrences = label_occurrences(node)
+        if occurrences:
+            found[name] = occurrences
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and any(
+                isinstance(sub, _FUNCTION_NODES) and sub.name.startswith("test_")
+                for sub in node.body):
+            occurrences = label_occurrences(node)
+            if occurrences:
+                found[node.name] = occurrences
+
+    module_wide = [SkipOccurrence(f"{PYTESTMARK_NAME} = {ast.unparse(e)}", e,
+                                  None) for e in _pytestmark_elements(tree)]
+    for statement in tree.body:
+        for call, dotted, inside_if in _module_level_calls(statement):
+            module_wide.append(SkipOccurrence(
+                f"{dotted}( {MODULE_LEVEL_NOTE}", call, inside_if))
+    if module_wide:
+        for name in methods:
+            found.setdefault(name, []).extend(module_wide)
+    return found
+
+
 # Утверждения тестового метода (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требования
 # 1-2): гейт неослабления тестов наблюдает замену и удаление утверждения
 # внутри метода, сохранившего имя. Утверждение — оператор `assert`, вызов
@@ -1006,6 +1184,7 @@ class TestModules:
                  in_scope=None):
         self._load = load
         self._cache: dict = {}
+        self._labels: dict = {}
         self.external = external
         self._workdir = workdir.strip("/") if external else ""
         self._in_scope = in_scope
@@ -1017,6 +1196,16 @@ class TestModules:
             self._cache[path] = None if tree is None else \
                 _module_entry(path, source, tree, self)
         return self._cache[path]
+
+    def labels(self, path: str) -> dict:
+        """{имя: узел значения} имён-меток модуля `path` этой стороны
+        (`_module_labels`, SPEC 01M56TNX1WWKV8PVQ94FT4ZJQB, требование 1б);
+        модуля нет либо он не парсится — пусто."""
+        if path not in self._labels:
+            entry = self.module(path)
+            tree = _parse_or_none(entry.source) if entry else None
+            self._labels[path] = {} if tree is None else _module_labels(tree)
+        return self._labels[path]
 
     def module_path(self, dotted: str) -> str | None:
         """Путь модуля `dotted` от корня репозитория; `None` — модуль вне
