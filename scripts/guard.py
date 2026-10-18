@@ -2609,9 +2609,31 @@ _SYS_PATH_MUTATORS = ("insert", "append", "extend")
 _PATCH_NAMES = ("unittest.mock.patch", "mock.patch", "patch")
 
 
-def _allowed_import_tops() -> frozenset:
+# Подполе профиля тестов внешнего проекта с перечнем верхних имён импорта
+# долгоживущих файлов (`orchestrator/targets.py`, SPEC
+# 01M5633WZ3Y3A0P4KKBZDB3KER) — его называет текст признака.
+LONG_LIVED_IMPORTS_FIELD = "test_profile.long_lived_imports"
+
+
+def _allowed_import_tops(project_imports=()) -> frozenset:
     return (frozenset(sys.stdlib_module_names) | frozenset(_LOCAL_PACKAGES)
-            | frozenset(name for name, _reason in stack.THIRD_PARTY_EXCEPTIONS))
+            | frozenset(name for name, _reason in stack.THIRD_PARTY_EXCEPTIONS)
+            | frozenset(project_imports))
+
+
+def _foreign_import_explanation(project_imports) -> str:
+    """Пояснение признака «импорт вне перечня»: `None` — артель, текст
+    прежний; иначе — внешний проект, текст называет его перечень либо
+    подполе, которое надо заполнить."""
+    if project_imports is None:
+        return _SIGN_EXPLANATIONS[SIGN_FOREIGN_IMPORT]
+    base = "только стандартная библиотека, orchestrator, scripts, tests"
+    if project_imports:
+        return (f"{base} и перечень проекта {LONG_LIVED_IMPORTS_FIELD}: "
+                f"{', '.join(project_imports)}")
+    return (f"{base} — имена кода и зависимостей проекта разрешает подполе "
+            f"{LONG_LIVED_IMPORTS_FIELD} записи проекта в targets.yaml, "
+            f"у проекта оно не заполнено")
 
 
 def _is_private(segment: str) -> bool:
@@ -2773,16 +2795,20 @@ def _names_of(node: ast.AST) -> list[str]:
     return []
 
 
-def long_lived_sign_hits(source: str, task_id: str) -> list[tuple[int, str]]:
+def long_lived_sign_hits(source: str, task_id: str, *,
+                         project_imports=()) -> list[tuple[int, str]]:
     """(строка, признак) требования 3 для текста долгоживущего файла, по
     строкам; файл не разбирается — пусто (синтаксис — предмет сухого
-    сбора). Признак — формулировка списка требования 3 (`SIGN_*`)."""
+    сбора). Признак — формулировка списка требования 3 (`SIGN_*`).
+
+    `project_imports` — верхние имена импорта сверх прежнего набора
+    (перечень профиля внешнего проекта), сравнение — точное."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
     bindings = _import_bindings(tree)
-    allowed_tops = _allowed_import_tops()
+    allowed_tops = _allowed_import_tops(project_imports)
     task_id_lower = task_id.lower()
     hits: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
@@ -2813,7 +2839,8 @@ def long_lived_sign_hits(source: str, task_id: str) -> list[tuple[int, str]]:
 
 def long_lived_errors_from_files(files: list[tuple[str, str]],
                                  task_id: str, *,
-                                 network_addresses: bool = True) -> list[str]:
+                                 network_addresses: bool = True,
+                                 project_imports=None) -> list[str]:
     """Ошибки долгоживущих файлов планки (требования 3, 4) по (label,
     текст) парам `test_*.py`: файлы иной группы (и без распознанной
     группы — это ошибка строки группы, не этой проверки) пропускаются.
@@ -2824,15 +2851,23 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
 
     `network_addresses` — признак сетевых адресов (инвариант 35): правило
     дерева `tests/` пульта, вызывающий снимает его для чужого проекта
-    (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC, замечание ревью R1-F1)."""
+    (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC, замечание ревью R1-F1).
+
+    `project_imports` — правило импортов по проекту (SPEC
+    01M5633WZ3Y3A0P4KKBZDB3KER): `None` — артель, прежний набор и текст;
+    перечень (возможно пустой) — внешний проект, его имена разрешены
+    сверх прежнего набора, текст признака называет перечень или подполе."""
     errors: list[str] = []
+    foreign_explanation = _foreign_import_explanation(project_imports)
     for label, source in files:
         group, _error = plank_file_group(source)
         if group != GROUP_LONG_LIVED:
             continue
-        for lineno, sign in long_lived_sign_hits(source, task_id):
-            errors.append(f"{label}:{lineno}: признак «{sign}» — "
-                          f"{_SIGN_EXPLANATIONS[sign]}")
+        for lineno, sign in long_lived_sign_hits(
+                source, task_id, project_imports=project_imports or ()):
+            explanation = (foreign_explanation if sign == SIGN_FOREIGN_IMPORT
+                           else _SIGN_EXPLANATIONS[sign])
+            errors.append(f"{label}:{lineno}: признак «{sign}» — {explanation}")
         for method in test_functions_without_mutation_claim(None, source):
             errors.append(f"{label}: метод {method} долгоживущего файла без "
                           f"«Ловит мутацию: …» в докстринге («Зелёный с "

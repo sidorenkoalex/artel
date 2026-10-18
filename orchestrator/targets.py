@@ -38,7 +38,8 @@ FIELDS = {
 # относительный путь каталога, "template" — шаблон имени с `<id>` и
 # `<name>`, "report" — одно из `PROFILE_REPORTS`, "positive_int" — целое > 0,
 # "runner" — одно из `PROFILE_RUNNERS`, "mapping" — отображение строк без
-# имён секретов (SPEC 01M52EEDEYV14658X8VFNHCW8K, требования 2-4).
+# имён секретов (SPEC 01M52EEDEYV14658X8VFNHCW8K, требования 2-4),
+# "identifiers" — список идентификаторов Python, возможно пустой.
 PROFILE_FIELD = "test_profile"
 PROFILE_FIELDS = {
     "command": "list",               # начало команды прогона тестов
@@ -52,12 +53,18 @@ PROFILE_FIELDS = {
     "runner": "runner",              # чей раннер гоняет тесты
     "workdir": "dir",                # каталог прогона от корня репозитория
     "env": "mapping",                # окружение прогона
+    # Верхние имена импорта, разрешённые долгоживущим файлам сверх
+    # стандартной библиотеки и пакетов пульта (SPEC
+    # 01M5633WZ3Y3A0P4KKBZDB3KER): список идентификаторов, возможно пустой.
+    "long_lived_imports": "identifiers",
 }
 # `report` и `install` описываются и проверяются, но пультом не
 # исполняются — их отсутствие поведения пульта не меняет. Так же пока
 # `runner`, `workdir`, `env`: потребители — следующие части D0.
 PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec", "runner",
-                    "workdir", "env")
+                    "workdir", "env", "long_lived_imports")
+# Подполе, недопустимое у артели: её правило импортов — правило пульта.
+PROFILE_EXTERNAL_ONLY = ("long_lived_imports",)
 PROFILE_REPORTS = ("junit-xml",)
 PROFILE_RUNNER_DEFAULT = "pult-pytest"
 PROFILE_RUNNER_OWN = "pytest-own"
@@ -174,6 +181,13 @@ def check(name: str, entry: object) -> None:
                            f"ожидается {' | '.join(MERGE_GATES)}")
     if PROFILE_FIELD in entry:
         _check_profile(where, entry[PROFILE_FIELD])
+        if name == config.DEFAULT_TARGET:
+            for sub in PROFILE_EXTERNAL_ONLY:
+                if sub in entry[PROFILE_FIELD]:
+                    raise TargetsError(
+                        f"{where}: подполе '{PROFILE_FIELD}.{sub}' — "
+                        f"недопустимо у артели (правило импортов "
+                        f"долгоживущих файлов пульта не расширяется)")
     if KNOWLEDGE_FIELD in entry:
         reason = _knowledge_error(name, entry[KNOWLEDGE_FIELD])
         if reason:
@@ -335,6 +349,14 @@ def _profile_value_error(kind: str, value: object) -> str:
     if kind == "positive_int":
         return "не положительное целое число секунд" if (
             type(value) is not int or value <= 0) else ""
+    if kind == "identifiers":
+        if not isinstance(value, list):
+            return "не список верхних имён импорта"
+        for item in value:
+            if not isinstance(item, str) or not item.isidentifier():
+                return (f"элемент {item!r} — не верхнее имя импорта "
+                        f"(идентификатор Python без точек и шаблонов)")
+        return ""
     if kind in ("list", "list0"):
         if not isinstance(value, list) or not all(
                 isinstance(item, str) and item for item in value):
