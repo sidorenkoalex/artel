@@ -71,6 +71,49 @@ PROFILE_RUNNER_OWN = "pytest-own"
 PROFILE_RUNNERS = (PROFILE_RUNNER_DEFAULT, PROFILE_RUNNER_OWN)
 # Подполя, осмысленные только у собственного раннера проекта.
 PROFILE_OWN_RUNNER_ONLY = ("workdir", "env")
+
+# Компоненты проекта — необязательное поле записи вместо `test_profile`
+# (ADR-0026 пп. 1-3; SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 1-3):
+# отображение «имя компонента → поля». Виды полей сверх видов профиля:
+# "command" — непустой список непустых строк (одна команда),
+# "path_template" — шаблон пути от корня репозитория с `<id>` (и только
+# `<id>`/`<dir>`/`<name>`), "layout" — шаблон пути с `<id>`, "repo" —
+# непустая строка, "repo_paths" — список путей от корня репозитория,
+# "masks" — маски `project_profile.mask_matches` без альтернатив `{a,b}`,
+# "regexes" — регулярные выражения путей строкой или потоковым списком,
+# "paths_source", "depends_on", "tools" — отображения своей формы.
+COMPONENTS_FIELD = "components"
+COMPONENT_FIELDS = dict(PROFILE_FIELDS, **{
+    "report": "component_report",
+    "install": "command",
+    "checks_local": "command",
+    "long_lived": "path_template",
+    "plank_layout": "layout",
+    "repo": "repo",
+    "report_args": "list0",
+    "select": "list0",
+    "failure_errors": "list0",
+    "layers": "list0",
+    "knowledge": "repo_paths",
+    "tests": "masks",
+    "test_support": "masks",
+    "paths": "regexes",
+    "paths_source": "paths_source",
+    "depends_on": "depends_on",
+    "tools": "tools",
+})
+# `pult-vitest` только допустим: отчётчик появится в G1б.
+COMPONENT_REPORTS = ("junit-xml", "pult-vitest")
+COMPONENT_TEMPLATE_MARKS = ("<id>", "<dir>", "<name>")
+COMPONENT_DEPENDS_VIA = ("paths", "files", "contract")
+COMPONENT_PATHS_SOURCE = ("file", "key")
+# Символы, которые потоковый список `yamlmini` не передаст выражению как
+# есть (кавычки, запятая, скобки списка): громкий отказ вместо молчаливо
+# другого выражения (ANSWER-1, п. 1).
+COMPONENT_REGEX_FORBIDDEN = ('"', "'", ",", "[", "]")
+# Причина отказа читателей профиля записи с несколькими компонентами до G1б.
+MULTI_COMPONENT_PENDING = ("запись проекта с несколькими компонентами "
+                           "исполняется после G1б")
 # Токены форжа — вне реестра провайдеров, но тоже секреты окружения.
 FORGE_SECRET_ENV_NAMES = ("GITHUB_TOKEN", "GH_TOKEN")
 
@@ -95,6 +138,12 @@ REFERENCE_MIN_USES_RANGE = (1, 1000)
 
 class TargetsError(Exception):
     """Декларацию target'а взять неоткуда: файл, формат или сама запись."""
+
+
+class ComponentsPending(TargetsError):
+    """Запись проекта с несколькими компонентами — читатель профиля
+    отказывает до G1б (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 9-10).
+    Отдельный класс — чтобы перехват отказа не был шире него."""
 
 
 def load() -> dict:
@@ -188,6 +237,12 @@ def check(name: str, entry: object) -> None:
                         f"{where}: подполе '{PROFILE_FIELD}.{sub}' — "
                         f"недопустимо у артели (правило импортов "
                         f"долгоживущих файлов пульта не расширяется)")
+    if COMPONENTS_FIELD in entry:
+        if PROFILE_FIELD in entry:
+            raise TargetsError(f"{where}: поля '{PROFILE_FIELD}' и "
+                               f"'{COMPONENTS_FIELD}' вместе недопустимы — "
+                               f"оставь одно")
+        _check_components(name, where, entry[COMPONENTS_FIELD])
     if KNOWLEDGE_FIELD in entry:
         reason = _knowledge_error(name, entry[KNOWLEDGE_FIELD])
         if reason:
@@ -315,6 +370,206 @@ def _check_profile(where: str, profile: object) -> None:
                     f"{where}: подполе '{PROFILE_FIELD}.{sub}' — допустимо "
                     f"только при 'runner: {PROFILE_RUNNER_OWN}' (runner — "
                     f"'{runner}')")
+
+
+def _check_components(name: str, where: str, comps: object) -> None:
+    """Проверка поля `components:` записи: отказ называет проект,
+    компонент и поле (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 2-3)."""
+    if not isinstance(comps, dict) or not comps:
+        raise TargetsError(f"{where}: поле '{COMPONENTS_FIELD}' — не непустое "
+                           f"отображение «имя компонента → поля»")
+    single = len(comps) == 1
+    for comp, fields in comps.items():
+        here = f"{where}: компонент '{comp}'"
+        if ":" in comp:
+            raise TargetsError(f"{here}: имя компонента с ':' — идентификатор "
+                               f"теста компонента не разобрать")
+        if not isinstance(fields, dict) or not fields:
+            raise TargetsError(f"{here}: поля компонента — не непустое "
+                               f"отображение")
+        for field in fields:
+            if field not in COMPONENT_FIELDS:
+                raise TargetsError(f"{here}: неизвестное поле '{field}' "
+                                   f"(известны: {', '.join(COMPONENT_FIELDS)})")
+        for field, value in fields.items():
+            reason = _component_value_error(COMPONENT_FIELDS[field], value,
+                                            comp, comps)
+            if reason:
+                raise TargetsError(f"{here}: поле '{field}' — {reason}")
+        _check_component_rules(name, here, fields, single)
+
+
+def _check_component_rules(name: str, here: str, fields: dict,
+                           single: bool) -> None:
+    """Правила компонента, зависящие от записи и соседних полей."""
+    pair = ("long_lived_dir", "long_lived_name")
+    if "long_lived" in fields:
+        for sub in pair:
+            if sub in fields:
+                raise TargetsError(f"{here}: поле 'long_lived' вместе с "
+                                   f"'{sub}' — либо шаблон, либо пара полей")
+        if single:
+            raise TargetsError(f"{here}: поле 'long_lived' — long_lived "
+                               f"исполняется после G2б; у единственного "
+                               f"компонента нужна пара "
+                               f"'long_lived_dir'/'long_lived_name'")
+    if single:
+        for sub in pair:
+            if sub not in fields:
+                raise TargetsError(f"{here}: нет поля '{sub}' — обязательно "
+                                   f"у единственного компонента записи")
+        runner = fields.get("runner", PROFILE_RUNNER_DEFAULT)
+        if runner != PROFILE_RUNNER_OWN:
+            for sub in PROFILE_OWN_RUNNER_ONLY:
+                if sub in fields:
+                    raise TargetsError(
+                        f"{here}: поле '{sub}' — у единственного компонента "
+                        f"допустимо только при 'runner: {PROFILE_RUNNER_OWN}' "
+                        f"(runner — '{runner}')")
+    elif not fields.get("paths"):
+        raise TargetsError(f"{here}: поле 'paths' — обязательно и непусто у "
+                           f"записи с несколькими компонентами")
+    if name == config.DEFAULT_TARGET:
+        for sub in PROFILE_EXTERNAL_ONLY:
+            if sub in fields:
+                raise TargetsError(
+                    f"{here}: поле '{sub}' — недопустимо у артели (правило "
+                    f"импортов долгоживущих файлов пульта не расширяется)")
+    if fields.get("repo", name) != name:
+        raise TargetsError(f"{here}: поле 'repo' — '{fields['repo']}': "
+                           f"несколько репозиториев не исполняются")
+
+
+def _component_value_error(kind: str, value: object, comp: str,
+                           comps: dict) -> str:
+    """Причина, по которой значение поля компонента не годно; пусто —
+    годно. Виды профиля — прежним `_profile_value_error`."""
+    if kind == "command":
+        return _profile_value_error("list", value)
+    if kind == "component_report":
+        if value not in COMPONENT_REPORTS:
+            return f"{value!r}, ожидается {' | '.join(COMPONENT_REPORTS)}"
+        return ""
+    if kind in ("path_template", "layout"):
+        return _template_path_error(value, kind == "path_template")
+    if kind == "repo":
+        return "" if isinstance(value, str) and value.strip() else (
+            "не непустая строка")
+    if kind == "repo_paths":
+        if not isinstance(value, list):
+            return "не список путей от корня репозитория"
+        for item in value:
+            if (not isinstance(item, str) or not item or item.startswith("/")
+                    or ".." in item.split("/")):
+                return (f"элемент {item!r} — не относительный путь от корня "
+                        f"репозитория (без ведущего '/' и '..')")
+        return ""
+    if kind == "masks":
+        reason = _profile_value_error("list0", value)
+        if reason:
+            return reason
+        for mask in value:
+            if "{" in mask or "}" in mask:
+                return (f"маска '{mask}': альтернативы `{{a,b}}` не "
+                        f"поддерживаются — разверните в несколько масок")
+        return ""
+    if kind == "regexes":
+        return _regexes_error(value)
+    if kind == "paths_source":
+        return _exact_strings_error(value, COMPONENT_PATHS_SOURCE)
+    if kind == "depends_on":
+        return _depends_on_error(value, comp, comps)
+    if kind == "tools":
+        if not isinstance(value, dict):
+            return "не отображение «имя инструмента → строка версии»"
+        for tool, version in value.items():
+            if not isinstance(version, str):
+                return (f"версия '{tool}' — {version!r}, не строка (пиши в "
+                        f"кавычках)")
+        return ""
+    return _profile_value_error(kind, value)
+
+
+def _template_path_error(value: object, marks_only: bool) -> str:
+    """Шаблон пути от корня репозитория с обязательным `<id>`; при
+    `marks_only` допустимы только заполнители `COMPONENT_TEMPLATE_MARKS`."""
+    if not isinstance(value, str) or not value.strip():
+        return "не непустая строка"
+    parts = value.split("/")
+    if value.startswith("/") or ".." in parts or "" in parts:
+        return (f"'{value}' — не относительный путь от корня репозитория "
+                f"(без ведущего '/', '..' и пустых сегментов)")
+    if "<id>" not in value:
+        return f"'{value}' — нет заполнителя <id>"
+    if marks_only:
+        foreign = [m for m in re.findall(r"<[^<>]*>", value)
+                   if m not in COMPONENT_TEMPLATE_MARKS]
+        if foreign:
+            return (f"'{value}' — заполнитель {', '.join(foreign)}; допустимы "
+                    f"только {', '.join(COMPONENT_TEMPLATE_MARKS)}")
+    return ""
+
+
+def _regexes_error(value: object) -> str:
+    """Регулярные выражения путей: строка или потоковый список строк,
+    каждая компилируется и без символов `COMPONENT_REGEX_FORBIDDEN`."""
+    items = [value] if isinstance(value, str) else value
+    if not isinstance(items, list):
+        return "не строка и не список регулярных выражений"
+    for item in items:
+        if not isinstance(item, str) or not item:
+            return f"элемент {item!r} — не непустая строка"
+        bad = [ch for ch in COMPONENT_REGEX_FORBIDDEN if ch in item]
+        if bad:
+            return (f"выражение '{item}' содержит {' '.join(bad)} — потоковый "
+                    f"список targets.yaml такие символы не передаёт")
+        try:
+            re.compile(item)
+        except re.error as exc:
+            return f"выражение '{item}' не компилируется: {exc}"
+    return ""
+
+
+def _exact_strings_error(value: object, keys: tuple) -> str:
+    """Отображение ровно из подполей `keys`, каждое — непустая строка."""
+    if not isinstance(value, dict):
+        return f"не отображение подполей {', '.join(keys)}"
+    extra = [key for key in value if key not in keys]
+    if extra:
+        return f"лишнее подполе '{extra[0]}' (допустимы: {', '.join(keys)})"
+    for key in keys:
+        item = value.get(key)
+        if not isinstance(item, str) or not item.strip():
+            return f"подполе '{key}' — нет или не непустая строка"
+    return ""
+
+
+def _depends_on_error(value: object, comp: str, comps: dict) -> str:
+    """`depends_on`: «имя поставщика → поля `via`, `paths`»; поставщик —
+    другой компонент той же записи."""
+    if not isinstance(value, dict):
+        return "не отображение «имя компонента-поставщика → поля»"
+    for supplier, spec in value.items():
+        if supplier == comp:
+            return f"поставщик '{supplier}' — сам компонент"
+        if supplier not in comps:
+            return f"поставщик '{supplier}' — нет такого компонента в записи"
+        if not isinstance(spec, dict):
+            return f"поставщик '{supplier}' — поля не отображение"
+        extra = [key for key in spec if key not in ("via", "paths")]
+        if extra:
+            return (f"поставщик '{supplier}': лишнее поле '{extra[0]}' "
+                    f"(допустимы: via, paths)")
+        for key in ("via", "paths"):
+            if key not in spec:
+                return f"поставщик '{supplier}': нет поля '{key}'"
+        if spec["via"] not in COMPONENT_DEPENDS_VIA:
+            return (f"поставщик '{supplier}': via — {spec['via']!r}, "
+                    f"ожидается {' | '.join(COMPONENT_DEPENDS_VIA)}")
+        reason = _regexes_error(spec["paths"])
+        if reason:
+            return f"поставщик '{supplier}': paths — {reason}"
+    return ""
 
 
 def secret_env_names() -> set[str]:
