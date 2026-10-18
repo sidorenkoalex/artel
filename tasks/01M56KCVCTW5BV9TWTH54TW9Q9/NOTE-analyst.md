@@ -1,14 +1,15 @@
 # Записка analyst — 01M56KCVCTW5BV9TWTH54TW9Q9
 
 ## Выяснено
-- Второй возврат из spec_gate 18.10 (по второму аудиту) — внесены все три решения, итерация 3; 7 AC, budget 35, status ready, guard ок.
-- (1) Требование 3 / AC-5 — только pytest-own; у pult-pytest FileNotFoundError доходит до вызывающего (tests/test_acceptance_pycache.py:73-98: run, collect, run_full_suite). Добавлено в «Не входит».
-- (2) Каталог прогона — необязательный параметр _place_env/_own_env; two_sided._run_side (two_sided.py:242, вне зон, не правится) его не передаёт → для относительного command[0] с `/` шаг (б) пропускается; записано в треб. 1 и AC-3.
-- (3) AC-7: os.environ + PYTHONUNBUFFERED (_run_full_suite_to_log, acceptance.py:1592) + PYTHONPATH/REPORT_ENV (two_sided) + наличие ключа PYTHONPYCACHEPREFIX.
+- Третий возврат из spec_gate 18.10 (по третьему аудиту) — внесены все решения, итерация 4; 7 AC, budget 35, status ready, guard ок.
+- (1) Вариант B: suite_run.py не правится; «имя отсутствующей команды в отчёте suite-run для «прогон не начат»» — в «Не входит», отдельной задачей вместе с исключённым требованием 4. В требовании 3 — строка «имя видно на гейтах и в plank-run».
+- (2) AC-7 — по каждому из восьми мест PLACES (tests/test_01m52eefna1wh31962hvnt0yz9_pytest_own_places.py:62-65).
+- (3) Обоснование требования 1: «префикс PATH сохраняется, наличие (б)/(в) одинаково», хвост у пульта возможен, но не затеняет.
+- Узкий перехват FileNotFoundError (только запуск процесса) — в требовании 3 + проверка в AC-5 (несуществующий каталог лога у _run_full_suite_to_log не даёт текста отказа/префикса FULL_SUITE_NOT_STARTED).
 - Ранее: каналы отказа по местам — run/collect `(False, текст)`, run_repeat `RedTest`, run_plank `REFUSED_EXIT_CODE`, полный прогон `FULL_SUITE_NOT_STARTED` (не кешируется).
 
 ## Не сработало
-- `ls` в Bash недоступен (command not found) — пользоваться Read/sed.
+- `ls` в Bash недоступен — пользоваться Read.
 
 ## Где остановился
 - SPEC сдан, guard ок.
