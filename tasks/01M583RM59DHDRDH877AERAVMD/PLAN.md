@@ -2,7 +2,7 @@
 task: 01M583RM59DHDRDH877AERAVMD
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -89,48 +89,11 @@ schema_version: 5
 - В шелле шага нет `ls`/`cat` (заметил и test_author) — роли тратят попытки
   на обход; стоит либо добавить их в PATH роли, либо упомянуть в миссии.
 
-## Эскалация
-
-**Вопросы** (один батч, по блокирующести):
-
-1. Полный набор красен одним новым на ветке тестом —
-   `tests/test_invariants.py::DeterministicTestsLintTest::test_tests_tree_has_no_wall_clock_waits_or_live_file_reads`:
-   «tests/test_01m583rm59dhdrdh877aeravmd_early_signal.py::EarlySignalCanaryTest::reap_observed:
-   строка 198: цикл до срока по time.monotonic(); строка 199: time.sleep с
-   ненулевой паузой». Это долгоживущий файл test_author под локом сумм
-   (уборка теста по требованию 7 / AC-8, AC-10), а перечень исключений
-   `_EXCEPTIONS` — в защищённом `tests/test_invariants.py`. Ни то ни другое
-   разработчик править не вправе. Код задачи (`orchestrator/canary.py`) к
-   этой находке отношения не имеет: на базе файла нет, поэтому «новый на
-   ветке».
-   Варианты:
-   - (а) Оператор добавляет запись `_EXCEPTIONS`
-     `"tests/test_01m583rm59dhdrdh877aeravmd_early_signal.py::EarlySignalCanaryTest::reap_observed"`
-     с обоснованием по образцу уже существующей
-     `...canary_lifecycle.py::CanaryLifecycleTest::launch_signalled`
-     (test_invariants.py:2183): «ожидание гибели групп ведения и suite —
-     внуков процесса теста, `waitpid` их не дождётся; срок 10 с —
-     страховка уборки, на утверждения теста не влияет». Отдельный MR
-     Оператора по защищённому пути.
-   - (б) `amend-tests`: test_author переписывает ожидание в `reap_observed`
-     без часов — ограниченным числом итераций с паузой через помощник
-     песочницы (`tests/sandbox.py`, вне обхода линта) или без паузы.
-   **Дефолт при молчании:** (а) — так уже решён тот же класс для
-   соседнего `launch_signalled`, поведение теста не меняется.
-
-**Контекст**
-- Реализация готова и проверена: `_SignalDeferral` + вызовы `release()` в
-  `_drive_in_clone` (`orchestrator/canary.py`); AC-12 в общих помощниках
-  `CanaryLifecycleTest` по мандату ANSWER-2; `docs/codebase-map.md`
-  регенерирована.
-- Затронутые модули: `pytest tests/test_01m583rm59dhdrdh877aeravmd_early_signal.py
-  tests/test_01m4axpy1py4ps1yafamd47vby_canary_lifecycle.py tests/test_canary_drive.py
-  tests/test_01m4beg0003ch0qa1gy0pxat03_clone_marker.py` — 34 passed;
-  `plank-run` — 5 passed (AC-6, 7, 9, 10, 12).
-- `suite-run` №1: 5885 прошло, 1 упало (выше), 2 пропущено; на базе
-  упавших нет.
-
-**Блокирует**
-- Зелёный полный набор ветки и, значит, выход из `in_dev` на гейте
-  приёмки. После решения (а) или (б) правки кода задачи не нужны —
-  достаточно повторить `suite-run --failed`.
+## Итог эскалации (ANSWER-3)
+- Красный линт `test_invariants.py::DeterministicTestsLintTest::test_tests_tree_has_no_wall_clock_waits_or_live_file_reads`
+  на `EarlySignalCanaryTest::reap_observed` закрыт Оператором по варианту (б):
+  `amend-tests` перевёл ожидание на `tests/sandbox.py::wait_processes_gone`
+  (коммит ffe7c593). Код задачи не менялся.
+- Проверка после ответа: затронутые модули (те же 4 файла) — 34 passed;
+  `artel.py suite-run 01M583RM59DHDRDH877AERAVMD --failed` (прогон №2) —
+  зелёный, 1 прошло, 0 упало.
