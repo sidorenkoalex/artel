@@ -1,16 +1,16 @@
 # Записка spec_auditor — 01M574A6YQHAPASS9716Z11G4Q
 
 ## Выяснено
-- Вердикт fail (spec_sha 544bdebe…). Главное: текст статуса читают подстроками verifying_is_red (ci.py:835), red_status_sha (ci.py:848), status_kind (ci.py:1014) → auto.py:485, ci_rerun.py:89-90, fsm_merge_gate.py:363; SPEC не требует сохранить их на пути Actions.
-- Источник триггера (pull_request) для ci.py в SPEC не определён; для вершины main фильтр pull_request обычно даёт пусто (ci.py:611, ci_rerun.py:291).
-- На пути Actions не потребован отбор по head_branch (_branch_checks ci.py:562).
-- Факты SPEC о строках подтвердились (fsm_merge_gate 583/626 — строки охраны is_artel, вызов на 591/630).
+- Визит 2 (spec_sha f51d9a54…): отклонения 1–6 первого аудита закрыты требованиями 2, 3, 5, 8 и AC-2..AC-12.
+- Факты SPEC о строках сверены, все подтвердились (ci.py, ci_rerun.py, fsm_merge_gate.py, fsm_advance.py, project_checks.py, misc_checks.py:80, cli.py:101).
+- Существующих тестов с 403 на check-runs и с числом строк doctor проекта в tests/ нет, так что «Меняемое поведение» не нужно.
+- Вердикт concerns. Остатки: исход verifying_status «неизвестен» на пути Actions без ограничения по тексту; не проверен красный при одновременно идущем запуске; red-запуск без красных заданий в failed_check_names; 403 с иным текстом в doctor; _inherited_from_main на пути Actions не требуется ни одним AC.
 
 ## Не сработало
-- grep с --include под zsh в этой оболочке падает (no matches found) — без флага.
+- Составные bash-команды (cd/pipe/head) просят подтверждение: годятся только одиночные команды с абсолютными путями.
 
 ## Где остановился
 - SPEC-AUDIT.md записан, guard прогнан.
 
 ## Чего не хватило
-- Карты потребителей текста note статуса CI (кто разбирает подстроки) — искал grep'ом по orchestrator/.
+- Список подстрок-разборщиков note (ci.py:835/848/1014) пришлось снова собирать grep'ом.
