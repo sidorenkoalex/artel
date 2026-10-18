@@ -1,15 +1,15 @@
 # Записка analyst
 
 ## Выяснено
-- `plank-run` не гонит долгоживущие файлы по путям: `[файл]` только внутри планки (`orchestrator/plank_run.py:58-69`, отказ :151-155). `suite-run` — только полный набор (`--wait`/`--failed`). Раннер профиля по нескольким путям есть: `acceptance.run_plank(targets, cwd, profile)` (`acceptance.py:1096`); гейт выхода из tests_writing гонит долгоживущие вместе с планкой (`advance_gates/acceptance.py:405`).
-- `plank_run.py`/`suite_run.py` по ТЗ только чтение, «правка вне зон — эскалация до SPEC» → батч QUESTIONS.md из одного вопроса (A расширить зону на plank_run.py — дефолт; B новая команда в artel.py; C suite-run).
-- Остальное ТЗ достаточно: команда `guard <id> [файл]` в artel.py + `_ROLE_ALLOWED_COMMANDS` (`artel.py:1907-1910`); миссии в `role_prompt.py` (analyst :64, developer :120, test_author п.5 :88-95, reviewer :142-145, spec_auditor :272); признак артели — `artel = conn is None or brief.is_artel_task(...)` (`role_prompt.py:38`).
+- ANSWER-1: вариант A — зона +`orchestrator/plank_run.py`, только приём и прогон путей долгоживущих файлов своей задачи (`Profile.is_long_lived`); условие матрицы: чужой/вне шаблона путь — прежний отказ, планка и вызов без аргумента — прежний исход (в SPEC это AC-6).
+- Мест правки: миссии `role_prompt.py` analyst :64, test_author п.5 :88-95 (`_long_lived_run_note` :216), developer :120, reviewer :141-145, spec_auditor :272; признак артели `artel` :38. Белый список `artel.py:1907-1910`. `plank_run._selected` :58-69, отказ :151-155, прогон :185-192.
+- Долгоживущий тест `tests/test_01m551w0tfct2xrq71xfxjdkb9_profile_mission.py` проверяет, что в миссии test_author внешнего проекта есть префикс профиля и нет голого `tests/` — новый пункт 5 должен это сохранить.
 
 ## Не сработало
-- Bash с `$?` отклоняется песочницей (simple_expansion) — гонять guard без `echo rc=$?`.
+- `ls`/`rm` в этом шелле нет (command not found) — файлы удалял через python3 os.remove. `$?` в Bash режет песочница.
 
 ## Где остановился
-- QUESTIONS.md написан, guard ок. SPEC.md не писался.
+- SPEC.md написан (9 AC, budget 30, монолит — материал для Оператора), guard ок; QUESTIONS.md удалён.
 
 ## Чего не хватило
-- Был ли в ТЗ смысл «назвать в SPEC» = назвать нужную правку plank_run.py (вне зон) или назвать отсутствие команды — отсюда вопрос.
+- Явной формулировки, применять ли расширение plank-run и к артели. Принял: да, по ANSWER-1 без оговорок; прежние вызовы у артели дают прежний результат.
