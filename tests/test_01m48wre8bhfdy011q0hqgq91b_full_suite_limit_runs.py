@@ -807,6 +807,7 @@ if flag:
 with open(records, "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"event": "start", "pgid": os.getpgid(0),
                          "mono": time.monotonic()}) + "\\n")
+print("started", flush=True)
 deadline = time.monotonic() + float(hold)
 while not os.path.exists(stop) and time.monotonic() < deadline:
     time.sleep(0.02)
@@ -842,7 +843,9 @@ class CopyClockOrderTest(unittest.TestCase):
         proc = subprocess.Popen(
             [sys.executable, "-c", CLOCK_PROBE, str(self.records),
              str(self.stop_file), str(flag or ""), str(self.HOLD), "pytest"],
-            stdin=subprocess.DEVNULL, start_new_session=True)
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True,
+            start_new_session=True)
+        self.addCleanup(proc.stdout.close)
         self.addCleanup(proc.wait)
         self.addCleanup(kill_group, proc.pid)
         return proc
@@ -888,9 +891,10 @@ class CopyClockOrderTest(unittest.TestCase):
         пробник отпускает `wait` через `HOLD` секунд без `TimeoutExpired`.
         """
         proc = self.spawn(None)
-        deadline = time.monotonic() + REAL_WAIT_CEILING_SEC
-        while not self.events("start") and time.monotonic() < deadline:
-            time.sleep(0.01)
+        # Канал готовности вместо цикла по часам: строку пробник пишет после
+        # записи «start»; умер раньше — чтение вернёт EOF.
+        self.assertEqual(proc.stdout.readline(), "started\n",
+                         "пробник не стартовал")
         self.assertTrue(self.events("start"), "пробник не стартовал")
         self.assert_cut_by_real_wait(proc)
 
