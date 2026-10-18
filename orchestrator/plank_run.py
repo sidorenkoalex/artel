@@ -237,8 +237,11 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
             # отказывает прогону в шаге роли (SPEC 01M41W15BK20WBTD9TMBTSXNZA).
             tests_rel = (tdir / "acceptance_tests").relative_to(code_dir).as_posix()
             target_arg = f"{tests_rel}/{selected}" if selected else tests_rel
+            # `task_id` — у `pytest-own` цель уходит в выкладку под
+            # `long_lived_dir` (SPEC 01M57JYJQC8VAHEWMXFNM7D1GS).
             code, output = (
-                acceptance.run_plank([target_arg], code_dir, profile=own)
+                acceptance.run_plank([target_arg], code_dir, profile=own,
+                                     task_id=task_id)
                 if own is not None
                 else acceptance.run_plank([target_arg], code_dir))
     print(output)
