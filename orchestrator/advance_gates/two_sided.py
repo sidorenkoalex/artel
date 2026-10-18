@@ -209,6 +209,55 @@ def _verdict(records: list, nodeid: str) -> str:
     return "green"
 
 
+def _variant_ids(records: list, nodeid: str) -> set:
+    """Хвосты `[<id>]` вариантов параметризованного узла `nodeid` в отчёте
+    (SPEC 01M56TNZ3E72XY9XSTAVS99CN2, требование 1). Вариант — id узла,
+    продолженный ровно скобкой: соседний `::test_x_slow` вариантом
+    `::test_x` не считается."""
+    prefix = f"{nodeid}["
+    return {r["nodeid"][len(nodeid):] for r in records
+            if (r.get("nodeid") or "").startswith(prefix)}
+
+
+def _side_verdict(records: list, nodeid: str, variants) -> tuple:
+    """(итог стороны в форме `_verdict`, id узла, на котором он вынесен)
+    по `variants` — хвостам вариантов, судимых на этой стороне; `None` —
+    узел не параметризован, судится точный id. Сторона доказывает смену,
+    только когда каждый её вариант упал на утверждении; первый не
+    упавший называет себя."""
+    if variants is None:
+        return _verdict(records, nodeid), nodeid
+    for variant in sorted(variants):
+        verdict = _verdict(records, nodeid + variant)
+        if verdict:
+            return verdict, nodeid + variant
+    return "", nodeid + min(variants)
+
+
+def _common_variants(side_records: dict, nodes: dict) -> tuple:
+    """({сторона: хвосты вариантов, судимые на ней, либо `None`}, причина
+    отказа метода целиком). Вариантов нет ни на одной стороне — узел
+    непараметризован, обе стороны судятся точным id (прежние исходы).
+    Иначе на каждой стороне судятся варианты, общие обеим сторонам
+    (сторона, чей прогон сорвался, отчёта не дала — тогда свои); общих
+    нет — отказ, не «пройден»: пустой набор прохода не даёт."""
+    found = {label: (_variant_ids(records, nodes[label])
+                     if records is not None else None)
+             for label, records in side_records.items()}
+    if not any(found.values()):
+        return {label: None for label in found}, ""
+    ran = [ids for ids in found.values() if ids is not None]
+    common = set.intersection(*ran) if len(ran) == len(found) else None
+    if common is None:
+        return {label: ids or None for label, ids in found.items()}, ""
+    if not common:
+        shown = "; ".join(
+            f"{label}: {', '.join(sorted(ids)) or 'нет вариантов'}"
+            for label, ids in found.items())
+        return {}, f"нет вариантов, общих обеим сторонам ({shown})"
+    return {label: common for label in found}, ""
+
+
 def _location(records: list, nodeid: str) -> dict:
     """Место упавшего утверждения узла из записи фазы call плагина;
     пусто — плагин места не нашёл."""
@@ -290,15 +339,18 @@ def _root_form(nodeid: str, tree: Path, cwd: Path) -> str:
     return os.path.relpath(cwd / path, tree).replace(os.sep, "/") + sep + rest
 
 
+def _same_sides(reason: str) -> dict:
+    return {label: {"outcome": reason}
+            for label in (NEW_ON_BASE, OLD_ON_BRANCH)}
+
+
 def _failed(methods: list, reason: str, head_sha: str,
             base_sha: str) -> Outcome:
     """Сбой, общий всем методам рубежа: отказ называет каждый метод."""
     return Outcome([f"{m.head_path}: {m.name}: двусторонний прогон: {reason}"
                     for m in methods],
                    {m.address: reason for m in methods}, head_sha, base_sha,
-                   {m.address: {label: {"outcome": reason}
-                                for label in (NEW_ON_BASE, OLD_ON_BRANCH)}
-                    for m in methods})
+                   {m.address: _same_sides(reason) for m in methods})
 
 
 def _place(tree: Path, rel: str, text: str) -> None:
@@ -362,28 +414,54 @@ def run(repo: Path, code_branch: str, base_sha: str, methods: list,
              "зелёная — поведение не сменилось"))
         refusals, results = [], {m.address: [] for m in methods}
         observed = {m.address: {} for m in methods}
-        for index, (label, tree, nodes, green) in enumerate(sides):
+        # Обе стороны прогоняются до вердикта: параметризованный метод
+        # судится по вариантам, общим обеим сторонам (SPEC
+        # 01M56TNZ3E72XY9XSTAVS99CN2, требование 1).
+        runs = {}
+        for index, (label, tree, nodes, _green) in enumerate(sides):
             report = scratch / f"report-{index}.jsonl"
             timeout = _side_timeout(deadline)
             if timeout <= 0:
-                records, failure = [], SIDE_LIMIT
+                runs[label] = ([], SIDE_LIMIT)
             else:
-                records, failure = _run_side(
+                runs[label] = _run_side(
                     tree, sorted(set(nodes.values())), plugin_dir, report,
                     timeout, profile)
+        judged = {}
+        for method in methods:
+            judged[method.address] = _common_variants(
+                {label: None if runs[label][1] else runs[label][0]
+                 for label, *_rest in sides},
+                {label: nodes[method.address]
+                 for label, _tree, nodes, _green in sides})
+            variants, reason = judged[method.address]
+            if reason:
+                observed[method.address] = _same_sides(reason)
+                results[method.address].append(reason)
+                refusals.append(f"{method.head_path}: {method.name}: "
+                                f"двусторонний прогон: {reason}")
+        for label, _tree, nodes, green in sides:
+            records, failure = runs[label]
             for method in methods:
+                variants, reason = judged[method.address]
+                if reason:
+                    continue
                 if failure:
                     reason = failure
                     observed[method.address][label] = {"outcome": reason}
                 else:
-                    verdict = _verdict(records, nodes[method.address])
+                    verdict, node = _side_verdict(
+                        records, nodes[method.address], variants[label])
                     if not verdict:
                         observed[method.address][label] = {
                             "outcome": SIDE_ASSERTION,
-                            **_location(records, nodes[method.address])}
+                            **_location(records, node)}
                         continue
                     reason = green if verdict == "green" \
                         else f"{NOT_PROOF} — {verdict}"
+                    variant = node[len(nodes[method.address]):]
+                    if variant:
+                        reason = f"вариант {variant}: {reason}"
                     observed[method.address][label] = {
                         "outcome": SIDE_GREEN if verdict == "green"
                         else reason}
