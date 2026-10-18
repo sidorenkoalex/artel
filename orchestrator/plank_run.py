@@ -14,6 +14,13 @@
 шага); в остальных состояниях — зафиксированная планка ссылки документов,
 а не диск каталога документов.
 
+`[файл]` — и путь долгоживущего файла своей задачи от корня рабочей копии
+кода (`Profile.is_long_lived` профиля проекта задачи, SPEC
+01M56G23ZQDHV2BKEVWWC22R96): роли внешнего проекта разрешён только
+`artel.py` пульта, а команда профиля (`uv run pytest` в `workdir`) роли
+неизвестна. Такой путь прогоняется тем же раннером без выкладки планки,
+после тех же отказов до выкладки; планка ему не нужна.
+
 Только чтение для пульта: строка задачи, журнал, ссылки и ветка задачи не
 меняются, lease не берётся — поэтому команда в перечне команд роли
 (`artel._ROLE_ALLOWED_COMMANDS`).
@@ -21,7 +28,8 @@
 import sys
 from pathlib import Path
 
-from . import acceptance, artifact_branch, config, store, workspace
+from . import (acceptance, artifact_branch, config, project_profile, store,
+               workspace)
 
 NO_PLANK = "планки нет"
 
@@ -67,6 +75,30 @@ def _selected(arg: str, task_id: str, names: list[str]) -> str | None:
     if path in names or any(n.startswith(path + "/") for n in names):
         return path + sep + node
     return None
+
+
+def _long_lived_arg(arg: str | None, task_id: str, target: str) -> bool:
+    """Аргумент `[файл]` — путь долгоживущего файла своей задачи (от корня
+    рабочей копии кода, с `::узлом` pytest или без) по профилю её проекта
+    (SPEC 01M56G23ZQDHV2BKEVWWC22R96, требование 5). Профиля нет — `False`:
+    прежний выбор только из планки."""
+    if not arg:
+        return False
+    profile = project_profile.decide(target).profile
+    return profile is not None and \
+        profile.is_long_lived(task_id, arg.partition("::")[0])
+
+
+def _long_lived_target(arg: str, code_dir: Path, own) -> str:
+    """Цель pytest для долгоживущего пути. У `pytest-own` — абсолютный
+    путь: `acceptance._own_target` переводит в `workdir` только путь без
+    `::узла`, а абсолютный оставляет как есть. У раннера пульта — путь от
+    корня рабочей копии: абсолютный сторож роли
+    `conftest._is_targeted_path` целевым не признаёт."""
+    if own is None:
+        return arg
+    path, sep, node = arg.partition("::")
+    return str(code_dir / path) + sep + node
 
 
 def _docs_in_code_copy(own_dir: Path) -> list[str]:
@@ -143,12 +175,20 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
                      f"(git не ответил); планка не выложена")
         names = sorted(p[len(prefix):] for p in paths if p.startswith(prefix))
         source = f"зафиксированная планка {ref}"
-    if not _has_tests(names):
+    long_lived = _long_lived_arg(file_arg, task_id, target)
+    if long_lived:
+        # Своему долгоживущему файлу планка не нужна (требование 6), а
+        # отказы до выкладки ниже он проходит тем же кодом (требование 5).
+        long_lived_path = file_arg.partition("::")[0]
+        if not (code_dir / long_lived_path).is_file():
+            sys.exit(f"{head}: отказ — файла {long_lived_path} нет в рабочей "
+                     f"копии кода ({code_dir}); pytest не запускался")
+    elif not _has_tests(names):
         sys.exit(f"{head}: отказ — {NO_PLANK}: в источнике ({source}) нет "
                  f"файлов test_*.py; pytest не запускался")
 
     selected = None
-    if file_arg:
+    if file_arg and not long_lived:
         selected = _selected(file_arg, task_id, names)
         if selected is None:
             sys.exit(f"{head}: отказ — файла {file_arg} нет в планке "
@@ -175,21 +215,32 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
                  f"amend-tests {task_id} --reason «…» — или убери файлы "
                  f"сам; pytest не запускался")
 
-    print(f"{head}: {source}, cwd {code_dir}", flush=True)
-    with acceptance.plank_in_code_copy(
-            task_id, artifact_branch.branch_name(task_id), code_dir,
-            files=draft) as tdir:
-        # Путь относителен от cwd pytest (рабочей копии кода): абсолютный
-        # сторож роли `conftest._is_targeted_path` не признаёт целевым и
-        # отказывает прогону в шаге роли (SPEC 01M41W15BK20WBTD9TMBTSXNZA).
-        tests_rel = (tdir / "acceptance_tests").relative_to(code_dir).as_posix()
-        target_arg = f"{tests_rel}/{selected}" if selected else tests_rel
-        # Профиль `pytest-own` проекта задачи (SPEC
-        # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — раннер пульта, как прежде.
-        own = acceptance._task_own_profile(conn, task_id)
+    # Профиль `pytest-own` проекта задачи (SPEC 01M52EEHSRD93WMPHWB5VJYRKD);
+    # иначе — раннер пульта, как прежде.
+    own = acceptance._task_own_profile(conn, task_id)
+    if long_lived:
+        # Файл уже в рабочей копии кода — выкладка планки не нужна, и
+        # `tasks/<id>/` рабочей копии этот прогон не трогает.
+        print(f"{head}: долгоживущий файл {file_arg}, cwd {code_dir}",
+              flush=True)
+        target_arg = _long_lived_target(file_arg, code_dir, own)
         code, output = (acceptance.run_plank([target_arg], code_dir, profile=own)
                         if own is not None
                         else acceptance.run_plank([target_arg], code_dir))
+    else:
+        print(f"{head}: {source}, cwd {code_dir}", flush=True)
+        with acceptance.plank_in_code_copy(
+                task_id, artifact_branch.branch_name(task_id), code_dir,
+                files=draft) as tdir:
+            # Путь относителен от cwd pytest (рабочей копии кода): абсолютный
+            # сторож роли `conftest._is_targeted_path` не признаёт целевым и
+            # отказывает прогону в шаге роли (SPEC 01M41W15BK20WBTD9TMBTSXNZA).
+            tests_rel = (tdir / "acceptance_tests").relative_to(code_dir).as_posix()
+            target_arg = f"{tests_rel}/{selected}" if selected else tests_rel
+            code, output = (
+                acceptance.run_plank([target_arg], code_dir, profile=own)
+                if own is not None
+                else acceptance.run_plank([target_arg], code_dir))
     print(output)
     summary = acceptance.run_summary_line(output) or "итоговой строки нет"
     if code is None:
