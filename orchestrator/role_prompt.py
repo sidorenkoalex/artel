@@ -33,14 +33,22 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
     task_ref = f"tasks/{task_id}"
     package = None
     brief_text = None
+    # Состав брифа задачи внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN,
+    # требование 10): конвенции проекта вместо карты кодовой базы пульта.
+    artel = conn is None or brief.is_artel_task(conn, task_id)
     if role == "analyst":
+        brief_line = (
+            "Карта кодовой базы и шаблоны templates/SPEC.md и "
+            "templates/QUESTIONS.md — в БРИФЕ РОЛИ ниже." if artel else
+            "Конвенции проекта (CLAUDE.md и AGENTS.md его базовой ветки) и "
+            "шаблоны templates/SPEC.md и templates/QUESTIONS.md — в БРИФЕ "
+            "РОЛИ ниже.")
         mission = (
             f"Роль: аналитик. Задача {task_id}, ветка {t['branch']} — уже "
             f"выписана в этом рабочем каталоге (собственный worktree "
             f"задачи, рабочая копия пульта его не видит). "
             f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
-            f"только после тебя. Карта кодовой базы и шаблоны "
-            f"templates/SPEC.md и templates/QUESTIONS.md — в БРИФЕ РОЛИ ниже.\n"
+            f"только после тебя. {brief_line}\n"
             f"{_template_unread_note()}\n"
             f"1) Прочитай {task_ref}/TZ.md.\n"
             f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по шаблону SPEC "
@@ -89,12 +97,18 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         brief_text = brief.test_author_answer_component(conn, task_id)
     elif role == "developer":
         long_lived = _long_lived_paths(conn, task_id)
+        brief_line = (
+            "SPEC задачи, карта кодовой базы, конвенции проекта и шаблон "
+            "templates/PLAN.md — целиком в БРИФЕ РОЛИ ниже, отдельно их "
+            "читать не нужно." if artel else
+            "SPEC задачи, конвенции проекта (CLAUDE.md и AGENTS.md его "
+            "базовой ветки) и шаблон templates/PLAN.md — целиком в БРИФЕ "
+            "РОЛИ ниже, отдельно их читать не нужно; правила работы роли — "
+            "в скилах пульта (СКИЛЫ РОЛИ ниже).")
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
             f"уже выписана в этом рабочем каталоге (собственный worktree "
-            f"задачи). SPEC задачи, карта кодовой базы, конвенции проекта "
-            f"и шаблон templates/PLAN.md — целиком в БРИФЕ РОЛИ ниже, "
-            f"отдельно их читать не нужно.\n"
+            f"задачи). {brief_line}\n"
             f"{_template_unread_note()}\n"
             f"1) Изучи бриф.\n"
             f"2) Напиши {task_ref}/PLAN.md по шаблону PLAN из брифа.\n"
@@ -113,7 +127,7 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         )
         brief_text = brief.developer_brief(conn, task_id)
     elif role == "spec_auditor":
-        mission = _spec_auditor_mission(conn, task_id, t)
+        mission = _spec_auditor_mission(conn, task_id, t, artel)
         brief_text = brief.spec_auditor_brief(conn, task_id)
     else:
         # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
@@ -217,7 +231,7 @@ def _long_lived_developer_note(long_lived) -> str:
             f"тем же локом: их не правь, расхождение с ними эскалируй.")
 
 
-def _spec_auditor_mission(conn, task_id: str, t) -> str:
+def _spec_auditor_mission(conn, task_id: str, t, artel: bool = True) -> str:
     """Миссия аудитора SPEC (ADR-0022 пп. 2-3, SPEC
     01M4MQAGRWMWR0GFDM9086P3TD, требования 6-7): проверяемая версия SPEC
     (sha содержимого на входе), сработавшие сигналы и глубина разбора — из
@@ -235,10 +249,11 @@ def _spec_auditor_mission(conn, task_id: str, t) -> str:
     else:
         depth = ("краткий разбор — вердикт и отклонения; разделы без "
                  "находок — одной строкой «отклонений нет»")
+    context = "карта кодовой базы" if artel else "конвенции проекта"
     return (
         f"Роль: аудитор SPEC. Задача {task_id}, ветка {t['branch']}. Ты — "
         f"независимая проверка SPEC аналитика до гейта SPEC: ТЗ, SPEC, ответы "
-        f"Оператора, карта кодовой базы и шаблон "
+        f"Оператора, {context} и шаблон "
         f"templates/{spec_audit.ARTIFACT} — в БРИФЕ РОЛИ ниже, код — в "
         f"рабочем каталоге.\n"
         f"{_template_unread_note()}\n"
