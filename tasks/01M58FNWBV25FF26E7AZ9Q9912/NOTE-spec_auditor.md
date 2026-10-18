@@ -1,17 +1,16 @@
-# Записка spec_auditor — 01M58FNWBV25FF26E7AZ9Q9912 (аудит SPEC a4898611, третий визит)
+# Записка spec_auditor — 01M58FNWBV25FF26E7AZ9Q9912 (аудит SPEC 398cfe76, четвёртый визит)
 
 ## Выяснено
-- Ссылки SPEC на код верны (мелочь: `targets.load` — targets.py:100). Решения гейта №1 отражены все.
-- `profile_of` — единственный читатель `test_profile` (grep по orchestrator/, scripts/).
-- `plank_run.py:220` достижим в `tests_writing`: `decide` смотрится только в `_long_lived_arg` (:87, `.profile`), `runner.py:1323-1333` шаг не блокирует → трассировка `TargetsError` на записи с двумя компонентами.
-- `suite_run._run`: `_profile_command` (:556) до `full_suite_limit` (:559) — безопасно.
-- AC-2 не покрывает форму `depends_on.paths`, кавычки в `paths`; AC-9 — ширину перехвата `drop_from_code_copy`.
+- Все пять пунктов решения гейта №2 перенесены в SPEC: plank_run.py:220 — в «Не входит»; подслучаи AC-2 по depends_on/paths; ширина перехвата — AC-9; пара long_lived_dir/long_lived_name у единственного компонента — треб. 3, AC-10; targets.load :100.
+- Ссылки на код верны: targets.py:43-73, :100, :182-190, :290-319, :334-384; project_profile.py:65-187; repo_context.py:129-151; acceptance.py:1285-1301, :2372, :2380-2400; suite_run.py:271-297; doctor/cli.py:94; plank_run.py:87, :220; runner.py:1323-1333.
+- amend.py:548/:723 идут после `_profile_or_exit` (amend.py:609, :956), а он выходит с отказом `for_task`.
+- yamlmini снимает кавычки со скаляра (`scalar`/`_unquote`), поэтому `"` или `'` в `paths` одной строкой текстом не увидеть. Подслучай AC-2 проверяется словарём (треб. 11 это допускает).
 
 ## Не сработало
-- `cd …; sed` и `$W` в составных командах требуют подтверждения — бери абсолютные пути и Read.
+- Составные команды bash с `$VAR`, `awk` и `cd` требуют подтверждения. Бери абсолютные пути, grep и sed без конвейеров.
 
 ## Где остановился
-SPEC-AUDIT.md записан, verdict concerns (4 отклонения + мелочь), guard ок.
+SPEC-AUDIT.md: verdict pass, замечания без отклонений.
 
 ## Чего не хватило
-Карты «какие команды роли доступны в каком состоянии» — достижимость `plank-run` выводил по runner.py и plank_run.py.
+—
