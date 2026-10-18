@@ -1,15 +1,15 @@
 # Записка developer
 
 ## Выяснено
-- Реализация: report.py (`_project`, `_project_suffix`/`_project_label`, `_alert_label`, `_split_metrics_html`), watch.py `_observation_events` (+None в targets, `-` в поле проекта). catalog.py не правился.
-- Позиция «оповещено» уже по наблюдению — отдельной правки store не нужно.
-- Долгоживущие тесты задачи + test_report + тесты наблюдения/дозора зелены; планка AC-8 зелена (plank-run). Карта регенерирована.
+- Реализация: report.py (`_project`, `_project_suffix`/`_project_label`, `_alert_label`, `_declared_projects`, `_split_metrics_html`), watch.py `_observation_events` (+None в targets, `-` в поле проекта). catalog.py не правился.
+- ANSWER-2 отработан (шаг 2): метка алерта — проекты `targets.yaml` ∪ проекты задач; неизвестное значение — в скобках как есть; id задачи БД / NULL / артель — без метки. Свой тест `tests/test_report_project_label.py` (NULL-задача во всех строках + правило метки алерта), мутации проверены. Сверка `status` по ТЗ п.3 — в PLAN.
+- Мутация «проекты только из задач» тест не краснит: при правиле «всё, кроме id задачи» декларация отличает лишь коллизию имени проекта с id — заявка мутации сформулирована как «метка только проекту задач».
 
 ## Не сработало
-- suite-run отказал: шёл прогон другой задачи (01M57JYJQC8VAHEWMXFNM7D1GS).
+- `cd <каталог документов> && python3 …` целиком отклоняется правилом Read deny — писать по абсолютному пути без cd.
 
 ## Где остановился
-- PLAN.md status: ready; suite-run №1 зелёный (5835/0/2). Шаг завершён.
+- PLAN.md status: ready; планка AC-8 зелена; suite-run №2 зелёный (5837/0/2). Шаг завершён.
 
 ## Чего не хватило
 - Ничего существенного.
