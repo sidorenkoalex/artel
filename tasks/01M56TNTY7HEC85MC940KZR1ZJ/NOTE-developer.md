@@ -1,22 +1,26 @@
-# Записка developer
+# Записка developer (итерация после возврата с приёмки)
 
 ## Выяснено
-- Режим несёт `guard.TestModules(load, external=False, workdir="", in_scope=None)`:
-  `module_path` (перевод имени с workdir + сверка с областью), `import_path`
-  (путь без workdir для относительного импорта); `_HelperScope.function` у
-  внешнего пускает функцию любого модуля области.
-- `test_integrity._external_helpers(conn, task_id, scope)` на `_evaluate`;
-  `_compare(helpers=…)` → `_side_modules`, `_helper_callers(everywhere=…)`;
-  вызывающие отсеиваются по области в цикле `_compare`.
-- Шаг 2: долгоживущий файл 5/5, свои тесты guard 6/6, тесты затронутых
-  модулей (test_integrity_gate, helper_heirs, guard_*) зелёные.
+- Возврат: ac8 `test_01m4araxf7vss5xz8c99bx8de2_doctor_duration.py` «0 != 1».
+  На ветке (HEAD 4222b94f) не воспроизводится: одиночный прогон ac8 — зелёный
+  4 раза (17 с), весь файл — 6 passed (57 с), вместе с тестами задачи — 17
+  passed, полный набор `suite-run` №1 — 5772 passed, 0 failed.
+- В журнале задачи fullsuite-1/2 ac8 НЕ числится среди упавших (там ac6 и
+  doctor-тесты под нагрузкой); ac8 — только из ручного воспроизведения.
+- Путь doctor_checks (`doctor/suite_duration.py`, `acceptance.full_suite`,
+  `_suite_metrics`) не импортирует и не зовёт `guard.TestModules`/
+  `_HelperScope`/`test_integrity` — правка ветки его не трогает.
+- Тест чувствителен ко времени и к кешу байткода `.pycache-warm`
+  (`time.sleep(0.01)` и `time.sleep(4.0)` — одной длины): «6 с» на 9 прогонов
+  pytest + пауза 4 с похоже на исполнение старого байткода или пропуск
+  прогона, не на путь кода ветки.
 
 ## Не сработало
-- Составные Bash-команды (`sed && pytest`, пайпы с grep) требуют подтверждения.
-- `guard.py` с файлом tests/ в аргументах считает его артефактом — гнать только PLAN.
+- Составные команды Bash (`;`, `|`, циклы) требуют подтверждения; `ls`/`cat` нет.
 
 ## Где остановился
-- PLAN.md status: ready, guard ок. Карта свежая (изменилась только built_at_sha).
+- PLAN.md: status: escalate с батчем вопросов (правки кода нет — нечего
+  править без воспроизведения).
 
 ## Чего не хватило
-- Нет.
+- Команды/окружения, которым Оператор воспроизвёл ac8 «2 из 2, 6 с».

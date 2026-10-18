@@ -2,7 +2,7 @@
 task: 01M56TNTY7HEC85MC940KZR1ZJ
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -89,3 +89,56 @@ schema_version: 5
 - `pytest -n` (xdist) в шаге роли падает «node down: Not properly
   terminated» на всех воркерах — тесты затронутых модулей приходится гнать
   последовательно, это > 10 минут.
+- Причина возврата с приёмки не несёт команды воспроизведения и пути лога
+  ручного прогона — роль не может повторить «2 из 2» в том же окружении.
+  Стоит требовать команду и лог в тексте `reject` для падения вне
+  fullsuite-логов.
+- `test_01m4araxf7vss5xz8c99bx8de2_doctor_duration.py` чувствителен ко
+  времени: `time.sleep(0.01)` и `time.sleep(4.0)` одной длины, а кеш байткода
+  `.pycache-warm` сверяет только mtime и размер. Это кандидат во флаки под
+  нагрузкой (задача на тест — через Оператора, файл долгоживущий).
+
+## Эскалация
+
+**Вопросы** (по степени блокировки):
+
+1. Как воспроизвести падение ac8 «2 из 2, 6 с»: какой командой, в каком
+   каталоге и окружении (ручной pytest или `approve`; параллельно с гейтом
+   другой задачи или нет)? Есть ли лог?
+   Варианты: (а) Оператор даёт команду и лог, и я чиню код по реальному
+   воспроизведению; (б) Оператор перезапускает приёмку
+   (`approve --fresh-suite`) по свежему зелёному прогону ниже.
+   По умолчанию — (б).
+2. Если падение не воспроизводится, считать ли ac8 флаки под нагрузкой (тест
+   долгоживущий, его не правлю) и принять ветку без правки кода?
+   Варианты: да / нет (тогда нужен ответ на п.1). По умолчанию — да.
+
+**Контекст** (проверено на ветке, HEAD 4222b94f):
+- `python3 -m pytest tests/test_01m4araxf7vss5xz8c99bx8de2_doctor_duration.py::DoctorDurationTest::test_ac8_ack_restarts_calibration_after_signal`
+  зелёный 4 раза из 4 (≈17 с). Весь файл — 6 passed (57 с). Вместе с
+  `tests/test_01m56tnty7hec85mc940kzr1zj_helper_scope.py` и
+  `tests/test_guard_helper_scope_modes.py` — 17 passed.
+- `artel.py suite-run 01M56TNTY7HEC85MC940KZR1ZJ` №1 (полный набор ветки):
+  зелёный, 5772 passed, 0 failed, 2 skipped. Лог:
+  `.artel/logs/suite-run/01M56TNTY7HEC85MC940KZR1ZJ/01M56TNTY7HEC85MC940KZR1ZJ-suiterun-1.log`.
+- В журнале задачи упавшие fullsuite-1 и fullsuite-2 не содержат ac8: там
+  ac6 этого файла и doctor-тесты чужих задач под нагрузкой (load ≈ 30 на 14
+  ядер, замок был у гейта задачи 01M56T94ZJE6H973HEBTM0Q0TD).
+- Путь `doctor_checks` → `doctor.all_checks` →
+  `doctor/suite_duration.check_suite_duration`; измерения пишет
+  `acceptance.full_suite` → `run_full_suite` → `_suite_metrics`. Ни один из
+  этих модулей не зовёт `guard.TestModules`, `_HelperScope`, `_module_entry`
+  или `advance_gates/test_integrity` (grep по `orchestrator/doctor/` и
+  `orchestrator/acceptance.py`). `acceptance.py` берёт из guard только
+  `scan_acceptance_tests`/`count_test_methods`/`TEST_METHOD`, а их ветка не
+  меняла (diff ветки — `scripts/guard.py`, `test_integrity.py`, тесты и
+  карта).
+- «6 с» на 9 прогонов pytest с паузой 4 с в девятом выглядит как пропуск
+  паузы. Под это подходят исполнение старого байткода: строки
+  `time.sleep(0.01)` и `time.sleep(4.0)` одной длины, а `.pycache-warm`
+  сверяет только mtime и размер. Ещё подходит не начавшийся прогон. Ни
+  то, ни другое не зависит от кода ветки.
+
+**Блокирует**: правку кода по причине возврата. Без воспроизведения
+исправлять нечего: правка guard или test_integrity «наугад» не меняет
+путь doctor и только расширит дифф вне требований SPEC.
