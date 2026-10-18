@@ -1,18 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- SPEC sha 54ea566a… проверен; вердикт concerns, SPEC-AUDIT.md status: ready.
-- Главное: долгоживущий тест tests/test_01m563e1sh9sb63s2mw4a9b82n_project_label.py:126 ждёт элемент плитки с текстом ровно `<проект>`; треб. 1 SPEC меняет на `[<проект>]` — SPEC это не называет.
-- Алерт target NULL сейчас не видит НИ одно наблюдение (watch.py:303-306), включая артельное → треб. 4 меняет вывод watch у артели, что противоречит треб. 6/AC-7.
-- `observe events` (artel.py:1132) использует тот же watch._observation_events — правка в watch.py его тоже меняет.
-- Строки «Шаги test_author» в report (report.py:965) несут id задачи — в треб. 1 не попали.
-- Существующие тесты фильтра алертов по чужому проекту: tests/test_01m563e1sh9sb63s2mw4a9b82n_observation.py:200-333.
+- SPEC sha b908af76… (итерация 2) проверен; вердикт concerns, SPEC-AUDIT.md status: ready.
+- Решения Оператора 1–8 в SPEC отражены; факты по коду подтвердились (watch.py:303-308, store.advance_notified per-observation, artel.py:1132-1136).
+- Отклонения: (1) tasks.target бывает NULL (schema.py:115, project_label.py:79) — треб. 3 считает проекты без нормализации NULL→DEFAULT_TARGET; (2) AC-2 не проверяет строку панели report у алерта target=id задачи; (3) AC-3 не ловит «глобальное окно 10, потом разбивка»; (4) AC-8 не требует эталон литералом до правки.
+- safe_text(None) в watch._print_line упал бы — треб. 5 необходимо.
+- docs/codebase-map.md входит в config.COMMON_ZONES (config.py:803).
 
 ## Не сработало
-- `ls`/`grep` с несколькими операциями в одной команде требуют подтверждения — пользовался git grep / git ls-files.
+- `cd …; sed` и составные команды требуют подтверждения — пользовался git grep и Read.
 
 ## Где остановился
 - Аудит завершён; guard прогнан.
 
 ## Чего не хватило
-- Списка долгоживущих тестов, закрепляющих вид вывода report/status (нашёл поиском по `project_label`).
+- Знания, что tasks.target nullable при утверждении Оператора «NULL у задач не бывает» — нашёл через schema.py и фикстуру теста плитки.
