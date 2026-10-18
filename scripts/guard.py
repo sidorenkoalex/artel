@@ -930,6 +930,173 @@ def resolved_skip_markers(source, modules: "TestModules | None" = None) -> dict:
     return found
 
 
+# Параметризация тестового метода (SPEC 01M56TNZ3E72XY9XSTAVS99CN2,
+# требования 3-5; ANSWER-1 пп. 1-2): узел сравнения гейта неослабления
+# сверяет вызов `parametrize` метода, сохранившего имя, — любая смена его
+# текста, кроме добавления варианта при прежних, выключает проверку так же,
+# как пропуск. Марка опознаётся последним сегментом имени
+# (`pytest.mark.parametrize`, `mark.parametrize`), вариант с маркой —
+# `pytest.param(…, marks=…)` последним сегментом `param`.
+PARAMETRIZE_NAME = "parametrize"
+PARAMETRIZE_PARAM_NAME = "param"
+# Место списка вариантов в тексте вызова `ParametrizeMark.frame`.
+PARAMETRIZE_VARIANTS_SLOT = "__variants__"
+
+
+class ParametrizeMark(NamedTuple):
+    """Одна марка `parametrize`, действующая на тестовый метод: `place` —
+    где она стоит («декоратор метода #1», «декоратор класса C #1»,
+    «pytestmark класса C #1», «pytestmark модуля #1»), `frame` — текст
+    вызова (`ast.unparse`) с литеральным списком вариантов, заменённым
+    `PARAMETRIZE_VARIANTS_SLOT`: имена аргументов, `ids=`, `indirect=` и
+    аргумент-имя — как написаны, `variants` — тексты элементов литерального
+    списка вариантов по порядку, `skipped` — те из них, что несут марку
+    пропуска в `pytest.param(…, marks=…)`, `bindings` — строки уровня модуля
+    и тела класса, где упомянуто имя, которое вызов берёт из того же модуля
+    (`CASES`, элемент-имя набора, и транзитивно имена из их строк)."""
+
+    place: str
+    frame: str
+    variants: tuple
+    skipped: frozenset
+    bindings: tuple
+
+
+def _is_parametrize(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and \
+        _called_dotted_name(node.func).rsplit(".", 1)[-1] == PARAMETRIZE_NAME
+
+
+def _is_pytestmark_assign(node: ast.AST) -> bool:
+    return isinstance(node, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == PYTESTMARK_NAME
+        for t in node.targets)
+
+
+def _module_statements(tree: ast.Module) -> list:
+    """[(текст строки с областью, имена, которым она присваивает, имена,
+    которые упоминает)] — строки уровня модуля и тела классов (ANSWER-1
+    п. 1). Тела функций — не строки модуля (значения, вычисляемые
+    функцией, — известный пробел); `pytestmark = …` сравнивается как
+    марка, а не как строка константы."""
+    statements = []
+
+    def add(scope: str, body: list) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or \
+                    _is_pytestmark_assign(node):
+                continue
+            if isinstance(node, ast.ClassDef):
+                add(f"{scope}{node.name}.", node.body)
+                continue
+            names = [n for n in ast.walk(node) if isinstance(n, ast.Name)]
+            statements.append((
+                f"{scope}{ast.unparse(node)}",
+                {n.id for n in names if isinstance(n.ctx, ast.Store)},
+                {n.id for n in names}))
+
+    add("", tree.body)
+    return statements
+
+
+def _bindings(call: ast.Call, statements: list) -> tuple:
+    """Строки модуля и классов, в которых упомянуто имя, взятое вызовом из
+    того же модуля, — с замыканием по именам, упомянутым в этих строках.
+    Имя, лишь импортированное, сюда не попадает (известный пробел SPEC)."""
+    defined = set().union(*(stored for _t, stored, _m in statements))
+    names = {n.id for n in ast.walk(call)
+             if isinstance(n, ast.Name)} & defined
+    while True:
+        wider = names.union(*(mentioned & defined
+                              for _t, _s, mentioned in statements
+                              if mentioned & names))
+        if wider == names:
+            break
+        names = wider
+    return tuple(text for text, _s, mentioned in statements
+                 if mentioned & names)
+
+
+def _pytestmark_marks(body: list) -> list:
+    """Элементы последнего присваивания `pytestmark = …` тела `body`
+    (модуля или класса) — одна марка либо элементы списка/кортежа."""
+    value = None
+    for node in body:
+        if _is_pytestmark_assign(node):
+            value = node.value
+    if value is None:
+        return []
+    return value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+
+
+def _variant_skipped(node: ast.AST) -> bool:
+    """Вариант `pytest.param(…, marks=…)` несёт марку пропуска или
+    ожидаемого провала (`_is_skip_mark`) в `marks`."""
+    if not isinstance(node, ast.Call) or \
+            _called_dotted_name(node.func).rsplit(".", 1)[-1] != \
+            PARAMETRIZE_PARAM_NAME:
+        return False
+    return any(_is_skip_mark(sub) for kw in node.keywords if kw.arg == "marks"
+               for sub in ast.walk(kw.value))
+
+
+def _parametrize_mark(call: ast.Call, place: str,
+                      statements: list) -> ParametrizeMark:
+    frame = copy.deepcopy(call)
+    slot = ast.Name(PARAMETRIZE_VARIANTS_SLOT, ast.Load())
+    elements: list = []
+    if len(frame.args) > 1:
+        if isinstance(frame.args[1], (ast.List, ast.Tuple)):
+            elements, frame.args[1] = list(frame.args[1].elts), slot
+    else:
+        for kw in frame.keywords:
+            if kw.arg == "argvalues" and isinstance(kw.value,
+                                                    (ast.List, ast.Tuple)):
+                elements, kw.value = list(kw.value.elts), slot
+    return ParametrizeMark(
+        place, ast.unparse(frame), tuple(ast.unparse(e) for e in elements),
+        frozenset(ast.unparse(e) for e in elements if _variant_skipped(e)),
+        _bindings(call, statements))
+
+
+def parametrize_variants(source) -> dict:
+    """{квалифицированное имя тестового метода: (ParametrizeMark, …)} —
+    марки `parametrize`, задающие варианты метода, во всех формах
+    требования 5: `pytestmark` модуля, декоратор класса, `pytestmark` тела
+    класса, декоратор метода. Метод без параметризации в результат не
+    попадает; пусто — текста нет либо он не парсится.
+
+    Литералы вариантов здесь только сравниваются как текст и в позиции
+    литералов утверждений (`method_literal_keys`) не входят: смену строки
+    `parametrize` «Меняемым поведением» не объявить (требование 2)."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return {}
+    statements = _module_statements(tree)
+
+    def marks(nodes, place: str) -> list:
+        return [_parametrize_mark(call, f"{place} #{index}", statements)
+                for index, call in enumerate(
+                    (n for n in nodes if _is_parametrize(n)), 1)]
+
+    module_marks = marks(_pytestmark_marks(tree.body), "pytestmark модуля")
+    class_marks: dict = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            class_marks[node.name] = (
+                marks(node.decorator_list, f"декоратор класса {node.name}")
+                + marks(_pytestmark_marks(node.body),
+                        f"pytestmark класса {node.name}"))
+    found: dict = {}
+    for name, node in _collect_qualified_test_functions(tree).items():
+        owner = name.split(TEST_NAME_SEP)[0] if TEST_NAME_SEP in name else None
+        own = module_marks + class_marks.get(owner, []) + \
+            marks(node.decorator_list, "декоратор метода")
+        if own:
+            found[name] = tuple(own)
+    return found
+
+
 # Утверждения тестового метода (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требования
 # 1-2): гейт неослабления тестов наблюдает замену и удаление утверждения
 # внутри метода, сохранившего имя. Утверждение — оператор `assert`, вызов
