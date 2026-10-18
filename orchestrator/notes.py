@@ -282,9 +282,12 @@ def _silence_window_reason() -> str | None:
     if lock_row is not None and not merge_lock._holder_is_dead(lock_row):
         holder = (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "
                   f"задача {lock_row['task_id']})")
-        task = conn.execute("SELECT * FROM tasks WHERE id=?",
-                            (lock_row["task_id"],)).fetchone()
-        project = None if task is None else _task_project(task)
+        # `task_exists` до `get_task`: тот завершает процесс на
+        # отсутствующей строке и разрешает префикс, а держатель без строки
+        # задачи — «проект не определён», не конец команды и не чужая задача.
+        project = None
+        if store.task_exists(conn, lock_row["task_id"]):
+            project = _task_project(store.get_task(conn, lock_row["task_id"]))
         if project == _ARTEL:
             return holder
         if project is None:
