@@ -38,31 +38,45 @@ def _prune_dead_entries(conn) -> None:
             store.delete_merge_queue_row(conn, row["rowid"])
 
 
-def _head_task_id(conn) -> str | None:
+def _head_task_id(conn, target: str | None = None) -> str | None:
     """`task_id` головы очереди — первая запись по времени входа (FIFO,
-    требование 2); `None` — очередь пуста."""
-    rows = store.merge_queue_rows(conn)
+    требование 2); `None` — очередь пуста. С `target` — голова очереди
+    этого проекта: записи других проектов её не задерживают (SPEC
+    01M57PM7NBFX34319TR0F9CB4F, требование 4); без него — голова всей
+    очереди, как до разделения."""
+    rows = (store.merge_queue_rows(conn) if target is None
+            else store.project_merge_queue_rows(conn, target))
     return rows[0]["task_id"] if rows else None
 
 
-def _current_holder_id(conn) -> str:
+def _holder_row(conn, target: str | None):
+    """Строка держателя мьютекса проекта `target`; без него — прежняя
+    первая строка таблицы."""
+    if target is None:
+        return store.merge_lock_row(conn)
+    return store.project_merge_lock_row(conn, target)
+
+
+def _current_holder_id(conn, target: str | None = None) -> str:
     """`task_id` текущего держателя мьютекса merge-окна — для текста входа
     в очередь (требование 1, AC-2). Занятый мьютекс — предпосылка вызова
     `wait_for_window`, так что держатель почти всегда есть; `"?"` — на
     случай, если он успел освободиться между отказом `merge_lock.acquire`
-    и входом в очередь (безвредная деградация только текста сообщения)."""
-    row = store.merge_lock_row(conn)
+    и входом в очередь (безвредная деградация только текста сообщения).
+    `target` — проект ждущей задачи (держатели других проектов не в
+    счёт)."""
+    row = _holder_row(conn, target)
     return row["task_id"] if row is not None else "?"
 
 
-def _current_holder_label(conn) -> str:
+def _current_holder_label(conn, target: str | None = None) -> str:
     """Держатель мьютекса merge-окна для журнала входа в очередь и
     суффикса `status` — «<task_id> (pid <pid>)» (SPEC
     01M2XFSE8G3MBRHHQR38H53J1M, требования 6-7): держатель — процесс, и
     по одному task_id Оператор не отличит два параллельных цикла одного
     пульта. Без держателя — прежний `"?"` (тот же довод, что у
-    `_current_holder_id`)."""
-    row = store.merge_lock_row(conn)
+    `_current_holder_id`; `target` — тоже)."""
+    row = _holder_row(conn, target)
     if row is None:
         return "?"
     return f"{row['task_id']} (pid {row['pid']})"
@@ -90,7 +104,7 @@ def wait_suffix(conn, t) -> str:
     minutes = queue_wait_minutes(conn, t["id"])
     if minutes is None:
         return ""
-    holder = _current_holder_label(conn)
+    holder = _current_holder_label(conn, store.task_target(conn, t["id"]))
     return f"  [ждёт merge-окна: занято {holder}, {minutes} мин]"
 
 
@@ -115,11 +129,17 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
     одной рабочей копии пульта несут один session_id и стоят в очереди
     двумя записями, продлевая и снимая каждый только свою; журнал входа
     называет держателя с pid (требование 6).
+
+    Очередь и мьютекс — проекта задачи (SPEC 01M57PM7NBFX34319TR0F9CB4F,
+    требование 4): голова — первая запись своего проекта, ждётся
+    освобождение мьютекса только своего проекта, держатель в журнале —
+    держатель своего проекта.
     """
     pid, hostname = os.getpid(), socket.gethostname()
+    target = store.task_target(conn, task_id)
     ts = store.now()
     store.enqueue_merge_wait(conn, task_id, sid, pid, hostname, ts)
-    holder = _current_holder_label(conn)
+    holder = _current_holder_label(conn, target)
     store.journal(
         conn, task_id, "orchestrator",
         f"ждёт merge-окна: держит {holder}",
@@ -131,7 +151,7 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
         while True:
             store.touch_merge_queue_heartbeat(conn, sid, pid, store.now())
             _prune_dead_entries(conn)
-            if _head_task_id(conn) == task_id:
+            if _head_task_id(conn, target) == task_id:
                 refusal = merge_lock.acquire(conn, task_id, sid)
                 if refusal is None:
                     return

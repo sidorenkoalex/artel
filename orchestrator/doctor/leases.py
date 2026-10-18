@@ -169,29 +169,38 @@ def check_merge_lock(conn) -> list[doctor.Check]:
 
     Авто-ack (SPEC T054, требование 2) — как у `check_leases`: зовётся на
     каждом прогоне перед `return`, не только когда найден свежий мёртвый
-    держатель.
+    держатель. Мьютекс держится по проекту (SPEC
+    01M57PM7NBFX34319TR0F9CB4F, требование 10) — проверяется каждая
+    строка, авто-ack сверяется с каждой.
     """
-    row = doctor.store.merge_lock_row(conn)
-    if row is None:
+    rows = doctor.store.merge_lock_rows(conn)
+    if not rows:
         result = [doctor.Check("merge-lock", "ok", "мьютекс merge свободен")]
-    elif row["hostname"] != socket.gethostname():
-        result = [doctor.Check("merge-lock", "ok",
-                        f"мьютекс merge держит {row['task_id']} на чужом "
-                        f"host {row['hostname']} — pid не проверяется")]
-    elif doctor.liveness._pid_alive(row["pid"]):
-        result = [doctor.Check("merge-lock", "ok",
-                        f"мьютекс merge держит {row['task_id']} (сессия "
-                        f"{row['session_id']}), pid жив")]
     else:
-        message = (f"{row['task_id']}: мьютекс merge сессии {row['session_id']} "
-                  f"мёртв (pid {row['pid']} на {row['hostname']})")
-        doctor.alerts.raise_alert(conn, doctor.store.task_target(conn, row["task_id"]),
-                           "incident", "doctor.merge_lock", message)
-        result = [doctor.Check("merge-lock", "fail", message)]
+        result = [_merge_lock_row_check(conn, row) for row in rows]
 
     doctor._auto_ack_gone(conn, "doctor.merge_lock",
-                  lambda msg: doctor._merge_lock_alert_live(msg, row))
+                  lambda msg: doctor._merge_lock_alert_live(msg, rows))
     return result
+
+
+def _merge_lock_row_check(conn, row) -> doctor.Check:
+    """Проверка одной строки мьютекса merge — держателя одного проекта
+    (SPEC 01M57PM7NBFX34319TR0F9CB4F, требование 10): мёртвый держатель
+    любого проекта на этом host — fail и incident-алерт."""
+    if row["hostname"] != socket.gethostname():
+        return doctor.Check("merge-lock", "ok",
+                     f"мьютекс merge держит {row['task_id']} на чужом "
+                     f"host {row['hostname']} — pid не проверяется")
+    if doctor.liveness._pid_alive(row["pid"]):
+        return doctor.Check("merge-lock", "ok",
+                     f"мьютекс merge держит {row['task_id']} (сессия "
+                     f"{row['session_id']}), pid жив")
+    message = (f"{row['task_id']}: мьютекс merge сессии {row['session_id']} "
+              f"мёртв (pid {row['pid']} на {row['hostname']})")
+    doctor.alerts.raise_alert(conn, doctor.store.task_target(conn, row["task_id"]),
+                       "incident", "doctor.merge_lock", message)
+    return doctor.Check("merge-lock", "fail", message)
 
 
 def check_merge_queue(conn) -> list[doctor.Check]:

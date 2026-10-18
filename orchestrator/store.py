@@ -1230,23 +1230,67 @@ def all_leases(conn) -> list:
 
 
 def merge_lock_row(conn) -> sqlite3.Row | None:
-    """Строка мьютекса merge-окна — не более одной на весь пульт; None —
-    свободен (SPEC T053, требование 1-2)."""
-    return conn.execute("SELECT * FROM merge_locks").fetchone()
+    """Первая по вставке строка мьютекса merge-окна; None — ни один проект
+    его не держит (SPEC T053, требование 1-2). С разделением мьютекса по
+    проекту (SPEC 01M57PM7NBFX34319TR0F9CB4F) строк может быть несколько —
+    держателя проекта даёт `project_merge_lock_row`, все строки —
+    `merge_lock_rows`; эта функция оставлена читателям одного проекта."""
+    return conn.execute(
+        "SELECT * FROM merge_locks ORDER BY rowid").fetchone()
+
+
+# Проект строки мьютекса/очереди — `target` её задачи с той же
+# нормализацией, что у `task_target`: пустой, NULL или нет строки задачи —
+# артель (SPEC 01M57PM7NBFX34319TR0F9CB4F, требование 13). Колонки
+# `target` в самих таблицах нет — схема не меняется.
+_ROW_TARGET_SQL = "COALESCE(NULLIF(t.target, ''), ?) AS target"
+
+
+def merge_lock_rows(conn) -> list:
+    """Все строки мьютекса merge-окна по порядку вставки, каждая — с
+    `rowid` и проектом `target` её задачи (SPEC 01M57PM7NBFX34319TR0F9CB4F,
+    требование 7): мьютекс держится по проекту, строк — не больше одной на
+    проект."""
+    return conn.execute(
+        "SELECT m.rowid AS rowid, m.task_id, m.session_id, m.pid,"
+        " m.hostname, m.heartbeat_ts, " + _ROW_TARGET_SQL +
+        " FROM merge_locks m LEFT JOIN tasks t ON t.id = m.task_id"
+        " ORDER BY m.rowid", (config.DEFAULT_TARGET,)).fetchall()
+
+
+def project_merge_lock_row(conn, target: str) -> sqlite3.Row | None:
+    """Строка мьютекса merge-окна проекта `target`; None — у проекта
+    держателя нет (держатели других проектов не в счёт)."""
+    return next((row for row in merge_lock_rows(conn)
+                 if row["target"] == target), None)
+
+
+def touch_merge_lock_heartbeat(conn, rowids: list, heartbeat_ts: str) -> None:
+    """Продлевает heartbeat строк мьютекса `rowids` одним коммитом — прочие
+    поля и остальные строки не меняются (`merge_lock.touch_heartbeat`)."""
+    conn.executemany("UPDATE merge_locks SET heartbeat_ts=? WHERE rowid=?",
+                     [(heartbeat_ts, rowid) for rowid in rowids])
+    conn.commit()
 
 
 def set_merge_lock(conn, task_id: str, session_id: str, pid: int,
                    hostname: str, heartbeat_ts: str) -> None:
-    """Заводит мьютекс merge-окна либо переписывает держателя (свежий
-    вход, продление своего или перехват протухшего чужого — все три
-    ветки `merge_lock.acquire`). Таблица несёт не более одной строки
-    (требование 2), поэтому запись всегда идёт через снос предыдущей —
-    не `INSERT`/`UPDATE` порознь, как у `leases`: там раздельные ветки
-    нужны только ради различения «взято с нуля» (`lease.acquire`
-    требование, из которого `auto` решает, снимать ли за собой чужой
-    lease); мьютекс merge живёт ровно одну операцию окна, и это различие
-    ему не нужно (`orchestrator/merge_lock.py`)."""
-    conn.execute("DELETE FROM merge_locks")
+    """Заводит мьютекс merge-окна проекта задачи `task_id` либо
+    переписывает его держателя (свежий вход, продление своего или
+    перехват протухшего чужого — все три ветки `merge_lock.acquire`).
+    Проект несёт не более одной строки, поэтому запись идёт через снос
+    прежней строки ЭТОГО проекта — строки других проектов не трогаются
+    (SPEC 01M57PM7NBFX34319TR0F9CB4F, требование 7). Не `INSERT`/`UPDATE`
+    порознь, как у `leases`: там раздельные ветки нужны только ради
+    различения «взято с нуля» (`lease.acquire` требование, из которого
+    `auto` решает, снимать ли за собой чужой lease); мьютекс merge живёт
+    ровно одну операцию окна, и это различие ему не нужно
+    (`orchestrator/merge_lock.py`)."""
+    target = task_target(conn, task_id)
+    for row in merge_lock_rows(conn):
+        if row["target"] == target:
+            conn.execute("DELETE FROM merge_locks WHERE rowid=?",
+                         (row["rowid"],))
     conn.execute(
         "INSERT INTO merge_locks (task_id, session_id, pid, hostname,"
         " heartbeat_ts) VALUES (?,?,?,?,?)",
@@ -1274,6 +1318,19 @@ def merge_queue_rows(conn) -> list:
     return conn.execute(
         "SELECT rowid, task_id, session_id, pid, hostname, enqueued_ts,"
         " heartbeat_ts FROM merge_queue ORDER BY enqueued_ts, rowid").fetchall()
+
+
+def project_merge_queue_rows(conn, target: str) -> list:
+    """Ожидающие мьютекса merge-окна проекта `target`, тем же порядком FIFO,
+    что `merge_queue_rows` (SPEC 01M57PM7NBFX34319TR0F9CB4F, требование 4):
+    записи других проектов в очередь проекта не входят."""
+    return conn.execute(
+        "SELECT q.rowid AS rowid, q.task_id, q.session_id, q.pid,"
+        " q.hostname, q.enqueued_ts, q.heartbeat_ts FROM merge_queue q"
+        " LEFT JOIN tasks t ON t.id = q.task_id"
+        " WHERE COALESCE(NULLIF(t.target, ''), ?) = ?"
+        " ORDER BY q.enqueued_ts, q.rowid",
+        (config.DEFAULT_TARGET, target)).fetchall()
 
 
 def enqueue_merge_wait(conn, task_id: str, session_id: str, pid: int,

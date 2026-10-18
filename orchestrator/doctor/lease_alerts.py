@@ -33,19 +33,19 @@ def _lease_alert_live(message: str, rows_by_task: dict) -> bool:
     return not doctor.liveness._pid_alive(row["pid"])
 
 
-def _merge_lock_alert_live(message: str, row) -> bool:
-    """SPEC T054, требование 2: условие живо, пока текущий держатель
-    мьютекса — то же (task_id, session_id), что в сообщении, и его
-    (актуальный) pid мёртв. Замок пуст, держатель сменился или pid ожил —
-    условие снято."""
+def _merge_lock_alert_live(message: str, rows) -> bool:
+    """SPEC T054, требование 2: условие живо, пока среди строк мьютекса
+    `rows` есть держатель с тем же (task_id, session_id), что в сообщении,
+    и его (актуальный) pid мёртв. Такой строки нет (замок снят, держатель
+    проекта сменился) или pid ожил — условие снято. Строки других
+    проектов (SPEC 01M57PM7NBFX34319TR0F9CB4F, требование 10) условие не
+    снимают: сверка идёт с каждой строкой, а не с первой."""
     match = doctor._MERGE_LOCK_ALERT_RE.match(message)
     if match is None:
         return True
-    if row is None:
-        return False
     task_id, session_id = match.group(1), match.group(2)
-    if row["task_id"] != task_id or row["session_id"] != session_id:
-        return False
-    return not doctor.liveness._pid_alive(row["pid"])
+    return any(row["task_id"] == task_id and row["session_id"] == session_id
+               and not doctor.liveness._pid_alive(row["pid"])
+               for row in rows)
 
 

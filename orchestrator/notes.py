@@ -265,7 +265,7 @@ def pending_notes() -> list[dict]:
 
 def _silence_window_reason() -> str | None:
     """Открытое «окно тишины» (требование 1, AC-1): живой держатель
-    мьютекса `merge_locks` (тот же признак живости, что
+    мьютекса `merge_locks` (любая из строк) (тот же признак живости, что
     `merge_lock._holder_is_dead`) ЛИБО хоть одна задача (`store.all_tasks`)
     в состоянии из `config.NOTE_SILENCE_WINDOW_STATES` — условие ИЛИ,
     любой из двух триггеров срабатывает независимо от другого (живой
@@ -278,8 +278,12 @@ def _silence_window_reason() -> str | None:
     триггер артели). Проект не определён (`_task_project` — `None`) —
     окно открыто с причиной «проект задачи не определён»."""
     conn = store.db()
-    lock_row = store.merge_lock_row(conn)
-    if lock_row is not None and not merge_lock._holder_is_dead(lock_row):
+    # Мьютекс держится по проекту (SPEC 01M57PM7NBFX34319TR0F9CB4F,
+    # требование 9): строк несколько, и держатель артели может стоять
+    # после держателя внешнего проекта — смотрятся все строки.
+    for lock_row in store.merge_lock_rows(conn):
+        if merge_lock._holder_is_dead(lock_row):
+            continue
         holder = (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "
                   f"задача {lock_row['task_id']})")
         # `task_exists` до `get_task`: тот завершает процесс на

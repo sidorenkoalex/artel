@@ -1,10 +1,13 @@
-"""Мьютекс merge-окна: один держатель на весь пульт (SPEC T053).
+"""Мьютекс merge-окна: один держатель на проект (SPEC T053; SPEC
+01M57PM7NBFX34319TR0F9CB4F — разделение по проекту задачи).
 
 Lease задачи (`lease.py`, T044) не защищает от гонки за main между двумя
 РАЗНЫМИ задачами: обе могут одновременно исполнять merge-окно, каждая
 удерживая lease только своей собственной задачи. Этот мьютекс — второй,
-отдельный замок с единственной строкой на весь пульт (не per-task, в
-отличие от `leases`): держит его ПРОЦЕСС — пара (session_id, pid), вне
+отдельный замок с единственной строкой на проект (не per-task, в
+отличие от `leases`; проект — `store.task_target` задачи строки: мержи
+разных проектов идут в разные репозитории и не ждут друг друга, SPEC
+01M57PM7NBFX34319TR0F9CB4F): держит его ПРОЦЕСС — пара (session_id, pid), вне
 зависимости от того, чью задачу он мержит (требование 2; SPEC
 01M2XFSE8G3MBRHHQR38H53J1M, требование 1: все процессы одной рабочей
 копии пульта несут один session_id (`session.resolve_session_id`), и
@@ -26,7 +29,7 @@ import os
 import socket
 import sys
 
-from . import config, liveness, store
+from . import config, liveness, session, store
 
 
 def _holder_is_dead(row) -> bool:
@@ -65,7 +68,8 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
-        row = store.merge_lock_row(conn)
+        row = store.project_merge_lock_row(conn,
+                                           store.task_target(conn, task_id))
         pid, hostname = os.getpid(), socket.gethostname()
         if row is None or _is_own_process(row, session_id, pid):
             store.set_merge_lock(conn, task_id, session_id, pid, hostname,
@@ -92,17 +96,22 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
             conn.rollback()
 
 
-def touch_heartbeat(conn) -> None:
-    """Продлевает `heartbeat_ts` ТЕКУЩЕГО держателя мьютекса, если строка
-    есть (SPEC 01M291EJMA995AZ61MEMDZKWRY, требование 3) — вызывать на
-    каждой итерации опроса CI внутри `_wait_for_branch_ci_green`, чтобы
-    долгое ожидание CI не роняло heartbeat ниже `LEASE_STALE_AFTER_SEC`
-    и не подставляло живого держателя под перехват `_holder_is_dead`.
+def touch_heartbeat(conn, task_id: str | None = None,
+                    session_id: str | None = None) -> None:
+    """Продлевает `heartbeat_ts` СВОЕЙ строки мьютекса (SPEC
+    01M291EJMA995AZ61MEMDZKWRY, требование 3) — вызывать на каждой
+    итерации опроса CI внутри `_wait_for_branch_ci_green`, чтобы долгое
+    ожидание CI не роняло heartbeat ниже `LEASE_STALE_AFTER_SEC` и не
+    подставляло живого держателя под перехват `_holder_is_dead`.
 
-    Не принимает `session_id`: таблица несёт не более одной строки на
-    весь пульт (требование 2), поэтому текущий держатель однозначен без
-    сверки. Строки нет (мьютекс не взят либо вызвано вне окна) —
-    молча ничего не делает.
+    «Своя» строка — строка проекта задачи `task_id` с той же задачей и
+    сессией `session_id` (по умолчанию — `session.resolve_session_id`):
+    строку держателя другого проекта и строку, перехваченную другой
+    задачей или сессией, продление не трогает (SPEC
+    01M57PM7NBFX34319TR0F9CB4F, требование 3). Прежняя форма без
+    `task_id` продлевает единственную строку, как до разделения; при
+    строках нескольких проектов — только строки сессии вызывающего
+    (ANSWER-2, ответ 2). Своей строки нет — молча ничего не делает.
 
     Чтение+запись обёрнуты `BEGIN IMMEDIATE`, тем же приёмом, что
     `acquire()` (см. модульный докстринг, ревью T044) — без этого
@@ -112,14 +121,28 @@ def touch_heartbeat(conn) -> None:
     REVIEW.md 01M291EJMA995AZ61MEMDZKWRY, итерация 1)."""
     conn.execute("BEGIN IMMEDIATE")
     try:
-        row = store.merge_lock_row(conn)
-        if row is None:
-            return
-        store.set_merge_lock(conn, row["task_id"], row["session_id"],
-                             row["pid"], row["hostname"], store.now())
+        rows = _own_rows(conn, task_id, session_id)
+        if rows:
+            store.touch_merge_lock_heartbeat(
+                conn, [row["rowid"] for row in rows], store.now())
     finally:
         if conn.in_transaction:
             conn.rollback()
+
+
+def _own_rows(conn, task_id: str | None, session_id: str | None) -> list:
+    """Строки, которые продлевает `touch_heartbeat` вызывающего."""
+    rows = store.merge_lock_rows(conn)
+    if task_id is None:
+        if len(rows) <= 1:
+            return rows
+        sid = session.resolve_session_id(session_id)
+        return [row for row in rows if row["session_id"] == sid]
+    sid = session.resolve_session_id(session_id)
+    target = store.task_target(conn, task_id)
+    return [row for row in rows
+            if row["target"] == target and row["task_id"] == task_id
+            and row["session_id"] == sid]
 
 
 def release(conn, session_id: str) -> None:
