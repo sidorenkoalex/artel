@@ -80,6 +80,7 @@ class Profile:
     # поле вне хэша (равенство его по-прежнему сравнивает).
     env: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), hash=False)
+    long_lived_imports: tuple = ()
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -93,7 +94,9 @@ class Profile:
                    full_suite_timeout_sec=values.get("full_suite_timeout_sec"),
                    runner=values.get("runner") or targets.PROFILE_RUNNER_DEFAULT,
                    workdir=values.get("workdir") or "",
-                   env=MappingProxyType(dict(values.get("env") or {})))
+                   env=MappingProxyType(dict(values.get("env") or {})),
+                   long_lived_imports=tuple(
+                       values.get("long_lived_imports") or ()))
 
     def in_weakening_scope(self, path: str | None) -> bool:
         return bool(path) and any(mask_matches(mask, path)
@@ -157,6 +160,16 @@ def decide(target: str) -> Decision:
             f"(ADR-0002)"))
     return Decision(target, skip=(f"у проекта «{target}» нет test_profile в "
                                   f"targets.yaml"))
+
+
+def long_lived_imports(target: str, profile: Profile | None):
+    """Правило импортов долгоживущих файлов проекта для
+    `guard.long_lived_errors_from_files(project_imports=…)` (SPEC
+    01M5633WZ3Y3A0P4KKBZDB3KER): `None` — артель, правило пульта; у
+    внешнего проекта — перечень его профиля, пустой без подполя."""
+    if repo_context.is_artel(target):
+        return None
+    return profile.long_lived_imports if profile is not None else ()
 
 
 def for_task(conn, task_id: str) -> Decision:
