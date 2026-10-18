@@ -1,15 +1,14 @@
 ## Выяснено
-- Возврат из spec_gate (О-1..О-3) закрыт: SPEC переписан, 8 AC, $25, guard ок.
-- О-1: `commit_success_checkpoint` (checkpoint.py:828-911, вызов `_commit_worktree_change` :895) — требование 1, AC-1 проверяет и аварийный WIP, и штатный путь.
-- О-2: `pult_commit_failed_paths` (:1669-1707, `_zone_paths` на :1694) — требование 2, AC-4.
-- О-3: `restore_out_of_bounds_deletions` (:532-590; для developer зоны `_zone_paths` :555, `_role_may_delete` :514) — требование 3, AC-5. Пункт «Не входит» про восстановление удалений снят.
-- `_commit_worktree_change` уже принимает `own_zones` (добавлено для test_author 01M551W0TF); гейт зон берёт профиль `project_profile.decide(target)` только при `not repo_context.is_artel(ctx)`.
+- Возврат №2 из spec_gate (решения 18.10 по аудиту: О-1 переименование, О-2 оба исхода decide + путь tests/, О-3 AC-2 для обоих путей).
+- О-2 противоречит коду и ТЗ: `_zone_paths` (checkpoint.py:1583) добавляет `config.COMMON_ZONES` к зонам ЛЮБОГО проекта, а в нём есть `tests/` (config.py:803). Значит, у внешнего проекта `tests/test_<id>_x.py` уже сегодня в зоне и коммитится. «Не коммитится» нарушило бы ТЗ п.1–2 и требования 5–6 SPEC. Аудит ошибся, назвав путь «вне зон».
+- Вывод: эскалация QUESTIONS.md, один вопрос (A — убрать путь, B — путь коммитится как сегодня (дефолт), C — исключить COMMON_ZONES у внешних проектов, нужна правка ТЗ). SPEC.md не трогала (это прежняя версия). Guard ок.
+- О-1 и О-3 вопросов не вызывают; после ответа их надо перенести в SPEC: AC на переименование `backend/tests/test_other.py` → `test_<id>_x.py` (удаление чужого не коммитится/восстанавливается, своё коммитится; `_stray_staged_paths` :1595 читает name-only без --no-renames), AC-2 — для обоих путей AC-1.
 
 ## Не сработало
-- `ls` в Bash недоступен (command not found) — каталог читается через Read.
+- ничего
 
 ## Где остановился
-- SPEC status: ready.
+- QUESTIONS.md status: ready, жду ANSWER.
 
 ## Чего не хватило
-- Перечня мест `checkpoint.py`, считающих зоны developer, — нашёлся grep по `_zone_paths`/`_commit_worktree_change(`.
+- Явного знания, что COMMON_ZONES в `_zone_paths` не зависят от проекта (checkpoint.py:1583): аудит из-за этого ошибся.
