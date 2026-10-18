@@ -152,6 +152,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import namedtuple
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
@@ -2296,6 +2297,47 @@ def _run_task_in_ephemeral_clone(
            normal_outcome, diag_dir)
 
 
+class _SignalDeferral:
+    """Откладывает SIGTERM, SIGHUP и SIGINT от создания до `release()`
+    (SPEC 01M583RM59DHDRDH877AERAVMD, требования 1-4, 8).
+
+    Не маска `pthread_sigmask` и не `SIG_IGN`: оба наследуются процессом
+    ведения через fork и exec, и SIGTERM снятия группы не снял бы его до
+    SIGKILL. Обработчик-функция Python при exec сбрасывается в действие по
+    умолчанию. Уже игнорируемый на входе сигнал не перехватывается — он и
+    так прогон не обрывает. Вне главного потока обработчик не ставится:
+    Python этого не позволяет, а сигнал туда и не доставляется.
+    """
+
+    SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+    def __init__(self):
+        self.previous = {}
+        self.pending = None
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for signum in self.SIGNALS:
+            handler = signal.getsignal(signum)
+            if handler in (signal.SIG_IGN, None):
+                continue
+            self.previous[signum] = handler
+            signal.signal(signum, self._defer)
+
+    def _defer(self, signum, _frame):
+        if self.pending is None:
+            self.pending = signum
+
+    def release(self) -> None:
+        """Возвращает прежние обработчики и поднимает отложенный сигнал ими
+        же — тем исключением, что дал бы сигнал во время ожидания."""
+        for signum, handler in self.previous.items():
+            signal.signal(signum, handler)
+        self.previous = {}
+        if self.pending is not None:
+            signum, self.pending = self.pending, None
+            signal.raise_signal(signum)
+
+
 def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
     """Запускает процесс ведения из клона `dest` и ждёт его не дольше
     `CANARY_DRIVE_TIMEOUT_SEC` (SPEC 01M3PKSWPETC49WFTFZ69GH3F2, требования
@@ -2329,13 +2371,23 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
            config.CANARY_SKIP_FULL_SUITE_ENV:
                "1" if config.CANARY_SKIP_FULL_SUITE else "0"}
     with open(log_path, "w", encoding="utf-8") as log:
+        # Сигнал между созданием процесса и `proc =` ушёл бы наверх мимо
+        # снятия группы ниже, оставив ведение сиротой удалённого клона
+        # (SPEC 01M583RM59DHDRDH877AERAVMD): он откладывается до места, где
+        # группа уже известна.
+        deferral = _SignalDeferral()
         try:
             proc = subprocess.Popen(argv, cwd=dest, stdin=subprocess.DEVNULL,
                                     stdout=log, stderr=subprocess.STDOUT,
                                     env=env, start_new_session=True)
         except OSError as exc:
+            deferral.release()
             return 127, f"canary: процесс клона не запущен: {exc}\n", result_path
+        except BaseException:
+            deferral.release()
+            raise
         try:
+            deferral.release()
             returncode = proc.wait(timeout=CANARY_DRIVE_TIMEOUT_SEC)
         except subprocess.TimeoutExpired:
             liveness.terminate_process_group(proc.pid)
