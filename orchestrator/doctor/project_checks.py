@@ -264,6 +264,11 @@ class _GhProbe:
         """403 не про права (лимит запросов и пр.) — отказ временный."""
         return self.http == 403 and not self.forbidden()
 
+    def denied(self) -> bool:
+        """Отказ правами: 403 «Resource not accessible …», 401, 404
+        (ANSWER-1 задачи 01M574A6YQHAPASS9716Z11G4Q)."""
+        return self.forbidden() or self.http in (401, 404)
+
 
 def _gh_probe(endpoint: str, key: str, env) -> _GhProbe:
     try:
@@ -296,7 +301,8 @@ def check_ci_token(check_name: str, name: str, entry: dict):
     требование 8). Без права Checks статус CI пульт берёт из Actions
     (`ci.checks_forbidden`) — это `warn`; иной отказ check-runs или
     недоступные Actions — `fail`: статус CI проекта пульт не узнает.
-    Временный отказ (сеть, 403 лимита) прав не определяет — `skip`."""
+    Временный отказ (сеть, 403 лимита, у Actions — всякий отказ не
+    правами) прав не определяет — `skip`."""
     base = entry.get("base", doctor.config.MAIN_BRANCH)
     pair = _owner_repo(str(entry.get("url", "")))
     if pair is None:
@@ -324,6 +330,12 @@ def check_ci_token(check_name: str, name: str, entry: dict):
             return doctor.Check(check_name, "skip",
                                 f"права токена на CI: не проверены — {what}: "
                                 f"временный отказ 403 ({probe.detail})")
+    # `fail` за Actions — только отказ правами; 5xx и неразобранный ответ
+    # прав не определяют (ANSWER-1 задачи 01M574A6YQHAPASS9716Z11G4Q).
+    if not actions.ok and not actions.denied():
+        return doctor.Check(check_name, "skip",
+                            f"права токена на CI: не проверены — Actions: "
+                            f"отказ не про права ({actions.detail})")
     if not actions.ok:
         return doctor.Check(check_name, "fail",
                             f"запуски Actions недоступны токену проекта "

@@ -66,12 +66,38 @@ class DoctorActionsThrottledTest(unittest.TestCase):
         лимит запросов на чтении Actions объявлялся бы «Actions
         недоступны» (`fail`).
         """
+        row = self.row(CHECKS_OK, RATE_LIMIT)
+        self.assertEqual(row.status, "skip", row.detail)
+
+    def test_both_rate_limited_is_skip(self):
+        """Оба эндпоинта ответили 403 лимита — `skip` (ANSWER-1).
+
+        Ловит мутацию: `_GhProbe.forbidden` признаёт отказом прав любой
+        403 — лимит запросов у обоих эндпоинтов давал бы `fail`.
+        """
+        row = self.row(RATE_LIMIT, RATE_LIMIT)
+        self.assertEqual(row.status, "skip", row.detail)
+
+    def test_actions_non_permission_refusal_is_skip(self):
+        """Actions 5xx или неразобранный ответ — `skip`; 401/404/403 прав — `fail` (ANSWER-1).
+
+        Ловит мутацию: любой отказ Actions объявляется «Actions недоступны»
+        (`fail`) — 502 у Actions давал бы `fail` вместо `skip`; либо отказ
+        правами 401 читается временным — `skip` вместо `fail`.
+        """
+        for actions in (completed("", 1, "gh: Bad Gateway (HTTP 502)\n"),
+                        completed("не json")):
+            self.assertEqual(self.row(CHECKS_OK, actions).status, "skip")
+        for actions in (completed("", 1, "gh: Bad credentials (HTTP 401)\n"),
+                        completed("", 1, "gh: Not Found (HTTP 404)\n"),
+                        completed("", 1, "gh: Resource not accessible by "
+                                         "personal access token (HTTP 403)\n")):
+            self.assertEqual(self.row(CHECKS_OK, actions).status, "fail")
+
+    @staticmethod
+    def row(checks, actions):
         def fake_run(cmd, **kwargs):
-            if "check-runs" in cmd[2]:
-                return completed(json.dumps({"total_count": 0,
-                                             "check_runs": []}))
-            return completed(json.dumps({"message": "API rate limit"}), 1,
-                             "gh: API rate limit exceeded (HTTP 403)\n")
+            return checks if "check-runs" in cmd[2] else actions
 
         doctor = project_checks.doctor
         with mock.patch.object(doctor.shutil, "which",
@@ -79,10 +105,14 @@ class DoctorActionsThrottledTest(unittest.TestCase):
                 mock.patch.object(doctor, "gh_env",
                                   lambda name, entry: (None, None)), \
                 mock.patch.object(doctor.subprocess, "run", fake_run):
-            row = project_checks.check_ci_token(
+            return project_checks.check_ci_token(
                 "project-ci-token-p", "p",
                 {"url": "https://localhost/o/p", "base": "main"})
-        self.assertEqual(row.status, "skip", row.detail)
+
+
+CHECKS_OK = completed(json.dumps({"total_count": 0, "check_runs": []}))
+RATE_LIMIT = completed(json.dumps({"message": "API rate limit"}), 1,
+                       "gh: API rate limit exceeded (HTTP 403)\n")
 
 
 if __name__ == "__main__":
