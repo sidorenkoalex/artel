@@ -70,8 +70,8 @@ from orchestrator import (acceptance, artel, catalog, checkpoint, config,
 from tests.sandbox import (ARTEL_TEST_PROFILE, FakeProc,
                            RealGitSandbox, _stub_check_stack,
                            capture, capture_new_task_id, is_claude_call,
-                           patch_pult_sleep,
-                           resilient_tmp_cleanup)
+                           patch_pult_sleep, PROJECT_URL,
+                           resilient_tmp_cleanup, route_url_to_bare)
 
 REPO = Path(__file__).resolve().parent.parent
 ARTEL = config.DEFAULT_TARGET
@@ -217,7 +217,11 @@ class ProjectAreaSandbox(RealGitSandbox):
         self.git("init", "-q", "--bare", "-b", config.MAIN_BRANCH, str(bare))
         self.git("-C", str(seed_repo), "push", "-q", str(bare),
                  f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
-        self.targets[name] = str(bare)
+        # Адрес записи — https-вида (`ci.gh` отказывает иному виду, SPEC
+        # 01M55V7WB94C9BZXTXTTH83YWV), git песочницы ходит по нему в `bare`.
+        url = PROJECT_URL.format(name=name)
+        route_url_to_bare(self, url, bare)
+        self.targets[name] = url
         self.write_targets()
         # `targets.yaml` в git главной копии: правка — коммитом, чтобы
         # `git status` главной копии оставался чистым до сценария.

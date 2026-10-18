@@ -28,8 +28,8 @@ from unittest import mock
 
 from orchestrator import (catalog, config, docs_fetch, doctor, review, store,
                           workspace)
-from tests.sandbox import (RealGitSandbox, capture, clone_artel_from_origin,
-                           make_project_repo)
+from tests.sandbox import (PROJECT_URL, RealGitSandbox, capture,
+                           clone_artel_from_origin, make_project_repo)
 
 ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 PASSPORT = "PASSPORT.md"
@@ -332,7 +332,7 @@ class FetchAllClonesTest(DocsRefSandbox):
         shutil.rmtree(self.ext_clone)
         text = config.TARGETS.read_text(encoding="utf-8")
         config.TARGETS.write_text(
-            text.replace(f"file:///nonexistent/{self.ext}", str(bare)),
+            text.replace(PROJECT_URL.format(name=self.ext), str(bare)),
             encoding="utf-8")
         self.assertFalse(self.ext_clone.exists())
         out, code = run_cmd(docs_fetch.cmd_docs, ["--fetch-all"])

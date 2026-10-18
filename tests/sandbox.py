@@ -1193,6 +1193,32 @@ def declare_target(target: str) -> None:
             name=target, base=config.MAIN_BRANCH), encoding="utf-8")
 
 
+# Адрес записи внешнего проекта песочницы: https-вида с владельцем и именем —
+# `ci.gh` выводит из него `GH_REPO` и отказывает адресу иного вида (SPEC
+# 01M55V7WB94C9BZXTXTTH83YWV, требование 1). Хост — localhost (инвариант 35);
+# git песочницы ходит не по нему, а в bare-репозиторий (`route_url_to_bare`
+# либо `origin` клона, заведённый путём).
+PROJECT_URL = "https://localhost/artel-tests/{name}"
+
+
+def route_url_to_bare(test: unittest.TestCase, url: str, bare: Path) -> None:
+    """git песочницы на время теста `test` ходит по `url` в `bare` —
+    правилом `url.<bare>.insteadOf <url>` в окружении процесса
+    (`GIT_CONFIG_COUNT`), без сети и без правки конфигурации git
+    Оператора."""
+    try:
+        count = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    except ValueError:
+        count = 0
+    patcher = mock.patch.dict(os.environ, {
+        f"GIT_CONFIG_KEY_{count}": f"url.{bare}.insteadOf",
+        f"GIT_CONFIG_VALUE_{count}": url,
+        "GIT_CONFIG_COUNT": str(count + 1),
+    })
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 def make_project_repo(target: str, origin: bool = True) -> Path:
     """Клон внешнего проекта `target` по адресу `repo_context`
     (`config.PROJECTS/<target>/repo`, ADR-0021 п.1, этап 2; до него —
@@ -1209,9 +1235,12 @@ def make_project_repo(target: str, origin: bool = True) -> Path:
     if f"\n  {target}:" not in "\n" + text:
         if "targets:" not in text:
             text = "targets:\n" + text
-        config.TARGETS.write_text(
-            text.rstrip("\n") + "\n" + _PROJECT_TARGET_ENTRY.format(
-                name=target, base=config.MAIN_BRANCH), encoding="utf-8")
+        entry = _PROJECT_TARGET_ENTRY.format(
+            name=target, base=config.MAIN_BRANCH).replace(
+            _ARTEL_PLACEHOLDER_URL.format(name=target),
+            PROJECT_URL.format(name=target))
+        config.TARGETS.write_text(text.rstrip("\n") + "\n" + entry,
+                                  encoding="utf-8")
     project = config.PROJECTS / target / "repo"
     project.mkdir(parents=True, exist_ok=True)
 
