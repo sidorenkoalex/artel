@@ -2,7 +2,7 @@
 task: 01M56TNTY7HEC85MC940KZR1ZJ
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -77,6 +77,12 @@ schema_version: 5
   (режим из `workdir`, без нормализации `workdir`, без сверки с областью,
   функции только из песочницы у внешнего, перевод без `workdir`) —
   каждая красит свой тест.
+- Тесты затронутых модулей зелёные: `tests/test_test_integrity_gate.py`
+  (51), `tests/test_test_integrity_helper_heirs.py`,
+  `tests/test_guard_helper_scope.py`, `tests/test_guard_assertion_changes.py`,
+  `tests/test_guard_test_ast.py`, `tests/test_guard_mutation_claim.py`,
+  `tests/test_01m4g8n9kbtvnnt7ygz59q5wbf_helper_assertions.py`,
+  `tests/test_01m55vdvvdvww2mtj01f88n5fm_weakening_mandate_scope.py` (72).
 - Карта регенерирована `python3 scripts/codebase_map.py`.
 
 ## Предложения системе
