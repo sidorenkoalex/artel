@@ -1,21 +1,15 @@
 # Записка analyst — 01M574A6YQHAPASS9716Z11G4Q
 
 ## Выяснено
-- Итерация 2 (возврат аудита 1 из 2): SPEC переписан, guard — ок, status: ready, 12 AC, budget 35 (класс ~45 — отмечено в «Оценке объёма»).
-- Закрытие отклонений аудита:
-  1. Разборщики note: verifying_is_red (ci.py:835; auto.py:485, ci_rerun.py:89, watch.py:219), red_status_sha (ci.py:848; ci_rerun.py:90), status_kind (ci.py:1014; fsm_merge_gate.py:363) — требование 5, AC-2/3/4/6.
-  2. Триггер = событие `pull_request` запуска Actions (основание: Draft-MR fsm_advance.py:356/:624 и CI_WAIT_WARNING project_checks.py:18), без чтения клона. Запуски других событий остаются в вердикте (красный — красный, идущий — идёт); зелёный требует ≥1 завершённого pull_request. Только push-зелёные без pull_request — как «нет запусков». failed_check_names — без фильтра события и ветки (паритет с check-runs ci.py:899) → вершина main (push) работает (AC-7).
-  3. Отбор по head_branch как _other_branch — требование 2, AC-5.
-  4. AC-4 фиксирует оба ответа gh run list (пусто → NONE, есть → RUNNING).
-  5. AC-9 называет 403 «API rate limit exceeded».
-  6. doctor: имя project-ci-token-<проект>, ROLE_SKIP в роли, NOT_APPLICABLE артели, gh_env-авторизация, нет gh/слот — skip, check-runs 401/404/5xx — fail.
-- Ссылки fsm_merge_gate исправлены на :591/:630 (охрана :583/:626).
+- Итерация 3 (возврат из spec_gate, решения Оператора 1–6 по аудиту визита 2): SPEC правлен, guard ок, status: ready, 12 AC, budget 35.
+- Куда легли решения: п.1 — треб. 2 (исход «неизвестен» = VERIFYING_NONE/RUNNING по образцу ci.py:754-758, выбор — в PLAN), треб. 5, AC-6 (+ auto не стопорится алертом AUTO_STOP_VERIFYING_RED, auto.py:485-489); п.2 — треб. 2, AC-2 (красный + идущий → красный); п.3 — треб. 2, 3, AC-3 (красный запуск без красных заданий → имя workflow); п.4 — треб. 8, AC-11 (401/неразобранный → fail, 403 rate limit → skip), AC-12 (отказ gh_env → skip); п.5 — `_inherited_from_main` снят из треб. 1, в «Контексте» — как любой вызов failed_check_names; п.6 — см. ниже.
+- п.6: на main 6019e421 `grep -n is_artel orchestrator/fsm_merge_gate.py` даёт строку охраны `if not repo_context.is_artel(ctx):` на :583 (и :626); :582 — закрытие докстринга. В SPEC указано `:582` по решению Оператора с оговоркой о фактической строке :583.
 
 ## Не сработало
-- `ls`/`cat` в Bash нет (command not found) — читать Read-инструментом.
+- `ls`/`cat` в Bash нет — читать Read-инструментом.
 
 ## Где остановился
-SPEC.md готов (ready), guard ок. Решения по п.6 (имя проверки, fail на 401/404/5xx) и бюджет — материал для правки Оператора на гейте.
+SPEC.md готов (ready), guard ок.
 
 ## Чего не хватило
-Карты потребителей текста note статуса CI — нашёл grep'ом по verifying_is_red|red_status_sha|status_kind.
+Аудит назвал :582 для охраны is_artel, код показывает :583 — пришлось сверять grep'ом по main.
