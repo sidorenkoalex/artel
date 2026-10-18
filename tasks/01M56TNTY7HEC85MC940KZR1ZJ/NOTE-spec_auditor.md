@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде подтвердились: test_integrity.py:631-650 (`_helper_callers`, grep по `tests/`), guard.py:1013-1019 (`_HelperScope._module`), :1087 (только sandbox), review.py:650-652, fsm_merge_gate.py:144-146, fsm.py:1053-1060, project_profile.py:78,95 (`workdir` по умолчанию ""), :140 decide, repo_context.py:154 is_artel.
-- Все три входа узла (`_test_integrity_gate`, `review_lines`, `merge_gate_escalates`) сходятся в `_evaluate(conn, task_id, …)` test_integrity.py:1074 — профиль можно читать там.
-- Существующий тест tests/test_guard_helper_scope.py:62 держит умолчание TestModules (функция чужого модуля tests/ — не помощник).
-- Вердикт: concerns (неоднозначность req1/req3 при пустом workdir; AC-1 без входа; относительный импорт; граница области модуля).
+- Визит 2 (spec_sha a99edcc6…): О1–О4 Оператора перенесены (треб. 2–5, AC-1..AC-4). Факты о коде подтверждены на HEAD 9d04674d.
+- Новое: AC-4 без нагрузки при неизменённом вызывающем тесте — файл вне области не входит в дифф узла (test_integrity.py:702-703), `weakened_helpers` его не видит (:749-752); мутацию «нет фильтра области в `_HelperScope.function`» ловит только изменённый вызывающий тест.
+- Требование 3 не задаёт исход узла при непрочитанном профиле в `_evaluate` (риск тихого режима артели).
+- Вердикт: concerns (О-A, О-B). guard на SPEC-AUDIT.md — ок.
 
 ## Не сработало
-- Составные bash-команды с `cd`/`;` требуют подтверждения — только одиночные grep/sed по абсолютным путям.
+- Bash с `$(…)`/составными командами отклоняется — только одиночные команды.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, guard прогнан.
+- SPEC-AUDIT.md написан, status: ready.
 
 ## Чего не хватило
 - Нет.
