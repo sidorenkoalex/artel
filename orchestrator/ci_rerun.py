@@ -219,9 +219,10 @@ def _stuck_rerun(conn, task_id: str, branch: str, note: str) -> str:
             conn, task_id,
             f"в статусе зависшего CI ветки {branch} не названо ни одного id "
             f"check-run — перезапускать нечего; статус: {note}")
+    project = _project_kwargs(task_id)
     run_ids = []
     for check_id in check_ids:
-        run_id, why = ci.check_run_workflow_run(check_id)
+        run_id, why = ci.check_run_workflow_run(check_id, **project)
         if not run_id:
             _ci_rerun_refuse(
                 conn, task_id,
@@ -229,8 +230,15 @@ def _stuck_rerun(conn, task_id: str, branch: str, note: str) -> str:
                 f"{why}")
         if run_id not in run_ids:
             run_ids.append(run_id)
-    return "; ".join(ci.trigger_rerun(branch, run_id=run_id)
+    return "; ".join(ci.trigger_rerun(branch, run_id=run_id, **project)
                      for run_id in run_ids)
+
+
+def _project_kwargs(task_id: str) -> dict:
+    """`repo=<клон проекта>` вызовов `ci` для задачи внешнего проекта; у
+    артели — {} и прежняя форма вызова, под которую написаны подмены
+    тестов пульта (SPEC 01M55V7WB94C9BZXTXTTH83YWV, требования 2-3, 5)."""
+    return ci._repo_kwargs(workspace.task_repo(task_id))
 
 
 def _red_rerun(conn, task_id: str, t, branch: str) -> str:
@@ -264,19 +272,23 @@ def _red_rerun(conn, task_id: str, t, branch: str) -> str:
     # любой из двух сторон — отказ, а не повтор (инвариант 19): иначе
     # первый же сбой `gh` возвращал бы систему к перезапуску, маскирующему
     # дефект главной ветки (урок 12.09, красная главная ветка 22-26.09).
-    branch_failed, why = ci.failed_check_names(head)
+    project = _project_kwargs(task_id)
+    branch_failed, why = ci.failed_check_names(head, **project)
     if branch_failed is None:
         _ci_rerun_refuse(
             conn, task_id,
             f"имена упавших заданий головы ветки {branch} не прочитаны: {why}")
-    main_sha = fsm._origin_main_sha(t["target"] or config.DEFAULT_TARGET)
+    # У внешнего проекта `git fetch` по его адресу идёт в его клоне, а не
+    # в главной копии пульта без токена (требование 5).
+    main_sha = fsm._origin_main_sha(t["target"] or config.DEFAULT_TARGET,
+                                    **project)
     if not main_sha:
         _ci_rerun_refuse(
             conn, task_id,
             f"вершина главной ветки не определена (голова origin/"
             f"{config.MAIN_BRANCH} не прочитана) — сверить красноту ветки "
             f"с главной веткой нечем, а неизвестный статус не зелёный")
-    main_failed, why = ci.failed_check_names(main_sha)
+    main_failed, why = ci.failed_check_names(main_sha, **project)
     if main_failed is None:
         _ci_rerun_refuse(
             conn, task_id,
@@ -295,4 +307,4 @@ def _red_rerun(conn, task_id: str, t, branch: str) -> str:
     # sha с предпочтением упавшего, `gh run rerun --failed`, ожидание
     # `gh run watch`. Ровно один вызов: цикла «до зелёного» здесь нет,
     # второй повтор — второе решение Оператора с новым основанием.
-    return ci.trigger_rerun(branch)
+    return ci.trigger_rerun(branch, **project)

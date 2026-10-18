@@ -58,17 +58,35 @@ def gh(*args: str, timeout: int | None = None,
     `token_slot` этой записи переменной `GH_TOKEN` своего окружения либо не
     запускается вовсе — отказ `gitcmd.hosting_token` возвращается текстом
     ошибки вызова (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 1-3, 7).
+
+    `gh api` флага `--repo` не принимает («unknown flag: --repo»): ему
+    репозиторий `repo` задаётся переменной `GH_REPO=<владелец>/<имя>`
+    окружения вызова — и у записи без `token_slot` тоже. Адрес, из
+    которого владельца и имя не разобрать (`_owner_and_name`), —
+    именованный отказ без запуска `gh` (SPEC 01M55V7WB94C9BZXTXTTH83YWV,
+    требование 1).
     """
     timeout_sec = config.GH_TIMEOUT_SEC if timeout is None else timeout
-    full_args = (*args, "--repo", repo) if repo else args
-    extra = {}
+    full_args = args
+    env_extra = {}
+    if repo and args[:1] == ("api",):
+        gh_repo = _owner_and_name(repo)
+        if gh_repo is None:
+            return subprocess.CompletedProcess(args, 1, "", (
+                f"адрес проекта {repo}: вид адреса не разобран — ждётся "
+                f"https://<хост>/<владелец>/<имя> или "
+                f"git@<хост>:<владелец>/<имя>; gh api не запущен"))
+        env_extra["GH_REPO"] = gh_repo
+    elif repo:
+        full_args = (*args, "--repo", repo)
     project = gitcmd.project_by_url(repo) if repo else None
     if project is not None:
         token, refusal = gitcmd.hosting_token(*project)
         if refusal is not None:
             return subprocess.CompletedProcess(args, 1, "", refusal)
         if token is not None:
-            extra["env"] = dict(os.environ, GH_TOKEN=token)
+            env_extra["GH_TOKEN"] = token
+    extra = {"env": dict(os.environ, **env_extra)} if env_extra else {}
     try:
         return subprocess.run(["gh", *full_args], cwd=config.ROOT,
                               capture_output=True, text=True,
@@ -78,6 +96,94 @@ def gh(*args: str, timeout: int | None = None,
             args, 1, "", f"gh молчал дольше {timeout_sec} с")
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
+
+
+# Два вида адреса проекта, из которых берутся владелец и имя для `GH_REPO`
+# (решение Оператора 18.10, К-3): https с необязательными `.git` и `/` в
+# конце и scp `git@<хост>:…` с необязательным `.git`. Сегмент — непустой и
+# без `/`: третий сегмент пути или пустой — не этот вид.
+_HTTPS_URL_RE = re.compile(
+    r"^https://[^/@\s]+/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
+_SCP_URL_RE = re.compile(r"^git@[^:/\s]+:([^/\s]+)/([^/\s]+?)(?:\.git)?$")
+
+
+def _owner_and_name(url: str) -> str | None:
+    """«<владелец>/<имя>» адреса проекта; `None` — вид адреса не разобран."""
+    for pattern in (_HTTPS_URL_RE, _SCP_URL_RE):
+        match = pattern.match(url.strip())
+        if match:
+            return f"{match.group(1)}/{match.group(2)}"
+    return None
+
+
+def _project_area_name(repo: Path) -> str | None:
+    """Имя каталога области проектов (`repo_context.projects_root()/<имя>/…`),
+    под которым лежит `repo`; `None` — путь не в области проектов. Сверка
+    — в абсолютном виде и с раскрытыми ссылками (временный каталог macOS
+    живёт под `/private`)."""
+    root = repo_context.projects_root()
+    for a, b in ((Path(os.path.abspath(repo)), Path(os.path.abspath(root))),
+                 (Path(repo).resolve(), Path(root).resolve())):
+        try:
+            parts = a.relative_to(b).parts
+        except ValueError:
+            continue
+        return parts[0] if parts else None
+    return None
+
+
+def _project_context(repo: Path | None) -> tuple["repo_context.RepoContext | None",
+                                                  str]:
+    """(контекст внешнего проекта клона `repo`, отказ) для адресации `gh`
+    (SPEC 01M55V7WB94C9BZXTXTTH83YWV, требование 1, К-4).
+
+    (None, "") — вызов артели: `None`, клон, который признак
+    `repo_context.is_artel` называет артелью, и любой путь вне области
+    внешнего проекта (главная копия `config.ROOT` у `pin-update`/`doctor`).
+    Путь в области проекта (`repo_context.clone_path(<имя>)` и глубже),
+    запись которого не разрешается, — (None, отказ): молчаливый вызов
+    артели спросил бы GitHub не о том репозитории (ответ Оператора, Н-4).
+    """
+    if repo is None or repo_context.is_artel(repo):
+        return None, ""
+    name = _project_area_name(repo)
+    if name is None or repo_context.is_artel(name):
+        return None, ""
+    ctx = repo_context.resolve(name)
+    if ctx is None:
+        # Путь — в конце: вызывающие обрезают текст `gh` до 200 знаков.
+        return None, (f"gh не запущен: "
+                      f"{repo_context.unresolved_reason(name)} (путь {repo})")
+    return ctx, ""
+
+
+def _project_kwargs(repo: Path | None) -> dict:
+    """`repo=` внутренних вызовов функций, адресующих `gh`: только для пути
+    внешнего проекта (в том числе неразрешённого — отказ назовёт вызов);
+    у артели — прежняя форма без `repo`, под которую написаны подмены
+    `lambda sha:` в тестах пульта (требование 2). В отличие от
+    `_repo_kwargs`, главная копия `config.ROOT` здесь — тоже артель."""
+    ctx, refusal = _project_context(repo)
+    return {"repo": repo} if ctx is not None or refusal else {}
+
+
+def _gh_at(repo: Path | None, *args: str, **kwargs) -> subprocess.CompletedProcess:
+    """`gh` с адресом проекта клона `repo` (`url` его записи); артель —
+    прежний вызов `gh(*args, **kwargs)`; отказ разрешения — ненулевой код
+    с текстом отказа, `gh` не запускается."""
+    ctx, refusal = _project_context(repo)
+    if refusal:
+        return subprocess.CompletedProcess(args, 1, "", refusal)
+    if ctx is not None:
+        kwargs["repo"] = ctx.remote
+    return gh(*args, **kwargs)
+
+
+def _project_url_kwargs(repo: Path | None) -> tuple[dict, str]:
+    """({"repo": <url проекта>} или {} у артели, отказ) — для функций,
+    чей `repo` — адрес форджа (`check_runs_page`, `run_list`)."""
+    ctx, refusal = _project_context(repo)
+    return ({"repo": ctx.remote} if ctx is not None else {}), refusal
 
 
 def _repo_kwargs(repo: Path | None) -> dict:
@@ -119,8 +225,9 @@ def check_runs_page(sha: str, page: int,
                     repo: str | None = None) -> tuple[dict | None, str]:
     """Одна страница проверок коммита; (None, причина) — ответа нет.
 
-    `repo` — адрес форджа (`gh --repo`, SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
-    AC-2), тот же смысл, что у `gh(repo=...)`. `repo=None` (по умолчанию)
+    `repo` — адрес форджа (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-2), тот же
+    смысл, что у `gh(repo=...)`: для `gh api` он становится `GH_REPO`
+    окружения вызова. `repo=None` (по умолчанию)
     не подставляется дальше как явная kwarg — байт-в-байт прежний вызов
     `gh(...)`, который существующие заглушки-моки этого модуля (сигнатура
     `(*args)`, без `**kwargs`) продолжают понимать."""
@@ -140,7 +247,7 @@ def check_runs_page(sha: str, page: int,
     return payload, ""
 
 
-def check_runs(sha: str) -> tuple[list | None, str]:
+def check_runs(sha: str, repo: Path | None = None) -> tuple[list | None, str]:
     """Все проверки коммита из GitHub API; (None, причина) — статуса нет.
 
     Ответ читается постранично и сверяется с `total_count` того же ответа:
@@ -162,11 +269,17 @@ def check_runs(sha: str) -> tuple[list | None, str]:
     добавление дедупликации по `id` потребовало бы такого же поля у всех
     существующих тестов модуля (`tests/test_ci_status.py`, хелпер `run()`),
     которые сейчас его не носят, — цена дороже гипотетического сценария.
+
+    `repo` — клон проекта, как у `head_sha` (SPEC 01M55V7WB94C9BZXTXTTH83YWV,
+    требование 3): проверки спрашиваются у репозитория его проекта.
     """
+    url_kwargs, refusal = _project_url_kwargs(repo)
+    if refusal:
+        return None, refusal
     runs: list = []
     total = None
     for page in range(1, config.CI_CHECKS_MAX_PAGES + 1):
-        payload, why = check_runs_page(sha, page)
+        payload, why = check_runs_page(sha, page, **url_kwargs)
         if payload is None:
             return None, why
         if page == 1:
@@ -368,20 +481,21 @@ def _url_run_id(check: dict) -> int | None:
     return None
 
 
-def _commit_workflow_runs(sha: str, checks: list) -> _RunIndex | None:
+def _commit_workflow_runs(sha: str, checks: list,
+                          repo: Path | None = None) -> _RunIndex | None:
     """Прогоны коммита для подписи его проверок; `None` — подписывать нечем.
 
     `None` и при сбое запроса (код `gh`, неразборный ответ), и когда ни
     один check-run не несёт связки с прогоном (`check_suite.id` или ссылки
     на прогон): сопоставлять тогда не с чем, а запрос был бы лишним. Исход
     статуса от этого не зависит — проверки подписываются «событие не
-    определено» (требование 3).
+    определено» (требование 3). `repo` — клон проекта, как у `check_runs`.
     """
     if not any(_check_suite_id(c) is not None or _url_run_id(c) is not None
                for c in checks):
         return None
-    res = gh("api", f"repos/{{owner}}/{{repo}}/actions/runs"
-                    f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
+    res = _gh_at(repo, "api", f"repos/{{owner}}/{{repo}}/actions/runs"
+                              f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
     if res.returncode != 0:
         return None
     try:
@@ -474,17 +588,33 @@ def _excluded_phrase(excluded: list, index: _RunIndex | None,
 def _inherited_from_main(failed: list, repo: Path | None) -> str:
     """Фраза «красный унаследован от main <sha>» по упавшим проверкам ветки,
     упавшим с тем же именем и на вершине main; "" — совпадений нет либо
-    вершину main или её проверки узнать не удалось (требование 4)."""
-    main_sha, _why = head_sha("main", **_repo_kwargs(repo))
+    вершину main или её проверки узнать не удалось (требование 4).
+
+    У внешнего проекта главная ветка — `base` его записи, вершина —
+    `origin/<base>` клона (локальную ветку push мержа не двигает), проверки
+    вершины — у репозитория проекта (SPEC 01M55V7WB94C9BZXTXTTH83YWV,
+    требование 4). У артели — прежняя локальная `main`."""
+    ctx, refusal = _project_context(repo)
+    if refusal:
+        return ""
+    if ctx is None:
+        main_name = "main"
+        main_sha, _why = head_sha("main", **_repo_kwargs(repo))
+    else:
+        main_name = ctx.base
+        res = gitcmd.in_repo(repo, "rev-parse", "--verify",
+                             f"refs/remotes/origin/{ctx.base}^{{commit}}")
+        main_sha = (res.stdout.strip()
+                    if res is not None and res.returncode == 0 else "")
     if not main_sha:
         return ""
-    main_failed, _why = failed_check_names(main_sha)
+    main_failed, _why = failed_check_names(main_sha, **_project_kwargs(repo))
     if not main_failed:
         return ""
     shared = sorted({str(c.get("name", "?")) for c in failed} & main_failed)
     if not shared:
         return ""
-    return (f"; красный унаследован от main {main_sha[:8]}: "
+    return (f"; красный унаследован от {main_name} {main_sha[:8]}: "
             f"{', '.join(shared)}")
 
 
@@ -613,8 +743,9 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
     if not sha:
         return VERIFYING_NONE, f"статус CI неизвестен: {why}"
     short = sha[:8]
+    project = _project_kwargs(repo)
 
-    runs, why = check_runs(sha)
+    runs, why = check_runs(sha, **project)
     if runs is None and _commit_not_found_in_origin(why):
         return VERIFYING_NONE, (
             f"{HEAD_NOT_IN_ORIGIN_NOTE} — GitHub не нашёл коммит {short} "
@@ -624,12 +755,12 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         first_source = (f"у коммита {short} нет ни одной проверки CI"
                         if runs is not None else
                         f"статус check-runs коммита {short} неизвестен ({why})")
-        return _no_checks_by_branch(branch, first_source, "")
+        return _no_checks_by_branch(branch, first_source, "", repo)
 
     # Индекс прогонов нужен на любом исходе: без него не отделить проверки
     # прогонов других веток (запроса нет, если связки с прогоном нет ни у
     # одной проверки).
-    index = _commit_workflow_runs(sha, runs)
+    index = _commit_workflow_runs(sha, runs, **project)
     runs, excluded = _branch_checks(runs, index, branch)
     foreign = _excluded_phrase(excluded, index, branch)
     if not runs:
@@ -637,7 +768,7 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         # пустой вердикт быть не может (требование 3).
         return _no_checks_by_branch(
             branch, f"у коммита {short} нет проверок прогонов ветки {branch}",
-            foreign)
+            foreign, repo)
 
     unfinished, reread = _unfinished_checks(runs)
     failed = [r for r in runs if r.get("conclusion") not in GREEN]
@@ -671,11 +802,14 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
         f"CI коммита {short} зелёный ({len(runs)} проверок){foreign}", reread)
 
 
-def _no_checks_by_branch(branch: str, first_source: str,
-                         foreign: str) -> tuple[str, str]:
+def _no_checks_by_branch(branch: str, first_source: str, foreign: str,
+                         repo: Path | None = None) -> tuple[str, str]:
     """Исход `verifying_status` без проверок ветки: `gh run list` по ветке
-    показывает запуск — «идут», иначе «проверок нет вовсе» (SPEC T079)."""
-    runs_by_branch, run_why = run_list(branch)
+    показывает запуск — «идут», иначе «проверок нет вовсе» (SPEC T079).
+    `repo` — клон проекта: `gh run list` идёт с `--repo <url>` проекта."""
+    url_kwargs, refusal = _project_url_kwargs(repo)
+    runs_by_branch, run_why = ((None, refusal) if refusal
+                               else run_list(branch, **url_kwargs))
     if runs_by_branch:
         return VERIFYING_RUNNING, (f"{first_source}, но `gh run list` "
                                    f"по ветке {branch} показывает "
@@ -729,7 +863,8 @@ def red_status_sha(note: str) -> str:
     return match.group(1) if match else ""
 
 
-def failed_check_names(sha: str) -> tuple[set[str] | None, str]:
+def failed_check_names(sha: str,
+                       repo: Path | None = None) -> tuple[set[str] | None, str]:
     """Имена ЗАВЕРШЁННЫХ не-зелёных check-run'ов коммита; (None, причина)
     — статус коммита неизвестен.
 
@@ -751,8 +886,10 @@ def failed_check_names(sha: str) -> tuple[set[str] | None, str]:
     «пересечения нет» было бы ложью в пользу повтора (инвариант 19 —
     неизвестный статус не зелёный). Та же трактовка, что у
     `branch_status` для того же обстоятельства.
+
+    `repo` — клон проекта коммита, как у `check_runs`.
     """
-    runs, why = check_runs(sha)
+    runs, why = check_runs(sha, **_project_kwargs(repo))
     short = sha[:8]
     if runs is None:
         return None, f"статус CI коммита {short} неизвестен: {why}"
@@ -779,7 +916,8 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     if not sha:
         return False, f"статус CI неизвестен: {why}"
 
-    runs, why = check_runs(sha)
+    project = _project_kwargs(repo)
+    runs, why = check_runs(sha, **project)
     short = sha[:8]
     if runs is None:
         return False, f"статус CI коммита {short} неизвестен: {why}"
@@ -787,7 +925,7 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
         return False, (f"у коммита {short} нет ни одной проверки CI — "
                        f"статус неизвестен")
 
-    index = _commit_workflow_runs(sha, runs)
+    index = _commit_workflow_runs(sha, runs, **project)
     runs, excluded = _branch_checks(runs, index, branch)
     foreign = _excluded_phrase(excluded, index, branch)
     if not runs:
@@ -971,8 +1109,8 @@ def _verdict_of_runs(runs: list) -> tuple[str, str] | None:
     return MAIN_GREEN, ""
 
 
-def _main_line_runs(failed: list, running: list,
-                    runs_at: dict) -> tuple[dict, str]:
+def _main_line_runs(failed: list, running: list, runs_at: dict,
+                    repo: Path | None = None) -> tuple[dict, str]:
     """(Подписи «событие, прогон» по (проверка, коммит), фраза о
     расхождении исхода по событиям) для упавших и идущих проверок линии
     (SPEC 01M46D5ZZQY7GBEW5TBVQ0P3ZV, AC-4/AC-6).
@@ -981,7 +1119,9 @@ def _main_line_runs(failed: list, running: list,
     идёт, а не у опорного: глубже головы у неё свой прогон."""
     commits = list(dict.fromkeys([c for _n, _c, c in failed]
                                  + [c for _n, c in running]))
-    indexes = {c: _commit_workflow_runs(c, runs_at[c]) for c in commits}
+    project = _project_kwargs(repo)
+    indexes = {c: _commit_workflow_runs(c, runs_at[c], **project)
+               for c in commits}
 
     def label(name: str, commit: str, selected) -> str:
         checks = [r for r in runs_at[commit]
@@ -1049,7 +1189,9 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
 
     `repo` (ADR-0021 п.1-2) — клон, в котором читается первая
     родительская линия и дифф пропущенных проверок; `None` (по умолчанию)
-    — клон артели, тем же приёмом, что у `head_sha`.
+    — клон артели, тем же приёмом, что у `head_sha`. Клон внешнего проекта
+    — ещё и адрес `gh` (`check_runs`, прогоны коммитов); главная копия
+    `config.ROOT` — вызов артели.
     """
     line = (first_parent_line(sha, MAIN_LINE_MAX_COMMITS, **_repo_kwargs(repo))
             or [sha])
@@ -1066,8 +1208,9 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
     # Check-run'ы пройденных коммитов — для подписи упавших и идущих
     # проверок прогоном их коммита после обхода.
     runs_at: dict[str, list] = {}
+    project = _project_kwargs(repo)
     for commit in line:
-        runs, reason = check_runs(commit)
+        runs, reason = check_runs(commit, **project)
         if runs is None and pending is None \
                 and _commit_not_found_in_origin(reason):
             # Сразу после push GitHub ещё не знает голову — CI не начался,
@@ -1127,13 +1270,13 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
         red_since = max((c for _n, _c, c in failed), key=line.index)
     elif not kind:
         kind = MAIN_RUNNING if running else MAIN_GREEN
-    labels, divergence = _main_line_runs(failed, running, runs_at)
+    labels, divergence = _main_line_runs(failed, running, runs_at, repo)
     note = _main_line_note(kind, ref, failed, running, red_since, why,
                            green_count, labels, divergence)
     return MainLineStatus(kind, ref, failed, running, red_since, note)
 
 
-def find_run_id(sha: str) -> tuple[str, str]:
+def find_run_id(sha: str, repo: Path | None = None) -> tuple[str, str]:
     """Id workflow-прогона головного коммита; ("", причина) — не найден.
 
     `gh run rerun` адресуется по id прогона (workflow run), не по sha
@@ -1158,9 +1301,11 @@ def find_run_id(sha: str) -> tuple[str, str]:
     Ни одного такого не нашлось (гонка API, неполный ответ) — деградация
     на прежнее поведение (самый свежий прогон вообще): ре-ран должен хоть
     на что-то нацелиться, а не отказывать совсем.
+
+    `repo` — клон проекта коммита, как у `check_runs`.
     """
-    res = gh("api", f"repos/{{owner}}/{{repo}}/actions/runs"
-                    f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
+    res = _gh_at(repo, "api", f"repos/{{owner}}/{{repo}}/actions/runs"
+                              f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
     if res.returncode != 0:
         detail = (res.stderr or res.stdout).strip()[:200]
         return "", f"gh не ответил: {detail or f'код {res.returncode}'}"
@@ -1178,7 +1323,7 @@ def find_run_id(sha: str) -> tuple[str, str]:
     # набора действительно шло: порядок выдачи не доказывает исполнение.
     executed_runs: set[int] = set()
     if len(failed) > 1:
-        checks, _ = check_runs(sha)
+        checks, _ = check_runs(sha, **_project_kwargs(repo))
         if checks is not None:
             index = _RunIndex({}, {})
             for item in runs:
@@ -1208,7 +1353,8 @@ def find_run_id(sha: str) -> tuple[str, str]:
     return str(run_id), ""
 
 
-def check_run_workflow_run(check_id: str) -> tuple[str, str]:
+def check_run_workflow_run(check_id: str,
+                           repo: Path | None = None) -> tuple[str, str]:
     """Id workflow-прогона, которому принадлежит check-run; ("", причина) —
     не найден (SPEC 01M3Y75C9TY76083CG1PK00EM4, требование 3).
 
@@ -1217,8 +1363,10 @@ def check_run_workflow_run(check_id: str) -> tuple[str, str]:
     здесь не годится: у коммита два прогона (push и pull_request), и в
     инциденте 02.10 оба были `completed/success`, а зависшая проверка
     принадлежала только одному из них.
+
+    `repo` — клон проекта задачи, как у `check_runs`.
     """
-    res = gh("api", f"repos/{{owner}}/{{repo}}/actions/jobs/{check_id}")
+    res = _gh_at(repo, "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{check_id}")
     if res.returncode != 0:
         detail = (res.stderr or res.stdout).strip()[:200]
         return "", f"gh не ответил: {detail or f'код {res.returncode}'}"
@@ -1232,7 +1380,8 @@ def check_run_workflow_run(check_id: str) -> tuple[str, str]:
     return str(run_id), ""
 
 
-def trigger_rerun(branch: str, run_id: str = "") -> str:
+def trigger_rerun(branch: str, run_id: str = "",
+                  repo: Path | None = None) -> str:
     """Настоящий повторный прогон CI головного коммита ветки (SPEC T082,
     требование 7): `gh run rerun <id> --failed` реально запускает упавшие
     job'ы заново (не то же самое, что повторное чтение уже завершённого
@@ -1249,23 +1398,26 @@ def trigger_rerun(branch: str, run_id: str = "") -> str:
     не бросает исключение — гейт не имеет права зависнуть на детекте
     флейка. Причина возвращается для журнала; повторный `branch_status`
     следом честно увидит тот же красный статус, если триггер не удался.
+
+    `repo` — клон проекта задачи: голова ветки читается в нём, поиск
+    прогона и сам повтор адресованы репозиторию его проекта.
     """
     if run_id:
-        rerun = gh("run", "rerun", run_id)
+        rerun = _gh_at(repo, "run", "rerun", run_id)
     else:
-        sha, why = head_sha(branch)
+        sha, why = head_sha(branch, **_repo_kwargs(repo))
         if not sha:
             return f"ре-ран CI не запущен: {why}"
-        run_id, why = find_run_id(sha)
+        run_id, why = find_run_id(sha, **_project_kwargs(repo))
         if not run_id:
             return f"ре-ран CI не запущен: {why}"
-        rerun = gh("run", "rerun", run_id, "--failed")
+        rerun = _gh_at(repo, "run", "rerun", run_id, "--failed")
     if rerun.returncode != 0:
         detail = (rerun.stderr or rerun.stdout).strip()[:200]
         return (f"ре-ран прогона {run_id} не запущен: "
                f"{detail or f'код {rerun.returncode}'}")
-    watch = gh("run", "watch", run_id, "--exit-status",
-              timeout=config.CI_RERUN_WAIT_SEC)
+    watch = _gh_at(repo, "run", "watch", run_id, "--exit-status",
+                   timeout=config.CI_RERUN_WAIT_SEC)
     detail = (watch.stderr or watch.stdout).strip()[:200]
     return (f"ре-ран прогона {run_id} запущен, ожидание завершения: "
            f"{detail or 'gh run watch завершился'}")
