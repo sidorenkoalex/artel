@@ -57,10 +57,18 @@ scratch-worktree в клоне своего проекта, рабочее де�
    только «свою» строку мьютекса — строку того же проекта, той же задачи и
    той же сессии, что у вызывающего (решение О-4). Строку держателя другого
    проекта оно не меняет. Строку своего проекта, перехваченную другой
-   сессией, оно не продлевает. Это правило действует во всех трёх вызовах в
-   `orchestrator/fsm_merge_gate.py`: `:355` (опрос CI в
-   `_wait_for_branch_ci_green`), `:631` и `:1474` (повтор после сдвига main
-   в `_cmd_approve_merge_gate_cycle`) (решение О-5).
+   сессией, оно не продлевает. Сигнатура —
+   `touch_heartbeat(conn, task_id=None, session_id=None)`: проект строки
+   определяется по `task_id` (требование 13). Все три вызова в
+   `orchestrator/fsm_merge_gate.py` передают `task_id` задачи и сессию
+   (`session.resolve_session_id`): `:355` (опрос CI в
+   `_wait_for_branch_ci_green`, `:324`), `:631` (ожидание CI main в
+   `_await_main_ci`, `:613-631`) и `:1474` (повтор после сдвига main)
+   (решения О-5 и визита 2 гейта SPEC). Прежняя форма вызова
+   `touch_heartbeat(conn)` (без `task_id` и `session_id`) допустима и ведёт
+   себя как сейчас. Сигнатуры `_wait_for_branch_ci_green` и `_await_main_ci`
+   не меняются: `tests/test_merge_gate_ci_wait.py:91-92` и
+   `tests/test_main_ci_line.py:318-321` работают без изменений.
 4. Очередь мержа разделена по проекту. Голова очереди для задачи проекта P —
    первая по времени входа (FIFO) запись проекта P. Записи других проектов
    не задерживают её вход в мерж. Внутри проекта порядок очереди прежний
@@ -98,13 +106,21 @@ scratch-worktree в клоне своего проекта, рабочее де�
     держатель того же проекта сменился, pid ожил) сохраняются (решение О-3).
 11. Диффом задачи не изменяются `tests/test_merge_lock.py`,
     `tests/test_notes.py`,
-    `tests/test_01m563947r26nzw2tjekm36qrd_note_window_project.py` и
-    `tests/test_merge_queue.py`; после правки они зелёные (решения О-1,
-    О-2).
+    `tests/test_01m563947r26nzw2tjekm36qrd_note_window_project.py`,
+    `tests/test_merge_queue.py`, `tests/test_doctor.py`,
+    `tests/test_merge_gate_ci_wait.py` и `tests/test_main_ci_line.py`; после
+    правки они зелёные (решения О-1, О-2 и визита 2 гейта SPEC).
 12. Тесты задачи детерминированы и работают без сети. Две задачи разных
     проектов (артель и учебный внешний) входят в мерж одновременно, и ни одна
     не ждёт другую. Две задачи одного проекта сохраняют прежнее взаимное
     исключение и порядок.
+13. Проект задачи для мьютекса, очереди и продления heartbeat
+    нормализуется так же, как в `store.task_target`
+    (`orchestrator/store.py:701-707`): пустой `target`, `NULL` или
+    отсутствие строки задачи в `tasks` — это `config.DEFAULT_TARGET`
+    (артель). Взаимное исключение внутри артели для таких задач не
+    снимается: задача с пустым или `NULL` `target` и задача без строки в
+    `tasks` исключают друг друга и задачу артели с явным `target`.
 
 ## Критерии приёмки
 
@@ -137,9 +153,11 @@ AC-6. Держат два проекта. `merge_lock.touch_heartbeat`, вызв
 держателем проекта A, обновляет `heartbeat_ts` строки A, а `heartbeat_ts`
 строки держателя проекта B остаётся прежним.
 
-AC-7. Строку мьютекса проекта A перехватила другая сессия (другая задача
-или другой session_id). `merge_lock.touch_heartbeat`, вызванный прежним
-держателем (его проект, задача и сессия), не меняет `heartbeat_ts`, задачу,
+AC-7. Строку мьютекса проекта A перехватил новый держатель. Проверяются оба
+варианта: (а) новый держатель — другая задача проекта A; (б) новый
+держатель — та же задача с другим session_id. В каждом варианте
+`merge_lock.touch_heartbeat(conn, task_id, session_id)`, вызванный с
+задачей и сессией прежнего держателя, не меняет `heartbeat_ts`, задачу,
 session_id и pid строки нового держателя.
 
 AC-8. Очередь мержа проекта P при записях нескольких проектов. Голова
@@ -183,7 +201,19 @@ AC-14. В `merge_locks` строка мёртвого держателя (это
 AC-15. Дифф ветки задачи против main не содержит изменений файлов
 `tests/test_merge_lock.py`, `tests/test_notes.py`,
 `tests/test_01m563947r26nzw2tjekm36qrd_note_window_project.py`,
-`tests/test_merge_queue.py`.
+`tests/test_merge_queue.py`, `tests/test_doctor.py`,
+`tests/test_merge_gate_ci_wait.py`, `tests/test_main_ci_line.py`.
+
+AC-16. Задача артели с явным `target` держит живой мьютекс. `acquire`
+другим процессом задачи с пустым `target`, задачи с `NULL` `target` и
+задачи, которой нет в `tasks`, — каждой — возвращает отказ «merge-окно
+занято …» и не меняет строку держателя. Симметрично: живой держатель —
+задача с пустым или `NULL` `target`, `acquire` задачи артели с явным
+`target` получает отказ.
+
+AC-17. При одном держателе вызов `merge_lock.touch_heartbeat(conn)` без
+`task_id` и `session_id` обновляет `heartbeat_ts` этой строки, как до
+правки; без строки мьютекса — ничего не меняет и не падает.
 
 ## Матрица неослабления
 
@@ -191,18 +221,19 @@ AC-15. Дифф ветки задачи против main не содержит 
 |---|---|---|---|---|
 | `orchestrator/store.py` `set_merge_lock`/`merge_lock_row`: строка мьютекса по проекту | взаимное исключение мержа внутри пульта — `orchestrator/merge_lock.py:56-93` под `BEGIN IMMEDIATE` | остаётся внутри проекта; между проектами снимается намеренно (ТЗ) | `tests/test_merge_lock.py` без изменений (требование 11) + новые тесты задачи (AC-1, AC-3, AC-4, AC-11) | ок при условии: `tests/test_merge_lock.py` не меняется и зелёный (решение О-1) |
 | `orchestrator/notes.py` `_silence_window_reason`: все строки мьютекса вместо одной | окно тишины по держателю артели — `orchestrator/notes.py:281-294` | остаётся и при двух держателях | `tests/test_01m563947r26nzw2tjekm36qrd_note_window_project.py`, `tests/test_notes.py` без изменений (требование 11) + новый тест (AC-13) | ок при условии: оба файла не меняются и зелёные (решение О-1) |
-| `orchestrator/doctor/leases.py` `check_merge_lock` и `orchestrator/doctor/lease_alerts.py` `_merge_lock_alert_live`: проверка и автоподтверждение по каждой строке | doctor видит мёртвого держателя мьютекса и не закрывает его инцидент, пока держатель мёртв — `orchestrator/doctor/leases.py:162-194`, `orchestrator/doctor/lease_alerts.py:36-49` | остаётся и при строках нескольких проектов (требование 10) | `tests/test_doctor.py` `MergeLockCheckTest` (один проект) + новый тест (AC-14) | ок (решение О-3) |
+| `orchestrator/doctor/leases.py` `check_merge_lock` и `orchestrator/doctor/lease_alerts.py` `_merge_lock_alert_live`: проверка и автоподтверждение по каждой строке | doctor видит мёртвого держателя мьютекса и не закрывает его инцидент, пока держатель мёртв — `orchestrator/doctor/leases.py:162-194`, `orchestrator/doctor/lease_alerts.py:36-49` | остаётся и при строках нескольких проектов (требование 10) | `tests/test_doctor.py` `MergeLockCheckTest` (один проект) без изменений (требование 11) + новый тест (AC-14) | ок при условии: `tests/test_doctor.py` не меняется и зелёный (решения О-3 и визита 2) |
 | `orchestrator/merge_queue.py` `_head_task_id`/`wait_for_window`: FIFO очереди по проекту | порядок входа в мерж FIFO по всей очереди пульта — `orchestrator/merge_queue.py:41-45` | внутри проекта остаётся прежним; между проектами FIFO снимается намеренно (ТЗ, требование 1) | `tests/test_merge_queue.py` без изменений (требование 11) + новые тесты (AC-8, AC-9, AC-12) | ок при условии: `tests/test_merge_queue.py` не меняется и зелёный, помощники зовутся с одним `conn` (решение О-2) |
-| `orchestrator/merge_lock.py` `touch_heartbeat`: продление только своей строки | долгое ожидание CI не роняет heartbeat живого держателя; продление после перехвата не воскрешает вытесненного — `orchestrator/merge_lock.py:95-122` | остаётся; сверка «своей» строки — по проекту, задаче и сессии (требование 3) | новые тесты (AC-6, AC-7) | ок (решения О-4, О-5) |
+| `orchestrator/merge_lock.py` `touch_heartbeat`: продление только своей строки | долгое ожидание CI не роняет heartbeat живого держателя; продление после перехвата не воскрешает вытесненного — `orchestrator/merge_lock.py:95-122` | остаётся; сверка «своей» строки — по проекту, задаче и сессии (требование 3); прежняя форма `touch_heartbeat(conn)` ведёт себя как сейчас | новые тесты (AC-6, AC-7, AC-17); `tests/test_merge_gate_ci_wait.py`, `tests/test_main_ci_line.py` без изменений (требование 11) | ок (решения О-4, О-5 и визита 2) |
+| нормализация проекта задачи (требование 13) | взаимное исключение мержа между всеми задачами артели, в том числе с пустым/`NULL` `target` и без строки в `tasks` — `orchestrator/merge_lock.py:56-93` (одна строка на пульт) | остаётся: такие задачи — проект `config.DEFAULT_TARGET`, как `orchestrator/store.py:701-707` | новый тест (AC-16) | ок (решение визита 2) |
 
 ## Оценка объёма и деление
 Сработавшие сигналы: 7 файлов кода в зоне (`merge_lock.py`,
 `merge_queue.py`, `fsm_merge_gate.py`, `store.py`, `notes.py`,
-`doctor/leases.py`, `doctor/lease_alerts.py`) плюс `tests/`; 15 критериев
+`doctor/leases.py`, `doctor/lease_alerts.py`) плюс `tests/`; 17 критериев
 приёмки (≥ 10); `budget_usd` $45 (≥ $30, бюджет поднят Оператором в
-ANSWER-1, ответ 4). Калибровка (8 и более позиций зоны) ориентирует на
-~$85; потолок $45 оставлен по решению Оператора, поднять его вправе только
-Оператор.
+ANSWER-1, ответ 4). Калибровка (больше 15 критериев, 8 позиций зоны)
+ориентирует на ~$85; потолок $45 оставлен по решению Оператора, поднять
+его вправе только Оператор.
 
 Обоснование монолита (ANSWER-1, ответ 4: «монолит с обоснованием»):
 - Разделение мьютекса по проекту в `merge_lock.py`/`merge_queue.py` не
@@ -243,13 +274,21 @@ ANSWER-1, ответ 4). Калибровка (8 и более позиций з
 
 ## Материалы
 - `tasks/01M57PM7NBFX34319TR0F9CB4F/TZ.md`, `ANSWER-1.md` (ответы и
-  матрица неослабления Оператора), решения Оператора на гейте SPEC О-1…О-5.
+  матрица неослабления Оператора), решения Оператора на гейте SPEC О-1…О-5
+  и решения визита 2 (сигнатура `touch_heartbeat`, оба варианта AC-7,
+  нормализация проекта, неизменность `tests/test_doctor.py`, атрибуция
+  `:631`).
 - `orchestrator/store.py:1232-1316` — функции `merge_locks`/`merge_queue`;
   `orchestrator/schema.py:148-157` — таблицы без ключа, несколько строк
   допустимы без смены схемы; `store.task_target` (`orchestrator/store.py:701`)
   — проект задачи по `task_id`.
-- `orchestrator/fsm_merge_gate.py:355`, `:631`, `:1474` — вызовы
-  `touch_heartbeat`; `:1456-1458` — `acquire`, затем `wait_for_window`.
+- `orchestrator/fsm_merge_gate.py` — вызовы `touch_heartbeat`: `:355`
+  (`_wait_for_branch_ci_green`, `:324`), `:631` (`_await_main_ci`,
+  `:613-631`), `:1474` (повтор после сдвига main); `:1456-1458` —
+  `acquire`, затем `wait_for_window`.
+- `tests/test_merge_gate_ci_wait.py:91-92`, `tests/test_main_ci_line.py:318-321`
+  — вызовы `_wait_for_branch_ci_green`/`_await_main_ci` прежней формы и мок
+  `touch_heartbeat`.
 - `tests/test_merge_queue.py:77-160,210` — вызовы `_head_task_id`,
   `_current_holder_id`, `_current_holder_label` с одним `conn`.
 - `tests/test_doctor.py:1362-1477` — `MergeLockCheckTest` (один проект).
