@@ -144,13 +144,56 @@ def _tree_files(code_branch: str | None,
     return gitcmd.ls_tree_files(code_branch, ".", repo=repo)
 
 
+def _task_decision(conn, task_id: str | None):
+    """Решение профиля тестов проекта задачи (`project_profile.for_task`) —
+    то же, на котором гейт неослабления берёт свою область; `None` — задача
+    не передана (так зовут узел юнит-тесты), действует область артели
+    (SPEC 01M55VDVVDVWW2MTJ01F88N5FM, требования 1-2)."""
+    if conn is None or not task_id:
+        return None
+    # Ленивый импорт: `project_profile` тянет `repo_context`/`targets`,
+    # которые этому узлу разбора без задачи не нужны.
+    from .. import project_profile
+    return project_profile.for_task(conn, task_id)
+
+
+def _weakening_scope_refusal(path: str, decision) -> str | None:
+    """Причина отказа пути элемента мандата ослабления по области гейта;
+    `None` — путь в области.
+
+    Решение профиля — отказ или пропуск — гейт неослабления на нём мандат
+    не засчитает ни при каком пути (отказ перехода либо гейт не
+    выполняется), поэтому отказ элементу несёт причину решения, а не текст
+    об области, ложно указывающий на ошибку пути."""
+    if decision is None:
+        if in_weakening_scope(path):
+            return None
+        return ("путь вне области tests/**/*.py — гейт неослабления "
+                "тестов другие пути не рассматривает")
+    if decision.refusal:
+        return (f"гейт неослабления тестов мандат не засчитает — решение "
+                f"профиля тестов проекта: отказ: {decision.refusal}")
+    if decision.profile is None:
+        return (f"гейт неослабления тестов у проекта не выполняется, "
+                f"засчитывать мандат нечему — решение профиля тестов "
+                f"проекта: пропуск: {decision.skip}")
+    if decision.profile.in_weakening_scope(path):
+        return None
+    scope = ", ".join(decision.profile.weakening_scope)
+    return (f"путь вне области {scope} — гейт неослабления тестов другие "
+            f"пути не рассматривает")
+
+
 def _element_refusal(element: str, marker: str,
-                     files: list[str] | None) -> str | None:
+                     files: list[str] | None, decision=None) -> str | None:
     """Причина, по которой элемент мандата не годен; `None` — годен.
 
     Порядок — порядок подпунктов требования 2: сначала общее правило 2а
     (пробел, непохожесть на путь), затем правило своего маркера — 2б для
     мандата зон, 2в для мандата ослабления.
+
+    `decision` — решение профиля задачи (`_task_decision`), область мандата
+    ослабления; `None` — область артели.
     """
     if any(ch.isspace() for ch in element):
         return ("элемент содержит пробел — пояснение пишется отдельным "
@@ -160,9 +203,9 @@ def _element_refusal(element: str, marker: str,
         path, sep, name = element.partition(guard.TEST_NAME_SEP)
         if not _looks_like_path(path):
             return "не похож на путь репозитория"
-        if not in_weakening_scope(path):
-            return ("путь вне области tests/**/*.py — гейт неослабления "
-                    "тестов другие пути не рассматривает")
+        scope_refusal = _weakening_scope_refusal(path, decision)
+        if scope_refusal is not None:
+            return scope_refusal
         if sep and not _qualified_name_ok(name):
             return f"нарушена форма «путь{guard.TEST_NAME_SEP}имя»"
         # Существование пути тут не проверяется СОЗНАТЕЛЬНО (требование 2б
@@ -202,12 +245,19 @@ def refusals(text: str, code_branch: str | None,
     `conn`/`task_id` — БД и задача ответа: строку «Зависимости мержа: …»
     (SPEC 01M44EP0D47F498TEE08MNGBYT, требование 3) проверяют правила
     гейта SPEC по БД (`merge_after.value_refusals`); без них — только
-    форма элементов.
+    форма элементов. Они же задают область мандата ослабления — профиль
+    проекта задачи (`_task_decision`); без них — область артели.
     """
     # Ленивый импорт: `merge_after` сам импортирует этот модуль ради
     # маркера.
     from .. import merge_after
     files = _tree_files(code_branch, repo)
+    # Решение профиля — только при строке мандата ослабления: ответу без
+    # неё `targets.yaml` не нужен, и его сбой такому ответу не отказывает.
+    decision = None
+    if any(elements(line, TEST_WEAKENING_MANDATE_MARKER)
+           for line in text.splitlines()):
+        decision = _task_decision(conn, task_id)
     found: list[str] = []
     for line in text.splitlines():
         for marker in MANDATE_MARKERS:
@@ -224,7 +274,7 @@ def refusals(text: str, code_branch: str | None,
                              merge_after.value_refusals(conn, task_id, parsed))
                 break
             for element in parsed:
-                reason = _element_refusal(element, marker, files)
+                reason = _element_refusal(element, marker, files, decision)
                 if reason is not None:
                     found.append(f"строка «{shown}»: элемент «{element}» — "
                                  f"{reason}")
@@ -262,6 +312,12 @@ _TOKEN_SPLIT_RE = re.compile(r"[\s`,;()«»]+")
 # Ссылка на тест в ячейке «Чем покрыто»: `tests/<…>.py`, за ней может стоять
 # `:строка` или `::имя`.
 _TEST_REF_RE = re.compile(r"(?<![\w/])tests/[\w./-]*\.py(?!\w)")
+
+# Кандидат в ссылку на тест у задачи с профилем проекта: любой путь `*.py`
+# (за ним может стоять `:строка` или `::имя`); ссылкой он становится, только
+# если лежит в области ослабления профиля (SPEC 01M55VDVVDVWW2MTJ01F88N5FM,
+# требование 4).
+_PY_PATH_RE = re.compile(r"(?<![\w./-])[\w][\w./-]*\.py(?!\w)")
 
 _EMPHASIS_RE = re.compile(r"(?<!\S)[*_`]+|[*_`]+(?!\S)")
 
@@ -343,11 +399,20 @@ def _remains(cell: str) -> bool:
     return not _normalized(cell).startswith(("нет", "не остается", "исчезает"))
 
 
-def _covered(cell: str) -> bool:
+def _covered(cell: str, profile=None) -> bool:
+    """Ячейка «Чем покрыто после» несёт ссылку на тест. `profile` — профиль
+    тестов проекта задачи: ссылка — путь `*.py` в его области ослабления;
+    `None` — прежнее правило `tests/…`."""
     value = _normalized(cell)
     if "не покрыто" in value or value.startswith(("нет", "—", "–", "-")):
         return False
-    return _TEST_REF_RE.search(value) is not None
+    if profile is None:
+        return _TEST_REF_RE.search(value) is not None
+    # Путь сверяется с масками без нижнего регистра нормализации: маска
+    # профиля сравнивается с путём буквально, как у гейта.
+    raw = _EMPHASIS_RE.sub("", cell.strip())
+    return any(profile.in_weakening_scope(m.group(0))
+               for m in _PY_PATH_RE.finditer(raw))
 
 
 def _conditional_with_replacements(cell: str) -> bool:
@@ -359,11 +424,23 @@ def _conditional_with_replacements(cell: str) -> bool:
                for ch in rest)
 
 
-def matrix_refusals(text: str, elements: list[str]) -> list[str]:
+def matrix_refusals(text: str, elements: list[str], *, conn=None,
+                    task_id: str | None = None) -> list[str]:
     """Причины отказа по форме матрицы неослабления в тексте `text` при
     мандате на `elements` (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, требования 1-3,
     7); пустой список — форма годна. Одна функция на оба канала — `answer`
-    и `zones-extend`: правило не может разойтись между ними."""
+    и `zones-extend`: правило не может разойтись между ними.
+
+    `conn`/`task_id` — задача ответа: у задачи с профилем проекта ссылка на
+    тест в «Чем покрыто после» — путь в области ослабления профиля (SPEC
+    01M55VDVVDVWW2MTJ01F88N5FM, требование 4); у артели, без задачи и без
+    профиля (решение — отказ или пропуск) — прежнее правило `tests/…`
+    (у артели — буквально прежнее, а не его пересказ масками профиля)."""
+    from .. import repo_context
+    decision = _task_decision(conn, task_id)
+    profile = None
+    if decision is not None and not repo_context.is_artel(decision.target):
+        profile = decision.profile
     section = matrix_section(text)
     if section is None:
         return ["нет раздела «## Матрица неослабления»"]
@@ -386,7 +463,7 @@ def matrix_refusals(text: str, elements: list[str]) -> list[str]:
                      + ", ".join(unnamed))
     for number, row in enumerate(rows, start=1):
         cells = row + [""] * (len(MATRIX_HEADERS) - len(row))
-        if (_remains(cells[2]) and not _covered(cells[3])
+        if (_remains(cells[2]) and not _covered(cells[3], profile)
                 and not _conditional_with_replacements(cells[4])):
             found.append(f"строка данных {number}: свойство остаётся и не "
                          f"покрыто, а «Решение» не начинается с «ок при "
