@@ -1,6 +1,7 @@
-"""Пакет orchestrator/doctor -- проверки записи внешнего проекта: клон, пуш, CI, защита ветки, токен, no_paths, project_skills.
+"""Пакет orchestrator/doctor -- проверки записи внешнего проекта: клон, пуш, CI, защита ветки, токен, права токена на CI, no_paths, project_skills.
 
-SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7. Коллаборанты читаются
+SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7; права токена на CI —
+SPEC 01M574A6YQHAPASS9716Z11G4Q, требование 8. Коллаборанты читаются
 лениво через фасад doctor (см. докстринг orchestrator/doctor/__init__.py)
 -- не импортируются напрямую.
 """
@@ -25,7 +26,7 @@ _CHILD_RE = re.compile(r"^(\s+)(?:-\s*)?([A-Za-z_][\w-]*)\s*(?::.*)?$")
 def _names(project: str) -> list[str]:
     return [f"project-{kind}-{project}" for kind in
             ("clone", "artifacts-push", "ci-pull-request", "base-protection",
-             "token", "no-paths", "skills")]
+             "token", "ci-token", "no-paths", "skills")]
 
 
 def project_entry_checks(name: str, entry: dict) -> list:
@@ -37,8 +38,8 @@ def project_entry_checks(name: str, entry: dict) -> list:
         return [doctor.Check(n, "skip", NOT_APPLICABLE) for n in names]
     clone = doctor.repo_context.clone_path(name)
     in_role = doctor.runner.in_role_environment()
-    clone_name, push_name, ci_name, prot_name, token_name, paths_name, \
-        skills_name = names
+    clone_name, push_name, ci_name, prot_name, token_name, ci_token_name, \
+        paths_name, skills_name = names
     return [
         (doctor.Check(clone_name, "skip", ROLE_SKIP) if in_role
          else check_clone(clone_name, clone, entry)),
@@ -48,6 +49,8 @@ def project_entry_checks(name: str, entry: dict) -> list:
         check_base_protection(prot_name, name, entry),
         (doctor.Check(token_name, "skip", ROLE_SKIP) if in_role
          else check_project_token(token_name, name, entry)),
+        (doctor.Check(ci_token_name, "skip", ROLE_SKIP) if in_role
+         else check_ci_token(ci_token_name, name, entry)),
         check_no_paths(paths_name, clone, entry),
         check_project_skills(skills_name, name, entry),
     ]
@@ -239,6 +242,116 @@ def check_project_token(check_name: str, name: str, entry: dict):
     return doctor.Check(check_name, "ok",
                         f"токен проекта есть в слоте {slot}, отличен от "
                         f"токена gh Оператора")
+
+
+CI_TOKEN_ACTIONS_WARNING = ("CI читается по Actions runs; для check-runs "
+                            "токену нужно право Checks: read")
+_HTTP_CODE_RE = re.compile(r"\(HTTP ([1-5][0-9][0-9])\)")
+
+
+class _GhProbe:
+    """Исход одного чтения `gh api`: `http` — код HTTP-отказа (None —
+    ответ получен либо HTTP-ответа нет вовсе); `network` — HTTP-ответа нет
+    (обрыв, таймаут); `ok` — ответ получен и несёт список `key`."""
+
+    def __init__(self, ok: bool, http: int | None, network: bool, detail: str):
+        self.ok, self.http, self.network, self.detail = ok, http, network, detail
+
+    def forbidden(self) -> bool:
+        return self.http == 403 and doctor.ci.checks_forbidden(self.detail)
+
+    def throttled(self) -> bool:
+        """403 не про права (лимит запросов и пр.) — отказ временный."""
+        return self.http == 403 and not self.forbidden()
+
+    def denied(self) -> bool:
+        """Отказ правами: 403 «Resource not accessible …», 401, 404
+        (ANSWER-1 задачи 01M574A6YQHAPASS9716Z11G4Q)."""
+        return self.forbidden() or self.http in (401, 404)
+
+
+def _gh_probe(endpoint: str, key: str, env) -> _GhProbe:
+    try:
+        res = doctor.subprocess.run(
+            ["gh", "api", endpoint], capture_output=True, text=True,
+            timeout=doctor.config.GH_TIMEOUT_SEC, env=env)
+    except doctor.subprocess.TimeoutExpired as exc:
+        return _GhProbe(False, None, True, str(exc))
+    except OSError as exc:
+        return _GhProbe(False, None, True, f"gh не запущен: {exc}")
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()[:200]
+        match = _HTTP_CODE_RE.search(res.stderr or "")
+        if match is None:
+            return _GhProbe(False, None, True,
+                            detail or f"код {res.returncode}")
+        return _GhProbe(False, int(match.group(1)), False, detail)
+    try:
+        payload = json.loads(res.stdout)
+    except ValueError:
+        return _GhProbe(False, None, False, "ответ gh не разобран")
+    if not isinstance(payload, dict) or not isinstance(payload.get(key), list):
+        return _GhProbe(False, None, False, f"в ответе gh нет списка {key}")
+    return _GhProbe(True, None, False, "")
+
+
+def check_ci_token(check_name: str, name: str, entry: dict):
+    """Читает ли токен проекта проверки коммита вершины базовой ветки
+    (check-runs) и запуски Actions (SPEC 01M574A6YQHAPASS9716Z11G4Q,
+    требование 8). Без права Checks статус CI пульт берёт из Actions
+    (`ci.checks_forbidden`) — это `warn`; иной отказ check-runs или
+    недоступные Actions — `fail`: статус CI проекта пульт не узнает.
+    Временный отказ (сеть, 403 лимита, у Actions — всякий отказ не
+    правами) прав не определяет — `skip`."""
+    base = entry.get("base", doctor.config.MAIN_BRANCH)
+    pair = _owner_repo(str(entry.get("url", "")))
+    if pair is None:
+        return doctor.Check(check_name, "skip",
+                            "права токена на CI: не проверены — url записи "
+                            "не разобран")
+    if doctor.shutil.which("gh") is None:
+        return doctor.Check(check_name, "skip",
+                            "права токена на CI: не проверены — gh CLI не найден")
+    env, refusal = doctor.gh_env(name, entry)
+    if refusal is not None:
+        return doctor.Check(check_name, "skip",
+                            f"права токена на CI: не проверены — {refusal}")
+    owner, repo = pair
+    checks = _gh_probe(f"repos/{owner}/{repo}/commits/{base}/check-runs"
+                       f"?per_page=1", "check_runs", env)
+    actions = _gh_probe(f"repos/{owner}/{repo}/actions/runs?branch={base}"
+                        f"&per_page=1", "workflow_runs", env)
+    for what, probe in (("check-runs", checks), ("Actions", actions)):
+        if probe.network:
+            return doctor.Check(check_name, "skip",
+                                f"права токена на CI: не проверены — {what}: "
+                                f"нет ответа GitHub ({probe.detail})")
+        if probe.throttled():
+            return doctor.Check(check_name, "skip",
+                                f"права токена на CI: не проверены — {what}: "
+                                f"временный отказ 403 ({probe.detail})")
+    # `fail` за Actions — только отказ правами; 5xx и неразобранный ответ
+    # прав не определяют (ANSWER-1 задачи 01M574A6YQHAPASS9716Z11G4Q).
+    if not actions.ok and not actions.denied():
+        return doctor.Check(check_name, "skip",
+                            f"права токена на CI: не проверены — Actions: "
+                            f"отказ не про права ({actions.detail})")
+    if not actions.ok:
+        return doctor.Check(check_name, "fail",
+                            f"запуски Actions недоступны токену проекта "
+                            f"({actions.detail}) — статус CI проекта пульт "
+                            f"не увидит")
+    if checks.ok:
+        return doctor.Check(check_name, "ok",
+                            f"токен проекта читает check-runs вершины {base} "
+                            f"и запуски Actions")
+    if checks.forbidden():
+        return doctor.Check(check_name, "warn",
+                            f"{CI_TOKEN_ACTIONS_WARNING} ({checks.detail})")
+    return doctor.Check(check_name, "fail",
+                        f"check-runs вершины {base} не читаются "
+                        f"({checks.detail}) — на таком отказе статус CI "
+                        f"проекта пульт не узнает")
 
 
 def check_no_paths(check_name: str, clone: Path, entry: dict):
