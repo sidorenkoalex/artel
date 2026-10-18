@@ -1295,8 +1295,12 @@ def drop_from_code_copy(task_id: str, code_dir: Path) -> None:
         return
     shutil.rmtree(Path(code_dir) / "tasks" / task_id, ignore_errors=True)
     from . import store  # store -> ... -> acceptance
-    own = _task_own_profile(store.db() if store.db_usable() else None,
-                            task_id)
+    try:
+        own = _task_own_profile(store.db() if store.db_usable() else None,
+                                task_id)
+    except targets.ComponentsPending:
+        # До G1б выкладки по компонентам нет — убирать под ней нечего.
+        return
     if _layout_mode(own) == "layout":
         _drop_layout(_layout_root(code_dir, own, task_id))
 
@@ -2382,7 +2386,11 @@ def _task_own_profile(conn, task_id: str):
     (SPEC 01M52EEFNA1WH31962HVNT0YZ9, требование 1); `None` — у проекта
     `pult-pytest`, профиля нет или он не прочитан: тогда `full_suite`
     зовётся прежней формой. Строка задачи не прочитана — проект артели,
-    тот же откат, что у `store.task_target` для строки без проекта."""
+    тот же откат, что у `store.task_target` для строки без проекта.
+
+    Запись с несколькими компонентами — `targets.ComponentsPending` с
+    причиной `profile_of`: прежняя форма пульта на ней была бы обходом
+    отказа до G1б (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требование 10)."""
     from . import project_profile, repo_context, store  # store -> ... -> acceptance
     target = config.DEFAULT_TARGET
     if isinstance(conn, sqlite3.Connection):
@@ -2391,6 +2399,8 @@ def _task_own_profile(conn, task_id: str):
         except (sqlite3.Error, TypeError, IndexError, KeyError):
             pass
     answer = repo_context.profile_of(target)
+    if answer.outcome == repo_context.PROFILE_UNREAD and answer.multi:
+        raise targets.ComponentsPending(answer.reason)
     if answer.outcome != repo_context.PROFILE_PRESENT:
         return None
     try:

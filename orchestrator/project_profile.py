@@ -149,6 +149,11 @@ def decide(target: str) -> Decision:
     answer = repo_context.profile_of(target)
     if answer.outcome == repo_context.PROFILE_PRESENT:
         return Decision(target, profile=Profile.from_values(answer.values))
+    if answer.outcome == repo_context.PROFILE_UNREAD and answer.multi:
+        return Decision(target, refusal=(
+            f"профиль тестов проекта «{target}» не прочитан (поле "
+            f"{targets.COMPONENTS_FIELD} записи в targets.yaml): "
+            f"{answer.reason}"))
     if answer.outcome == repo_context.PROFILE_UNREAD:
         return Decision(target, refusal=(
             f"профиль тестов проекта «{target}» не прочитан (поле "
@@ -185,6 +190,99 @@ def full_suite_limit(target: str) -> tuple[int, str]:
     if value is not None:
         return value, f"профиль тестов проекта {target}"
     return config.FULL_SUITE_TIMEOUT_SEC, "config"
+
+
+# Имя компонента записи с `test_profile` (SPEC 01M58FNWBV25FF26E7AZ9Q9912,
+# требование 4).
+DEFAULT_COMPONENT = "default"
+
+
+@dataclass(frozen=True)
+class Component:
+    """Компонент записи проекта: имя и поля (`targets.COMPONENT_FIELDS`;
+    у `default` — подполя `test_profile`)."""
+    name: str
+    fields: Mapping = field(hash=False)
+
+
+def components(target: str) -> tuple:
+    """Компоненты записи проекта `target` в порядке записи (ADR-0026 п. 3):
+    `test_profile` — один `default`, запись без профиля и компонентов —
+    пусто. TargetsError — файл или запись не годны."""
+    entry = targets.target(target)
+    comps = entry.get(targets.COMPONENTS_FIELD)
+    if comps is not None:
+        return tuple(Component(name, MappingProxyType(dict(fields)))
+                     for name, fields in comps.items())
+    profile = entry.get(targets.PROFILE_FIELD)
+    if profile is not None:
+        return (Component(DEFAULT_COMPONENT, MappingProxyType(dict(profile))),)
+    return ()
+
+
+def _regexes(value) -> list:
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _touches(component: Component, path: str) -> bool:
+    """Путь задевает компонент: его `paths`, маски `test_support` или
+    `paths` поставщика `depends_on` вида `paths`/`files` (компонент —
+    потребитель). `contract` выбор не расширяет."""
+    fields = component.fields
+    regexes = _regexes(fields.get("paths"))
+    for dep in (fields.get("depends_on") or {}).values():
+        if dep.get("via") in ("paths", "files"):
+            regexes += _regexes(dep.get("paths"))
+    if any(re.search(regex, path) for regex in regexes):
+        return True
+    return any(mask_matches(mask, path)
+               for mask in fields.get("test_support") or ())
+
+
+def select_components(target: str, paths) -> tuple[str, ...]:
+    """Имена компонентов, затронутых путями `paths` (от корня репозитория),
+    в порядке записи. Путь, не задевший ни одного компонента, — все
+    компоненты; пустой набор путей — тоже все (ничего не гонять — не
+    вывод из пустого набора). У записи с одним компонентом — он."""
+    comps = components(target)
+    names = tuple(c.name for c in comps)
+    if len(comps) <= 1:
+        return names
+    chosen = set()
+    for path in paths:
+        hit = {c.name for c in comps if _touches(c, path)}
+        if not hit:
+            return names
+        chosen |= hit
+    if not chosen:
+        return names
+    return tuple(name for name in names if name in chosen)
+
+
+def test_id(component: str, path: str, name: str, n: int | None = None) -> str:
+    """Идентификатор теста компонента `<компонент>:<путь>::<полное
+    имя>[#<n>]` (ADR-0026 п. 3)."""
+    if ":" in component:
+        raise ValueError(f"имя компонента '{component}' с ':'")
+    text = f"{component}:{path}::{name}"
+    return text if n is None else f"{text}#{n}"
+
+
+def parse_test_id(text: str) -> tuple[str, str, str, int | None]:
+    """Обратный разбор `test_id`: (компонент, путь, полное имя, номер или
+    `None`). Полное имя может само нести `::`. ValueError — не та форма."""
+    component, sep, rest = text.partition(":")
+    path, sep2, name = rest.partition("::")
+    if not (sep and sep2 and component and path and name):
+        raise ValueError(f"'{text}' — не идентификатор теста компонента "
+                         f"<компонент>:<путь>::<полное имя>[#<n>]")
+    n = None
+    head, hash_, tail = name.rpartition("#")
+    if hash_ and tail.isascii() and tail.isdigit() and head:
+        name, n = head, int(tail)
+    return component, path, name, n
 
 
 def journal_skip(conn, task_id: str, check: str, decision: Decision) -> None:

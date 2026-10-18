@@ -130,25 +130,46 @@ class ProfileAnswer:
     """Профиль тестов проекта из его записи `targets.yaml` (ADR-0021 пп.
     8-9; SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требование 2): `outcome` — один
     из трёх исходов, `values` — разобранные подполя (только при
-    `PROFILE_PRESENT`), `reason` — почему не прочитан."""
+    `PROFILE_PRESENT`), `reason` — почему не прочитан; `multi` — не
+    прочитан, потому что запись несёт несколько компонентов (SPEC
+    01M58FNWBV25FF26E7AZ9Q9912, требование 5)."""
     outcome: str
     values: dict | None = None
     reason: str = ""
+    multi: bool = False
 
 
 def profile_of(target_name: str) -> ProfileAnswer:
     """Профиль тестов проекта `target_name` — у артели тоже из её записи
     `targets.yaml`, как у любого проекта. Три исхода: профиль есть, у
     записи нет поля, профиль не прочитан (файл или запись не годны —
-    `targets.check` проверяет и само поле)."""
+    `targets.check` проверяет и само поле).
+
+    Запись с `components:` из одного компонента — профиль из его подполей
+    `targets.PROFILE_FIELDS`; из нескольких — не прочитан с признаком
+    `multi` до G1б."""
     try:
         entry = targets.target(target_name)
     except targets.TargetsError as exc:
         return ProfileAnswer(PROFILE_UNREAD, reason=str(exc))
     values = entry.get(targets.PROFILE_FIELD)
-    if values is None:
+    if values is not None:
+        return ProfileAnswer(PROFILE_PRESENT, values=dict(values))
+    comps = entry.get(targets.COMPONENTS_FIELD)
+    if comps is None:
         return ProfileAnswer(PROFILE_ABSENT)
-    return ProfileAnswer(PROFILE_PRESENT, values=dict(values))
+    if len(comps) > 1:
+        return ProfileAnswer(PROFILE_UNREAD, multi=True,
+                             reason=targets.MULTI_COMPONENT_PENDING)
+    (comp, fields), = comps.items()
+    for sub in targets.PROFILE_FIELDS:
+        if sub not in targets.PROFILE_OPTIONAL and sub not in fields:
+            return ProfileAnswer(PROFILE_UNREAD, reason=(
+                f"{config.TARGETS}: target '{target_name}': компонент "
+                f"'{comp}': нет подполя '{sub}', обязательного у профиля "
+                f"тестов"))
+    return ProfileAnswer(PROFILE_PRESENT, values={
+        sub: fields[sub] for sub in targets.PROFILE_FIELDS if sub in fields})
 
 
 def is_artel(subject) -> bool:
