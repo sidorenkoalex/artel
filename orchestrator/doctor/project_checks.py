@@ -246,7 +246,7 @@ def check_project_token(check_name: str, name: str, entry: dict):
 
 CI_TOKEN_ACTIONS_WARNING = ("CI читается по Actions runs; для check-runs "
                             "токену нужно право Checks: read")
-_HTTP_CODE_RE = re.compile(r"\(HTTP (\d{3})\)")
+_HTTP_CODE_RE = re.compile(r"\(HTTP ([1-5][0-9][0-9])\)")
 
 
 class _GhProbe:
