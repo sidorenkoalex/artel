@@ -19,12 +19,12 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 from unittest import mock
 
 from orchestrator import canary, catalog, config, store
-from tests.sandbox import ALL_CONFIG_ATTRS, RealGitSandbox, capture
+from tests.sandbox import (ALL_CONFIG_ATTRS, RealGitSandbox, capture,
+                           wait_processes_gone)
 
 
 _EARLY_CHILD = r'''
@@ -194,9 +194,7 @@ class EarlySignalCanaryTest(RealGitSandbox):
                 os.killpg(pgid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
-        deadline = time.monotonic() + 10
-        while any(group_alive(pgid) for pgid in groups) and time.monotonic() < deadline:
-            time.sleep(0.05)
+        wait_processes_gone(groups, group_alive, polls=200, pause=0.05)
         for key in ("clone", "origin"):
             if state.get(key):
                 shutil.rmtree(state[key], ignore_errors=True)
