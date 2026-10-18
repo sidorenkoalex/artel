@@ -4,9 +4,13 @@
 отказывает): `run`, `collect` и `run_plank` называют отказ выкладки, pytest
 не запускается, каталога `.artel-plank` в дереве нет (SPEC
 01M57JYJQC8VAHEWMXFNM7D1GS, требование 6: исключение — до записи файлов).
+То же при сбое записи `info/exclude` в настоящем репозитории (ANSWER-2,
+пункт 1: отказ с именованной причиной до выкладки).
 """
+import errno
 import os
 import random
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +73,63 @@ class PlankLayoutRefusalTest(unittest.TestCase):
                 self.assertIn("отказ выкладки планки", output, note)
                 popen.assert_not_called()
                 self.assertEqual(self.layout_dirs(), [], note)
+
+    def places(self):
+        return (
+            ("run", lambda: acceptance.run(self.tdir, cwd=self.tree,
+                                           command=self.profile)),
+            ("collect", lambda: acceptance.collect(self.tdir, cwd=self.tree,
+                                                   command=self.profile)),
+            ("run_plank", lambda: acceptance.run_plank(
+                [f"tasks/{self.task_id}/acceptance_tests"], self.tree,
+                profile=self.profile, task_id=self.task_id)),
+        )
+
+    def init_git(self) -> Path:
+        subprocess.run(["git", "init", "-q", str(self.tree)], check=True,
+                       capture_output=True)
+        res = subprocess.run(["git", "-C", str(self.tree), "rev-parse",
+                              "--git-path", "info/exclude"], check=True,
+                             capture_output=True, text=True)
+        path = Path(res.stdout.strip())
+        return path if path.is_absolute() else self.tree / path
+
+    def assert_refused(self, reason: str):
+        for label, call in self.places():
+            with self.subTest(place=label, seed=self.seed), \
+                    mock.patch.object(acceptance, "_run_pytest",
+                                      side_effect=AssertionError("pytest")) as popen:
+                first, output = call()
+                note = f"зерно: {self.seed}; {label}: {output}"
+                self.assertIn(first, (False, acceptance.REFUSED_EXIT_CODE), note)
+                self.assertIn("отказ выкладки планки", output, note)
+                self.assertIn(reason, output, note)
+                popen.assert_not_called()
+                self.assertEqual(self.layout_dirs(), [], note)
+
+    def test_refusal_when_exclude_not_writable(self):
+        """`info/exclude` не записать (на его месте каталог) — отказ с причиной, pytest не запущен, выкладки нет.
+
+        Ловит мутацию: ошибка записи `info/exclude` глотается (`except` без
+        отказа) — выкладка создаётся видимой git и pytest запускается.
+        """
+        exclude = self.init_git()
+        if exclude.exists():
+            exclude.unlink()
+        exclude.mkdir(parents=True)
+        self.assert_refused("не записан")
+
+    def test_refusal_on_lock_io_error(self):
+        """Ошибка ввода-вывода на блокировке `info/exclude` — отказ с причиной до выкладки.
+
+        Ловит мутацию: сбой `flock` не превращается в отказ (исключение
+        ловится выше или игнорируется) — выкладка создаётся, pytest
+        запускается.
+        """
+        self.init_git()
+        err = OSError(errno.EIO, "сбой ввода-вывода")
+        with mock.patch.object(acceptance.fcntl, "flock", side_effect=err):
+            self.assert_refused("сбой ввода-вывода")
 
 
 if __name__ == "__main__":

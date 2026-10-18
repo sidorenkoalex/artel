@@ -10,6 +10,7 @@
 """
 import ast
 import contextlib
+import fcntl
 import hashlib
 import importlib.metadata
 import json
@@ -635,7 +636,11 @@ def _layout_root(code_root: Path, own, task_id: str) -> Path:
 def _exclude_layout(code_root: Path) -> str:
     """Шаблон выкладки в `info/exclude` клона рабочей копии `code_root`,
     если его там ещё нет; текст отказа — git не ответил или файл не
-    записан (выкладку, видимую git, класть нельзя)."""
+    записан (выкладку, видимую git, класть нельзя).
+
+    Файл общий для всех worktree клона, и задачи дописывают его
+    параллельно: проверка «шаблон уже есть» и дописывание идут под
+    `flock` на самом файле, иначе две задачи оставили бы две строки."""
     res = gitcmd.in_repo(Path(code_root), "rev-parse", "--git-path",
                          "info/exclude")
     if res is None or res.returncode != 0 or not res.stdout.strip():
@@ -646,13 +651,18 @@ def _exclude_layout(code_root: Path) -> str:
     if not path.is_absolute():
         path = Path(code_root) / path
     try:
-        text = path.read_text(encoding="utf-8") if path.is_file() else ""
-        if PLANK_LAYOUT_EXCLUDE in text.splitlines():
-            return ""
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(("" if not text or text.endswith("\n") else "\n")
-                     + PLANK_LAYOUT_EXCLUDE + "\n")
+        with path.open("a+", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                fh.seek(0)
+                text = fh.read()
+                if PLANK_LAYOUT_EXCLUDE not in text.splitlines():
+                    fh.write(("" if not text or text.endswith("\n") else "\n")
+                             + PLANK_LAYOUT_EXCLUDE + "\n")
+                    fh.flush()
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
     except (OSError, UnicodeDecodeError) as exc:
         return (f"отказ выкладки планки: {path} не записан ({exc}) — pytest "
                 f"не запускался")
