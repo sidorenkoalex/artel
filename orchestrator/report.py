@@ -541,6 +541,29 @@ def _friction_trend(by_task: list) -> str:
 
 # --------------------------------------------------------------- рендер
 
+def _project(row) -> str:
+    """Проект задачи; строка без ключа `target` (фикстуры, старые срезы)
+    и NULL — задача артели, как в `status`."""
+    return (row["target"] if "target" in row.keys() else None) or config.DEFAULT_TARGET
+
+
+def _project_suffix(row) -> str:
+    """Метка ` [<проект>]` сразу за id строки задачи — только у задачи
+    внешнего проекта, как в `status` (SPEC 01M57PMBHWK5EGQ8HPA5TQX72H,
+    требование 1); строка артели прежняя. Не экранирована."""
+    project = _project(row)
+    return f" [{project}]" if project != config.DEFAULT_TARGET else ""
+
+
+def _project_label(row) -> str:
+    return _esc(_project_suffix(row))
+
+
+def _project_labels(tasks: list) -> dict:
+    """{id задачи: метка} — для строк, которые несут только id задачи."""
+    return {row["id"]: _project_label(row) for row in tasks}
+
+
 def _tile_html(row) -> str:
     escalated = bool(row["escalated_from"]) or row["state"] == "escalated"
     escalation_line = ""
@@ -550,12 +573,13 @@ def _tile_html(row) -> str:
             f'<div class="tile-field tile-escalation">'
             f'Эскалация (из {_esc(source)})</div>')
     # Проект — только у задачи внешнего проекта (SPEC
-    # 01M563E1SH9SB63S2MW4A9B82N, требование 7); строка без ключа
-    # `target` (фикстуры, старые срезы) и NULL — задача артели.
-    project = (row["target"] if "target" in row.keys() else None) or config.DEFAULT_TARGET
+    # 01M563E1SH9SB63S2MW4A9B82N, требование 7). Скобки — снаружи
+    # элемента проекта (SPEC 01M57PMBHWK5EGQ8HPA5TQX72H, требование 1):
+    # его собственный текст остаётся ровно именем проекта.
+    project = _project(row)
     project_line = ""
     if project != config.DEFAULT_TARGET:
-        project_line = f'<span class="tile-project">{_esc(project)}</span>'
+        project_line = f' [<span class="tile-project">{_esc(project)}</span>]'
     return (
         f'<div class="tile">'
         f'<span class="tile-id">{_esc(row["id"])}</span>'
@@ -601,7 +625,7 @@ def _gate_queue_html(tasks: list) -> str:
     rows = "".join(
         f'<div class="gate-row">'
         f'<span class="gate-name">{_esc(row["state"])}</span>'
-        f'<span class="gate-task">{_esc(row["id"])} — '
+        f'<span class="gate-task">{_esc(row["id"])}{_project_label(row)} — '
         f'«{_esc(row["title"])}»</span>'
         f'</div>'
         for row in gated
@@ -624,7 +648,7 @@ def _closed_tasks_html(tasks: list, steps: list) -> str:
         step_counts[s["task_id"]] = step_counts.get(s["task_id"], 0) + 1
     rows = "".join(
         f'<div class="closed-row">'
-        f'<span class="closed-id">{_esc(row["id"])}</span>'
+        f'<span class="closed-id">{_esc(row["id"])}{_project_label(row)}</span>'
         f'<span class="closed-field">Диф: '
         f'{_esc(row["diff_bytes"]) if row["diff_bytes"] is not None else _DASH}'
         f' байт</span>'
@@ -639,11 +663,23 @@ def _closed_tasks_html(tasks: list, steps: list) -> str:
     return f'<div class="closed-list">{rows}</div>'
 
 
-def _alerts_html(alerts: list) -> str:
+def _alert_label(alert, projects: set) -> str:
+    """Метка ` [<проект>]` алерта внешнего проекта (SPEC
+    01M57PMBHWK5EGQ8HPA5TQX72H, требование 2): `target` — имя проекта
+    задачи, не артели. Алерт артели, NULL и алерт с id задачи — без
+    метки."""
+    target = alert["target"]
+    if target in projects and target != config.DEFAULT_TARGET:
+        return f'<span class="alert-project">[{_esc(target)}]</span>'
+    return ""
+
+
+def _alerts_html(alerts: list, projects: set = frozenset()) -> str:
     if not alerts:
         return '<p class="empty">Незакрытых алертов нет.</p>'
     items = "".join(
         f'<li class="alert-item">'
+        f'{_alert_label(a, projects)}'
         f'<span class="alert-kind">{_esc(a["kind"])}</span>'
         f'<span class="alert-text">{_esc(a["message"])}</span>'
         f'<span class="alert-source">source: {_esc(a["source"])}</span>'
@@ -690,36 +726,87 @@ def _divergence_html(divergence: dict) -> str:
     )
 
 
+def _gate_ratio_rows(steps: list, prefix: str = "") -> str:
+    gate_ratio = _gate_ratio(steps)
+    return (
+        f'{_ratio_line(prefix + "за всю историю", gate_ratio["history"])}'
+        f'{_ratio_line(prefix + "за последние 10 задач", gate_ratio["last_window"])}'
+    )
+
+
+def _economy_rows(tasks: list, total_spent: float, total_estimate: float,
+                  prefix: str = "") -> str:
+    cost_per_task = _cost_per_done_task(tasks)
+    cost_line = (_usd(cost_per_task) if cost_per_task is not None
+                else "нет done-задач")
+    # Верхняя оценка (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) —
+    # отдельная строка от точного расхода, не сложена с ним в одно число
+    # (иначе оценка перестала бы быть отличимой от факта, требование 6).
+    return (
+        f'<div class="metric-row">{_esc(prefix)}$/задачу (done): {cost_line}</div>'
+        f'<div class="metric-row">{_esc(prefix)}Суммарный расход программы: '
+        f'{_usd(total_spent)}</div>'
+        f'<div class="metric-row">{_esc(prefix)}Суммарная верхняя оценка '
+        f'(тариф модели не разрешён): {_usd(total_estimate)}</div>'
+    )
+
+
+def _by_project(tasks: list) -> list:
+    """[(проект, его задачи)] — артель первой, остальные по имени; задача
+    с `target` NULL — задача артели (SPEC 01M57PMBHWK5EGQ8HPA5TQX72H,
+    требование 3)."""
+    groups: dict = {}
+    for row in tasks:
+        groups.setdefault(_project(row), []).append(row)
+    return sorted(groups.items(),
+                  key=lambda item: (item[0] != config.DEFAULT_TARGET, item[0]))
+
+
+def _split_metrics_html(steps: list, tasks: list) -> tuple:
+    """(доля acceptance, экономика) по строке на проект: значения проекта
+    считаются только по его задачам и их записям журнала, окно доли —
+    последние записи этого проекта, а не его доля в окне пульта (SPEC
+    01M57PMBHWK5EGQ8HPA5TQX72H, требование 3, AC-3)."""
+    gate_rows, economy_rows = [], []
+    for project, project_tasks in _by_project(tasks):
+        ids = {row["id"] for row in project_tasks}
+        project_steps = [s for s in steps if s["task_id"] in ids]
+        prefix = f"{project}: "
+        gate_rows.append(_gate_ratio_rows(project_steps, prefix))
+        economy_rows.append(_economy_rows(
+            project_tasks,
+            sum(row["spent_usd"] or 0.0 for row in project_tasks),
+            sum(row["spent_estimate_usd"] or 0.0 for row in project_tasks),
+            prefix))
+    return "".join(gate_rows), "".join(economy_rows)
+
+
 def _metrics_html(steps: list, tasks: list, total_spent: float,
                   total_estimate: float, divergence: dict | None = None) -> str:
-    gate_ratio = _gate_ratio(steps)
     per_day = _operator_journal_by_day(steps)
-    cost_per_task = _cost_per_done_task(tasks)
 
     per_day_html = "".join(
         f'<div class="metric-row">{_esc(day)}: operator {count}</div>'
         for day, count in per_day
     ) or '<div class="metric-row">записей actor=operator за 14 дней нет</div>'
 
-    cost_line = (_usd(cost_per_task) if cost_per_task is not None
-                else "нет done-задач")
+    # Разбивка по проекту — только при задачах больше одного проекта
+    # (ANSWER-1, п.2): у одного проекта, в том числе единственного
+    # внешнего, блоки прежние.
+    if len({_project(row) for row in tasks}) > 1:
+        gate_html, economy_html = _split_metrics_html(steps, tasks)
+    else:
+        gate_html = _gate_ratio_rows(steps)
+        economy_html = _economy_rows(tasks, total_spent, total_estimate)
 
-    # Верхняя оценка (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) —
-    # отдельная строка от точного расхода, не сложена с ним в одно число
-    # (иначе оценка перестала бы быть отличимой от факта, требование 6).
     return (
         '<div class="metrics">'
         '<h3>Доля acceptance: автогейт vs Оператор</h3>'
-        f'{_ratio_line("за всю историю", gate_ratio["history"])}'
-        f'{_ratio_line("за последние 10 задач", gate_ratio["last_window"])}'
+        f'{gate_html}'
         '<h3>Записи actor=operator по дням (последние 14 дней)</h3>'
         f'{per_day_html}'
         '<h3>Экономика</h3>'
-        f'<div class="metric-row">$/задачу (done): {cost_line}</div>'
-        f'<div class="metric-row">Суммарный расход программы: '
-        f'{_usd(total_spent)}</div>'
-        f'<div class="metric-row">Суммарная верхняя оценка (тариф модели не '
-        f'разрешён): {_usd(total_estimate)}</div>'
+        f'{economy_html}'
         '<h3>Калибровка курса токенов</h3>'
         f'{_divergence_html(divergence or {})}'
         '</div>'
@@ -767,8 +854,9 @@ def _tokens_by_task(tasks: list, steps: list) -> str:
     rows = []
     for row in tasks:
         task_steps = by_task.get(row["id"], [])
+        # `_token_cost_row_html` экранирует адрес сам — метка сырая.
         rows.append(_token_cost_row_html(
-            row["id"], _usd(row["spent_usd"]),
+            f'{row["id"]}{_project_suffix(row)}', _usd(row["spent_usd"]),
             retro.task_token_total(task_steps),
             retro.task_token_breakdown(task_steps)))
     return "".join(rows)
@@ -810,8 +898,9 @@ def _friction_html(tasks: list, steps: list) -> str:
     (AC-4/AC-5, `_task_friction`) — ни то, ни другое не новая запись в
     `state.db`: только уже существующие `store.task_steps`/чтение файлов."""
     by_task = _friction_by_task(tasks, steps)
+    labels = _project_labels(tasks)
     rows_html = "".join(
-        f'<div class="metric-row">{_esc(task_id)}: '
+        f'<div class="metric-row">{_esc(task_id)}{labels.get(task_id, "")}: '
         + (f'{round(avg * 100)}% (шагов: {n})' if avg is not None
            else "трение не посчитано")
         + '</div>'
@@ -932,7 +1021,7 @@ def _write_groups(calls: list) -> dict:
     return groups
 
 
-def _test_author_row_html(step: dict) -> str:
+def _test_author_row_html(step: dict, label: str = "") -> str:
     calls = _tool_calls(step["log"])
     # Запуск без записи провайдера — старше поля `provider=`, когда
     # исполнитель был один: Claude.
@@ -962,12 +1051,14 @@ def _test_author_row_html(step: dict) -> str:
             text += (f", {NOT_AVAILABLE} по {unknown} вызовам Write (путь "
                      f"обрезан или файла нет)")
         parts.append(text)
-    return (f'<div class="metric-row">{_esc(step["task"])} '
+    return (f'<div class="metric-row">{_esc(step["task"])}{label} '
             f'{_esc(step["ts"][:10])}: {_esc(" · ".join(parts))}</div>')
 
 
-def _test_author_html(steps: list) -> str:
-    rows = [_test_author_row_html(step) for step in _test_author_steps(steps)]
+def _test_author_html(steps: list, tasks: list = ()) -> str:
+    labels = _project_labels(tasks)
+    rows = [_test_author_row_html(step, labels.get(step["task"], ""))
+            for step in _test_author_steps(steps)]
     return "".join(rows) or (f'<p class="empty">Шагов test_author за '
                              f'{OPERATOR_WINDOW_DAYS} дней нет.</p>')
 
@@ -1204,7 +1295,7 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         '<header class="topbar"><h1>Артель — отчёт пульта</h1></header>\n'
         "<main>\n"
         '<section class="panel"><h2>Алерты</h2>'
-        f"{_alerts_html(alerts)}</section>\n"
+        f"{_alerts_html(alerts, {_project(row) for row in tasks})}</section>\n"
         '<section class="panel"><h2>Очередь ожиданий Оператора</h2>'
         f"{_gate_queue_html(tasks)}</section>\n"
         '<section class="panel"><h2>Борд задач — состояния FSM</h2>'
@@ -1219,7 +1310,7 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         f"{_friction_html(tasks, steps)}</section>\n"
         f'<section class="panel"><h2>Шаги test_author (последние '
         f'{OPERATOR_WINDOW_DAYS} дней)</h2>'
-        f'<div class="metrics">{_test_author_html(steps)}</div></section>\n'
+        f'<div class="metrics">{_test_author_html(steps, tasks)}</div></section>\n'
         f'<section class="panel"><h2>Разведка ролей (последние '
         f'{EXPLORE_WINDOW_DAYS} дней)</h2>'
         f'<div class="metrics">{_explore_html(steps, now)}</div></section>\n'

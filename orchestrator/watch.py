@@ -299,12 +299,17 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
         # 01M563E1SH9SB63S2MW4A9B82N, требование 3): алерт виден по id
         # задачи набора, проекту любой её задачи, проекту наблюдения — даже
         # если задач этого проекта в наборе не осталось, — и проекту
-        # артели, на который заводятся алерты уровня пульта.
+        # артели, на который заводятся алерты уровня пульта. Алерт с
+        # `target` NULL — уровня пульта без проекта (SPEC
+        # 01M57PMBHWK5EGQ8HPA5TQX72H, требования 4-5): виден каждому
+        # наблюдению, поле проекта — `-`, как в секции триггеров `status`.
+        # «Оповещено» — позиция самого наблюдения (`next_alert`), так что
+        # отметка одного наблюдения доставку другому не снимает.
         targets = (task_ids | {store.task_target(conn, t) for t in task_ids}
-                   | {row["target"], config.DEFAULT_TARGET})
+                   | {row["target"], config.DEFAULT_TARGET, None})
         for item in alerts:
             if item["target"] in targets:
-                _print_line(item["ts"], item["target"], item["source"],
+                _print_line(item["ts"], item["target"] or "-", item["source"],
                             f"alert:{item['kind']}", item["message"])
     return next_step, next_alert
 
