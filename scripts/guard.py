@@ -931,28 +931,35 @@ def resolved_skip_markers(source, modules: "TestModules | None" = None) -> dict:
 
 
 # Параметризация тестового метода (SPEC 01M56TNZ3E72XY9XSTAVS99CN2,
-# требования 3-5): узел сравнения гейта неослабления сверяет варианты
-# `parametrize` метода, сохранившего имя, — удалённый или изменённый
-# вариант выключает проверку так же, как пропуск. Марка опознаётся
-# последним сегментом имени (`pytest.mark.parametrize`, `mark.parametrize`),
-# вариант с маркой — `pytest.param(…, marks=…)` последним сегментом `param`.
+# требования 3-5; ANSWER-1 пп. 1-2): узел сравнения гейта неослабления
+# сверяет вызов `parametrize` метода, сохранившего имя, — любая смена его
+# текста, кроме добавления варианта при прежних, выключает проверку так же,
+# как пропуск. Марка опознаётся последним сегментом имени
+# (`pytest.mark.parametrize`, `mark.parametrize`), вариант с маркой —
+# `pytest.param(…, marks=…)` последним сегментом `param`.
 PARAMETRIZE_NAME = "parametrize"
 PARAMETRIZE_PARAM_NAME = "param"
+# Место списка вариантов в тексте вызова `ParametrizeMark.frame`.
+PARAMETRIZE_VARIANTS_SLOT = "__variants__"
 
 
 class ParametrizeMark(NamedTuple):
     """Одна марка `parametrize`, действующая на тестовый метод: `place` —
     где она стоит («декоратор метода #1», «декоратор класса C #1»,
-    «pytestmark класса C #1», «pytestmark модуля #1»), `signature` — имена
-    аргументов и прочие именованные аргументы марки текстом, `variants` —
-    тексты вариантов (`ast.unparse` элемента; аргумент-константа модуля
-    раскрыт до присвоенного значения), `skipped` — те из них, что несут
-    марку пропуска в `pytest.param(…, marks=…)`."""
+    «pytestmark класса C #1», «pytestmark модуля #1»), `frame` — текст
+    вызова (`ast.unparse`) с литеральным списком вариантов, заменённым
+    `PARAMETRIZE_VARIANTS_SLOT`: имена аргументов, `ids=`, `indirect=` и
+    аргумент-имя — как написаны, `variants` — тексты элементов литерального
+    списка вариантов по порядку, `skipped` — те из них, что несут марку
+    пропуска в `pytest.param(…, marks=…)`, `bindings` — строки уровня модуля
+    и тела класса, где упомянуто имя, которое вызов берёт из того же модуля
+    (`CASES`, элемент-имя набора, и транзитивно имена из их строк)."""
 
     place: str
-    signature: str
+    frame: str
     variants: tuple
     skipped: frozenset
+    bindings: tuple
 
 
 def _is_parametrize(node: ast.AST) -> bool:
@@ -960,22 +967,54 @@ def _is_parametrize(node: ast.AST) -> bool:
         _called_dotted_name(node.func).rsplit(".", 1)[-1] == PARAMETRIZE_NAME
 
 
-def _module_constants(tree: ast.Module) -> dict:
-    """{имя: узел значения} присваиваний верхнего уровня `имя = …`
-    (требование 5); последнее присваивание побеждает. Имя, импортированное
-    из другого модуля, сюда не попадает — известный пробел SPEC."""
-    constants: dict = {}
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
-        else:
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name):
-                constants[target.id] = value
-    return constants
+def _is_pytestmark_assign(node: ast.AST) -> bool:
+    return isinstance(node, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == PYTESTMARK_NAME
+        for t in node.targets)
+
+
+def _module_statements(tree: ast.Module) -> list:
+    """[(текст строки с областью, имена, которым она присваивает, имена,
+    которые упоминает)] — строки уровня модуля и тела классов (ANSWER-1
+    п. 1). Тела функций — не строки модуля (значения, вычисляемые
+    функцией, — известный пробел); `pytestmark = …` сравнивается как
+    марка, а не как строка константы."""
+    statements = []
+
+    def add(scope: str, body: list) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or \
+                    _is_pytestmark_assign(node):
+                continue
+            if isinstance(node, ast.ClassDef):
+                add(f"{scope}{node.name}.", node.body)
+                continue
+            names = [n for n in ast.walk(node) if isinstance(n, ast.Name)]
+            statements.append((
+                f"{scope}{ast.unparse(node)}",
+                {n.id for n in names if isinstance(n.ctx, ast.Store)},
+                {n.id for n in names}))
+
+    add("", tree.body)
+    return statements
+
+
+def _bindings(call: ast.Call, statements: list) -> tuple:
+    """Строки модуля и классов, в которых упомянуто имя, взятое вызовом из
+    того же модуля, — с замыканием по именам, упомянутым в этих строках.
+    Имя, лишь импортированное, сюда не попадает (известный пробел SPEC)."""
+    defined = set().union(*(stored for _t, stored, _m in statements))
+    names = {n.id for n in ast.walk(call)
+             if isinstance(n, ast.Name)} & defined
+    while True:
+        wider = names.union(*(mentioned & defined
+                              for _t, _s, mentioned in statements
+                              if mentioned & names))
+        if wider == names:
+            break
+        names = wider
+    return tuple(text for text, _s, mentioned in statements
+                 if mentioned & names)
 
 
 def _pytestmark_marks(body: list) -> list:
@@ -983,26 +1022,11 @@ def _pytestmark_marks(body: list) -> list:
     (модуля или класса) — одна марка либо элементы списка/кортежа."""
     value = None
     for node in body:
-        if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == PYTESTMARK_NAME
-                for t in node.targets):
+        if _is_pytestmark_assign(node):
             value = node.value
     if value is None:
         return []
     return value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
-
-
-def _argnames_text(node) -> str:
-    """Имена аргументов марки — нормальной формой: строка `"k, v"` и список
-    `["k", "v"]` дают один текст."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        names = [n.strip() for n in node.value.split(",") if n.strip()]
-        return ", ".join(names)
-    if isinstance(node, (ast.List, ast.Tuple)) and all(
-            isinstance(e, ast.Constant) and isinstance(e.value, str)
-            for e in node.elts):
-        return ", ".join(e.value.strip() for e in node.elts)
-    return "" if node is None else ast.unparse(node)
 
 
 def _variant_skipped(node: ast.AST) -> bool:
@@ -1017,26 +1041,22 @@ def _variant_skipped(node: ast.AST) -> bool:
 
 
 def _parametrize_mark(call: ast.Call, place: str,
-                      constants: dict) -> ParametrizeMark:
-    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
-    argnames = call.args[0] if call.args else keywords.pop("argnames", None)
-    argvalues = call.args[1] if len(call.args) > 1 \
-        else keywords.pop("argvalues", None)
-    if isinstance(argvalues, ast.Name) and argvalues.id in constants:
-        argvalues = constants[argvalues.id]
-    if isinstance(argvalues, (ast.List, ast.Tuple)):
-        elements = list(argvalues.elts)
+                      statements: list) -> ParametrizeMark:
+    frame = copy.deepcopy(call)
+    slot = ast.Name(PARAMETRIZE_VARIANTS_SLOT, ast.Load())
+    elements: list = []
+    if len(frame.args) > 1:
+        if isinstance(frame.args[1], (ast.List, ast.Tuple)):
+            elements, frame.args[1] = list(frame.args[1].elts), slot
     else:
-        elements = [] if argvalues is None else [argvalues]
-    rest = [f"{name}={ast.unparse(value)}"
-            for name, value in sorted(keywords.items())]
-    rest += [f"**{ast.unparse(kw.value)}" for kw in call.keywords
-             if kw.arg is None]
-    rest += [ast.unparse(arg) for arg in call.args[2:]]
-    variants = tuple(ast.unparse(e) for e in elements)
-    skipped = frozenset(ast.unparse(e) for e in elements if _variant_skipped(e))
-    return ParametrizeMark(place, "; ".join([_argnames_text(argnames)] + rest),
-                           variants, skipped)
+        for kw in frame.keywords:
+            if kw.arg == "argvalues" and isinstance(kw.value,
+                                                    (ast.List, ast.Tuple)):
+                elements, kw.value = list(kw.value.elts), slot
+    return ParametrizeMark(
+        place, ast.unparse(frame), tuple(ast.unparse(e) for e in elements),
+        frozenset(ast.unparse(e) for e in elements if _variant_skipped(e)),
+        _bindings(call, statements))
 
 
 def parametrize_variants(source) -> dict:
@@ -1052,10 +1072,10 @@ def parametrize_variants(source) -> dict:
     tree = _parse_or_none(source)
     if tree is None:
         return {}
-    constants = _module_constants(tree)
+    statements = _module_statements(tree)
 
     def marks(nodes, place: str) -> list:
-        return [_parametrize_mark(call, f"{place} #{index}", constants)
+        return [_parametrize_mark(call, f"{place} #{index}", statements)
                 for index, call in enumerate(
                     (n for n in nodes if _is_parametrize(n)), 1)]
 

@@ -513,26 +513,48 @@ def _variants_text(variants) -> str:
     return ", ".join(variants)
 
 
+def _grown_by(base: tuple, head: tuple):
+    """Варианты, вставленные в `head` при прежних вариантах `base` в
+    прежнем порядке; None — прежний вариант удалён, изменён или
+    переставлен."""
+    added, rest = [], iter(base)
+    expected = next(rest, None)
+    for variant in head:
+        if expected is not None and variant == expected:
+            expected = next(rest, None)
+        else:
+            added.append(variant)
+    return added if expected is None else None
+
+
 def _mark_problems(base, head) -> tuple:
     """(что в марке `head` изменено против `base` — находка требования 3,
-    добавленные варианты — требование 4). Варианты сравниваются по
-    значению с учётом повторов, не по позиции: вставка нового варианта в
-    начало списка прежних не меняет."""
-    problems, added = [], []
-    if base.signature != head.signature:
-        problems.append(f"{base.place}: аргументы `{base.signature}` → "
-                        f"`{head.signature}`")
-    gone = list((Counter(base.variants) - Counter(head.variants)).elements())
-    new = list((Counter(head.variants) - Counter(base.variants)).elements())
-    if gone:
-        problems.append(f"{base.place}: удалены или изменены варианты "
-                        f"{_variants_text(gone)}")
-    skipped = [v for v in new if v in head.skipped]
+    добавленные варианты — требование 4). Находка — любая смена текста
+    вызова, кроме вставки новых вариантов при прежних в прежнем порядке
+    (ANSWER-1 п. 2), и любая смена строк модуля и классов с именами,
+    которые вызов берёт из того же модуля (ANSWER-1 п. 1)."""
+    problems = []
+    if base.frame != head.frame:
+        problems.append(f"{base.place}: вызов `{base.frame}` → "
+                        f"`{head.frame}`")
+    if base.bindings != head.bindings:
+        gone = [b for b in base.bindings if b not in head.bindings]
+        new = [b for b in head.bindings if b not in base.bindings]
+        problems.append(f"{base.place}: изменены строки модуля с именами "
+                        f"вызова (было: {_variants_text(gone) or '—'}; "
+                        f"стало: {_variants_text(new) or '—'})")
+    added = _grown_by(base.variants, head.variants)
+    if added is None:
+        gone = list((Counter(base.variants) - Counter(head.variants))
+                    .elements())
+        problems.append(f"{base.place}: удалены, изменены или переставлены "
+                        f"варианты {_variants_text(gone or base.variants)}")
+        return problems, []
+    skipped = [v for v in added if v in head.skipped]
     if skipped:
         problems.append(f"{base.place}: марка пропуска на вариантах "
                         f"{_variants_text(skipped)}")
-    added += [v for v in new if v not in head.skipped]
-    return problems, added
+    return problems, [v for v in added if v not in head.skipped]
 
 
 def _parametrize_findings(base_path, head_path, renamed_to, base_source,
@@ -541,8 +563,9 @@ def _parametrize_findings(base_path, head_path, renamed_to, base_source,
     о добавленных вариантах) одного файла (SPEC 01M56TNZ3E72XY9XSTAVS99CN2,
     требования 3-5).
 
-    Находка — снятая марка, смена имён и прочих аргументов марки,
-    удалённый или изменённый вариант, вариант с маркой пропуска в
+    Находка — снятая марка, любая смена текста вызова (имена и прочие
+    аргументы марки, удалённый, изменённый или переставленный вариант),
+    смена строк модуля с именами вызова, вариант с маркой пропуска в
     `pytest.param(…, marks=…)`, марка, появившаяся у метода, который в
     базе ею не параметризован (прежний единственный вариант исчез). Она
     идёт в `found` — тем же каналом, что изменённое утверждение без
