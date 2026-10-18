@@ -727,6 +727,253 @@ def _commit_not_found_in_origin(why: str) -> bool:
     return "422" in why
 
 
+# Отказ чтения check-runs правами токена (SPEC 01M574A6YQHAPASS9716Z11G4Q,
+# требование 1): токену проекта без права Checks GitHub отвечает 403 с одним
+# из этих текстов, а запуски Actions тому же токену доступны. Прочий 403
+# (лимит запросов и пр.) — не про права и на Actions не переводится.
+CHECKS_FORBIDDEN_TEXTS = ("Resource not accessible by personal access token",
+                          "Resource not accessible by integration")
+# Строка причины перехода на Actions в `note` каждого такого исхода
+# (требование 6) — не первая: на первой стоят разборщики статуса.
+ACTIONS_REASON = ("check-runs недоступны токену проекта (403) — итог по "
+                  "Actions runs")
+# Событие запуска, которым CI проекта проверяет ветку задачи (Draft-MR).
+BRANCH_TRIGGER_EVENT = "pull_request"
+
+
+def checks_forbidden(why: str) -> bool:
+    """`why` отказа чтения check-runs (текст `gh`) — HTTP 403 «Resource not
+    accessible …», то есть у токена нет права Checks: read."""
+    return "403" in why and any(t in why for t in CHECKS_FORBIDDEN_TEXTS)
+
+
+def _actions_fallback(repo: Path | None, why: str) -> bool:
+    """Отказ check-runs `why` переводит статус внешнего проекта на запуски
+    Actions; артель (свой репозиторий, токен Оператора) — никогда
+    (требование 7)."""
+    ctx, refusal = _project_context(repo)
+    return ctx is not None and not refusal and checks_forbidden(why)
+
+
+def _actions_pages(repo: Path | None, endpoint: str,
+                   key: str) -> tuple[list | None, str]:
+    """Все записи `key` постраничного ответа Actions `endpoint`; (None,
+    причина) — ответ не получен, не разобран или неполон (записей меньше,
+    чем обещает `total_count`), как у `check_runs`. Без `total_count`
+    полноту сверить не с чем — тоже «неизвестен» (инвариант 19)."""
+    items: list = []
+    total = None
+    sep = "&" if "?" in endpoint else "?"
+    for page in range(1, config.CI_CHECKS_MAX_PAGES + 1):
+        res = _gh_at(repo, "api", f"{endpoint}{sep}per_page="
+                                  f"{config.CI_CHECKS_PER_PAGE}&page={page}")
+        if res.returncode != 0:
+            detail = (res.stderr or res.stdout).strip()[:200]
+            return None, f"gh не ответил: {detail or f'код {res.returncode}'}"
+        try:
+            payload = json.loads(res.stdout)
+        except (json.JSONDecodeError, TypeError) as exc:
+            return None, f"ответ gh не разобран: {exc}"
+        chunk = payload.get(key) if isinstance(payload, dict) else None
+        if not isinstance(chunk, list) or not all(isinstance(i, dict)
+                                                  for i in chunk):
+            return None, f"в ответе gh нет списка {key}"
+        if page == 1:
+            total = payload.get("total_count")
+            if (isinstance(total, bool) or not isinstance(total, int)
+                    or total < 0):
+                return None, f"в ответе gh нечисловой total_count: {total!r}"
+        items.extend(chunk)
+        if len(items) >= total or len(chunk) < config.CI_CHECKS_PER_PAGE:
+            break
+    else:
+        return None, (f"записей {key} больше, чем помещается в "
+                      f"{config.CI_CHECKS_MAX_PAGES} страниц по "
+                      f"{config.CI_CHECKS_PER_PAGE}")
+    if len(items) != total:
+        return None, (f"получено {len(items)} записей {key} из {total} "
+                      f"обещанных — список неполон")
+    return items, ""
+
+
+class _ActionsRun(NamedTuple):
+    """Запуск Actions коммита и его задания."""
+    run: dict
+    jobs: list
+
+
+def _actions_runs(sha: str,
+                  repo: Path | None) -> tuple[list[_ActionsRun] | None, str]:
+    """Запуски Actions коммита `sha` с заданиями каждого; (None, причина) —
+    запуски или задания хоть одного запуска не получены, не разобраны или
+    неполны. Задания читаются и у зелёных запусков: неполный ответ заданий
+    иначе не обнаружить, а имя упавшего — не узнать."""
+    runs, why = _actions_pages(
+        repo, f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
+        "workflow_runs")
+    if runs is None:
+        return None, f"запуски Actions: {why}"
+    result = []
+    for run in runs:
+        run_id = _int_or_none(run.get("id"))
+        if run_id is None:
+            return None, f"запуск Actions без id: {run.get('name', '?')}"
+        jobs, why = _actions_pages(
+            repo, f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs",
+            "jobs")
+        if jobs is None:
+            return None, f"задания запуска Actions {run_id}: {why}"
+        result.append(_ActionsRun(run, jobs))
+    return result, ""
+
+
+def _actions_finished(run: dict) -> bool:
+    return run.get("status") == "completed"
+
+
+def _actions_failed_names(item: _ActionsRun) -> list[str]:
+    """Имена упавших заданий завершённого запуска; у красного запуска без
+    красных заданий (заданий нет, `startup_failure`) — имя самого запуска:
+    пустой список при красном запуске был бы ложью в пользу зелёного."""
+    names = [str(j.get("name", "?")) for j in item.jobs
+             if j.get("status") == "completed"
+             and j.get("conclusion") not in GREEN]
+    if not names and item.run.get("conclusion") not in GREEN:
+        names = [str(item.run.get("name", "?"))]
+    return names
+
+
+def _actions_label(run: dict) -> str:
+    return f"{run.get('event') or UNDEFINED_EVENT}, прогон {run.get('id')}"
+
+
+def _actions_failed_listing(red: list[_ActionsRun]) -> str:
+    """«<задание>=<заключение> (<событие>, прогон <id>)» по красным
+    запускам; у запуска без красных заданий — по самому запуску."""
+    parts = []
+    for item in red:
+        jobs = [j for j in item.jobs if j.get("status") == "completed"
+                and j.get("conclusion") not in GREEN]
+        for job in jobs or [item.run]:
+            parts.append(f"{job.get('name', '?')}={job.get('conclusion')} "
+                         f"({_actions_label(item.run)})")
+    return ", ".join(parts)
+
+
+class _ActionsVerdict(NamedTuple):
+    """Разбор запусков Actions ветки: `kind` — "unknown" | "red" |
+    "running" | "none" | "green"; `first` — первая строка `note` (для
+    "none" — источник для `_no_checks_by_branch`); `failed` — упавшие
+    (имена, для `_inherited_from_main`); `foreign` — фраза об исключённых."""
+    kind: str
+    first: str
+    failed: list
+    foreign: str
+
+
+def _actions_verdict(sha: str, branch: str,
+                     repo: Path | None) -> _ActionsVerdict:
+    """Вердикт ветки задачи по запускам Actions коммита (требование 2):
+    запуски других веток (непустой чужой `head_branch`) — вне вердикта;
+    красный выигрывает у идущего; зелёный — только при завершённом запуске
+    события `pull_request` и всех зелёных запусках вердикта."""
+    short = sha[:8]
+    runs, why = _actions_runs(sha, repo)
+    if runs is None:
+        return _ActionsVerdict(
+            "unknown", f"статус CI коммита {short} неизвестен: {why}", [], "")
+    own, excluded = [], []
+    for item in runs:
+        head = item.run.get("head_branch")
+        other = isinstance(head, str) and head and head != branch
+        (excluded if other else own).append(item)
+    foreign = ""
+    if excluded:
+        listing = ", ".join(
+            f"{i.run.get('name', '?')}={i.run.get('conclusion') or i.run.get('status')}"
+            f" (ветка {i.run.get('head_branch')}, {_actions_label(i.run)})"
+            for i in excluded)
+        foreign = f"; вне вердикта — запуски Actions других веток: {listing}"
+    red = [i for i in own if _actions_finished(i.run)
+           and i.run.get("conclusion") not in GREEN]
+    if red:
+        failed = [{"name": n} for i in red for n in _actions_failed_names(i)]
+        return _ActionsVerdict(
+            "red", f"CI коммита {short} не зелёный: "
+                   f"{_actions_failed_listing(red)}", failed, foreign)
+    running = [i for i in own if not _actions_finished(i.run)]
+    if running:
+        listing = ", ".join(f"{i.run.get('name', '?')} "
+                            f"({_actions_label(i.run)})" for i in running)
+        return _ActionsVerdict(
+            "running", f"CI коммита {short} ещё идёт: {listing}", [], foreign)
+    if not any(i.run.get("event") == BRANCH_TRIGGER_EVENT for i in own):
+        return _ActionsVerdict(
+            "none", f"у коммита {short} нет запусков Actions ветки {branch} "
+                    f"события {BRANCH_TRIGGER_EVENT}", [], foreign)
+    return _ActionsVerdict(
+        "green", f"CI коммита {short} зелёный ({len(own)} запусков "
+                 f"Actions)", [], foreign)
+
+
+def _with_actions_reason(note: str) -> str:
+    return f"{note}\n{ACTIONS_REASON}"
+
+
+def _verifying_by_actions(sha: str, branch: str,
+                          repo: Path | None) -> tuple[str, str]:
+    """Исход `verifying_status` по запускам Actions. «Статус неизвестен» —
+    `VERIFYING_NONE`, как у неопределённой головы ветки («статус CI
+    неизвестен» в начале `verifying_status`): ответа о CI нет вовсе, а
+    «проверки идут» утверждало бы, что запуск виден."""
+    verdict = _actions_verdict(sha, branch, repo)
+    if verdict.kind == "unknown":
+        return VERIFYING_NONE, _with_actions_reason(verdict.first)
+    if verdict.kind == "none":
+        outcome, note = _no_checks_by_branch(branch, verdict.first,
+                                             verdict.foreign, repo)
+        return outcome, _with_actions_reason(note)
+    if verdict.kind == "red":
+        inherited = _inherited_from_main(verdict.failed, repo)
+        hint = PULL_MAIN_HINT if inherited else ""
+        return VERIFYING_RED, _with_actions_reason(
+            f"{verdict.first}{inherited}{hint}{verdict.foreign}")
+    outcome = (VERIFYING_RUNNING if verdict.kind == "running"
+               else VERIFYING_GREEN)
+    return outcome, _with_actions_reason(f"{verdict.first}{verdict.foreign}")
+
+
+def _branch_by_actions(sha: str, branch: str,
+                       repo: Path | None) -> tuple[bool, str]:
+    """Исход `branch_status` по запускам Actions; тексты читает
+    `status_kind` так же, как тексты пути check-runs."""
+    verdict = _actions_verdict(sha, branch, repo)
+    if verdict.kind == "none":
+        return False, _with_actions_reason(
+            f"{verdict.first} — статус неизвестен{verdict.foreign}")
+    if verdict.kind == "red":
+        return False, _with_actions_reason(
+            f"{verdict.first}{_inherited_from_main(verdict.failed, repo)}"
+            f"{verdict.foreign}")
+    return verdict.kind == "green", _with_actions_reason(
+        f"{verdict.first}{verdict.foreign}")
+
+
+def _failed_names_by_actions(sha: str,
+                             repo: Path | None) -> tuple[set[str] | None, str]:
+    """`failed_check_names` по запускам Actions (требование 3): все события,
+    без отбора по ветке, как на пути check-runs."""
+    short = sha[:8]
+    runs, why = _actions_runs(sha, repo)
+    if runs is None:
+        return None, f"статус CI коммита {short} неизвестен: {why}"
+    if not runs:
+        return None, (f"у коммита {short} нет ни одного запуска Actions — "
+                      f"статус неизвестен")
+    return {n for item in runs if _actions_finished(item.run)
+            for n in _actions_failed_names(item)}, ""
+
+
 def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
     """Статус CI ветки задачи в состоянии `verifying` (SPEC T079,
     требование 5) — не то же самое, что `branch_status`: тот сворачивает
@@ -751,6 +998,8 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
             f"{HEAD_NOT_IN_ORIGIN_NOTE} — GitHub не нашёл коммит {short} "
             f"({why}); пульт сам отправит голову ветки {branch} в origin "
             f"(push) при опросе verifying")
+    if runs is None and _actions_fallback(repo, why):
+        return _verifying_by_actions(sha, branch, repo)
     if not runs:
         first_source = (f"у коммита {short} нет ни одной проверки CI"
                         if runs is not None else
@@ -891,6 +1140,8 @@ def failed_check_names(sha: str,
     """
     runs, why = check_runs(sha, **_project_kwargs(repo))
     short = sha[:8]
+    if runs is None and _actions_fallback(repo, why):
+        return _failed_names_by_actions(sha, repo)
     if runs is None:
         return None, f"статус CI коммита {short} неизвестен: {why}"
     if not runs:
@@ -919,6 +1170,8 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     project = _project_kwargs(repo)
     runs, why = check_runs(sha, **project)
     short = sha[:8]
+    if runs is None and _actions_fallback(repo, why):
+        return _branch_by_actions(sha, branch, repo)
     if runs is None:
         return False, f"статус CI коммита {short} неизвестен: {why}"
     if not runs:
