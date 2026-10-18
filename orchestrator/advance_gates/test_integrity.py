@@ -337,10 +337,29 @@ def _skip_calls(node, inside_if: bool):
         yield from _skip_calls(child, inside_if)
 
 
-def _excused_skips(node) -> dict:
+def _resolved_reason(occurrence: guard.SkipOccurrence) -> str:
+    """Причина вхождения `guard.resolved_skip_markers`, годного под
+    послабление, — по правилам SPEC 01M56TNX1WWKV8PVQ94FT4ZJQB (требования
+    2, 4): метка и марка `pytestmark` — по правилу прямого декоратора,
+    вызов уровня модуля — по правилу вызова в теле (условен только в ветке
+    `if`/`else`). У `importorskip` первый позиционный аргумент — имя
+    модуля, не причина: причина только `reason=`."""
+    node = occurrence.node
+    if occurrence.inside_if is None:
+        return _decorator_occurrence(node, _called_dotted_name(node))[1]
+    if not occurrence.inside_if:
+        return ""
+    dotted = _called_dotted_name(node.func)
+    if dotted.rsplit(".", 1)[-1] == guard.MODULE_IMPORTORSKIP_NAME:
+        return _constant_reason(node, len(node.args))
+    return _constant_reason(node, 0)
+
+
+def _excused_skips(node, extra=()) -> dict:
     """{маркер: причина} по маркерам пропуска ОДНОГО тестового метода,
     которые годятся под послабление требования 2 — условные и с названной
-    причиной.
+    причиной. `extra` — вхождения `guard.resolved_skip_markers` того же
+    имени (метка, `pytestmark`, вызов уровня модуля).
 
     Маркер попадает сюда только если КАЖДОЕ его вхождение в метод годится:
     `guard.test_skip_markers` сводит вхождения к одному тексту маркера, и
@@ -348,7 +367,7 @@ def _excused_skips(node) -> dict:
     права уйти из находок за компанию с условным вызовом того же вида
     ниже (рубеж закрывается в пользу находки).
     """
-    occurrences: list = []
+    occurrences: list = [(o.marker, _resolved_reason(o)) for o in extra]
     for decorator in getattr(node, "decorator_list", []):
         dotted = _called_dotted_name(decorator)
         if dotted and dotted.rsplit(".", 1)[-1] in guard.SKIP_DECORATOR_NAMES:
@@ -397,8 +416,22 @@ def _early_return_text(name: str) -> str:
     return f"ранний return под условием в {name}"
 
 
+def _skip_markers(source, modules) -> tuple:
+    """({имя: маркеры} — `guard.test_skip_markers` вместе с маркерами
+    `guard.resolved_skip_markers`, {имя: вхождения последних}) одной
+    стороны файла. `modules` — модули `tests/` этой стороны: по ним
+    разрешается импортированная метка (SPEC 01M56TNX1WWKV8PVQ94FT4ZJQB,
+    требование 1б)."""
+    markers = {name: set(found)
+               for name, found in guard.test_skip_markers(source).items()}
+    extra = guard.resolved_skip_markers(source, modules)
+    for name, occurrences in extra.items():
+        markers.setdefault(name, set()).update(o.marker for o in occurrences)
+    return markers, extra
+
+
 def _file_findings(base_path, head_path, renamed_to, base_source,
-                   head_source) -> tuple:
+                   head_source, modules=(None, None)) -> tuple:
     """(находки одного файла, прошедшие послабление пропуски).
 
     Находки: удаление/переименование (только если в base есть хоть один
@@ -438,15 +471,17 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
         if name not in head_methods:
             found.append(Finding(path, name, f"метод {name} исчез", alias))
 
-    base_markers = guard.test_skip_markers(base_source)
-    for name, markers in guard.test_skip_markers(head_source).items():
+    base_markers, _base_extra = _skip_markers(base_source, modules[0])
+    head_markers, head_extra = _skip_markers(head_source, modules[1])
+    for name, markers in head_markers.items():
         # Послабление SPEC 01M3HWXFYWVDHGW011P6BZJFYA действует только на
         # имени МЕТОДА, которого в базе сравнения нет (его требования 1-2,
         # 4). Ключ `test_skip_markers`, отсутствующий среди методов head, —
         # это имя КЛАССА: один декоратор над классом гасит все его тесты
         # разом и остаётся находкой даже в новом файле.
         new_name = name in head_methods and name not in base_methods
-        excused = _excused_skips(head_methods[name]) if new_name else {}
+        excused = _excused_skips(head_methods[name], head_extra.get(name, ())) \
+            if new_name else {}
         for marker in sorted(markers - base_markers.get(name, set())):
             if marker in excused:
                 # Путь HEAD, а не базы: перечень уходит в журнал задачи для
@@ -735,7 +770,8 @@ def _compare(code_branch: str, repo=None, scope=None,
     for (base_path, head_path, base_source, head_source), renamed_to in \
             zip(files, renames):
         file_found, file_passed = _file_findings(
-            base_path, head_path, renamed_to, base_source, head_source)
+            base_path, head_path, renamed_to, base_source, head_source,
+            modules)
         found += file_found
         passed += file_passed
         file_observed, reason, file_changes = _assertion_observation(
@@ -755,6 +791,35 @@ def _compare(code_branch: str, repo=None, scope=None,
             if source is not None and (base_path is None or
                                        head_path is None):
                 guard.test_assertions(source, path, side_modules)
+
+    # Импортёры метки, сменившей значение, вне диффа (SPEC
+    # 01M56TNX1WWKV8PVQ94FT4ZJQB, требования 3, 5): файл теста с прежним
+    # `@requires_pg` не меняется, меняется только модуль метки — маркер
+    # такого файла на стороне base и head разрешается модулями своей
+    # стороны и потому различается.
+    labels: set = set()
+    for _base_path, _head_path, base_source, head_source in files:
+        before = guard.skip_label_values(base_source)
+        after = guard.skip_label_values(head_source)
+        labels |= {n for n in before.keys() | after.keys()
+                   if before.get(n) != after.get(n)}
+    if labels:
+        importers = _helper_callers(code_branch, labels, repo,
+                                    everywhere=helpers is not None)
+        if importers is None:
+            return _git_failure(_git_silence(
+                f"поиск импортёров меток пропуска ({', '.join(sorted(labels))}) "
+                f"в {code_branch}"))
+        for path in importers:
+            if path in in_diff or not in_scope(path):
+                continue
+            text = read_unchanged(path)
+            if text is None:
+                return _git_failure(_git_silence(
+                    f"чтение {path} из {code_branch}"))
+            file_found, _file_passed = _file_findings(
+                path, path, None, text, text, modules)
+            found += file_found
 
     # Вызывающие вне диффа (SPEC 01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2):
     # помощник файла диффа потерял утверждение либо класс файла диффа

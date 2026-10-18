@@ -130,6 +130,46 @@ class SkipMarkersTest(unittest.TestCase):
         self.assertEqual({}, guard.test_skip_markers(source))
 
 
+class ResolvedSkipMarkersTest(unittest.TestCase):
+    """`resolved_skip_markers` (SPEC 01M56TNX1WWKV8PVQ94FT4ZJQB): границы
+    распознавания метки и пропуска уровня модуля, не покрытые
+    долгоживущими файлами задачи."""
+
+    def test_label_rebound_to_non_mark_is_not_a_skip(self):
+        """Ловит мутацию: метка не снимается переприсваиванием обычным
+        значением — `requires = pytest.mark.skip()`, затем `requires =
+        pytest.mark.slow`, и `@requires` на методе становится находкой,
+        хотя действует последнее связывание и тест не выключен."""
+        source = ('import pytest\n\n'
+                  'requires = pytest.mark.skip()\n'
+                  'requires = pytest.mark.slow\n\n\n'
+                  '@requires\ndef test_one():\n    pass\n')
+        self.assertEqual({}, guard.resolved_skip_markers(source))
+
+    def test_ordinary_mark_label_is_not_a_skip(self):
+        """Ловит мутацию: меткой считается любое присваивание марки pytest
+        — `slow = pytest.mark.slow` с `@slow` на методе начинает
+        отказывать переходу на ровном месте."""
+        source = ('import pytest\n\n'
+                  'slow = pytest.mark.slow\n\n\n'
+                  '@slow\ndef test_one():\n    pass\n')
+        self.assertEqual({}, guard.resolved_skip_markers(source))
+
+    def test_skip_inside_function_or_class_body_is_not_module_level(self):
+        """Ловит мутацию: обход уровня модуля заходит в тела функций и
+        классов — `pytest.skip(` в теле одного метода (его уже видит
+        `test_skip_markers`) и в помощнике становится пропуском всего
+        файла, и соседний метод получает находку."""
+        source = ('import pytest\n\n\n'
+                  'def helper():\n    pytest.skip("нет базы")\n\n\n'
+                  'class T:\n'
+                  '    pg = pytest.importorskip("psycopg")\n\n'
+                  '    def test_one(self):\n'
+                  '        pytest.skip("нет базы")\n\n'
+                  '    def test_two(self):\n        pass\n')
+        self.assertEqual({}, guard.resolved_skip_markers(source))
+
+
 def _changed(base: str, head: str) -> dict:
     """Изменённые утверждения base -> head (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6,
     требование 3) — тем же путём, каким их видит гейт."""
