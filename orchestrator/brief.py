@@ -22,7 +22,7 @@ from pathlib import Path
 from scripts import codebase_map
 
 from . import (alerts, artifact_branch, config, context_package, gitcmd,
-               reference_cache, store)
+               reference_cache, repo_context, store)
 from .advance_gates import refusal_classes
 
 MAP_REL = "docs/codebase-map.md"
@@ -38,6 +38,13 @@ MAP_PROJECTION_NOTE = (
     f"«Импортируется» лежит в {MAP_REL} рабочего каталога и читается "
     "адресно.\n\n")
 CONVENTIONS_REL = "CLAUDE.md"
+# Конвенции задачи внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN,
+# требования 4-9; ANSWER-1 п.2): фиксированный список файлов корня базовой
+# ветки проекта — вместо `CLAUDE.md` пульта и карты кодовой базы пульта.
+PROJECT_CONVENTIONS = ("CLAUDE.md", "AGENTS.md")
+PROJECT_CONVENTIONS_ABSENT_MARK = "файла нет"
+PROJECT_CONVENTIONS_UNREAD_MARK = "конвенции проекта не прочитаны"
+PROJECT_CONVENTIONS_UNREAD_ACTION = "бриф: конвенции проекта не прочитаны"
 # Те же три glob'а, что и у CI-джобы codebase-map — общий способ сверки
 # свежести карты (SPEC T028, требование 5).
 MAP_WATCH_GLOBS = ("orchestrator/*.py", "scripts/*.py", "tests/*.py")
@@ -516,6 +523,105 @@ def _template_components(conn, task_id: str, role: str, run_id: str,
     return parts
 
 
+def is_artel_task(conn, task_id: str) -> bool:
+    """Задача — артели: развилка брифа и миссий по признаку проекта задачи
+    (SPEC 01M5634E094QF7JX8HD3KSG4KN, требование 1) — тем же
+    `repo_context.is_artel`, что у остальных потребителей."""
+    return repo_context.is_artel(store.task_target(conn, task_id))
+
+
+def _clone_git(clone: Path, *args: str) -> tuple[bytes | None, str]:
+    """(stdout байтами, "") git-команды в клоне проекта; (None, причина) —
+    git не ответил или отказал. Байтами, а не `gitcmd.git`: текст файла
+    проекта не обязан быть UTF-8, а декодирование внутри `subprocess.run`
+    уронило бы сборку брифа исключением."""
+    try:
+        res = subprocess.run(["git", "-C", str(clone), *args],
+                             capture_output=True, env=gitcmd.pult_env(),
+                             timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"git не ответил ({type(exc).__name__})"
+    if res.returncode != 0:
+        err = " ".join(res.stderr.decode("utf-8", "replace").split())
+        return None, f"git {args[0]}: {err or f'код возврата {res.returncode}'}"
+    return res.stdout, ""
+
+
+def _read_project_conventions(ctx) -> tuple[list, str]:
+    """([(файл, текст | None, причина)], "") — файлы `PROJECT_CONVENTIONS`
+    корня `refs/heads/<base>` клона проекта (требование 4): текст `None` с
+    пустой причиной — файла в корне нет (требование 7), с причиной — файл
+    есть, а чтение не удалось (требование 9). ([], причина) — базу прочитать
+    не удалось (требование 8).
+
+    Состав корня — `ls-tree` коммита базы, а не `gitcmd.show`: тот отвечает
+    `None` одинаково на «файла нет» и на сбой git."""
+    sha, reason = reference_cache.branch_commit(ctx.path, ctx.base)
+    if sha is None:
+        return [], reason
+    listing, reason = _clone_git(ctx.path, "ls-tree", sha)
+    if listing is None:
+        return [], f"корень ветки {ctx.base} не прочитан: {reason}"
+    blobs = set()
+    for line in listing.decode("utf-8", "replace").splitlines():
+        meta, _, name = line.partition("\t")
+        if meta.split()[1:2] == ["blob"]:
+            blobs.add(name)
+    entries = []
+    for rel in PROJECT_CONVENTIONS:
+        if rel not in blobs:
+            entries.append((rel, None, ""))
+            continue
+        data, reason = _clone_git(ctx.path, "show", f"{sha}:{rel}")
+        if data is None:
+            entries.append((rel, None, f"{rel}: {reason}"))
+            continue
+        try:
+            entries.append((rel, data.decode("utf-8"), ""))
+        except UnicodeDecodeError:
+            entries.append((rel, None, f"{rel}: текст не в UTF-8"))
+    return entries, ""
+
+
+def _project_conventions_parts(conn, task_id: str, role: str, run_id: str,
+                               render) -> list[str]:
+    """Конвенции проекта задачи внешнего проекта — куски брифа роли (SPEC
+    01M5634E094QF7JX8HD3KSG4KN, требования 4-9): по компоненту на
+    найденный файл, оформленному `render` соседей роли (требование 5);
+    пометка «файла нет» на месте отсутствующего; пометка «конвенции проекта
+    не прочитаны: <причина>» и запись журнала с той же причиной на месте
+    нечитаемого файла или вместо всех, если не прочитана база. Сборку брифа
+    сбой не останавливает."""
+    target = store.task_target(conn, task_id)
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        entries, reason = [], repo_context.unresolved_reason(target)
+        where = f"проекта {target}"
+    else:
+        entries, reason = _read_project_conventions(ctx)
+        where = f"корень ветки {ctx.base} проекта {target}"
+    names = ", ".join(PROJECT_CONVENTIONS)
+    if reason:
+        store.journal(conn, task_id, role, PROJECT_CONVENTIONS_UNREAD_ACTION,
+                      reason)
+        return [f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {reason} — {names}, "
+                f"{where}\n"]
+    parts = []
+    for rel, text, why in entries:
+        if text is not None:
+            parts.append(render(conn, task_id, role, f"{rel} ({where})", text,
+                                run_id))
+        elif why:
+            store.journal(conn, task_id, role,
+                          PROJECT_CONVENTIONS_UNREAD_ACTION, why)
+            parts.append(f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {why} — "
+                         f"{where}\n")
+        else:
+            parts.append(f"конвенции проекта: {rel} — "
+                         f"{PROJECT_CONVENTIONS_ABSENT_MARK} ({where})\n")
+    return parts
+
+
 def skills_text(conn, task_id: str, role: str,
                 skill_names: list[str]) -> tuple[str | None, str]:
     """Текст скилов роли (`skills/*.md`, состав из `roles.yaml`) — с
@@ -899,38 +1005,50 @@ def developer_brief(conn, task_id: str) -> str:
     тексту ПОСЛЕ сверки свежести/регенерации (`_fresh_map_text_and_note`)
     — единственное место правил проекции остаётся в `scripts/
     codebase_map.py`, этот модуль их не дублирует.
+
+    Задача внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN, требования
+    2-6): ни карты пульта со сверкой её свежести и алертами, ни `CLAUDE.md`
+    пульта — на их месте конвенции проекта с его базовой ветки
+    (`_project_conventions_parts`).
     """
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
     spec_text = _developer_spec_text(conn, task_id, branch, foreign)
-    # Текст карты и пометка стухлости — раздельно (R1-F4): опись считает
-    # размер/sha256 по тексту ПРОЕКЦИИ (SPEC 01M1RFQ52S0VD22J628TXX96XS,
-    # требование 2/3, AC-9/AC-13) как есть после сверки свежести, пометка
-    # (если карта стухла) идёт в текст брифа ПЕРЕД компонентом, но не
-    # участвует в его заголовке — иначе sha256 в описи разошёлся бы с
-    # sha256 фактически включённого текста.
-    map_text, map_note = _fresh_map_text_and_note(conn, task_id)
-    projected_map_text = codebase_map.project_for_brief(map_text)
-    conventions_text = _main_branch_text(task_id, CONVENTIONS_REL)
-    _handle_map_size_alert(conn, task_id, projected_map_text)
+    artel = is_artel_task(conn, task_id)
+    if artel:
+        # Текст карты и пометка стухлости — раздельно (R1-F4): опись считает
+        # размер/sha256 по тексту ПРОЕКЦИИ (SPEC 01M1RFQ52S0VD22J628TXX96XS,
+        # требование 2/3, AC-9/AC-13) как есть после сверки свежести, пометка
+        # (если карта стухла) идёт в текст брифа ПЕРЕД компонентом, но не
+        # участвует в его заголовке — иначе sha256 в описи разошёлся бы с
+        # sha256 фактически включённого текста.
+        map_text, map_note = _fresh_map_text_and_note(conn, task_id)
+        projected_map_text = codebase_map.project_for_brief(map_text)
+        conventions_text = _main_branch_text(task_id, CONVENTIONS_REL)
+        _handle_map_size_alert(conn, task_id, projected_map_text)
     parts = []
     return_reason_part = _return_reason_component(
         conn, task_id, "developer", "in_dev", branch, foreign, run_id,
         render=_manifest_component)
     if return_reason_part:
         parts.append(return_reason_part)
-    parts += [
-        _manifest_component(conn, task_id, "developer",
-                            f"tasks/{task_id}/SPEC.md", spec_text, run_id),
-        map_note + MAP_PROJECTION_NOTE + _manifest_component(
+    parts.append(_manifest_component(conn, task_id, "developer",
+                                     f"tasks/{task_id}/SPEC.md", spec_text,
+                                     run_id))
+    if artel:
+        parts.append(map_note + MAP_PROJECTION_NOTE + _manifest_component(
             conn, task_id, "developer", MAP_PROJECTION_LABEL,
-            projected_map_text, run_id),
-    ]
+            projected_map_text, run_id))
     reference_part = _core_reference_part(conn, task_id, "developer", run_id)
     if reference_part:
         parts.append(reference_part)
-    parts.append(_manifest_component(conn, task_id, "developer",
-                                     CONVENTIONS_REL, conventions_text, run_id))
+    if artel:
+        parts.append(_manifest_component(conn, task_id, "developer",
+                                         CONVENTIONS_REL, conventions_text,
+                                         run_id))
+    else:
+        parts.extend(_project_conventions_parts(
+            conn, task_id, "developer", run_id, _manifest_component))
     parts.extend(_plan_review_components(conn, task_id, branch, foreign,
                                          run_id))
     parts.extend(_developer_answer_components(conn, task_id, branch, foreign,
@@ -991,10 +1109,16 @@ def spec_auditor_brief(conn, task_id: str) -> str:
                                              f"tasks/{task_id}/{name}", text,
                                              run_id))
     parts.extend(_spec_gate_decision_components(conn, task_id, role, run_id))
-    map_text, map_note = _fresh_map_text_and_note(conn, task_id)
-    parts.append(map_note + MAP_PROJECTION_NOTE + _manifest_component(
-        conn, task_id, role, MAP_PROJECTION_LABEL,
-        codebase_map.project_for_brief(map_text), run_id))
+    if is_artel_task(conn, task_id):
+        map_text, map_note = _fresh_map_text_and_note(conn, task_id)
+        parts.append(map_note + MAP_PROJECTION_NOTE + _manifest_component(
+            conn, task_id, role, MAP_PROJECTION_LABEL,
+            codebase_map.project_for_brief(map_text), run_id))
+    else:
+        # Внешний проект — конвенции проекта вместо карты пульта (SPEC
+        # 01M5634E094QF7JX8HD3KSG4KN, требования 2-6).
+        parts.extend(_project_conventions_parts(conn, task_id, role, run_id,
+                                                _manifest_component))
     parts.extend(_template_components(conn, task_id, role, run_id,
                                       _manifest_component))
     text, num_parts = context_package.discipline(
@@ -1276,17 +1400,26 @@ def analyst_map_component(conn, task_id: str) -> str:
     заголовка компонента» у analyst не меняется — `fresh_map_text` уже
     отдаёт пометку и текст одной строкой, проекция применяется к ней
     целиком: пометка не начинается с «## », поэтому в шапку проекции
-    попадает без изменений, AC-4)."""
+    попадает без изменений, AC-4).
+
+    Задача внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN, требования
+    2-6): вместо карты пульта — конвенции проекта с его базовой ветки."""
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
-    map_text = codebase_map.project_for_brief(fresh_map_text(conn, task_id))
+    artel = is_artel_task(conn, task_id)
+    if artel:
+        map_text = codebase_map.project_for_brief(fresh_map_text(conn, task_id))
     parts = []
     return_reason_part = _return_reason_component(
         conn, task_id, "analyst", "spec_writing", branch, foreign, run_id)
     if return_reason_part:
         parts.append(return_reason_part)
-    parts.append(MAP_PROJECTION_NOTE + _journal_component(
-        conn, task_id, "analyst", MAP_PROJECTION_LABEL, map_text, run_id))
+    if artel:
+        parts.append(MAP_PROJECTION_NOTE + _journal_component(
+            conn, task_id, "analyst", MAP_PROJECTION_LABEL, map_text, run_id))
+    else:
+        parts.extend(_project_conventions_parts(
+            conn, task_id, "analyst", run_id, _journal_component))
     q_part = _questions_component(conn, task_id, "analyst", branch, foreign,
                                   run_id)
     if q_part:
@@ -1309,7 +1442,11 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
     прежним (без добавки).
 
     Справочник ядра (SPEC 01M4S24EBVB72B8WYJ3JY96Y0E, требование 2) —
-    последним куском, после причины возврата и ANSWER."""
+    последним куском, после причины возврата и ANSWER.
+
+    Задача внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN, требование
+    6): конвенции проекта — перед справочником, поэтому добавка у неё есть
+    всегда."""
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
     return_reason_part = _return_reason_component(
@@ -1317,8 +1454,13 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
         run_id)
     part = _answer_component(conn, task_id, "test_author", branch, foreign,
                              run_id)
+    conventions = []
+    if not is_artel_task(conn, task_id):
+        conventions = _project_conventions_parts(
+            conn, task_id, "test_author", run_id, _journal_component)
     reference_part = _core_reference_part(conn, task_id, "test_author", run_id)
-    pieces = [p for p in (return_reason_part, part, reference_part) if p]
+    pieces = [p for p in (return_reason_part, part, *conventions,
+                          reference_part) if p]
     if not pieces:
         return None
     return f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n" + "\n".join(pieces)

@@ -114,7 +114,7 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 
 from . import (acceptance, config, gitcmd, knowledge_cards, merge_lock,
-               runner, store, workspace)
+               repo_context, runner, store, workspace)
 
 BACKLOG_REL = "docs/backlog.md"
 
@@ -270,16 +270,55 @@ def _silence_window_reason() -> str | None:
     в состоянии из `config.NOTE_SILENCE_WINDOW_STATES` — условие ИЛИ,
     любой из двух триггеров срабатывает независимо от другого (живой
     держатель без единой задачи в этих состояниях — уже открытое окно).
-    `None` — окна нет, push идёт как сегодня (AC-5)."""
+    `None` — окна нет, push идёт как сегодня (AC-5).
+
+    Окно открывают только задачи артели (SPEC 01M563947R26NZW2TJEKM36QRD):
+    задача внешнего проекта — ни в состоянии окна, ни как задача держателя
+    — пропускается, а не закрывает окно досрочно (внешний триггер не гасит
+    триггер артели). Проект не определён (`_task_project` — `None`) —
+    окно открыто с причиной «проект задачи не определён»."""
     conn = store.db()
     lock_row = store.merge_lock_row(conn)
     if lock_row is not None and not merge_lock._holder_is_dead(lock_row):
-        return (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "
-               f"задача {lock_row['task_id']})")
+        holder = (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "
+                  f"задача {lock_row['task_id']})")
+        # `task_exists` до `get_task`: тот завершает процесс на
+        # отсутствующей строке и разрешает префикс, а держатель без строки
+        # задачи — «проект не определён», не конец команды и не чужая задача.
+        project = None
+        if store.task_exists(conn, lock_row["task_id"]):
+            project = _task_project(store.get_task(conn, lock_row["task_id"]))
+        if project == _ARTEL:
+            return holder
+        if project is None:
+            return f"{holder}: {_UNKNOWN_PROJECT}"
     for task in store.all_tasks(conn):
-        if task["state"] in config.NOTE_SILENCE_WINDOW_STATES:
+        if task["state"] not in config.NOTE_SILENCE_WINDOW_STATES:
+            continue
+        project = _task_project(task)
+        if project == _ARTEL:
             return f"задача {task['id']} в состоянии {task['state']}"
+        if project is None:
+            return (f"задача {task['id']} в состоянии {task['state']}: "
+                    f"{_UNKNOWN_PROJECT}")
     return None
+
+
+_ARTEL = "artel"
+_EXTERNAL = "external"
+_UNKNOWN_PROJECT = "проект задачи не определён"
+
+
+def _task_project(task) -> str | None:
+    """Проект строки задачи для окна тишины: `_ARTEL`, `_EXTERNAL` или
+    `None` — не определён. `is_artel` первым (пустая/NULL колонка `target`
+    — артель), `resolve` — только для не-артели: `resolve("")` дал бы
+    `None` и превратил бы задачу артели в неизвестную."""
+    if repo_context.is_artel(task):
+        return _ARTEL
+    if repo_context.resolve(task["target"]) is None:
+        return None
+    return _EXTERNAL
 
 
 def _hold_pending(request: dict, known: str = "") -> None:

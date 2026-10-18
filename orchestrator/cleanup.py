@@ -5,8 +5,8 @@ import signal
 import socket
 import sys
 
-from . import (config, fixation, gitcmd, lease, liveness, repo_context, store,
-               workspace)
+from . import (ci, config, fixation, gitcmd, lease, liveness, repo_context,
+               store, targets, workspace)
 
 
 def _dir_in_main(task_id: str) -> bool | None:
@@ -208,13 +208,89 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
         # в неё каталог — оставить грязное дерево: ровно тот мусор, ради
         # которого уборка и заводилась.
         notes = [f"уборка пропущена: ветка {branch} сейчас checked out — "
-                 f"перейди на {config.MAIN_BRANCH} и повтори kill"]
+                 f"перейди на {_base_of(repo)} и повтори kill"]
     else:
         # Worktree — первым: ветку с `-D` не удалить, пока её держит
         # worktree (SPEC T045, требование 5, AC-5).
         notes = [workspace.remove(task_id), drop_task_dir(task_id),
                  drop_task_branch(branch, repo)]
 
+    store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
+    for note in notes:
+        print(f"  {note}")
+
+
+# Признаки срабатывания предела `http.lowSpeedTime` в stderr git-пуша
+# (curl, код 28): по ним отказ пуша отличается от молчания хостинга.
+_PUSH_SILENT_MARKS = ("Operation too slow", "curl 28")
+_GH_SILENT_PREFIX = "gh молчал дольше"
+
+
+def _left_reason(res, silent: bool, what: str) -> str:
+    text = ((res.stderr or res.stdout).strip()[:200]
+            or f"код {res.returncode}")
+    if silent:
+        return f"{what} не ответил за {config.GH_TIMEOUT_SEC} с ({text})"
+    return f"отказ: {text}"
+
+
+def _forge_of(target: str) -> str:
+    try:
+        return targets.target(target).get("forge") or ""
+    except targets.TargetsError:
+        return ""
+
+
+def _close_project_pr(branch: str, url: str, task_id: str) -> str:
+    res = ci.gh("pr", "close", branch, "--comment",
+                f"задача ликвидирована в пульте: {task_id}", repo=url)
+    if res.returncode == 0:
+        return f"PR {branch}: закрыт"
+    silent = (res.stderr or "").startswith(_GH_SILENT_PREFIX)
+    return f"PR {branch}: оставлено — {_left_reason(res, silent, 'gh')}"
+
+
+def _delete_origin_branch(repo, branch: str) -> str:
+    # Предел — в самом вызове пуша (`gitcmd.git` без таймаута): хостинг,
+    # принявший соединение и замолчавший, иначе держал бы kill без конца.
+    res = gitcmd.in_repo(repo, "-c", "http.lowSpeedLimit=1", "-c",
+                         f"http.lowSpeedTime={config.GH_TIMEOUT_SEC}",
+                         "push", "origin", "--delete", branch)
+    if res.returncode == 0:
+        return f"ветка origin {branch}: удалена"
+    silent = any(mark in (res.stderr or "") for mark in _PUSH_SILENT_MARKS)
+    return (f"ветка origin {branch}: оставлено — "
+            f"{_left_reason(res, silent, 'origin')}")
+
+
+def cleanup_project_remote(conn, task_id: str, branch: str) -> None:
+    """Уборка в репозитории внешнего проекта (SPEC 01M568XFYM68EYHH0C16Y7D7F0):
+    черновой PR задачи закрывается, ветка задачи удаляется из `origin`.
+
+    Зовёт только `_cmd_kill`, выигравший переход в `killed`; деление на
+    гейте SPEC и повторный kill терминальной задачи её не выполняют, а
+    `cleanup_killed_task` — общий для них узел — её не зовёт. Исход
+    локальной уборки не важен: нужно только имя ветки. PR — первым:
+    удаление head-ветки на GitHub закрывает PR само, и комментарий потом
+    не добавить. Ни один сбой не отменяет kill — это «оставлено» с
+    причиной. `refs/artifacts/<id>` не трогаются — документы проекта
+    публикуются в его репозиторий намеренно.
+    """
+    t = store.get_task(conn, task_id)
+    if repo_context.is_artel(t) or not branch:
+        return
+    target = t["target"]
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        notes = [f"PR {branch}: оставлено — {repo_context.unresolved_reason(target)}",
+                 f"ветка origin {branch}: оставлено — "
+                 f"{repo_context.unresolved_reason(target)}"]
+    else:
+        notes = []
+        # Не GitHub — PR пульт там не заводит (`github_adapter.ensure_draft_mr`).
+        if _forge_of(target) == "github":
+            notes.append(_close_project_pr(branch, ctx.remote, task_id))
+        notes.append(_delete_origin_branch(workspace.task_repo(task_id), branch))
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
     for note in notes:
         print(f"  {note}")
@@ -455,6 +531,8 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     if won:
         _commit_closing(conn, task_id)
     cleanup_killed_task(conn, task_id, t["branch"])
+    if won:
+        cleanup_project_remote(conn, task_id, t["branch"])
 
 
 def _warn_moved_ref(conn, task_id: str, drift) -> None:

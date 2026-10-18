@@ -116,7 +116,8 @@ def _read_checked_answer_file(conn, task_id: str, file_path: str,
     if problems:
         sys.exit(f"[{task_id}] answer отказана — строка мандата не прошла "
                  f"проверку:\n" + "\n".join(f"  {p}" for p in problems))
-    _refuse_without_matrix(task_id, "answer", _matrix_problems(raw))
+    _refuse_without_matrix(task_id, "answer",
+                           _matrix_problems(raw, conn, task_id))
     return raw
 
 
@@ -146,15 +147,17 @@ def _has_independent_check(raw: str) -> bool:
     return False
 
 
-def _matrix_problems(raw: str) -> list[str]:
+def _matrix_problems(raw: str, conn=None,
+                     task_id: str | None = None) -> list[str]:
     """Причины отказа файлу `answer` с мандатом по матрице неослабления
     (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, требования 1-4): форма — общей
-    `mandate.matrix_refusals`, строка независимой проверки — только при
-    мандате тестов."""
+    `mandate.matrix_refusals` по профилю проекта задачи, строка независимой
+    проверки — только при мандате тестов."""
     elements = _matrix_mandate_elements(raw)
     if elements is None:
         return []
-    problems = mandate.matrix_refusals(raw, elements)
+    problems = mandate.matrix_refusals(raw, elements, conn=conn,
+                                       task_id=task_id)
     weakening = any(
         mandate.elements(line, mandate.TEST_WEAKENING_MANDATE_MARKER)
         is not None for line in raw.splitlines())
@@ -465,7 +468,7 @@ def cmd_zones_extend(task_id: str, paths_arg: str,
                                                    matrix_path))
 
 
-def _zones_extend_matrix(task_id: str, matrix_path: str | None,
+def _zones_extend_matrix(conn, task_id: str, matrix_path: str | None,
                          paths: list[str]) -> str:
     """Раздел матрицы файла `matrix_path`, прошедший проверку формы для
     `paths`, — его и только его переносит ANSWER (требование 5).
@@ -484,7 +487,8 @@ def _zones_extend_matrix(task_id: str, matrix_path: str | None,
     problems = [f"строка мандата в файле матрицы: «{line}» — мандат "
                 f"zones-extend собирается только из путей аргумента"
                 for line in foreign]
-    problems += mandate.matrix_refusals(raw, paths)
+    problems += mandate.matrix_refusals(raw, paths, conn=conn,
+                                        task_id=task_id)
     _refuse_without_matrix(task_id, "zones-extend", problems)
     return mandate.matrix_section(raw)
 
@@ -504,7 +508,7 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str,
     paths = fsm_advance._split_zone_paths(paths_arg)
     if not paths:
         sys.exit(f"[{task_id}] zones-extend: отказ — пустой список путей")
-    section = _zones_extend_matrix(task_id, matrix_path, paths)
+    section = _zones_extend_matrix(conn, task_id, matrix_path, paths)
 
     fixation.stop_on_ref_drift(conn, task_id, "operator", "zones-extend")
     branch, _foreign = artifact_source.resolve(conn, task_id)
