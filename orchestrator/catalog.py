@@ -967,8 +967,13 @@ def cmd_status() -> None:
         # модели шагов, и тариф, по которому тратится этот бюджет.
         model_set = models.task_set_name(r)
         set_field = f"  набор {model_set}" if model_set else ""
+        # Метка проекта — сразу за id и только у задачи внешнего проекта
+        # (SPEC 01M563E1SH9SB63S2MW4A9B82N, требование 6): строка артели
+        # и задачи с `target` NULL прежняя.
+        project = r["target"] or config.DEFAULT_TARGET
+        label = f" [{project}]" if project != config.DEFAULT_TARGET else ""
         print(
-            f"{r['id']}  {r['state']:<13} "
+            f"{r['id']}{label}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
             f"  токенов {tokens}  {r['title']}"

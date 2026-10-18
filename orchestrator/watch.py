@@ -295,8 +295,15 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
     alerts = store.alerts_since(conn, start_alert, top_alert)
     next_alert = max(start_alert, top_alert)
     if "alerts" in events:
+        # Наблюдение ведёт задачи разных проектов (SPEC
+        # 01M563E1SH9SB63S2MW4A9B82N, требование 3): алерт виден по id
+        # задачи набора, проекту любой её задачи, проекту наблюдения — даже
+        # если задач этого проекта в наборе не осталось, — и проекту
+        # артели, на который заводятся алерты уровня пульта.
+        targets = (task_ids | {store.task_target(conn, t) for t in task_ids}
+                   | {row["target"], config.DEFAULT_TARGET})
         for item in alerts:
-            if item["target"] in task_ids or item["target"] == row["target"]:
+            if item["target"] in targets:
                 _print_line(item["ts"], item["target"], item["source"],
                             f"alert:{item['kind']}", item["message"])
     return next_step, next_alert
