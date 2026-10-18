@@ -15,7 +15,8 @@
 в корне песочницы; `config.ROOT` копии считается от её `config.py`, и её
 пути — те же, что подменены песочницей) для задачи внешнего проекта с
 клоном и bare `origin` (`tests/sandbox.py::make_project_repo`); в конец
-`config.py` копии дописаны параллель 1 и предел прогона сценария.
+`config.py` копии дописаны параллель 1, предел прогона сценария и часы
+`proc.wait` прогона pytest (`COPY_CLOCK`).
 
 Пределы, имена и времена держания — от зерна; зерно печатается и входит
 в текст провала.
@@ -44,7 +45,11 @@ from tests.sandbox import (RealGitSandbox, capture, make_project_repo,
 CODE_ROOT = Path(acceptance.__file__).resolve().parent.parent
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 LETTERS = "abcdefghijkmnpqrstuvwxyz"
+ID_LETTERS = "".join(ch for ch in ALPHABET if not ch.isdigit())
 PROFILE_HEAD = "    test_profile:\n"
+# Потолок реального ожидания обрыва, от которого зависит исход (SPEC
+# 01M56T94ZJE6H973HEBTM0Q0TD, требование 3); время подменённых часов не в счёт.
+REAL_WAIT_CEILING_SEC = 5
 
 PROBE_TEST = '''import json, os, time
 
@@ -52,8 +57,10 @@ PROBE_TEST = '''import json, os, time
 def note(event):
     with open({records!r}, "a", encoding="utf-8") as fh:
         fh.write(json.dumps({{"event": event, "at": time.time(),
+                              "mono": time.monotonic(),
                               "pid": os.getpid(),
-                              "ppid": os.getppid()}}) + "\\n")
+                              "ppid": os.getppid(),
+                              "pgid": os.getpgid(0)}}) + "\\n")
 
 
 def test_{name}():
@@ -114,6 +121,92 @@ PROJECT_ENTRY = """  {name}:
       weakening_scope: [tests/**/*.py]
       mutation_claim_scope: [tests/test_*.py]
 """
+
+# Часы `proc.wait` прогона pytest в копии пульта (SPEC
+# 01M56T94ZJE6H973HEBTM0Q0TD, требование 2): настоящий `Popen.wait` с
+# переданным ему пределом считает время по `subprocess._time`; на время
+# такого вызова часы стоят, а когда пробник прогона (его группа процессов)
+# записал «start», каждое чтение показывает ещё на предел профиля N больше —
+# обрыв делает сам `Popen.wait` копии, без N секунд реального времени и без
+# зависимости от того, сколько пробник ждал процессора. Перевод на каждом
+# чтении, а не однократно: срок `endtime`, прочитанный и до старта пробника,
+# и после него, истекает на следующем же чтении (гонка 07.10). Предел,
+# отличный от N, часы не переводят и отпускают пробник: прогон кончается
+# сам, отчёта «не уложился» нет. Отметки `wait_enter`/`clock_jump`/`cut` в
+# журнале пробника (по `time.monotonic`) — доказательство, что часы
+# опрошены и переведены и сколько реально длилось ожидание обрыва.
+COPY_CLOCK = '''
+
+# Песочница теста предела полного прогона: часы proc.wait прогона pytest.
+import json as _sandbox_json
+import os as _sandbox_os
+import subprocess as _sandbox_subprocess
+import threading as _sandbox_threading
+import time as _sandbox_time
+
+_sandbox_call = _sandbox_threading.local()
+_sandbox_real_clock = _sandbox_subprocess._time
+_sandbox_real_wait = _sandbox_subprocess.Popen.wait
+
+
+def _sandbox_note(event, pgid, **fields):
+    fields.update(event=event, pgid=pgid, pid=_sandbox_os.getpid(),
+                  mono=_sandbox_time.monotonic())
+    with open({records!r}, "a", encoding="utf-8") as fh:
+        fh.write(_sandbox_json.dumps(fields) + "\\n")
+
+
+def _sandbox_probe_started(pgid):
+    try:
+        with open({records!r}, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        return False
+    for line in lines:
+        try:
+            rec = _sandbox_json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("event") == "start" and rec.get("pgid") == pgid:
+            return True
+    return False
+
+
+def _sandbox_clock():
+    call = getattr(_sandbox_call, "state", None)
+    if call is None:
+        return _sandbox_real_clock()
+    if call["cut"] and _sandbox_probe_started(call["pgid"]):
+        if not call["jumped"]:
+            call["jumped"] = True
+            _sandbox_note("clock_jump", call["pgid"])
+        call["at"] += {limit!r}
+    return call["at"]
+
+
+def _sandbox_wait(self, timeout=None):
+    args = self.args if isinstance(self.args, (list, tuple)) else [self.args]
+    if timeout is None or "pytest" not in [str(a) for a in args]:
+        return _sandbox_real_wait(self, timeout)
+    cut = timeout == {limit!r}
+    if not cut:
+        with open({stop!r}, "w", encoding="utf-8") as fh:
+            fh.write("stop")
+    _sandbox_note("wait_enter", self.pid, timeout=timeout)
+    _sandbox_call.state = {{"at": _sandbox_real_clock(), "pgid": self.pid,
+                           "cut": cut, "jumped": False}}
+    try:
+        return _sandbox_real_wait(self, timeout)
+    except _sandbox_subprocess.TimeoutExpired:
+        _sandbox_note("cut", self.pid, timeout=timeout)
+        raise
+    finally:
+        _sandbox_call.state = None
+
+
+_sandbox_subprocess._time = _sandbox_clock
+_sandbox_subprocess.Popen.wait = _sandbox_wait
+'''
 
 
 def standalone(number: int, text: str) -> bool:
@@ -514,6 +607,12 @@ class SuiteRunLimitSandbox(ProbeSandbox):
 
     COPY_LIMIT = 60
 
+    def task_id(self) -> str:
+        # Id стоит в начале строки отчёта «не уложился», а `standalone`
+        # считает число отдельно стоящим и между буквами: цифры id давали
+        # там `COPY_LIMIT` (…K60X…) — около 1% зёрен (падение 17.10).
+        return "01M" + "".join(self.rng.choice(ID_LETTERS) for _ in range(23))
+
     def setUp(self):
         super().setUp()
         for name in ("orchestrator", "scripts"):
@@ -531,7 +630,13 @@ class SuiteRunLimitSandbox(ProbeSandbox):
 
     def add_project_task(self, limit: int) -> tuple:
         """(id, рабочая копия) задачи проекта с `full_suite_timeout_sec:
-        limit`; база — один быстрый тест, ветка добавляет пробник."""
+        limit`; база — один быстрый тест, ветка добавляет пробник. Часы
+        `proc.wait` прогона pytest копии пульта переводятся на `limit`
+        (`COPY_CLOCK`)."""
+        with open(self.root / "orchestrator" / "config.py", "a",
+                  encoding="utf-8") as fh:
+            fh.write(COPY_CLOCK.format(records=str(self.records),
+                                       stop=str(self.stop_file), limit=limit))
         target = "p" + self.word()
         origin = config.PROJECTS / target / "origin.git"
         entry = PROJECT_ENTRY.format(name=target, origin=origin,
@@ -586,6 +691,21 @@ class SuiteRunLimitSandbox(ProbeSandbox):
             kill_group(proc.pid)
         return proc.returncode, raw.decode("utf-8", errors="replace")
 
+    def run_traces(self, task_id: str) -> str:
+        """Записи пробника и файлы `suite-run` задачи — для текста провала:
+        по одному коду выхода `--wait` исход не восстановить (копилка
+        07.10)."""
+        try:
+            records = self.records.read_text(encoding="utf-8")
+        except OSError:
+            records = "(нет)\n"
+        parts = [f"записи пробника:\n{records}"]
+        logs = self.root / ".artel" / "logs" / "suite-run" / task_id
+        for path in sorted(logs.glob("*")) if logs.is_dir() else ():
+            text = path.read_bytes().decode("utf-8", errors="replace")
+            parts.append(f"{path.name}:\n{text[-4000:]}")
+        return "\n".join(parts)
+
 
 class SuiteRunProfileLimitTest(SuiteRunLimitSandbox):
 
@@ -594,14 +714,24 @@ class SuiteRunProfileLimitTest(SuiteRunLimitSandbox):
 
         Сценарий: в `config.py` копии пульта предел — 60 с; в профиле
         проекта задачи `full_suite_timeout_sec: N` (11–13 с, от зерна);
-        пробник ветки держится дольше 60 с. Запуск `suite-run`, затем
+        пробник ветки держится дольше 60 с. Часы `proc.wait` прогона pytest
+        копии (`COPY_CLOCK`) стоят, пока пробник не стартовал, и тогда
+        переходят на N: обрыв делает настоящий `Popen.wait` копии без N
+        секунд реального времени. Запуск `suite-run`, затем
         `suite-run --wait 1`: отчёт несёт «не уложился» и N в той же
-        строке, без 60.
+        строке, без 60. Журнал пробника показывает, что этот обрыв
+        случился в вызове с пределом N, что часы того вызова переведены,
+        и что реальное ожидание обрыва (от входа в `proc.wait` либо старта
+        пробника, что позже) по `time.monotonic` короче 5 с.
 
         Ловит мутацию: фоновый прогон `suite-run` берёт
         `config.FULL_SUITE_TIMEOUT_SEC` (подполе профиля читает только
-        гейт) — прогон за минуту ожидания не оборван, отчёта нет; либо
-        отчёт о таймауте печатает значение config, а не N.
+        гейт) либо `proc.wait` получает предел, отличный от N — часы его не
+        переводят, пробник отпущен, прогон кончается сам, строки «не
+        уложился» нет; либо отчёт о таймауте печатает значение config, а не
+        N; либо `Popen.wait` копии не опрашивает подменённые часы (обрыв
+        чужими средствами) — отметки `clock_jump` нет; либо обрыв вернулся
+        к реальному отсчёту N (11–13 с) — реальное ожидание не короче 5 с.
         """
         limit = self.rng.randint(11, 13)
         task_id, wt = self.add_project_task(limit)
@@ -613,13 +743,200 @@ class SuiteRunProfileLimitTest(SuiteRunLimitSandbox):
         code, report = self.cli("suite-run", task_id, "--wait", "1", cwd=wt,
                                 timeout=100)
         context = self.note(f"N={limit}; отчёт (код {code}):\n{report}\n"
-                            f"targets.yaml:\n{self.targets_text}")
+                            f"targets.yaml:\n{self.targets_text}\n"
+                            f"{self.run_traces(task_id)}")
         self.assertTrue(self.events("start"), context)
         lines = [line for line in report.splitlines() if "не уложился" in line]
         self.assertTrue(lines, context)
         self.assertTrue(any(standalone(limit, line) for line in lines), context)
         self.assertFalse(any(standalone(self.COPY_LIMIT, line)
                              for line in lines), context)
+
+        cuts = [rec for rec in self.events("cut") if rec["timeout"] == limit]
+        self.assertTrue(cuts, f"обрыва прогона pytest в proc.wait копии с "
+                        f"пределом {limit} нет\n{context}")
+        pgid = cuts[0]["pgid"]
+        self.assertTrue(
+            [rec for rec in self.events("clock_jump") if rec["pgid"] == pgid],
+            f"подмена часов копии не сработала: Popen.wait прогона {pgid} не "
+            f"опросил подменённые часы после старта пробника — обрыв не по "
+            f"ним\n{context}")
+        entered = [rec["mono"] for rec in self.events("wait_enter")
+                   if rec["pgid"] == pgid]
+        started = [rec["mono"] for rec in self.events("start")
+                   if rec.get("pgid") == pgid]
+        self.assertTrue(entered and started, context)
+        waited = cuts[0]["mono"] - max(max(entered), min(started))
+        self.assertLess(waited, REAL_WAIT_CEILING_SEC,
+                        f"реальное ожидание обрыва {waited:.1f} с не короче "
+                        f"{REAL_WAIT_CEILING_SEC} с\n{context}")
+
+
+class SuiteRunFixtureIdTest(unittest.TestCase):
+
+    def test_fixture_task_ids_have_no_digits_after_prefix(self):
+        """Id задачи песочницы `suite-run` после префикса `01M` — без цифр, при любом зерне набора.
+
+        Сценарий: зёрна 0–2999, id генератором `SuiteRunLimitSandbox.task_id`;
+        часть после `01M` не пуста и не содержит цифр — число id не может
+        стать отдельно стоящим `COPY_LIMIT` в строке «не уложился».
+
+        Ловит мутацию: генератор id песочницы `suite-run` вернули к алфавиту
+        с цифрами (`ALPHABET`) или в `ID_LETTERS` попала цифра — на 3000
+        зёрнах id с цифрой после префикса находится всегда.
+        """
+        bad = []
+        for seed in range(3000):
+            holder = mock.Mock(rng=random.Random(seed))
+            task_id = SuiteRunLimitSandbox.task_id(holder)
+            rest = task_id.removeprefix("01M")
+            if rest == task_id or not rest or re.search(r"\d", rest):
+                bad.append((seed, task_id))
+        self.assertEqual(bad[:5], [], f"id с цифрами после префикса: {len(bad)}")
+
+
+# Пробник проверки часов: «pytest» в argv — как у прогона pytest пульта;
+# старт пишется после флага (если задан), держание — до файла-стопа или
+# `hold` секунд, чтобы сломанные часы дали провал, а не зависание.
+CLOCK_PROBE = '''import json, os, sys, time
+records, stop, flag, hold = sys.argv[1:5]
+if flag:
+    deadline = time.monotonic() + 10
+    while not os.path.exists(flag) and time.monotonic() < deadline:
+        time.sleep(0.01)
+with open(records, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"event": "start", "pgid": os.getpgid(0),
+                         "mono": time.monotonic()}) + "\\n")
+deadline = time.monotonic() + float(hold)
+while not os.path.exists(stop) and time.monotonic() < deadline:
+    time.sleep(0.02)
+'''
+
+
+class CopyClockOrderTest(unittest.TestCase):
+    """`COPY_CLOCK` в процессе теста против настоящего процесса-пробника:
+    оба порядка «старт пробника / первое чтение часов в `Popen.wait`»
+    детерминированно (SPEC 01M56T94ZJE6H973HEBTM0Q0TD, требование 2)."""
+
+    LIMIT = 12
+    HOLD = 10
+
+    def setUp(self):
+        work = Path(tempfile.mkdtemp(prefix="artel-copy-clock-")).resolve()
+        self.addCleanup(shutil.rmtree, work, True)
+        self.records = work / "records.jsonl"
+        self.stop_file = work / "stop"
+        self.flag = work / "first-clock-read"
+        # Подмены `subprocess` снимаются здесь; `COPY_CLOCK` ставит свои.
+        for patcher in (mock.patch.object(subprocess, "_time",
+                                          subprocess._time),
+                        mock.patch.object(subprocess.Popen, "wait",
+                                          subprocess.Popen.wait)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        exec(COPY_CLOCK.format(records=str(self.records),
+                               stop=str(self.stop_file), limit=self.LIMIT),
+             {"__name__": "copy_clock"})
+
+    def spawn(self, flag: Path | None) -> subprocess.Popen:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", CLOCK_PROBE, str(self.records),
+             str(self.stop_file), str(flag or ""), str(self.HOLD), "pytest"],
+            stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(proc.wait)
+        self.addCleanup(kill_group, proc.pid)
+        return proc
+
+    def events(self, event: str) -> list:
+        if not self.records.exists():
+            return []
+        return [rec for rec in map(json.loads, self.records.read_text(
+            encoding="utf-8").splitlines()) if rec["event"] == event]
+
+    def assert_cut_by_real_wait(self, proc: subprocess.Popen) -> None:
+        started = time.monotonic()
+        # Не `assertRaises`: он стирает traceback, а по нему видно, кто бросил.
+        try:
+            code = proc.wait(timeout=self.LIMIT)
+        except subprocess.TimeoutExpired as exc:
+            tb = exc.__traceback__
+        else:
+            self.fail(f"обрыва нет: wait вернул {code}")
+        waited = time.monotonic() - started
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        self.assertEqual(
+            (tb.tb_frame.f_code.co_name,
+             Path(tb.tb_frame.f_code.co_filename).name),
+            ("_wait", "subprocess.py"),
+            "TimeoutExpired бросил не настоящий Popen._wait")
+        self.assertLess(waited, REAL_WAIT_CEILING_SEC)
+        self.assertEqual([r["pgid"] for r in self.events("clock_jump")],
+                         [proc.pid])
+        self.assertEqual([r["pgid"] for r in self.events("cut")], [proc.pid])
+
+    def test_probe_started_before_first_clock_read_is_cut(self):
+        """Пробник стартовал до первого чтения часов — настоящий `Popen._wait` обрывает быстро.
+
+        Сценарий: `proc.wait(timeout=N)` зовётся лишь после записи «start»
+        пробника. Ожидается `TimeoutExpired` из `subprocess.Popen._wait`
+        короче 5 с реального времени, отметки `clock_jump` и `cut` того же
+        процесса.
+
+        Ловит мутацию: часы переводятся однократно при старте пробника
+        (гонка 07.10) — перевод уходит в само чтение `endtime`, обрыва нет,
+        пробник отпускает `wait` через `HOLD` секунд без `TimeoutExpired`.
+        """
+        proc = self.spawn(None)
+        deadline = time.monotonic() + REAL_WAIT_CEILING_SEC
+        while not self.events("start") and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.events("start"), "пробник не стартовал")
+        self.assert_cut_by_real_wait(proc)
+
+    def test_probe_started_after_first_clock_read_is_cut(self):
+        """Пробник стартовал после первого чтения часов — настоящий `Popen._wait` обрывает быстро.
+
+        Сценарий: первое чтение `subprocess._time` (срок `endtime` в
+        `Popen.wait`) ставит флаг, и только по нему пробник пишет «start».
+        Ожидается `TimeoutExpired` из `subprocess.Popen._wait` короче 5 с,
+        отметки `clock_jump` и `cut` того же процесса.
+
+        Ловит мутацию: перевод часов решён один раз на входе в обёртку
+        (пробник к тому моменту ещё не стартовал) — часы стоят, обрыва нет,
+        `wait` возвращается через `HOLD` секунд без `TimeoutExpired`.
+        """
+        clock = subprocess._time
+
+        def first_read_releases_probe():
+            value = clock()
+            self.flag.touch()
+            return value
+
+        subprocess._time = first_read_releases_probe
+        proc = self.spawn(self.flag)
+        self.assert_cut_by_real_wait(proc)
+        self.assertTrue(self.events("start"), "пробник не стартовал")
+        self.assertFalse(self.stop_file.exists())
+
+    def test_other_limit_releases_probe_without_cut(self):
+        """Предел, отличный от N, — часы не переводятся, пробник отпущен файлом-стопом.
+
+        Сценарий: `proc.wait(timeout=N + 1)`; пробник кончается сам по
+        файлу-стопу, `wait` возвращает 0 короче 5 с, отметок `clock_jump` и
+        `cut` нет.
+
+        Ловит мутацию: обёртка обрывает при любом пределе (часы переводятся
+        и при пределе config) — `TimeoutExpired` вместо кода 0, и мутация
+        «фоновый прогон берёт предел config» не краснила бы метод `suite-run`.
+        """
+        proc = self.spawn(None)
+        started = time.monotonic()
+        self.assertEqual(proc.wait(timeout=self.LIMIT + 1), 0)
+        self.assertLess(time.monotonic() - started, REAL_WAIT_CEILING_SEC)
+        self.assertTrue(self.stop_file.exists())
+        self.assertEqual(self.events("clock_jump"), [])
+        self.assertEqual(self.events("cut"), [])
 
 
 if __name__ == "__main__":
