@@ -1,13 +1,17 @@
-# Записка spec_auditor — 01M58FNWBV25FF26E7AZ9Q9912 (аудит SPEC f65ba288, второй визит)
+# Записка spec_auditor — 01M58FNWBV25FF26E7AZ9Q9912 (аудит SPEC a4898611, третий визит)
 
 ## Выяснено
-- SPEC второй редакции учёл ANSWER-1 (вариант B yamlmini, деление на часть 1). Ссылки на код в основном верны; неточности: `PROFILE_OWN_RUNNER_ONLY` — targets.py:73 (не :71); стр. «77-80» теста — на деле 71-74 (tests/test_acceptance_suite_profile.py).
-- `_task_own_profile` (acceptance.py:2380) зовут pull.py:665, plank_run.py:220, amend.py:548/723 и `drop_from_code_copy` (acceptance.py:1298), а его — runner.py:1218 на старте КАЖДОГО шага роли, checkpoint.py:1237, fsm_advance.py:607, amend.py:765. Форма «отказа» требования 9 не задана: raise уронит старт шага, возврат не-None сломает `command=own`.
-- doctor/cli.py:94 зовёт `full_suite_limit` без try: после требования 8 запись с двумя компонентами роняет весь `doctor` (cli.py вынесен из зон SPEC, хотя в зонах ТЗ).
-- yamlmini: ключ режется по первому `:` (yamlmini.py:146) — имя с `:` из файла не записать, только словарём; повтор ключа молча перезаписывает.
+- Ссылки SPEC на код верны (мелочь: `targets.load` — targets.py:100). Решения гейта №1 отражены все.
+- `profile_of` — единственный читатель `test_profile` (grep по orchestrator/, scripts/).
+- `plank_run.py:220` достижим в `tests_writing`: `decide` смотрится только в `_long_lived_arg` (:87, `.profile`), `runner.py:1323-1333` шаг не блокирует → трассировка `TargetsError` на записи с двумя компонентами.
+- `suite_run._run`: `_profile_command` (:556) до `full_suite_limit` (:559) — безопасно.
+- AC-2 не покрывает форму `depends_on.paths`, кавычки в `paths`; AC-9 — ширину перехвата `drop_from_code_copy`.
+
+## Не сработало
+- `cd …; sed` и `$W` в составных командах требуют подтверждения — бери абсолютные пути и Read.
 
 ## Где остановился
-SPEC-AUDIT.md записан, verdict concerns, guard прогнан.
+SPEC-AUDIT.md записан, verdict concerns (4 отклонения + мелочь), guard ок.
 
 ## Чего не хватило
-Карты вызывающих `drop_from_code_copy` — искал grep'ом по orchestrator/.
+Карты «какие команды роли доступны в каком состоянии» — достижимость `plank-run` выводил по runner.py и plank_run.py.
