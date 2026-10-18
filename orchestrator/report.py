@@ -549,9 +549,17 @@ def _tile_html(row) -> str:
         escalation_line = (
             f'<div class="tile-field tile-escalation">'
             f'Эскалация (из {_esc(source)})</div>')
+    # Проект — только у задачи внешнего проекта (SPEC
+    # 01M563E1SH9SB63S2MW4A9B82N, требование 7); строка без ключа
+    # `target` (фикстуры, старые срезы) и NULL — задача артели.
+    project = (row["target"] if "target" in row.keys() else None) or config.DEFAULT_TARGET
+    project_line = ""
+    if project != config.DEFAULT_TARGET:
+        project_line = f'<span class="tile-project">{_esc(project)}</span>'
     return (
         f'<div class="tile">'
         f'<span class="tile-id">{_esc(row["id"])}</span>'
+        f'{project_line}'
         f'<span class="tile-title">{_esc(row["title"])}</span>'
         f'<div class="tile-field">Статус: {_esc(row["state"])}</div>'
         f'<div class="tile-field">Бюджет: {_usd(row["budget_usd"])}'
@@ -1156,6 +1164,7 @@ _STYLE = """
     border-radius: 6px; padding: 7px 8px; font-size: 12px;
   }
   .tile .tile-id { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; }
+  .tile .tile-project { margin-left: 6px; color: var(--muted); font-size: 11px; }
   .tile .tile-title { display: block; margin: 2px 0 4px; color: var(--text); }
   .tile-field { color: var(--muted); font-size: 11px; }
   .tile-escalation { color: #c22b2b; font-weight: 600; }

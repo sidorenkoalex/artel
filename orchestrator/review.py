@@ -202,6 +202,14 @@ def artifact_part(label: str, text: str | None, note: str,
     return f"### {label}{note} — {size} байт, sha256={sha}\n\n{body}\n"
 
 
+def _conventions_component(_conn, _task_id: str, _role: str, label: str,
+                           text: str, run_id: str) -> str:
+    """`render` для `brief._project_conventions_parts`: компонент конвенций
+    проекта оформлен как остальные части пакета (SPEC
+    01M56G7SB1PSR277BN4CHJBCQC, требование 2)."""
+    return artifact_part(label, text, "", run_id)
+
+
 def git_diff_part(base: str, branch: str, *flags: str,
                   pathspec: tuple[str, ...] = (),
                   repo=None) -> tuple[str, int, str]:
@@ -723,7 +731,8 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     """Вход ревьювера одним куском: text, chars, bytes, diff_lines и признаки.
 
     Порядок частей фиксирован (задача, статус CI, SPEC, PLAN, прошлый
-    REVIEW, форма вердикта, ANSWER-n.md задачи, стат-список, diff) — по
+    REVIEW, форма вердикта, конвенции проекта — только у задачи внешнего
+    проекта, ANSWER-n.md задачи, стат-список, diff) — по
     нему ревьювер ориентируется в пакете, а тесты сравнивают сборку.
 
     Статус CI (ADR-0015, требование 4/AC-13): последняя по времени запись
@@ -898,6 +907,15 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
                                    *found[review_rel], run_id))
     parts.append(artifact_part(f"{form_rel} (форма вердикта)",
                                *found[form_rel], run_id))
+    is_artel = brief.is_artel_task(conn, task_id)
+    if not is_artel:
+        # Конвенции внешнего проекта — тем же чтением и с теми же пометками,
+        # что в брифе роли (SPEC 01M56G7SB1PSR277BN4CHJBCQC, требования 1-3):
+        # после формы вердикта, рядом с остальными правилами, по которым
+        # ревьювер сверяет diff. У артели их роль играет карта пульта —
+        # пакет артели не меняется (требование 5).
+        parts.extend(brief._project_conventions_parts(
+            conn, task_id, "reviewer", run_id, _conventions_component))
     for rel in answer_rels:
         # Границы решений Оператора — после того, как у ревьювера уже на
         # руках SPEC/PLAN/прошлый REVIEW/форма, но до diff (AC-1/AC-4:
@@ -962,17 +980,27 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # Покрытие карты названо тем, какое оно есть (R2-F2, REVIEW.md
     # итерация 2): обещать ревьюверу проверку джобом, который идёт только
     # на main, значит выдать ему уверенность, которой на ветке нет.
-    parts.append(
-        f"Из стат-списка и diff исключены артефакты задачи "
-        f"tasks/{task_id}/ (они выше отдельными компонентами пакета) и "
-        f"сгенерированная {MAP_REL} — её diff в том же диапазоне: "
-        f"{excluded_note(base, branch, (MAP_REL,), repo)}. Карта "
-        f"генерируется по коду этой же ветки и построчного ревью не "
-        f"требует; на ветке её свежесть не проверяет никто — джоб CI "
-        f"«Карта кодовой базы генерируется и свежа» идёт только на "
-        f"{config.MAIN_BRANCH} после мержа. Понадобился взгляд на неё — "
-        f"смотри командой: python3 scripts/codebase_map.py и "
-        f"git diff -- {MAP_REL}.\n")
+    if is_artel:
+        parts.append(
+            f"Из стат-списка и diff исключены артефакты задачи "
+            f"tasks/{task_id}/ (они выше отдельными компонентами пакета) и "
+            f"сгенерированная {MAP_REL} — её diff в том же диапазоне: "
+            f"{excluded_note(base, branch, (MAP_REL,), repo)}. Карта "
+            f"генерируется по коду этой же ветки и построчного ревью не "
+            f"требует; на ветке её свежесть не проверяет никто — джоб CI "
+            f"«Карта кодовой базы генерируется и свежа» идёт только на "
+            f"{config.MAIN_BRANCH} после мержа. Понадобился взгляд на неё — "
+            f"смотри командой: python3 scripts/codebase_map.py и "
+            f"git diff -- {MAP_REL}.\n")
+    else:
+        # Карты пульта, её джоба и команды у внешнего проекта нет (SPEC
+        # 01M56G7SB1PSR277BN4CHJBCQC, требование 4); исключение пути из
+        # diff (`snapshot_exclude`) при этом общее для любого проекта.
+        parts.append(
+            f"Из стат-списка и diff исключены артефакты задачи "
+            f"tasks/{task_id}/ (они выше отдельными компонентами пакета); "
+            f"из diff исключён также {MAP_REL} — его diff в том же "
+            f"диапазоне: {excluded_note(base, branch, (MAP_REL,), repo)}.\n")
     if long_lived_rels:
         parts.append(
             f"Из стат-списка и diff исключены также долгоживущие тесты "

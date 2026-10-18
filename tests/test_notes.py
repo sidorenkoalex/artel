@@ -364,6 +364,29 @@ class SilenceWindowReasonTest(NoteSilenceSandbox):
                              "иной-хост", old_heartbeat)
         self.assertIsNone(notes._silence_window_reason())
 
+    def test_artel_task_and_holder_not_resolved_through_targets(self):
+        """Задача артели с пустой колонкой `target` и держатель с той же
+        задачей узнаются по `repo_context.is_artel`, без `resolve`: даже
+        когда записи проектов не разрешаются (сломанный `targets.yaml`),
+        причина — прежний текст артели, не «проект задачи не определён».
+
+        Ловит мутацию: `resolve(task["target"])` зовётся первым (или
+        вместо `is_artel`) — для пустого `target` он даёт `None`, задача
+        артели становится «не определён», и тест краснеет на подстроке."""
+        conn = store.db()
+        store.insert_task(conn, "T-ART", "окно тишины", "in_dev",
+                          "task/T-ART", config.DEFAULT_TARGET, 10.0)
+        conn.execute("UPDATE tasks SET target='' WHERE id='T-ART'")
+        conn.commit()
+        with mock.patch.object(notes.repo_context, "resolve",
+                               return_value=None):
+            self.assertEqual(notes._silence_window_reason(),
+                             "задача T-ART в состоянии in_dev")
+            self.set_live_merge_lock(task_id="T-ART")
+            self.assertEqual(notes._silence_window_reason(),
+                             "держатель merge-окна жив (сессия s-live, "
+                             "задача T-ART)")
+
 
 class WindowHoldsValidNoteTest(NoteSilenceSandbox):
 
