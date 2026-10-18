@@ -1,15 +1,16 @@
 ## Выяснено
-- ТЗ достаточно — пишу SPEC без батча.
-- sled сегодня — `test_profile` с `runner: pytest-own`, `workdir: backend` (uv.lock отслеживается): ключ идёт через `acceptance._own_suite_result_key` (acceptance.py:2150). Требование 4 ТЗ требует прежний ключ и у sled → новый элемент ключа (файлы блокировки + tools) только у профиля из записи с `components:`; у `test_profile` — байт в байт прежний.
-- Вызовы `suite_result_key`: acceptance.py:2269 (рабочее дерево), :2319 (база), suite_run.py:523 (база, вне зоны) — корня рабочей копии нет ни у одного.
-- `depends_on` — `via` ∈ paths|files|contract (targets.py:108); в сверку paths_source идут только paths/files.
-- `tests/` — общая зона (config.COMMON_ZONES) → 4 файла зоны, сигналов деления нет при ≤9 AC и бюджете < 60.
+- Итерация 2 (после fail аудита): исход — батч QUESTIONS.md, SPEC.md не трогаю.
+- `tools` до `Profile` не доходят: `repo_context.profile_of` (repo_context.py:171-172) отдаёт только `targets.PROFILE_FIELDS` (targets.py:44-59), `tools` — только в `COMPONENT_FIELDS` (targets.py:103). Внутри зоны можно дозаполнить в `project_profile.decide` (project_profile.py:143-151) через `components(target)` — но ТЗ сужает зону до «только поле tools» → вопрос 1.
+- Тест равенства `tests/test_01m58fnwbv25ff26e7az9q9912_components.py:657-694` — фикстура БЕЗ `tools`: различитель «непустые tools» с ним совместим, признак происхождения — нет → вопрос 2.
+- Ключ базы: suite_run.py:521-523 зовёт `suite_result_key(tree, command, base=True)` без корня; отслеживаемые блокировки уже в `tree`, игнорируемых в коммите нет → вопрос 3 (дефолт: в base-ключе только tools).
+- Запись, проходящая `targets.load`, но роняющая `full_suite_limit`: единственный компонент без обязательного подполя (UNREAD) — годится для второй половины AC-1 → вопрос 4.
+- Ключ `full_suite` (acceptance.py:2265) тоже зовёт `full_suite_limit` — у записи с несколькими компонентами прогона нет до G1б.
 
 ## Не сработало
-- Bash с `cd …; sed` и цепочками команд требует подтверждения — читать через Read/одиночный grep с абсолютным путём.
+- `ls` в оболочке нет (zsh: command not found) — пользоваться Read/grep.
 
 ## Где остановился
-- SPEC написан (9 AC, budget 30, status ready), guard ок. Guard считает `tests/` в сигнале «файлов зоны ≥5» — пришлось дать секцию «Оценка объёма» (обоснование монолита + прогноз диффа 60 КиБ).
+- QUESTIONS.md записан (6 вопросов, дефолты: 1-A, 2-A, 3-A, 4-A, 5-A, 6-A), guard — ок. SPEC.md не тронут. После ANSWER: переписать SPEC по ответам и удалить QUESTIONS.md.
 
 ## Чего не хватило
-- Как профиль одного компонента получает поле tools (repo_context.profile_of берёт только PROFILE_FIELDS) — решает разработчик.
+- Формы строки `BACKEND_RE` в ci.yml sled (клон sled закрыт на чтение) — вопрос 5.
