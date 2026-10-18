@@ -1,15 +1,15 @@
 ## Выяснено
-- SPEC sha 9dbddb8d… совпадает; вердикт concerns, 5 отклонений, guard ок.
-- Все места pytest-own идут через acceptance._place_env → _own_env (acceptance.py:144-172); правка PATH в одном _own_env закрывает и suite-run (дочерний процесс с os.environ роли, suite_run.py:798-805), и two_sided.
-- Готовый перечень 8 мест: tests/test_01m52eefna1wh31962hvnt0yz9_pytest_own_places.py:62-65 (PLACES); полный прогон — три пути (acceptance.py:1543/1564/1591).
-- Отказ workdir в полном прогоне идёт как FULL_SUITE_NOT_STARTED (не кешируется, :2028); красный итог кешируется на 24 ч (:1905, config.py:124) — отказ «команда не найдена» тем же каналом, что workdir.
-- Существующие тесты PATH не фиксируют (ALLOWED_VARS содержит PATH, :76); deselected в tests/ нет.
+- Повторный аудит SPEC sha 2a54ced8…: все пять решений гейта №1 учтены; вердикт concerns, 3 отклонения, guard ок.
+- tests/test_acceptance_pycache.py:73-98 требует, чтобы у pult-pytest FileNotFoundError доходил до вызывающего (run, collect, run_full_suite) — требование 3 SPEC не ограничено pytest-own.
+- _place_env/_own_env получают только профиль, не каталог прогона (acceptance.py:144-152); two_sided.py:242 зовёт _place_env(profile) сам — относительный command[0] «от workdir» требует правки вне зон.
+- Окружение мест несёт служебные переменные: PYTHONUNBUFFERED (acceptance.py:1592, оба профиля), PYTHONPATH/REPORT_ENV у two_sided (two_sided.py:243-245) — литеральное ожидание AC-7 неполно.
+- FULL_SUITE_NOT_STARTED не кешируется (acceptance.py:2028-2031); база suite-run сохраняется только завершённой (suite_run.py:540-546).
 
 ## Не сработало
-- grep с `cd …;` и переменными в Bash требовал подтверждения — помогли `cd … &&` и литеральные пути.
+- Bash с `cd` перед git, с `;`/`$?` требует подтверждения — только одиночные команды с литеральными путями.
 
 ## Где остановился
 - SPEC-AUDIT.md готов (status ready, verdict concerns).
 
 ## Чего не хватило
-- Канал отказа каждого места пришлось собирать по acceptance.py вручную (_own_cwd-отказы :601, :717, :833, :1113, :1379).
+- Список тестов, фиксирующих поведение pult-pytest при исключении запуска (нашёл grep по assertRaises(FileNotFoundError)).
