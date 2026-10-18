@@ -1,18 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- SPEC-AUDIT.md сдан: status ready, verdict concerns, guard ок. Отклонения D1–D6.
-- guard._collect_qualified_test_functions (scripts/guard.py:621,626) УЖЕ берёт AsyncFunctionDef; TEST_AC (guard.py:170) без якоря уже матчит `async def test_ac1_` (проверено python). Сломан только TEST_METHOD (guard.py:178).
-- Послабление условного пропуска — только для методов, которых нет в базе; декоратор класса — всегда находка (test_integrity.py:442-449). AC-3/AC-4/AC-6 этих ограничений не называют.
-- Изменённые утверждения без объявления/мандата — НАХОДКА (test_integrity.py:1105-1111), не только журнал; SPEC треб.6 сузил до наблюдения.
-- Литералы «Меняемого поведения» — только из утверждений (guard.method_literal_keys, guard.py:3834): смену строки parametrize объявить нельзя.
-- workdir до _compare не доходит: review.py:652, fsm_merge_gate.py:146 передают только scope-предикат.
+- Визит 2 (SPEC sha 7229a8be…): SPEC-AUDIT.md сдан, status ready, verdict concerns, guard ок. Отклонения C1–C6; D1–D5 Оператора перенесены в SPEC.
+- C1: weakening_scope артели — tests/**/*.py (targets.yaml:49): единое правило треб.6 у артели прослеживает импорт из любого модуля tests/ и ломает AC-10(в); признак режима не назван; импортированная метка у артели без AC.
+- C2: orchestrator/fsm.py:1053-1060 — второй потребитель guard.TestModules/method_literal_keys (сверка «Меняемого поведения»), вне зон, в SPEC не назван.
+- C3: исхода «доказано» в коде нет — two_sided.PASSED = "пройден" (two_sided.py:44).
+- Путь profile/workdir внутри зоны есть: _evaluate(conn, task_id, …) test_integrity.py:1074, project_profile.for_task.
 
 ## Не сработало
-- grep с `$W`/`cd … ;` в Bash требует подтверждения — писать абсолютные пути; `cd X && cmd` работает.
+- Bash: `$W`-переменные, `cd X && …`, `;`/`|` с head — требуют подтверждения; одна команда, абсолютные пути.
 
 ## Где остановился
 - Шаг закончен.
 
 ## Чего не хватило
-- Где правило «послабление только новым методам» — нашёл в test_integrity._file_findings (:440-455) не сразу.
+- Искал, есть ли вне зон потребители guard.TestModules — нашёлся fsm.py:1053; в карте «Импортируется» это не видно по имени класса.
