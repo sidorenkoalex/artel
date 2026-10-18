@@ -76,12 +76,12 @@ targets:
     merge_gate: operator
     # Профиль тестов backend (D0, решение Оператора 17.10): чистое окружение,
     # база недоступна (DB__PORT 1, имя без _test) — тесты PostgreSQL пропускаются.
-    # Временно исключены 4 теста, которым нужны PostgreSQL или запущенный Docker;
-    # снимаются задачей на sled, которая учит их пропускаться.
+    # Тесты, которым нужны PostgreSQL или Docker, пропускаются своими метками
+    # (исключения --deselect сняты 18.10 после задач 01M55SKHZ2 и 01M57W9PD5).
     test_profile:
       runner: pytest-own
       workdir: backend
-      command: [uv, run, --frozen, pytest, -q, --deselect, tests/bugs/test_legacy.py::test_offense_natural_part_number_sort_order, --deselect, tests/bugs/test_stage4.py::test_b31_krsp_xlsx_export_with_control_chars_returns_200, --deselect, tests/test_deploy_config.py::test_p1_compose_config_renders_with_example_env, --deselect, tests/test_deploy_config.py::test_r6_compose_renders_urls_from_sled_host]
+      command: [uv, run, --frozen, pytest, -q]
       long_lived_dir: backend/tests
       long_lived_name: test_<id>_<name>.py
       weakening_scope: [backend/tests/**/*.py]
