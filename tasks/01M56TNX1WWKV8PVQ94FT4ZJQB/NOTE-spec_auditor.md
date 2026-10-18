@@ -1,16 +1,15 @@
 # Записка spec_auditor — 01M56TNX1WWKV8PVQ94FT4ZJQB
 
 ## Выяснено
-- Визит 2, SPEC sha 2f8d2e1c. Решения Оператора пп.1–6 перенесены в SPEC полностью; ссылки 142, 294-313, 316-337, 441-457, 447-449, _journal_pass 1236-1239, invariants.md:68, config.py:758-764 сверены — верны.
-- БЛОКЕР: `docs/invariants.md` стоит в `zones:` SPEC. Гейт SPEC отказывает approve по защищённой зоне: `orchestrator/fsm.py:1068-1086` (`_spec_protected_zones_refusal`), вызов `fsm.py:1143-1147`; `guard.protected_zones([...зоны SPEC])` → `['docs/invariants.md']`. Путь надо убрать из zones и назвать в «Материалы»/«Не входит» (иначе — неклассифицированный путь).
-- Прочее (concerns): «имя-метка» в AC-10 не литерал; алиас импорта `as`, аннотированное присваивание, модульный вызов в try/except не названы ни в требованиях, ни в «Не входит»; AC-8 смена только tests/marks.py не покрыта.
-- Вердикт: fail (approve на гейте откажет механически).
+- Визит 3, SPEC sha b495b2b1. Все 5 отклонений визита 2 закрыты: zones без docs/invariants.md; try/except/with определены (треб. 4); as/AnnAssign — в «Не входит»; AC-8 с tests/marks.py; AC-10 с литералами.
+- guard.protected_zones(зоны SPEC) = [], guard.spec_unclassified_paths(SPEC) = [] — механического отказа гейта SPEC нет.
+- Ссылки кода на HEAD 4b0efef0 верны. Вердикт: pass (к сведению — ~$40 при budget 25).
 
 ## Не сработало
-- `$?` в bash-команде отклоняется (simple_expansion) — без него.
+- `cd … && git` и составные ls/wc в bash просят подтверждения — давать абсолютные пути одной командой.
 
 ## Где остановился
-- SPEC-AUDIT.md переписан, guard прогнан.
+- SPEC-AUDIT.md записан, guard прогнан.
 
 ## Чего не хватило
-- Что гейт SPEC отказывает по защищённым путям в zones — нашёл по `PROTECTED_ZONE_REFUSAL` в guard.py:4169 → fsm.py:1068.
+- Сигнатура guard.spec_unclassified_paths(text, meta, root) — нужен meta из yamlmini.frontmatter.
