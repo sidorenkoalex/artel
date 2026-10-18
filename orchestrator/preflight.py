@@ -174,7 +174,7 @@ def _plank_label(task_id: str, rel: str) -> str:
 
 
 def _groups(task_id: str, docs: Path, profile,
-            network_addresses: bool) -> list[str]:
+            network_addresses: bool, project_imports) -> list[str]:
     """Состав и порядок `_tests_writing_test_groups_gate`; метка —
     `acceptance_tests/<файл>`, как у выложенной для сбора планки."""
     files = [(label, text) for label, text in guard.acceptance_test_files(docs)
@@ -184,11 +184,12 @@ def _groups(task_id: str, docs: Path, profile,
                                             profile.long_lived_dir,
                                             profile.long_lived_name)
             + guard.long_lived_errors_from_files(
-                files, task_id, network_addresses=network_addresses))
+                files, task_id, network_addresses=network_addresses,
+                project_imports=project_imports))
 
 
 def _long_lived(task_id: str, files: list[tuple[str, str]], profile,
-                network_addresses: bool) -> list[str]:
+                network_addresses: bool, project_imports) -> list[str]:
     """Проверки `_tests_writing_long_lived_gate`, исполнимые без git: строка
     группы каждого файла, затем ядро долгоживущих файлов."""
     errors = []
@@ -201,7 +202,8 @@ def _long_lived(task_id: str, files: list[tuple[str, str]], profile,
                           f"{profile.long_lived_dir}/ кодовой ветки "
                           f"только долгоживущие файлы")
     return errors + guard.long_lived_errors_from_files(
-        files, task_id, network_addresses=network_addresses)
+        files, task_id, network_addresses=network_addresses,
+        project_imports=project_imports)
 
 
 def _report(check: str, errors: list[str]) -> bool:
@@ -257,10 +259,15 @@ def cmd_preflight(arg: str) -> None:
             print(f"{check}: {skipped}")
     else:
         network_addresses = repo_context.is_artel(target)
+        # Правило импортов по проекту задачи — тем же узлом, что переход
+        # (`tests_writing._project_imports`), но по `target` строки: БД
+        # предпроверка не открывает.
+        project_imports = project_profile.long_lived_imports(target, profile)
         refused |= _report(CHECK_LONG_LIVED, long_lived_read_errors + _long_lived(
-            task_id, long_lived, profile, network_addresses))
+            task_id, long_lived, profile, network_addresses, project_imports))
         refused |= _report(CHECK_GROUPS, _groups(task_id, docs, profile,
-                                                 network_addresses))
+                                                 network_addresses,
+                                                 project_imports))
 
     for name, functions in NOT_CHECKED:
         suffix = f" — {', '.join(functions)}" if functions else ""

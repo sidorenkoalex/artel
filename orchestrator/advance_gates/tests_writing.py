@@ -5,7 +5,7 @@ from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint,
                 cycle_hint, fixation, github_adapter, gitcmd, knowledge_cards,
-                repo_context, store, workspace)
+                project_profile, repo_context, store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
 from .refusal_classes import LONG_LIVED_GIT_REFUSAL_ACTION
@@ -318,6 +318,14 @@ def _tests_writing_artifact_source_gate(acc_tdir, task_id: str) -> GateRefusal |
 TEST_GROUPS_ACTION = "переход отклонён: группы приёмочных тестов"
 
 
+def _project_imports(task_id: str, profile):
+    """Правило импортов долгоживущих файлов по проекту задачи (SPEC
+    01M5633WZ3Y3A0P4KKBZDB3KER, требование 6): признак артели — здесь,
+    по проекту задачи, а не флагом вызывающего обработчика."""
+    return project_profile.long_lived_imports(
+        workspace.task_target(task_id), profile)
+
+
 def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
                                     network_addresses: bool = True
                                     ) -> GateRefusal | None:
@@ -349,7 +357,8 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
                                               profile.long_lived_dir,
                                               profile.long_lived_name)
               + guard.long_lived_errors_from_files(
-                  files, task_id, network_addresses=network_addresses))
+                  files, task_id, network_addresses=network_addresses,
+                  project_imports=_project_imports(task_id, profile)))
     if not errors:
         return None
     hint = f"исправь файл планки и повтори artel.py advance {task_id}"
@@ -469,7 +478,8 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
                               f"только долгоживущие файлы")
         errors += guard.long_lived_errors_from_files(
             sorted(files.items()), task_id,
-            network_addresses=network_addresses)
+            network_addresses=network_addresses,
+            project_imports=_project_imports(task_id, profile))
         if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")
