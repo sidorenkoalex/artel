@@ -1,20 +1,21 @@
 # Записка developer
 
 ## Выяснено
+- Возврат из verifying: `tests/test_multitarget.py::SqlOnlyInStoreTest` — SQL в notes.py
+  запрещён. Закрыто: держатель мьютекса читается `store.task_exists` + `store.get_task`
+  (exists первым — get_task делает sys.exit на отсутствии и разрешает префикс; при
+  точном существующем id resolve_task_id возвращает его же). store.py не тронут.
 - Правка — `orchestrator/notes.py::_silence_window_reason` + помощник `_task_project`
-  (is_artel первым, resolve только для не-артели; держатель — строка задачи прямым
-  SELECT, без get_task/task_target). Внешний триггер пропускается, не закрывает окно.
-- Тексты для неизвестного проекта: `<прежний текст>: проект задачи не определён`.
-- tests/test_notes.py + долгоживущий файл задачи: 50+1 зелёные; новый тест
-  `test_artel_task_and_holder_not_resolved_through_targets` проверен мутацией.
-- Карта регенерирована.
+  (is_artel первым, resolve только для не-артели). Внешний триггер пропускается.
+- tests/test_notes.py + долгоживущий файл + SqlOnlyInStoreTest: 53 зелёные. Карта регенерирована.
 
 ## Не сработало
-- plank-run: планки в acceptance_tests нет (вся проверка — долгоживущий файл tests/).
-- suite-run: занято чужим прогоном гейта 01M55VGDHXQ55YR2YXXBPAHTNB.
+- suite-run: занят чужим прогоном (задача 01M563E1SH9SB63S2MW4A9B82N) — полный набор не прогнан.
+- plank-run: планки в acceptance_tests нет.
 
 ## Где остановился
-- PLAN ready; полный набор пульта не прогнан из-за занятости замка.
+- PLAN ready, guard ок.
 
 ## Чего не хватило
-- Нет.
+- В прошлом шаге не знал про инвариант «SQL только в store.py» (tests/test_multitarget.py) —
+  его стоит проверять при любой правке orchestrator/ вне store.py.

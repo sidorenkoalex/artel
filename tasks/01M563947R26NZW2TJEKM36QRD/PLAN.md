@@ -14,9 +14,12 @@ schema_version: 5
 `repo_context.is_artel(row)` первым (пустой/NULL `target` — артель),
 `repo_context.resolve(row["target"])` — только для не-артели; исход —
 «артель» / «внешний» / «не определён». Для держателя мьютекса строка
-задачи берётся из `tasks` (`conn.execute`, не `store.get_task` — тот
-`sys.exit`'ит, и не `store.task_target` — тот подставляет артель для
-отсутствующей строки); строки нет — «не определён».
+задачи берётся `store.get_task` под проверкой `store.task_exists`
+(SQL только в store.py — инвариант
+`tests/test_multitarget.py::SqlOnlyInStoreTest`, причина возврата из
+verifying; `get_task` сам `sys.exit`'ит на отсутствующей строке, а
+`store.task_target` подставляет артель); строки нет — «не определён».
+store.py не правится.
 
 Порядок: живой держатель — артель → прежний текст; не определён → текст
 с id задачи держателя и «проект задачи не определён»; внешний — не
