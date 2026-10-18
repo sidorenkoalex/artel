@@ -859,6 +859,24 @@ def _register_and_watch(task_id: str) -> str:
             "`artel.py watch --observation <ID из её вывода>`")
 
 
+def _session_observation_with_task(conn, task_id: str,
+                                   session_id: str) -> str | None:
+    """Активное наблюдение сессии любого проекта, в наборе которого задача
+    включена, — для совета отказа без `--observation` (SPEC
+    01M563E1SH9SB63S2MW4A9B82N, требование 4а). Порядок свежести — как у
+    `store.matching_observation`; сам выбор наблюдения без флага не
+    меняется. Проект наблюдения — всегда проект какой-то задачи (так его
+    задаёт `observe register`), поэтому перебор проектов задач полон."""
+    projects = {row["target"] or config.DEFAULT_TARGET
+                for row in store.all_tasks(conn)}
+    rows = [row for project in sorted(projects)
+            for row in store.session_observations(conn, task_id, project, session_id)
+            if row["task_enabled"]]
+    rows.sort(key=lambda row: (row["last_seen_at"] or "", row["created_at"] or ""),
+              reverse=True)
+    return rows[0]["id"] if rows else None
+
+
 def _launch_observation(conn, task_id: str, target: str,
                         observation_id: str | None):
     """Наблюдение запуска (SPEC 01M4FZ6QYPPKYQZFEX14QH8XT6, требования 1,
@@ -870,6 +888,12 @@ def _launch_observation(conn, task_id: str, target: str,
     if observation_id is None:
         observer = store.matching_observation(conn, task_id, target, session_id)
         if observer is None:
+            holder = _session_observation_with_task(conn, task_id, session_id)
+            if holder is not None:
+                sys.exit(f"[{task_id}] нет активного наблюдения текущей сессии "
+                         f"и проекта {target} с задачей в наборе; задача стоит "
+                         f"в наблюдении {holder} — передай "
+                         f"`--observation {holder}`")
             sys.exit(f"[{task_id}] нет активного наблюдения текущей сессии и "
                      f"проекта с задачей в наборе — {_register_and_watch(task_id)}; "
                      f"либо `artel.py observe add <ID> --tasks {task_id}` к "
@@ -879,9 +903,12 @@ def _launch_observation(conn, task_id: str, target: str,
         if observer is None:
             sys.exit(f"[{task_id}] наблюдение {observation_id} не найдено — "
                      f"{_register_and_watch(task_id)}")
-        if observer["session_id"] != session_id or observer["target"] != target:
+        # Проект наблюдения с проектом задачи не сверяется: наблюдение
+        # ведёт задачи любых проектов (SPEC 01M563E1SH9SB63S2MW4A9B82N,
+        # требование 4).
+        if observer["session_id"] != session_id:
             sys.exit(f"[{task_id}] наблюдение {observation_id} принадлежит "
-                     "другой сессии или проекту — "
+                     "другой сессии — "
                      f"{_register_and_watch(task_id)}")
         if observer["state"] != "active":
             sys.exit(f"[{task_id}] наблюдение {observation_id} не активно "
@@ -1037,12 +1064,21 @@ def _cmd_observe(rest: list) -> None:
         chat = _observe_flag(rest, "--chat") if "--chat" in rest else None
         _refuse_malformed_pair(client, chat, "observe register")
         client, chat = client or "", chat or ""
+        # Наблюдение ведёт задачи любых проектов; его проект — проект по
+        # умолчанию (SPEC 01M563E1SH9SB63S2MW4A9B82N, требование 2):
+        # названный `--project` либо проект первой ПЕРЕЧИСЛЕННОЙ задачи —
+        # набор ниже уже отсортирован и порядка перечисления не помнит.
         raw_tasks = _observe_flag(rest, "--tasks")
+        task_ids = _validated_observation_tasks(conn, raw_tasks)
         first_task = raw_tasks.split(",", 1)[0].strip()
-        target = store.get_task(conn, first_task)["target"]
-        if "--project" in rest and _observe_flag(rest, "--project") != target:
-            sys.exit("observe: проект не совпадает с проектом задачи")
-        task_ids = _validated_observation_tasks(conn, raw_tasks, target)
+        projects = [store.task_target(conn, task_id) for task_id in task_ids]
+        if "--project" in rest:
+            target = _observe_flag(rest, "--project")
+            if target not in projects:
+                sys.exit(f"observe: ни одна задача из --tasks не принадлежит "
+                         f"проекту {target}")
+        else:
+            target = store.task_target(conn, store.get_task(conn, first_task)["id"])
         observation_id = store.register_observation(
             conn, target, client, chat, session.resolve_session_id(None), task_ids)
         print(json.dumps({"id": observation_id}))
@@ -1117,7 +1153,7 @@ def _cmd_observe(rest: list) -> None:
         return
     if row["state"] != "active":
         sys.exit("observe: прекращённое наблюдение нельзя менять; зарегистрируйте новое")
-    task_ids = _validated_observation_tasks(conn, _observe_flag(rest, "--tasks"), row["target"])
+    task_ids = _validated_observation_tasks(conn, _observe_flag(rest, "--tasks"))
     if action == "add":
         store.add_observation_tasks(conn, row["id"], task_ids)
     else:
@@ -1147,17 +1183,11 @@ def _refuse_extra_observe_args(action: str, rest: list) -> None:
              f"--tasks {form}")
 
 
-def _validated_observation_tasks(conn, raw: str, target: str) -> list[str]:
+def _validated_observation_tasks(conn, raw: str) -> list[str]:
     ids = [part.strip() for part in raw.split(",")]
     if not ids or any(not item for item in ids):
         sys.exit("observe: нужен непустой список задач")
-    result = []
-    for task_id in ids:
-        task = store.get_task(conn, task_id)
-        if task["target"] != target:
-            sys.exit(f"observe: задача {task_id} принадлежит другому проекту")
-        result.append(task["id"])
-    return sorted(set(result))
+    return sorted({store.get_task(conn, task_id)["id"] for task_id in ids})
 
 
 def _hook_flag(rest: list, flag: str) -> str:
