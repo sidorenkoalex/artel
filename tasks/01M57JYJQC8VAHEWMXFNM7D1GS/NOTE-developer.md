@@ -1,19 +1,19 @@
 # Записка developer — 01M57JYJQC8VAHEWMXFNM7D1GS
 
 ## Выяснено
-- amend.py обе ветви зовут acceptance.collect/run с cwd=wt и command=own (amend.py:550-554, :724-728) —
-  выкладка внутри run/collect покрывает amend без правки amend.py.
-- Реализация: acceptance._plank_layout (exclude в info/exclude до copytree, уборка в finally),
-  run/collect/run_plank(task_id=...) гонят из выкладки; run_full_suite +--ignore=<lld>/.artel-plank;
-  drop_from_code_copy убирает остаток по профилю задачи. plank_run.py передаёт task_id.
-- Тесты задачи (19) зелёные; затронутые модули 87+119 passed; две правки теста 01m56g23 по мандату, мутация проверена.
-- Свой тест: tests/test_acceptance_plank_layout_refusal.py (отказ без info/exclude), мутация проверена.
+- amend.py обе ветви зовут acceptance.collect/run с cwd=wt и command=own — выкладка внутри run/collect покрывает amend.
+- Реализация: acceptance._plank_layout (exclude в info/exclude до copytree, уборка в finally); run_full_suite +--ignore;
+  drop_from_code_copy убирает остаток; plank_run.py передаёт task_id.
+- ANSWER-2 отработан (шаг 2): _exclude_layout — open("a+") + fcntl.flock(LOCK_EX), проверка и запись под замком;
+  сбой → «отказ выкладки планки: … не записан (причина)». Тесты: test_acceptance_plank_layout_refusal.py (+2 метода:
+  каталог вместо info/exclude, EIO на flock), новый test_acceptance_plank_exclude_lock.py. Мутации проверены.
+- Риск importlib для _pult — записан в PLAN «Предложения системе».
 
 ## Не сработало
-- pytest -n/xdist в шаге: все узлы «node down». Гонять последовательно.
+- pytest -n/xdist в шаге: все узлы «node down». Bash шага не пускает cp/heredoc-цепочки — мутации через Edit.
 
 ## Где остановился
-- PLAN.md status: ready, guard ок; suite-run №1 зелёный (5842 прошло, 0 упало). Шаг сдан.
+- suite-run №2 зелёный (5846/0/2); guard ок; PLAN status: ready. Шаг сдан.
 
 ## Чего не хватило
 - Ничего существенного.

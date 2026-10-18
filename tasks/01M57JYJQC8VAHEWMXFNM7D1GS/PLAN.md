@@ -24,6 +24,12 @@ schema_version: 5
   уборка (`_drop_layout`, вместе с пустым `.artel-plank/`) — в `finally`.
   git не назвал файл исключений / файл не записан — отказ выкладки без
   запуска pytest (выкладку, видимую git, класть нельзя).
+- ANSWER-2: сбой записи `info/exclude` (нет прав, ввод-вывод, неразобранный
+  путь `--git-path`) — отказ «отказ выкладки планки: … не записан (<причина>)»
+  до создания выкладки, pytest не запускается (п.1). Проверка «шаблон уже
+  есть» и дописывание идут под `fcntl.flock(LOCK_EX)` на самом файле
+  (`open("a+")` → блокировка → чтение с начала → запись при отсутствии),
+  поэтому две задачи одновременно оставляют одну строку (п.2).
 - `run`/`collect`: цель-каталог планки заменяется путём выкладки
   (абсолютным); заголовок «планка: <tasks/<id>/acceptance_tests>, cwd: …»
   прежний. `long_lived_dir` вне `workdir` — прежний путь и строка
@@ -60,7 +66,16 @@ schema_version: 5
    не покрытое долгоживущими файлами: без файла исключений выкладки нет и
    pytest не запускается. Мутация (пропуск отказа `_exclude_layout`)
    краснит все три подтеста.
-5. Регенерация `docs/codebase-map.md`.
+5. ANSWER-2, п.1: в том же файле `test_refusal_when_exclude_not_writable`
+   (настоящий `git init`, на месте `info/exclude` каталог) и
+   `test_refusal_on_lock_io_error` (`flock` бросает `EIO`) — отказ с
+   причиной, pytest не запущен, `.artel-plank` нет, во всех трёх прогонах.
+   Мутация (ошибка записи глотается) краснит оба — проверено.
+6. ANSWER-2, п.2: `tests/test_acceptance_plank_exclude_lock.py` —
+   держатель `flock` в тесте + поток `_exclude_layout`: поток ждёт и после
+   строки держателя второй не пишет; два потока с барьером ×20 — одна
+   строка. Мутация (снят `flock`) краснит оба — проверено.
+7. Регенерация `docs/codebase-map.md`.
 
 ## Покрытие требований
 
@@ -71,7 +86,7 @@ schema_version: 5
 | 3 | 1, 2 |
 | 4 | 2 (без `task_id` для долгоживущего пути), 3 |
 | 5 | 1 (`finally` в `_plank_layout`) |
-| 6 | 1 (`_exclude_layout` до `copytree`; `drop_from_code_copy`), 4 |
+| 6 | 1 (`_exclude_layout` до `copytree` под `flock`; `drop_from_code_copy`), 4, 5, 6 |
 | 7 | 1 (`--ignore` в `run_full_suite`) |
 | 8 | 1 (исключение `info/exclude`) |
 | 9 | 1 (заголовок прежний, узел несёт `.artel-plank/<id>/acceptance_tests/<файл>`) |
@@ -86,6 +101,9 @@ schema_version: 5
 pytest-own места, profile_callers, pull_long_lived_plank) — 87 + 119
 passed. Каталог `acceptance_tests/` задачи пуст (все AC — долгоживущие).
 Полный набор `suite-run` №1 — зелёный: прошло 5842, упало 0, пропущено 2.
+После ANSWER-2: тесты задачи + `test_acceptance_plank_*` +
+`test_01m56g23…` — 24 passed; `suite-run` №2 — зелёный: прошло 5846,
+упало 0, пропущено 2.
 
 ## Влияние на систему
 - Артель (`pult-pytest`) — путь не меняется: `_layout_mode` возвращает «»,
@@ -111,3 +129,7 @@ passed. Каталог `acceptance_tests/` задачи пуст (все AC — 
 - Шаг разработчика: `pytest -n … -p xdist` по файлам затронутых модулей
   роняет все узлы («node down: Not properly terminated») без пояснения —
   стоит назвать в скиле, что параллель в шаге недоступна.
+- Риск (ANSWER-2, п.3): под конфигом проекта с `--import-mode=importlib`
+  импорт `_pult` из планки (`from _pult import …`) может не работать —
+  каталог выкладки не попадает в `sys.path`. Отдельной правки задача не
+  вносит; адрес — `orchestrator/plank_helper.py`/выкладка помощника.
