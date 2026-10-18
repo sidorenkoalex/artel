@@ -45,7 +45,9 @@ def launch(argv, *args, **kwargs):
                        *args, **kwargs)
     Path(settings["observation"]).write_text(json.dumps({
         "clone": str(clone), "origin": origin, "suite_pid": suite.pid,
-        "drive_pid": drive.pid}))
+        "drive_pid": drive.pid,
+        "alive_before_signal": {"suite": suite.poll() is None,
+                                "drive": drive.poll() is None}}))
     return drive
 with mock.patch.object(Path, "home", return_value=Path(settings["home"])), \
      mock.patch.object(catalog, "cmd_init"), \
@@ -132,6 +134,12 @@ class CanaryLifecycleTest(RealGitSandbox):
         self.suite_pids.append(state["suite_pid"])
         self.drive_pids.append(state["drive_pid"])
         self.clone_paths.extend([Path(state["clone"]), Path(state["origin"])])
+        # Без живых до сигнала ведения и suite проверка «не живы» после него
+        # пуста (SPEC 01M583RM59DHDRDH877AERAVMD, AC-12).
+        self.assertEqual(state.get("alive_before_signal"), {"suite": True, "drive": True},
+                         f"зерно: {self.seed}; до сигнала ведение и suite обязаны жить")
+        self.assertTrue(self.alive(state["suite_pid"]) and self.alive(state["drive_pid"]),
+                        f"зерно: {self.seed}; ведение или suite не живы перед сигналом")
         os.kill(child.pid, signum)
         stdout, stderr = child.communicate(timeout=20)
         return state, stdout, stderr
