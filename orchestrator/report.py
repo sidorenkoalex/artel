@@ -29,7 +29,7 @@ from pathlib import Path
 # такая подмена падает с `AttributeError`. Про отчёт целиком планка
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
-from . import agent_log, alerts, config, explore_metric, retro, spend, store  # noqa: F401
+from . import agent_log, alerts, config, explore_metric, retro, spend, store, targets  # noqa: F401
 from .advance_gates import test_integrity, two_sided
 from .providers import base as provider_base
 from .providers import claude as claude_provider
@@ -663,23 +663,36 @@ def _closed_tasks_html(tasks: list, steps: list) -> str:
     return f'<div class="closed-list">{rows}</div>'
 
 
-def _alert_label(alert, projects: set) -> str:
+def _alert_label(alert, projects: set, task_ids: set) -> str:
     """Метка ` [<проект>]` алерта внешнего проекта (SPEC
-    01M57PMBHWK5EGQ8HPA5TQX72H, требование 2): `target` — имя проекта
-    задачи, не артели. Алерт артели, NULL и алерт с id задачи — без
-    метки."""
+    01M57PMBHWK5EGQ8HPA5TQX72H, требование 2; ANSWER-2, п.2): `target` —
+    имя проекта (`targets.yaml` или проект задачи выборки), не артели.
+    Алерт артели, NULL и алерт с id задачи — без метки; значение, не
+    названное ни проектом, ни id задачи, печатается в скобках как есть."""
     target = alert["target"]
-    if target in projects and target != config.DEFAULT_TARGET:
-        return f'<span class="alert-project">[{_esc(target)}]</span>'
-    return ""
+    if not target or target == config.DEFAULT_TARGET:
+        return ""
+    if target not in projects and target in task_ids:
+        return ""
+    return f'<span class="alert-project">[{_esc(target)}]</span>'
 
 
-def _alerts_html(alerts: list, projects: set = frozenset()) -> str:
+def _declared_projects() -> set:
+    """Имена проектов `targets.yaml`; негодный или отсутствующий файл —
+    пустой набор: отчёт строится и без декларации проектов."""
+    try:
+        return set(targets.load())
+    except targets.TargetsError:
+        return set()
+
+
+def _alerts_html(alerts: list, projects: set = frozenset(),
+                 task_ids: set = frozenset()) -> str:
     if not alerts:
         return '<p class="empty">Незакрытых алертов нет.</p>'
     items = "".join(
         f'<li class="alert-item">'
-        f'{_alert_label(a, projects)}'
+        f'{_alert_label(a, projects, task_ids)}'
         f'<span class="alert-kind">{_esc(a["kind"])}</span>'
         f'<span class="alert-text">{_esc(a["message"])}</span>'
         f'<span class="alert-source">source: {_esc(a["source"])}</span>'
@@ -1283,6 +1296,8 @@ _STYLE = """
 def _render(tasks: list, steps: list, alerts: list, total_spent: float,
            total_estimate: float, divergence: dict | None = None,
            map_growth_html: str = "", *, now: datetime) -> str:
+    projects = _declared_projects() | {_project(row) for row in tasks}
+    task_ids = {row["id"] for row in tasks}
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ru">\n'
@@ -1295,7 +1310,7 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         '<header class="topbar"><h1>Артель — отчёт пульта</h1></header>\n'
         "<main>\n"
         '<section class="panel"><h2>Алерты</h2>'
-        f"{_alerts_html(alerts, {_project(row) for row in tasks})}</section>\n"
+        f"{_alerts_html(alerts, projects, task_ids)}</section>\n"
         '<section class="panel"><h2>Очередь ожиданий Оператора</h2>'
         f"{_gate_queue_html(tasks)}</section>\n"
         '<section class="panel"><h2>Борд задач — состояния FSM</h2>'
