@@ -509,10 +509,11 @@ def _long_lived_errors(task_id: str, files: dict[str, str],
                           f"долгоживущие файлы")
     # Сетевые адреса (инвариант 35) — правило дерева `tests/` пульта: у
     # чужого проекта не проверяются, как на выходе из `tests_writing`.
+    target = workspace.task_target(task_id)
     errors += guard.long_lived_errors_from_files(
         sorted(files.items()), task_id,
-        network_addresses=repo_context.is_artel(
-            workspace.task_target(task_id)))
+        network_addresses=repo_context.is_artel(target),
+        project_imports=project_profile.long_lived_imports(target, profile))
     kept: set[str] = set()
     for source in [*plank_sources, *files.values()]:
         kept |= _method_names(source)
