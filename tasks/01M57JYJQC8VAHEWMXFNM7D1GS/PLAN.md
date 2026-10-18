@@ -76,6 +76,14 @@ schema_version: 5
    строки держателя второй не пишет; два потока с барьером ×20 — одна
    строка. Мутация (снят `flock`) краснит оба — проверено.
 7. Регенерация `docs/codebase-map.md`.
+8. ANSWER-3: уточнение мандата ANSWER-1 — правка помощника
+   `PlankLongLivedSandbox.assert_runs_file` (:345-348), которую гейт
+   неослабления назвал находкой
+   `Ac5OwnProfileLongLivedRunTest::test_ac5_long_lived_path_runs_by_own_profile`,
+   покрыта мандатом без изменения объёма. Код и тест не меняются: правка уже
+   ровно та (запретные цели — прежний путь планки и путь выкладки по
+   префиксу, `assertFalse` над всеми целями). Перепроверено: тесты задачи,
+   `test_01m56g23…`, `test_acceptance_plank_*` — 24 passed.
 
 ## Покрытие требований
 
@@ -92,7 +100,7 @@ schema_version: 5
 | 9 | 1 (заголовок прежний, узел несёт `.artel-plank/<id>/acceptance_tests/<файл>`) |
 | 10 | 1 (`LAYOUT_OUTSIDE_NOTE`) |
 | 11 | 1 (у `pult-pytest` `_plank_layout` ничего не делает) |
-| 12 | 3 |
+| 12 | 3, 8 |
 | 13 | тесты test_author: `tests/test_01m57jyjqc8vahewmxfnm7d1gs_*.py` |
 
 Проверки: `tests/test_01m57jyjqc8vahewmxfnm7d1gs_plank_layout.py`,
