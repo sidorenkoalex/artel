@@ -1,5 +1,5 @@
 ---
-built_at_sha: f8fc3aa9e6fe04e0e6805db0688edc747f37b5b8
+built_at_sha: 89b4a5270438dbea642773cbba189a06bf4916ed
 ---
 
 # Codebase-map пульта
@@ -2400,6 +2400,7 @@ built_at_sha: f8fc3aa9e6fe04e0e6805db0688edc747f37b5b8
 - `patch_sleep`
 - `resilient_tmp_cleanup`
 - `role_map_fixture`
+- `route_url_to_bare`
 - `seed_artel_clone_stub`
 - `seed_artel_targets`
 - `seed_developer_brief_fixtures`
