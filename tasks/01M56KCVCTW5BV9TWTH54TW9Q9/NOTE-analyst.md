@@ -1,15 +1,14 @@
 # Записка analyst — 01M56KCVCTW5BV9TWTH54TW9Q9
 
 ## Выяснено
-- Возврат из spec_gate 18.10: Оператор принял все 5 предложений SPEC-AUDIT. SPEC переписан (итерация 2): 7 AC, budget 35 (рамка ТЗ), zones прежние, status ready, guard ок.
-- (1) Отказ «команда профиля <имя> не найдена» — каналом отказа workdir каждого места: run/collect `(False, текст)`, run_repeat `RedTest`, run_plank `REFUSED_EXIT_CODE`, 3 пути полного прогона — префикс `FULL_SUITE_NOT_STARTED` (не кешируется, acceptance.py:2028 до save_suite_result :2038). Отдельный AC-6 про некеширование.
-- (2) AC-2 и AC-5 — по каждому из 8 мест PLACES (tests/test_01m52eefna1wh31962hvnt0yz9_pytest_own_places.py:62-65); two_sided — свой текст «pytest не запустился: …».
-- (3) command[0]: не найден — (б) пропускается без падения; относительный с `/` — от workdir (AC-3).
-- (4) Формулировка: одинаково наличие каталогов (б)/(в), не PATH целиком.
-- (5) AC-7 (артель pult-pytest): ожидание — литералы argv/cwd и os.environ + PYTHONPYCACHEPREFIX, не через _pytest_env/_place_env.
+- Второй возврат из spec_gate 18.10 (по второму аудиту) — внесены все три решения, итерация 3; 7 AC, budget 35, status ready, guard ок.
+- (1) Требование 3 / AC-5 — только pytest-own; у pult-pytest FileNotFoundError доходит до вызывающего (tests/test_acceptance_pycache.py:73-98: run, collect, run_full_suite). Добавлено в «Не входит».
+- (2) Каталог прогона — необязательный параметр _place_env/_own_env; two_sided._run_side (two_sided.py:242, вне зон, не правится) его не передаёт → для относительного command[0] с `/` шаг (б) пропускается; записано в треб. 1 и AC-3.
+- (3) AC-7: os.environ + PYTHONUNBUFFERED (_run_full_suite_to_log, acceptance.py:1592) + PYTHONPATH/REPORT_ENV (two_sided) + наличие ключа PYTHONPYCACHEPREFIX.
+- Ранее: каналы отказа по местам — run/collect `(False, текст)`, run_repeat `RedTest`, run_plank `REFUSED_EXIT_CODE`, полный прогон `FULL_SUITE_NOT_STARTED` (не кешируется).
 
 ## Не сработало
-- —
+- `ls` в Bash недоступен (command not found) — пользоваться Read/sed.
 
 ## Где остановился
 - SPEC сдан, guard ок.
