@@ -68,8 +68,12 @@ schema_version: 5
 
 Порядок исходов:
 - нет HTTP-ответа (таймаут, OSError, ненулевой код без «(HTTP n)») → `skip`;
-- 403 не про права → `skip`;
-- Actions не читаются → `fail`;
+- 403 не про права (лимит запросов) у любого из двух эндпоинтов, в том
+  числе у обоих сразу → `skip`;
+- Actions отказывают не правами (5xx, неразобранный ответ) → `skip`
+  (ANSWER-1: `fail` за Actions — только отказ правами);
+- Actions отказывают правами (403 «Resource not accessible …», 401, 404,
+  `_GhProbe.denied`) → `fail`;
 - check-runs читаются → `ok`;
 - check-runs 403 прав → `warn` с текстом SPEC;
 - прочий отказ check-runs → `fail`.
@@ -90,7 +94,10 @@ schema_version: 5
    долгоживущими файлами:
    - 403 прав только при коде 403;
    - ответ Actions без `total_count` → неизвестен;
-   - 403 лимита у Actions в doctor → `skip`.
+   - 403 лимита у Actions в doctor → `skip`;
+   - 403 лимита у обоих эндпоинтов → `skip` (ANSWER-1);
+   - Actions 502/неразобранный ответ → `skip`, Actions 401/404/403 прав →
+     `fail` (ANSWER-1).
    
    Каждый тест проверен временной мутацией (красный → код возвращён).
 4. `python3 scripts/codebase_map.py` — карта регенерирована.
