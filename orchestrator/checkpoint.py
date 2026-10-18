@@ -229,7 +229,8 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
         pass
     elif role == "developer":
         committed, sha, stray, _error, _mandated = _commit_worktree_change(
-            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
+            conn, task_id, wt, message, exclude=f"tasks/{task_id}",
+            own_long_lived=True)
         if stray:
             restore_out_of_bounds_deletions(conn, task_id, role, wt)
         if committed:
@@ -519,11 +520,16 @@ def _role_may_delete(task_id: str, role: str, rel: str,
     что у `_stray_staged_paths`); свои долгоживущие файлы по профилю
     проекта `profile` — test_author (их судьбу решает
     `_test_author_checkpoint`; SPEC 01M551W0TFCT2XRQ71XFXJDKB9,
-    требование 2). Профиля нет — своих долгоживущих файлов нет."""
+    требование 2) и developer (SPEC 01M56GWRJ5NVSR39VNT6QQC7NV,
+    требование 3). Профиля нет — своих долгоживущих файлов нет."""
     if zone_lock._paths_overlap(rel, task_dir_zone(task_id)):
         return True
     if role == "developer":
-        return not zones or any(zone_lock._paths_overlap(rel, z) for z in zones)
+        # Свой долгоживущий файл задачи — зона developer наравне с
+        # заявленными (SPEC 01M56GWRJ5NVSR39VNT6QQC7NV, требование 3).
+        return (not zones
+                or any(zone_lock._paths_overlap(rel, z) for z in zones)
+                or (profile is not None and profile.is_long_lived(task_id, rel)))
     if role == "test_author":
         return profile is not None and profile.is_long_lived(task_id, rel)
     return False
@@ -554,7 +560,7 @@ def restore_out_of_bounds_deletions(conn, task_id: str, role: str,
         return []
     zones = _zone_paths(conn, task_id) if role == "developer" else []
     profile = (project_profile.for_task(conn, task_id).profile
-               if role == "test_author" else None)
+               if role in ("developer", "test_author") else None)
     doomed = [rel for rel in deleted
               if not _role_may_delete(task_id, role, rel, zones, profile)]
     if zones:
@@ -893,7 +899,7 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
     committed, sha, stray, _error, mandated = _commit_worktree_change(
-        conn, task_id, wt, message, exclude=exclude)
+        conn, task_id, wt, message, exclude=exclude, own_long_lived=True)
     if stray:
         restore_out_of_bounds_deletions(conn, task_id, role, wt)
     if not committed:
@@ -1530,7 +1536,7 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
     message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
     committed, sha, _stray, _error, _mandated = _commit_worktree_change(
         conn, task_id, wt, message, exclude=f"tasks/{task_id}",
-        refuse_on_stray=True)
+        refuse_on_stray=True, own_long_lived=True)
     if not committed:
         return ""
     detail = f"{message} (sha {sha})" if sha else message
@@ -1589,10 +1595,16 @@ def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
     правилом, что `zone_lock._paths_overlap` (SPEC 01M290PVYG2VJK6442H5BAX9MA,
     AC-1). `zones` пуст — пустой список без единого вызова git: фильтр не
     применяется вовсе (см. `_zone_paths`). `None` — git не ответил на сам
-    `diff --cached`."""
+    `diff --cached`.
+
+    `--no-renames`: с распознаванием переименований `git mv` пути вне зон
+    в путь зоны дал бы только имя назначения, и удаление источника ушло бы
+    в коммит пульта мимо восстановления удалений вне зон (SPEC
+    01M56GWRJ5NVSR39VNT6QQC7NV, требование 5). Без него источник —
+    отдельный удалённый путь, посторонний наравне с прочими."""
     if not zones:
         return []
-    res = gitcmd.in_repo(wt, "diff", "--cached", "--name-only")
+    res = gitcmd.in_repo(wt, "diff", "--cached", "--name-only", "--no-renames")
     if res is None or res.returncode != 0:
         return None
     stray = []
@@ -1601,6 +1613,22 @@ def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
         if rel and not any(zone_lock._paths_overlap(rel, z) for z in zones):
             stray.append(rel)
     return stray
+
+
+def _own_long_lived(conn, task_id: str, paths: list[str]) -> list[str]:
+    """Подсписок `paths` вне зон задачи — свои долгоживущие файлы задачи по
+    профилю проекта (`Profile.is_long_lived`; SPEC
+    01M56GWRJ5NVSR39VNT6QQC7NV, требования 1-2): тот же источник, что у
+    гейта зон (`advance_gates.zones`), — иначе гейт признавал бы файл
+    зоной, а коммит пульта снимал бы его со стейджа. Проект без профиля
+    (`skip`) или с непрочитанным (`refusal`) — своих файлов нет, зоны не
+    расширяются (требование 7). Пустой `paths` — без чтения профиля."""
+    if not paths:
+        return []
+    profile = project_profile.for_task(conn, task_id).profile
+    if profile is None:
+        return []
+    return [p for p in paths if profile.is_long_lived(task_id, p)]
 
 
 def _mandate_covered(task_id: str, paths: list[str]) -> list[str]:
@@ -1701,16 +1729,18 @@ def pult_commit_failed_paths(conn, task_id: str) -> list[str] | None:
         if zones and not any(zone_lock._paths_overlap(rel, z) for z in zones):
             outside.append(rel)
         paths.append(rel)
-    # Путь по мандату Оператора пульт коммитит наравне с путями зон —
-    # значит, и его незакоммиченность после отказа git — результат шага.
-    stray = set(outside) - set(_mandate_covered(task_id, outside))
+    # Путь по мандату Оператора и свой долгоживущий файл задачи пульт
+    # коммитит наравне с путями зон — значит, и их незакоммиченность после
+    # отказа git — результат шага.
+    stray = (set(outside) - set(_mandate_covered(task_id, outside))
+             - set(_own_long_lived(conn, task_id, outside)))
     return [p for p in paths if p not in stray]
 
 
 def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
                             exclude: str | None = None,
                             refuse_on_stray: bool = False,
-                            own_zones=()
+                            own_zones=(), own_long_lived: bool = False
                             ) -> tuple[bool, str, list[str], str, list[str]]:
     """(закоммичено, sha, посторонние, отказ git, по мандату) — `add -A` +
     фильтр по зонам задачи + `commit` служебной идентичностью В ЗАДАННОМ
@@ -1757,6 +1787,11 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     свои долгоживущие файлы test_author по профилю проекта (SPEC
     01M551W0TFCT2XRQ71XFXJDKB9, требование 3). Задача без заявленных зон
     фильтра не имеет и так — тогда они ничего не меняют.
+
+    `own_long_lived=True` (чекпоинты developer) — путь вне зон, который
+    профиль проекта признаёт своим долгоживущим файлом задачи
+    (`_own_long_lived`), посторонним не считается (SPEC
+    01M56GWRJ5NVSR39VNT6QQC7NV, требование 1).
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
@@ -1773,6 +1808,9 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     stray = _stray_staged_paths(wt, zones)
     if stray is None:
         return False, "", [], "", []
+    if own_long_lived:
+        own = set(_own_long_lived(conn, task_id, stray))
+        stray = [p for p in stray if p not in own]
     mandated = _mandate_covered(task_id, stray)
     stray = [p for p in stray if p not in mandated]
     if stray:
