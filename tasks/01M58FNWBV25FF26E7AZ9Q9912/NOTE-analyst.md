@@ -1,17 +1,14 @@
-# Записка analyst — 01M58FNWBV25FF26E7AZ9Q9912
+# Записка analyst — 01M58FNWBV25FF26E7AZ9Q9912 (шаг 2, после аудита fail)
 
 ## Выяснено
-- ТЗ достаточно: SPEC.md написан, status: ready, guard ок. 10 требований, AC-1…AC-12, budget_usd 40 (рамка ТЗ; таблица калибровки для 6 файлов/12 AC даёт 45).
-- Сработали сигналы деления: 6 файлов зоны вне общих (порог 5) и 12 AC (порог 10). В SPEC — обоснование монолита плюс запасная граница нарезки (схема/выбор/отказ → doctor+ключ кэша); решает Оператор на гейте SPEC.
-- Форма полей компонента (`long_lived`, `tools: {node: "22 (frontend/.nvmrc)"}`, `depends_on`) — черновик sled в ADR-0026, строки 61-105.
-- Словарь статусов doctor: ok/warn/fail/skip (`doctor.Check`, orchestrator/doctor/project_checks.py). `check_no_paths` на отсутствующий путь даёт warn — поэтому для отсутствующего `workdir` SPEC требует только «не ok».
-- `project_profile.full_suite_limit` (`:179`) тоже читает `test_profile` напрямую — разработчику учесть при переходе на компоненты.
-
-## Не сработало
-- Первый прогон guard: путь `docs/adr/0026-…md` упомянут, но не классифицирован — добавлен в «Не входит» как только чтение.
+- Аудит подтверждён по коду: `targets.load` → `yamlmini.mapping` (targets.py:111). Блочные списки отказываются (yamlmini.py:145), вложенные `[[`, кавычки в потоковом списке (yamlmini.py:178, :194); `{…}` становится строкой (:174). Отказы держит `tests/test_yaml_parsing.py::YamlMappingTest::test_unsupported_shapes_refuse_loudly` (стр. 190-201; подслучаи «блочный список» и «кавычки в списке»), `yamlmini.mapping` читают ещё roles.py, models.py, gates.py, knowledge_cards.py.
+- Читатели `profile_of`: project_profile.decide :149, full_suite_limit :181, acceptance._task_own_profile :2393 (UNREAD/ABSENT → None → прежняя форма полного набора — обход), suite_run._profile_command :278.
+- `mask_matches` (project_profile.py:46) — глоб с `*`/`**`, без `{a,b}`; у ADR в `tests` фронтенда `*.{test,spec}.{js,jsx}`.
+- `_own_suite_result_key` (acceptance.py:2146) — без корня рабочей копии; отслеживаемые lock-файлы уже в `tree`.
+- Решение шага: QUESTIONS.md (9 вопросов), SPEC.md не трогаю.
 
 ## Где остановился
-- Шаг завершён: SPEC.md готов.
+- QUESTIONS.md записан, guard прогнан.
 
 ## Чего не хватило
-- «Совпадение главной части версии» в ТЗ не уточняет, как сравнивать требуемое `3.12` или `22 (frontend/.nvmrc)`; в SPEC оставлено формулировкой ТЗ, AC проверяет только 22/20.
+- Что `targets.yaml` читает `yamlmini`, а не PyYAML, в первом шаге не проверила — это и стоило возврата.
