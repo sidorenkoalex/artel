@@ -1,21 +1,21 @@
 # Записка analyst — 01M574A6YQHAPASS9716Z11G4Q
 
 ## Выяснено
-- Сверка вызовов `check_runs` (требование 4 ТЗ), все в `orchestrator/ci.py` (зона):
-  - :748 `verifying_status` — путь внешней задачи (fsm_advance:453, fsm_autogate:287, ci_rerun:123/158, acceptance:2260). Пустой/None → `_no_checks_by_branch` (:805) — источник инцидента («проверки идут» по `gh run list`).
-  - :892 `failed_check_names` — ci_rerun:276/291 для внешнего проекта (голова и main), плюс `_inherited_from_main` (:611) на красном исходе.
-  - :920 `branch_status` — гейт мержа внешней задачи (fsm_merge_gate:299, :353), фильтра is_artel нет.
-  - :969 `accepted_full_suite` — для не-артели возврат до `check_runs` (:967): не на пути.
-  - :1213 `main_line_status` — вызыватели только артель (pin.py:86 ROOT, fsm_merge_gate:583/:626 под `is_artel`, doctor/main_ci ROOT): не на пути.
-  - :1326 `find_run_id` — на пути ре-рана; при None от check_runs деградирует на первый красный прогон, зелёным не читает — отдельной правки не требует.
-- В tests/ нет тестов, закрепляющих исход 403 для CI → раздела «Меняемое поведение» нет.
-- Понятия «триггер, которым CI проекта проверяет ветку» в ci.py нет; в ТЗ — отсылка к doctor `project-ci-pull-request` (разбор `on:` workflow клона, project_checks.py:104 `declares_pull_request`).
-
-## Где остановился
-SPEC.md написан (status: ready, budget_usd 35 = рамка ТЗ, 10 AC), `scripts/guard.py` — ок. Сигналы объёма (бюджет ≥30, 10 AC, инвариант 19) — в SPEC дано обоснование монолита по цене с запасным вариантом деления (CI → doctor); решать Оператору на гейте SPEC.
+- Итерация 2 (возврат аудита 1 из 2): SPEC переписан, guard — ок, status: ready, 12 AC, budget 35 (класс ~45 — отмечено в «Оценке объёма»).
+- Закрытие отклонений аудита:
+  1. Разборщики note: verifying_is_red (ci.py:835; auto.py:485, ci_rerun.py:89, watch.py:219), red_status_sha (ci.py:848; ci_rerun.py:90), status_kind (ci.py:1014; fsm_merge_gate.py:363) — требование 5, AC-2/3/4/6.
+  2. Триггер = событие `pull_request` запуска Actions (основание: Draft-MR fsm_advance.py:356/:624 и CI_WAIT_WARNING project_checks.py:18), без чтения клона. Запуски других событий остаются в вердикте (красный — красный, идущий — идёт); зелёный требует ≥1 завершённого pull_request. Только push-зелёные без pull_request — как «нет запусков». failed_check_names — без фильтра события и ветки (паритет с check-runs ci.py:899) → вершина main (push) работает (AC-7).
+  3. Отбор по head_branch как _other_branch — требование 2, AC-5.
+  4. AC-4 фиксирует оба ответа gh run list (пусто → NONE, есть → RUNNING).
+  5. AC-9 называет 403 «API rate limit exceeded».
+  6. doctor: имя project-ci-token-<проект>, ROLE_SKIP в роли, NOT_APPLICABLE артели, gh_env-авторизация, нет gh/слот — skip, check-runs 401/404/5xx — fail.
+- Ссылки fsm_merge_gate исправлены на :591/:630 (охрана :583/:626).
 
 ## Не сработало
-- Bash с `cd`/переменной в составной команде отклоняется правилами — звать команды из рабочего каталога относительными путями, по одной.
+- `ls`/`cat` в Bash нет (command not found) — читать Read-инструментом.
+
+## Где остановился
+SPEC.md готов (ready), guard ок. Решения по п.6 (имя проверки, fail на 401/404/5xx) и бюджет — материал для правки Оператора на гейте.
 
 ## Чего не хватило
-Ничего критичного; дольше всего — проверка, какие вызыватели main_line_status ограничены is_artel (fsm_merge_gate.py:583, :626).
+Карты потребителей текста note статуса CI — нашёл grep'ом по verifying_is_red|red_status_sha|status_kind.
