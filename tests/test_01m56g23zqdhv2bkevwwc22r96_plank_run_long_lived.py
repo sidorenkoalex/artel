@@ -343,8 +343,12 @@ class PlankLongLivedSandbox(RealGitSandbox):
         self.assertIn((expected, node), targets,
                       self.explain(f"цель {rel}::{node} не прогонялась\n{output}"))
         plank = os.path.realpath(self.own_dir(task_id) / "acceptance_tests")
-        self.assertFalse(any(path == plank or path.startswith(plank + os.sep)
-                             for path, _node in targets),
+        layout = os.path.realpath(
+            self.wt(task_id)
+            / self.profile(store.task_target(self.conn, task_id)).long_lived_dir
+            / ".artel-plank" / task_id)
+        self.assertFalse(any(path == p or path.startswith(p + os.sep)
+                             for path, _node in targets for p in (plank, layout)),
                          self.explain(f"прогонялась планка\n{output}"))
 
     def assert_refused_without_run(self, status, output: str, text: str) -> None:
@@ -468,6 +472,10 @@ class Ac6PreviousOutcomeTest(PlankLongLivedSandbox):
                 self.assertEqual(len(self.calls), 1, self.explain(output))
                 targets = [p for p, _n in self.targets_of(self.calls[0])]
                 plank = os.path.realpath(self.own_dir(task_id) / "acceptance_tests")
+                if target == self.ext:
+                    plank = os.path.realpath(
+                        self.wt(task_id) / self.profile(target).long_lived_dir
+                        / ".artel-plank" / task_id / "acceptance_tests")
                 self.assertEqual(targets, [plank], self.explain(output))
                 self.assertNotIn(os.path.realpath(self.wt(task_id) / own_rel),
                                  targets, self.explain(output))
