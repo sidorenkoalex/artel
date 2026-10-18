@@ -629,6 +629,9 @@ origin main или отставание ветки не определены; п
   suite_run команда `suite-run <id> [--wait <минуты> | --failed]`: полный
             прогон тестов проекта задачи фоном у пульта, сравнение с базой
             ветки, повтор упавших (SPEC 01M462QACEH29RPRD2RZHGHQFM)
+  guard     команда `guard <id> [файл]`: `scripts/guard.py` по файлам
+            каталога документов задачи; только чтение, доступна роли и
+            внешнего проекта (SPEC 01M56G23ZQDHV2BKEVWWC22R96)
   preflight команда `preflight <id>`: предпроверка выхода из tests_writing
             по черновику test_author теми же ядрами guard, что переход;
             только чтение (SPEC 01M4P4ZP37WV81410YTZHKQC8D)
@@ -763,7 +766,8 @@ def _ensure_supported_interpreter():
 
 _ensure_supported_interpreter()
 
-from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
+from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
+                          artifact_cleanup, auto,
                           budget, canary, catalog, ci_rerun, cleanup, doctor,
                           docs_fetch, dry_run, explore_metric, fsm,
                           knowledge_cards, lease, liveness, models, notes, pause, pin, plank_run,
@@ -772,6 +776,7 @@ from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
                           report, runner, session, snapshot, store, suite_run,
                           venv, version, watch, workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
+from scripts import guard as artifact_guard  # noqa: E402
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -1888,6 +1893,45 @@ def _cmd_pause(rest: list) -> None:
     pause.cmd_pause(rest[0])
 
 
+def _cmd_guard(rest: list) -> None:
+    """`guard <id> [<файл>]`: проверка артефактов каталога документов задачи
+    правилом `scripts/guard.py` (SPEC 01M56G23ZQDHV2BKEVWWC22R96,
+    требования 1-3). Роли внешнего проекта разрешён только `artel.py`
+    пульта, а `scripts/guard.py` в рабочем каталоге проекта нет.
+
+    Правило не копируется: эталон `python3 scripts/guard.py <пути>` в режиме
+    по файлам зовётся тем же `main()` с argv из абсолютных путей каталога
+    документов — те же строки нарушений с той же путь-меткой, пропуск
+    записок и паспорта, тот же код выхода. Без `<файл>` — все `*.md`
+    первого уровня каталога одним вызовом. Только чтение: ни lease, ни
+    записей журнала, ни коммитов."""
+    if not rest:
+        sys.exit("guard требует id задачи: artel.py guard <id> [<файл>].")
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, rest[0])
+    docs = artifact_branch.docs_dir(task_id, store.task_target(conn, task_id))
+    if len(rest) > 1:
+        name = rest[1]
+        prefix = f"tasks/{task_id}/"
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+        files = [docs / name]
+    else:
+        files = sorted(p for p in docs.glob("*.md") if p.is_file())
+        if not files:
+            sys.exit(f"[{task_id}] guard: отказ — в каталоге документов {docs} "
+                     f"нет файлов *.md")
+    saved_argv = sys.argv
+    sys.argv = ["guard.py", *map(str, files)]
+    try:
+        code = artifact_guard.main()
+    finally:
+        sys.argv = saved_argv
+    sys.stdout.flush()
+    if code:
+        sys.exit(code)
+
+
 #: Команды, которые процесс роли исполняет в любой форме: только чтение,
 #: кроме досыла очереди журнала у `suite-run` и одной записи журнала
 #: команды `knowledge` (SPEC 01M3XTF5506GF43HD51ECE230T, требование 5;
@@ -1903,11 +1947,13 @@ def _cmd_pause(rest: list) -> None:
 #: коммитов и выкладки планки (SPEC 01M4P4ZP37WV81410YTZHKQC8D,
 #: требования 7, 9, 10). `knowledge` читает БД `mode=ro` и пишет одну
 #: запись обращения постоянным автором `knowledge_cards.JOURNAL_ACTOR`,
-#: которому не доверяет ни один читатель журнала.
+#: которому не доверяет ни один читатель журнала. `guard` только читает
+#: каталог документов задачи и строку задачи (SPEC
+#: 01M56G23ZQDHV2BKEVWWC22R96, требование 3).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
      "acceptance-dry-run", "plank-run", "suite-run", "preflight",
-     "knowledge"))
+     "knowledge", "guard"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -2036,6 +2082,7 @@ def main() -> None:
             rest[0], rest[1] if len(rest) > 1 else None),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
         "preflight": lambda: preflight.cmd_preflight(rest[0]),
+        "guard": lambda: _cmd_guard(rest),
         "knowledge": lambda: knowledge_cards.cmd_knowledge(rest),
         # `docs` и `artifact-branches-cleanup` ходят в сеть и переписывают
         # локальные ссылки — вне белого списка ролей.
