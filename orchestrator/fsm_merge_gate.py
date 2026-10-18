@@ -28,7 +28,7 @@ from scripts import guard
 from . import (acceptance, alerts, appendix_tree, artifact_branch,
               artifact_source, ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
               github_adapter, lease, merge_lock, merge_queue, project_profile,
-              reference_cache, repo_context, store, workspace)
+              reference_cache, repo_context, session, store, workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
 from .advance_gates import plan_appendix
@@ -352,7 +352,8 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
     while True:
         green, note = ci.branch_status(branch,
                                        repo=workspace.task_repo(task_id))
-        merge_lock.touch_heartbeat(conn)
+        merge_lock.touch_heartbeat(conn, task_id,
+                                   session.resolve_session_id())
         elapsed = int(time.monotonic() - start)
         detail = f"{note} (ожидание {elapsed} сек)"
         store.journal(conn, task_id, "orchestrator",
@@ -628,7 +629,8 @@ def _await_main_ci(conn, task_id: str, head: str,
     start = time.monotonic()
     while True:
         status = ci.main_line_status(head, repo=ctx.path) if head else None
-        merge_lock.touch_heartbeat(conn)
+        merge_lock.touch_heartbeat(conn, task_id,
+                                   session.resolve_session_id())
         if status is None:
             outcome = "CI main не дождался: голова main после мержа не определена"
         elif status.kind == ci.MAIN_GREEN:
@@ -1471,7 +1473,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
                 deadline = start + config.MERGE_GATE_CI_WAIT_CEILING_SEC
             if outcome[0] == "moved":
                 moved_retries += 1
-                merge_lock.touch_heartbeat(conn)
+                merge_lock.touch_heartbeat(conn, task_id, sid)
                 time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
                 if time.monotonic() >= deadline:
                     _exit_moved_main_ceiling(conn, task_id, branch,
