@@ -1,17 +1,15 @@
 # Записка developer — 01M56T94ZJE6H973HEBTM0Q0TD
 
 ## Выяснено
-- Правка — только `tests/test_01m48wre8bhfdy011q0hqgq91b_full_suite_limit_runs.py` и регенерированная `docs/codebase-map.md`. Основа — диф ТЗ: `ID_LETTERS`, `task_id` песочницы suite-run, `COPY_CLOCK`, `run_traces`. Сверх него `COPY_CLOCK` пишет в журнал пробника отметки `wait_enter`/`clock_jump`/`cut` с `mono`. Пробник пишет `pgid`/`mono`. Метод после прежних утверждений проверяет: cut с пределом N есть, есть clock_jump того же pgid (AC-5), `cut − max(wait_enter, start) < 5` (AC-3).
-- Новые классы: `SuiteRunFixtureIdTest` (зёрна 0–2999) и `CopyClockOrderTest` (оба порядка часов и «предел не N» в процессе теста против дочернего пробника).
-- `assertRaises` стирает `__traceback__`, поэтому для проверки «бросил настоящий `Popen._wait`» нужен ручной try/except.
-- Файл: 11 passed за 82 с, метод suite-run — около 4,5 с. Планка 11/11. Четыре временные мутации новых тестов — каждая краснит заявленный тест.
+- Возврат из verifying: линт `tests/test_invariants.py::DeterministicTestsLintTest` ловил цикл `while … time.monotonic() < deadline` в `CopyClockOrderTest::test_probe_started_before_first_clock_read_is_cut`. Заменён каналом готовности: пробник `CLOCK_PROBE` печатает `started` после записи «start», тест читает `proc.stdout.readline()` (stdout — пайп в `spawn`). Код внутри строки `CLOCK_PROBE` линт не разбирает (это строка, не AST функции).
+- После правки: линт 5 passed, файл 11 passed (60 с), планка 11 passed. Карта регенерирована.
+- Ранее: правка — только файл теста и `docs/codebase-map.md`; `COPY_CLOCK`, `ID_LETTERS`, `run_traces`, классы `SuiteRunFixtureIdTest`, `CopyClockOrderTest`.
 
 ## Не сработало
-- `suite-run`: отказ — на машине шёл полный прогон задачи 01M56G23ZQDHV2BKEVWWC22R96. Полный набор не прогнан.
-- Heredoc с `{…!r}` Bash шага отказывает: мутации гонялись одноразовым скриптом в рабочем каталоге, скрипт сам себя удалил.
+- Ранее `suite-run` отказывал из-за чужого полного прогона.
 
 ## Где остановился
-- PLAN.md status: ready, guard ок. Код не закоммичен — коммитит пульт.
+- PLAN.md status: ready, раздел «Возврат из verifying» добавлен. Код не закоммичен — коммитит пульт.
 
 ## Чего не хватило
-- Bash шага не даёт `ls`/`$VAR`: список каталога документов — через `python3 -c os.walk`.
+- Прошлый шаг не прогнал `DeterministicTestsLintTest` на новом файле — стоит гонять его при любой правке tests/ с ожиданиями.

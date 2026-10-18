@@ -79,6 +79,20 @@ AC-3 и AC-5.
 - Отметки `monotonic` разных процессов сравнимы только на одной машине — так
   и есть: копия пульта и пробник идут на машине теста.
 
+## Возврат из verifying (инвариант детерминированных тестов)
+CI краснил `tests/test_invariants.py::DeterministicTestsLintTest::test_tests_tree_has_no_wall_clock_waits_or_live_file_reads`:
+в `CopyClockOrderTest::test_probe_started_before_first_clock_read_is_cut`
+стоял цикл ожидания «start» пробника до срока по `time.monotonic()`.
+Заменён каналом готовности: `CLOCK_PROBE` после записи «start» печатает
+`started` в stdout, `spawn` открывает stdout пайпом, тест блокирующе читает
+строку (`proc.stdout.readline()`); пробник умер раньше — EOF и провал
+«пробник не стартовал». Инвариант не тронут, утверждения метода прежние.
+После правки: `DeterministicTestsLintTest` 5 passed, файл теста 11 passed
+за 60 с, планка 11 passed; карта регенерирована. Полный набор `suite-run`
+№1: 5728 passed, 3 упали — 1 падает и на базе, 2 таймаута 120 с в
+`tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::PultUnchangedTest`
+(к задаче не относятся); повтор упавших №2 — 3 passed.
+
 ## Проверка
 - Файл теста: 11 passed за 82 с; метод `suite-run` идёт ~4,5 с вместо прежних N = 11–13 с реального ожидания.
 - Планка `plank-run`: 11 passed (AC-1…AC-5).
