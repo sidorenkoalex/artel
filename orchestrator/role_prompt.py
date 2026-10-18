@@ -61,7 +61,8 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"брифа, отсортированный по блокирующести, каждый — с вариантами "
             f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
             f"эскалирует задачу.\n"
-            f"4) Прогони scripts/guard.py на своём файле. tasks/<id>/ "
+            f"4) Прогони {_guard_tool(task_id, artel, '<файл>')} на своём "
+            f"файле. tasks/<id>/ "
             f"коммитить не нужно — автокоммит оркестратора сам перенесёт "
             f"написанное в артефактную ветку. Код репозитория не трогай."
         )
@@ -85,12 +86,8 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"или `# AC-n: skip — <причина>`.\n"
             f"4) Критерий в принципе неисполним тестом — не изобретай "
             f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
-            f"5) Прогони планку командой пульта `plank-run` (абзац о "
-            f"каталоге документов ниже): она сама выложит черновик и выполнит "
-            f"`python3 -m pytest {task_ref}/acceptance_tests -p "
-            f"no:cacheprovider -p timeout -o "
-            f"timeout={stack.PER_TEST_TIMEOUT_SEC}`"
-            f"{_long_lived_run_note(long_lived)}. tasks/<id>/ коммитить "
+            f"{_plank_run_point(task_id, task_ref, artel, long_lived)}"
+            f". tasks/<id>/ коммитить "
             f"не нужно — автокоммит оркестратора сам перенесёт написанное в "
             f"артефактную ветку. Остальной код репозитория и SPEC.md НЕ трогай."
         )
@@ -117,7 +114,8 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
             f"код чинится под них, их правка — эскалация, не правка."
             f"{_long_lived_developer_note(long_lived)}\n"
-            f"4) Прогони scripts/guard.py на своих артефактах, поставь "
+            f"4) Прогони {_guard_tool(task_id, artel)} на своих "
+            f"артефактах, поставь "
             f"PLAN.md status: ready. НЕ мержи. Коммитить код самому не "
             f"обязательно: код, оставленный в worktree незакоммиченным, по "
             f"итогам шага коммитит пульт в ветку задачи. tasks/<id>/ "
@@ -140,9 +138,7 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"Работай от пакета, а не от обхода репозитория.\n"
             f"Файлы сверх пакета читай точечно и только когда без них не "
             f"проверить конкретное замечание; причину чтения называй в самом "
-            f"замечании. Права не сужены: тесты, guard и другие исполняемые "
-            f"проверки запускай, когда они доказывают или опровергают "
-            f"замечание.\n"
+            f"замечании. {_reviewer_checks_note(task_id, artel)}\n"
             f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
             f"заполни {task_ref}/REVIEW.md по форме из пакета "
             f"(iteration: {iteration}). Код НЕ правь. Коммитить "
@@ -213,6 +209,65 @@ def _long_lived_author_note(task_ref: str, long_lived) -> str:
         f"префиксом он сам закоммитит в ветку на чекпоинте шага.\n")
 
 
+def _pult_command() -> str:
+    """Форма команды пульта, которую разрешает белый список роли внешнего
+    проекта (`providers/claude.py`): полный путь к `artel.py` пульта."""
+    return f"python3 {config.ROOT / 'orchestrator' / 'artel.py'}"
+
+
+def _guard_tool(task_id: str, artel: bool, file_arg: str = "") -> str:
+    """Чем роль проверяет свой артефакт (SPEC 01M56G23ZQDHV2BKEVWWC22R96,
+    требование 4): у артели — `scripts/guard.py` рабочего каталога, как
+    прежде; у внешнего проекта его в рабочем каталоге нет, а разрешён роли
+    только `artel.py` пульта — команда пульта `guard`."""
+    if artel:
+        return "scripts/guard.py"
+    tail = f" {file_arg}" if file_arg else ""
+    return f"командой пульта `{_pult_command()} guard {task_id}{tail}`"
+
+
+def _plank_run_point(task_id: str, task_ref: str, artel: bool,
+                     long_lived) -> str:
+    """Пункт 5 задания test_author без завершающей точки. У внешнего
+    проекта `python3 -m pytest` неверен (своя команда и `workdir` профиля,
+    SPEC 01M56G23ZQDHV2BKEVWWC22R96, требование 8): и планка, и
+    долгоживущие файлы — командой пульта `plank-run`, которая гонит их
+    раннером профиля."""
+    if artel:
+        return (f"5) Прогони планку командой пульта `plank-run` (абзац о "
+                f"каталоге документов ниже): она сама выложит черновик и "
+                f"выполнит `python3 -m pytest {task_ref}/acceptance_tests -p "
+                f"no:cacheprovider -p timeout -o "
+                f"timeout={stack.PER_TEST_TIMEOUT_SEC}`"
+                f"{_long_lived_run_note(long_lived)}")
+    pult = _pult_command()
+    point = (f"5) Прогони планку командой пульта `{pult} plank-run {task_id}` "
+             f"(абзац о каталоге документов ниже): она сама выложит черновик "
+             f"и прогонит его раннером проекта")
+    if long_lived is not None:
+        point += (f"; долгоживущие файлы {long_lived[0]}/ — той же командой "
+                  f"по пути каждого файла: `{pult} plank-run {task_id} "
+                  f"{long_lived[1]}<имя>.py`")
+    return point
+
+
+def _reviewer_checks_note(task_id: str, artel: bool) -> str:
+    """Фраза миссии ревьювера о проверках (SPEC 01M56G23ZQDHV2BKEVWWC22R96,
+    требование 9): у внешнего проекта права роли сужены до команд пульта
+    белого списка ролей."""
+    if artel:
+        return ("Права не сужены: тесты, guard и другие исполняемые "
+                "проверки запускай, когда они доказывают или опровергают "
+                "замечание.")
+    pult = _pult_command()
+    return (f"Исполняемые проверки доступны только командами пульта: "
+            f"`{pult} guard {task_id} [<файл>]` — структура артефактов, "
+            f"`{pult} plank-run {task_id} [<файл>]` — планка и долгоживущие "
+            f"файлы задачи, `{pult} suite-run {task_id}` — полный набор "
+            f"тестов; запускай их, когда они доказывают или опровергают "
+            f"замечание.")
+
+
 def _long_lived_run_note(long_lived) -> str:
     """Хвост пункта 5 задания test_author о прогоне долгоживущих файлов."""
     if long_lived is None:
@@ -269,7 +324,8 @@ def _spec_auditor_mission(conn, task_id: str, t, artel: bool = True) -> str:
         f"2) Без ответа Оператора вердикт не вынести — status: escalate и "
         f"раздел «Эскалация» (skills/escalation-rules.md).\n"
         f"3) SPEC.md, ТЗ и код не правь: правка SPEC за визит аудита делает "
-        f"вердикт недействительным. Прогони scripts/guard.py на своём файле. "
+        f"вердикт недействительным. Прогони "
+        f"{_guard_tool(task_id, artel, spec_audit.ARTIFACT)} на своём файле. "
         f"tasks/<id>/ коммитить не нужно — автокоммит оркестратора сам "
         f"перенесёт {spec_audit.ARTIFACT} в артефактную ветку."
     )
