@@ -11,11 +11,24 @@ from orchestrator import doctor
 # --- команда doctor -------------------------------------------------------
 
 def full_suite_timeout_check(name: str) -> doctor.Check:
-    """Действующий предел полного прогона проекта в строке doctor."""
+    """Действующий предел полного прогона проекта в строке doctor.
+
+    Запись с несколькими компонентами — `skip` до G1б; профиль, который
+    не прочитан, — `fail` с причиной: строка, а не исключение, роняющее
+    всю команду (SPEC 01M58PG72PG64GS790XM2EWS61, требование 1)."""
     from orchestrator import project_profile
-    seconds, source = project_profile.full_suite_limit(name)
+    check_name = f"full-suite-timeout-{name}"
+    if doctor.repo_context.profile_of(name).multi:
+        return doctor.Check(check_name, "skip",
+                            f"проект {name}: {doctor.targets.MULTI_COMPONENT_PENDING}")
+    try:
+        seconds, source = project_profile.full_suite_limit(name)
+    except doctor.targets.TargetsError as exc:
+        return doctor.Check(check_name, "fail",
+                            f"проект {name}: предел полного прогона не "
+                            f"определён — {exc}")
     return doctor.Check(
-        f"full-suite-timeout-{name}", "ok",
+        check_name, "ok",
         f"проект {name}: предел полного прогона tests/ {seconds} с "
         f"(источник: {source})")
 
@@ -99,6 +112,10 @@ def all_checks(conn) -> list[doctor.Check]:
         # записи проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7)
         # — рядом с base-branch: предмет тот же, хостинг проекта.
         checks.extend(doctor.project_entry_checks(name, entry))
+        # Версии инструментов, карта путей CI и каталоги компонентов
+        # (SPEC 01M58PG72PG64GS790XM2EWS61, требования 2-8) — следом за
+        # строками записи: предмет тот же, клон проекта.
+        checks.extend(doctor.project_checks.component_checks(name, entry))
         checks.extend(doctor.recovery_check(conn, name))
 
     checks.extend(doctor.check_orphans(conn))

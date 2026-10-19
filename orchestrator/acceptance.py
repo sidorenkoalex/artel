@@ -2105,19 +2105,22 @@ def _with_tree_db_files(root: Path, tree: str) -> str:
 
 
 def suite_result_key(tree: str, command: list[str] | None = None,
-                     *, base: bool = False) -> str | None:
+                     *, base: bool = False,
+                     root: Path | None = None) -> str | None:
     """Дерево плюс Python, установленные пакеты и команда pytest.
 
     `command` — и профиль (канал `run_full_suite`): у `pult-pytest` ключ
     — ключ его команды, байт в байт прежний; у `pytest-own` — argv его
     прогона (цель `long_lived_dir` из `workdir`, base-ключ её вычищает)
     плюс `runner`, `workdir` и `env` (SPEC 01M52EEFNA1WH31962HVNT0YZ9,
-    требование 7)."""
+    требование 7). `root` — рабочая копия дерева `tree`: из неё ключ
+    рабочего дерева профиля с `tools` берёт игнорируемые файлы блокировки
+    (SPEC 01M58PG72PG64GS790XM2EWS61, требование 10)."""
     if not isinstance(tree, str) or not re.fullmatch(r"[0-9a-f]{40}", tree):
         return None
     own = _own(command)
     if own is not None:
-        return _own_suite_result_key(tree, own, base)
+        return _own_suite_result_key(tree, own, base, root)
     command = _head(command)
     try:
         argv = _pytest_command(command=command) if base else (
@@ -2147,8 +2150,21 @@ def suite_result_key(tree: str, command: list[str] | None = None,
         return None
 
 
-def _own_suite_result_key(tree: str, profile, base: bool) -> str | None:
-    """Ключ итога полного набора `pytest-own` (`suite_result_key`)."""
+def _own_suite_result_key(tree: str, profile, base: bool,
+                          root: Path | None = None) -> str | None:
+    """Ключ итога полного набора `pytest-own` (`suite_result_key`).
+
+    Ключ рабочего дерева профиля с непустыми `tools` несёт отдельным
+    элементом объявленные версии и суммы файлов блокировки `workdir`
+    (SPEC 01M58PG72PG64GS790XM2EWS61, требования 10-12): без `tools`
+    данные ключа прежние байт в байт, ключ базы прежний всегда — его
+    ищет `suite-run`, чей профиль `tools` не несёт."""
+    tools = dict(getattr(profile, "tools", None) or {})
+    locks = None
+    if tools and not base:
+        locks = _lock_sums(root, tree, profile.workdir)
+        if locks is None:
+            return None
     try:
         target = _own_target(profile, profile.long_lived_dir)
         argv = _place_command(profile) if base else \
@@ -2162,10 +2178,51 @@ def _own_suite_result_key(tree: str, profile, base: bool) -> str | None:
         data = {"tree": tree, "python": sys.version, "packages": packages,
                 "command": argv, "runner": profile.runner,
                 "workdir": profile.workdir, "env": dict(profile.env)}
+        if locks is not None:
+            data["tools"] = {"declared": tools, "locks": locks}
         return hashlib.sha256(json.dumps(data, sort_keys=True,
                                          ensure_ascii=False).encode()).hexdigest()
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+# Файлы блокировки зависимостей в `workdir` компонента (SPEC
+# 01M58PG72PG64GS790XM2EWS61, требование 10).
+LOCK_FILE_NAMES = ("uv.lock", "package-lock.json", "poetry.lock", "yarn.lock",
+                   "pnpm-lock.yaml")
+
+
+def _lock_sums(root: Path | None, tree: str, workdir: str) -> dict | None:
+    """Суммы файлов блокировки `workdir`, какие есть: отслеживаемый — sha
+    блоба из дерева `tree`, игнорируемый git — sha256 рабочей копии
+    `root`. `None` — сумм не снять (нет `root`, git не ответил, файл не
+    прочитан): ключа тогда нет, и итог не переиспользуется."""
+    if root is None:
+        return None
+    prefix = workdir.strip("/")
+    rels = [f"{prefix}/{name}" if prefix else name for name in LOCK_FILE_NAMES]
+    res = gitcmd.in_repo(Path(root), "ls-tree", "-z", tree, "--", *rels)
+    if res is None or res.returncode != 0:
+        return None
+    tracked = {}
+    for item in res.stdout.split("\0"):
+        meta, _, rel = item.partition("\t")
+        parts = meta.split()
+        if rel and len(parts) == 3 and parts[1] == "blob":
+            tracked[rel] = parts[2]
+    sums = {}
+    for rel in rels:
+        if rel in tracked:
+            sums[rel] = f"blob:{tracked[rel]}"
+            continue
+        path = Path(root) / rel
+        if not path.is_file():
+            continue
+        try:
+            sums[rel] = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+        except OSError:
+            return None
+    return sums
 
 
 def _suite_result_path(kind: str, key: str) -> Path:
@@ -2266,7 +2323,7 @@ def full_suite(root: Path, task_id: str,
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
     try:
         tree = suite_tree_hash(root)
-        key = suite_result_key(tree, command) if tree else None
+        key = suite_result_key(tree, command, root=root) if tree else None
         if key and not fresh:
             saved = saved_suite_result("gate", key, tree=tree,
                                        max_age=config.FULL_SUITE_REUSE_MAX_AGE_SEC)
@@ -2404,8 +2461,9 @@ def _task_own_profile(conn, task_id: str):
     if answer.outcome != repo_context.PROFILE_PRESENT:
         return None
     try:
-        profile = project_profile.Profile.from_values(answer.values)
-    except (KeyError, TypeError, ValueError):
+        profile = project_profile.with_tools(
+            target, project_profile.Profile.from_values(answer.values))
+    except (KeyError, TypeError, ValueError, targets.TargetsError):
         return None
     return _own(profile)
 
