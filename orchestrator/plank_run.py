@@ -63,6 +63,21 @@ def _has_tests(names) -> bool:
                for n in names)
 
 
+def _component_names(names: list[str], rule, component: str | None
+                     ) -> list[str]:
+    """Файлы планки компонента проекта задачи по правилу не по умолчанию
+    (SPEC 01M59Z0FW1699SJQ2FA5Y76CZ3, требование 8); компонент не назван
+    (профиль не прочитан) — файлы любого компонента правила."""
+    return [n for n in names
+            if (rule.component_of(n) == component if component
+                else rule.owns(n))]
+
+
+def _component_masks(rule, component: str | None) -> list[str]:
+    masks = rule.masks(component) if component else ()
+    return list(masks or (m for c in rule.components for m in c.masks))
+
+
 def _selected(arg: str, task_id: str, names: list[str]) -> str | None:
     """Путь от каталога планки для аргумента `[файл]` (с `::узлом` pytest,
     если он назван) либо `None`, если такого файла в планке нет. Принимает
@@ -183,9 +198,33 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
         if not (code_dir / long_lived_path).is_file():
             sys.exit(f"{head}: отказ — файла {long_lived_path} нет в рабочей "
                      f"копии кода ({code_dir}); pytest не запускался")
-    elif not _has_tests(names):
-        sys.exit(f"{head}: отказ — {NO_PLANK}: в источнике ({source}) нет "
-                 f"файлов test_*.py; pytest не запускался")
+    else:
+        # Планка проверяется по правилу планки проекта (SPEC
+        # 01M59Z0FW1699SJQ2FA5Y76CZ3, требование 8); у правила по умолчанию
+        # — прежний код и прежние тексты.
+        rule = project_profile.plank_rule(target)
+        if rule.refusal:
+            sys.exit(f"{head}: отказ — {rule.refusal}; pytest не запускался")
+        profile = (project_profile.decide(target).profile
+                   if not rule.is_default or (file_arg and "::" in file_arg)
+                   else None)
+        if rule.is_default:
+            if not _has_tests(names):
+                sys.exit(f"{head}: отказ — {NO_PLANK}: в источнике ({source}) "
+                         f"нет файлов test_*.py; pytest не запускался")
+        else:
+            component = profile.component if profile is not None else None
+            names = _component_names(names, rule, component)
+            if not any(rule.is_test(n) for n in names):
+                sys.exit(f"{head}: отказ — {NO_PLANK}: в источнике ({source}) "
+                         f"нет файлов "
+                         f"{', '.join(_component_masks(rule, component))}; "
+                         f"pytest не запускался")
+        if file_arg and "::" in file_arg and profile is not None and \
+                not acceptance.is_pytest_command(profile.command):
+            sys.exit(f"{head}: отказ — узел :: у компонента "
+                     f"{acceptance._component_name(profile)} не "
+                     f"поддерживается; передай файл")
 
     selected = None
     if file_arg and not long_lived:
