@@ -1,16 +1,14 @@
 ## Выяснено
-- Повторный аудит (spec_sha 128cf82e…): решения Оператора №1 п. 1–7 перенесены в SPEC полностью; адреса SPEC сходятся с кодом c2dc427f.
-- Компонент с report полный набор гонит через `_run_full_suite_reported` (acceptance.py:2288-2291) → `_report_run` → `_report_argv` (:805); ветка :2307-2311 — только pytest-own без report. AC-6 (junit-xml) её не ловит.
-- targets.py:498-501 запрещает `..` и пустые сегменты, но не `.`: `web/build/./<id>` проходит «родитель с точки», шаблон info/exclude не сработает.
-- Выкладка сегодня — только при plank_present / task_id (acceptance.py:1349, :1507, :1976); отказ «нет plank_layout» без такой оговорки ломал бы plank-run долгоживущего файла (plank_run.py:221-229).
-- plank_rule записи из одного pytest-компонента — умолчание (project_profile.py:482-488), masks() пуст.
-- test_ac11/test_ac16 после правки становятся тривиальными (отказ вместо прогона) — Оператор принял (решение №1 п. 5), не поднимал.
+- Третий аудит (spec_sha 8b124974…): решения №2 п. 1–6 в SPEC перенесены (треб. 3, 5, 7, 8, AC-4…AC-7, AC-11); адреса сходятся с кодом c2dc427f.
+- `pult-pytest` — значение `runner` (targets.py:69), report компонента — только junit-xml | pult-vitest (targets.py:106). Условие треб. 5 «report, отличным от pult-pytest» всегда истинно.
+- Каналы `_task_own_profile`/`place_channel` (acceptance.py:3282-3294, :374-380) отдают профиль только pytest-own или reported — компонент без report с runner pult-pytest и plank_layout до мест прогона не доходит; AC этого не ловят.
+- Порядок отказа правила (треб. 1) и прежних путей без выкладки (AC-11) не задан.
 
 ## Не сработало
-- `cd … && sed …` и пайпы с head требуют подтверждения — бери Read и grep по абсолютному пути.
+- `ls` не найден; `;` + `echo rc=$?` в Bash отвергается — команды без `$`.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns, status ready; guard прогнан.
+- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-- Какие профили попадают в ветку полного набора :2307 против `_run_full_suite_reported` — ключ в `_reported` (acceptance.py:366) и project_profile.reported (:317).
+- Словарь: `pult-pytest` — runner, `junit-xml`/`pult-vitest` — report; какой профиль идёт в места прогона — `place_channel` (acceptance.py:374).
