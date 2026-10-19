@@ -8,7 +8,9 @@
 `suite-run` (требование 15). Плюс argv компонента с отчётом без
 pytest-аргументов `pytest-own` (требования 4, 7), замок установки
 зависимостей (требование 12) и перечень упавших `suite-run` только из
-отчёта (требование 18).
+отчёта (требование 18). `checks_local` из записи `targets.yaml` без
+подмены профиля задачи — в узле приёмки и на гейте мержа без приложений
+PLAN (требование 13), пустой `install` (требование 12).
 """
 import contextlib
 import dataclasses
@@ -23,11 +25,11 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import (acceptance, config, fsm, fsm_merge_gate,
-                          project_profile, suite_run)
+                          project_profile, store, suite_run)
 from orchestrator.reporters import outcome
 from tests.test_01m590gjaf0edv4nbc4c99mfvh_report_outcome import (
-    ENTRY_HEAD, REQUIRE_ASSERTIONS, VITEST_BASE, VITEST_REPORT_ARGS,
-    ReportSandbox, block, vitest_report, vitest_test)
+    ENTRY_HEAD, REQUIRE_ASSERTIONS, VITEST_BASE, VITEST_REPORT_ARGS, Fake,
+    ReportSandbox, block, junit, vitest_report, vitest_test)
 
 
 def profile(**extra) -> project_profile.Profile:
@@ -338,6 +340,165 @@ class SuiteRunKeyTest(ReportSandbox):
                 bare = dataclasses.replace(run_profile, tools={})
                 self.assertNotEqual(acceptance.suite_result_key(
                     tree, bare, base=base, root=case["clone"]), key)
+
+
+class Reached(Exception):
+    """Гейт мержа дошёл до публикации мержа — дальше тесту идти незачем."""
+
+
+class ChecksLocalFromRecordTest(ReportSandbox):
+    """`checks_local` из записи `targets.yaml`, без подмены профиля задачи:
+    поле доезжает через `project_profile.with_tools` до узла приёмки и до
+    гейта мержа без приложений PLAN (требование 13)."""
+
+    def check_script(self) -> tuple:
+        """(исполняемая проверка вне дерева, маркер запуска, файл кода
+        выхода): печатает строку с текстом проверки и выходит с кодом из
+        файла."""
+        folder = Path(tempfile.mkdtemp(prefix="artel-check-")).resolve()
+        self.addCleanup(__import__("shutil").rmtree, folder, True)
+        marker, code = folder / "ran", folder / "code"
+        script = folder / "check"
+        script.write_text(
+            f"#!{sys.executable}\nimport sys\n"
+            f"open({str(marker)!r}, 'a').write('x\\n')\n"
+            f"print('проверка компонента: код', open({str(code)!r}).read())\n"
+            f"sys.exit(int(open({str(code)!r}).read()))\n", encoding="utf-8")
+        script.chmod(0o755)
+        return script, marker, code
+
+    def checked_case(self, code: int) -> dict:
+        script, marker, code_file = self.check_script()
+        code_file.write_text(str(code), encoding="utf-8")
+        case = self.junit_component(checks_local=[str(script)])
+        case["fake"].scenario(stdout="1 passed in 0.01s\n", report=junit(
+            [("src/x.test.jsx", "test_ok", "passed", "", "", "0.1")]))
+        case.update(marker=marker, code_file=code_file)
+        return case
+
+    def journal(self, task_id: str, action: str) -> list:
+        return [r["detail"] for r in store.task_steps(store.db(), task_id)
+                if r["action"] == action]
+
+    def test_record_checks_local_runs_in_acceptance_suite(self):
+        """Запись с одним компонентом и `checks_local`: `decide(...).profile.checks_local` непуст, узел `acceptance.acceptance_suite` на обоих путях (`operator`, `fsm`) исполняет проверку из записи; прошла — итог зелёный, не прошла — красный с её выводом.
+
+        Ловит мутацию: `project_profile.with_tools` (или
+        `_with_component_fields`) теряет поле `checks_local` — профиль
+        задачи приходит без проверок, маркер запуска не появляется, и
+        зелёный набор при упавшей проверке остаётся зелёным.
+        """
+        case = self.checked_case(0)
+        self.assertEqual(project_profile.decide(case["name"]).profile.checks_local,
+                         (str(Path(case["marker"]).parent / "check"),))
+        branch = store.task_branch(store.db(), case["task"])
+        for actor in ("operator", "fsm"):
+            with self.subTest(actor=actor):
+                case["code_file"].write_text("0", encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    run = acceptance.acceptance_suite(
+                        store.db(), case["clone"], case["task"], branch,
+                        case["clone"], actor=actor, fresh=True)
+                self.assertTrue(run.green, self.note(str(run)))
+                case["code_file"].write_text("3", encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    run = acceptance.acceptance_suite(
+                        store.db(), case["clone"], case["task"], branch,
+                        case["clone"], actor=actor, fresh=True)
+                self.assertFalse(run.green, self.note(str(run)))
+                self.assertEqual(run.outcome, acceptance.FULL_SUITE_RED)
+                self.assertIn("проверка компонента: код 3", run.detail)
+        self.assertEqual(case["marker"].read_text().count("x"), 4,
+                         self.note("проверка из записи исполнялась не каждый раз"))
+        self.assertEqual(len(self.journal(case["task"],
+                                          acceptance.CHECKS_LOCAL_ACTION)), 4)
+
+    def merge(self, case: dict):
+        """Тело гейта мержа `_cmd_approve_merge_gate` на дереве клона
+        проекта: шаги до плотницкого мержа — исход «ок», приложений PLAN
+        нет (узел `_apply_plan_appendices` настоящий), публикация мержа —
+        `Reached`."""
+        ok = lambda *a, **k: False  # noqa: E731
+        patches = [
+            mock.patch.object(fsm_merge_gate, "_docs_ref_unsynced", ok),
+            mock.patch.object(fsm_merge_gate, "_protected_path_diff_gate", ok),
+            mock.patch.object(fsm_merge_gate, "_test_integrity_diff_gate", ok),
+            mock.patch.object(fsm_merge_gate, "_ensure_branch_head_published",
+                              lambda *a, **k: "ok"),
+            mock.patch.object(fsm_merge_gate, "_sync_main_or_wait",
+                              lambda *a, **k: "fresh"),
+            mock.patch.object(fsm_merge_gate, "_acceptance_locks_refuse", ok),
+            mock.patch.object(fsm_merge_gate, "_ci_ready_or_wait",
+                              lambda *a, **k: "ok"),
+            mock.patch.object(fsm_merge_gate, "_refuse_if_main_red",
+                              lambda *a, **k: None),
+            mock.patch.object(fsm_merge_gate, "_perform_carpentry_merge",
+                              lambda *a, **k: ("ok", case["clone"])),
+            mock.patch.object(fsm_merge_gate, "_plan_appendices_or_refuse",
+                              lambda *a, **k: []),
+            mock.patch.object(fsm_merge_gate, "_drop_scratch_worktree",
+                              lambda *a, **k: None),
+            mock.patch.object(fsm_merge_gate, "_publish_merge_artifacts",
+                              mock.Mock(side_effect=Reached)),
+        ]
+        conn = store.db()
+        t = store.get_task(conn, case["task"])
+        with contextlib.ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            return fsm_merge_gate._cmd_approve_merge_gate(
+                conn, case["task"], "merge_gate", t)
+
+    def test_merge_gate_without_appendices_runs_record_checks_local(self):
+        """Гейт мержа без приложений PLAN: упавшая `checks_local` записи отказывает мерж (задача на гейте, вывод проверки в журнале `merge FAILED`), прошедшая пишется в журнал и мерж идёт дальше.
+
+        Ловит мутацию: вызов `_checks_local_refuse` перенесён внутрь
+        `_full_suite_or_refuse` (или в ветку с применёнными приложениями) —
+        без приложений проверка не исполняется, упавшая не отказывает, и
+        гейт доходит до публикации мержа.
+        """
+        case = self.checked_case(5)
+        self.assertEqual(self.merge(case), ("stopped",), self.note())
+        refusals = self.journal(case["task"],
+                                fsm_merge_gate.CHECKS_LOCAL_REFUSAL_ACTION)
+        self.assertTrue(any("проверка компонента: код 5" in r for r in refusals),
+                        self.note(str(refusals)))
+        self.assertEqual(store.task_state(store.db(), case["task"]), "in_dev")
+        case["code_file"].write_text("0", encoding="utf-8")
+        with self.assertRaises(Reached):
+            self.merge(case)
+        records = self.journal(case["task"], acceptance.CHECKS_LOCAL_ACTION)
+        self.assertEqual(len(records), 2, self.note(str(records)))
+        self.assertIn("— код 0", records[-1])
+        self.assertEqual(case["marker"].read_text().count("x"), 2)
+
+
+class EmptyInstallTest(ReportSandbox):
+
+    def test_empty_install_neither_installs_nor_refuses(self):
+        """Запись `test_profile` с итогом из отчёта (`runner: pytest-own`, `report: junit-xml`) и `install: []` без файла блокировки: прогон зелёный по отчёту, отказа «install без файла блокировки» нет, каталог установок пульта не заводится.
+
+        Ловит мутацию: пустой `install` считается объявленной установкой
+        (`if profile.install is None` вместо `if not profile.install`) —
+        прогон отказывает «install без файла блокировки не исполняется»
+        либо заводит каталог `deps/` пульта.
+        """
+        fake = Fake(self, "junit")
+        workdir = f"be{self.word(5)}"
+        name, clone = self.project(
+            self.junit_fields(fake, workdir, install=[]),
+            {f"{workdir}/src/x.test.py": "# тест\n"})
+        prof = self.profile(name)
+        self.assertEqual(prof.install, ())
+        fake.scenario(stdout="1 passed in 0.01s\n", report=junit(
+            [("src/x.test.py", "test_ok", "passed", "", "", "0.1")]))
+        run, out = self.full(clone, self.task(name), prof)
+        self.assertTrue(run.green, self.note(f"{run}\n{out}"))
+        self.assertNotIn(acceptance.INSTALL_WITHOUT_LOCK, f"{run.detail}\n{out}")
+        self.assertFalse((config.PROJECTS / name / "deps").exists())
+        self.assertEqual(acceptance._install(prof, clone / workdir),
+                         (None, [], ""))
 
 
 if __name__ == "__main__":
