@@ -1,17 +1,19 @@
 # Записка spec_auditor — 01M59DP2GV3SAN54M562CQY42R
 
 ## Выяснено
-- `spend.known_cost_pairs` (orchestrator/spend.py:630-680) — НЕ по задаче: обходит все задачи, ключ (роль, модель), значения (расчёт по тарифу, факт); отбрасывает строки до даты тарифа и без модели каталога. Разбор одной строки — `spend.known_cost_breakdown` (spend.py:579), его же зовёт `report._known_cost_breakdown` (report.py:407).
-- Тексты событий подтверждены: spec_audit.py:36 RETURN_ACTION, spec_audit.py:289 detail «аудит SPEC: вердикт fail…», fsm.py:1617 «возврат из spec_gate: », fsm.py:1487 «эскалация разрешена, продолжаем», store.py:852 `state -> <state>`.
-- `raise_alert` дедуплицирует только среди открытых (alerts.py:93-108): после ack тот же текст заводится заново — признак в журнале нужен.
-- tests/test_01m4rzayh3swjw4wfbw4qw15fp_command_report.py:524-580 — `store.db()` открывается в report один раз; если rounds.py откроет своё соединение, тест упадёт.
-- auto останавливается на escalated (auto.py:1015 условие цикла) — проверка порога эскалаций должна стоять до выхода.
+- Визит 2 (spec_sha a2b74f4a…): все 5 отклонений визита 1 сняты. Теперь разбор — `spend.known_cost_breakdown` (стоимость — `actual_usd`); формы «X / Y» заданы; AC-8 и AC-9 разведены; AC-6 различает медиану и среднее; `config.py` входит в `COMMON_ZONES` (config.py:803), его пропускает гейт зон (zones.py:274).
+- Факты SPEC сверены с кодом, все ссылки на строки верны: auto.py:577, auto.py:1015, store.py:775, fsm.py:1487/1617, brief.py:62, spec_audit.py:36.
+- Вердикт concerns:
+  - AC-5 не закрепляет границу ровно 3/2 в report (мутация `>` не ловится);
+  - строка `agent cost KNOWN` без `actual_usd` не покрыта AC, к тому же разбор возвращает `(None, None)`, а не `None`;
+  - для Оператора: эскалации считаются по всем `escalated`, включая технические.
+- Тест report :524–580 растит число прогонов, а не задач: запрос на каждую задачу из rounds он не поймает.
 
 ## Не сработало
 - Нет.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, вердикт fail.
+- SPEC-AUDIT.md записан, guard ок, status ready, verdict concerns.
 
 ## Чего не хватило
-- Пришлось читать spend.known_cost_pairs целиком: в ТЗ он назван разбором по задаче, а это сводка по паре (роль, модель).
+- Ничего существенного.
