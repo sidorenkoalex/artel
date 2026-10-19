@@ -1,14 +1,13 @@
 ## Выяснено
-- Четвёртый аудит (spec_sha 064a7329…): решения №3 п. 1–3 в SPEC перенесены (треб. 1, 2, 5, AC-3, AC-5, «Не входит» SPEC.md:81). Код orchestrator/scripts/tests с c2dc427f не менялся.
-- Новое противоречие: `pytest-own` без `report` с `plank_layout`. Треб. 2 и «Не входит» его `plank_layout` не читают, а треб. 5 (п. 1), треб. 7 и AC-6 требуют `--ignore=<родитель <id>>` в ветке acceptance.py:2299-2313.
-- SPEC.md:81 «pult-pytest — выкладка прежняя под long_lived_dir» неверно: `_own` есть только у pytest-own (acceptance.py:120-123), у pult-pytest выкладки нет.
-- Порядок «refusal правила» против «нет plank_layout» у pult-vitest без tests не задан. Правило с отказом = умолчание (`components` пуст, guard.py:2627).
+- Пятый аудит (spec_sha f8aad771…): решение №4 п. 1–3 перенесено в треб. 5, 7, AC-5, AC-6 и «Не входит». Все три отклонения прошлого аудита сняты. Код orchestrator/scripts/tests с c2dc427f не менялся.
+- Компонент с `report` идёт полным набором через `_run_full_suite_reported` (acceptance.py:2288, :2377) → `_report_run` → `_report_argv`. Ветка pytest-own :2299-2313 — только профиль без report.
+- targets.py:420-428: workdir→pytest-own требуется только у единственного компонента записи. Контекст SPEC говорит шире; на поведение это не влияет.
 
 ## Не сработало
-- `cd <dir> && git …` в Bash отвергается — нужны абсолютные пути без cd.
+- В Bash не проходят `$VAR`, `;`-цепочки с awk/grep и `cd … &&` с несколькими командами: на них нужно подтверждение. Работают одиночные команды с абсолютными путями.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
+- SPEC-AUDIT.md: verdict pass, status ready, guard ок.
 
 ## Чего не хватило
-- Ветка полного набора acceptance.py:2299 — это pytest-own без report; с report уходит в :2288. Это ключ к противоречию AC-6 и «Не входит».
+- Ничего существенного.
