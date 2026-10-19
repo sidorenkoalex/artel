@@ -106,6 +106,18 @@ sha блоба из `git ls-tree <tree>`, игнорируемый — sha256 с
 - Карта `docs/codebase-map.md` регенерирована.
 - `suite-run` №1 (полный набор): зелёный — прошло 5918, упало 0,
   пропущено 2.
+- Итерация 2 (ревью R1-F1, R1-F2): в `tests/test_component_checks.py`
+  сторожа ключа — `ToolsKeyTest` (смена `tools` и игнорируемого
+  `package-lock.json` меняет ключ рабочего дерева, ключ базы от них не
+  зависит) на публичном `suite_result_key`, `DecideToolsTest` (`decide`
+  несёт `tools` единственного компонента, у `test_profile` — пусто) и
+  `test_unclosed_class_at_zero_depth_is_unparseable` (`a|[b`, `^(a)|[b`);
+  10 passed. Временные мутации по одной — `_top_level` без `in_class`,
+  `tools` без объявленных версий, игнорируемый файл пропускается,
+  `tools` и в ключе базы, `decide` без `with_tools` — каждая краснит
+  ровно свой тест; код возвращён. Три файла (свой, долгоживущий задачи,
+  G1а) — 33 passed; планка — 4 passed; карта регенерирована; `suite-run`
+  №2: зелёный — прошло 5923, упало 0, пропущено 2.
 
 ## Предложения системе
 - `orchestrator/doctor/__init__.py` (фасад) не входил в зоны, а новая
