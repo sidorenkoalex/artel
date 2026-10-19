@@ -1,15 +1,14 @@
 # Записка analyst — 01M59KMPG2ZMK10V556VZVQD65 (G2а-1)
 
 ## Выяснено
-- ТЗ достаточно, вопросов нет: пишу SPEC, не QUESTIONS.
-- Закрепляемые тексты артели сверены по main: `scripts/guard.py:2283` EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в каталоге планки"; `orchestrator/checkpoint.py:44` STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX = "в каталоге планки посторонние файлы: "; `scripts/guard.py:2333` RESERVED_PLANK_HELPER_HINT = "имя занято помощником пульта"; `orchestrator/preflight.py:37` INPUT_FILTERS = (guard.is_extraneous_acceptance_test_file,); отказы `guard.py:2490-2536`; маркер красноты `guard.py:574-581`; `dry_run.py:78,84`; `fsm_autogate.py:264`; `acceptance.py:3354`.
-- Сигналы деления: файлов зоны ≥5, AC ≥10. budget $50 (рамка ТЗ = дефолт) — сигнал бюджета (порог $60) не срабатывает. Дал обоснование монолита по образцу G1б (01M590GJAF0EDV4NBC4C99MFVH).
+- Шаг 2 (возврат из spec_gate): SPEC переписан по решениям Оператора пп. 1–9 на SPEC-AUDIT. Новое: автогейт fail-closed у правила не по умолчанию (треб. 8, AC-19); совместимость сигнатур — `scan_acceptance_tests` (retro.py:490) и `scan_ac_content`; негативы AC-3/AC-10; новые AC-16 (Profile.tests/plank_layout), AC-17 (masks/is_test), AC-18 (_util.jsx не покрывает; образец id в .jsx); отказ построения → документы перед мержем по умолчанию независимо от guard_rules (треб. 9, AC-13); Г1 — фильтр в переходе методами правила, параметр правила у is_extraneous_acceptance_test_file (треб. 3, 11); AC-5 — шаблон INDENTED_AC_MARKER_REASON_TMPL (guard.py:2579-2581) с префиксом `//`, добавлен в треб. 10; `pult-vitest` = поле report (targets.py:106); перечень областей чтения артели (треб. 3, AC-15); бюджет $65, без деления; остаточный риск Е2 — в «Не входит».
+- Причина автогейта формируется как `f"автогейт: {...}"` (fsm_autogate.py:252-292) — AC-19 говорит «причина содержит».
 
 ## Не сработало
-- Составные bash-команды (`;`, пайпы с sed) требуют подтверждения — читать по одной команде.
+- `ls` в этой оболочке нет — читать файлы Read'ом.
 
 ## Где остановился
-- SPEC написан (15 AC, status: ready, budget 50, обоснование монолита со швом «треб. 1–7 / треб. 8–9»), `guard.py` — ок. Раздела «Меняемое поведение» нет: у артели всё прежнее.
+- SPEC.md: 19 AC, status: ready, budget 65, guard — ок.
 
 ## Чего не хватило
-- Ничего существенного: ТЗ уже несёт адреса строк.
+- Ничего: решения Оператора в причине возврата исчерпывающие.
