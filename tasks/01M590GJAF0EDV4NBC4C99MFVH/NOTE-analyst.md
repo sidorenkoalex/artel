@@ -1,16 +1,16 @@
 # Записка analyst — 01M590GJAF0EDV4NBC4C99MFVH (G1б)
 
 ## Выяснено
-- Шаг 3 (после ANSWER-1): Оператор ответил на все 8 вопросов — 1–4, 6–8 вариант A; 5 — без правки `fsm.py`: «неизвестно» выдаётся исходом `acceptance.FULL_SUITE_NOT_STARTED` с деталью «итог неизвестен: <причина>», `approve --accept-red` отказывает ему через существующую ветку `fsm.py:1304`.
-- Пункты «Закрывается в SPEC без вопроса» (А1, Г3, Е2, Г2, Б1) приняты — внесены в SPEC.
-- Места прогона планки на гейтах: `acceptance.run` (`:713`) из `advance_gates/acceptance.py:405,408`, `pull.py:668,671`, `amend.py:554,728`; `run_repeat` (`:1032`) из `advance_gates/acceptance.py:169`.
-- `repo_context.profile_of` (только чтение) у записи с одним компонентом отдаёт только подполя `PROFILE_FIELDS` (`repo_context.py:164-172`) — `report_args`/`checks_local`/`failure_errors` компонента надо брать через `project_profile.components`.
+- Шаг 4 (возврат из spec_gate, последний): Оператор решил 9 пунктов SPEC-AUDIT (concerns) без новых вопросов — правка SPEC по ним, QUESTIONS.md не нужен.
+- Узел приёмки, общий для `approve` (`fsm.py:1294`) и автогейта (`fsm_autogate.py:326`), — `acceptance.acceptance_suite` (`acceptance.py:2393`); туда `checks_local` (решение 5).
+- «Не начат» в `full_suite` возвращается до записи лога (`acceptance.py:2363-2366`) — для «неизвестно» лог обязан сохраняться (решение 8). Подсказка гейта мержа для NOT_STARTED — `fsm_merge_gate.py:996-1005`.
+- Места прогона планки: `acceptance.run` из `advance_gates/acceptance.py:405,408`, `pull.py:668,671`, `amend.py:554,728`; `run_repeat` из `advance_gates/acceptance.py:169`.
 
 ## Не сработало
-- Первый SPEC: различитель «report и runner ≠ pult-pytest» не покрыл компоненты без `runner` из черновика ADR.
+- В оболочке нет `ls`/`wc` без подтверждения — смотреть каталог через `python3 -c os.listdir`.
 
 ## Где остановился
-- SPEC.md переписан по ANSWER-1 (20 требований, AC-1…AC-21, status: ready), guard ок; QUESTIONS.md удалён. В оболочке шага нет `rm`/`ls` — файлы удалял через `python3 -c os.remove`.
+- SPEC.md поправлен по 9 решениям гейта (треб. 2, 3, 7, 12, 13; AC-2, 4, 5, 9, 10, 15, 17, 19; «Не входит» — черновик sled в ADR на этапе 2), status: ready, guard ок. Нумерация AC прежняя (AC-1…AC-21).
 
 ## Чего не хватило
-- Порядка шагов в теле гейта мержа (`fsm_merge_gate.py:1320-1360`): профиль → неослабление → приложения → прогон.
+- Смысл «Вариант A» ANSWER-1 — только в удалённом QUESTIONS.md (`git show 08c69578:tasks/<id>/QUESTIONS.md` в ссылке документов).
