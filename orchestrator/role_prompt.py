@@ -176,11 +176,14 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
     return mission, brief_text, package
 
 
-def _long_lived_paths(conn, task_id: str) -> tuple[str, str] | None:
-    """(каталог, префикс имени) долгоживущих файлов задачи по профилю её
-    проекта — тем же источником, что гейт выхода из `tests_writing`
-    (SPEC 01M551W0TFCT2XRQ71XFXJDKB9, требования 1, 5). Префикс конкретный,
-    не шаблон (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 10, Р1).
+def _long_lived_paths(conn, task_id: str) -> tuple[str, str, str, bool] | None:
+    """(каталог, пример пути с `<имя>`, пример пути с `*`, шаблон несёт
+    `<dir>`) долгоживущих файлов задачи по профилю её проекта — тем же
+    источником, что гейт выхода из `tests_writing` (SPEC
+    01M551W0TFCT2XRQ71XFXJDKB9, требования 1, 5). Пример конкретный, не
+    шаблон (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 10, Р1): у профиля
+    из шаблона `long_lived` — `Profile.long_lived_hint` (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 4), иначе — префикс и «.py».
     `None` — профиля нет (отказ или пропуск): умолчания артели не
     подставляются, и задание каталог долгоживущих тестов не называет.
     `conn=None` — проект артели (тот же ответ, что `store.task_target` у
@@ -190,21 +193,26 @@ def _long_lived_paths(conn, task_id: str) -> tuple[str, str] | None:
     profile = project_profile.decide(target).profile
     if profile is None:
         return None
-    return profile.long_lived_dir, profile.long_lived_prefix(task_id)
+    return (profile.long_lived_dir, profile.long_lived_hint(task_id),
+            profile.long_lived_hint(task_id, "*"),
+            "<dir>" in profile.long_lived_template)
 
 
 def _long_lived_author_note(task_ref: str, long_lived) -> str:
     """Пункт 2а задания test_author; пустая строка — профиля нет."""
     if long_lived is None:
         return ""
-    directory, prefix = long_lived
+    directory, example, _star, has_dir = long_lived
+    dir_note = (f"; <каталог> — каталог модуля: ноль или больше подкаталогов "
+                f"{directory}/, ни один не начинается с точки"
+                if has_dir else "")
     return (
         f"2а) Долгоживущий файл (`Группа: долгоживущий`, "
         f"skills/test-authoring.md) пиши не в каталог приёмочных тестов, "
         f"а в каталог {directory}/ кодовой ветки, с именем "
-        f"{prefix}<имя>.py (<имя> — строчные латинские буквы, "
-        f"цифры, подчёркивание). Существующие файлы {directory}/ не трогай — "
-        f"их правку, переименование и удаление, как и любую другую "
+        f"{example} (<имя> — строчные латинские буквы, "
+        f"цифры, подчёркивание{dir_note}). Существующие файлы {directory}/ "
+        f"не трогай — их правку, переименование и удаление, как и любую другую "
         f"правку вне {task_ref}/, пульт откатит; свои новые файлы с этим "
         f"префиксом он сам закоммитит в ветку на чекпоинте шага.\n")
 
@@ -247,7 +255,7 @@ def _plank_run_point(task_id: str, task_ref: str, artel: bool,
     if long_lived is not None:
         point += (f"; долгоживущие файлы {long_lived[0]}/ — той же командой "
                   f"по пути каждого файла: `{pult} plank-run {task_id} "
-                  f"{long_lived[1]}<имя>.py`")
+                  f"{long_lived[1]}`")
     return point
 
 
@@ -280,8 +288,8 @@ def _long_lived_developer_note(long_lived) -> str:
     """Фраза пункта 3 задания developer о долгоживущих файлах задачи."""
     if long_lived is None:
         return ""
-    directory, prefix = long_lived
-    return (f" Долгоживущие файлы задачи в {directory}/ ({prefix}*.py) "
+    directory, _example, star, _has_dir = long_lived
+    return (f" Долгоживущие файлы задачи в {directory}/ ({star}) "
             f"зафиксированы так же, как приёмочные тесты, — перечнем сумм под "
             f"тем же локом: их не правь, расхождение с ними эскалируй.")
 

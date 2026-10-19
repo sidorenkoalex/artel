@@ -106,6 +106,11 @@ class Profile:
     # причине, что поля выше.
     tests: tuple = field(default=(), compare=False)
     plank_layout: str = field(default="", compare=False)
+    # Шаблон `long_lived` компонента (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
+    # требование 2): пара `long_lived_dir`/`long_lived_name` тогда выведена
+    # из него. У явной пары, `test_profile` и артели — пусто; вне сравнения
+    # по той же причине, что поля выше.
+    long_lived_template: str = field(default="", compare=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -138,8 +143,19 @@ class Profile:
     def long_lived_example(self, task_id: str) -> str:
         """Путь долгоживущего файла задачи с `<имя>` вместо имени — для
         подсказок (у артели `tests/test_<id>_<имя>.py`)."""
-        name = self.long_lived_name.replace("<id>", task_id.lower())
-        return f"{self.long_lived_dir}/{name.replace('<name>', '<имя>')}"
+        return guard.long_lived_example(task_id, self.long_lived_dir,
+                                        self.long_lived_name)
+
+    def long_lived_hint(self, task_id: str, name: str = "<имя>") -> str:
+        """Пример пути долгоживущего файла в подсказках, называвших его
+        префиксом и хвостом «<имя>.py»/«*.py» (SPEC
+        01M5AA5TS90RDJ2AFXB882WTPD, требование 4): у профиля из шаблона —
+        пример `guard.long_lived_example` с подстановкой `name`, у явной
+        пары, `test_profile` и артели — прежняя склейка."""
+        if self.long_lived_template:
+            return guard.long_lived_example(task_id, self.long_lived_dir,
+                                            self.long_lived_name, name)
+        return f"{self.long_lived_prefix(task_id)}{name}.py"
 
     def is_long_lived(self, task_id: str, rel: str) -> bool:
         return guard.is_long_lived_test_path(task_id, rel, self.long_lived_dir,
@@ -272,7 +288,8 @@ def _with_component_fields(profile: Profile, comp: Component) -> Profile:
         failure_errors=tuple(fields.get("failure_errors") or ()),
         checks_local=tuple(fields.get("checks_local") or ()),
         tests=tuple(fields.get("tests") or ()),
-        plank_layout=fields.get("plank_layout") or "")
+        plank_layout=fields.get("plank_layout") or "",
+        long_lived_template=fields.get("long_lived") or "")
 
 
 def component_profiles(target: str, names=None) -> tuple:
@@ -487,6 +504,16 @@ def plank_rule(target: str) -> guard.PlankRule:
     if all(c.label == guard.LABEL_TEST_AC for c in built):
         return guard.DEFAULT_PLANK_RULE
     return guard.PlankRule(components=tuple(built))
+
+
+def long_lived_rule(target: str, profile: Profile) -> "guard.PlankRule | None":
+    """Правило планки проекта для долгоживущих файлов (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требования 5-7): только у профиля из
+    шаблона `long_lived`; `None` — прежний разбор долгоживущих файлов
+    (явная пара, `test_profile`, артель)."""
+    if not profile.long_lived_template:
+        return None
+    return plank_rule(target)
 
 
 def journal_plank_default(conn, task_id: str, actor: str,

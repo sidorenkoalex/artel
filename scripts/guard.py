@@ -285,11 +285,11 @@ def _js_literal_at(source: str, i: int) -> str | None:
     return text
 
 
-def plank_test_names(source: str) -> list[str]:
-    """Имена тестов файла не-pytest компонента — литералы вызовов
-    требования 4 (у `.each` — первый аргумент второго вызова), в порядке
-    файла."""
-    names = []
+def _test_calls(source: str) -> list[tuple[int, str]]:
+    """(строка головы вызова, имя теста) вызовов `plank_test_names`, в
+    порядке файла; голова `.each(` с многострочной таблицей — строка, где
+    стоит `.each(`."""
+    calls = []
     for m in TEST_CALL_HEAD.finditer(source):
         pos = m.end()
         if source.startswith(".each(", pos):
@@ -301,8 +301,15 @@ def plank_test_names(source: str) -> list[str]:
             continue
         name = _js_literal_at(source, pos + 1)
         if name is not None:
-            names.append(name)
-    return names
+            calls.append((source.count("\n", 0, m.start()) + 1, name))
+    return calls
+
+
+def plank_test_names(source: str) -> list[str]:
+    """Имена тестов файла не-pytest компонента — литералы вызовов
+    требования 4 (у `.each` — первый аргумент второго вызова), в порядке
+    файла."""
+    return [name for _line, name in _test_calls(source)]
 
 
 def _labelled_ac_content(content: str) -> tuple[set, dict]:
@@ -2938,7 +2945,10 @@ def acceptance_traceability_errors(tdir: Path,
 
     `extra_sources` — тексты долгоживущих файлов `tests/` кодовой ветки
     этой задачи (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 5): их методы
-    `test_ac<n>_…` покрывают критерии наравне с каталогом приёмочных тестов.
+    `test_ac<n>_…` покрывают критерии наравне с каталогом приёмочных тестов;
+    пара (путь, текст) — разбор по правилу `rule`, `it('AC-<n>: …')`
+    долгоживущего файла с меткой (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
+    требование 7); текст — прежний разбор Python.
 
     `rule` — правило планки проекта (SPEC 01M59KMPG2ZMK10V556VZVQD65,
     требования 3-4): разбор, подсказки и пометки с отступом по нему.
@@ -2950,7 +2960,7 @@ def acceptance_traceability_errors(tdir: Path,
         return [f"{spec_path}: не прочитан: {exc}"]
     meta = yamlmini.frontmatter(text) or {}
     tested, markers = scan_acceptance_tests(tdir, rule)
-    extra_tested, extra_markers = scan_ac_content(list(extra_sources))
+    extra_tested, extra_markers = scan_ac_content(list(extra_sources), rule)
     tested = tested | extra_tested
     markers = {**extra_markers, **markers}
     errors = traceability_errors_from_content(text, meta, tested, markers,
@@ -3350,36 +3360,67 @@ GROUP_VALUES = (GROUP_LONG_LIVED, GROUP_ONE_OFF)
 GROUP_LINE = re.compile(r"^[^\S\n]*Группа:[^\S\n]*(\S*)", re.M)
 
 
-def plank_file_group(source: str) -> tuple[str | None, str | None]:
+# Ведущая « * » строки блока `/* … */` (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
+# требования 5-6): строка группы и заявка мутации читаются без неё.
+_BLOCK_COMMENT_STAR = re.compile(r"^[^\S\n]*\*(?!/)[^\S\n]?", re.M)
+
+
+def plank_file_group(source: str, labelled: bool = False
+                     ) -> tuple[str | None, str | None]:
     """(группа, ошибка) файла `test_*.py` по строке группы его докстринга
     модуля: ровно одна из пары не `None`. Файл не разбирается — `(None,
-    None)`: синтаксис — предмет сухого сбора, его диагноз точнее."""
+    None)`: синтаксис — предмет сухого сбора, его диагноз точнее.
+
+    `labelled` — файл с меткой `AC-<n>: ` (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
+    требование 5): строка группы — в первом комментарии (`first_comment`,
+    у блока `/* … */` без ведущей « * »), значения и правила прежние, текст
+    называет место «в первом комментарии файла»."""
+    if labelled:
+        comment = first_comment(source) or ""
+        return _group_of(_BLOCK_COMMENT_STAR.sub("", comment),
+                         f" {REDNESS_PLACE_FIRST_COMMENT}")
     try:
         docstring = ast.get_docstring(ast.parse(source)) or ""
     except SyntaxError:
         return None, None
-    values = [m.group(1) for m in GROUP_LINE.finditer(docstring)]
+    return _group_of(docstring, "")
+
+
+def _group_of(text: str, place: str) -> tuple[str | None, str | None]:
+    """Разбор строки группы текста `text`; `place` — место для текстов
+    файла с меткой (у Python тексты прежние, место в первом названо)."""
+    values = [m.group(1) for m in GROUP_LINE.finditer(text)]
     if not values:
-        return None, (f"нет строки группы в докстринге модуля — допиши "
+        return None, (f"нет строки группы "
+                      f"{place.strip() or REDNESS_PLACE_DOCSTRING} — допиши "
                       f"«Группа: {GROUP_LONG_LIVED}» или «Группа: "
                       f"{GROUP_ONE_OFF}»")
     unknown = [v for v in values if v not in GROUP_VALUES]
     if unknown:
-        return None, (f"неизвестное значение строки группы «{unknown[0]}» — "
-                      f"допустимы только «{GROUP_LONG_LIVED}» и "
+        return None, (f"неизвестное значение строки группы «{unknown[0]}»"
+                      f"{place} — допустимы только «{GROUP_LONG_LIVED}» и "
                       f"«{GROUP_ONE_OFF}»")
     if len(set(values)) > 1:
-        return None, "строк группы две с разными значениями — оставь одну"
+        return None, (f"строк группы две с разными значениями{place} — "
+                      f"оставь одну")
     return values[0], None
 
 
-def group_line_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+def _is_labelled(rule: "PlankRule | None", label: str) -> bool:
+    """Файл с меткой `AC-<n>: ` по имени из метки `label` и правилу."""
+    return rule is not None and rule.is_labelled(Path(label).name)
+
+
+def group_line_errors_from_files(files: list[tuple[str, str]],
+                                 rule: "PlankRule | None" = None
+                                 ) -> list[str]:
     """Ошибки строки группы по (label, текст) парам файлов `test_*.py`
     планки — источник выбирает вызывающий код (приём
-    `redness_marker_errors_from_files`)."""
+    `redness_marker_errors_from_files`). `rule` — файл с меткой несёт
+    строку группы в первом комментарии."""
     errors: list[str] = []
     for label, source in files:
-        _group, error = plank_file_group(source)
+        _group, error = plank_file_group(source, _is_labelled(rule, label))
         if error is not None:
             errors.append(f"{label}: {error}")
     return errors
@@ -3652,10 +3693,66 @@ def long_lived_sign_hits(source: str, task_id: str, *,
     return sorted(hits)
 
 
+def _comment_above(lines: list[str], index: int) -> str:
+    """Комментарий непосредственно над строкой `lines[index]` (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 6): подряд идущие строки `//`
+    либо один блок `/* … */`, кончающийся на строке прямо над ней (у
+    строк блока — без ведущей « * »); пустая строка его обрывает. Нет
+    комментария — пустая строка."""
+    j = index - 1
+    if j < 0:
+        return ""
+    line = lines[j].strip()
+    if line.startswith("//"):
+        block = []
+        while j >= 0 and lines[j].strip().startswith("//"):
+            block.append(lines[j].strip()[2:])
+            j -= 1
+        return "\n".join(reversed(block))
+    if not line.endswith("*/"):
+        return ""
+    block = []
+    while j >= 0:
+        block.append(lines[j])
+        if "/*" in lines[j]:
+            text = "\n".join(reversed(block))
+            text = text[text.find("/*") + 2:text.rfind("*/")]
+            return _BLOCK_COMMENT_STAR.sub("", text)
+        j -= 1
+    return ""
+
+
+def _labelled_long_lived_errors(label: str, source: str,
+                                task_id: str) -> list[str]:
+    """Статика долгоживущего файла с меткой `AC-<n>: ` (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 6) — по тексту, без разбора
+    синтаксиса: литерал каталога задач и id задачи без учёта регистра в
+    любой строке, включая комментарии; «Ловит мутацию: …» в комментарии
+    над каждым вызовом теста `plank_test_names`."""
+    errors: list[str] = []
+    lines = source.splitlines()
+    task_id_lower = task_id.lower()
+    for lineno, line in enumerate(lines, start=1):
+        signs = []
+        if SIGN_TASKS in line:
+            signs.append(SIGN_TASKS)
+        if task_id_lower and task_id_lower in line.lower():
+            signs.append(SIGN_TASK_ID)
+        errors += [f"{label}:{lineno}: признак «{sign}» — "
+                   f"{_SIGN_EXPLANATIONS[sign]}" for sign in signs]
+    for lineno, name in _test_calls(source):
+        if not MUTATION_CLAIM.search(_comment_above(lines, lineno - 1)):
+            errors.append(f"{label}:{lineno}: тест «{name}» долгоживущего "
+                          f"файла без «Ловит мутацию: …» в комментарии над "
+                          f"вызовом")
+    return errors
+
+
 def long_lived_errors_from_files(files: list[tuple[str, str]],
                                  task_id: str, *,
                                  network_addresses: bool = True,
-                                 project_imports=None) -> list[str]:
+                                 project_imports=None,
+                                 rule: "PlankRule | None" = None) -> list[str]:
     """Ошибки долгоживущих файлов планки (требования 3, 4) по (label,
     текст) парам `test_*.py`: файлы иной группы (и без распознанной
     группы — это ошибка строки группы, не этой проверки) пропускаются.
@@ -3671,12 +3768,27 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
     `project_imports` — правило импортов по проекту (SPEC
     01M5633WZ3Y3A0P4KKBZDB3KER): `None` — артель, прежний набор и текст;
     перечень (возможно пустой) — внешний проект, его имена разрешены
-    сверх прежнего набора, текст признака называет перечень или подполе."""
+    сверх прежнего набора, текст признака называет перечень или подполе.
+
+    `rule` — правило планки проекта (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
+    требования 5-6): файл с меткой `AC-<n>: ` — строка группы в первом
+    комментарии и статика `_labelled_long_lived_errors`; признаки импорта,
+    закрытых имён и git у него не проверяются."""
     errors: list[str] = []
     foreign_explanation = _foreign_import_explanation(project_imports)
     for label, source in files:
-        group, _error = plank_file_group(source)
+        labelled = _is_labelled(rule, label)
+        if rule is not None and not labelled and not label.endswith(".py"):
+            # Не файл с меткой и не Python — отказ даёт
+            # `long_lived_group_errors`, статика не проверяема.
+            continue
+        group, _error = plank_file_group(source, labelled)
         if group != GROUP_LONG_LIVED:
+            continue
+        if labelled:
+            errors += _labelled_long_lived_errors(label, source, task_id)
+            if network_addresses:
+                errors += network_address_errors_from_files([(label, source)])
             continue
         for lineno, sign in long_lived_sign_hits(
                 source, task_id, project_imports=project_imports or ()):
@@ -3766,10 +3878,14 @@ def network_address_errors_from_files(files: list[tuple[str, str]]) -> list[str]
     return errors
 
 
-def acceptance_test_files(tdir: Path) -> list[tuple[str, str]]:
+def acceptance_test_files(tdir: Path, rule: "PlankRule | None" = None
+                          ) -> list[tuple[str, str]]:
     """(путь относительно `tdir`, текст) файлов `acceptance_tests/**/test_*.py`
     каталога задачи `tdir` — те же файлы, что `scan_redness_markers`;
-    метка — как у `scan_artifact_disk_reads`."""
+    метка — как у `scan_artifact_disk_reads`.
+
+    `rule` — к ним тестовые файлы с меткой `AC-<n>: ` первого уровня по
+    правилу планки (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требование 5)."""
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return []
@@ -3779,6 +3895,12 @@ def acceptance_test_files(tdir: Path) -> list[tuple[str, str]]:
             files.append((str(f.relative_to(tdir)), f.read_text(encoding="utf-8")))
         except (OSError, UnicodeDecodeError):
             continue
+    if _by_rule(rule):
+        seen = {label for label, _text in files}
+        files += [(str(f.relative_to(tdir)), text) for f, text
+                  in _rule_plank_files(tdir, rule, tests_only=True)
+                  if rule.is_labelled(f.name)
+                  and str(f.relative_to(tdir)) not in seen]
     return files
 
 
@@ -3817,19 +3939,38 @@ def long_lived_path_prefix(task_id: str, directory: str = LONG_LIVED_DIR,
     return f"{directory}/{head}"
 
 
+# Сегмент `<dir>` шаблона: не начинается с точки — каталог выкладки
+# `.artel-plank` и скрытые каталоги своими не признаются.
+_LONG_LIVED_DIR_SEGMENT = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
+
+
 def is_long_lived_test_path(task_id: str, rel: str,
                             directory: str = LONG_LIVED_DIR,
                             template: str = LONG_LIVED_TEMPLATE) -> bool:
     """`rel` — `<каталог>/<шаблон>` с `<id>` задачи и непустым `<имя>` из
     `[a-z0-9_]` (Р1; у артели `tests/test_<id задачи>_<имя>.py`): файл,
-    который test_author задачи вправе добавить в кодовую ветку."""
-    parts = re.split(r"(<id>|<name>)", template)
+    который test_author задачи вправе добавить в кодовую ветку. `<dir>/`
+    шаблона — ноль или больше сегментов `_LONG_LIVED_DIR_SEGMENT` (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 3)."""
+    parts = re.split(r"(<id>|<name>|<dir>/)", template)
     pattern = re.escape(f"{directory}/") + "".join(
         re.escape(task_id.lower()) if part == "<id>"
         else _LONG_LIVED_NAME.pattern if part == "<name>"
+        else f"(?:{_LONG_LIVED_DIR_SEGMENT}/)*" if part == "<dir>/"
         else re.escape(part)
         for part in parts)
     return re.fullmatch(pattern, rel) is not None
+
+
+def long_lived_example(task_id: str, directory: str = LONG_LIVED_DIR,
+                       template: str = LONG_LIVED_TEMPLATE,
+                       name: str = "<имя>") -> str:
+    """Пример пути долгоживущего файла задачи для подсказок (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 3): `<id>` — id задачи в нижнем
+    регистре, `<name>` — `name` (`<имя>` либо `*`), `<dir>` — `<каталог>`."""
+    path = (template.replace("<id>", task_id.lower())
+            .replace("<name>", name).replace("<dir>", "<каталог>"))
+    return f"{directory}/{path}"
 
 
 def render_long_lived_manifest(digests: dict[str, str]) -> str:
@@ -3856,16 +3997,57 @@ def parse_long_lived_manifest(text: str) -> tuple[dict[str, str] | None, str]:
 
 def long_lived_plank_errors(files: list[tuple[str, str]], task_id: str,
                             directory: str = LONG_LIVED_DIR,
-                            template: str = LONG_LIVED_TEMPLATE) -> list[str]:
+                            template: str = LONG_LIVED_TEMPLATE,
+                            rule: "PlankRule | None" = None,
+                            example: str | None = None) -> list[str]:
     """Долгоживущий файл в каталоге приёмочных тестов (SPEC
     01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 4): временная оговорка задачи 1
     снята, место такого файла — каталог долгоживущих тестов кодовой ветки
-    по правилу имени Р1 (у артели — `tests/`)."""
-    prefix = long_lived_path_prefix(task_id, directory, template)
+    по правилу имени Р1 (у артели — `tests/`).
+
+    `rule` — строка группы файла с меткой из первого комментария;
+    `example` — пример пути вместо склейки префикса и «<имя>.py» (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 4)."""
+    if example is None:
+        prefix = long_lived_path_prefix(task_id, directory, template)
+        example = f"{prefix}<имя>.py"
     return [f"{label}: «Группа: {GROUP_LONG_LIVED}» в каталоге приёмочных "
-            f"тестов — перенеси файл в {prefix}<имя>.py кодовой ветки"
+            f"тестов — перенеси файл в {example} кодовой ветки"
             for label, source in files
-            if plank_file_group(source)[0] == GROUP_LONG_LIVED]
+            if plank_file_group(source, _is_labelled(rule, label))[0]
+            == GROUP_LONG_LIVED]
+
+
+LONG_LIVED_UNCHECKABLE = ("не файл с меткой AC-<n>: и не Python — группа и "
+                          "статика не проверяемы")
+
+
+def long_lived_group_errors(files: list[tuple[str, str]], directory: str,
+                            rule: "PlankRule | None" = None) -> list[str]:
+    """Строка группы долгоживущих файлов кодовой ветки (путь, текст): у
+    каждого — «Группа: долгоживущий» (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    требование 3), текст отказа называет каталог `directory`. Одно место
+    на выход из `tests_writing` и `preflight`.
+
+    `rule` — правило планки у профиля из шаблона `long_lived` (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 5): у файла с меткой строка
+    группы — в первом комментарии, её ошибка — текстом разбора; файл не с
+    меткой и не `.py` — отказ `LONG_LIVED_UNCHECKABLE`. `None` — прежний
+    разбор Python у всех файлов."""
+    errors: list[str] = []
+    for path, text in files:
+        labelled = _is_labelled(rule, path)
+        if rule is not None and not labelled and not path.endswith(".py"):
+            errors.append(f"{path}: {LONG_LIVED_UNCHECKABLE}")
+            continue
+        group, group_error = plank_file_group(text, labelled)
+        if labelled and group_error is not None:
+            errors.append(f"{path}: {group_error}")
+        elif group != GROUP_LONG_LIVED and (group or group_error):
+            errors.append(f"{path}: нет строки «Группа: {GROUP_LONG_LIVED}» — "
+                          f"в {directory}/ кодовой ветки только долгоживущие "
+                          f"файлы")
+    return errors
 
 
 # Секция «Проверено исполнением» — обязательна при status: approved

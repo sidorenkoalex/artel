@@ -371,7 +371,7 @@ class ComponentFormsTest(TargetsFileTest):
         cases.append(("paths нет у компонента записи с несколькими", "proj",
                       comps, (comp, "paths"), ()))
         comps = multi_components()
-        comps[comp].update(long_lived="tests/test_<id>.py",
+        comps[comp].update(long_lived="tests/test_<id>_<name>.py",
                            long_lived_dir="tests")
         cases.append(("long_lived вместе с long_lived_dir", "proj", comps,
                       (comp, "long_lived"), ()))

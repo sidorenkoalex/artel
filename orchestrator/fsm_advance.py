@@ -532,9 +532,16 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             task_id, t["branch"], profile)
         if _run_gates(conn, task_id, [lambda: refusal]):
             return False
+    # Профиль из шаблона `long_lived` — источники парами (путь, текст):
+    # `it('AC-<n>: …')` файла с меткой разбирается по правилу планки (SPEC
+    # 01M5AA5TS90RDJ2AFXB882WTPD, требование 7); иначе — тексты, прежний
+    # разбор Python.
+    long_lived_sources = (
+        sorted((long_lived or {}).items())
+        if profile is not None and profile.long_lived_template
+        else list((long_lived or {}).values()))
     result = fsm._tests_writing_ac_state(
-        conn, task_id, branch, tdir,
-        long_lived_sources=list((long_lived or {}).values()))
+        conn, task_id, branch, tdir, long_lived_sources=long_lived_sources)
     if result is None:
         return False
     tested, markers, errors = result

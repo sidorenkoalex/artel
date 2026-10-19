@@ -157,16 +157,20 @@ def _long_lived_files(task_id: str, code_copy: Path,
 
 
 def _traceability(task_id: str, docs: Path, plank: list[tuple[str, str]],
-                  long_lived: list[tuple[str, str]], rule) -> list[str]:
+                  long_lived: list[tuple[str, str]], rule,
+                  by_template: bool = False) -> list[str]:
     """Тем же ядром, что ветко-корректный путь `fsm._tests_writing_ac_state`:
     источники — все `.py` планки (у правила не по умолчанию — тестовые
-    файлы по правилу), долгоживущие тексты покрывают AC."""
+    файлы по правилу), долгоживущие тексты покрывают AC; у профиля из
+    шаблона `long_lived` (`by_template`) — парами (путь, текст) по правилу
+    (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требование 7)."""
     spec_text = _read(docs / "SPEC.md")
     if spec_text is None:
         return [f"tasks/{task_id}/SPEC.md: не прочитан с диска каталога "
                 f"документов {docs}"]
     extra_tested, extra_markers = guard.scan_ac_content(
-        [text for _rel, text in long_lived])
+        list(long_lived) if by_template
+        else [text for _rel, text in long_lived], rule=rule)
     sources = ([text for _rel, text in plank] if rule.is_default
                else [(rel, text) for rel, text in plank if rule.is_test(rel)])
     tested, markers = guard.scan_ac_content(sources, rule=rule)
@@ -181,37 +185,35 @@ def _plank_label(task_id: str, rel: str) -> str:
     return f"tasks/{task_id}/{PLANK_DIR}/{rel}"
 
 
-def _groups(task_id: str, docs: Path, profile,
+def _groups(task_id: str, docs: Path, profile, rule,
             network_addresses: bool, project_imports) -> list[str]:
     """Состав и порядок `_tests_writing_test_groups_gate`; метка —
     `acceptance_tests/<файл>`, как у выложенной для сбора планки."""
-    files = [(label, text) for label, text in guard.acceptance_test_files(docs)
-             if not _filtered(label.split("/", 1)[1])]
-    return (guard.group_line_errors_from_files(files)
-            + guard.long_lived_plank_errors(files, task_id,
-                                            profile.long_lived_dir,
-                                            profile.long_lived_name)
+    files = [(label, text) for label, text
+             in guard.acceptance_test_files(docs, rule)
+             if not _filtered(label.split("/", 1)[1], rule)]
+    return (guard.group_line_errors_from_files(files, rule)
+            + guard.long_lived_plank_errors(
+                files, task_id, profile.long_lived_dir,
+                profile.long_lived_name, rule=rule,
+                example=profile.long_lived_hint(task_id))
             + guard.long_lived_errors_from_files(
                 files, task_id, network_addresses=network_addresses,
-                project_imports=project_imports))
+                project_imports=project_imports, rule=rule))
 
 
-def _long_lived(task_id: str, files: list[tuple[str, str]], profile,
+def _long_lived(task_id: str, files: list[tuple[str, str]], profile, rule,
                 network_addresses: bool, project_imports) -> list[str]:
     """Проверки `_tests_writing_long_lived_gate`, исполнимые без git: строка
-    группы каждого файла, затем ядро долгоживущих файлов."""
+    группы каждого файла, затем ядро долгоживущих файлов; `rule` — как у
+    перехода (`project_profile.long_lived_rule`)."""
     errors = []
     for path, text in files:
-        group, group_error = guard.plank_file_group(text)
-        if group != guard.GROUP_LONG_LIVED and (group or group_error):
-            # Текст — как у гейта перехода (tests_writing.py:452–457).
-            errors.append(f"{path}: нет строки «Группа: "
-                          f"{guard.GROUP_LONG_LIVED}» — в "
-                          f"{profile.long_lived_dir}/ кодовой ветки "
-                          f"только долгоживущие файлы")
+        errors += guard.long_lived_group_errors([(path, text)],
+                                                profile.long_lived_dir, rule)
     return errors + guard.long_lived_errors_from_files(
         files, task_id, network_addresses=network_addresses,
-        project_imports=project_imports)
+        project_imports=project_imports, rule=rule)
 
 
 def _report(check: str, errors: list[str]) -> bool:
@@ -257,8 +259,10 @@ def cmd_preflight(arg: str) -> None:
             print(f"рабочей копии кода {code_copy} нет — долгоживущих файлов нет")
 
     plank = _plank_py_files(docs, rule)
+    by_template = profile is not None and bool(profile.long_lived_template)
     refused |= _report(CHECK_TRACEABILITY,
-                       _traceability(task_id, docs, plank, long_lived, rule))
+                       _traceability(task_id, docs, plank, long_lived, rule,
+                                     by_template))
     refused |= _report(CHECK_REDNESS, guard.redness_marker_errors_from_files(
         [(_plank_label(task_id, rel), text) for rel, text in plank
          if (Path(rel).name.startswith("test_") if rule.is_default
@@ -276,9 +280,11 @@ def cmd_preflight(arg: str) -> None:
         # (`tests_writing._project_imports`), но по `target` строки: БД
         # предпроверка не открывает.
         project_imports = project_profile.long_lived_imports(target, profile)
+        long_lived_rule = project_profile.long_lived_rule(target, profile)
         refused |= _report(CHECK_LONG_LIVED, long_lived_read_errors + _long_lived(
-            task_id, long_lived, profile, network_addresses, project_imports))
-        refused |= _report(CHECK_GROUPS, _groups(task_id, docs, profile,
+            task_id, long_lived, profile, long_lived_rule, network_addresses,
+            project_imports))
+        refused |= _report(CHECK_GROUPS, _groups(task_id, docs, profile, rule,
                                                  network_addresses,
                                                  project_imports))
 
