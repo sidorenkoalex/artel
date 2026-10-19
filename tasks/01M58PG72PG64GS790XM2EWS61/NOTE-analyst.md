@@ -1,11 +1,9 @@
 ## Выяснено
-- Итерация 4 (возврат аудита 2 из 2). Блокирующее п.1 аудита подтверждено по коду: ключ итога `pytest-own` считают три входа — `full_suite` с профилем из `acceptance._task_own_profile` (acceptance.py:2376-2410, `Profile.from_values`), гейт мержа (fsm_merge_gate.py:832-837/982, через `decide`), поиск базы `suite_run` (suite_run.py:523, профиль из `_profile_command`, suite_run.py:294, `from_values`). `profile_of` values несут только PROFILE_FIELDS (repo_context.py:171-172) — `tools` туда не попадают.
-- pull.py/plank_run.py/amend.py строят `Profile.from_values`, но `suite_result_key` не зовут (grep) — на ключ не влияют.
-- Варианты закрытия п.1: (A) расширить зоны — `_task_own_profile` + `suite_run._profile_command` берут `tools` из `components(target)`; (B) `tools` в values `profile_of` (repo_context.py — Оператор в ANSWER-1 ответ 1 запретил) → `from_values` читает их, все входы сразу; (C) `tools` не в ключе базы (пересмотр ответа 3).
-- Пп. 2-4 аудита — уточнения SPEC: AC-3 добавить `3.1`↔`3.12.0` fail; определение «неразбираемой строки» и разбор `paths`; имена строк doctor, поток `--version`, шов подмены — вынесены вопросами с дефолтами в тот же батч.
+- Итерация 5: ANSWER-2 прочитан. Ответ 1: `tools` заполняет один помощник `project_profile`, зовут его `decide` и `acceptance._task_own_profile`; ключ рабочего дерева с `tools`+суммы блокировок (при непустых `tools`); ключ базы прежний (без `tools`), одинаков у гейта мержа и `suite-run`; пробел suite_run.py:294 — в «Не входит» до G1б. Ответы 2-4 — A (разбор строк, имена строк doctor `project-tools/paths/workdir-…`, stdout→stderr, шов `doctor.subprocess.run`/`doctor.shutil.which`). AC-3 + `3.1`↔`3.12.0`, `2`↔`22.1` fail.
+- Факты кода: ключ рабочего дерева — acceptance.py:2269 (`full_suite`), ключ базы — acceptance.py:2318-2322 и suite_run.py:523; `_task_own_profile` acceptance.py:2384-2410; `_names` project_checks.py:26-29; цикл записей cli.py:93-102.
 
 ## Где остановился
-- QUESTIONS.md записан (4 вопроса: зоны `tools`, разбор строк, имена строк doctor, поток `--version`/шов), guard ок; SPEC.md не тронут. После ответа — переписать тр. 7-8, AC-3, AC-8, AC-11/12, «Не входит», удалить QUESTIONS.md.
+- SPEC.md переписан (тр. 7-8 по ANSWER-2, AC-3/AC-8/AC-11/AC-12, новые AC разбора), QUESTIONS.md удалён (через python os.remove — `rm` в шаге недоступен), guard ок, status: ready. 15 AC, budget 30 (рамка ТЗ; калибровка ~45 — отмечено в «Оценке объёма»).
 
 ## Чего не хватило
 - Карта не показывает, кто строит `Profile` в обход `decide` — grep `from_values`.
