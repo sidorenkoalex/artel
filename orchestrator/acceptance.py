@@ -492,12 +492,47 @@ def _install(profile, cwd: Path) -> tuple[Path | None, list, str]:
         return None, [], (f"файл блокировки {lock} не прочитан ({exc}) — "
                           f"прогон не запускался")
     home = _pult_dir(profile, "deps") / digest
+    links = _install_mark(home, digest)
+    if links is not None:
+        return home, links, ""
+    # Каталог установки общий у задач проекта с тем же файлом блокировки, а
+    # прогоны планки идут вне замка полных прогонов: проверка отметки и
+    # установка — под замком на сумму, иначе параллельная первая установка
+    # снесла бы чужое дерево посреди `npm ci`.
+    guard = home.parent / f"{digest}.lock"
+    try:
+        guard.parent.mkdir(parents=True, exist_ok=True)
+        fh = guard.open("a")
+    except OSError as exc:
+        return None, [], (f"замок установки {guard} не заведён ({exc}) — "
+                          f"прогон не запускался")
+    with fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            links = _install_mark(home, digest)
+            if links is not None:
+                return home, links, ""
+            return _install_locked(profile, cwd, lock, digest, home)
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _install_mark(home: Path, digest: str) -> list | None:
+    """Подключаемые каталоги завершённой установки `home` по её отметке;
+    `None` — установки нет или она не завершена."""
     try:
         mark = json.loads((home / _INSTALL_MARK).read_text(encoding="utf-8"))
         if mark.get("lock") == digest and isinstance(mark.get("links"), list):
-            return home, [str(n) for n in mark["links"]], ""
+            return [str(n) for n in mark["links"]]
     except (OSError, ValueError, AttributeError):
         pass
+    return None
+
+
+def _install_locked(profile, cwd: Path, lock: Path, digest: str,
+                    home: Path) -> tuple[Path | None, list, str]:
+    """Установка `install` в `home` под замком `_install`."""
+    name, command = _component_name(profile), " ".join(profile.install)
 
     def failed(why: str) -> tuple[None, list, str]:
         _drop_install(home)
@@ -671,6 +706,16 @@ def _subset_args(profile, subset: list) -> tuple[list | None, str]:
     return args, ""
 
 
+def is_pytest_command(command) -> bool:
+    """Команда — запуск pytest: исполняемый файл `pytest`/`py.test` или
+    `-m pytest`. Имя интерпретатора само по себе ничего не говорит."""
+    command = list(command or ())
+    if any(Path(part).name in ("pytest", "py.test") for part in command):
+        return True
+    return any(flag == "-m" and module == "pytest"
+               for flag, module in zip(command, command[1:]))
+
+
 def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
                  report: Path) -> tuple[list | None, str]:
     """(argv прогона по отчёту, отказ подготовки)."""
@@ -694,7 +739,10 @@ def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
             return None, refusal
     else:
         head = list(profile.command)
-    own = _own(profile)
+    # Цель `long_lived_dir`, `--ignore` выкладки и `-p no:cacheprovider` —
+    # аргументы pytest: к иной команде компонента (Vitest, свой раннер) их
+    # не добавляет и `runner: pytest-own` (требования 4, 7).
+    own = _own(profile) if not vitest and is_pytest_command(head) else None
     if subset is not None:
         extra, refusal = _subset_args(profile, subset)
         if refusal:
@@ -3172,6 +3220,11 @@ def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
         store.journal(conn, task_id, actor, CHECKS_LOCAL_ACTION, text)
     if ok:
         return run
+    if not run.green:
+        # Проверка только добавляет красноту: незелёный исход («неизвестно»,
+        # «не начат», таймаут) остаётся прежним — иначе `--accept-red`
+        # принял бы его как красный (требование 3, инвариант 41).
+        return run._replace(detail=f"{run.detail}\n{text}")
     return FullSuiteRun(False, FULL_SUITE_RED, text, run.log_path,
                         f"{text}\n{run.detail}", run.tests)
 

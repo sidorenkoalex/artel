@@ -268,10 +268,7 @@ def _release_lock() -> None:
 def _is_pytest(command: list[str]) -> bool:
     """Команда — запуск pytest: исполняемый файл `pytest`/`py.test` или
     `-m pytest`. Имя интерпретатора само по себе ничего не говорит."""
-    if any(Path(part).name in ("pytest", "py.test") for part in command):
-        return True
-    return any(flag == "-m" and module == "pytest"
-               for flag, module in zip(command, command[1:]))
+    return acceptance.is_pytest_command(command)
 
 
 def _profile_command(target: str) -> tuple:
@@ -365,13 +362,17 @@ def _subtest_progress(output: str) -> dict[str, str]:
     return units
 
 
-def parse(green: bool, output: str) -> Parsed:
+def parse(green: bool, output: str, *, reported: bool = False) -> Parsed:
+    """Разбор вывода прогона. `reported` — вывод профиля с итогом из отчёта
+    (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требование 18): упавшие и числа —
+    только из сводки отчёта в конце вывода; строки хода сырого вывода
+    раннера (id от `workdir`, иной формы) не читаются."""
     outcome = acceptance._full_suite_outcome(green, output)
     summary = acceptance.run_summary_line(output)
     finished = (outcome in (acceptance.FULL_SUITE_GREEN,
                             acceptance.FULL_SUITE_RED) and bool(summary))
-    statuses = _progress(output)
-    parents = _subtest_progress(output)
+    statuses = {} if reported else _progress(output)
+    parents = {} if reported else _subtest_progress(output)
     failures = dict.fromkeys(
         (node for node, status in statuses.items()
          if status in ("FAILED", "ERROR")), "")
@@ -559,7 +560,8 @@ def _base(task_id: str, target: str, branch: str, command,
         green, output = acceptance.run_full_suite(
             copy, command=command, targets=("tests",),
             extra=_extra_flags(command), log=base_log, limit=limit)
-    parsed = parse(green, output)
+    parsed = parse(green, output,
+                   reported=acceptance._reported(command) is not None)
     if not parsed.finished:
         return None, (f"прогон базы {sha[:12]} не завершён "
                       f"({parsed.outcome}); лог базы: {base_log}")
@@ -607,7 +609,8 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
                 extra=_extra_flags(command), log=log, limit=limit,
                 **({"test_ids": test_ids} if test_ids else {}))
     metrics = acceptance._last_full_suite_metrics
-    parsed = parse(green, output)
+    parsed = parse(green, output,
+                   reported=acceptance._reported(command) is not None)
     # Повтор — по id тестов: единицу подтеста `<id> <метка>` pytest не найдёт.
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": list(parsed.rerun)})
