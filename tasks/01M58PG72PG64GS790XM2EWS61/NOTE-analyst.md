@@ -1,9 +1,12 @@
 ## Выяснено
-- Итерация 5: ANSWER-2 прочитан. Ответ 1: `tools` заполняет один помощник `project_profile`, зовут его `decide` и `acceptance._task_own_profile`; ключ рабочего дерева с `tools`+суммы блокировок (при непустых `tools`); ключ базы прежний (без `tools`), одинаков у гейта мержа и `suite-run`; пробел suite_run.py:294 — в «Не входит» до G1б. Ответы 2-4 — A (разбор строк, имена строк doctor `project-tools/paths/workdir-…`, stdout→stderr, шов `doctor.subprocess.run`/`doctor.shutil.which`). AC-3 + `3.1`↔`3.12.0`, `2`↔`22.1` fail.
-- Факты кода: ключ рабочего дерева — acceptance.py:2269 (`full_suite`), ключ базы — acceptance.py:2318-2322 и suite_run.py:523; `_task_own_profile` acceptance.py:2384-2410; `_names` project_checks.py:26-29; цикл записей cli.py:93-102.
+- Итерация 6 (возврат из spec_gate): Оператор велел внести только правки A1, F1, V1, V2, V3 из SPEC-AUDIT; V4 (AC-12 у `pult-pytest`) он не назвал, поэтому её не трогал.
+- A1: в «Не входит» сужение до «игнорируемый» теперь опирается на подтверждение Оператора и на acceptance.py:2041-2048, а не на отменённый ответ 3 ANSWER-1.
+- F1: pull.py:665, plank_run.py:220, amend.py:548/723 зовут `_task_own_profile` и получат `tools`; ключа они не считают (`suite_result_key` зовут только acceptance.py:2269/2319 и suite_run.py:523).
+- V1 → AC-4/AC-5 (инструмент есть только в PATH процесса, а в env.PATH нет — fail); V2 → AC-5 (таймаут `--version` — skip, doctor не падает); V3 → AC-6 (`depends_on` вида `contract` в сравнение не входит).
+- Нумерация AC прежняя (15), новых AC нет: правки встроены в AC-4/5/6.
 
 ## Где остановился
-- SPEC.md переписан (тр. 7-8 по ANSWER-2, AC-3/AC-8/AC-11/AC-12, новые AC разбора), QUESTIONS.md удалён (через python os.remove — `rm` в шаге недоступен), guard ок, status: ready. 15 AC, budget 30 (рамка ТЗ; калибровка ~45 — отмечено в «Оценке объёма»).
+- SPEC.md поправлен, guard ок, status: ready.
 
 ## Чего не хватило
-- Карта не показывает, кто строит `Profile` в обход `decide` — grep `from_values`.
+- Ничего: все адреса строк были в SPEC-AUDIT.
