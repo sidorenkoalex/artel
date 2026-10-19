@@ -749,9 +749,7 @@ def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
             return None, refusal
     elif own is not None:
         extra = [_own_target(own, own.long_lived_dir)]
-        if _layout_mode(own) == "layout":
-            extra.append("--ignore=" + _own_target(
-                own, f"{own.long_lived_dir}/{PLANK_LAYOUT_DIR}"))
+        extra += _layout_ignore(own)
     else:
         extra = []
     if own is not None:
@@ -1193,6 +1191,20 @@ def _layout_mode(own) -> str:
     return "layout" if _inside(own.long_lived_dir, own.workdir) else "outside"
 
 
+def _layout_ignore(own) -> list[str]:
+    """`--ignore` остатка выкладки в аргументах полного набора `pytest-own`
+    с командой pytest: у компонента с `report` и `plank_layout` — родитель
+    `<id>`, иначе (прежний путь) — `<long_lived_dir>/.artel-plank`; путь
+    переведён к `workdir` (SPEC 01M59Z0FW1699SJQ2FA5Y76CZ3, требование 7)."""
+    if _uses_plank_layout(own):
+        parent = _layout_parent(own.plank_layout)
+        return ["--ignore=" + _own_target(own, parent)] if parent else []
+    if _layout_mode(own) == "layout":
+        return ["--ignore=" + _own_target(
+            own, f"{own.long_lived_dir}/{PLANK_LAYOUT_DIR}")]
+    return []
+
+
 def _layout_root(code_root: Path, own, task_id: str) -> Path:
     return Path(code_root) / own.long_lived_dir / PLANK_LAYOUT_DIR / task_id
 
@@ -1280,6 +1292,179 @@ def _plank_layout(task_id: str, tests_dir: Path, code_root: Path,
         _drop_layout(root)
 
 
+# ------------------------------------------------ выкладка по `plank_layout`
+#
+# Компонент записи `components:` с `report` и `plank_layout` (SPEC
+# 01M59Z0FW1699SJQ2FA5Y76CZ3; ADR-0026 п. 5): на время прогона файлы планки
+# его компонента лежат прямо в `<plank_layout>` рабочей копии, без
+# подкаталога `acceptance_tests`. Родитель `<id>` — скрытый каталог без
+# отслеживаемых файлов: шаблон `/<родитель>/` в `info/exclude` прячет только
+# выкладку, не код.
+PLANK_ABSENT_NOTE = "acceptance_tests/ нет — приёмочные тесты не заведены"
+NO_PLANK_LAYOUT = ("у компонента {name} нет plank_layout — выкладка планки "
+                   "не определена")
+LAYOUT_NOT_NORMAL = "plank_layout должен быть нормализованным путём без «.» и «..»"
+LAYOUT_ID_NOT_LAST = "<id> должен быть последним сегментом plank_layout"
+LAYOUT_OUTSIDE_WORKDIR = "plank_layout вне рабочего каталога компонента {name}"
+LAYOUT_PARENT_NOT_HIDDEN = ("родитель <id> в plank_layout должен быть скрытым "
+                            "каталогом (имя с точки)")
+LAYOUT_PARENT_TRACKED = ("в каталоге {parent} есть отслеживаемые git файлы — "
+                         "выкладка спрятала бы их")
+_LAYOUT_ID = "<id>"
+
+
+def _uses_plank_layout(profile) -> bool:
+    """`plank_layout` читается только у компонента записи `components:` с
+    `report` (требования 5, 7); у прочих профилей поле не действует."""
+    return bool(getattr(profile, "from_components", False)
+                and getattr(profile, "report", "")
+                and getattr(profile, "plank_layout", ""))
+
+
+def _layout_parent(layout: str) -> str:
+    """Родитель `<id>` в `plank_layout` нормализованной формы с `<id>`
+    последним сегментом; пусто — форма не та (`_layout_check`)."""
+    parts = layout.split("/")
+    if any(p in ("", ".", "..") for p in parts) or parts[-1] != _LAYOUT_ID:
+        return ""
+    return "/".join(parts[:-1])
+
+
+def _layout_check(profile, code_root: Path) -> tuple[str, str]:
+    """(родитель `<id>` от корня рабочей копии, текст отказа) — форма
+    `plank_layout` в порядке требования 3."""
+    parts = profile.plank_layout.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return "", LAYOUT_NOT_NORMAL
+    if parts[-1] != _LAYOUT_ID:
+        return "", LAYOUT_ID_NOT_LAST
+    parent = "/".join(parts[:-1])
+    workdir = Path(code_root) / profile.workdir if profile.workdir \
+        else Path(code_root)
+    if not _inside_real(str(Path(code_root) / profile.plank_layout),
+                        str(workdir)):
+        return "", LAYOUT_OUTSIDE_WORKDIR.format(name=_component_name(profile))
+    if not parent or not parts[-2].startswith("."):
+        return "", LAYOUT_PARENT_NOT_HIDDEN
+    res = gitcmd.in_repo(Path(code_root), "ls-files", "--", parent)
+    if res is None or res.returncode != 0:
+        detail = (res.stderr.strip() if res is not None else "") or "нет ответа"
+        return "", (f"отслеживаемые git файлы каталога {parent} не проверены "
+                    f"({detail}) — выкладка планки не идёт")
+    if res.stdout.strip():
+        return "", LAYOUT_PARENT_TRACKED.format(parent=parent)
+    return parent, ""
+
+
+class _PlankPlan(NamedTuple):
+    """Решение по планке места прогона до запуска (требования 1, 5, 6):
+    `refusal` — отказ подготовки; `absent` — файлов компонента нет, та же
+    «планка не заведена»; `files` — файлы компонента для выкладки по
+    `plank_layout` (`tests` — из них тестовые); иначе — прежний путь."""
+    refusal: str = ""
+    absent: bool = False
+    files: tuple = ()
+    tests: tuple = ()
+    profile: object = None
+
+
+def _plank_plan(tests_dir: Path, command) -> _PlankPlan:
+    """Порядок правил выкладки (требование 5). Без файлов планки (прогон
+    только `extra`) и у канала без профиля проекта — прежний путь."""
+    if not plank_present(tests_dir) or command is None or \
+            isinstance(command, (list, tuple)) or \
+            not getattr(command, "project", ""):
+        return _PlankPlan()
+    from . import project_profile  # project_profile -> acceptance: цикл
+    rule = project_profile.plank_rule(command.project)
+    if rule.refusal:
+        return _PlankPlan(refusal=rule.refusal)
+    if not (command.from_components and command.report):
+        return _PlankPlan()
+    names = sorted(p.name for p in tests_dir.iterdir() if p.is_file())
+    files = tuple(n for n in names
+                  if (rule.owns(n) if rule.is_default
+                      else rule.component_of(n) == command.component))
+    if not command.plank_layout:
+        if is_pytest_command(command.command):
+            return _PlankPlan()
+        if files:
+            return _PlankPlan(refusal=NO_PLANK_LAYOUT.format(
+                name=_component_name(command)))
+        return _PlankPlan(absent=True)
+    if not files:
+        return _PlankPlan(absent=True)
+    return _PlankPlan(files=files,
+                      tests=tuple(n for n in files if rule.is_test(n)),
+                      profile=command)
+
+
+class _Laid(NamedTuple):
+    """Выкладка на время блока: `targets` — цели планки вместо каталога
+    планки (`None` — прежние), `root` — каталог, соответствующий каталогу
+    планки; `note` — строка о случае; `refusal` — отказ подготовки."""
+    targets: list | None = None
+    root: Path | None = None
+    note: str = ""
+    refusal: str = ""
+
+
+def _drop_component_layout(root: Path) -> None:
+    """Каталог `<id>` выкладки; родитель — только если он опустел."""
+    shutil.rmtree(root, ignore_errors=True)
+    with contextlib.suppress(OSError):
+        root.parent.rmdir()
+
+
+@contextlib.contextmanager
+def _component_layout(plan: _PlankPlan, task_id: str, tests_dir: Path,
+                      code_root: Path) -> Iterator[_Laid]:
+    """Выкладка файлов компонента прямо в `<plank_layout>` (требования 2-4):
+    форма пути, затем шаблон родителя в `info/exclude` до записи файлов,
+    уборка в `finally` на любом исходе. Цели: у команды pytest — каталог
+    выкладки (там же помощник `_pult.py`), у прочих — тестовые файлы."""
+    profile = plan.profile
+    parent, refusal = _layout_check(profile, code_root)
+    if not refusal:
+        refusal = _exclude_pattern(code_root, f"/{parent}/", "выкладки планки")
+    if refusal:
+        yield _Laid(refusal=refusal)
+        return
+    root = Path(code_root) / parent / task_id
+    pytest = is_pytest_command(profile.command)
+    try:
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True)
+        names = list(plan.files)
+        if pytest and (tests_dir / PLANK_HELPER_NAME).is_file():
+            names.append(PLANK_HELPER_NAME)
+        for name in names:
+            shutil.copy2(tests_dir / name, root / name)
+        targets = ([str(root)] if pytest or not plan.tests
+                   else [str(root / name) for name in plan.tests])
+        yield _Laid(targets=targets, root=root)
+    finally:
+        _drop_component_layout(root)
+
+
+@contextlib.contextmanager
+def _laid_plank(plan: _PlankPlan, task_id: str, tests_dir: Path,
+                code_root: Path, own) -> Iterator[_Laid]:
+    """Выкладка места прогона: по `plank_layout` (`plan.files`), никакой
+    (`plan.absent`) либо прежняя `_plank_layout` под `long_lived_dir`."""
+    if plan.files:
+        with _component_layout(plan, task_id, tests_dir, code_root) as laid:
+            yield laid
+        return
+    if plan.absent:
+        yield _Laid()
+        return
+    with _plank_layout(task_id, tests_dir, code_root, own) as laid:
+        layout, note, refusal = laid
+        yield _Laid(targets=None if layout is None else [str(layout)],
+                    root=layout, note=note, refusal=refusal)
+
+
 def run(tdir: Path, cwd: Path | None = None,
         extra: list[str] = (),
         command: list[str] | None = None,
@@ -1332,11 +1517,15 @@ def run(tdir: Path, cwd: Path | None = None,
     (`_pytest_command`) либо сам профиль (`pytest-own`: команда профиля в
     `workdir`, пути от `cwd` переведены к нему; `workdir` вне дерева —
     отказ без прогона).
+
+    Профиль компонента с `report`: файлы планки — по правилу планки
+    проекта и выкладке `_plank_plan` (SPEC 01M59Z0FW1699SJQ2FA5Y76CZ3).
     """
     tests_dir = tdir / "acceptance_tests"
-    targets = _run_targets(tests_dir, extra)
+    plan = _plank_plan(tests_dir, command)
+    targets = list(extra) if plan.absent else _run_targets(tests_dir, extra)
     if not targets:
-        return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
+        return True, PLANK_ABSENT_NOTE
     tree = run_cwd = cwd if cwd is not None else config.ROOT
     own, refusal = _own(command), ""
     if own is not None:
@@ -1344,17 +1533,18 @@ def run(tdir: Path, cwd: Path | None = None,
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
+    refusal = refusal or plan.refusal
     if refusal:
         return False, f"{location_note}\n{refusal}"
-    with _plank_layout(Path(tdir).name, tests_dir, tree,
-                       own if plank_present(tests_dir) else None) as laid:
-        layout, case_note, layout_refusal = laid
+    with _laid_plank(plan, Path(tdir).name, tests_dir, tree,
+                     own if plank_present(tests_dir) else None) as laid:
+        case_note = laid.note
         if case_note:
             location_note += f"\n{case_note}"
-        if layout_refusal:
-            return False, f"{location_note}\n{layout_refusal}"
-        if layout is not None:
-            targets[0] = str(layout)
+        if laid.refusal:
+            return False, f"{location_note}\n{laid.refusal}"
+        if laid.targets is not None:
+            targets = [*laid.targets, *extra]
         reported = _reported(command)
         if reported is not None:
             return _run_reported(reported, targets, tree, location_note, extra,
@@ -1492,9 +1682,10 @@ def collect(tdir: Path, cwd: Path | None = None,
     контракт, что у `run()`.
     """
     tests_dir = tdir / "acceptance_tests"
-    targets = _run_targets(tests_dir, extra)
+    plan = _plank_plan(tests_dir, command)
+    targets = list(extra) if plan.absent else _run_targets(tests_dir, extra)
     if not targets:
-        return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
+        return True, PLANK_ABSENT_NOTE
     tree = run_cwd = cwd if cwd is not None else config.ROOT
     own, refusal = _own(command), ""
     if own is not None:
@@ -1502,17 +1693,18 @@ def collect(tdir: Path, cwd: Path | None = None,
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
+    refusal = refusal or plan.refusal
     if refusal:
         return False, f"{location_note}\n{refusal}"
-    with _plank_layout(Path(tdir).name, tests_dir, tree,
-                       own if plank_present(tests_dir) else None) as laid:
-        layout, case_note, layout_refusal = laid
+    with _laid_plank(plan, Path(tdir).name, tests_dir, tree,
+                     own if plank_present(tests_dir) else None) as laid:
+        case_note = laid.note
         if case_note:
             location_note += f"\n{case_note}"
-        if layout_refusal:
-            return False, f"{location_note}\n{layout_refusal}"
-        if layout is not None:
-            targets[0] = str(layout)
+        if laid.refusal:
+            return False, f"{location_note}\n{laid.refusal}"
+        if laid.targets is not None:
+            targets = [*laid.targets, *extra]
         reported = _reported(command)
         if reported is not None:
             ok, output = _collect_reported(reported, targets, tree,
@@ -1912,7 +2104,9 @@ def drop_from_code_copy(task_id: str, code_dir: Path) -> None:
     выкладка прогона.
 
     Остаток выкладки `pytest-own` под `long_lived_dir`
-    (`_plank_layout`), переживший обрыв прогона, убирается тут же."""
+    (`_plank_layout`), переживший обрыв прогона, убирается тут же; как и
+    остаток выкладки по `plank_layout` (`_component_layout`): каталог `<id>`
+    и опустевший родитель, файлы кода в родителе не трогаются."""
     if Path(code_dir).resolve() == config.ROOT.resolve():
         return
     shutil.rmtree(Path(code_dir) / "tasks" / task_id, ignore_errors=True)
@@ -1925,6 +2119,12 @@ def drop_from_code_copy(task_id: str, code_dir: Path) -> None:
         return
     if _layout_mode(own) == "layout":
         _drop_layout(_layout_root(code_dir, own, task_id))
+    if _uses_plank_layout(own):
+        # Остаток выкладки по `plank_layout`: только при годной форме —
+        # иначе каталога `<id>` выкладка не заводила, и под ним может быть код.
+        parent, refusal = _layout_check(own, Path(code_dir))
+        if not refusal:
+            _drop_component_layout(Path(code_dir) / parent / task_id)
 
 
 @contextlib.contextmanager
@@ -1965,7 +2165,9 @@ def run_plank(targets: list[str], cwd: Path,
     `task_id` — цели лежат в планке задачи `tasks/<id>/acceptance_tests`
     рабочей копии `cwd`: у `pytest-own` с `long_lived_dir` внутри `workdir`
     они гонятся из выкладки (`_plank_layout`) тем же путём от каталога
-    планки. Не передан — цели как есть (долгоживущий файл, раннер пульта)."""
+    планки; у компонента с `report` — по правилу планки и `plank_layout`
+    (`_plank_plan`): каталог планки — выложенные файлы компонента. Не
+    передан — цели как есть (долгоживущий файл, раннер пульта)."""
     run_cwd = cwd
     own = _own(profile)
     if own is not None:
@@ -1973,12 +2175,25 @@ def run_plank(targets: list[str], cwd: Path,
         if refusal:
             return REFUSED_EXIT_CODE, refusal
     tests_dir = Path(cwd) / "tasks" / (task_id or "") / "acceptance_tests"
-    with _plank_layout(task_id or "", tests_dir, cwd,
-                       own if task_id else None) as laid:
-        layout, case_note, layout_refusal = laid
-        if layout_refusal:
-            return REFUSED_EXIT_CODE, layout_refusal
-        args = [_layout_target(t, cwd, tests_dir, layout) for t in targets]
+    plan = _plank_plan(tests_dir, profile) if task_id else _PlankPlan()
+    if plan.refusal:
+        return REFUSED_EXIT_CODE, plan.refusal
+    with _laid_plank(plan, task_id or "", tests_dir, cwd,
+                     own if task_id else None) as laid:
+        case_note = laid.note
+        if laid.refusal:
+            return REFUSED_EXIT_CODE, laid.refusal
+        if plan.files:
+            args = [a for t in targets
+                    for a in _component_target(t, cwd, tests_dir, laid)]
+        elif plan.absent:
+            args = [t for t in targets
+                    if _component_target(t, cwd, tests_dir, _Laid()) == [t]]
+            if not args:
+                return REFUSED_EXIT_CODE, PLANK_ABSENT_NOTE
+        else:
+            args = [_layout_target(t, cwd, tests_dir, laid.root)
+                    for t in targets]
         reported = _reported(profile)
         if reported is not None:
             code, output = _run_plank_reported(reported, args, cwd)
@@ -2017,6 +2232,22 @@ def _layout_target(arg: str, cwd: Path, tests_dir: Path,
     if rel == os.pardir or rel.startswith(os.pardir + os.sep):
         return arg
     return os.path.normpath(os.path.join(str(layout), rel)) + sep + node
+
+
+def _component_target(arg: str, cwd: Path, tests_dir: Path,
+                      laid: _Laid) -> list[str]:
+    """Цели выкладки по `plank_layout` вместо цели `arg`: сам каталог
+    планки — цели выкладки (`laid.targets`), файл в нём — тот же файл прямо
+    в каталоге выкладки; цель вне каталога планки — как есть."""
+    path, sep, node = arg.partition("::")
+    rel = os.path.relpath(os.path.join(str(cwd), path), str(tests_dir))
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return [arg]
+    if laid.root is None:
+        return []
+    if rel == os.curdir:
+        return list(laid.targets or ())
+    return [os.path.normpath(os.path.join(str(laid.root), rel)) + sep + node]
 
 
 def _run_plank_now(profile, args: list[str],
@@ -2303,14 +2534,12 @@ def run_full_suite(root: Path, command: list[str] | None = None,
             return False, f"{FULL_SUITE_NOT_STARTED}: {refusal}"
         if not (root / own.long_lived_dir).is_dir():
             return False, FULL_SUITE_NO_TESTS_NOTE
-        args = [own.long_lived_dir if t == "tests" else t for t in targets]
-        if _layout_mode(own) == "layout":
-            # Остаток выкладки планки лежит под `long_lived_dir` и
-            # собирался бы при любом `norecursedirs` проекта.
-            args.append("--ignore=" + _own_target(
-                own, f"{own.long_lived_dir}/{PLANK_LAYOUT_DIR}"))
-        argv = _place_command(own, *(_own_target(own, a) for a in args),
-                              *test_ids, *extra)
+        args = [_own_target(own, own.long_lived_dir if t == "tests" else t)
+                for t in targets]
+        # Остаток выкладки планки собирался бы при любом `norecursedirs`
+        # проекта.
+        args += _layout_ignore(own)
+        argv = _place_command(own, *args, *test_ids, *extra)
     limit = limit or (config.FULL_SUITE_TIMEOUT_SEC, "config")
     with _machine_lock(None, limit) as holder:
         if holder is not None:
