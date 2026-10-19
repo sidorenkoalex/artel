@@ -347,18 +347,24 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
     (`_network_address_gate`); решает вызывающий обработчик."""
     if profile is None:
         return None
-    files = guard.acceptance_test_files(acc_tdir)
+    # Тестовые файлы с меткой `AC-<n>: ` — по правилу планки проекта: строка
+    # группы в первом комментарии (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
+    # требование 5).
+    rule = project_profile.plank_rule(workspace.task_target(task_id))
+    files = guard.acceptance_test_files(acc_tdir, rule)
     # Долгоживущий файл в планке — отказ с подсказкой перенести его в
     # каталог долгоживущих тестов (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
     # требование 4): временная оговорка задачи 1 снята; проверки задачи 1
     # для такого файла остаются.
-    errors = (guard.group_line_errors_from_files(files)
-              + guard.long_lived_plank_errors(files, task_id,
-                                              profile.long_lived_dir,
-                                              profile.long_lived_name)
+    errors = (guard.group_line_errors_from_files(files, rule)
+              + guard.long_lived_plank_errors(
+                  files, task_id, profile.long_lived_dir,
+                  profile.long_lived_name, rule=rule,
+                  example=profile.long_lived_hint(task_id))
               + guard.long_lived_errors_from_files(
                   files, task_id, network_addresses=network_addresses,
-                  project_imports=_project_imports(task_id, profile)))
+                  project_imports=_project_imports(task_id, profile),
+                  rule=rule))
     if not errors:
         return None
     hint = f"исправь файл планки и повтори artel.py advance {task_id}"
@@ -467,19 +473,20 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
             return _long_lived_git_refusal(
                 task_id, f"дерево {main_ref} не прочитано — git не ответил, "
                          f"проверка путей невозможна")
+        # Профиль из шаблона `long_lived` — файлы с меткой по правилу
+        # планки (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требования 5-6); иначе
+        # `None`, прежний разбор Python.
+        rule = project_profile.long_lived_rule(workspace.task_target(task_id),
+                                               profile)
         for path in sorted(files):
             if path in on_main:
                 errors.append(f"{path}: путь уже существует в {main_ref}")
-            group, group_error = guard.plank_file_group(files[path])
-            if group != guard.GROUP_LONG_LIVED and (group or group_error):
-                errors.append(f"{path}: нет строки «Группа: "
-                              f"{guard.GROUP_LONG_LIVED}» — в "
-                              f"{profile.long_lived_dir}/ кодовой ветки "
-                              f"только долгоживущие файлы")
+            errors += guard.long_lived_group_errors(
+                [(path, files[path])], profile.long_lived_dir, rule)
         errors += guard.long_lived_errors_from_files(
             sorted(files.items()), task_id,
             network_addresses=network_addresses,
-            project_imports=_project_imports(task_id, profile))
+            project_imports=_project_imports(task_id, profile), rule=rule)
         if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")

@@ -1335,7 +1335,7 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str,
             return None
         return (f"acceptance_tests/ (файл в tasks/{task_id}/acceptance_tests/ "
                 f"либо долгоживущий файл "
-                f"{profile.long_lived_prefix(task_id)}<имя>.py)")
+                f"{profile.long_lived_hint(task_id)})")
     return None
 
 

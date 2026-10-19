@@ -233,6 +233,31 @@ def _plank_rule_or_exit(conn, task_id: str):
     return rule
 
 
+# Отказ правки файлов с меткой `AC-<n>: ` до G3б (SPEC
+# 01M5AA5TS90RDJ2AFXB882WTPD, требование 8): их строки группы, статика и
+# трассируемость в `amend-tests` не исполняются.
+LABELLED_REFUSAL = ("amend-tests для файлов планки с меткой AC-<n>: — до G3б "
+                    "не исполняется; правка планки — reject на гейте")
+
+
+def _refuse_labelled(task_id: str, rule, profile, rel_tests_dir: str,
+                     plank_paths, long_paths) -> None:
+    """Отказ команды до любой записи, если среди `plank_paths` (снимки
+    планки до и после правки) есть файл с меткой правила планки или среди
+    `long_paths` (долгоживущие пути правки) — файл с меткой у профиля из
+    шаблона `long_lived`."""
+    prefix = f"{rel_tests_dir}/"
+    labelled = sorted(
+        p for p in plank_paths
+        if p.startswith(prefix) and rule.is_labelled(p[len(prefix):]))
+    if profile is not None and profile.long_lived_template:
+        labelled += sorted(p for p in long_paths
+                           if rule.is_labelled(Path(p).name))
+    if labelled:
+        sys.exit(f"[{task_id}] amend-tests: отказ — {LABELLED_REFUSAL} "
+                 f"({', '.join(labelled)})")
+
+
 def _rule_test_files(tdir: Path, rule) -> list[tuple[str, str]]:
     """(путь относительно `tdir`, текст) тестовых файлов планки по правилу
     не по умолчанию — перечень маркера красноты (требование 7); метка — как
@@ -694,6 +719,8 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"содержимое {rel_tests_dir}/")
     baseline = _artifact_tests_snapshot(task_id, rel_tests_dir)
+    _refuse_labelled(task_id, rule, profile, rel_tests_dir,
+                     set(disk) | set(baseline), long_changed)
     # Файл перечня в сверку «есть ли правка» не входит: его пишет только
     # команда (ручная правка — отказ сразу), а его отсутствие на диске —
     # не правка: планку в worktree материализует и выход из
@@ -1058,6 +1085,9 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
         old_plank, new_plank = old_snapshot, new_snapshot
     long_diverged = sorted(p for p in set(manifest) | set(head_digests)
                            if manifest.get(p) != head_digests.get(p))
+    _refuse_labelled(task_id, rule, profile, rel_tests_dir,
+                     set(old_snapshot) | set(new_snapshot),
+                     set(manifest) | set(head_files))
 
     if old_plank == new_plank and not long_diverged:
         sys.exit(f"[{task_id}] amend-tests: отказ — нет расхождения в "

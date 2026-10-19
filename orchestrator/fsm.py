@@ -626,6 +626,9 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     ветки ЭТОЙ задачи (файлы с её префиксом, SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
     требование 5, Р3): их методы `test_ac<n>_…` покрывают критерии; прочие
     файлы `tests/`, в том числе одноимённые методы смерженных задач, — нет.
+    Элемент — текст (разбор Python) либо пара (путь, текст) у профиля из
+    шаблона `long_lived`: `it('AC-<n>: …')` файла с меткой по правилу планки
+    (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требование 7).
 
     Первым — сверка незакоммиченного результата шага (SPEC
     01M3VFYP4RXBY0BG8D3A0B18HD, требование 4): после отказа git на коммите
@@ -646,7 +649,8 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
                       rule.refusal)
         print(f"[{task_id}] переход отклонён: {rule.refusal}")
         return None
-    extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources))
+    extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources),
+                                                        rule=rule)
     if not artifact_branch.on_foreign_rev(task_id, branch):
         tested, markers = guard.scan_acceptance_tests(tdir, rule=rule)
         tested = tested | extra_tested

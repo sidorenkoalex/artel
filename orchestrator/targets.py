@@ -14,6 +14,7 @@ targets.yaml» — свойство файла, и узнать о сломан�
 на первом же чтении, чем на подключении того проекта через месяц.
 """
 import re
+from pathlib import Path
 
 from . import config, yamlmini
 
@@ -167,7 +168,11 @@ def load() -> dict:
         raise TargetsError(f"{config.TARGETS}: раздел 'targets:' пуст")
     for name, entry in entries.items():
         check(name, entry)
-    return entries
+    # Производная пара шаблона `long_lived` — только в отданной копии
+    # (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требование 2): её читают
+    # `repo_context.profile_of` и `project_profile` без смены своей логики.
+    return {name: _with_long_lived_pairs(entry)
+            for name, entry in entries.items()}
 
 
 def target(name: str) -> dict:
@@ -401,21 +406,25 @@ def _check_components(name: str, where: str, comps: object) -> None:
 
 def _check_component_rules(name: str, here: str, fields: dict,
                            single: bool) -> None:
-    """Правила компонента, зависящие от записи и соседних полей."""
+    """Правила компонента, зависящие от записи и соседних полей. Шаблон
+    `long_lived`: форма → «шаблон или пара» → наличие (SPEC
+    01M5AA5TS90RDJ2AFXB882WTPD, требование 1)."""
     pair = ("long_lived_dir", "long_lived_name")
     if "long_lived" in fields:
+        reason = _long_lived_shape_error(fields)
+        if reason:
+            raise TargetsError(f"{here}: поле 'long_lived' — {reason}")
         for sub in pair:
             if sub in fields:
                 raise TargetsError(f"{here}: поле 'long_lived' вместе с "
                                    f"'{sub}' — либо шаблон, либо пара полей")
-        if single:
-            raise TargetsError(f"{here}: поле 'long_lived' — long_lived "
-                               f"исполняется после G2б; у единственного "
-                               f"компонента нужна пара "
-                               f"'long_lived_dir'/'long_lived_name'")
+    elif single and not any(sub in fields for sub in pair):
+        raise TargetsError(f"{here}: нет ни шаблона long_lived, ни пары "
+                           f"long_lived_dir/long_lived_name — обязательно у "
+                           f"единственного компонента записи")
     if single:
         for sub in pair:
-            if sub not in fields:
+            if "long_lived" not in fields and sub not in fields:
                 raise TargetsError(f"{here}: нет поля '{sub}' — обязательно "
                                    f"у единственного компонента записи")
         runner = fields.get("runner", PROFILE_RUNNER_DEFAULT)
@@ -438,6 +447,90 @@ def _check_component_rules(name: str, here: str, fields: dict,
     if fields.get("repo", name) != name:
         raise TargetsError(f"{here}: поле 'repo' — '{fields['repo']}': "
                            f"несколько репозиториев не исполняются")
+
+
+# Образцы заполнителей шаблона `long_lived` для сверки его последнего
+# сегмента с масками `tests` (требование 1): идентификатор задачи — в
+# нижнем регистре, как его подставляет правило имени.
+_LONG_LIVED_SAMPLES = {"<id>": "0" * 26, "<name>": "a", "<dir>": "a"}
+
+
+def _long_lived_shape_error(fields: dict) -> str:
+    """Причина, по которой форма шаблона `long_lived` компонента не годна;
+    пусто — годна (требование 1). Базовую форму пути уже проверил
+    `_template_path_error`."""
+    template = fields["long_lived"]
+    segments = template.split("/")
+    last = segments[-1]
+    for mark in ("<id>", "<name>"):
+        if template.count(mark) != 1 or last.count(mark) != 1:
+            return (f"'{template}' — {mark} ровно один раз и только в "
+                    f"последнем сегменте")
+    if template.count("<dir>") > 1 or (
+            "<dir>" in template and "<dir>" not in segments):
+        return (f"'{template}' — <dir> не больше одного раза и только целым "
+                f"сегментом")
+    first = next(i for i, seg in enumerate(segments)
+                 if any(mark in seg for mark in COMPONENT_TEMPLATE_MARKS))
+    if first == 0:
+        return (f"'{template}' — у шаблона long_lived нет каталога до первого "
+                f"заполнителя")
+    masks = fields.get("tests") or ()
+    if masks and not _is_pytest_command(fields.get("command")):
+        sample = last
+        for mark, value in _LONG_LIVED_SAMPLES.items():
+            sample = sample.replace(mark, value)
+        if not any(_mask_segment_matches(mask.rsplit("/", 1)[-1], sample)
+                   for mask in masks):
+            return (f"'{template}' — последний сегмент не подходит под маски "
+                    f"tests ({', '.join(masks)}): файл не признать файлом с "
+                    f"меткой AC-<n>: ")
+    return ""
+
+
+def long_lived_pair(template: str) -> tuple[str, str]:
+    """(`long_lived_dir`, `long_lived_name`) из шаблона `long_lived`
+    (требование 2): каталог — сегменты до сегмента с первым заполнителем,
+    имя — остаток (может начинаться с `<dir>/`)."""
+    segments = template.split("/")
+    first = next(i for i, seg in enumerate(segments)
+                 if any(mark in seg for mark in COMPONENT_TEMPLATE_MARKS))
+    return "/".join(segments[:first]), "/".join(segments[first:])
+
+
+def _with_long_lived_pairs(entry: dict) -> dict:
+    """Копия записи, у компонентов которой шаблон `long_lived` дополнен
+    производной парой (требование 2): записи на диске и словарю,
+    поданному `check`, пара не дописывается."""
+    comps = entry.get(COMPONENTS_FIELD)
+    if not isinstance(comps, dict) or not any(
+            isinstance(fields, dict) and "long_lived" in fields
+            for fields in comps.values()):
+        return entry
+    copied = {}
+    for comp, fields in comps.items():
+        if isinstance(fields, dict) and "long_lived" in fields:
+            directory, name = long_lived_pair(fields["long_lived"])
+            fields = dict(fields, long_lived_dir=directory,
+                          long_lived_name=name)
+        copied[comp] = fields
+    return dict(entry, **{COMPONENTS_FIELD: copied})
+
+
+# Повторы `guard._mask_segment_matches` и `acceptance.is_pytest_command`:
+# импорт `scripts/guard.py` и `orchestrator/acceptance.py` отсюда — цикл
+# импорта (требование 1).
+def _mask_segment_matches(segment: str, name: str) -> bool:
+    regex = "".join("[^/]*" if ch == "*" else re.escape(ch) for ch in segment)
+    return re.fullmatch(regex, name) is not None
+
+
+def _is_pytest_command(command) -> bool:
+    command = list(command or ())
+    if any(Path(part).name in ("pytest", "py.test") for part in command):
+        return True
+    return any(flag == "-m" and module == "pytest"
+               for flag, module in zip(command, command[1:]))
 
 
 def _component_value_error(kind: str, value: object, comp: str,
