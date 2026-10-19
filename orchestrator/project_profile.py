@@ -101,6 +101,11 @@ class Profile:
     # Профиль взят из записи `components:` — признак различителя
     # «итог из отчёта» (`reported`).
     from_components: bool = field(default=False, compare=False)
+    # Маски `tests` и `plank_layout` компонента (SPEC
+    # 01M59KMPG2ZMK10V556VZVQD65, требование 2) — вне сравнения по той же
+    # причине, что поля выше.
+    tests: tuple = field(default=(), compare=False)
+    plank_layout: str = field(default="", compare=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -265,7 +270,9 @@ def _with_component_fields(profile: Profile, comp: Component) -> Profile:
         report_args=tuple(fields.get("report_args") or ()),
         select=tuple(fields.get("select") or ()),
         failure_errors=tuple(fields.get("failure_errors") or ()),
-        checks_local=tuple(fields.get("checks_local") or ()))
+        checks_local=tuple(fields.get("checks_local") or ()),
+        tests=tuple(fields.get("tests") or ()),
+        plank_layout=fields.get("plank_layout") or "")
 
 
 def component_profiles(target: str, names=None) -> tuple:
@@ -435,6 +442,60 @@ def parse_test_id(text: str) -> tuple[str, str, str, int | None]:
     if hash_ and tail.isascii() and tail.isdigit() and head:
         name, n = head, int(tail)
     return component, path, name, n
+
+
+# Действие журнала: правило планки проекта не построено по записи, взято
+# умолчание (SPEC 01M59KMPG2ZMK10V556VZVQD65, требование 2) — чекпоинт,
+# автогейт и документы перед мержем; деталь — причина отказа построения.
+PLANK_RULE_DEFAULT_ACTION = "правило планки: взято умолчание"
+
+
+def plank_rule(target: str) -> guard.PlankRule:
+    """Правило планки проекта `target` (SPEC 01M59KMPG2ZMK10V556VZVQD65,
+    требование 2): умолчание — артели (запись не читается), записи
+    `test_profile`, непрочитанной записи и записи, где ни один компонент
+    не получает правила по маскам (нет `tests` либо pytest-команда).
+    Иначе — компоненты в порядке записи: по последнему сегменту масок
+    `tests` с меткой `AC-<n>: ` и пометками `//`, прочие — по умолчанию.
+    Компонент `report: pult-vitest` без `tests` — отказ построения:
+    умолчание с причиной в `refusal`. `decide` не зовётся: запись с
+    несколькими компонентами правило строит без отказа."""
+    # acceptance -> ... -> store -> ... -> project_profile: цикл импорта.
+    from .acceptance import is_pytest_command
+    if repo_context.is_artel(target):
+        return guard.DEFAULT_PLANK_RULE
+    try:
+        if targets.target(target).get(targets.COMPONENTS_FIELD) is None:
+            return guard.DEFAULT_PLANK_RULE
+        comps = components(target)
+    except targets.TargetsError:
+        return guard.DEFAULT_PLANK_RULE
+    for comp in comps:
+        if comp.fields.get("report") == REPORT_VITEST and \
+                not comp.fields.get("tests"):
+            return guard.PlankRule(refusal=(
+                f"у компонента {comp.name} нет tests — допустимые файлы "
+                f"планки не определены"))
+    built = []
+    for comp in comps:
+        masks = tuple(comp.fields.get("tests") or ())
+        if not masks or is_pytest_command(comp.fields.get("command")):
+            built.append(guard.PlankComponent(comp.name, masks))
+        else:
+            built.append(guard.PlankComponent(
+                comp.name, masks, guard.LABEL_AC, guard.MARKER_SLASH))
+    if all(c.label == guard.LABEL_TEST_AC for c in built):
+        return guard.DEFAULT_PLANK_RULE
+    return guard.PlankRule(components=tuple(built))
+
+
+def journal_plank_default(conn, task_id: str, actor: str,
+                          rule: guard.PlankRule) -> None:
+    """Запись о взятом умолчании при отказе построения правила планки; без
+    отказа — ничего."""
+    if rule.refusal:
+        store.journal(conn, task_id, actor, PLANK_RULE_DEFAULT_ACTION,
+                      rule.refusal)
 
 
 def journal_skip(conn, task_id: str, check: str, decision: Decision) -> None:

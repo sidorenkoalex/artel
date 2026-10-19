@@ -12,8 +12,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, appendix_tree, artifact_branch, artifact_source,
-              budget, ci, config, fixation, gates, gitcmd, models, store,
-              workspace)
+              budget, ci, config, fixation, gates, gitcmd, models,
+              project_profile, store, workspace)
 from .advance_gates import acceptance as acceptance_gates
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
@@ -73,23 +73,33 @@ def _acceptance_pull_merge_commits(branch: str, repo: Path) -> list[str]:
     return [line for line in res.stdout.splitlines() if line.strip()]
 
 
-def _plank_sources(task_id: str, branch: str, *, conn=None, t=None
-                   ) -> tuple[list[str], bool, str | None]:
+def _plank_sources(task_id: str, branch: str, *, conn=None, t=None,
+                   rule=None) -> tuple[list, bool, str | None]:
     """Тексты разовой и долгоживущей планки, наличие файлов и ошибка чтения.
 
     Перечень берётся из дерева лока тем же узлом, что прогон планки на
     переходе `in_dev`; содержимое долгоживущих файлов — из кодовой ветки,
     а не из незакоммиченного рабочего дерева.
+
+    `rule` не по умолчанию (SPEC 01M59KMPG2ZMK10V556VZVQD65, требование 8)
+    — файлы планки по правилу: тестовые — парами (путь, текст) для
+    `guard.scan_ac_content(…, rule=…)`; долгоживущие — текстом, как прежде.
     """
     tests_rel = f"tasks/{task_id}/acceptance_tests"
     listed = artifact_branch.ls_tree(task_id, branch, tests_rel) or []
-    py_paths = [p for p in listed
-                if p.endswith(".py")]
+    by_rule = rule is not None and not rule.is_default
+    if by_rule:
+        py_paths = [p for p in listed if rule.owns(p[len(tests_rel) + 1:])]
+    else:
+        py_paths = [p for p in listed
+                    if p.endswith(".py")]
     sources = []
     for path in py_paths:
+        if by_rule and not rule.is_test(path[len(tests_rel) + 1:]):
+            continue
         text, _ = artifact_branch.show(task_id, branch, path)
         if text is not None:
-            sources.append(text)
+            sources.append((path, text) if by_rule else text)
 
     if (t is None or "tests_locked_sha" not in t.keys()
             or not t["tests_locked_sha"]):
@@ -123,8 +133,10 @@ def _acceptance_manual_criteria(task_id: str, branch: str, *, conn=None,
 
     Чтение планки — тем же общим сборщиком, что и условие «а»: все
     разовые `*.py` из артефактной ветки и записи перечня из кодовой."""
-    sources, _, error = _plank_sources(task_id, branch, conn=conn, t=t)
-    _, markers = guard.scan_ac_content(sources)
+    rule = _plank_rule(task_id)
+    sources, _, error = _plank_sources(task_id, branch, conn=conn, t=t,
+                                       rule=rule)
+    _, markers = guard.scan_ac_content(sources, rule=rule)
     items = [f"AC-{n}: {kind}" + (f" — {reason}" if reason else "")
              for n, (kind, reason) in sorted(markers.items())
              if kind in ("manual", "skip", "escalate")]
@@ -214,6 +226,29 @@ def _log_acceptance_checklist(conn, task_id: str, t, iteration: int) -> None:
     print(f"  {detail}")
 
 
+def _plank_rule(task_id: str):
+    """Правило планки проекта задачи (SPEC 01M59KMPG2ZMK10V556VZVQD65,
+    требование 2); при отказе построения — умолчание с причиной. Проект —
+    по БД пульта (`workspace.task_target`), не по `conn` вызывающего."""
+    return project_profile.plank_rule(workspace.task_target(task_id))
+
+
+def _plank_rule_refusal(rule) -> str | None:
+    """Причина fail-closed автогейта по правилу планки (требование 8): до
+    выкладки `plank_layout` (G2а-2) прогон планки компонента по правилу не
+    исполняется — приёмку решает Оператор; при отказе построения правила —
+    его причина. `None` — правило по умолчанию без отказа: прежние
+    условия."""
+    if rule.refusal:
+        return f"автогейт: {rule.refusal}"
+    if rule.is_default:
+        return None
+    names = ", ".join(rule.labelled_components())
+    return (f"автогейт: прогон планки компонента {names} по правилу — до "
+            f"выкладки plank_layout (G2а-2) не исполняется; приёмку решает "
+            f"Оператор")
+
+
 def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
                          iteration: int) -> tuple[list[str], str | None]:
     """(выполненные условия, причина первого невыполненного).
@@ -252,6 +287,14 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
         return ok, f"автогейт: {exc}"
     if trial is not None:
         return ok, f"автогейт: {trial}"
+
+    # Правило планки — до чтения планки: `.jsx`-планка иначе получила бы
+    # прежнюю причину «каталог пуст» (SPEC 01M59KMPG2ZMK10V556VZVQD65,
+    # требование 8).
+    rule = _plank_rule(task_id)
+    refusal = _plank_rule_refusal(rule)
+    if refusal is not None:
+        return ok, refusal
 
     branch, _ = artifact_source.resolve(conn, task_id)
     branch_sha = artifact_branch.rev_sha(task_id, branch)

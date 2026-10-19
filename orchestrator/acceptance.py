@@ -3317,6 +3317,20 @@ def _task_profile(conn, task_id: str):
         return None
 
 
+def _summary_plank_rule(tdir: Path):
+    """Правило планки проекта задачи каталога `tdir` (имя каталога — id
+    задачи; SPEC 01M59KMPG2ZMK10V556VZVQD65, требование 8): проект — по
+    БД, если она пригодна (приём `drop_from_code_copy`), иначе артель."""
+    from . import project_profile, store  # store -> ... -> acceptance
+    target = config.DEFAULT_TARGET
+    if store.db_usable():
+        try:
+            target = store.task_target(store.db(), tdir.name)
+        except sqlite3.Error:
+            pass
+    return project_profile.plank_rule(target)
+
+
 def summary(tdir: Path, branch: str | None = None,
             long_lived: list[Path] | None = None,
             repo: Path | None = None) -> str:
@@ -3342,15 +3356,19 @@ def summary(tdir: Path, branch: str | None = None,
     тем же прогоном (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 9): итог
     называет число тестов обеих групп. `None` — у задачи нет перечня, строки
     групп нет, прежний вид сводки.
+
+    Тесты и пометки — по правилу планки проекта задачи
+    (`_summary_plank_rule`); у правила-умолчания — прежний счёт.
     """
     tests_dir = tdir / "acceptance_tests"
     if not plank_present(tests_dir) and long_lived is None:
         return "acceptance_tests/ нет — приёмочные тесты не заведены"
-    _, markers = guard.scan_acceptance_tests(tdir)
+    rule = _summary_plank_rule(tdir)
+    _, markers = guard.scan_acceptance_tests(tdir, rule=rule)
     manual = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
     skip = sorted(n for n, (kind, _) in markers.items() if kind == "skip")
     ci_ns = sorted(n for n, (kind, _) in markers.items() if kind == "ci")
-    count = guard.count_test_methods(tdir)
+    count = guard.count_test_methods(tdir, rule=rule)
     lines = [f"приёмочные тесты: {count} тест(ов), "
              f"{len(manual)} manual, {len(skip)} skip, {len(ci_ns)} ci"]
     if long_lived is not None:

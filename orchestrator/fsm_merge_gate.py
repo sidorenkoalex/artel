@@ -392,7 +392,7 @@ def _task_docs_files(conn, task_id: str) -> tuple[str, list[str] | None, str]:
 
 
 def _task_docs_violations(task_id: str, rev: str, paths: list[str],
-                          guard_rules: bool) -> list[str]:
+                          guard_rules: bool, rule=None) -> list[str]:
     """Нарушения документов задачи на ревизии `rev` ссылки: посторонние
     файлы каталога задачи — у любого проекта (критерий
     `_guard_task_root_or_refuse`, включая подкаталоги); с `guard_rules` —
@@ -402,12 +402,22 @@ def _task_docs_violations(task_id: str, rev: str, paths: list[str],
     Освобождения «закрытой истории» по `docs/retro/<id>.md`, которое
     `guard --all` даёт задачам дерева, здесь нет: проверяется живая
     мержащаяся задача (требование 6). Нужный правилу файл, который git не
-    отдал, — нарушение, как нечитаемый файл у `guard.check`."""
+    отдал, — нарушение, как нечитаемый файл у `guard.check`.
+
+    Правило планки проекта (`rule`; не передано — по проекту задачи; SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 9): не по умолчанию — посторонние
+    файлы планки и пометки с отступом по нему и без `guard_rules`; отказ
+    построения у внешнего проекта — то же по правилу по умолчанию. Артель
+    и записи `test_profile` — как прежде."""
+    if rule is None:
+        rule = project_profile.plank_rule(workspace.task_target(task_id))
+    by_rule = not rule.is_default
+    plank_rules = guard_rules or by_rule or bool(rule.refusal)
     prefix = f"tasks/{task_id}/"
     rels = [p[len(prefix):] for p in paths if p.startswith(prefix)]
     violations = [f"{prefix}{rel}: {guard.EXTRANEOUS_TASK_ROOT_FILE_REASON}"
                   for rel in rels if guard.is_extraneous_task_root_file(rel)]
-    if not guard_rules:
+    if not plank_rules:
         return violations
     plank: list[tuple[str, str]] = []
     for rel in rels:
@@ -416,15 +426,20 @@ def _task_docs_violations(task_id: str, rev: str, paths: list[str],
         if in_plank:
             if "__pycache__" in parts:
                 continue
-            if guard.is_extraneous_acceptance_test_file("/".join(parts[1:])):
+            if guard.is_extraneous_acceptance_test_file(
+                    "/".join(parts[1:]), rule if by_rule else None):
                 violations.append(f"{prefix}{rel}: "
                                   f"{guard.EXTRANEOUS_ACCEPTANCE_FILE_REASON}")
                 continue
         elif guard.is_extraneous_task_root_file(rel):
             continue
-        is_test = (in_plank and parts[-1].startswith("test_")
-                   and rel.endswith(".py"))
-        if not (is_test or rel.endswith(".md")):
+        if by_rule:
+            is_test = in_plank and rule.is_test("/".join(parts[1:]))
+        else:
+            is_test = (in_plank and parts[-1].startswith("test_")
+                       and rel.endswith(".py"))
+        # Структура `.md` — правило `guard --all` артели, не правило планки.
+        if not (is_test or (guard_rules and rel.endswith(".md"))):
             continue
         if guard.is_task_passport(Path("tasks") / task_id / rel):
             continue
@@ -439,7 +454,8 @@ def _task_docs_violations(task_id: str, rev: str, paths: list[str],
             plank.append((prefix + rel, text))
         else:
             violations.extend(guard.check_content(prefix + rel, text))
-    violations.extend(guard.indented_ac_marker_errors_from_files(plank))
+    violations.extend(guard.indented_ac_marker_errors_from_files(
+        plank, rule=rule if by_rule else None))
     return violations
 
 
@@ -463,7 +479,11 @@ def _guard_task_docs_or_refuse(conn, task_id: str, scratch: Path,
         # дерева мержа: артель, в дереве которой guard есть.
         guard_rules = (repo_context.is_artel(ctx)
                        and (scratch / "scripts" / "guard.py").is_file())
-        violations = _task_docs_violations(task_id, rev, paths, guard_rules)
+        rule = project_profile.plank_rule(ctx.target)
+        project_profile.journal_plank_default(conn, task_id, "orchestrator",
+                                              rule)
+        violations = _task_docs_violations(task_id, rev, paths, guard_rules,
+                                           rule)
     if not violations:
         return
     detail = (f"документы задачи на {artifact_branch.branch_name(task_id)}: "

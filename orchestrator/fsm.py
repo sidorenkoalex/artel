@@ -24,7 +24,7 @@ from scripts import guard
 
 from . import (acceptance, appendix_tree, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
               config, cycle_hint, fixation, github_adapter, gitcmd, lease,
-              merge_after, pull, repo_context,
+              merge_after, project_profile, pull, repo_context,
               review, store, workspace, yamlmini)
 from .advance_gates import refusal_classes
 from .pull import _merge_conflict_note
@@ -636,14 +636,25 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     """
     if _uncommitted_step_result_refuses(conn, task_id):
         return None
+    # Правило планки проекта (SPEC 01M59KMPG2ZMK10V556VZVQD65, требования
+    # 2-3, 7): отказ построения — отказ перехода, чинит Оператор
+    # `targets.yaml`. Пути ветки фильтруются только методами правила:
+    # сторож предпроверки сверяет функции guard этого тела с `preflight`.
+    rule = project_profile.plank_rule(store.task_target(conn, task_id))
+    if rule.refusal:
+        store.journal(conn, task_id, "fsm", project_profile.REFUSAL_ACTION,
+                      rule.refusal)
+        print(f"[{task_id}] переход отклонён: {rule.refusal}")
+        return None
     extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources))
     if not artifact_branch.on_foreign_rev(task_id, branch):
-        tested, markers = guard.scan_acceptance_tests(tdir)
+        tested, markers = guard.scan_acceptance_tests(tdir, rule=rule)
         tested = tested | extra_tested
         markers = {**extra_markers, **markers}
-        errors = guard.acceptance_traceability_errors(tdir, long_lived_sources)
-        errors = errors + guard.scan_redness_markers(tdir)
-        errors = errors + guard.scan_id_format_samples(tdir)
+        errors = guard.acceptance_traceability_errors(tdir, long_lived_sources,
+                                                      rule=rule)
+        errors = errors + guard.scan_redness_markers(tdir, rule=rule)
+        errors = errors + guard.scan_id_format_samples(tdir, rule=rule)
         return tested, markers, errors
 
     spec_rel = f"tasks/{task_id}/SPEC.md"
@@ -661,26 +672,33 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
                            f"трассируемость AC не проверена")
         return None
 
-    sources: list[str] = []
+    sources: list = []
     redness_files: list[tuple[str, str]] = []
     id_format_files: list[tuple[str, str]] = []
     for p in paths:
-        if not p.endswith(".py"):
+        # У правила-умолчания — прежняя область: все `.py` ссылки.
+        rel = p[len(tests_rel) + 1:]
+        if not (p.endswith(".py") if rule.is_default else rule.owns(rel)):
             continue
         text, _ = artifact_branch.show(task_id, branch, p)
         if text is None:
             continue
-        sources.append(text)
         id_format_files.append((p, text))
-        if Path(p).name.startswith("test_"):
+        if rule.is_default:
+            sources.append(text)
+            if Path(p).name.startswith("test_"):
+                redness_files.append((p, text))
+        elif rule.is_test(rel):
+            sources.append((p, text))
             redness_files.append((p, text))
     meta = yamlmini.frontmatter(spec_text) or {}
-    tested, markers = guard.scan_ac_content(sources)
+    tested, markers = guard.scan_ac_content(sources, rule=rule)
     tested = tested | extra_tested
     markers = {**extra_markers, **markers}
     errors = guard.traceability_errors_from_content(spec_text, meta, tested,
-                                                     markers)
-    errors = errors + guard.redness_marker_errors_from_files(redness_files)
+                                                     markers, rule=rule)
+    errors = errors + guard.redness_marker_errors_from_files(redness_files,
+                                                             rule=rule)
     errors = errors + guard.id_format_sample_errors(id_format_files)
     return tested, markers, errors
 
