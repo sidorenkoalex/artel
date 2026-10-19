@@ -18,7 +18,7 @@ SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования 2-5).
 """
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
 from scripts import guard
@@ -81,6 +81,11 @@ class Profile:
     env: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), hash=False)
     long_lived_imports: tuple = ()
+    # Объявленные инструменты компонента «имя → версия» (SPEC
+    # 01M58PG72PG64GS790XM2EWS61, требование 9): заполняет `with_tools`, у
+    # записей с `test_profile` пусто. Вне хэша — по той же причине, что `env`.
+    tools: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({}), hash=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -148,7 +153,8 @@ def decide(target: str) -> Decision:
                         unresolved=True)
     answer = repo_context.profile_of(target)
     if answer.outcome == repo_context.PROFILE_PRESENT:
-        return Decision(target, profile=Profile.from_values(answer.values))
+        return Decision(target, profile=with_tools(
+            target, Profile.from_values(answer.values)))
     if answer.outcome == repo_context.PROFILE_UNREAD and answer.multi:
         return Decision(target, refusal=(
             f"профиль тестов проекта «{target}» не прочитан (поле "
@@ -218,6 +224,19 @@ def components(target: str) -> tuple:
     if profile is not None:
         return (Component(DEFAULT_COMPONENT, MappingProxyType(dict(profile))),)
     return ()
+
+
+def with_tools(target: str, profile: Profile) -> Profile:
+    """`profile` с объявленными `tools` единственного компонента записи
+    `target` (SPEC 01M58PG72PG64GS790XM2EWS61, требование 9) — один
+    помощник на `decide` и `acceptance._task_own_profile`, чтобы ключ
+    итога обоих входов совпадал. У `test_profile` поля `tools` нет —
+    профиль возвращается как есть."""
+    comps = components(target)
+    tools = comps[0].fields.get("tools") if len(comps) == 1 else None
+    if not tools:
+        return profile
+    return replace(profile, tools=MappingProxyType(dict(tools)))
 
 
 def _regexes(value) -> list:

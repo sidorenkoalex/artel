@@ -1,11 +1,13 @@
-"""Пакет orchestrator/doctor -- проверки записи внешнего проекта: клон, пуш, CI, защита ветки, токен, права токена на CI, no_paths, project_skills.
+"""Пакет orchestrator/doctor -- проверки записи внешнего проекта: клон, пуш, CI, защита ветки, токен, права токена на CI, no_paths, project_skills, компоненты.
 
 SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7; права токена на CI —
-SPEC 01M574A6YQHAPASS9716Z11G4Q, требование 8. Коллаборанты читаются
-лениво через фасад doctor (см. докстринг orchestrator/doctor/__init__.py)
--- не импортируются напрямую.
+SPEC 01M574A6YQHAPASS9716Z11G4Q, требование 8; версии инструментов, карта
+путей CI и каталоги компонентов — SPEC 01M58PG72PG64GS790XM2EWS61,
+требования 2-8. Коллаборанты читаются лениво через фасад doctor (см.
+докстринг orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -384,3 +386,246 @@ def check_project_skills(check_name: str, name: str, entry: dict):
     if refusal:
         return doctor.Check(check_name, "fail", refusal)
     return doctor.Check(check_name, "ok", "project_skills записи годны")
+
+
+# --- компоненты записи -----------------------------------------------------
+
+# Тот же таймаут, что у `claude --version`/`codex --version` (preflight).
+TOOL_VERSION_TIMEOUT_SEC = 10
+MULTILINE_VALUE = "многострочное значение не сравнивается"
+_VERSION_RE = re.compile(r"\d+(?:\.\d+)*")
+_BLOCK_INDICATORS = (">-", ">", "|-", "|")
+
+
+def component_checks(name: str, entry: dict) -> list:
+    """Строки компонентов записи `name`: на каждый инструмент `tools`, на
+    компонент с `paths_source`, на компонент с `workdir`. Запись с
+    `test_profile` (и без `components:`) строк не получает (требование 8)."""
+    comps = entry.get(doctor.targets.COMPONENTS_FIELD)
+    if not isinstance(comps, dict):
+        return []
+    clone = doctor.repo_context.clone_path(name)
+    checks = []
+    for comp, fields in comps.items():
+        prefix = f"{name}-{comp}"
+        env = fields.get("env") or {}
+        for tool, required in (fields.get("tools") or {}).items():
+            checks.append(check_tool_version(
+                f"project-tools-{prefix}-{tool}", tool, str(required),
+                env.get("PATH")))
+        if fields.get("paths_source"):
+            checks.append(check_paths_source(f"project-paths-{prefix}",
+                                             clone, fields))
+        if fields.get("workdir"):
+            checks.append(check_workdir(f"project-workdir-{prefix}", clone,
+                                        str(fields["workdir"])))
+    return checks
+
+
+def version_matches(required: str, shown: str) -> bool:
+    """Версия `shown` совпадает с требуемой по стольким числовым частям,
+    сколько их в `required`: числа, не префикс строки (`3.1` ≠ `3.12`)."""
+    want = [int(part) for part in required.split(".")]
+    got = [int(part) for part in shown.split(".")]
+    return got[:len(want)] == want
+
+
+def check_tool_version(check_name: str, tool: str, required: str,
+                       env_path: str | None):
+    """`<tool> --version` с `PATH` компонента (`env.PATH`, иначе `PATH`
+    процесса doctor) против требуемой версии — текста до первого пробела."""
+    path = env_path if env_path is not None else os.environ.get("PATH", "")
+    wanted = required.split()[0] if required.split() else ""
+    if not re.fullmatch(_VERSION_RE, wanted):
+        return doctor.Check(check_name, "skip",
+                            f"{tool}: требуемая версия «{required}» не "
+                            f"разобрана — ожидаются числа через точку")
+    found = doctor.shutil.which(tool, path=path)
+    if found is None:
+        return doctor.Check(check_name, "fail",
+                            f"{tool} не найден в PATH {path or '(пусто)'}")
+    try:
+        res = doctor.subprocess.run(
+            [found, "--version"], capture_output=True, text=True,
+            timeout=TOOL_VERSION_TIMEOUT_SEC,
+            env={**os.environ, "PATH": path})
+    except (OSError, doctor.subprocess.TimeoutExpired) as exc:
+        return doctor.Check(check_name, "skip",
+                            f"{tool} --version не выполнен: {exc}")
+    if res.returncode != 0:
+        return doctor.Check(check_name, "skip",
+                            f"{tool} --version завершился с кодом "
+                            f"{res.returncode}")
+    match = (_VERSION_RE.search(res.stdout or "")
+             or _VERSION_RE.search(res.stderr or ""))
+    if match is None:
+        return doctor.Check(check_name, "skip",
+                            f"{tool} --version: в выводе нет версии")
+    if not version_matches(wanted, match.group(0)):
+        return doctor.Check(check_name, "fail",
+                            f"{tool} ({found}): версия {match.group(0)}, "
+                            f"требуется {wanted}")
+    return doctor.Check(check_name, "ok",
+                        f"{tool} ({found}): версия {match.group(0)}, "
+                        f"требуется {wanted}")
+
+
+def _unquote(raw: str) -> str:
+    """Значение без кавычек; без кавычек — как есть, без хвостового
+    комментария ` #…`."""
+    if raw[:1] in ("'", '"'):
+        end = raw.find(raw[0], 1)
+        if end > 0:
+            return raw[1:end]
+        return raw
+    return re.sub(r"\s+#.*$", "", raw).strip()
+
+
+def _block_value(lines: list, indent: int) -> tuple[str | None, str]:
+    """Значение блока `>-`/`>`/`|-`/`|`: строки с отступом больше
+    `indent`. Одна строка — значение; несколько — не сравнивается."""
+    content = []
+    for line in lines:
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        content.append(line.strip())
+    if len(content) > 1:
+        return None, MULTILINE_VALUE
+    return (content[0] if content else ""), ""
+
+
+def find_variable(text: str, key: str) -> tuple[str | None, str]:
+    """(значение, "") переменной `key` текста файла — ключ YAML (в
+    кавычках, без них или блоком) либо присваивание оболочки с `export`
+    или без; (None, причина) — не найдено или не сравнивается. Строки-
+    комментарии пропускаются (требование 6)."""
+    name = re.escape(key)
+    yaml_key = re.compile(rf"^(\s*){name}\s*:(?:\s+(.*))?$")
+    shell_key = re.compile(rf"^\s*(?:export\s+)?{name}=(.*)$")
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            continue
+        m = yaml_key.match(line)
+        if m:
+            raw = (m.group(2) or "").strip()
+            if re.sub(r"\s+#.*$", "", raw) in _BLOCK_INDICATORS:
+                return _block_value(lines[i + 1:], len(m.group(1)))
+            return _unquote(raw), ""
+        m = shell_key.match(line)
+        if m:
+            return _unquote(m.group(1).strip()), ""
+    return None, f"переменной {key} нет"
+
+
+def _top_level(body: str) -> tuple[list | None, int | None, str]:
+    """(альтернативы по `|` верхнего уровня, индекс скобки, закрывающей
+    ведущую `(`, "") либо (None, None, причина) — скобки не
+    сбалансированы. `|` внутри `()`/`[]` и после `\\` не делит."""
+    parts, start, depth, in_class, escaped = [], 0, 0, False, False
+    lead_close = None
+    for i, ch in enumerate(body):
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return None, None, "несбалансированные скобки"
+            if depth == 0 and lead_close is None and body.startswith("("):
+                lead_close = i
+        elif ch == "|" and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    if depth or in_class or escaped:
+        return None, None, "несбалансированные скобки"
+    parts.append(body[start:])
+    return parts, lead_close, ""
+
+
+def regex_alternatives(text: str) -> tuple[set | None, str]:
+    """Множество альтернатив верхнего уровня строки регулярного выражения
+    (требование 5); (None, причина) — строку не разобрать."""
+    if not text:
+        return None, "пустое значение"
+    body = text[1:] if text.startswith("^") else text
+    parts, lead_close, reason = _top_level(body)
+    if parts is None:
+        return None, reason
+    if lead_close is not None:
+        if lead_close == len(body) - 1:
+            parts, _, reason = _top_level(body[1:-1])
+            if parts is None:
+                return None, reason
+        elif body[lead_close + 1] != "|":
+            return None, f"хвост «{body[lead_close + 1:]}» после ведущей группы"
+    if not body or any(part == "" for part in parts):
+        return None, "пустая альтернатива"
+    return set(parts), ""
+
+
+def _regex_strings(value) -> list:
+    if value is None:
+        return []
+    return [str(value)] if isinstance(value, str) else [str(v) for v in value]
+
+
+def check_paths_source(check_name: str, clone: Path, fields: dict):
+    """Альтернативы переменной `paths_source` в файле клона против
+    объединения `paths` компонента и `paths` его `depends_on` вида
+    `paths`/`files` (требования 4-6); порядок не важен."""
+    source = fields["paths_source"]
+    rel, key = str(source.get("file")), str(source.get("key"))
+    path = clone / rel
+    if not path.is_file():
+        return doctor.Check(check_name, "skip", f"файла {rel} в клоне {clone} нет")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return doctor.Check(check_name, "skip", f"{rel} не прочитан: {exc}")
+    value, reason = find_variable(text, key)
+    if value is None:
+        return doctor.Check(check_name, "skip", f"{rel}: {key}: {reason}")
+    got, reason = regex_alternatives(value)
+    if got is None:
+        return doctor.Check(check_name, "skip",
+                            f"{rel}: значение {key} «{value}» не разобрано: "
+                            f"{reason}")
+    strings = _regex_strings(fields.get("paths"))
+    for dep in (fields.get("depends_on") or {}).values():
+        if dep.get("via") in ("paths", "files"):
+            strings += _regex_strings(dep.get("paths"))
+    want = set()
+    for item in strings:
+        alts, reason = regex_alternatives(item)
+        if alts is None:
+            return doctor.Check(check_name, "skip",
+                                f"строка paths «{item}» не разобрана: {reason}")
+        want |= alts
+    if got == want:
+        return doctor.Check(check_name, "ok",
+                            f"{rel}: {key} совпадает с paths компонента "
+                            f"({len(got)} альтернатив)")
+    extra = ", ".join(sorted(got - want)) or "нет"
+    missing = ", ".join(sorted(want - got)) or "нет"
+    return doctor.Check(check_name, "warn",
+                        f"{rel}: {key} «{value}» ≠ paths компонента "
+                        f"«{', '.join(strings)}» (лишние в {key}: {extra}; "
+                        f"недостающие: {missing})")
+
+
+def check_workdir(check_name: str, clone: Path, workdir: str):
+    """Каталог `workdir` компонента есть в клоне проекта (требование 7)."""
+    if (clone / workdir).is_dir():
+        return doctor.Check(check_name, "ok", f"каталог {workdir} есть в клоне")
+    return doctor.Check(check_name, "fail",
+                        f"каталога {workdir} нет в клоне {clone}")
