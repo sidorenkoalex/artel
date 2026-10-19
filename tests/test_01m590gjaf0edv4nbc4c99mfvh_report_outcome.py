@@ -1523,7 +1523,7 @@ class HungComponentWatchdogTest(ReportSandbox):
         — процессы компонентов не находятся; либо узнаёт любой процесс в
         рабочей копии задачи — `node server.js` тоже находка.
         """
-        vitest = self.vitest_component(version=f"4.{self.rng.randint(0, 9)}.0")
+        vitest = self.vitest_component()
         fake = Fake(self, "hung")
         flag = f"--{self.word(5)}"
         junit_case = self.junit_component(command=[str(fake.wrapper), flag])
