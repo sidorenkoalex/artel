@@ -3215,3 +3215,68 @@ class MainCopyGitUnchangedDuringTaskTest(unittest.TestCase):
         for name, snapshot in observed:
             self.assertEqual(snapshot, before,
                              flow.msg(f"git главной копии изменился {name}"))
+
+
+class ReportedOutcomeNotGreenInvariantTest(unittest.TestCase):
+    """Инвариант 41: неизвестный или неразобранный местный итог тестов не
+    зелёный; повторы внутри прогона компонентов с отчётом пульта запрещены
+    (refs/artifacts/01M590GJAF0EDV4NBC4C99MFVH:tasks/01M590GJAF0EDV4NBC4C99MFVH/SPEC.md,
+    требования 3, 6, 19).
+
+    Учебные записи проектов песочницы долгоживущего файла задачи
+    (`ReportSandbox`: настоящий git, подменённый раннер компонента вне
+    дерева, поддельная установка зависимостей): компонент `junit-xml`,
+    раннер которого выходит с кодом 0 и печатает «1 passed», но отчёта не
+    пишет, и компонент `pult-vitest`, отчётчик которого называет тест
+    зелёным с числом повторов больше 0. Узел полного прогона
+    `acceptance.full_suite` и прогон планки `acceptance.run` судятся по
+    отчёту; контроль — тот же компонент с зелёным отчётом без повторов
+    зелёный (учебная запись исправна, краснота — от свойства).
+    """
+
+    def test_unknown_or_retried_component_outcome_is_never_green(self):
+        """Ловит мутацию: исход «неизвестно» (отчёта нет при коде 0)
+        считается зелёным — `full_suite`/`run` компонента `junit-xml`
+        отдают зелёный итог; либо тест с повтором больше 0 считается
+        зелёным — `full_suite` компонента `pult-vitest` зелёный при
+        `retry_count > 0`.
+        """
+        import io
+        from orchestrator import acceptance
+        from tests.test_01m590gjaf0edv4nbc4c99mfvh_report_outcome import (
+            ReportSandbox, junit, vitest_report, vitest_test)
+
+        class Flow(ReportSandbox):
+            def runTest(self):
+                pass
+
+        flow = Flow()
+        flow.setUp()
+        self.addCleanup(flow.doCleanups)
+
+        case = flow.junit_component()
+        case["fake"].scenario(stdout="1 passed in 0.01s\n", report=None)
+        run, out = flow.full(case["clone"], case["task"], case["profile"])
+        self.assertFalse(run.green, flow.note(f"«неизвестно» зелёное: {run}\n{out}"))
+        self.assertEqual(run.outcome, acceptance.FULL_SUITE_NOT_STARTED,
+                         flow.note(str(run)))
+        self.assertTrue(run.detail.startswith(acceptance.UNKNOWN_PREFIX),
+                        flow.note(run.detail))
+        with contextlib.redirect_stdout(io.StringIO()):
+            green, tail = acceptance.run(flow.plank_dir(), cwd=case["clone"],
+                                         command=case["profile"])
+        self.assertFalse(green, flow.note(f"планка «неизвестно» зелёная: {tail}"))
+        case["fake"].scenario(stdout="1 passed in 0.01s\n", report=junit(
+            [("src/x.test.jsx", "test_ok", "passed", "", "", "0.1")]))
+        run, out = flow.full(case["clone"], case["task"], case["profile"])
+        self.assertTrue(run.green, flow.note(f"контроль junit-xml: {run}\n{out}"))
+
+        vitest = flow.vitest_component()
+        version = f"vitest/{vitest['version']} linux-x64 node-v22.11.0"
+        for retries, expected in ((flow.rng.randint(1, 4), False), (0, True)):
+            vitest["fake"].scenario(version_out=version, report=vitest_report(
+                [vitest_test("src/a.test.js", "ok", retry_count=retries)]))
+            run, out = flow.full(vitest["clone"], vitest["task"],
+                                 vitest["profile"])
+            self.assertEqual(run.green, expected, flow.note(
+                f"повторов {retries}: {run}\n{out}"))
