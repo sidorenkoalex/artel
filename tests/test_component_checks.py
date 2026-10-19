@@ -1,5 +1,6 @@
 """Разбор строк doctor по компонентам и суммы отслеживаемых файлов блокировки в ключе итога (SPEC 01M58PG72PG64GS790XM2EWS61)."""
 import dataclasses
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from unittest import mock
 
-from orchestrator import acceptance, config, project_profile, targets
+from orchestrator import acceptance, config, project_profile, store, targets
 from orchestrator.doctor import project_checks
 from tests.sandbox import ARTEL_TEST_PROFILE
 
@@ -234,6 +235,54 @@ class DecideToolsTest(unittest.TestCase):
                          {"node": "22 (из .nvmrc)"})
         self.assertEqual(
             dict(project_profile.decide(config.DEFAULT_TARGET).profile.tools), {})
+
+
+OWN_TEST_PROFILE = """    test_profile:
+      command: [python3, -m, pytest]
+      long_lived_dir: tests
+      long_lived_name: test_<id>_<name>.py
+      weakening_scope: [tests/**/*.py]
+      mutation_claim_scope: [tests/test_*.py]
+      runner: pytest-own
+      workdir: w
+"""
+
+
+class TaskOwnProfileToolsTest(unittest.TestCase):
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name) / "targets.yaml"
+        path.write_text(
+            "targets:\n" + TARGET_HEAD.format(name=config.DEFAULT_TARGET)
+            + ARTEL_TEST_PROFILE + TARGET_HEAD.format(name="single")
+            + SINGLE_COMPONENT + TARGET_HEAD.format(name="own")
+            + OWN_TEST_PROFILE, encoding="utf-8")
+        patcher = mock.patch.object(config, "TARGETS", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        self.conn = conn
+
+    def own_profile(self, target: str):
+        with mock.patch.object(store, "task_target", return_value=target):
+            return acceptance._task_own_profile(self.conn, "T1")
+
+    def test_task_own_profile_carries_single_component_tools(self):
+        """Профиль автогейта приёмки записи с одним компонентом несёт его `tools`, записи с `test_profile` — пустые.
+
+        Ловит мутацию: `_task_own_profile` не зовёт `with_tools` — `tools`
+        профиля автогейта пусты, и ключ рабочего дерева автогейта не видит
+        смены инструментов и игнорируемого файла блокировки.
+        """
+        single = self.own_profile("single")
+        self.assertIsNotNone(single)
+        self.assertEqual(dict(single.tools), {"node": "22 (из .nvmrc)"})
+        own = self.own_profile("own")
+        self.assertIsNotNone(own)
+        self.assertEqual(dict(own.tools), {})
 
 
 if __name__ == "__main__":
