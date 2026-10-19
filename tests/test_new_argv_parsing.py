@@ -141,5 +141,37 @@ class CmdCanaryDispatchTest(unittest.TestCase):
                                         templates=None)
 
 
+class StrictTzFlagTest(unittest.TestCase):
+    """`new --strict-tz` (SPEC 01M598KY8V2P2GRD5Q67DRAZNA, требование 6)."""
+
+    def test_usage_names_strict_tz_flag(self):
+        """Справка `new` называет флаг.
+
+        Ловит мутацию: `_NEW_USAGE` без `[--strict-tz]` — Оператор не
+        узнаёт о флаге из справки."""
+        self.assertIn("[--strict-tz]", artel._NEW_USAGE)
+
+    def test_strict_tz_anywhere_reaches_cmd_new_only_when_given(self):
+        """Флаг в любом месте argv доходит до `catalog.cmd_new` как
+        `strict_tz=True`; без флага вызов прежний, без нового keyword.
+
+        Ловит мутацию: флаг не снимается до `_parse_new_args` (отказ
+        «Нераспознанный аргумент») или не передаётся (`strict_tz` теряется);
+        без флага передаётся `strict_tz=False` — прежние сверки вызова
+        `cmd_new` ломаются."""
+        for rest in (["Название", "--strict-tz", "--tz", "т.md"],
+                     ["Название", "--tz", "т.md", "--strict-tz"]):
+            with self.subTest(rest=rest), \
+                    mock.patch.object(artel.catalog, "cmd_new") as cmd_new:
+                artel._cmd_new(rest + ["--target", "artel"])
+            cmd_new.assert_called_once_with("Название", tz_path="т.md",
+                                            model_set=None, target="artel",
+                                            strict_tz=True)
+        with mock.patch.object(artel.catalog, "cmd_new") as cmd_new:
+            artel._cmd_new(["Название", "--tz", "т.md", "--target", "artel"])
+        cmd_new.assert_called_once_with("Название", tz_path="т.md",
+                                        model_set=None, target="artel")
+
+
 if __name__ == "__main__":
     unittest.main()
