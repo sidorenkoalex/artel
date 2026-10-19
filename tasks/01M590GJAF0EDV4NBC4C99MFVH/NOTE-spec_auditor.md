@@ -1,24 +1,18 @@
 # Записка spec_auditor — 01M590GJAF0EDV4NBC4C99MFVH
 
 ## Выяснено
-- Визит 2 (SPEC sha d354ec11…): SPEC переписан по ANSWER-1 (варианты A батча QUESTIONS.md, коммит ссылки документов 08c69578). Все 14 отклонений первого аудита закрыты.
-- Новые находки (concerns, 9 пунктов):
-  - argv `pult-vitest` против ADR:86 (флаг `--expect.requireAssertions` внутри `command`);
-  - механизм кэша Vite не задан (`node_modules` только для чтения);
-  - умолчание `report_args` буквально цепляет артель (`targets.yaml:45-51`);
-  - для `pult-vitest` нет условий запуска (`workdir`, таймаут);
-  - `checks_local` не покрыты на автогейте (`fsm_autogate.py:327`);
-  - дерево lock-файла установки не определено;
-  - путь в идентификаторе AC-2 не привязан к корню репозитория;
-  - «неизвестно» через ветку `NOT_STARTED` теряет лог (`acceptance.py:2363`);
-  - у AC-19 нет отрицательного случая.
-- QUESTIONS.md удалён из каталога документов, читается `git show 08c69578:tasks/<id>/QUESTIONS.md`.
+- Визит 3 (SPEC sha 6381041…). Все 9 отклонений визита 2 закрыты по решению Оператора на гейте SPEC №1 (пп. 1–9).
+- Новые находки (concerns, 3 пункта):
+  - Б11: `repo_context.profile_of` (только чтение) у записи с одним компонентом отдаёт только `PROFILE_FIELDS` (`repo_context.py:164-172`). На гейтовых входах (`decide`, `_task_own_profile`, `suite-run`) теряются `report_args`, `select`, `failure_errors`, `checks_local`; доливается только `tools` через `with_tools`. SPEC не называет носителя.
+  - Е9: у AC-17 нет случая «гейт мержа без приложений». Полного прогона там нет, но `checks_local` обязаны идти.
+  - Е10: файл блокировки у произвольной команды `install` не определён (поля нет). Пустой `install: []` у артели и sled backend (`targets.yaml:51`, `:93`) не назван «установки нет».
+- Возвратов уже два (`fail` визита 1 и возврат с гейта): вердикт идёт на гейт.
 
 ## Не сработало
-- `ls` в шелле нет (command not found): каталог документов смотреть через `git ls-tree refs/artifacts/<id>`.
+- `cd X && git …`, `$VAR`, `find` и `perl -i` в Bash требуют подтверждения, которого нет. Нужны абсолютные пути, без переменных; правки — через Edit.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready, spec_sha d354ec11…, guard ок.
+- SPEC-AUDIT.md сдан: verdict concerns, status ready, spec_sha 6381041…, guard ок.
 
 ## Чего не хватило
-- Смысл «Вариант A» в ANSWER-1 есть только в удалённом QUESTIONS.md из истории ссылки документов.
+- Нигде не записано, что запись `components:` с одним компонентом на гейтовых входах теряет поля сверх `PROFILE_FIELDS`. Выяснилось только чтением `repo_context.profile_of`.
