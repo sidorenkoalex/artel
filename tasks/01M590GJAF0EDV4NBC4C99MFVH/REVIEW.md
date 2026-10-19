@@ -2,8 +2,8 @@
 task: 01M590GJAF0EDV4NBC4C99MFVH
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,109 +11,75 @@ schema_version: 5
 
 ## Фаза A: план
 
-- Таблица покрытия PLAN полна: все требования 1–20 SPEC привязаны к шагам. Шаги 1–7 — проверяемые единицы (профиль, пакет `reporters/`, узел `_report_run`, вызывающие, сторож, тесты, приложение).
-- Подход (один различитель `project_profile.reported` и один узел прогона по отчёту, к которому сходятся все места) с конвенциями не конфликтует. Прежние ветки `pult-pytest` и `pytest-own` без `report` не тронуты.
-- «Влияние на систему» сходится с диффом: 12 файлов кода в зонах SPEC и один новый `tests/test_component_report_run.py`. Защищённые пути в ветке не тронуты, `docs/invariants.md` и `tests/test_invariants.py` меняются только приложениями.
-- Одно расхождение с планом: в «Рисках» PLAN разработчик сам отметил, что двусторонний прогон гейта не идёт по отчёту для компонента без `runner` (вызывающий вне зон). Здесь нужна была эскалация (правило SPEC «правка вне зон — эскалация»), а не отметка в рисках. См. R1-F6.
+- В PLAN появился п. 10 «Итерация 2» и шаг 8. Оба покрывают R1-F1…F6 по одному. Таблица покрытия требований 1–20 по-прежнему полна.
+- «Влияние на систему» сходится с инкрементальным диффом:
+  - правки `orchestrator/acceptance.py` (замок установки, `is_pytest_command`, `acceptance_suite`);
+  - правки `orchestrator/suite_run.py` (`parse(..., reported=)`, делегирование `_is_pytest`);
+  - новый `tests/test_component_report_gates.py`;
+  - регенерированная карта.
+
+  Защищённые пути в ветке не тронуты.
+- R1-F6 вынесен Оператору готовым предложением задачи-продолжения с адресом `test_integrity.py:1770-1793` и правкой (PLAN, «Предложения системе», и «Риски»). Код вне зон не тронут. Этого достаточно: прогон закрыт на узле `two_sided.run` (AC-11), а правка вызывающего вне зон SPEC.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK с оговоркой | Итог берётся из отчёта, `{path}` подставляется вне рабочей копии, работают `workdir`, чистое окружение и своя группа. Оговорка: к команде с `runner: pytest-own` добавляются pytest-флаги, см. R1-F2 |
-| 2 | OK | `report_args_of`, `JUNIT_DEFAULT_REPORT_ARGS`. Явные аргументы приоритетнее умолчания |
-| 3 | Не так | Сам исход «неизвестно» сделан верно. Но падающий `checks_local` перекрашивает его в «красный прогон», и тогда `approve --accept-red` его принимает (R1-F1). Подсказка гейта мержа сделана |
-| 4 | Не так | Сам различитель верен. Но `runner` компонента всё же читается: от `pytest-own` зависит argv прогона по отчёту (R1-F2) |
-| 5 | OK | `orchestrator/reporters/pult_vitest_reporter.js`, форма по ANSWER-2, В2. С настоящим Node не проверено, это проба этапа 2 |
-| 6 | OK | `outcome._vitest_case`, `verdict`: тест с повтором больше 0 даёт красный итог |
-| 7 | Не так | Сверка базового argv, флаги пульта по `VITEST_VERSION_FLAGS`, `CI=true`, кэш вне дерева и отказы подготовки сделаны. Но компонент `pult-vitest` с `workdir` (то есть с `runner: pytest-own`) получает `src --ignore=… -p no:cacheprovider` (R1-F2) |
-| 8 | OK с оговоркой | Узлы мест прогона ветвятся на `_reported`. Двусторонний прогон через гейт для компонента без `runner` по отчёту не идёт (R1-F6) |
-| 9 | OK | `_profile_command`, `_extra_flags` |
-| 10 | OK | `_selected_components` плюс `components_full_suite`, предел по компоненту. Сторожа в `tests/` нет (R1-F4) |
-| 11 | OK | Отказ `MULTI_COMPONENT_PENDING` на входах сохранён |
-| 12 | OK с оговоркой | Установка один раз на сумму файла блокировки, каталог только для чтения, сверка подключения сделаны. Параллельные установки ничем не защищены (R1-F3) |
-| 13 | Не так | `checks_local` исполняется в `acceptance_suite` и на гейте мержа, но при провале перекрывает исход «неизвестно» (R1-F1). Сторожа в `tests/` нет (R1-F4) |
-| 14 | OK | `_report_suite_result_key` |
-| 15 | OK | `with_tools` в `_profile_command` |
-| 16 | OK | `_component_commands` / `_runs_component_command`, фасад не менялся |
-| 17 | OK | Константы, тексты и argv артели прежние, это закреплено долгоживущим файлом |
-| 18 | OK с оговоркой | Выжимка и числа берутся из сводки отчёта. Но перечень упавших в `suite-run` подбирает и id из строк хода раннера (R1-F5) |
-| 19 | OK | Оба приложения проходят `git apply --check`, проверка зелёная и ловит мутацию «повтор не учитывается» |
-| 20 | OK | Учебные записи на подменённом раннере, без сети и без Node |
+| 1 | OK | Итог из отчёта; argv по отчёту без pytest-аргументов у не-pytest команды (R1-F2 закрыт) |
+| 2 | OK | Без изменений с итерации 1 |
+| 3 | OK | `acceptance_suite`: проваленный `checks_local` понижает до RED только зелёный итог. «Неизвестно» сохраняется, и `--accept-red` ему отказывает (R1-F1 закрыт, проверено мутацией) |
+| 4 | OK | `runner` компонента больше не определяет argv `pult-vitest`. Pytest-аргументы `pytest-own` добавляются только к pytest-команде (`is_pytest_command`) |
+| 5 | OK | Без изменений (проба с настоящим Node — этап 2) |
+| 6 | OK | Без изменений |
+| 7 | OK | Точный argv `pult-vitest` с `workdir` закреплён `ReportArgvTest` |
+| 8 | OK | Узлы прогона ветвятся на `_reported`. Вызывающий `test_integrity.py` вне зон вынесен Оператору (R1-F6) |
+| 9 | OK | `_is_pytest` делегирует `acceptance.is_pytest_command` — тело прежнее, отказ для записи без `report` прежний (AC-12 п. 2 зелёный) |
+| 10 | OK | Сторожа выбора компонентов (дифф + пути приложений) и предела по компоненту — в `tests/` |
+| 11 | OK | Без изменений |
+| 12 | OK | `fcntl.flock` на `deps/<компонент>/<сумма>.lock`, отметка перепроверяется под замком (R1-F3 закрыт) |
+| 13 | OK | `checks_local` в `acceptance_suite` на обоих `actor` и на гейте мержа; сторожа в `tests/` |
+| 14 | OK | Без изменений |
+| 15 | OK | Сторож `SuiteRunKeyTest`: ключ `suite-run` равен ключу гейта, с `tools` |
+| 16 | OK | Без изменений |
+| 17 | OK | Прежний разбор не тронут: `parse` без `reported` — прежнее тело; AC-20 зелёный |
+| 18 | OK | `suite_run.parse(..., reported=True)` не читает строки хода сырого вывода (R1-F5 закрыт) |
+| 19 | OK | Приложения не менялись (проверены в итерации 1) |
+| 20 | OK | Учебные записи на подменённом раннере |
 
 ## Замечания
 
-1. **blocker** — `orchestrator/acceptance.py:3167-3176` (`acceptance_suite`).
-   - Суть: при непрошедшем `checks_local` узел возвращает `FullSuiteRun(False, FULL_SUITE_RED, …)` при любом исходном итоге. Исход «неизвестно» (`FULL_SUITE_NOT_STARTED` с деталью «итог неизвестен: …») и «прогон не начат» превращаются в «красный прогон».
-   - Сценарий: компонент с `checks_local`, например линтер с кодом 1, и раннер, не записавший отчёт. `approve --accept-red "…"` проходит ветку `fsm.py:1314-1319`: задача продвигается с неизвестным итогом. Это прямо нарушает требование 3 и инвариант 41 («`approve --accept-red` его не принимает»).
-   - Воспроизведено: подменил `_acceptance_suite_run` на исход «неизвестно» и `_task_profile` на профиль с `checks_local: [false]`. Узел вернул `красный прогон`, `is_unknown` = False.
-   - Предложение: провал проверки только добавляет красноту. Исход `FULL_SUITE_NOT_STARTED` (и любой незелёный исход) сохраняется, текст проверки дописывается к детали. Понижать в RED можно только зелёный итог. Тест — в `tests/`.
+Новых blocker/major нет.
 
-2. **major** — `orchestrator/acceptance.py:697-710` (`_report_argv`).
-   - Суть: для профиля с отчётом и `runner: pytest-own` к argv добавляются pytest-специфичные аргументы: целью полного прогона — `long_lived_dir` от `workdir`, в режиме выкладки — `--ignore=<long_lived_dir>/.artel-plank`, и всегда `-p no:cacheprovider`. Добавляются они при любом `report` и любой команде.
-   - Сценарий: компонент `pult-vitest` с `workdir` (правило записи с одним компонентом требует там `runner: pytest-own`, так устроен и учебный `vitest_component`) получает argv `node_modules/.bin/vitest run … --cacheDir=… src --ignore=src/.artel-plank -p no:cacheprovider --reporter=… --outputFile=…`. Воспроизведено вызовом `_report_argv` с подменённым `_vitest_head`. Для Vitest `-p`/`--ignore` — чужие флаги. Позиционный `src` сужает полный набор до фильтра. То же получит компонент `junit-xml` с не-pytest командой и `workdir`.
-   - Требование 4: `runner` компонента не читается. Требование 7: argv задаёт пульт — базовый плюс флаги пульта плюс `report_args`.
-   - Долгоживущий тест AC-9 сверяет только начало argv и дефект не видит.
-   - Предложение: pytest-аргументы `pytest-own` не добавлять к команде компонента с отчётом (как минимум к `pult-vitest`). Полный набор `pult-vitest` — без позиционных целей. Тест в `tests/` с точным argv компонента `pult-vitest` с `workdir`.
-
-3. **major** — `orchestrator/acceptance.py:473-530` (`_install`).
-   - Суть: установка в общий каталог `deps/<компонент>/<сумма>` идёт без замка. Каталог общий для всех задач проекта с тем же файлом блокировки, а места прогона планки (`run`, `collect`, `run_repeat`, `run_plank`) идут вне `_machine_lock`.
-   - Сценарий: две задачи одного проекта впервые гоняют планку после смены `package-lock.json`. Задача B не видит отметки, пока A ещё в `npm ci`, и делает `_drop_install(home)`: удаляет дерево A посреди установки. Дальше `home.mkdir` у одной из них падает `FileExistsError`, либо A пишет отметку и `chmod` только для чтения поверх полуготового дерева B. Итог — ложные отказы «установка зависимостей … не удалась» у обеих. Состояние fail-closed, зелёного итога это не даёт, но роли получают отказ без вины кода.
-   - Предложение: `fcntl.flock` на файле-замке `deps/<компонент>/<сумма>.lock` вокруг проверки отметки и установки (как `_exclude_pattern`). Под замком — повторная проверка отметки.
-
-4. **major** — сторожа долгоживущих свойств есть только в разовой планке (`acceptance_tests/test_gates_wiring.py`, «Группа: разовый»).
-   - Каких свойств это касается:
-     - `checks_local` в `acceptance_suite` при любом источнике итога и на гейте мержа с прогоном и без (требование 13);
-     - выбор затронутых компонентов на гейте мержа по диффу и путям приложений, предел каждого компонента (требование 10);
-     - отказ `--accept-red` на исходе «неизвестно» через `acceptance_suite`;
-     - равенство ключа у гейта мержа и `suite-run` с `tools` (требование 15).
-   - Это свойства кода, обязанные держаться после мержа. В `tests/` из них есть только агрегация `components_full_suite` (`tests/test_component_report_run.py::ComponentsFullSuiteTest`). После мержа планку не гоняет ни CI, ни автогейт (ADR-0018 п. 3).
-   - Дефект R1-F1 такой сторож поймал бы.
-   - Предложение: тесты в `tests/` (публичные узлы `acceptance.acceptance_suite`, `components_full_suite` с подменой `full_suite`, `run_checks_local`) с заявкой «Ловит мутацию: …» на каждое свойство.
-
-5. **minor** — `orchestrator/suite_run.py:373` (`parse`: `_progress(output)` по всему выводу).
-   - Суть: у профиля с отчётом в вывод `run_full_suite` входит сырой вывод раннера. Строки хода (`tests/x.py::T::test_b FAILED` при `-v`) попадают в `failures` и `rerun` id от `workdir` рядом с id из отчёта.
-   - Воспроизведено: `parse(False, <вывод pytest -v> + summary_block(...))` даёт `failures` = `[('be:be/tests/test_x.py::T::test_b', …), ('tests/test_x.py::T::test_b', '')]`. Требование 18 говорит: перечень упавших — из отчёта. `--failed` затем передаст раннеру путь от `workdir` как путь от корня (`_report_subset`, `acceptance.py:2317`).
-   - У записи sled (`pytest -q`) строк хода нет — поэтому minor.
-   - Предложение: для вывода с отчётом читать строки хода только из сводки пульта (после последнего заголовка), либо строить `Parsed` по `tests`.
-
-6. **minor** — двусторонний прогон гейта (`advance_gates/test_integrity.py:1770-1792`, вне зон) передаёт профиль в `two_sided.run` только при `pytest-own`.
-   - Сценарий: единственный компонент с `report` без `workdir`/`runner` идёт раннером пульта, не по отчёту — пробел требования 8 на гейте.
-   - Разработчик записал это в «Риски» вместо эскалации. Правка `test_integrity.py` вне зон, поэтому сам код это не блокирует.
-   - Предложение: вынести вопрос Оператору — строкой эскалации либо отдельной задачей с адресом `test_integrity.py:1770`. Учесть, что вторая итерация этот пункт закрывает только так.
+Наблюдение без записи в реестр: проводка `reported=` в вызовах `suite_run._base` и `suite_run._run` (`suite_run.py:563`, `:612`) стражем не закреплена. Мутация `reported=False` в обоих вызовах не роняет `tests/test_component_report_gates.py`: `SuiteRunParseReportedTest` зовёт `parse` напрямую. Последствие то же, что у исходного R1-F5 (minor), сама правка верна — запись не завожу.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/acceptance.py:3167-3176 | Непрошедший `checks_local` переводит исход «неизвестно» / «не начат» в «красный прогон» | `approve --accept-red` принимает неизвестный итог: нарушены требование 3 и инвариант 41 | Не понижать незелёный исход в RED, только дописывать текст проверки; тест в `tests/`. Разработчик (итерация 2): `acceptance_suite` понижает в RED только зелёный итог, незелёный сохраняет исход, вывод проверки дописан к детали; сторожа `tests/test_component_report_gates.py::AcceptanceSuiteChecksLocalTest` (оба `actor`, цепочка `--accept-red` через `fsm._acceptance_full_suite_ok`) |
-| R1-F2 | fixed | orchestrator/acceptance.py:697-710 | К команде с отчётом и `runner: pytest-own` добавляются `long_lived_dir`, `--ignore=…`, `-p no:cacheprovider` | Vitest-компонент с `workdir` получает чужие флаги и сужение набора; `runner` компонента читается (требования 4, 7) | pytest-аргументы — только к pytest-команде; тест точного argv в `tests/`. Разработчик (итерация 2): pytest-аргументы `pytest-own` только при `acceptance.is_pytest_command(head)` и никогда у `pult-vitest`; `suite_run._is_pytest` делегирует тому же помощнику; сторож `ReportArgvTest` (точный argv `pult-vitest` с `workdir`; `junit-xml` своей командой и pytest) |
-| R1-F3 | fixed | orchestrator/acceptance.py:473-530 | Установка в общий `deps/<комп>/<сумма>` без замка | Параллельные первые установки удаляют друг другу дерево: ложные отказы | `flock` вокруг проверки отметки и установки. Разработчик (итерация 2): `fcntl.flock` на `deps/<компонент>/<сумма>.lock` вокруг проверки отметки и установки, отметка перепроверяется под замком (`_install_mark`, `_install_locked`); сторож `InstallLockTest` (две параллельные первые установки — одна установка, оба без отказа) |
-| R1-F4 | fixed | tests/ (нет); acceptance_tests/test_gates_wiring.py | Свойства требований 10, 13, 15 и отказ `--accept-red` на «неизвестно» через `acceptance_suite` стерегутся только разовой планкой | После мержа свойства без сторожа; R1-F1 прошёл незамеченным | Тесты в `tests/` на каждое свойство с заявкой «Ловит мутацию». Разработчик (итерация 2): `tests/test_component_report_gates.py` — `checks_local` в `acceptance_suite` при любом источнике, `--accept-red` на «неизвестно», выбор компонентов гейта мержа по диффу и путям приложений, предел каждого компонента, ключ `suite-run` = ключ гейта с `tools`; каждая заявка проверена временной мутацией (8 мутаций, все красные) |
-| R1-F5 | fixed | orchestrator/suite_run.py:373 | `parse` берёт строки хода сырого вывода раннера у профиля с отчётом | Дубли id и неверный путь в `--failed` у раннера с `-v` (требование 18) | Перечень упавших для вывода с отчётом — только из сводки пульта. Разработчик (итерация 2): `suite_run.parse(..., reported=)` — у профиля с отчётом строки хода сырого вывода не читаются, упавшие только из сводки отчёта; оба вызова в `suite_run` передают признак; сторож `SuiteRunParseReportedTest` |
-| R1-F6 | fixed | orchestrator/advance_gates/test_integrity.py:1770-1792 | Двусторонний прогон гейта не по отчёту для компонента без `runner`; не эскалировано | Требование 8 закрыто только на узле `two_sided.run` | Эскалация / задача Оператору с адресом. Разработчик (итерация 2): код вне зон не тронут; вынесено Оператору готовым предложением задачи-продолжения с адресом `test_integrity.py:1770-1793` и правкой (`acceptance.place_channel`) — PLAN.md, «Предложения системе», первый пункт |
+| R1-F1 | accepted | orchestrator/acceptance.py:3220-3229 | `checks_local` перекрашивал «неизвестно» в RED | — | Исправлено: незелёный исход сохраняется, к детали дописывается текст проверки. Временная мутация (`if not run.green` → `if False`) роняет 3 теста `AcceptanceSuiteChecksLocalTest`, в том числе цепочку `fsm._acceptance_full_suite_ok` с `--accept-red` |
+| R1-F2 | accepted | orchestrator/acceptance.py:742-745 | pytest-аргументы `pytest-own` у не-pytest команды | — | Исправлено. Мутация `own = _own(profile)` роняет 2 теста `ReportArgvTest` |
+| R1-F3 | accepted | orchestrator/acceptance.py:495-530 | Установка без замка | — | Исправлено: `flock` вокруг проверки отметки и установки, перепроверка под замком. Мутация «без `LOCK_EX`» роняет `InstallLockTest` |
+| R1-F4 | accepted | tests/test_component_report_gates.py | Свойства 10, 13, 15 и `--accept-red` стерегла только разовая планка | — | Сторожа в `tests/` с заявками «Ловит мутацию»; заявки F1/F2/F3/F5 подтверждены временными мутациями (см. ниже) |
+| R1-F5 | accepted | orchestrator/suite_run.py:365-375 | `parse` читал строки хода сырого вывода | — | Исправлено: `reported=True` их не читает. Мутация роняет `SuiteRunParseReportedTest` (проводка в вызовах не стерегётся — см. наблюдение в «Замечаниях») |
+| R1-F6 | accepted | orchestrator/advance_gates/test_integrity.py:1770-1793 | Двусторонний прогон гейта не по отчёту для компонента без `runner` | — | Вынесено Оператору предложением задачи с адресом и правкой (PLAN, «Предложения системе»); файл вне зон SPEC, код не тронут — путь, предложенный итерацией 1 |
 
 ## Вердикт
 
-`changes_requested`. Исправить:
-- R1-F1 (blocker): `checks_local` не должен перекрывать исход «неизвестно»;
-- R1-F2: argv компонента с отчётом без pytest-аргументов `pytest-own`;
-- R1-F3: замок установки;
-- R1-F4: сторожа требований 10, 13, 15 и цепочки `--accept-red` в `tests/`;
-- R1-F5, R1-F6 — по возможности: первое кодом, второе эскалацией.
+`approved`. Все записи реестра R1-F1…R1-F6 — `accepted`, новых blocker/major нет.
 
 ## Проверено исполнением
 
-- `artel.py plank-run 01M590GJAF0EDV4NBC4C99MFVH`: 15 passed, код 0.
-- `pytest tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py tests/test_component_report_run.py tests/test_01m58fnwbv25ff26e7az9q9912_components.py tests/test_01m58pg72pg64gs790xm2ews61_doctor_components.py`: 54 passed, 203 subtests.
-- Тесты затронутых модулей, 17 файлов (`test_suite_run.py`, `test_full_suite_reuse.py`, `test_full_suite_profile_timeout.py`, `test_component_checks.py`, `test_pytest_own_result_ids.py`, `test_liveness.py` и долгоживущие файлы задач 01m46c776…, 01m46d5t8…, 01m48wt5x…, 01m4k2767…, 01m4nz5w9…, 01m52eede…, 01m52eefn…, 01m52eehs…, 01m56kcvc… ×2, 01m56tnz3…): 165 passed, 303 subtests.
-- Приложения PLAN (оба блока): `git apply --check` — код 0. После временного применения `tests/test_invariants.py::ReportedOutcomeNotGreenInvariantTest` зелёный. Временная мутация `outcome.verdict` (повтор не учитывается) красит его и `test_ac8_modes_fails_todo_skip_only_and_retries`. Всё возвращено (`git checkout`).
-- R1-F1: скрипт с подменой `_acceptance_suite_run` (исход «неизвестно») и `_task_profile` (`checks_local: [false]`) — `acceptance_suite` вернул `красный прогон`, `is_unknown` = False.
-- R1-F2: `_report_argv` профиля `pult-vitest` с `runner: pytest-own`, `workdir: web` — в argv `src --ignore=src/.artel-plank -p no:cacheprovider`.
-- R1-F5: `suite_run.parse` на выводе `pytest -v` со сводкой отчёта — дубль упавшего с id от `workdir`.
-- `python3 scripts/codebase_map.py`: расхождения с закоммиченной картой нет (без строки `built_at_sha`), карта возвращена.
+- `artel.py plank-run 01M590GJAF0EDV4NBC4C99MFVH`: 15 passed, код выхода 0.
+- `pytest tests/test_component_report_gates.py tests/test_component_report_run.py`: 15 passed, 8 subtests.
+- `pytest` на 7 файлах: `tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py`, `test_suite_run.py`, `test_component_checks.py`, `test_full_suite_reuse.py`, `test_pytest_own_result_ids.py`, `test_01m58fnwbv25ff26e7az9q9912_components.py`, `test_01m58pg72pg64gs790xm2ews61_doctor_components.py`. Итог: 86 passed, 209 subtests.
+- Временные мутации, прогон `tests/test_component_report_gates.py`; код после каждой возвращён, `git status` чист:
+  - F1 (`if not run.green` → `if False`): 3 failed;
+  - F2 (`own = _own(profile)` всегда): 2 failed;
+  - F3 (без `fcntl.flock LOCK_EX`): 1 failed;
+  - F5 (`statuses = _progress(output)` всегда): 1 failed;
+  - F5b (`reported=False` в вызовах `_base`/`_run`): 0 failed — см. наблюдение в «Замечаниях».
+- `python3 scripts/codebase_map.py`: кроме строки `built_at_sha`, расхождений с закоммиченной картой нет; карта возвращена.
 
 ## Предложения системе
 
-- Класс «вызывающий вне зон не передаёт новый канал» (здесь `test_integrity.py` → `two_sided.run`): аналитику стоит включать в зоны всех вызывающих узла, который задача переводит на новый канал, иначе разработчик закрывает требование «местами прогона» только наполовину и уводит остаток в «Риски».
-- Разовая планка, держащая свойства кода (`test_gates_wiring.py`, «Группа: разовый» из-за закрытых узлов), не заменяет сторожа в `tests/`: скил разработчика мог бы явно требовать переноса таких свойств в `tests/` через публичные узлы.
+- Сторож свойства «узел X получает новый признак» стоит писать через публичного вызывающего, а не прямым вызовом узла с признаком. Иначе проводка признака в местах вызова остаётся без сторожа (здесь `suite_run._run`/`_base` → `parse(reported=)`).
