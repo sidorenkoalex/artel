@@ -1,18 +1,19 @@
-# Записка spec_auditor
+# Записка spec_auditor (визит 2, SPEC sha 41889f8a…)
 
 ## Выяснено
-- sha SPEC = 38de666f… подтверждён (git hash-object).
-- Адреса строк SPEC/ТЗ в guard.py, checkpoint.py, preflight.py, fsm.py, amend.py, dry_run.py, fsm_autogate.py, fsm_merge_gate.py, acceptance.py сверены — сходятся.
-- Неверный факт: retro.py:490 зовёт guard.scan_acceptance_tests, НЕ scan_ac_content (SPEC треб. 3).
-- Сторож предпроверки (tests/test_01m4p4zp37wv81410ytzhkqc8d_preflight.py:220-261, 1079): функции guard в теле перехода минус INPUT_FILTERS == функции preflight; фильтр is_extraneous_acceptance_test_file должен остаться в checkpoint; preflight._filtered зовёт фильтр одним аргументом (preflight.py:105) — значит фильтру нужен параметр правила; ссылка на guard.is_extraneous_acceptance_test_file в теле _tests_writing_ac_state покрасит сторож.
-- Промежуток G2а-1→G2а-2: автогейт сегодня у .jsx-планки «пуст» (fsm_autogate.py:263) → Оператор; после G2а-1 видит .jsx, а прогона .jsx ещё нет — вопрос Оператору.
-- docs/codebase-map.md в COMMON_ZONES (config.py:809).
+- sha SPEC = 41889f8a… подтверждён; код на 9da139ee (тот же, что в визите 1).
+- Решения Оператора 1–9 и риск Е2 перенесены в SPEC полностью.
+- Новые адреса (guard.py:2579-2581, :2227; fsm_autogate.py:84; amend.py:930-931; dry_run.py:30-35; fsm_merge_gate.py:425-426; preflight.py:105-106; targets.py:106; retro.py:490) сходятся.
+- «не принято автогейтом» в коде нет: отказ — причина «автогейт: …», действие журнала «автогейт acceptance не пройден» (fsm_autogate.py:380-389). Новая причина → models.autogate_refusal_blame = «не установлена», пару не приостанавливает.
+- Сторож считает только inspect.isfunction из guard: PlankRule/DEFAULT_PLANK_RULE и методы не попадают.
+- Ветка перехода у артели читает все .py (fsm.py:667-668), включая conftest.py/_pult.py — DEFAULT.component_of их отвергает (Е5).
+- Существующих тестов чекпоинта/автогейта/мержа на .jsx-планке нет — ослабления нет.
 
 ## Не сработало
-- grep с `cd` и `$W`-подстановками отклоняется песочницей — использовать абсолютные пути и Read.
+- Bash с несколькими командами (ls, xargs) требует подтверждения — только одиночные команды/Read.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict concerns, guard ок. Главное — Е1 (автогейт до G2а-2), Б1 (retro), пробелы AC-3/AC-10/В1–В3, Г1 (сторож).
+- SPEC-AUDIT.md сдан: status ready, verdict concerns (Б3 форма исхода автогейта, Е4 условие fail-closed, Е5 фильтр ветки у умолчания), guard ок.
 
 ## Чего не хватило
-- Как acceptance.run ведёт себя на планке только из .jsx до G2а-2 (зелено/красно) — по коду не установил за разумное время.
+- Нет перечня «исходов» автогейта как литералов — пришлось сверять по fsm_autogate.py:380-389 и models.py:1001-1032.
