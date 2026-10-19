@@ -108,6 +108,27 @@ schema_version: 5
     - R1-F6: вызывающий `advance_gates/test_integrity.py:1770-1793` вне зон
       задачи — вынесен Оператору предложением отдельной задачи (раздел
       «Предложения системе»), код вне зон не тронут.
+11. **Итерация 3 (возврат с приёмки Оператора на `merge_gate`).** Код не
+    меняется: добавлены сторожа в `tests/test_component_report_gates.py`,
+    все зелёные на коде ветки.
+    - `ChecksLocalFromRecordTest.test_record_checks_local_runs_in_acceptance_suite`:
+      запись с одним компонентом и `checks_local` в `targets.yaml`, без
+      подмены `acceptance._task_profile`; `decide(...).profile.checks_local`
+      непуст, `acceptance_suite` (`actor` `operator` и `fsm`) исполняет
+      проверку записи: код 0 — зелёный, код 3 — «красный прогон» с выводом.
+      Мутация «`_with_component_fields` теряет `checks_local`» — красный.
+    - `ChecksLocalFromRecordTest.test_merge_gate_without_appendices_runs_record_checks_local`:
+      тело `_cmd_approve_merge_gate` с настоящим `_apply_plan_appendices`
+      (приложений нет), шаги до плотницкого мержа — «ок», публикация —
+      стоп-исключение; упавшая проверка — `("stopped",)` и `merge FAILED` с
+      выводом, прошедшая — запись `checks_local компонента` в журнале и
+      гейт идёт дальше. Мутация «вызов `_checks_local_refuse` убран из тела
+      (перенос внутрь `_full_suite_or_refuse`)» — красный.
+    - `EmptyInstallTest`: `test_profile` (`pytest-own`, `junit-xml`) с
+      `install: []` без файла блокировки — зелёный, без отказа и без
+      `deps/` (у компонента `install` — непустая команда, `targets.py:88`,
+      поэтому запись `test_profile`). Мутация `if profile.install is None`
+      (`acceptance.py:480`) — красный.
 
 ## Шаги
 
@@ -127,6 +148,8 @@ schema_version: 5
 7. Приложение инварианта 41.
 8. Итерация 2: замечания R1-F1…F5 кодом и сторожами в `tests/`, R1-F6 —
    предложением задачи Оператору (подход, п. 10).
+9. Итерация 3: сторожа `checks_local` из записи (узел приёмки, гейт мержа
+   без приложений) и пустого `install` (подход, п. 11).
 
 ## Покрытие требований
 
