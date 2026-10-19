@@ -1,13 +1,13 @@
-# Записка spec_auditor
+# Записка spec_auditor (аудит SPEC sha 0020cce9…)
 
 ## Выяснено
-- Падение doctor на записи с 2 компонентами — cli.py:94 `full_suite_timeout_check` → `project_profile.full_suite_limit` (project_profile.py:186-188) поднимает TargetsError на PROFILE_UNREAD multi; `targets.load` (cli.py:88-92) уже перехвачен.
-- `repo_context.profile_of` (только чтение) отдаёт в values лишь `targets.PROFILE_FIELDS` (repo_context.py:171-172) — `tools` туда не входит; запись с >1 компонентом — UNREAD, Profile нет вовсе.
-- Долгоживущий тест tests/test_01m58fnwbv25ff26e7az9q9912_components.py:657-694 требует равенства Profile единственного компонента и test_profile — признак «из components:» в Profile нельзя добавить без поломки равенства; требование 7 против AC-8 неразличимо.
-- Ключ базы: acceptance.py:2319 пишет, suite_run.py:523 читает — SPEC не говорит, входят ли суммы блокировок в base-ключ.
+- Требование 7 кладёт `tools` в `Profile` только через `decide`, но ключ кэша считают по `Profile` из `Profile.from_values(profile_of.values)` в обход `decide`: acceptance.py:2407 (`_task_own_profile` — автогейт приёмки, pull.py:665, plank_run.py:220, amend.py:548/723) и suite_run.py:294 (`_profile_command` — поиск ключа базы, suite_run.py:523). Через `decide` идёт только гейт мержа (fsm_merge_gate.py:832-837). Итог: в проде `tools` в ключ приёмки не попадут, ключ базы гейта мержа (с tools) и suite-run (без) разойдутся — AC-12 невыполним без правки suite_run.py (вне зон).
+- AC-3 не ловит мутацию «сравнение строковым префиксом» (все 4 случая проходят).
+- Имена/гранулярность новых строк doctor и шов подмены запуска инструментов не названы.
+- Факты SPEC о строках кода (cli.py:13-20/94, acceptance.py:2150/2318-2322/2041-2048, suite_run.py:521-524, project_profile.py:184-188, repo_context.py:161-163) подтвердились.
 
 ## Где остановился
-- Вердикт fail, SPEC-AUDIT.md записан, status: ready, guard.py — ок. Шаг завершён.
+- Вердикт fail, SPEC-AUDIT.md записан.
 
 ## Чего не хватило
-- CI-файл sled (.artel/projects/sled/repo/.github/workflows/ci.yml) недоступен на чтение — формат переменной BACKEND_RE не сверен.
+- Карта не показывает, кто строит `Profile` в обход `decide` — нашёл grep'ом `Profile.from_values`.
