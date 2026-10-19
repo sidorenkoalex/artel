@@ -29,7 +29,7 @@ from pathlib import Path
 # такая подмена падает с `AttributeError`. Про отчёт целиком планка
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
-from . import agent_log, alerts, config, explore_metric, retro, spend, store, targets  # noqa: F401
+from . import agent_log, alerts, config, explore_metric, retro, rounds, spend, store, targets  # noqa: F401
 from .advance_gates import test_integrity, two_sided
 from .providers import base as provider_base
 from .providers import claude as claude_provider
@@ -1142,6 +1142,80 @@ def _observation_html(steps: list) -> str:
             f'<tbody>{body}</tbody></table>')
 
 
+# ---------------------------- круги до кода (SPEC 01M59DP2GV3SAN54M562CQY42R)
+#
+# Подсчёт — `orchestrator/rounds.py` по уже выбранному журналу отчёта
+# (`_all_steps`): блок не добавляет ни одного запроса к `steps`.
+
+def _rounds_number(value: float) -> str:
+    return f"{round(value, 2):g}"
+
+
+def _rounds_summary(values: list, fmt=_rounds_number) -> tuple:
+    return fmt(statistics.median(values)), fmt(statistics.mean(values))
+
+
+def _rounds_table_html(entries: list) -> str:
+    """Таблица одного проекта: строка на задачу и строка итога — медиана и
+    среднее каждого числа; составные столбцы — «X / Y» в обеих формах."""
+    rows = []
+    for row, counted in entries:
+        hot = ' class="rounds-hot"' if rounds.over_threshold(counted) else ""
+        rows.append(
+            f'<tr{hot}><td>{_esc(row["id"])}</td><td>{_esc(_project(row))}</td>'
+            f'<td>{counted.audits}</td>'
+            f'<td>{counted.audit_returns} / {counted.gate_returns}</td>'
+            f'<td>{counted.escalations}</td><td>{counted.review_iters}</td>'
+            f'<td>{_usd(counted.cost_before_plank)} / '
+            f'{_usd(counted.cost_total)}</td></tr>')
+    counts = [counted for _row, counted in entries]
+
+    def summary(field: str, fmt=_rounds_number) -> tuple:
+        return _rounds_summary([getattr(c, field) for c in counts], fmt)
+
+    def cell(*fields: str, fmt=_rounds_number) -> str:
+        parts = [summary(field, fmt) for field in fields]
+        median = " / ".join(p[0] for p in parts)
+        mean = " / ".join(p[1] for p in parts)
+        return f'<td>медиана {median}<br>среднее {mean}</td>'
+
+    rows.append(
+        '<tr class="rounds-total"><td colspan="2">Итог: медиана и среднее</td>'
+        f'{cell("audits")}{cell("audit_returns", "gate_returns")}'
+        f'{cell("escalations")}{cell("review_iters")}'
+        f'{cell("cost_before_plank", "cost_total", fmt=_usd)}</tr>')
+    return (
+        '<table class="rounds-table">'
+        '<tr><th>Задача</th><th>Проект</th><th>Аудиты SPEC</th>'
+        '<th>Возвраты аудита / с гейта SPEC</th><th>Эскалации</th>'
+        '<th>Итерации ревью</th><th>Расход до планки / всего</th></tr>'
+        + "".join(rows) + '</table>')
+
+
+def _rounds_html(tasks: list, steps: list) -> str:
+    """Блок «Круги до кода» (требования 2-5): задачи, созданные за
+    `OPERATOR_WINDOW_DAYS` дней; при задачах больше одного проекта —
+    таблица на проект, как прочие блоки отчёта."""
+    window = [row for row in tasks if _in_window(row["created_at"])]
+    if not window:
+        return (f'<p class="empty">Задач, созданных за последние '
+                f'{OPERATOR_WINDOW_DAYS} дней, нет.</p>')
+    by_task: dict = {}
+    for s in steps:
+        by_task.setdefault(s["task_id"], []).append(s)
+
+    def entries(rows: list) -> list:
+        return [(row, rounds.count(by_task.get(row["id"], []), row["review_iters"]))
+                for row in rows]
+
+    # Разбивка — по тому же признаку, что у `_metrics_html`: задачи больше
+    # одного проекта у пульта, не только в окне.
+    if len({_project(row) for row in tasks}) == 1:
+        return _rounds_table_html(entries(window))
+    return "".join(f'<h3>{_esc(project)}</h3>{_rounds_table_html(entries(rows))}'
+                   for project, rows in _by_project(window))
+
+
 def _map_size_table_html(rows: list) -> str:
     body_rows = "".join(
         '<tr>'
@@ -1289,6 +1363,12 @@ _STYLE = """
   table.map-size-table th, table.map-size-table td {
     border: 1px solid var(--border); padding: 4px 8px; text-align: left;
   }
+  table.rounds-table { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+  table.rounds-table th, table.rounds-table td {
+    border: 1px solid var(--border); padding: 4px 8px; text-align: left;
+  }
+  table.rounds-table tr.rounds-hot td { background: #fdecec; font-weight: 600; }
+  table.rounds-table tr.rounds-total td { color: var(--muted); }
   footer { padding: 0 24px 30px; font-size: 11px; color: var(--muted); }
 """
 
@@ -1334,6 +1414,9 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         f"{_observation_html(steps)}</section>\n"
         '<section class="panel"><h2>Рост карты кодовой базы</h2>'
         f"{map_growth_html}</section>\n"
+        f'<section class="panel"><h2>Круги до кода (задачи последних '
+        f'{OPERATOR_WINDOW_DAYS} дней)</h2>'
+        f'<div class="metrics">{_rounds_html(tasks, steps)}</div></section>\n'
         "</main>\n"
         "<footer>Сгенерировано командой `report` из state.db — "
         "срез на момент запуска, история прежних отчётов не хранится."
