@@ -560,13 +560,14 @@ def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
 
     `command` — начало команды прогона из профиля тестов проекта (SPEC
     01M45FJVGQT1K0P8HDEXZX6HS7, требование 6) либо сам профиль
-    `pytest-own` — он идёт в сбор как есть, не сворачиваясь в список (SPEC
-    01M52EEHSRD93WMPHWB5VJYRKD); `None` — команда пульта (проект без
+    `pytest-own` или профиль с отчётом — он идёт в сбор как есть, не
+    сворачиваясь в список (SPEC 01M52EEHSRD93WMPHWB5VJYRKD,
+    01M590GJAF0EDV4NBC4C99MFVH); `None` — команда пульта (проект без
     профиля)."""
     refusal = _tests_writing_artifact_source_gate(acc_tdir, task_id)
     if refusal is not None:
         return refusal
-    own = acceptance._own(command)
+    own = acceptance._own(command) or acceptance._reported(command)
     kwargs = ({"command": own} if own is not None
               else {"command": list(command)} if command else {})
     if extra:
