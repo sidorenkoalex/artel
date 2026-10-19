@@ -11,7 +11,7 @@ from scripts import guard
 from . import (alerts, artifact_branch, budget, config, cycle_hint,
               gitcmd, idgen, liveness, merge_after, merge_queue, models,
               providers, repo_context, retro, runner,
-              store, targets, workspace, zone_lock)
+              store, targets, tz_check, workspace, zone_lock)
 from .advance_gates import spec_audit
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
@@ -242,6 +242,38 @@ def _tz_path_refusal(tz_path: str, tz_raw: str,
         lines.append(f"ТЗ {tz_path}: в «Зоны:» {', '.join(protected)} — "
                      f"{guard.PROTECTED_ZONE_REFUSAL}")
     return "\n".join(lines) if lines else None
+
+
+# Граница кандидатов проверки вызывающих (SPEC 01M598KY8V2P2GRD5Q67DRAZNA,
+# требование 5.1): первая строка, начинающаяся меткой классифицирующего
+# раздела, — имена с неё и ниже уже классифицированы самим ТЗ.
+_TZ_CANDIDATE_BOUNDARY = re.compile(
+    r"^(?:" + "|".join((_TZ_ZONES_LABEL,) + _TZ_DECLARING_LABELS) + r"):",
+    re.M)
+
+
+def _tz_content_check(tz_raw: str, target: str, strict: bool) -> str | None:
+    """Проверка содержания ТЗ по дереву проекта (SPEC
+    01M598KY8V2P2GRD5Q67DRAZNA, требования 3, 6): отказ либо, под
+    `strict`, любое предупреждение — `sys.exit` с находками; иначе находки
+    печатаются, а возвращается текст для записи журнала задачи (`None` —
+    находок нет, журнал не пишется)."""
+    boundary = _TZ_CANDIDATE_BOUNDARY.search(tz_raw)
+    candidate_text = tz_raw[:boundary.start()] if boundary else tz_raw
+    declared_text, _ = _tz_sections(tz_raw, _TZ_DECLARING_LABELS)
+    report = tz_check.check(tz_raw, candidate_text, target,
+                            _tz_zone_items(tz_raw), declared_text)
+    if report is None or report.empty():
+        return None
+    text = "\n".join(report.lines())
+    if report.refusals:
+        sys.exit(f"{text}\nnew: ссылки ТЗ не сходятся с деревом проекта — "
+                 f"задача не заведена")
+    if strict and report.warnings:
+        sys.exit(f"{text}\nnew: --strict-tz — предупреждения проверки ТЗ "
+                 f"отказывают, задача не заведена")
+    print(text)
+    return text
 
 
 def _tz_calibration_inputs(tz_raw: str) -> tuple[float, int, int] | None:
@@ -517,7 +549,7 @@ def _project_line_reasons(tz_raw: str, target: str) -> list[str]:
 
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
-           model_set: str | None = None) -> str:
+           model_set: str | None = None, strict_tz: bool = False) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -561,6 +593,10 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     ветки и строки БД — отказ не оставляет ни того, ни другого. Имя и
     состав набора на момент `new` пишутся в строку задачи той же записью, что
     заводит саму строку (`store.insert_task`).
+
+    `strict_tz` — `new --strict-tz` (SPEC 01M598KY8V2P2GRD5Q67DRAZNA,
+    требование 6): предупреждения проверки содержания ТЗ становятся
+    отказом.
     """
     # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
     # 2): до ТЗ, клона, id, ссылки документов и строки БД.
@@ -617,6 +653,12 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     _clone, clone_error = workspace.ensure_clone(target)
     if clone_error is not None:
         sys.exit(f"new: {clone_error} — задача не заведена")
+    # Содержание ТЗ по дереву проекта (SPEC 01M598KY8V2P2GRD5Q67DRAZNA,
+    # требование 1) — после клона, которым оно читается, и до id: отказ не
+    # оставляет следов. Канарейка не проверяется — её ТЗ учебный шаблон.
+    tz_check_detail = None
+    if tz_raw is not None and not canary:
+        tz_check_detail = _tz_content_check(tz_raw, target, strict_tz)
     task_id = idgen.new_task_id()
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
@@ -624,6 +666,9 @@ def cmd_new(title: str, tz_path: str | None = None, *,
                  journal_detail=f"{title} (проект {target})",
                  model_set=model_set,
                  set_members=set_members)
+    if tz_check_detail is not None:
+        store.journal(conn, task_id, "operator", tz_check.ACTION,
+                      tz_check_detail)
     _ensure_task_worktree(conn, task_id, target)
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)

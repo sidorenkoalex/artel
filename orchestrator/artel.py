@@ -1438,7 +1438,7 @@ def _tz_arg(rest: list) -> str | None:
 
 
 _NEW_USAGE = ('new "<название>" [--tz <файл>] [--set <набор>] '
-              '[--target <имя>]')
+              '[--target <имя>] [--strict-tz]')
 
 
 def _parse_new_args(rest: list) -> tuple | None:
@@ -1628,7 +1628,17 @@ def _new_target_arg(rest: list) -> tuple[list, str | None]:
     return rest[:idx] + rest[idx + 2:], rest[idx + 1]
 
 
+def _new_strict_tz_arg(rest: list) -> tuple[list, bool]:
+    """(argv `new` без флага `--strict-tz`, флаг поднят) — SPEC
+    01M598KY8V2P2GRD5Q67DRAZNA, требование 6; снимается до
+    `_parse_new_args`, как `--set`/`--target`, в любом месте argv."""
+    if "--strict-tz" not in rest:
+        return rest, False
+    return [arg for arg in rest if arg != "--strict-tz"], True
+
+
 def _cmd_new(rest: list) -> None:
+    rest, strict_tz = _new_strict_tz_arg(rest)
     rest, model_set = _new_set_arg(rest)
     rest, target = _new_target_arg(rest)
     parsed = _parse_new_args(rest)
@@ -1637,9 +1647,12 @@ def _cmd_new(rest: list) -> None:
     title, tz_path = parsed
     target = catalog.new_cli_target(target)
     # Без проекта — прежний вызов без keyword `target=` (требование 1):
-    # `cmd_new(target=None)` и есть артель.
-    project = {} if target is None else {"target": target}
-    catalog.cmd_new(title, tz_path=tz_path, model_set=model_set, **project)
+    # `cmd_new(target=None)` и есть артель. Флаг `--strict-tz` — тем же
+    # приёмом: без него вызов прежний.
+    options = {} if target is None else {"target": target}
+    if strict_tz:
+        options["strict_tz"] = True
+    catalog.cmd_new(title, tz_path=tz_path, model_set=model_set, **options)
 
 
 _SET_MODELS_USAGE = "set-models <id> <набор>|--default"
