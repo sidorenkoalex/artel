@@ -215,7 +215,8 @@ class PlankConsumersSandbox(callers.ProfileCallersSandbox):
     def write_disk_plank(self, task: str, files: dict) -> Path:
         """SPEC и планка задачи на диске `config.TASKS/<id>/` — источник
         пути «диск» выхода из `tests_writing`."""
-        tdir = config.TASKS / task
+        # `config.TASKS` песочницы — это `self.root / "tasks"` (tests/sandbox.py).
+        tdir = self.root / "tasks" / task
         (tdir / "acceptance_tests").mkdir(parents=True, exist_ok=True)
         spec, _ = artifact_branch.show(task, artifact_branch.ref_head(task),
                                        f"tasks/{task}/SPEC.md")
