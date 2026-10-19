@@ -221,6 +221,36 @@ def _profile_or_exit(conn, task_id: str):
     return decision.profile
 
 
+def _plank_rule_or_exit(conn, task_id: str):
+    """Правило планки проекта задачи; отказ построения (SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 2) — отказ команды до любой
+    записи, тем же путём, что отказ профиля."""
+    rule = project_profile.plank_rule(store.task_target(conn, task_id))
+    if rule.refusal:
+        store.journal(conn, task_id, "operator", "amend-tests отклонён",
+                      rule.refusal)
+        sys.exit(f"[{task_id}] amend-tests: отказ — {rule.refusal}")
+    return rule
+
+
+def _rule_test_files(tdir: Path, rule) -> list[tuple[str, str]]:
+    """(путь относительно `tdir`, текст) тестовых файлов планки по правилу
+    не по умолчанию — перечень маркера красноты (требование 7); метка — как
+    у `guard.acceptance_test_files`."""
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files = []
+    for f in sorted(tests_dir.iterdir()):
+        if not f.is_file() or not rule.is_test(f.name):
+            continue
+        try:
+            files.append((str(f.relative_to(tdir)), f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return files
+
+
 def _refuse_group_lines(conn, task_id: str, errors: list[str]) -> None:
     """Отказ по строке группы — тем же приёмом, что `_refuse_traceability`
     (журнал актором `operator`, не `AMEND_ACTION`)."""
@@ -534,14 +564,18 @@ def _long_lived_errors(task_id: str, files: dict[str, str],
 
 def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
                      long_lived: dict[str, str],
-                     plank_files: list[tuple[str, str]]) -> str:
+                     plank_files: list[tuple[str, str]], rule=None) -> str:
     """Сухой сбор и прогон планки вместе с долгоживущими файлами — как
     `in_dev -> verifying`; хвост прогона для журнала. Красный прогон
     допускается прежним правилом: каждый файл планки несёт маркер
     «Красен до реализации»/«Зелёный с рождения». Долгоживущий файл обязан
     нести маркер, только если упал он сам (или имена упавших из вывода
     не прочитаны): зелёный долгоживущий файл рядом с ещё красной планкой —
-    обычное состояние задачи в разработке, не повод для отказа."""
+    обычное состояние задачи в разработке, не повод для отказа.
+
+    `rule` не по умолчанию — маркер красноты планки по отдельному перечню
+    тестовых файлов правила (SPEC 01M59KMPG2ZMK10V556VZVQD65, требование
+    7); `plank_files` строк группы и долгоживущих не меняются."""
     extra = sorted(long_lived)
     # Профиль `pytest-own` проекта задачи — каналом `command` (SPEC
     # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — прежний вызов без него.
@@ -556,7 +590,10 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
         failed = acceptance.failed_test_lines(tail)
         suspects = [(rel, text) for rel, text in sorted(long_lived.items())
                     if not failed or any(rel in line for line in failed)]
-        marker_errors = (guard.redness_marker_errors_from_files(plank_files)
+        redness_files = (plank_files if rule is None or rule.is_default
+                         else _rule_test_files(acc_tdir, rule))
+        marker_errors = (guard.redness_marker_errors_from_files(redness_files,
+                                                                rule=rule)
                          + guard.redness_marker_errors_from_files(suspects))
         if marker_errors:
             _refuse(conn, task_id, "прогон планки и долгоживущих файлов не "
@@ -607,6 +644,7 @@ def _push_code_head(conn, t, task_id: str) -> None:
 
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     profile = _profile_or_exit(conn, task_id)
+    rule = _plank_rule_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
@@ -684,14 +722,16 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     with acceptance.plank_helper_laid_out(task_id, wt_path):
         if manifest:
             _amend_with_long_lived(conn, t, task_id, reason, wt_path, disk,
-                                   manifest, long_changed, removed, profile)
+                                   manifest, long_changed, removed, profile,
+                                   rule)
         else:
             _amend_plank_only(conn, t, task_id, reason, wt_path, disk,
-                              removed)
+                              removed, rule)
 
 
 def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
-                      disk: dict[str, bytes], removed: list[str]) -> None:
+                      disk: dict[str, bytes], removed: list[str],
+                      rule=None) -> None:
     """Правка из worktree задачи без долгоживущих файлов: проверки планки,
     сухой сбор и прогон — до записи; затем коммит в ссылку документов и
     сдвиг `tests_locked_sha`."""
@@ -702,7 +742,7 @@ def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
     # коммит 33aeb202: `amend-tests` сдвигал лок мимо этой проверки).
     created_spec = _materialize_spec_if_missing(task_id, tdir)
     try:
-        trace_errors = guard.acceptance_traceability_errors(tdir)
+        trace_errors = guard.acceptance_traceability_errors(tdir, rule=rule)
     finally:
         if created_spec is not None:
             created_spec.unlink(missing_ok=True)
@@ -732,7 +772,7 @@ def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
         # реализации»/«Зелёный с рождения» (тем же разбором, что выход
         # из tests_writing, guard.scan_redness_markers): такой файл
         # ещё не имеет кода под собой, и это норма, не поломка правки.
-        marker_errors = guard.scan_redness_markers(tdir)
+        marker_errors = guard.scan_redness_markers(tdir, rule=rule)
         if marker_errors:
             sys.exit(
                 f"[{task_id}] amend-tests: отказ — прогон "
@@ -768,7 +808,7 @@ def _drop_fixed_task_dir(task_id: str, wt_path: Path) -> None:
 def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
                            disk: dict[str, bytes], manifest: dict[str, str],
                            long_changed: list[str], removed: list[str],
-                           profile=None) -> None:
+                           profile=None, rule=None) -> None:
     """Правка из worktree задачи с непустым перечнем лока (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): проверки итогового
     состояния планки и долгоживущих файлов — до любой записи; затем строго
@@ -795,7 +835,7 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     created_spec = _materialize_spec_if_missing(task_id, tdir)
     try:
         trace_errors = guard.acceptance_traceability_errors(
-            tdir, list(files.values()))
+            tdir, list(files.values()), rule=rule)
     finally:
         if created_spec is not None:
             created_spec.unlink(missing_ok=True)
@@ -812,7 +852,8 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
                                 [text for _rel, text in plank_files], profile)
     if errors:
         _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
-    tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files)
+    tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files,
+                            rule)
 
     if long_changed:
         if not _commit_long_lived(
@@ -905,7 +946,8 @@ def _branch_tests_snapshot(rev: str, rel_tests_dir: str,
 
 def _branch_traceability_errors(task_id: str, rev: str,
                                 tests_snapshot: dict[str, str],
-                                extra_sources: list[str] = ()) -> list[str] | None:
+                                extra_sources: list[str] = (),
+                                rule=None) -> list[str] | None:
     """Ошибки трассируемости AC (SPEC требование 2, AC-3) по SPEC.md и
     `acceptance_tests/` ГОЛОВЫ артефактной ветки — тем же ядром, что
     рабочая копия использует через `guard.acceptance_traceability_errors`
@@ -921,17 +963,26 @@ def _branch_traceability_errors(task_id: str, rev: str,
 
     `extra_sources` — тексты долгоживущих файлов задачи с головы кодовой
     ветки: их методы `test_ac<n>_…` покрывают критерии наравне с планкой
-    (тот же контракт, что у `guard.acceptance_traceability_errors`)."""
+    (тот же контракт, что у `guard.acceptance_traceability_errors`).
+
+    `rule` не по умолчанию — тестовые файлы планки по правилу (SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 7)."""
     spec_text, _reason = artifact_branch.show(task_id, rev,
                                               f"tasks/{task_id}/SPEC.md")
     if spec_text is None:
         return None
     meta = yamlmini.frontmatter(spec_text) or {}
-    sources = [text for rel, text in tests_snapshot.items()
-              if Path(rel).name.startswith("test_")] + list(extra_sources)
-    tested, markers = guard.scan_ac_content(sources)
+    if rule is None or rule.is_default:
+        sources = [text for rel, text in tests_snapshot.items()
+                   if Path(rel).name.startswith("test_")]
+    else:
+        prefix = f"tasks/{task_id}/acceptance_tests/"
+        sources = [(rel, text) for rel, text in tests_snapshot.items()
+                   if rel.startswith(prefix) and rule.is_test(rel[len(prefix):])]
+    tested, markers = guard.scan_ac_content(sources + list(extra_sources),
+                                            rule=rule)
     return guard.traceability_errors_from_content(spec_text, meta, tested,
-                                                   markers)
+                                                   markers, rule=rule)
 
 
 def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None:
@@ -954,6 +1005,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     Голова, сдвинутая мимо пульта, лок не получает: правку планки ролью
     узаконивает не эта команда, а `approve <id> <sha>`."""
     profile = _profile_or_exit(conn, task_id)
+    rule = _plank_rule_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
     t = store.get_task(conn, task_id)
 
@@ -1018,7 +1070,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     # tests_locked_sha (копилка 11.09, тот же путь мимо проверки, что и
     # у worktree-пути AC-1).
     trace_errors = _branch_traceability_errors(task_id, new_sha, new_snapshot,
-                                               list(head_files.values()))
+                                               list(head_files.values()), rule)
     if trace_errors is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"tasks/{task_id}/SPEC.md")
@@ -1034,7 +1086,8 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
         _refuse_group_lines(conn, task_id, group_errors)
     if long_diverged:
         _check_code_head_long_lived(conn, t, task_id, branch, code_head,
-                                    head_files, manifest, plank_files, profile)
+                                    head_files, manifest, plank_files, profile,
+                                    rule)
         _push_code_head(conn, t, task_id)
 
     if manifest:
@@ -1066,7 +1119,7 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                                 code_head: str, head_files: dict[str, str],
                                 manifest: dict[str, str],
                                 plank_files: list[tuple[str, str]],
-                                profile=None) -> None:
+                                profile=None, rule=None) -> None:
     """Проверки требования 1 по долгоживущим файлам головы кодовой ветки
     для `--from-branch` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
     статические — по текстам из git; сухой сбор и прогон — в worktree
@@ -1095,4 +1148,4 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                  f"кодовой ветки — закоммить правку или верни файлы как были")
     with acceptance.plank_in_code_copy(task_id, docs_branch, wt_path) as acc_tdir:
         _collect_and_run(conn, task_id, acc_tdir, wt_path, head_files,
-                         plank_files)
+                         plank_files, rule)

@@ -44,15 +44,26 @@ STRAY_ACCEPTANCE_FILES_ACTION = "посторонние файлы в катал
 STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX = "в каталоге планки посторонние файлы: "
 
 
-def _is_stray_acceptance_test_file(task_rel: str) -> bool:
+def _is_stray_acceptance_test_file(task_rel: str, rule=None) -> bool:
     """`task_rel` — путь относительно `tasks/<id>/` (например
     `acceptance_tests/docs/codebase-map.md` или `PLAN.md`). `True` — файл
     внутри `acceptance_tests/`, не входящий в разрешённый набор первого
-    уровня; файлы вне `acceptance_tests/` этим правилом не задеты вовсе."""
+    уровня; файлы вне `acceptance_tests/` этим правилом не задеты вовсе.
+    `rule` — правило планки проекта задачи (SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 6)."""
     if not task_rel.startswith(_ACCEPTANCE_TESTS_DIR):
         return False
     inner = task_rel[len(_ACCEPTANCE_TESTS_DIR):]
-    return guard.is_extraneous_acceptance_test_file(inner)
+    return guard.is_extraneous_acceptance_test_file(inner, rule)
+
+
+def _plank_rule(conn, task_id: str):
+    """Правило планки проекта задачи; при отказе построения — умолчание
+    (оно строже) и запись причины в журнал (SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 2)."""
+    rule = project_profile.plank_rule(store.task_target(conn, task_id))
+    project_profile.journal_plank_default(conn, task_id, "orchestrator", rule)
+    return rule
 
 
 # RETRO.md первого уровня `tasks/<id>/` — легитимный наравне с
@@ -1049,9 +1060,12 @@ def _journal_stray_step_artifacts(conn, task_id: str, files: dict[str, bytes],
     выкладка начала шага, против которой решается «написана шагом».
     """
     task_prefix = f"tasks/{task_id}/"
+    # Запись о взятом умолчании — до записи о посторонних файлах: гейт
+    # выхода из `tests_writing` сверяет ПОСЛЕДНЮЮ запись визита с ней.
+    rule = _plank_rule(conn, task_id)
     stray = sorted(
         rel[len(task_prefix):] for rel in files
-        if _is_stray_acceptance_test_file(rel[len(task_prefix):]))
+        if _is_stray_acceptance_test_file(rel[len(task_prefix):], rule))
     if stray:
         files = {rel: content for rel, content in files.items()
                  if rel[len(task_prefix):] not in stray}

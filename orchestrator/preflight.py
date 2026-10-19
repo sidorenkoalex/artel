@@ -102,8 +102,8 @@ def _task_row(arg: str):
         conn.close()
 
 
-def _filtered(rel: str) -> bool:
-    return any(input_filter(rel) for input_filter in INPUT_FILTERS)
+def _filtered(rel: str, rule=None) -> bool:
+    return any(input_filter(rel, rule) for input_filter in INPUT_FILTERS)
 
 
 def _read(path: Path) -> str | None:
@@ -113,16 +113,21 @@ def _read(path: Path) -> str | None:
         return None
 
 
-def _plank_py_files(docs: Path) -> list[tuple[str, str]]:
+def _plank_py_files(docs: Path, rule) -> list[tuple[str, str]]:
     """(путь от `acceptance_tests/`, текст) файлов `.py` черновика планки,
-    которые автокоммит перенёс бы в ссылку документов."""
+    которые автокоммит перенёс бы в ссылку документов. Правило планки не
+    по умолчанию (SPEC 01M59KMPG2ZMK10V556VZVQD65, требование 7) — файлы
+    компонентов правила, не только `.py`."""
     plank = docs / PLANK_DIR
     if not plank.is_dir():
         return []
     files = []
-    for path in sorted(plank.rglob("*.py")):
+    pattern = "*.py" if rule.is_default else "*"
+    for path in sorted(plank.rglob(pattern)):
         rel = path.relative_to(plank).as_posix()
-        if not path.is_file() or _filtered(rel):
+        if not path.is_file() or _filtered(rel, rule):
+            continue
+        if not (rule.is_default or rule.owns(rel)):
             continue
         text = _read(path)
         if text is not None:
@@ -152,21 +157,24 @@ def _long_lived_files(task_id: str, code_copy: Path,
 
 
 def _traceability(task_id: str, docs: Path, plank: list[tuple[str, str]],
-                  long_lived: list[tuple[str, str]]) -> list[str]:
+                  long_lived: list[tuple[str, str]], rule) -> list[str]:
     """Тем же ядром, что ветко-корректный путь `fsm._tests_writing_ac_state`:
-    источники — все `.py` планки, долгоживущие тексты покрывают AC."""
+    источники — все `.py` планки (у правила не по умолчанию — тестовые
+    файлы по правилу), долгоживущие тексты покрывают AC."""
     spec_text = _read(docs / "SPEC.md")
     if spec_text is None:
         return [f"tasks/{task_id}/SPEC.md: не прочитан с диска каталога "
                 f"документов {docs}"]
     extra_tested, extra_markers = guard.scan_ac_content(
         [text for _rel, text in long_lived])
-    tested, markers = guard.scan_ac_content([text for _rel, text in plank])
+    sources = ([text for _rel, text in plank] if rule.is_default
+               else [(rel, text) for rel, text in plank if rule.is_test(rel)])
+    tested, markers = guard.scan_ac_content(sources, rule=rule)
     tested = tested | extra_tested
     markers = {**extra_markers, **markers}
     meta = yamlmini.frontmatter(spec_text) or {}
     return guard.traceability_errors_from_content(spec_text, meta, tested,
-                                                  markers)
+                                                  markers, rule=rule)
 
 
 def _plank_label(task_id: str, rel: str) -> str:
@@ -228,11 +236,15 @@ def cmd_preflight(arg: str) -> None:
     refused = False
     decision = project_profile.decide(target)
     profile = decision.profile
+    # Отказ построения правила планки отказывает и переход (SPEC
+    # 01M59KMPG2ZMK10V556VZVQD65, требование 2); проверки ниже — по
+    # умолчанию.
+    rule = project_profile.plank_rule(target)
+    profile_errors = [rule.refusal] if rule.refusal else []
     if decision.refusal:
-        refused = _report(CHECK_PROFILE, [decision.refusal,
-                                          project_profile.refusal_hint(task_id)])
-    else:
-        _report(CHECK_PROFILE, [])
+        profile_errors = [decision.refusal, *profile_errors,
+                          project_profile.refusal_hint(task_id)]
+    refused = _report(CHECK_PROFILE, profile_errors)
 
     long_lived: list[tuple[str, str]] = []
     long_lived_read_errors: list[str] = []
@@ -244,12 +256,13 @@ def cmd_preflight(arg: str) -> None:
         else:
             print(f"рабочей копии кода {code_copy} нет — долгоживущих файлов нет")
 
-    plank = _plank_py_files(docs)
+    plank = _plank_py_files(docs, rule)
     refused |= _report(CHECK_TRACEABILITY,
-                       _traceability(task_id, docs, plank, long_lived))
+                       _traceability(task_id, docs, plank, long_lived, rule))
     refused |= _report(CHECK_REDNESS, guard.redness_marker_errors_from_files(
         [(_plank_label(task_id, rel), text) for rel, text in plank
-         if Path(rel).name.startswith("test_")]))
+         if (Path(rel).name.startswith("test_") if rule.is_default
+             else rule.is_test(rel))], rule=rule))
     refused |= _report(CHECK_ID_FORMAT, guard.id_format_sample_errors(
         [(_plank_label(task_id, rel), text) for rel, text in plank]))
 

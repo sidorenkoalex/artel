@@ -16,13 +16,18 @@ Read-only, тот же класс команд, что `status`/`log` (треб�
 ветки»: расхождение источников разбора между этой командой и переходами
 FSM/сводкой гейта acceptance (`orchestrator/acceptance.py::summary`)
 невозможно по построению.
+
+Тестовые файлы, имена тестов и пометки — по правилу планки проекта задачи
+(`project_profile.plank_rule`, SPEC 01M59KMPG2ZMK10V556VZVQD65, требование
+8): у компонента с меткой `AC-<n>: ` имена тестов — литералы вызовов
+(`guard.plank_test_names`); у правила-умолчания — прежний `test_*.py`.
 """
 import sys
 from pathlib import Path
 
 from scripts import guard
 
-from . import gitcmd, store, workspace
+from . import gitcmd, project_profile, store, workspace
 
 DRY_RUN_MARKER = "сухой прогон — не является прохождением приёмки"
 
@@ -47,8 +52,11 @@ def cmd_acceptance_dry_run(task_id: str) -> None:
                  f"{branch!r} не существует, приёмочные тесты недоступны")
 
     prefix = f"tasks/{task_id}/acceptance_tests"
+    rule = project_profile.plank_rule(store.task_target(conn, task_id))
     paths = gitcmd.ls_tree_files(branch, prefix, repo=repo)
-    test_paths = sorted(p for p in (paths or []) if _is_test_file(p))
+    test_paths = sorted(p for p in (paths or [])
+                        if (_is_test_file(p) if rule.is_default
+                            else rule.is_test(p[len(prefix) + 1:])))
     if not test_paths:
         sys.exit(f"[{task_id}] сухой прогон приёмки: отказ — на ветке "
                  f"{branch!r} нет каталога {prefix}/ (или в нём нет "
@@ -60,20 +68,28 @@ def cmd_acceptance_dry_run(task_id: str) -> None:
         sys.exit(f"[{task_id}] сухой прогон приёмки: отказ — SPEC.md "
                  f"ветки {branch!r} не прочитан: {spec_reason}")
 
-    sources: list[str] = []
+    sources: list = []
     file_methods: list[tuple[str, list[str]]] = []
     for path in test_paths:
         text, _ = gitcmd.show(branch, path, repo=repo)
         if text is None:
             continue
-        sources.append(text)
-        file_methods.append((Path(path).name, guard.TEST_METHOD.findall(text)))
+        name = Path(path).name
+        if rule.is_default:
+            sources.append(text)
+        else:
+            sources.append((path, text))
+        file_methods.append((name, guard.plank_test_names(text)
+                             if rule.is_labelled(name)
+                             else guard.TEST_METHOD.findall(text)))
 
-    tested, markers = guard.scan_ac_content(sources)
+    tested, markers = guard.scan_ac_content(sources, rule=rule)
     ac_numbers = sorted(int(n) for n in guard.AC_ITEM.findall(
         guard.section_body(spec_text, "Критерии приёмки")))
 
     print(f"[{task_id}] {DRY_RUN_MARKER} (ветка {branch})")
+    if rule.refusal:
+        print(f"правило планки — умолчание: {rule.refusal}")
     print()
     print(f"Тестовые файлы и методы ({len(file_methods)} файл(ов)):")
     for name, methods in file_methods:

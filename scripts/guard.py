@@ -25,6 +25,7 @@ import math
 import re
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -208,6 +209,113 @@ AC_MARKER = re.compile(
 # ниже (после `acceptance_traceability_errors`) используют этот образец.
 INDENTED_AC_MARKER = re.compile(
     r"^[ \t]+#\s*AC-(\d+):\s*(manual|skip|escalate|ci)\b", re.M)
+
+# Разметка файла не-pytest компонента планки (SPEC 01M59KMPG2ZMK10V556VZVQD65,
+# требование 4): тест критерия — вызов `it`/`test` в начале строки (отступ
+# допустим) с цепочкой `.concurrent`/`.sequential` и необязательным
+# `.each(…)`, чей первый строковый аргумент начинается строго с `AC-<n>: `;
+# пометка — `// AC-<n>: …` в начале строки, тем же разбором, что
+# `AC_MARKER`. Голова вызова — регуляркой, скобки `.each(…)` и литерал —
+# разбором текста (`plank_test_names`): таблица `.each` бывает многострочной.
+TEST_CALL_HEAD = re.compile(
+    r"^[ \t]*(?:it|test)(?:\.(?:concurrent|sequential))*", re.M)
+AC_LABEL_LITERAL = re.compile(r"AC-(\d+): ")
+AC_SLASH_MARKER = re.compile(
+    r"^//[^\S\n]*AC-(\d+):[^\S\n]*(manual|skip|escalate|ci)\b[^\S\n]*"
+    r"(?:[—-]+[^\S\n]*(.*))?", re.M)
+INDENTED_SLASH_AC_MARKER = re.compile(
+    r"^[ \t]+//[^\S\n]*AC-(\d+):[^\S\n]*(manual|skip|escalate|ci)\b", re.M)
+_JS_QUOTES = "'\"`"
+
+
+def _skip_js_string(source: str, i: int) -> int | None:
+    """Индекс за закрывающей кавычкой строки, открытой в `source[i]`;
+    `None` — строка не закрыта (у `'`/`"` — до конца строки файла)."""
+    quote = source[i]
+    j = i + 1
+    while j < len(source):
+        ch = source[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == quote:
+            return j + 1
+        if ch == "\n" and quote != "`":
+            return None
+        j += 1
+    return None
+
+
+def _closing_paren(source: str, i: int) -> int | None:
+    """Индекс `)`, парной `(` в `source[i]`, мимо скобок внутри строк;
+    `None` — пары нет."""
+    depth = 0
+    j = i
+    while j < len(source):
+        ch = source[j]
+        if ch in _JS_QUOTES:
+            end = _skip_js_string(source, j)
+            if end is None:
+                return None
+            j = end
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return None
+
+
+def _js_literal_at(source: str, i: int) -> str | None:
+    """Строковый литерал, с которого (после пробелов) начинается
+    `source[i:]`; `None` — не литерал либо шаблон с подстановкой `${`."""
+    while i < len(source) and source[i].isspace():
+        i += 1
+    if i >= len(source) or source[i] not in _JS_QUOTES:
+        return None
+    end = _skip_js_string(source, i)
+    if end is None:
+        return None
+    text = source[i + 1:end - 1]
+    if source[i] == "`" and "${" in text:
+        return None
+    return text
+
+
+def plank_test_names(source: str) -> list[str]:
+    """Имена тестов файла не-pytest компонента — литералы вызовов
+    требования 4 (у `.each` — первый аргумент второго вызова), в порядке
+    файла."""
+    names = []
+    for m in TEST_CALL_HEAD.finditer(source):
+        pos = m.end()
+        if source.startswith(".each(", pos):
+            close = _closing_paren(source, pos + len(".each"))
+            if close is None:
+                continue
+            pos = close + 1
+        if not source.startswith("(", pos):
+            continue
+        name = _js_literal_at(source, pos + 1)
+        if name is not None:
+            names.append(name)
+    return names
+
+
+def _labelled_ac_content(content: str) -> tuple[set, dict]:
+    """(AC, покрытые тестом) и пометки `//` текста файла с меткой
+    `AC-<n>: `."""
+    tested = set()
+    for name in plank_test_names(content):
+        m = AC_LABEL_LITERAL.match(name)
+        if m:
+            tested.add(int(m.group(1)))
+    markers = {int(n): (kind, reason.strip())
+               for n, kind, reason in AC_SLASH_MARKER.findall(content)}
+    return tested, markers
 
 # Полный текст критерия `AC-n. <текст>` — от начала пункта до следующего
 # `AC-m.` в начале строки либо конца раздела. Тот же якорь, что AC_ITEM
@@ -479,24 +587,37 @@ def spec_ac_errors(path: Path | str, text: str, meta: dict) -> list[str]:
     return []
 
 
-def scan_ac_content(sources: list[str]) -> tuple[set, dict]:
+def scan_ac_content(sources: list, rule: "PlankRule | None" = None
+                    ) -> tuple[set, dict]:
     """(AC, покрытые тестом) и {AC: (пометка, причина)} по уже прочитанным
     текстам файлов *.py под acceptance_tests/.
 
     Источник-агностичное ядро `scan_acceptance_tests` (диск) и ветко-
     корректного чтения `orchestrator/fsm.py` (git, SPEC T031, AC-3) — сам
     разбор AC-разметки не должен раздваиваться между источником файлов.
+
+    Элемент `sources` — текст (разбор Python, как прежде) либо пара (имя
+    файла, текст): у пары синтаксис выбирает правило планки `rule` по
+    имени файла (SPEC 01M59KMPG2ZMK10V556VZVQD65, требование 3). Тексты
+    долгоживущих файлов вызывающие передают текстом — в G2а это Python.
     """
     tested: set = set()
     markers: dict = {}
-    for content in sources:
+    for item in sources:
+        name, content = ("", item) if isinstance(item, str) else item
+        if rule is not None and name and rule.is_labelled(Path(name).name):
+            file_tested, file_markers = _labelled_ac_content(content)
+            tested |= file_tested
+            markers.update(file_markers)
+            continue
         tested.update(int(n) for n in TEST_AC.findall(content))
         for n, kind, reason in AC_MARKER.findall(content):
             markers[int(n)] = (kind, reason.strip())
     return tested, markers
 
 
-def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
+def scan_acceptance_tests(tdir: Path, rule: "PlankRule | None" = None
+                          ) -> tuple[set, dict]:
     """(AC, покрытые тестом) и {AC: (пометка, причина)} из acceptance_tests/
     рабочей копии.
 
@@ -509,7 +630,19 @@ def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
     (T064): маркер или тест-метод во вспомогательном файле вроде
     `_sandbox.py` (например, литерал-фикстура в исходнике теста другой
     задачи) не должен читаться как настоящая AC-разметка этой задачи.
+
+    `rule` не по умолчанию — тестовые файлы планки по правилу, синтаксис
+    файла по его компоненту (SPEC 01M59KMPG2ZMK10V556VZVQD65, требования
+    3-4); без правила и при правиле-умолчании — прежний разбор.
     """
+    if not _by_rule(rule):
+        return _scan_acceptance_tests(tdir)
+    return scan_ac_content([(f.name, text) for f, text
+                            in _rule_plank_files(tdir, rule, tests_only=True)],
+                           rule)
+
+
+def _scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return set(), {}
@@ -522,8 +655,20 @@ def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
     return scan_ac_content(sources)
 
 
-def count_test_methods(tdir: Path) -> int:
-    """Число тестовых методов в acceptance_tests/*.py — статический счёт."""
+def count_test_methods(tdir: Path, rule: "PlankRule | None" = None) -> int:
+    """Число тестовых методов в acceptance_tests/*.py — статический счёт.
+
+    `rule` не по умолчанию — файлы компонентов планки: у pytest-компонента
+    методы всех его файлов, у компонента с меткой `AC-<n>: ` — вызовы
+    тестов его тестовых файлов (`plank_test_names`)."""
+    if _by_rule(rule):
+        count = 0
+        for f, content in _rule_plank_files(tdir, rule, tests_only=False):
+            if not rule.is_labelled(f.name):
+                count += len(TEST_METHOD.findall(content))
+            elif rule.is_test(f.name):
+                count += len(plank_test_names(content))
+        return count
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return 0
@@ -563,31 +708,78 @@ def has_redness_marker(docstring: str | None) -> bool:
     return bool(REDNESS_MARKER.search(docstring))
 
 
-def redness_marker_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+def first_comment(source: str) -> str | None:
+    """Первый комментарий файла не-pytest компонента (SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 5): подряд идущие строки `//`
+    либо один блок `/* … */` до первой непустой строки кода; `None` —
+    файл начинается с кода."""
+    lines = source.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i == len(lines):
+        return None
+    head = lines[i].lstrip()
+    if head.startswith("//"):
+        block = []
+        while i < len(lines) and lines[i].lstrip().startswith("//"):
+            block.append(lines[i].lstrip()[2:])
+            i += 1
+        return "\n".join(block)
+    if head.startswith("/*"):
+        rest = "\n".join([head] + lines[i + 1:])
+        end = rest.find("*/", 2)
+        return None if end < 0 else rest[2:end]
+    return None
+
+
+# Место маркера красноты в тексте отказа: Python — докстринг модуля, файл
+# не-pytest компонента — первый комментарий (требование 5).
+REDNESS_PLACE_DOCSTRING = "в докстринге модуля"
+REDNESS_PLACE_FIRST_COMMENT = "в первом комментарии файла"
+
+
+def redness_marker_errors_from_files(files: list[tuple[str, str]],
+                                     rule: "PlankRule | None" = None
+                                     ) -> list[str]:
     """Ядро проверки маркера красноты (SPEC T064, требования 1–3) по уже
     прочитанным (label, текст) парам файлов `acceptance_tests/test_*.py` —
     без чтения файлов: источник (рабочая копия или ВЕТКА задачи, тот же
     приём, что `traceability_errors_from_content`) выбирает вызывающий код.
+
+    `rule` — файл компонента с меткой `AC-<n>: ` (по имени из `label`)
+    несёт маркер в первом комментарии (`first_comment`).
     """
     errors: list[str] = []
     for label, source in files:
-        if not has_redness_marker(module_docstring(source)):
+        if rule is not None and rule.is_labelled(Path(label).name):
+            text, place = first_comment(source), REDNESS_PLACE_FIRST_COMMENT
+        else:
+            text, place = module_docstring(source), REDNESS_PLACE_DOCSTRING
+        if not has_redness_marker(text):
             errors.append(
                 f"{label}: нет маркера «Красен до реализации:» или «Зелёный "
                 f"с рождения:» с непустым объяснением на той же строке сразу "
-                f"после двоеточия в докстринге модуля — допиши объяснение "
+                f"после двоеточия {place} — допиши объяснение "
                 f"сразу после двоеточия на той же строке, например «Красен "
                 f"до реализации: <причина>» (перенос объяснения на "
                 f"следующую строку не считается заполненным маркером)")
     return errors
 
 
-def scan_redness_markers(tdir: Path) -> list[str]:
+def scan_redness_markers(tdir: Path, rule: "PlankRule | None" = None
+                         ) -> list[str]:
     """Ошибки маркера красноты для `acceptance_tests/test_*.py` рабочей
     копии (SPEC T064). Только `test_*.py` — SPEC требование 1 называет
     этот шаблон, вспомогательные файлы (`_sandbox.py`, `__init__.py`)
     маркером не размечаются.
+
+    `rule` не по умолчанию — тестовые файлы планки по правилу.
     """
+    if _by_rule(rule):
+        return redness_marker_errors_from_files(
+            [(str(f), text) for f, text
+             in _rule_plank_files(tdir, rule, tests_only=True)], rule)
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return []
@@ -2213,13 +2405,20 @@ def id_format_sample_errors(files: list[tuple[str, str]]) -> list[str]:
     return errors
 
 
-def scan_id_format_samples(tdir: Path) -> list[str]:
+def scan_id_format_samples(tdir: Path, rule: "PlankRule | None" = None
+                           ) -> list[str]:
     """Ошибки образца формата идентификатора для всех `*.py` под
     acceptance_tests/ рабочей копии — та же область файлов, что источники
     трассируемости AC (`scan_ac_content`), шире `scan_redness_markers`
     (не только `test_*.py`): образец формата может утечь и во
     вспомогательный файл вроде `_sandbox.py`.
+
+    `rule` не по умолчанию — все файлы компонентов планки, не только `.py`.
     """
+    if _by_rule(rule):
+        return id_format_sample_errors(
+            [(str(f), text) for f, text
+             in _rule_plank_files(tdir, rule, tests_only=False)])
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return []
@@ -2333,12 +2532,19 @@ RESERVED_PLANK_HELPER_NAME = "_pult.py"
 RESERVED_PLANK_HELPER_HINT = "имя занято помощником пульта"
 
 
-def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
+def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str,
+                                       rule: "PlankRule | None" = None) -> bool:
     """`rel_to_acceptance_tests` — путь файла относительно `acceptance_tests/`
     (`/`-разделённый, например `test_x.py` или `docs/codebase-map.md`).
     `True` — файл вне разрешённого набора первого уровня (AC-1 задачи
     01M1SAA01YRRTWAVADT2F81RRQ) либо зарезервированное имя помощника
-    пульта `RESERVED_PLANK_HELPER_NAME`."""
+    пульта `RESERVED_PLANK_HELPER_NAME`.
+
+    `rule` — допустимые файлы по правилу планки проекта (SPEC
+    01M59KMPG2ZMK10V556VZVQD65, требование 1): файл не принадлежит ни
+    одному компоненту и не общий."""
+    if rule is not None:
+        return rule.component_of(rel_to_acceptance_tests) is None
     if "/" in rel_to_acceptance_tests:
         return True
     if rel_to_acceptance_tests == RESERVED_PLANK_HELPER_NAME:
@@ -2350,6 +2556,154 @@ def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
     if rel_to_acceptance_tests == TASK_PASSPORT_NAME:
         return True
     return not ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(rel_to_acceptance_tests)
+
+
+# --------------------------------------------------------------------------
+# Правило планки по компоненту (SPEC 01M59KMPG2ZMK10V556VZVQD65, требования
+# 1, 3-5; ADR-0026 пп. 1, 3, 5): какие файлы первого уровня каталога планки
+# допустимы и чьи они, какие из них тестовые, вид метки критерия и
+# синтаксис пометок. Строит правило по записи проекта
+# `orchestrator/project_profile.plank_rule`; здесь — только описание и
+# разбор, без зависимостей пульта. Правило без компонентов —
+# `DEFAULT_PLANK_RULE`, нынешнее правило: функции разбора с ним идут
+# прежним путём побайтно.
+LABEL_TEST_AC = "test_ac<n>_"
+LABEL_AC = "^AC-<n>: "
+MARKER_HASH = "#"
+MARKER_SLASH = "//"
+# `component_of` у правила-умолчания и у общих файлов (`.md`/`.txt`
+# первого уровня, в том числе перечень долгоживущих) — не имя компонента.
+DEFAULT_PLANK_COMPONENT = "default"
+SHARED_PLANK_FILE = "*"
+ALWAYS_STRAY_PLANK_NAMES = (RESERVED_PLANK_HELPER_NAME, TASK_PASSPORT_NAME,
+                            "conftest.py")
+_SHARED_PLANK_NAME = re.compile(r"^(.+\.md|.+\.txt)$")
+
+
+def _mask_segment_matches(segment: str, name: str) -> bool:
+    regex = "".join("[^/]*" if ch == "*" else re.escape(ch) for ch in segment)
+    return re.fullmatch(regex, name) is not None
+
+
+@dataclass(frozen=True)
+class PlankComponent:
+    """Компонент правила планки: имя, маски `tests` записи, вид метки и
+    синтаксис пометок. pytest-компонент (`LABEL_TEST_AC`) допускает файлы
+    по `ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL`; компонент с меткой
+    `LABEL_AC` — файлы под последний сегмент масок и помощники
+    `_<имя>.<расширение маски>`."""
+    name: str
+    masks: tuple = ()
+    label: str = LABEL_TEST_AC
+    marker: str = MARKER_HASH
+
+    def _patterns(self) -> list[str]:
+        return [mask.rsplit("/", 1)[-1] for mask in self.masks]
+
+    def is_test(self, name: str) -> bool:
+        if self.label != LABEL_AC:
+            return name.startswith("test_") and name.endswith(".py")
+        return any(_mask_segment_matches(p, name) for p in self._patterns())
+
+    def allows(self, name: str) -> bool:
+        if self.label != LABEL_AC:
+            return bool(ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(name))
+        if self.is_test(name):
+            return True
+        suffixes = {"." + p.rsplit(".", 1)[1] for p in self._patterns()
+                    if "." in p}
+        return any(re.fullmatch(r"_[A-Za-z0-9_]+" + re.escape(suffix), name)
+                   for suffix in suffixes)
+
+
+@dataclass(frozen=True)
+class PlankRule:
+    """Правило планки проекта. `components` — в порядке записи: файл,
+    подходящий нескольким, принадлежит первому. `refusal` — причина отказа
+    построения правила по записи (правило тогда — умолчание с причиной)."""
+    components: tuple = ()
+    refusal: str = ""
+
+    @property
+    def is_default(self) -> bool:
+        return not self.components
+
+    def _component(self, name: str) -> "PlankComponent | None":
+        for comp in self.components:
+            if comp.allows(name):
+                return comp
+        return None
+
+    def component_of(self, name: str) -> str | None:
+        """Имя компонента файла `name` (путь от `acceptance_tests/`);
+        `SHARED_PLANK_FILE` — общий файл; `None` — посторонний."""
+        if "/" in name or name in ALWAYS_STRAY_PLANK_NAMES:
+            return None
+        if not self.components:
+            if is_extraneous_acceptance_test_file(name):
+                return None
+            return (SHARED_PLANK_FILE if _SHARED_PLANK_NAME.match(name)
+                    else DEFAULT_PLANK_COMPONENT)
+        if _SHARED_PLANK_NAME.match(name):
+            return SHARED_PLANK_FILE
+        comp = self._component(name)
+        return comp.name if comp is not None else None
+
+    def owns(self, name: str) -> bool:
+        """Файл принадлежит компоненту (не общий и не посторонний)."""
+        return self.component_of(name) not in (None, SHARED_PLANK_FILE)
+
+    def is_test(self, name: str) -> bool:
+        if not self.owns(name):
+            return False
+        if not self.components:
+            return name.startswith("test_") and name.endswith(".py")
+        return self._component(name).is_test(name)
+
+    def is_labelled(self, name: str) -> bool:
+        """Файл размечен меткой `AC-<n>: ` и пометками `//`."""
+        comp = self._component(name) if self.owns(name) else None
+        return comp is not None and comp.label == LABEL_AC
+
+    def masks(self, component: str) -> tuple:
+        for comp in self.components:
+            if comp.name == component:
+                return tuple(comp.masks)
+        return ()
+
+    def labelled_components(self) -> tuple:
+        """Имена компонентов с меткой `AC-<n>: ` в порядке записи."""
+        return tuple(c.name for c in self.components if c.label == LABEL_AC)
+
+
+DEFAULT_PLANK_RULE = PlankRule()
+
+
+def _by_rule(rule: "PlankRule | None") -> bool:
+    """Разбор идёт по правилу, а не прежним путём: правило не по
+    умолчанию."""
+    return rule is not None and not rule.is_default
+
+
+def _rule_plank_files(tdir: Path, rule: PlankRule,
+                      tests_only: bool) -> list[tuple[Path, str]]:
+    """(путь, текст) файлов первого уровня `acceptance_tests/` каталога
+    `tdir`, принадлежащих компонентам правила (`tests_only` — только
+    тестовых)."""
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files = []
+    for f in sorted(tests_dir.iterdir()):
+        if not f.is_file() or not rule.owns(f.name):
+            continue
+        if tests_only and not rule.is_test(f.name):
+            continue
+        try:
+            files.append((f, f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return files
 
 
 def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
@@ -2487,16 +2841,49 @@ def scan_extraneous_task_root_files(tasks_root: Path) -> list[Path]:
     return extraneous
 
 
+def _rule_labels(rule: "PlankRule | None") -> set:
+    """Виды метки компонентов правила; без правила и у умолчания — pytest."""
+    if not _by_rule(rule):
+        return {LABEL_TEST_AC}
+    return {comp.label for comp in rule.components}
+
+
+def _missing_test_hint(n: int, labels: set) -> str:
+    """Подсказка «нет теста» с формой теста и пометки по видам метки
+    правила (SPEC 01M59KMPG2ZMK10V556VZVQD65, требование 4)."""
+    if labels == {LABEL_AC}:
+        return (f"добавь тест 'it('AC-{n}: …')' в acceptance_tests/, либо "
+                f"пометку '// AC-{n}: manual|skip|escalate — причина' в том "
+                f"же каталоге")
+    if LABEL_AC in labels:
+        return (f"добавь тестовый метод 'def test_ac{n}_...' либо тест "
+                f"'it('AC-{n}: …')' в acceptance_tests/, либо пометку "
+                f"'# AC-{n}: manual|skip|escalate — причина' (в .py) либо "
+                f"'// AC-{n}: manual|skip|escalate — причина' в том же "
+                f"каталоге")
+    return (f"добавь тестовый метод 'def test_ac{n}_...' в "
+            f"acceptance_tests/, либо пометку "
+            f"'# AC-{n}: manual|skip|escalate — причина' в том же "
+            f"каталоге")
+
+
 def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
-                                     markers: dict) -> list[str]:
+                                     markers: dict,
+                                     rule: "PlankRule | None" = None
+                                     ) -> list[str]:
     """Ядро проверки трассируемости AC -> тест (SPEC T023, требование 4) по
     уже прочитанным SPEC-тексту и результату `scan_ac_content` — без
     чтения файлов: источник (рабочая копия или ВЕТКА задачи, SPEC T031,
     AC-3) выбирает вызывающий код (`acceptance_traceability_errors` — диск,
     `orchestrator/fsm.py` — git при чужом чекауте), не эта функция.
+
+    `rule` — формы теста и пометки в подсказках по виду метки компонентов
+    правила; без правила и при умолчании — прежние тексты.
     """
     if not requires_ac_markup(meta):
         return []
+    labels = _rule_labels(rule)
+    marker_prefix = MARKER_SLASH if labels == {LABEL_AC} else MARKER_HASH
     body = section_body(spec_text, "Критерии приёмки")
     ac_numbers = {int(n) for n in AC_ITEM.findall(body)}
     ac_texts = {int(n): text for n, text in AC_ITEM_FULL.findall(body)}
@@ -2505,10 +2892,7 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
         if n not in tested and n not in markers:
             errors.append(
                 f"AC-{n}: нет теста и нет пометки manual/skip/escalate — "
-                f"добавь тестовый метод 'def test_ac{n}_...' в "
-                f"acceptance_tests/, либо пометку "
-                f"'# AC-{n}: manual|skip|escalate — причина' в том же "
-                f"каталоге")
+                f"{_missing_test_hint(n, labels)}")
     for n, (kind, reason) in sorted(markers.items()):
         if n not in ac_numbers:
             errors.append(
@@ -2519,7 +2903,7 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
             errors.append(
                 f"AC-{n}: пометка {kind} без причины — впиши причину после "
                 f"тире в той же строке, например "
-                f"'# AC-{n}: {kind} — <причина>'")
+                f"'{marker_prefix} AC-{n}: {kind} — <причина>'")
         elif kind == "ci" and not ci_marker_wording_ok(ac_texts.get(n, "")):
             errors.append(
                 f"AC-{n}: пометка ci на критерий, формулировка которого не "
@@ -2537,7 +2921,9 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
 
 
 def acceptance_traceability_errors(tdir: Path,
-                                   extra_sources: list[str] = ()) -> list[str]:
+                                   extra_sources: list[str] = (),
+                                   rule: "PlankRule | None" = None
+                                   ) -> list[str]:
     """AC без теста и без пометки — невалидный выход из tests_writing
     (SPEC T023, требование 4), рабочая копия.
 
@@ -2553,6 +2939,9 @@ def acceptance_traceability_errors(tdir: Path,
     `extra_sources` — тексты долгоживущих файлов `tests/` кодовой ветки
     этой задачи (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 5): их методы
     `test_ac<n>_…` покрывают критерии наравне с каталогом приёмочных тестов.
+
+    `rule` — правило планки проекта (SPEC 01M59KMPG2ZMK10V556VZVQD65,
+    требования 3-4): разбор, подсказки и пометки с отступом по нему.
     """
     spec_path = tdir / "SPEC.md"
     try:
@@ -2560,12 +2949,13 @@ def acceptance_traceability_errors(tdir: Path,
     except (OSError, UnicodeDecodeError) as exc:
         return [f"{spec_path}: не прочитан: {exc}"]
     meta = yamlmini.frontmatter(text) or {}
-    tested, markers = scan_acceptance_tests(tdir)
+    tested, markers = scan_acceptance_tests(tdir, rule)
     extra_tested, extra_markers = scan_ac_content(list(extra_sources))
     tested = tested | extra_tested
     markers = {**extra_markers, **markers}
-    errors = traceability_errors_from_content(text, meta, tested, markers)
-    return errors + scan_indented_ac_markers(tdir)
+    errors = traceability_errors_from_content(text, meta, tested, markers,
+                                              rule)
+    return errors + scan_indented_ac_markers(tdir, rule)
 
 
 # --------------------------------------------------------------------------
@@ -2579,6 +2969,10 @@ def acceptance_traceability_errors(tdir: Path,
 INDENTED_AC_MARKER_REASON_TMPL = (
     "маркер '# AC-{n}: {kind}' с отступом не учитывается каталогом — "
     "вынеси в начало строки либо убери")
+# Тот же текст для пометки `//` файла не-pytest компонента (SPEC
+# 01M59KMPG2ZMK10V556VZVQD65, требование 4): меняется только префикс.
+INDENTED_SLASH_AC_MARKER_REASON_TMPL = INDENTED_AC_MARKER_REASON_TMPL.replace(
+    "'# AC-", "'// AC-")
 
 
 def _string_literal_lines(source: str) -> set[int]:
@@ -2606,7 +3000,9 @@ def _string_literal_lines(source: str) -> set[int]:
     return lines
 
 
-def indented_ac_marker_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+def indented_ac_marker_errors_from_files(files: list[tuple[str, str]],
+                                         rule: "PlankRule | None" = None
+                                         ) -> list[str]:
     """Ошибки маркера AC-n с отступом (требования 1-2) по уже прочитанным
     (label, текст) парам .py-файлов acceptance_tests/ — источник (диск
     или ВЕТКА задачи) выбирает вызывающий код, тем же приёмом, что
@@ -2620,9 +3016,21 @@ def indented_ac_marker_errors_from_files(files: list[tuple[str, str]]) -> list[s
     `^[ \\t]+#`, ровно тем же приёмом, каким `AC_MARKER` уже отсекает
     текст маркера, не стоящий буквально в начале строки (комментарий
     выше `AC_MARKER`, R1-F2).
+
+    `rule` — файл компонента с пометками `//` (по имени из `label`)
+    проверяется образцом `INDENTED_SLASH_AC_MARKER`, без разбора строк
+    Python.
     """
     errors: list[str] = []
     for label, source in files:
+        if rule is not None and rule.is_labelled(Path(label).name):
+            for lineno, line in enumerate(source.splitlines(), start=1):
+                m = INDENTED_SLASH_AC_MARKER.match(line)
+                if m:
+                    reason = INDENTED_SLASH_AC_MARKER_REASON_TMPL.format(
+                        n=m.group(1), kind=m.group(2))
+                    errors.append(f"{label}:{lineno}: {reason}")
+            continue
         string_lines = _string_literal_lines(source)
         for lineno, line in enumerate(source.splitlines(), start=1):
             if lineno in string_lines:
@@ -2636,12 +3044,19 @@ def indented_ac_marker_errors_from_files(files: list[tuple[str, str]]) -> list[s
     return errors
 
 
-def scan_indented_ac_markers(tdir: Path) -> list[str]:
+def scan_indented_ac_markers(tdir: Path, rule: "PlankRule | None" = None
+                             ) -> list[str]:
     """Ошибки маркера AC-n с отступом для `acceptance_tests/test_*.py`
     рабочей копии `tdir` — тот же набор файлов, что `scan_acceptance_tests`
     читает для AC_MARKER без отступа, сохраняя единый домен между
     признанной и непризнанной разметкой одного и того же критерия.
+
+    `rule` не по умолчанию — тестовые файлы планки по правилу.
     """
+    if _by_rule(rule):
+        return indented_ac_marker_errors_from_files(
+            [(str(f), text) for f, text
+             in _rule_plank_files(tdir, rule, tests_only=True)], rule)
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return []
