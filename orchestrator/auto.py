@@ -9,7 +9,8 @@ import time
 from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
-              fsm, lease, models, pause, pull, runner, store, zone_lock)
+              fsm, lease, models, pause, pull, rounds, runner, store,
+              zone_lock)
 from .advance_gates import refusal_classes, spec_audit
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -976,6 +977,15 @@ def _role_run_step(conn, task_id: str, session_id: str, role: str,
 
 
 def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> None:
+    """Цикл `_auto_cycle` и сверка «кругов до кода» с порогом на его выходе
+    (SPEC 01M59DP2GV3SAN54M562CQY42R, требование 6): переход в состояние без
+    роли (`escalated`) выходит из цикла, и сверка обязана случиться в том же
+    вызове `auto`, на какой бы остановке цикл ни вышел."""
+    _auto_cycle(conn, task_id, session_id, wait_zone)
+    rounds.raise_once(conn, task_id)
+
+
+def _auto_cycle(conn, task_id: str, session_id: str, wait_zone: bool = False) -> None:
     """Цикл advance+run, пока в шаге работает агент, — до места, где нужен
     человек. После разбора (SPEC «R1» 01M1SC40NT8T1WFKKKJ67CK96Z) —
     короткая композиция именованных шагов: (а) `_rework_gate_blocks`, (б)
@@ -1028,6 +1038,7 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
         if state == "verifying":
             if _advance_verifying_poll(conn, task_id, session_id):
                 return
+            rounds.raise_once(conn, task_id)
             t = store.get_task(conn, task_id)
             state = t["state"]
             role = runner.step_role(t)
@@ -1048,6 +1059,7 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
                           outcome.hint, alert=outcome.alert)
                 return
             if isinstance(outcome, Advanced):
+                rounds.raise_once(conn, task_id)
                 t = store.get_task(conn, task_id)
                 state = t["state"]
                 role = runner.step_role(t)
@@ -1060,6 +1072,7 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
             auto_stop(conn, task_id, outcome.state, outcome.reason,
                       outcome.hint, alert=outcome.alert)
             return
+        rounds.raise_once(conn, task_id)
         t = store.get_task(conn, task_id)
         state = t["state"]
         role = runner.step_role(t)

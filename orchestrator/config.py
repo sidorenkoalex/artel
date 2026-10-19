@@ -312,6 +312,12 @@ BUDGET_SOURCE_OPERATOR = "operator"
 BUDGET_SOURCE_PLAN = "plan"
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+# Порог «кругов до кода» (SPEC 01M59DP2GV3SAN54M562CQY42R, требование 8):
+# аудитов SPEC не меньше первого либо эскалаций не меньше второго — строка
+# блока `report` выделена и `auto` поднимает однократное оповещение
+# `rounds`. Одни и те же значения для обоих мест (`rounds.over_threshold`).
+ROUNDS_ALERT_SPEC_AUDITS = 3
+ROUNDS_ALERT_ESCALATIONS = 2
 # Опрос CI в `verifying` (SPEC T086, требование 1): `auto` — владелец
 # опроса, пауза между повторными advance-опросами внутри одного вызова.
 # Величина порядка 60-120 секунд (требование 1, AC-1); опрос с этой
