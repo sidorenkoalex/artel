@@ -1,24 +1,23 @@
 # Записка test_author — 01M590GJAF0EDV4NBC4C99MFVH
 
 ## Выяснено
-- Визит 2: шаг закончен эскалацией. Батч В1–В5 с вариантами и дефолтами — в докстринге acceptance_tests/test_escalation.py. Пометки escalate стоят у AC-2, 6, 7, 8, 9, 10, 21.
-- Главное (В1): требование 7 велит отказывать в подготовке pult-vitest, пока флаг кэша не подтверждён для версии. Подтверждение — «проба этапа 2», после задачи. Значит, положительные сценарии AC-6…AC-10 недостижимы, а где записано «версия подтверждена», SPEC не говорит.
-- В2: формат JSON отчётчика не задан. В3: нет носителя итога по каждому тесту. В4: AC-21 «падает при мутациях» — места мутации планка не знает. В5: узел полного прогона гейта мержа закрытый (`fsm_merge_gate._full_suite_or_refuse`) — разовый файл.
-- Эскалация обрабатывается в `fsm_advance.tests_writing` (строка ~541) РАНЬШЕ ошибок трассируемости и сухого сбора, поэтому AC без тестов переход не заваливают.
-- Канал профиля в места прогона — `command=` (`run`, `collect`, `run_repeat`, `run_full_suite`, `full_suite`), у `run_plank`/`two_sided.run` — `profile=`. Прецедент обёртки-зонда (argv/cwd/env) — tests/test_01m52eefna1wh31962hvnt0yz9_pytest_own_places.py.
-- Фикстура профиля компонента: targets.yaml песочницы, запись с одним компонентом → `project_profile.decide(<проект>).profile` (нужен `make_project_repo`). Запись из двух — образец YAML в tests/test_01m58pg72pg64gs790xm2ews61_doctor_components.py (`HEAD`, `add_components`).
-- Прецеденты:
-  - `approve` при «не начат»: tests/test_suite_lock.py:172 (`ApproveAcceptanceSandbox` из tests/test_approve_acceptance_full_suite.py:38 патчит `acceptance.run_full_suite`);
-  - гейт мержа с приложениями: tests/test_plan_appendix.py:643 `MergeAppendixTest`;
-  - подсказка гейта мержа: tests/test_worktree_db_files.py:69;
-  - `suite-run` сквозной: tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py (`PytestSpy`, `Detached`);
-  - сторож: `doctor._find_hung_test_runs`, `check_hung_test_runs(conn)`; `ps` идёт через `doctor.subprocess.run` (публичное имя, патч допустим).
+- Визит 3 (после ANSWER-2: В1–В5 — варианты A). Пишу планку целиком.
+- Раскладка: долгоживущий tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py (AC-1…4, 5 п.1–4, 6, 7…10, 11 на уровне функций acceptance/two_sided, 15, 16, 18 п.1/2/5, 19, 20); разовый acceptance_tests/test_gates_wiring.py (AC-5 approve/подсказка мержа, AC-11 сквозь вызывающих, AC-12, AC-13, AC-14, AC-17, AC-18 п.3/4, AC-21).
+- Канал профиля компонента: запись `components:` с одним компонентом → `project_profile.decide(<проект>).profile` → места прогона (`command=`/`profile=`). Одиночный компонент с `workdir`/`env` по targets.py обязан нести `runner: pytest-own` (правило `_check_component_rules`); компонент без runner — без workdir.
+- Подменённый раннер: исполняемый драйвер вне дерева (пишет argv/cwd/env/pgid в зонд, отчёт по сценарию JSON). Vitest ставит поддельный install (python) в `node_modules/.bin/vitest` своего cwd — как `npm ci`.
+- Таблица `project_profile.VITEST_VERSION_FLAGS`: форму записи не навязываю — флаг кэша = строковое значение на `--`, «принимает» = булево значение; отрицательная версия — подмена таблицы целиком `patch.object`.
+- Узел гейта мержа — `fsm_merge_gate._full_suite_or_refuse(conn, task, paths, scratch, ctx)` (прецедент tests/test_worktree_db_files.py).
+- Сквозные места — подкласс `ProfileCallersSandbox` из tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py (разовый файл).
 
 ## Не сработало
-- `ls` в Bash недоступен (command not found).
+- `ls` в Bash недоступен; `$VAR` в Bash требует подтверждения.
 
 ## Где остановился
-- Эскалация сдана. После ANSWER: написать тесты AC-1…AC-21 по ответу и снять пометки escalate в test_escalation.py (или удалить файл).
+- Долгоживущий файл написан и прогнан: красные падают по правильным причинам (нет поля tests, таблицы версий, report_args, имени в ключе, сторожа); зелёные с рождения — AC-4/6 п.1–2, AC-12 п.2, AC-20.
+- Разовый acceptance_tests/test_gates_wiring.py написан, test_escalation.py удалён; preflight — все проверки «пройдена».
+- Дальше: валидация стабом (временный модуль-плагин pytest в рабочей копии, удалить после).
+- yamlmini: кавычки в потоковом списке не разбираются — `[--junitxml, {path}]` без кавычек.
+- pytest собирает вспомогательный метод `tests_of` как тест (префикс test) — не называть помощники на `test`.
 
 ## Чего не хватило
-- SPEC не задаёт формат отчётчика pult-vitest и способ задать «подтверждённую» версию Vitest — без них планка Vitest не пишется.
+- Нигде не сказано, как одиночный компонент с `workdir` проходит правило `runner` targets.py — выяснил чтением `_check_component_rules`.
