@@ -49,7 +49,7 @@ from typing import NamedTuple
 from . import (acceptance, appendix_tree, config, gitcmd, liveness,
                project_profile, repo_context, session, store, suite_lock,
                workspace)
-from .targets import PROFILE_RUNNER_OWN
+from .targets import PROFILE_RUNNER_OWN, TargetsError
 
 # Вид в имени лога прогона: `.artel/logs/suite-run/<id>/<id>-suiterun-<n>.log`
 # — имя прежнее, каталог — хозяйство команды (`_new_log`).
@@ -97,6 +97,12 @@ _REPORT_SECTION = re.compile(r"^=+ (?!test session starts =).* =+$",
                              re.MULTILINE)
 _SUMMARY_COUNT = re.compile(
     r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)")
+
+
+def _extra_flags(command) -> tuple:
+    """Флаги pytest пульта к команде прогона; команде компонента с отчётом
+    — никаких: она не обязана быть pytest (требование 9)."""
+    return () if acceptance._reported(command) is not None else _PYTEST_FLAGS
 
 
 # ------------------------------------------------------------- состояние
@@ -262,19 +268,19 @@ def _release_lock() -> None:
 def _is_pytest(command: list[str]) -> bool:
     """Команда — запуск pytest: исполняемый файл `pytest`/`py.test` или
     `-m pytest`. Имя интерпретатора само по себе ничего не говорит."""
-    if any(Path(part).name in ("pytest", "py.test") for part in command):
-        return True
-    return any(flag == "-m" and module == "pytest"
-               for flag, module in zip(command, command[1:]))
+    return acceptance.is_pytest_command(command)
 
 
 def _profile_command(target: str) -> tuple:
     """(команда профиля тестов проекта, причина отказа) — требование 2.
 
-    У `runner: pytest-own` команда — сам профиль (`project_profile.Profile`):
-    прогоны и ключ итога базы идут каналом профиля `run_full_suite` и
-    `suite_result_key` (SPEC 01M52EEHSRD93WMPHWB5VJYRKD); у `pult-pytest` —
-    список, как прежде."""
+    У `runner: pytest-own` и у профиля с итогом из отчёта команда — сам
+    профиль (`project_profile.Profile`, с `tools` и полями компонента —
+    `project_profile.with_tools`, тот же помощник, что у `decide`; SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 15): прогоны и ключ итога идут
+    каналом профиля `run_full_suite` и `suite_result_key` (SPEC
+    01M52EEHSRD93WMPHWB5VJYRKD); у `pult-pytest` — список, как прежде.
+    Признак «не pytest» профилю с отчётом не отказывает (требование 9)."""
     answer = repo_context.profile_of(target)
     if answer.outcome == repo_context.PROFILE_UNREAD:
         return None, (f"профиль тестов проекта «{target}» не прочитан "
@@ -283,6 +289,17 @@ def _profile_command(target: str) -> tuple:
         return None, (f"у проекта «{target}» нет профиля тестов "
                       f"(test_profile в targets.yaml) — команде прогона "
                       f"неоткуда взять команду")
+    profile = None
+    if answer.values.get("report") or \
+            answer.values.get("runner") == PROFILE_RUNNER_OWN:
+        try:
+            profile = project_profile.with_tools(
+                target, project_profile.Profile.from_values(answer.values))
+        except (KeyError, TypeError, ValueError, TargetsError) as exc:
+            return None, (f"профиль тестов проекта «{target}» не прочитан "
+                          f"(test_profile в targets.yaml): {exc}")
+        if acceptance._reported(profile) is not None:
+            return profile, ""
     command = [str(part) for part in answer.values.get("command") or ()]
     if not _is_pytest(command):
         return None, (f"команда профиля тестов проекта «{target}» "
@@ -290,11 +307,7 @@ def _profile_command(target: str) -> tuple:
                       f"флаги параллели pytest (-n) к ней неприменимы")
     if answer.values.get("runner") != PROFILE_RUNNER_OWN:
         return command, ""
-    try:
-        return project_profile.Profile.from_values(answer.values), ""
-    except (KeyError, TypeError, ValueError) as exc:
-        return None, (f"профиль тестов проекта «{target}» не прочитан "
-                      f"(test_profile в targets.yaml): {exc}")
+    return profile, ""
 
 
 # -------------------------------------------------------- разбор прогона
@@ -304,7 +317,9 @@ class Parsed(NamedTuple):
     упавшие парами (id, первая строка сообщения) и признак «прогон
     завершён» — только такой годится в итог базы (требование 8).
     Упавший подтест — единицей `acceptance.subtest_unit`; `rerun` — id
-    тестов для повтора `--failed` (подтест — id родителя)."""
+    тестов для повтора `--failed` (подтест — id родителя); `unknown` —
+    строка исхода «неизвестно» (`acceptance.unknown_line`, SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 3), иначе пусто."""
     outcome: str
     passed: int
     failed: int
@@ -312,6 +327,7 @@ class Parsed(NamedTuple):
     failures: list
     finished: bool
     rerun: tuple = ()
+    unknown: str = ""
 
 
 def _progress_part(output: str) -> str:
@@ -346,13 +362,17 @@ def _subtest_progress(output: str) -> dict[str, str]:
     return units
 
 
-def parse(green: bool, output: str) -> Parsed:
+def parse(green: bool, output: str, *, reported: bool = False) -> Parsed:
+    """Разбор вывода прогона. `reported` — вывод профиля с итогом из отчёта
+    (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требование 18): упавшие и числа —
+    только из сводки отчёта в конце вывода; строки хода сырого вывода
+    раннера (id от `workdir`, иной формы) не читаются."""
     outcome = acceptance._full_suite_outcome(green, output)
     summary = acceptance.run_summary_line(output)
     finished = (outcome in (acceptance.FULL_SUITE_GREEN,
                             acceptance.FULL_SUITE_RED) and bool(summary))
-    statuses = _progress(output)
-    parents = _subtest_progress(output)
+    statuses = {} if reported else _progress(output)
+    parents = {} if reported else _subtest_progress(output)
     failures = dict.fromkeys(
         (node for node, status in statuses.items()
          if status in ("FAILED", "ERROR")), "")
@@ -374,8 +394,10 @@ def parse(green: bool, output: str) -> Parsed:
         skipped = values.count("SKIPPED")
     rerun = tuple(dict.fromkeys(parents.get(node, node)
                                 for node in sorted(failures)))
+    unknown = (output.splitlines()[0]
+               if output.startswith(acceptance.UNKNOWN_PREFIX) else "")
     return Parsed(outcome, passed, failed, skipped,
-                  sorted(failures.items()), finished, rerun)
+                  sorted(failures.items()), finished, rerun, unknown)
 
 
 # ------------------------------------------------------------------ отчёт
@@ -435,6 +457,8 @@ def render(task_id: str, run_no: int, mode: str, parsed: Parsed,
         acceptance.FULL_SUITE_NO_TESTS: acceptance.FULL_SUITE_NO_TESTS_NOTE,
         acceptance.FULL_SUITE_NOT_STARTED: acceptance.FULL_SUITE_NOT_STARTED,
     }[parsed.outcome]
+    if parsed.unknown:
+        title = parsed.unknown
     what = "повтор упавших" if mode == MODE_FAILED else "полный набор"
     lines = [f"[{task_id}] suite-run №{run_no} ({what}): {title}",
              f"прошло: {parsed.passed}, упало: {parsed.failed}, "
@@ -534,9 +558,10 @@ def _base(task_id: str, target: str, branch: str, command,
         if copy is None:
             return None, refusal
         green, output = acceptance.run_full_suite(
-            copy, command=command, targets=("tests",), extra=_PYTEST_FLAGS,
-            log=base_log, limit=limit)
-    parsed = parse(green, output)
+            copy, command=command, targets=("tests",),
+            extra=_extra_flags(command), log=base_log, limit=limit)
+    parsed = parse(green, output,
+                   reported=acceptance._reported(command) is not None)
     if not parsed.finished:
         return None, (f"прогон базы {sha[:12]} не завершён "
                       f"({parsed.outcome}); лог базы: {base_log}")
@@ -564,7 +589,8 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         if not targets:
             return (f"[{task_id}] suite-run №{run_no}: отказ — перечня "
                     f"упавших прошлого прогона нет"), False
-        if acceptance._own(command) is not None:
+        if acceptance._own(command) is not None and \
+                acceptance._reported(command) is None:
             # id упавших `pytest-own` напечатаны из `workdir` — идут как
             # есть каналом `test_ids`, без перевода путей целей.
             targets, test_ids = (), targets
@@ -579,10 +605,12 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         acceptance._last_full_suite_metrics = None
         with acceptance.observed_full_suite():
             green, output = acceptance.run_full_suite(
-                tree.root, command=command, targets=targets, extra=_PYTEST_FLAGS,
-                log=log, limit=limit, **({"test_ids": test_ids} if test_ids else {}))
+                tree.root, command=command, targets=targets,
+                extra=_extra_flags(command), log=log, limit=limit,
+                **({"test_ids": test_ids} if test_ids else {}))
     metrics = acceptance._last_full_suite_metrics
-    parsed = parse(green, output)
+    parsed = parse(green, output,
+                   reported=acceptance._reported(command) is not None)
     # Повтор — по id тестов: единицу подтеста `<id> <метка>` pytest не найдёт.
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": list(parsed.rerun)})

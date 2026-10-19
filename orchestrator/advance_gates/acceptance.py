@@ -390,10 +390,10 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
                                      project_profile.CHECK_LONG_LIVED_RUN,
                                      decision)
     else:
-        # `pytest-own` — профилем целиком, и в прогон, и в повторы с
-        # зерном (SPEC 01M52EEHSRD93WMPHWB5VJYRKD); `pult-pytest` — список.
-        command = (acceptance._own(decision.profile)
-                   or list(decision.profile.command))
+        # `pytest-own` и профиль с отчётом — профилем целиком, и в прогон,
+        # и в повторы с зерном (SPEC 01M52EEHSRD93WMPHWB5VJYRKD,
+        # 01M590GJAF0EDV4NBC4C99MFVH); `pult-pytest` — список.
+        command = acceptance.place_channel(decision.profile)
         digests, _reason = long_lived_manifest(task_id, t, target)
         if digests is not None and t["tests_locked_sha"]:
             long_lived = sorted(digests)

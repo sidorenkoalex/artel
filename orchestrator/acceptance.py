@@ -338,6 +338,570 @@ def _timeout_text(value: bytes | str | None) -> str:
     return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
+# ------------------------------------------------ итог из отчёта компонента
+#
+# Профиль с отчётом (`project_profile.reported`: компонент записи
+# `components:` с `report` либо `test_profile` с `runner: pytest-own` и
+# `report`; SPEC 01M590GJAF0EDV4NBC4C99MFVH, требования 1-7, 12) приходит в
+# места запуска тем же каналом `command`/`profile`, что `pytest-own`, и
+# гонится узлом `_report_run`: команда компонента с `report_args`
+# (`{path}` — файл во временном каталоге вне рабочей копии), установка
+# зависимостей пультом, `workdir`, чистое окружение, своя группа процессов
+# и таймаут. Итог — только из отчёта (`reporters.outcome`); код возврата и
+# текст раннера исход зелёным не делают.
+
+# Исход «неизвестно» (требование 3): значение — `FULL_SUITE_NOT_STARTED`,
+# деталь начинается с `UNKNOWN_PREFIX`; прогон был, и лог его пишется.
+UNKNOWN_PREFIX = "итог неизвестен: "
+UNKNOWN_OUTCOME = "неизвестно"
+INSTALL_WITHOUT_LOCK = "install без файла блокировки не исполняется"
+# Предел одной установки зависимостей компонента и опроса версии Vitest.
+INSTALL_TIMEOUT_SEC = 1800
+_VERSION_TIMEOUT_SEC = 60
+# Отметка завершённой установки в каталоге пульта: сумма файла блокировки и
+# имена каталогов, которые подключаются в `workdir` рабочей копии.
+_INSTALL_MARK = ".artel-install.json"
+
+
+def _reported(command):
+    """Профиль с итогом из отчёта, переданный каналом `command`; иначе
+    `None`."""
+    if command is None or isinstance(command, (list, tuple)):
+        return None
+    from . import project_profile  # project_profile -> store -> … -> acceptance
+    return command if project_profile.reported(command) else None
+
+
+def place_channel(profile):
+    """Канал `command` мест прогона для профиля проекта: сам профиль у
+    `pytest-own` и у профиля с отчётом, иначе список его команды (раннер
+    пульта)."""
+    if _own(profile) is not None or _reported(profile) is not None:
+        return profile
+    return list(profile.command)
+
+
+def is_unknown(run) -> bool:
+    """Итог полного набора — исход «неизвестно» (требование 3)."""
+    return run.outcome == FULL_SUITE_NOT_STARTED and \
+        run.detail.startswith(UNKNOWN_PREFIX)
+
+
+class ReportRun(NamedTuple):
+    """Исход одного прогона по отчёту: `refusal` — подготовка отказала,
+    прогона не было; `timed_out` — оборван по пределу; иначе `state` —
+    вердикт `reporters.outcome` с причиной `reason`. `raw` — вывод раннера,
+    `block` — сводка итога из отчёта, `code` — код возврата."""
+    state: str = ""
+    reason: str = ""
+    refusal: str = ""
+    timed_out: bool = False
+    raw: str = ""
+    block: str = ""
+    tests: tuple = ()
+    code: int | None = None
+
+    @property
+    def green(self) -> bool:
+        from .reporters import outcome
+        return not self.refusal and not self.timed_out and \
+            self.state == outcome.GREEN
+
+    def text(self, tail: int | None = None) -> str:
+        """Текст исхода для человека и журнала: отказ, таймаут, «неизвестно»
+        с причиной либо вывод раннера (хвост `tail`) и сводка из отчёта."""
+        from .reporters import outcome
+        raw = self.raw if tail is None else self.raw[-tail:]
+        if self.refusal:
+            return self.refusal
+        if self.timed_out:
+            return raw
+        if self.state == outcome.UNKNOWN:
+            return f"{unknown_line(self.reason)}\n{raw}"
+        return f"{raw.rstrip()}\n{self.block}\n"
+
+
+def unknown_line(reason: str) -> str:
+    return f"{UNKNOWN_PREFIX}{reason} — исход «{UNKNOWN_OUTCOME}»"
+
+
+def _component_name(profile) -> str:
+    from . import project_profile
+    return profile.component or project_profile.DEFAULT_COMPONENT
+
+
+def _pult_dir(profile, kind: str) -> Path:
+    """Каталог пульта проекта компонента для `kind` (`deps`, `cache`)."""
+    return (config.PROJECTS / (profile.project or config.DEFAULT_TARGET)
+            / kind / _component_name(profile))
+
+
+def _lock_file(cwd: Path) -> Path | None:
+    for name in LOCK_FILE_NAMES:
+        path = Path(cwd) / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _chmod_tree(root: Path, read_only: bool) -> None:
+    """Права записи дерева `root` (ссылки не трогаются): каталог установки
+    пульта подключается к рабочей копии только для чтения (требование 12),
+    перед переустановкой — снова на запись."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in [*dirnames, *filenames]:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path):
+                continue
+            mode = os.stat(path).st_mode
+            if os.path.isdir(path):
+                mode = 0o555 if read_only else 0o755
+            else:
+                mode = mode & ~0o222 if read_only else mode | 0o200
+            with contextlib.suppress(OSError):
+                os.chmod(path, mode)
+    with contextlib.suppress(OSError):
+        os.chmod(root, 0o555 if read_only else 0o755)
+
+
+def _drop_install(home: Path) -> None:
+    if home.exists():
+        _chmod_tree(home, read_only=False)
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def _install(profile, cwd: Path) -> tuple[Path | None, list, str]:
+    """(каталог установки пульта, имена подключаемых каталогов, отказ) —
+    `install` компонента (требование 12): один раз на сумму файла
+    блокировки `workdir` рабочей копии, в каталоге пульта
+    `.artel/projects/<проект>/deps/<компонент>/<сумма>` с копией файлов
+    верхнего уровня `workdir`; после установки каталог — только для
+    чтения. Без `install` — ничего не делается."""
+    if not profile.install:
+        return None, [], ""
+    name, command = _component_name(profile), " ".join(profile.install)
+    lock = _lock_file(cwd)
+    if lock is None:
+        return None, [], (f"{INSTALL_WITHOUT_LOCK}: в {cwd} нет файла "
+                          f"блокировки ({', '.join(LOCK_FILE_NAMES)}) — "
+                          f"install компонента {name} ({command}); прогон не "
+                          f"запускался")
+    try:
+        digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+    except OSError as exc:
+        return None, [], (f"файл блокировки {lock} не прочитан ({exc}) — "
+                          f"прогон не запускался")
+    home = _pult_dir(profile, "deps") / digest
+    links = _install_mark(home, digest)
+    if links is not None:
+        return home, links, ""
+    # Каталог установки общий у задач проекта с тем же файлом блокировки, а
+    # прогоны планки идут вне замка полных прогонов: проверка отметки и
+    # установка — под замком на сумму, иначе параллельная первая установка
+    # снесла бы чужое дерево посреди `npm ci`.
+    guard = home.parent / f"{digest}.lock"
+    try:
+        guard.parent.mkdir(parents=True, exist_ok=True)
+        fh = guard.open("a")
+    except OSError as exc:
+        return None, [], (f"замок установки {guard} не заведён ({exc}) — "
+                          f"прогон не запускался")
+    with fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            links = _install_mark(home, digest)
+            if links is not None:
+                return home, links, ""
+            return _install_locked(profile, cwd, lock, digest, home)
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _install_mark(home: Path, digest: str) -> list | None:
+    """Подключаемые каталоги завершённой установки `home` по её отметке;
+    `None` — установки нет или она не завершена."""
+    try:
+        mark = json.loads((home / _INSTALL_MARK).read_text(encoding="utf-8"))
+        if mark.get("lock") == digest and isinstance(mark.get("links"), list):
+            return [str(n) for n in mark["links"]]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def _install_locked(profile, cwd: Path, lock: Path, digest: str,
+                    home: Path) -> tuple[Path | None, list, str]:
+    """Установка `install` в `home` под замком `_install`."""
+    name, command = _component_name(profile), " ".join(profile.install)
+
+    def failed(why: str) -> tuple[None, list, str]:
+        _drop_install(home)
+        return None, [], (f"установка зависимостей компонента {name} "
+                          f"({command}) не удалась: {why}; прогон не "
+                          f"запускался")
+
+    _drop_install(home)
+    copied = set()
+    try:
+        home.mkdir(parents=True)
+        for entry in Path(cwd).iterdir():
+            if entry.is_file() and not entry.is_symlink():
+                shutil.copy2(entry, home / entry.name)
+                copied.add(entry.name)
+    except OSError as exc:
+        return failed(f"каталог {home} не подготовлен ({exc})")
+    try:
+        with _report_env(profile, home) as env:
+            res = _run_in_session(list(profile.install), home, env,
+                                  INSTALL_TIMEOUT_SEC)
+    except CommandNotFound as exc:
+        return failed(str(exc))
+    except subprocess.TimeoutExpired:
+        return failed(f"превышен предел {INSTALL_TIMEOUT_SEC} с")
+    except OSError as exc:
+        return failed(f"команда не запустилась ({exc})")
+    if res.returncode != 0:
+        return failed(f"код {res.returncode}: "
+                      f"{_bounded(res.stdout + res.stderr)}")
+    links = sorted(p.name for p in home.iterdir()
+                   if p.is_dir() and not p.is_symlink() and p.name not in copied)
+    try:
+        (home / _INSTALL_MARK).write_text(json.dumps(
+            {"lock": digest, "lock_file": lock.name, "links": links}),
+            encoding="utf-8")
+    except OSError as exc:
+        return failed(f"отметка установки не записана ({exc})")
+    _chmod_tree(home, read_only=True)
+    return home, links, ""
+
+
+def _inside_real(path: str, folder: str) -> bool:
+    real, base = os.path.realpath(path), os.path.realpath(folder)
+    return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
+
+
+def _link_deps(profile, tree: Path, cwd: Path, home: Path,
+               links: list) -> str:
+    """Подключение каталогов установки пульта к `workdir` рабочей копии
+    символьными ссылками; текст отказа или пусто. Гейт каталогу дерева не
+    доверяет (требование 12): на месте ссылки — собственный каталог или
+    ссылка мимо каталога пульта — отказ. Ссылка на прежнюю установку того
+    же компонента (сменился файл блокировки) — переподключается. Ссылка
+    исключена из git (`info/exclude` клона): чекпоинт её не закоммитит."""
+    component_root = str(_pult_dir(profile, "deps"))
+    for name in links:
+        target, link = home / name, Path(cwd) / name
+        if os.path.lexists(link):
+            real = os.path.realpath(link)
+            if os.path.islink(link) and real == os.path.realpath(target):
+                continue
+            if not (os.path.islink(link) and _inside_real(real, component_root)):
+                what = (f"ссылка на {real}" if os.path.islink(link)
+                        else "собственный каталог дерева")
+                return (f"подключение {link} подменено: {what} — не каталог "
+                        f"установки пульта {target}; прогон не запускался")
+            os.unlink(link)
+        rel = os.path.relpath(link, tree).replace(os.sep, "/")
+        refusal = _exclude_pattern(tree, f"/{rel}", "подключения зависимостей")
+        if refusal:
+            return refusal
+        try:
+            os.symlink(target, link)
+        except OSError as exc:
+            return (f"подключение {link} -> {target} не создано ({exc}); "
+                    f"прогон не запускался")
+    return ""
+
+
+def _prepare_deps(profile, tree: Path, cwd: Path) -> str:
+    """Установка и подключение зависимостей компонента перед прогоном или
+    проверкой; текст отказа или пусто."""
+    home, links, refusal = _install(profile, cwd)
+    if refusal or home is None:
+        return refusal
+    return _link_deps(profile, tree, cwd, home, links)
+
+
+@contextlib.contextmanager
+def _report_env(profile, run_dir: Path) -> Iterator[dict[str, str]]:
+    """Окружение прогона компонента — то же чистое окружение, что у
+    `pytest-own` (`_own_env`); у `pult-vitest` ещё `CI=true` (требование 7)."""
+    from . import project_profile
+    with _own_env(profile, run_dir) as env:
+        if profile.report == project_profile.REPORT_VITEST:
+            env["CI"] = "true"
+        yield env
+
+
+def _vitest_version(profile, cwd: Path) -> tuple[str, str]:
+    """(версия Vitest, отказ): из `tools` компонента, иначе из вывода
+    `--version` установленного раннера."""
+    declared = (profile.tools or {}).get("vitest")
+    if declared:
+        return str(declared), ""
+    argv = [profile.command[0], "--version"]
+    try:
+        with _report_env(profile, cwd) as env:
+            res = _run_in_session(argv, cwd, env, _VERSION_TIMEOUT_SEC)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "", (f"версия Vitest не получена ({' '.join(argv)}: {exc}); "
+                    f"прогон не запускался")
+    found = re.search(r"(\d+\.\d+(?:\.\d+)?)", res.stdout + res.stderr)
+    if res.returncode != 0 or found is None:
+        return "", (f"версия Vitest не получена ({' '.join(argv)}: код "
+                    f"{res.returncode}); прогон не запускался")
+    return found.group(1), ""
+
+
+def _vitest_head(profile, cwd: Path) -> tuple[list | None, str]:
+    """(argv `pult-vitest` до подмножества и `report_args`, отказ):
+    базовый argv требования 7 и флаги пульта по таблице версий."""
+    from . import project_profile
+    base = list(project_profile.VITEST_BASE_ARGV)
+    flag = project_profile.VITEST_REQUIRE_ASSERTIONS
+    if list(profile.command) != base:
+        return None, (f"command компонента {_component_name(profile)} "
+                      f"({' '.join(profile.command)}) не совпадает с базовым "
+                      f"argv пульта ({' '.join(base)}); {flag} и флаг кэша "
+                      f"добавляет пульт — прогон не запускался")
+    version, refusal = _vitest_version(profile, cwd)
+    if refusal:
+        return None, refusal
+    major = version.split(".", 1)[0]
+    flags = project_profile.vitest_flags(int(major)) if major.isdigit() else None
+    if flags is None:
+        return None, (f"Vitest {version}: флаг кэша для главной версии "
+                      f"{major} не подтверждён (её нет в "
+                      f"project_profile.VITEST_VERSION_FLAGS) — прогон не "
+                      f"запускался")
+    if not flags.require_assertions:
+        return None, (f"Vitest {version} не принимает {flag} — без него "
+                      f"прогон компонента не исполняется")
+    cache = _pult_dir(profile, "cache") / "vitest"
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return None, f"каталог кэша {cache} не заведён ({exc})"
+    return [*base, flag, f"{flags.cache_flag}={cache}"], ""
+
+
+def _subset_args(profile, subset: list) -> tuple[list | None, str]:
+    """Аргументы подмножества тестов (пути от корня дерева): у `pult-vitest`
+    — подстановкой `{tests}` в `select` (без `select` — отказ), иначе — как
+    у `pytest-own`, путями от `workdir` после команды."""
+    from . import project_profile
+    paths = [_own_target(profile, t, node=True) for t in subset]
+    if profile.report != project_profile.REPORT_VITEST:
+        return paths, ""
+    if not profile.select:
+        return None, (f"у компонента {_component_name(profile)} нет select — "
+                      f"подмножество тестов ({', '.join(subset)}) передать "
+                      f"раннеру нечем; прогон не запускался")
+    args = []
+    for item in profile.select:
+        if item == "{tests}":
+            args.extend(paths)
+        else:
+            args.append(item.replace("{tests}", " ".join(paths)))
+    return args, ""
+
+
+def is_pytest_command(command) -> bool:
+    """Команда — запуск pytest: исполняемый файл `pytest`/`py.test` или
+    `-m pytest`. Имя интерпретатора само по себе ничего не говорит."""
+    command = list(command or ())
+    if any(Path(part).name in ("pytest", "py.test") for part in command):
+        return True
+    return any(flag == "-m" and module == "pytest"
+               for flag, module in zip(command, command[1:]))
+
+
+def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
+                 report: Path) -> tuple[list | None, str]:
+    """(argv прогона по отчёту, отказ подготовки)."""
+    from . import project_profile
+    from .reporters import outcome
+    args = project_profile.report_args_of(profile)
+    vitest = profile.report == project_profile.REPORT_VITEST
+    needed = ["{path}", "{pult_reporter}"] if vitest else ["{path}"]
+    missing = [mark for mark in needed if not any(mark in a for a in args)]
+    if missing:
+        return None, (f"в report_args компонента {_component_name(profile)} "
+                      f"нет {' и '.join(missing)} — отчёт пульта не "
+                      f"подключить; прогон не запускался")
+    if vitest:
+        if not profile.install:
+            return None, (f"компонент {_component_name(profile)} "
+                          f"pult-vitest без install: node_modules дерева "
+                          f"пульт не исполняет — прогон не запускался")
+        head, refusal = _vitest_head(profile, cwd)
+        if refusal:
+            return None, refusal
+    else:
+        head = list(profile.command)
+    # Цель `long_lived_dir`, `--ignore` выкладки и `-p no:cacheprovider` —
+    # аргументы pytest: к иной команде компонента (Vitest, свой раннер) их
+    # не добавляет и `runner: pytest-own` (требования 4, 7).
+    own = _own(profile) if not vitest and is_pytest_command(head) else None
+    if subset is not None:
+        extra, refusal = _subset_args(profile, subset)
+        if refusal:
+            return None, refusal
+    elif own is not None:
+        extra = [_own_target(own, own.long_lived_dir)]
+        if _layout_mode(own) == "layout":
+            extra.append("--ignore=" + _own_target(
+                own, f"{own.long_lived_dir}/{PLANK_LAYOUT_DIR}"))
+    else:
+        extra = []
+    if own is not None:
+        extra += ["-p", "no:cacheprovider"]
+    tail = [a.replace("{path}", str(report))
+            .replace("{pult_reporter}", str(outcome.VITEST_REPORTER))
+            for a in args]
+    return [*head, *extra, *tail], ""
+
+
+def _session_to_log(argv: list, cwd: Path, env: dict, timeout: float,
+                    log: Path) -> tuple[int | None, str]:
+    """(код возврата или `None` по пределу, вывод) — прогон с выводом прямо
+    в файл `log`, группа процессов снимается на пределе и на исключении."""
+    with open(log, "wb") as fh:
+        proc = _launch(argv, cwd, True, env=env, stdout=fh,
+                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                       start_new_session=True)
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            code = None
+            _kill_group(proc.pid)
+            proc.wait()
+        except BaseException:
+            _kill_group(proc.pid)
+            proc.wait()
+            raise
+    return code, log.read_bytes().decode("utf-8", errors="replace")
+
+
+def _report_run(profile, tree: Path, subset: list | None, timeout: float,
+                log: Path | None = None) -> ReportRun:
+    """Прогон компонента по отчёту в дереве `tree`: `subset` — пути тестов
+    от корня дерева (планка, повтор, `--failed`), `None` — полный набор.
+    Подготовка (сверка `workdir`, `report_args`, команды `pult-vitest`,
+    установка и подключение зависимостей, версия Vitest) отказывает до
+    запуска — `refusal`; иначе итог читается из отчёта
+    (`reporters.outcome`)."""
+    from . import project_profile
+    from .reporters import outcome
+    cwd, refusal = _own_cwd(profile, Path(tree))
+    if not refusal:
+        refusal = _prepare_deps(profile, Path(tree), cwd)
+    if refusal:
+        return ReportRun(refusal=refusal)
+    holder = Path(tempfile.mkdtemp(prefix="artel-report-"))
+    try:
+        vitest = profile.report == project_profile.REPORT_VITEST
+        report = holder / ("report.json" if vitest else "report.xml")
+        argv, refusal = _report_argv(profile, Path(tree), cwd, subset, report)
+        if refusal:
+            return ReportRun(refusal=refusal)
+        try:
+            with _report_env(profile, cwd) as env:
+                if vitest:
+                    env["PULT_VITEST_REPORT"] = str(report)
+                if log is not None:
+                    code, raw = _session_to_log(argv, cwd, env, timeout, log)
+                else:
+                    try:
+                        res = _run_in_session(argv, cwd, env, timeout)
+                        code, raw = res.returncode, res.stdout + res.stderr
+                    except subprocess.TimeoutExpired as exc:
+                        code = None
+                        raw = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
+        except CommandNotFound as exc:
+            return ReportRun(refusal=f"{exc}; прогон не запускался")
+        if code is None:
+            return ReportRun(timed_out=True, raw=raw)
+        if vitest:
+            records, reason = outcome.parse_vitest(
+                report, _component_name(profile), profile.workdir,
+                profile.failure_errors)
+        else:
+            records, reason = outcome.parse_junit(
+                report, _component_name(profile), profile.workdir, cwd)
+        state, reason = outcome.verdict(records, code, reason)
+        block = outcome.summary_block(records) if records is not None else ""
+        return ReportRun(state=state, reason=reason, raw=raw, block=block,
+                         tests=tuple(records or ()), code=code)
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
+
+
+def _report_file_times(tests, files: list[str]) -> dict[str, float]:
+    """Сумма времени тестов каждого файла `files` (пути от корня дерева) по
+    записям отчёта."""
+    from . import project_profile
+    wanted = {os.path.normpath(rel): rel for rel in files}
+    times: dict[str, float] = {}
+    for record in tests:
+        try:
+            _comp, path, _name, _n = project_profile.parse_test_id(record.id)
+        except ValueError:
+            continue
+        rel = wanted.get(os.path.normpath(path))
+        if rel is not None:
+            times[rel] = times.get(rel, 0.0) + record.time
+    return times
+
+
+def _report_reds(run: ReportRun, files: list[str]) -> list:
+    """Красные повторы `run_repeat` по прогону из отчёта: упавшие и
+    повторённые тесты; отказ, предел и «неизвестно» — красный повтор
+    каждого файла с причиной (повтор с неизвестным исходом не зелёный)."""
+    from .reporters import outcome
+    if run.refusal:
+        return [RedTest(rel, (), run.refusal) for rel in files]
+    if run.timed_out:
+        note = f"прогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с"
+        return [RedTest(rel, (), note) for rel in files]
+    if run.state == outcome.UNKNOWN:
+        return [RedTest(rel, (), unknown_line(run.reason)) for rel in files]
+    return [RedTest(r.id, tuple(dict.fromkeys(_SEED_LINE.findall(r.failure))),
+                    r.failure or f"{outcome.RETRY_NOTE}: {r.retries}")
+            for r in run.tests
+            if r.outcome in (outcome.FAILED, outcome.ERROR) or r.retries > 0]
+
+
+def run_checks_local(profile, tree: Path) -> tuple[bool, str]:
+    """(прошли, текст) — `checks_local` компонента в его `workdir` дерева
+    `tree` (требование 13): окружение и зависимости — те же, что у прогона
+    компонента. Ненулевой код, отказ подготовки и предел — не прошли, текст
+    несёт вывод проверки."""
+    command = list(getattr(profile, "checks_local", ()) or ())
+    if not command:
+        return True, ""
+    head = (f"checks_local компонента {_component_name(profile)} "
+            f"({' '.join(command)})")
+    cwd, refusal = _own_cwd(profile, Path(tree))
+    if not refusal:
+        refusal = _prepare_deps(profile, Path(tree), cwd)
+    if refusal:
+        return False, f"{head}: {refusal}"
+    try:
+        with _report_env(profile, cwd) as env:
+            res = _run_in_session(command, cwd, env,
+                                  config.ACCEPTANCE_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        return False, (f"{head}: превышен предел "
+                       f"{config.ACCEPTANCE_TIMEOUT_SEC} с")
+    except OSError as exc:
+        return False, f"{head}: не запустилась ({exc})"
+    output = _bounded(res.stdout + res.stderr)
+    if res.returncode != 0:
+        return False, f"{head} — код {res.returncode}:\n{output}"
+    return True, f"{head} — код 0"
+
+
 # ------------------------------------------------ разбор вывода прогона
 #
 # Один узел разбора на весь пульт (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME,
@@ -641,11 +1205,17 @@ def _exclude_layout(code_root: Path) -> str:
     Файл общий для всех worktree клона, и задачи дописывают его
     параллельно: проверка «шаблон уже есть» и дописывание идут под
     `flock` на самом файле, иначе две задачи оставили бы две строки."""
+    return _exclude_pattern(code_root, PLANK_LAYOUT_EXCLUDE, "выкладки планки")
+
+
+def _exclude_pattern(code_root: Path, pattern: str, what: str) -> str:
+    """Шаблон `pattern` в `info/exclude` клона рабочей копии `code_root`
+    (`_exclude_layout`); текст отказа «отказ <what>: …» или пусто."""
     res = gitcmd.in_repo(Path(code_root), "rev-parse", "--git-path",
                          "info/exclude")
     if res is None or res.returncode != 0 or not res.stdout.strip():
         detail = (res.stderr.strip() if res is not None else "") or "нет ответа"
-        return (f"отказ выкладки планки: git не назвал info/exclude рабочей "
+        return (f"отказ {what}: git не назвал info/exclude рабочей "
                 f"копии {code_root} ({detail}) — pytest не запускался")
     path = Path(res.stdout.strip())
     if not path.is_absolute():
@@ -657,14 +1227,14 @@ def _exclude_layout(code_root: Path) -> str:
             try:
                 fh.seek(0)
                 text = fh.read()
-                if PLANK_LAYOUT_EXCLUDE not in text.splitlines():
+                if pattern not in text.splitlines():
                     fh.write(("" if not text or text.endswith("\n") else "\n")
-                             + PLANK_LAYOUT_EXCLUDE + "\n")
+                             + pattern + "\n")
                     fh.flush()
             finally:
                 fcntl.flock(fh, fcntl.LOCK_UN)
     except (OSError, UnicodeDecodeError) as exc:
-        return (f"отказ выкладки планки: {path} не записан ({exc}) — pytest "
+        return (f"отказ {what}: {path} не записан ({exc}) — pytest "
                 f"не запускался")
     return ""
 
@@ -785,10 +1355,32 @@ def run(tdir: Path, cwd: Path | None = None,
             return False, f"{location_note}\n{layout_refusal}"
         if layout is not None:
             targets[0] = str(layout)
+        reported = _reported(command)
+        if reported is not None:
+            return _run_reported(reported, targets, tree, location_note, extra,
+                                 file_times)
         if own is not None:
             targets = [_own_target(own, t) for t in targets]
         return _run_now(command, targets, run_cwd, location_note, extra,
                         file_times)
+
+
+def _report_timeout_text(run: ReportRun, what: str = "прогон") -> str:
+    return (f"{what} превысил {config.ACCEPTANCE_TIMEOUT_SEC}с — завис или "
+            f"ждёт сетевой ответ\n{run.raw[-2000:]}")
+
+
+def _run_reported(profile, targets: list[str], tree: Path, location_note: str,
+                  extra: list[str], file_times: dict[str, float] | None
+                  ) -> tuple[bool, str]:
+    """`run()` профиля с отчётом: цели — подмножество компонента, исход —
+    из отчёта (требования 1, 8)."""
+    run = _report_run(profile, tree, list(targets),
+                      config.ACCEPTANCE_TIMEOUT_SEC)
+    if file_times is not None:
+        file_times.update(_report_file_times(run.tests, list(extra)))
+    text = _report_timeout_text(run) if run.timed_out else run.text(tail=2000)
+    return run.green, f"{location_note}\n{text}"
 
 
 def _run_now(command, targets: list[str], run_cwd: Path, location_note: str,
@@ -921,13 +1513,37 @@ def collect(tdir: Path, cwd: Path | None = None,
             return False, f"{location_note}\n{layout_refusal}"
         if layout is not None:
             targets[0] = str(layout)
-        if own is not None:
-            targets = [_own_target(own, t) for t in targets]
-        ok, output = _collect_now(command, targets, run_cwd, location_note)
+        reported = _reported(command)
+        if reported is not None:
+            ok, output = _collect_reported(reported, targets, tree,
+                                           location_note)
+        else:
+            if own is not None:
+                targets = [_own_target(own, t) for t in targets]
+            ok, output = _collect_now(command, targets, run_cwd, location_note)
     # Зелёный и пустой сбор заголовка не несут — строку о случае им дописать.
     if case_note and case_note not in output:
         output = f"{case_note}\n{output}"
     return ok, output
+
+
+def _collect_reported(profile, targets: list[str], tree: Path,
+                      location_note: str) -> tuple[bool, str]:
+    """`collect()` профиля с отчётом: сухого сбора у произвольной команды
+    компонента нет — подмножество прогоняется, и «собралось» значит «отчёт
+    прочитан и назвал хотя бы один тест»; исход тестов (в `tests_writing`
+    они красны по построению) сбор не судит. «Неизвестно», отказ и предел —
+    не собралось."""
+    from .reporters import outcome
+    run = _report_run(profile, tree, list(targets),
+                      config.ACCEPTANCE_TIMEOUT_SEC)
+    if run.timed_out:
+        return False, f"{location_note}\n{_report_timeout_text(run, 'сбор')}"
+    if run.refusal or run.state == outcome.UNKNOWN:
+        return False, f"{location_note}\n{run.text(tail=2000)}"
+    if not run.tests:
+        return False, "планка не содержит ни одного теста"
+    return True, run.text(tail=2000)
 
 
 def _collect_now(command, targets: list[str], run_cwd: Path,
@@ -1043,7 +1659,13 @@ def run_repeat(files: list[str], cwd: Path,
     причины: повтор, исход которого неизвестен, зелёным не считается.
 
     `command` — тот же контракт, что у `run()`: отказ запуска `pytest-own`
-    — красный повтор каждого файла с текстом отказа."""
+    — красный повтор каждого файла с текстом отказа; профиль с отчётом —
+    красные тесты отчёта (`_report_reds`)."""
+    reported = _reported(command)
+    if reported is not None:
+        return _report_reds(_report_run(reported, cwd, list(files),
+                                        config.ACCEPTANCE_TIMEOUT_SEC),
+                            list(files))
     run_cwd, args = cwd, list(files)
     own = _own(command)
     if own is not None:
@@ -1357,10 +1979,31 @@ def run_plank(targets: list[str], cwd: Path,
         if layout_refusal:
             return REFUSED_EXIT_CODE, layout_refusal
         args = [_layout_target(t, cwd, tests_dir, layout) for t in targets]
-        if own is not None:
-            args = [_own_target(own, t) for t in args]
-        code, output = _run_plank_now(profile, args, run_cwd)
+        reported = _reported(profile)
+        if reported is not None:
+            code, output = _run_plank_reported(reported, args, cwd)
+        else:
+            if own is not None:
+                args = [_own_target(own, t) for t in args]
+            code, output = _run_plank_now(profile, args, run_cwd)
     return code, f"{case_note}\n{output}" if case_note else output
+
+
+def _run_plank_reported(profile, args: list[str],
+                        tree: Path) -> tuple[int | None, str]:
+    """`run_plank()` профиля с отчётом: код 0 — только зелёный итог из
+    отчёта; отказ подготовки — `REFUSED_EXIT_CODE`; предел — `None`;
+    иначе код раннера, а при нулевом — 1 (красный или «неизвестно»)."""
+    run = _report_run(profile, tree, list(args), config.ACCEPTANCE_TIMEOUT_SEC)
+    if run.refusal:
+        return REFUSED_EXIT_CODE, run.refusal
+    if run.timed_out:
+        return None, (f"{run.raw}\nпрогон превысил "
+                      f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
+                      f"сетевой ответ")
+    if run.green:
+        return 0, run.text()
+    return run.code or 1, run.text()
 
 
 def _layout_target(arg: str, cwd: Path, tests_dir: Path,
@@ -1503,7 +2146,9 @@ class FullSuiteRun(NamedTuple):
     выжимка `run_digest`; `log_path` — файл с ПОЛНЫМ выводом прогона
     (`None`: прогона не было вовсе либо запись лога не удалась);
     `detail` — готовая строка для журнала: различимая причина, выжимка и
-    путь к логу.
+    путь к логу. `tests` — итог по каждому тесту из отчёта компонента
+    (`reporters.outcome.CaseResult`, SPEC 01M590GJAF0EDV4NBC4C99MFVH,
+    ANSWER-2, В3); у прогона без отчёта — пусто.
     """
 
     green: bool
@@ -1511,18 +2156,22 @@ class FullSuiteRun(NamedTuple):
     digest: str
     log_path: Path | None
     detail: str
+    tests: tuple = ()
 
 
 def _full_suite_outcome(green: bool, output: str) -> str:
     """Исход прогона по его тексту — по префиксу СВОЕГО ЖЕ сообщения о
     вырожденном исходе (см. `FULL_SUITE_NO_TESTS_NOTE`), не по разбору
     вывода pytest: сам pytest про «каталога нет» и «не уложился в
-    потолок» ничего не печатает — это решения `run_full_suite`."""
+    потолок» ничего не печатает — это решения `run_full_suite`. Исход
+    «неизвестно» (`UNKNOWN_PREFIX`) — значение «прогон не начат»
+    (требование 3)."""
     if green:
         return FULL_SUITE_GREEN
     if output.startswith(FULL_SUITE_NO_TESTS_NOTE):
         return FULL_SUITE_NO_TESTS
-    if output.startswith(f"{FULL_SUITE_NOT_STARTED}: "):
+    if output.startswith(f"{FULL_SUITE_NOT_STARTED}: ") or \
+            output.startswith(UNKNOWN_PREFIX):
         return FULL_SUITE_NOT_STARTED
     if output.startswith("прогон полного набора tests/ превысил "):
         return FULL_SUITE_TIMEOUT
@@ -1629,11 +2278,17 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     идут в argv после целей без перевода к `workdir`.
     """
     global _last_full_suite_metrics, _last_process_snapshot, _last_run_completed_at
+    global _last_report_tests
     observe = _observe_full_suite
     _last_full_suite_metrics = None
     _last_process_snapshot = None
     _last_run_completed_at = None
+    _last_report_tests = ()
     full_run = tuple(targets) == ("tests",) and not test_ids
+    reported = _reported(command)
+    if reported is not None:
+        return _run_full_suite_reported(root, reported, targets, test_ids,
+                                        log, limit, full_run)
     own = _own(command)
     run_cwd = root
     if own is None:
@@ -1689,6 +2344,69 @@ def run_full_suite(root: Path, command: list[str] | None = None,
             head, newline, rest = output.partition("\n")
             output = f"{head}\n{suite_load_line(_last_full_suite_metrics)}\n{rest}"
         return green, output
+
+
+# Итог по каждому тесту последнего прогона `run_full_suite` профиля с
+# отчётом — его читает `full_suite` в `FullSuiteRun.tests` (вывод
+# `run_full_suite` — пара «зелено, текст», её форму знают `suite-run` и
+# `notes`).
+_last_report_tests: tuple = ()
+
+
+def _report_subset(profile, targets: tuple, test_ids: tuple) -> list | None:
+    """Подмножество полного прогона компонента: `None` — полный набор;
+    иначе пути целей, а id `<компонент>:<путь>::<имя>` (`suite-run
+    --failed`) — их пути (повтор идёт по файлу)."""
+    from . import project_profile
+    items = [t for t in (*targets, *test_ids) if t != "tests"]
+    if tuple(targets) == ("tests",) and not test_ids:
+        return None
+    subset = []
+    for item in items:
+        try:
+            comp, path, _name, _n = project_profile.parse_test_id(item)
+        except ValueError:
+            comp, path = "", item
+        if comp != _component_name(profile):
+            path = item
+        if path not in subset:
+            subset.append(path)
+    return subset
+
+
+def _run_full_suite_reported(root: Path, profile, targets: tuple,
+                             test_ids: tuple, log: Path | None,
+                             limit: tuple[int, str] | None,
+                             full_run: bool) -> tuple[bool, str]:
+    """`run_full_suite` профиля с отчётом (SPEC 01M590GJAF0EDV4NBC4C99MFVH,
+    требования 1, 3, 9): команда компонента без флагов параллели и `-vv`
+    пульта (`extra` не передаётся), итог — из отчёта. Отказ подготовки —
+    «прогон не начат: …»; «неизвестно» — `unknown_line` первой строкой;
+    иначе вывод раннера и сводка из отчёта в конце (её читают
+    `run_summary_line`, `failed_entries`, `suite_run.parse`)."""
+    global _last_report_tests
+    own = _own(profile)
+    subset = _report_subset(profile, targets, test_ids)
+    if subset is None and own is not None and \
+            not (root / own.long_lived_dir).is_dir():
+        return False, FULL_SUITE_NO_TESTS_NOTE
+    limit = limit or (config.FULL_SUITE_TIMEOUT_SEC, "config")
+    with _machine_lock(None, limit) as holder:
+        if holder is not None:
+            return False, _not_started_note(holder)
+        start = time.monotonic()
+        run = _report_run(profile, root, subset, limit[0], log=log)
+        if full_run and not run.refusal:
+            _signal_near_limit(root, time.monotonic() - start, limit, None)
+    if run.refusal:
+        return False, f"{FULL_SUITE_NOT_STARTED}: {run.refusal}"
+    if run.timed_out:
+        return False, f"{_full_suite_timeout_note(limit)}\n{run.raw}"
+    _last_report_tests = run.tests
+    if log is not None and run.block:
+        with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
+            fh.write(f"\n{run.block}\n")
+    return run.green, run.text()
 
 
 # Порог сигнала «длительность близка к пределу» (SPEC
@@ -2118,6 +2836,9 @@ def suite_result_key(tree: str, command: list[str] | None = None,
     (SPEC 01M58PG72PG64GS790XM2EWS61, требование 10)."""
     if not isinstance(tree, str) or not re.fullmatch(r"[0-9a-f]{40}", tree):
         return None
+    reported = _reported(command)
+    if reported is not None:
+        return _report_suite_result_key(tree, reported, base, root)
     own = _own(command)
     if own is not None:
         return _own_suite_result_key(tree, own, base, root)
@@ -2180,6 +2901,35 @@ def _own_suite_result_key(tree: str, profile, base: bool,
                 "workdir": profile.workdir, "env": dict(profile.env)}
         if locks is not None:
             data["tools"] = {"declared": tools, "locks": locks}
+        return hashlib.sha256(json.dumps(data, sort_keys=True,
+                                         ensure_ascii=False).encode()).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _report_suite_result_key(tree: str, profile, base: bool,
+                             root: Path | None = None) -> str | None:
+    """Ключ итога полного набора профиля с отчётом (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 14): дерево, `tools`, суммы
+    файлов блокировки `workdir`, команда с действующими `report_args`, имя
+    компонента (плюс `runner`, `workdir`, `env`, `select`). Ключ рабочего
+    дерева без `root` не считается: игнорируемый файл блокировки иначе не
+    прочесть; ключ базы — по дереву коммита, без файлов рабочей копии."""
+    from . import project_profile
+    locks = None
+    if not base:
+        locks = _lock_sums(root, tree, profile.workdir)
+        if locks is None:
+            return None
+    try:
+        data = {"tree": tree, "base": base, "locks": locks,
+                "tools": dict(profile.tools or {}),
+                "command": list(profile.command), "report": profile.report,
+                "report_args": list(project_profile.report_args_of(profile)),
+                "select": list(profile.select),
+                "component": _component_name(profile),
+                "runner": profile.runner, "workdir": profile.workdir,
+                "env": dict(profile.env)}
         return hashlib.sha256(json.dumps(data, sort_keys=True,
                                          ensure_ascii=False).encode()).hexdigest()
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
@@ -2319,7 +3069,14 @@ def full_suite(root: Path, task_id: str,
         return FullSuiteRun(False, FULL_SUITE_NOT_STARTED, "", None,
                             _full_suite_detail(FULL_SUITE_NOT_STARTED, "",
                                                None, note))
-    limit = project_profile.full_suite_limit(target)
+    reported = _reported(command)
+    if reported is not None and reported.from_components and \
+            len(project_profile.components(reported.project or target)) > 1:
+        # Узел по компонентам записи из нескольких компонентов: предел —
+        # свой у каждого (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требование 10).
+        limit = project_profile.component_limit(reported)
+    else:
+        limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
     try:
         tree = suite_tree_hash(root)
@@ -2359,8 +3116,10 @@ def full_suite(root: Path, task_id: str,
         else:
             green, output = run_full_suite(root, command=command, **run_kwargs)
     _journal_db_files_created(root, task_id, recordable)
+    tests = _last_report_tests if reported is not None else ()
     outcome = _full_suite_outcome(green, output)
-    if outcome == FULL_SUITE_NOT_STARTED:
+    unknown = output.startswith(UNKNOWN_PREFIX)
+    if outcome == FULL_SUITE_NOT_STARTED and not unknown:
         # Прогона не было: ни лога, ни выжимки, ни итога по sha.
         return FullSuiteRun(green, outcome, "", None,
                             _full_suite_detail(outcome, "", None, output))
@@ -2369,6 +3128,13 @@ def full_suite(root: Path, task_id: str,
     _remember_gate_failures(root, outcome, output)
     log_path = (_write_full_suite_log(task_id, output)
                  if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
+    if unknown:
+        # «Неизвестно» (требование 3): прогон был, лог есть и назван, итог
+        # по sha не сохраняется — он не зелёный и не красный.
+        head = output.splitlines()[0]
+        log_note = f" (лог прогона: {log_path})" if log_path is not None else ""
+        return FullSuiteRun(False, outcome, head, log_path,
+                            f"{head}{log_note}", tests)
     if key and tree:
         save_suite_result("gate", key, tree, outcome, output, log_path)
         try:
@@ -2382,12 +3148,48 @@ def full_suite(root: Path, task_id: str,
             pass
     digest_output = "\n".join(line for line in output.splitlines()
                               if not line.startswith("нагрузка: load average"))
+    if reported is not None and outcome in (FULL_SUITE_GREEN, FULL_SUITE_RED):
+        # Выжимка компонента — из сводки отчёта в конце вывода, не из
+        # текста раннера (требование 18).
+        headers = list(_SHORT_SUMMARY_HEADER.finditer(digest_output))
+        if headers:
+            digest_output = digest_output[headers[-1].start():]
     digest = run_digest(digest_output)
     detail = _full_suite_detail(outcome, digest, log_path,
                                 output.splitlines()[0] if output else "")
     if outcome == FULL_SUITE_TIMEOUT and _last_full_suite_metrics is not None:
         detail += "\n" + suite_load_line(_last_full_suite_metrics)
-    return FullSuiteRun(green, outcome, digest, log_path, detail)
+    return FullSuiteRun(green, outcome, digest, log_path, detail, tests)
+
+
+def components_full_suite(root: Path, task_id: str, profiles: tuple,
+                          fresh: bool = False) -> FullSuiteRun:
+    """Полный набор по каждому компоненту `profiles` (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требования 10-11): каждый — узлом
+    `full_suite` со своим пределом; итог зелёный, только если зелены все.
+    Не зелёный итог несёт исход и деталь решающего компонента первой
+    строкой («неизвестно» и «не начат» решают раньше таймаута, таймаут —
+    раньше красного), затем строки остальных."""
+    if not profiles:
+        note = f"{FULL_SUITE_NOT_STARTED}: компонентов для прогона нет"
+        return FullSuiteRun(False, FULL_SUITE_NOT_STARTED, "", None, note)
+    runs = [(p, full_suite(root, task_id, command=p, fresh=True) if fresh
+             else full_suite(root, task_id, command=p)) for p in profiles]
+    tests = tuple(t for _p, run in runs for t in run.tests)
+    lines = [f"компонент {p.component}: {run.detail}" for p, run in runs]
+    bad = [(p, run) for p, run in runs if not run.green]
+    if not bad:
+        return FullSuiteRun(True, FULL_SUITE_GREEN,
+                            "\n".join(run.digest for _p, run in runs),
+                            runs[-1][1].log_path, "\n".join(lines), tests)
+    order = (FULL_SUITE_NOT_STARTED, FULL_SUITE_TIMEOUT, FULL_SUITE_NO_TESTS,
+             FULL_SUITE_RED)
+    p, run = min(bad, key=lambda item: order.index(item[1].outcome)
+                 if item[1].outcome in order else len(order))
+    rest = [line for (q, _r), line in zip(runs, lines) if q is not p]
+    detail = "\n".join([f"{run.detail} [компонент {p.component}]", *rest])
+    return FullSuiteRun(False, run.outcome, run.digest, run.log_path, detail,
+                        tests)
 
 
 def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
@@ -2396,7 +3198,46 @@ def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
 
     Гейт мержа продолжает вызывать `full_suite` напрямую. Сравнивается
     фактическое дерево прогона, включая приложения PLAN и рабочие правки.
+
+    `checks_local` компонента проекта задачи исполняются здесь после
+    итога любого источника — CI, повторно взятого и свежего (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 13): узел общий у `approve` и
+    автогейта. Проверка не прошла — красный итог с её выводом.
     """
+    run = _acceptance_suite_run(conn, root, task_id, branch, repo,
+                                actor=actor, fresh=fresh)
+    try:
+        profile = _task_profile(conn, task_id)
+    except targets.ComponentsPending:
+        # Путь CI запись из нескольких компонентов отказом не встречает —
+        # её держат входы гейтов; проверок компонента тут нет.
+        profile = None
+    ok, text = run_checks_local(profile, root)
+    if not text:
+        return run
+    from . import store
+    if isinstance(conn, sqlite3.Connection):
+        store.journal(conn, task_id, actor, CHECKS_LOCAL_ACTION, text)
+    if ok:
+        return run
+    if not run.green:
+        # Проверка только добавляет красноту: незелёный исход («неизвестно»,
+        # «не начат», таймаут) остаётся прежним — иначе `--accept-red`
+        # принял бы его как красный (требование 3, инвариант 41).
+        return run._replace(detail=f"{run.detail}\n{text}")
+    return FullSuiteRun(False, FULL_SUITE_RED, text, run.log_path,
+                        f"{text}\n{run.detail}", run.tests)
+
+
+# Запись журнала об исполнении `checks_local` компонента (требование 13).
+CHECKS_LOCAL_ACTION = "checks_local компонента"
+
+
+def _acceptance_suite_run(conn, root: Path, task_id: str, branch: str,
+                          repo: Path, *, actor: str,
+                          fresh: bool) -> FullSuiteRun:
+    """Итог полного набора приёмки — тело `acceptance_suite` до
+    `checks_local`."""
     from . import store
 
     reason = "запрошен свежий локальный прогон" if fresh else ""
@@ -2439,15 +3280,24 @@ def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
 
 
 def _task_own_profile(conn, task_id: str):
-    """Профиль `pytest-own` проекта задачи для полного набора приёмки
-    (SPEC 01M52EEFNA1WH31962HVNT0YZ9, требование 1); `None` — у проекта
-    `pult-pytest`, профиля нет или он не прочитан: тогда `full_suite`
-    зовётся прежней формой. Строка задачи не прочитана — проект артели,
-    тот же откат, что у `store.task_target` для строки без проекта.
+    """Профиль `pytest-own` или профиль с итогом из отчёта (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 4) проекта задачи для мест
+    прогона (SPEC 01M52EEFNA1WH31962HVNT0YZ9, требование 1); `None` — у
+    проекта `pult-pytest` без отчёта, профиля нет или он не прочитан: тогда
+    места зовутся прежней формой. Строка задачи не прочитана — проект
+    артели, тот же откат, что у `store.task_target` для строки без проекта.
 
     Запись с несколькими компонентами — `targets.ComponentsPending` с
     причиной `profile_of`: прежняя форма пульта на ней была бы обходом
     отказа до G1б (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требование 10)."""
+    profile = _task_profile(conn, task_id)
+    return _reported(profile) or _own(profile)
+
+
+def _task_profile(conn, task_id: str):
+    """Профиль тестов проекта задачи (`with_tools`) или `None` — тело
+    `_task_own_profile` без фильтра раннера: его `checks_local` нужны и
+    профилю без отчёта."""
     from . import project_profile, repo_context, store  # store -> ... -> acceptance
     target = config.DEFAULT_TARGET
     if isinstance(conn, sqlite3.Connection):
@@ -2461,11 +3311,10 @@ def _task_own_profile(conn, task_id: str):
     if answer.outcome != repo_context.PROFILE_PRESENT:
         return None
     try:
-        profile = project_profile.with_tools(
+        return project_profile.with_tools(
             target, project_profile.Profile.from_values(answer.values))
     except (KeyError, TypeError, ValueError, targets.TargetsError):
         return None
-    return _own(profile)
 
 
 def summary(tdir: Path, branch: str | None = None,

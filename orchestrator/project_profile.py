@@ -86,6 +86,21 @@ class Profile:
     # записей с `test_profile` пусто. Вне хэша — по той же причине, что `env`.
     tools: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), hash=False)
+    # Поля компонента (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требования 1-7, 13):
+    # заполняет `with_tools` (у записи `components:`) либо
+    # `component_profiles`; у `test_profile` — имя `default` и проект. Вне
+    # сравнения: профиль записи `test_profile` и её единственного
+    # компонента с теми же подполями — один профиль (SPEC
+    # 01M58FNWBV25FF26E7AZ9Q9912); ключ итога читает поля явно.
+    component: str = field(default="", compare=False)
+    project: str = field(default="", compare=False)
+    report_args: tuple = field(default=(), compare=False)
+    select: tuple = field(default=(), compare=False)
+    failure_errors: tuple = field(default=(), compare=False)
+    checks_local: tuple = field(default=(), compare=False)
+    # Профиль взят из записи `components:` — признак различителя
+    # «итог из отчёта» (`reported`).
+    from_components: bool = field(default=False, compare=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -228,15 +243,133 @@ def components(target: str) -> tuple:
 
 def with_tools(target: str, profile: Profile) -> Profile:
     """`profile` с объявленными `tools` единственного компонента записи
-    `target` (SPEC 01M58PG72PG64GS790XM2EWS61, требование 9) — один
-    помощник на `decide` и `acceptance._task_own_profile`, чтобы ключ
-    итога обоих входов совпадал. У `test_profile` поля `tools` нет —
-    профиль возвращается как есть."""
+    `target` (SPEC 01M58PG72PG64GS790XM2EWS61, требование 9) и полями
+    компонента, которых нет в `targets.PROFILE_FIELDS` (`report_args`,
+    `select`, `failure_errors`, `checks_local`, имя, проект; SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 15) — один помощник на `decide`,
+    `acceptance._task_own_profile` и `suite_run._profile_command`, чтобы
+    профиль и ключ итога всех входов совпадали. У `test_profile` таких
+    полей нет — только имя `default` и проект."""
+    entry = targets.target(target)
     comps = components(target)
-    tools = comps[0].fields.get("tools") if len(comps) == 1 else None
-    if not tools:
-        return profile
-    return replace(profile, tools=MappingProxyType(dict(tools)))
+    if entry.get(targets.COMPONENTS_FIELD) is None or len(comps) != 1:
+        return replace(profile, component=DEFAULT_COMPONENT, project=target)
+    return _with_component_fields(replace(profile, project=target), comps[0])
+
+
+def _with_component_fields(profile: Profile, comp: Component) -> Profile:
+    fields = comp.fields
+    return replace(
+        profile, component=comp.name, from_components=True,
+        tools=MappingProxyType(dict(fields.get("tools") or {})),
+        report_args=tuple(fields.get("report_args") or ()),
+        select=tuple(fields.get("select") or ()),
+        failure_errors=tuple(fields.get("failure_errors") or ()),
+        checks_local=tuple(fields.get("checks_local") or ()))
+
+
+def component_profiles(target: str, names=None) -> tuple:
+    """Профили компонентов записи `target` (все либо названные `names`, в
+    порядке записи) — для узлов полного прогона по компонентам (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 11). Поля профиля, которых у
+    компонента записи из нескольких компонентов может не быть
+    (`long_lived_dir` и др.), — пустые: прогону полного набора компонента
+    они не нужны. TargetsError — запись не годна."""
+    chosen = []
+    for comp in components(target):
+        if names is not None and comp.name not in names:
+            continue
+        fields = comp.fields
+        profile = Profile(
+            command=tuple(fields.get("command") or ()),
+            long_lived_dir=fields.get("long_lived_dir") or "",
+            long_lived_name=fields.get("long_lived_name") or "",
+            weakening_scope=tuple(fields.get("weakening_scope") or ()),
+            mutation_claim_scope=tuple(fields.get("mutation_claim_scope") or ()),
+            report=fields.get("report") or "",
+            install=tuple(fields.get("install") or ()),
+            full_suite_timeout_sec=fields.get("full_suite_timeout_sec"),
+            runner=fields.get("runner") or targets.PROFILE_RUNNER_DEFAULT,
+            workdir=fields.get("workdir") or "",
+            env=MappingProxyType(dict(fields.get("env") or {})),
+            long_lived_imports=tuple(fields.get("long_lived_imports") or ()),
+            project=target)
+        chosen.append(_with_component_fields(profile, comp))
+    return tuple(chosen)
+
+
+# Отчёт компонента, итог которого читается только из отчёта пульта (SPEC
+# 01M590GJAF0EDV4NBC4C99MFVH, требования 1, 5).
+REPORT_JUNIT = "junit-xml"
+REPORT_VITEST = "pult-vitest"
+# Умолчание `report_args` у `junit-xml` (требование 2): `{path}` — файл
+# отчёта вне рабочей копии.
+JUNIT_DEFAULT_REPORT_ARGS = ("--junitxml", "{path}")
+
+
+def reported(profile) -> bool:
+    """Итог прогона по профилю читается только из отчёта (требование 4):
+    `report` объявлен у компонента записи `components:` либо у записи
+    `test_profile` с `runner: pytest-own`. Запись артели (`pult-pytest`) и
+    записи без `report` — прежний разбор по коду возврата и тексту
+    pytest."""
+    if not getattr(profile, "report", ""):
+        return False
+    return bool(getattr(profile, "from_components", False)) or \
+        getattr(profile, "runner", "") == targets.PROFILE_RUNNER_OWN
+
+
+def report_args_of(profile) -> tuple:
+    """Действующие `report_args` профиля с отчётом: явные — как есть, у
+    `junit-xml` без них — умолчание `JUNIT_DEFAULT_REPORT_ARGS`
+    (требование 2)."""
+    if profile.report_args:
+        return tuple(profile.report_args)
+    if profile.report == REPORT_JUNIT:
+        return JUNIT_DEFAULT_REPORT_ARGS
+    return ()
+
+
+# Базовый argv команды компонента `pult-vitest` (требование 7): `command`
+# компонента обязан совпасть с ним; флаги пульта добавляются после.
+VITEST_BASE_ARGV = ("node_modules/.bin/vitest", "run", "--config",
+                    "vitest.config.js", "--allowOnly=false", "--update=false",
+                    "--retry=0")
+VITEST_REQUIRE_ASSERTIONS = "--expect.requireAssertions"
+
+
+@dataclass(frozen=True)
+class VitestFlags:
+    """Флаги пульта для главной версии Vitest: флаг каталога кэша и
+    принимает ли версия `--expect.requireAssertions`; `probe` — чем
+    подтверждено значение."""
+    cache_flag: str
+    require_assertions: bool
+    probe: str
+
+
+# Главная версия Vitest → флаги пульта (ANSWER-2, В1). Версия вне таблицы —
+# отказ подготовки прогона: флаг кэша для неё не подтверждён. Значение для
+# Vitest 4 — кандидат; правит его проба этапа 2 (перевод записи sled).
+VITEST_VERSION_FLAGS = {
+    4: VitestFlags("--cacheDir", True, "не подтверждено пробой (этап 2)"),
+}
+
+
+def vitest_flags(major: int):
+    """Запись `VITEST_VERSION_FLAGS` главной версии `major` (ключ — число
+    или его строка); `None` — версии в таблице нет."""
+    table = VITEST_VERSION_FLAGS
+    return table.get(major, table.get(str(major)))
+
+
+def component_limit(profile) -> tuple[int, str]:
+    """Предел полного набора компонента — его `full_suite_timeout_sec`
+    (требование 10), иначе `config`."""
+    if profile.full_suite_timeout_sec is not None:
+        return (profile.full_suite_timeout_sec,
+                f"компонент {profile.component} проекта {profile.project}")
+    return config.FULL_SUITE_TIMEOUT_SEC, "config"
 
 
 def _regexes(value) -> list:

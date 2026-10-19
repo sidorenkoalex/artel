@@ -120,16 +120,55 @@ def _hung_test_run_task_lease_alive(conn, task_id: str) -> bool:
     return doctor.liveness._pid_alive(row["pid"])
 
 
+def _component_commands() -> list[list[str]]:
+    """`command` записей `targets.yaml` — компонентов и `test_profile` (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 16): ими сторож узнаёт прогоны
+    не на pytest. Файл не прочитан — пусто, сторож остаётся при
+    `pytest`/`unittest`."""
+    try:
+        entries = doctor.targets.load()
+    except doctor.targets.TargetsError:
+        return []
+    commands = []
+    for entry in entries.values():
+        records = list((entry.get(doctor.targets.COMPONENTS_FIELD) or {}).values())
+        if entry.get(doctor.targets.PROFILE_FIELD) is not None:
+            records.append(entry[doctor.targets.PROFILE_FIELD])
+        for fields in records:
+            command = [str(part) for part in fields.get("command") or ()]
+            if command:
+                commands.append(command)
+    return commands
+
+
+def _runs_component_command(command: str, commands: list[list[str]]) -> bool:
+    """Командная строка процесса несёт `command` записи подряд идущими
+    словами — тот же argv, что пульт запускает (интерпретатор перед ним,
+    флаги пульта после допустимы)."""
+    words = command.split()
+    for wanted in commands:
+        size = len(wanted)
+        if any(words[i:i + size] == wanted
+               for i in range(len(words) - size + 1)):
+            return True
+    return False
+
+
 def _find_hung_test_runs(conn) -> list[dict]:
-    """Кандидаты сторожа (AC-8/AC-9): `python -m unittest`/`pytest` с cwd
-    внутри `.artel/worktrees/<id>`, старше `config.HUNG_TEST_RUN_AGE_SEC`,
-    чья задача не держит живой lease."""
+    """Кандидаты сторожа (AC-8/AC-9): `python -m unittest`/`pytest` или
+    команда компонента проекта (`_component_commands`) с cwd внутри
+    `.artel/worktrees/<id>`, старше `config.HUNG_TEST_RUN_AGE_SEC`, чья
+    задача не держит живой lease."""
     found = []
+    commands = None
     for pid, age, command in doctor._running_processes():
         if age < doctor.config.HUNG_TEST_RUN_AGE_SEC:
             continue
         if not doctor._HUNG_TEST_CMD_RE.search(command):
-            continue
+            if commands is None:
+                commands = _component_commands()
+            if not _runs_component_command(command, commands):
+                continue
         cwd = doctor._process_cwd(pid)
         if cwd is None:
             continue

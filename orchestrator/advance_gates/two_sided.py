@@ -278,7 +278,13 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
     профиля в `workdir` дерева стороны, пути узлов переведены к нему
     (`--rootdir` — по-прежнему дерево: id узлов отчёта — от его корня;
     id от `workdir` приводит к корню `_root_form`), чистое окружение без `PYTHONPATH` пульта, свой сеанс; `workdir` вне
-    дерева — сбой стороны без прогона."""
+    дерева — сбой стороны без прогона.
+
+    Профиль с итогом из отчёта (SPEC 01M590GJAF0EDV4NBC4C99MFVH,
+    требование 8) — `_run_side_report`."""
+    reported = acceptance._reported(profile)
+    if reported is not None:
+        return _run_side_report(tree, nodes, reported, timeout)
     own = acceptance._own(profile)
     cwd = tree
     if own is not None:
@@ -324,6 +330,40 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
             location = record.get("location")
             if isinstance(location, dict) and location.get("path"):
                 location["path"] = _root_form(location["path"], tree, cwd)
+    return records, ""
+
+
+def _run_side_report(tree: Path, nodes: list, profile,
+                     timeout: float) -> tuple:
+    """(записи в форме плагина, причина сбоя) стороны по профилю с отчётом:
+    файлы узлов гонятся подмножеством компонента, итог узла — запись
+    отчёта с тем же путём и именем (`passed`/`failed`/`skipped`; ошибка —
+    падение не на утверждении). Отказ подготовки, предел и исход
+    «неизвестно» — сбой стороны, не доказательство."""
+    from .. import project_profile  # project_profile -> store -> … -> acceptance
+    from ..reporters import outcome
+    files = sorted({node.partition("::")[0] for node in nodes})
+    run = acceptance._report_run(profile, tree, files, timeout)
+    if run.refusal:
+        return [], run.refusal
+    if run.timed_out:
+        return [], f"{TIMEOUT} прогона компонента ({timeout:g} с)"
+    if run.state == outcome.UNKNOWN:
+        return [], acceptance.unknown_line(run.reason)
+    records = []
+    for case in run.tests:
+        try:
+            _comp, path, name, _n = project_profile.parse_test_id(case.id)
+        except ValueError:
+            continue
+        record = {"nodeid": f"{path}::{name}", "when": "call",
+                  "outcome": "passed" if case.outcome == outcome.PASSED
+                  else "skipped" if case.outcome == outcome.SKIPPED
+                  else "failed"}
+        if case.outcome in (outcome.FAILED, outcome.ERROR):
+            record["exception"] = case.failure.partition(":")[0] or "?"
+            record["assertion"] = case.outcome == outcome.FAILED
+        records.append(record)
     return records, ""
 
 
