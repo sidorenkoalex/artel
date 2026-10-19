@@ -1,17 +1,16 @@
 ## Выяснено
-- Адреса SPEC (acceptance.py:688/709/719/752-754/1172-1282/1283/1460/1907/1923/1951/2307-2313, plank_run.py:61-77/186-195, guard.py:2620, project_profile.py:104-108, targets.py:493-510) — сходятся с кодом c2dc427f.
-- Факт SPEC «pult-vitest выкладки не получает» неверен для компонента с workdir: единственный компонент с workdir обязан иметь runner: pytest-own (targets.py:73, 421-428), `_own()` (acceptance.py:121) смотрит только на runner, и `_layout_mode` даёт «layout» — выкладка под long_lived_dir/.artel-plank сегодня есть (фикстура tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py:557-585).
-- Отсюда коллизия требования 5: pult-vitest с runner: pytest-own без plank_layout — и «отказ» (не-pytest), и «прежняя выкладка» (pytest-own).
-- `--ignore` в `_report_argv` добавляется только при own (runner: pytest-own); путь — через `_own_target` (от workdir). SPEC пишет «--ignore=<plank_layout до <id>>» без уточнения базы пути.
-- Существующие тесты с компонентами по отчёту без plank_layout (report_outcome.py:927-934 test_ac11, :1480 test_ac16) останутся зелёными, но run/collect/run_plank в них станут отказом — покрытие свойства «неизвестно не зелено в точечных местах» деградирует молча; матрицы в SPEC нет.
-- `drop_from_code_copy` для остатка plank_layout не покрыт ни одним AC.
-- codebase-map в COMMON_ZONES (config.py:809) — регенерация карты зону не нарушает.
+- Повторный аудит (spec_sha 128cf82e…): решения Оператора №1 п. 1–7 перенесены в SPEC полностью; адреса SPEC сходятся с кодом c2dc427f.
+- Компонент с report полный набор гонит через `_run_full_suite_reported` (acceptance.py:2288-2291) → `_report_run` → `_report_argv` (:805); ветка :2307-2311 — только pytest-own без report. AC-6 (junit-xml) её не ловит.
+- targets.py:498-501 запрещает `..` и пустые сегменты, но не `.`: `web/build/./<id>` проходит «родитель с точки», шаблон info/exclude не сработает.
+- Выкладка сегодня — только при plank_present / task_id (acceptance.py:1349, :1507, :1976); отказ «нет plank_layout» без такой оговорки ломал бы plank-run долгоживущего файла (plank_run.py:221-229).
+- plank_rule записи из одного pytest-компонента — умолчание (project_profile.py:482-488), masks() пуст.
+- test_ac11/test_ac16 после правки становятся тривиальными (отказ вместо прогона) — Оператор принял (решение №1 п. 5), не поднимал.
 
 ## Не сработало
-- grep с `cd … &&` и пайпами через head/awk требует подтверждения — используй абсолютные пути/git grep без пайпов.
+- `cd … && sed …` и пайпы с head требуют подтверждения — бери Read и grep по абсолютному пути.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns.
+- SPEC-AUDIT.md написан, verdict concerns, status ready; guard прогнан.
 
 ## Чего не хватило
-- Долго искал, у какого профиля работает выкладка сегодня: ключ — `_own()` по runner, а не по report (acceptance.py:121) и правило targets.py:421-428.
+- Какие профили попадают в ветку полного набора :2307 против `_run_full_suite_reported` — ключ в `_reported` (acceptance.py:366) и project_profile.reported (:317).
