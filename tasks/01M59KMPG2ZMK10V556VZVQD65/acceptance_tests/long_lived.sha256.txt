@@ -1,0 +1,1 @@
+b79905aff5508fef3e512c5776d845f6d2967251bc022fee27988e23eb23d7cc  tests/test_01m59kmpg2zmk10v556vzvqd65_plank_rule.py
