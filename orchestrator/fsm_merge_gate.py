@@ -28,7 +28,8 @@ from scripts import guard
 from . import (acceptance, alerts, appendix_tree, artifact_branch,
               artifact_source, ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
               github_adapter, lease, merge_lock, merge_queue, project_profile,
-              reference_cache, repo_context, session, store, workspace)
+              reference_cache, repo_context, session, store, targets,
+              workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
 from .advance_gates import plan_appendix
@@ -829,12 +830,17 @@ def _full_suite_command(conn, task_id: str, paths: list[str], scratch: Path,
     отказал бы; здесь — на случай правки `targets.yaml` посреди окна)."""
     if repo_context.is_artel(ctx):
         return _appendix_needs_full_suite(paths), None
+    selected = _selected_components(conn, task_id, paths, ctx)
+    if selected is not None:
+        # Запись из нескольких компонентов — кортеж профилей затронутых
+        # (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требования 10-11).
+        return True, selected
     decision = project_profile.decide(ctx.target)
     if decision.profile is not None:
-        # `pytest-own` — профилем целиком (argv, `cwd`, окружение по нему,
-        # SPEC 01M52EEHSRD93WMPHWB5VJYRKD); `pult-pytest` — прежний список.
-        return True, (acceptance._own(decision.profile)
-                      or list(decision.profile.command))
+        # `pytest-own` и профиль с отчётом — профилем целиком (argv, `cwd`,
+        # окружение по нему, SPEC 01M52EEHSRD93WMPHWB5VJYRKD,
+        # 01M590GJAF0EDV4NBC4C99MFVH); `pult-pytest` — прежний список.
+        return True, acceptance.place_channel(decision.profile)
     if decision.refusal:
         store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
                       decision.refusal)
@@ -846,6 +852,73 @@ def _full_suite_command(conn, task_id: str, paths: list[str], scratch: Path,
                   f"{decision.skip}: нет профиля тестов — приложения "
                   f"{', '.join(paths)} применены без полного прогона")
     return False, None
+
+
+def _selected_components(conn, task_id: str, paths: list[str],
+                         ctx: repo_context.RepoContext) -> tuple | None:
+    """Профили компонентов записи из нескольких компонентов, затронутых
+    диффом ветки задачи и путями приложений `paths`
+    (`project_profile.select_components`, SPEC 01M590GJAF0EDV4NBC4C99MFVH,
+    требование 10); `None` — у записи один компонент или она не прочитана
+    (решает `decide`). Дифф ветки не прочитан — все компоненты: молча
+    сузить выбор нельзя."""
+    try:
+        if len(project_profile.components(ctx.target)) < 2:
+            return None
+    except targets.TargetsError:
+        return None
+    branch = store.task_branch(conn, task_id)
+    base = gitcmd.diff_base(branch, repo=ctx.path) if branch else None
+    changed = (gitcmd.diff_names(base, branch, repo=ctx.path)
+               if base else None)
+    if changed is None:
+        return project_profile.component_profiles(ctx.target)
+    names = project_profile.select_components(ctx.target,
+                                              [*changed, *paths])
+    return project_profile.component_profiles(ctx.target, names)
+
+
+def _gate_profiles(conn, task_id: str, paths: list[str],
+                   ctx: repo_context.RepoContext) -> tuple:
+    """Профили компонентов проекта задачи на гейте мержа — для
+    `checks_local` (требование 13): затронутые компоненты записи из
+    нескольких компонентов либо профиль единственного; у артели и проекта
+    без профиля — пусто."""
+    if repo_context.is_artel(ctx):
+        return ()
+    selected = _selected_components(conn, task_id, paths, ctx)
+    if selected is not None:
+        return selected
+    profile = project_profile.decide(ctx.target).profile
+    return (profile,) if profile is not None else ()
+
+
+CHECKS_LOCAL_REFUSAL_ACTION = "merge FAILED"
+
+
+def _checks_local_refuse(conn, task_id: str, paths: list[str], scratch: Path,
+                         ctx: repo_context.RepoContext) -> bool:
+    """`checks_local` затронутых компонентов в дереве мержа после
+    приложений — на каждом гейте мержа, с полным прогоном и без него (SPEC
+    01M590GJAF0EDV4NBC4C99MFVH, требование 13). Ненулевой код — отказ
+    мержа с выводом проверки: задача остаётся на гейте, scratch убран.
+    `True` — отказ напечатан и записан."""
+    for profile in _gate_profiles(conn, task_id, paths, ctx):
+        ok, text = acceptance.run_checks_local(profile, scratch)
+        if not text:
+            continue
+        store.journal(conn, task_id, "orchestrator",
+                      acceptance.CHECKS_LOCAL_ACTION, text)
+        if ok:
+            continue
+        store.journal(conn, task_id, "orchestrator",
+                      CHECKS_LOCAL_REFUSAL_ACTION, text)
+        _drop_scratch_worktree(ctx, scratch)
+        print(f"[{task_id}] merge отклонён: {text}\n"
+              f"  задача осталась на гейте merge; почини код под проверку и "
+              f"повтори: artel.py approve {task_id}")
+        return True
+    return False
 
 
 def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
@@ -975,7 +1048,10 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     needed, command = _full_suite_command(conn, task_id, paths, scratch, ctx)
     if not needed:
         return
-    if command is None:
+    if isinstance(command, tuple):
+        run = acceptance.components_full_suite(scratch, task_id, command,
+                                               fresh=fresh_suite)
+    elif command is None:
         run = (acceptance.full_suite(scratch, task_id, fresh=True)
                if fresh_suite else acceptance.full_suite(scratch, task_id))
     else:
@@ -986,7 +1062,14 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
         store.journal(conn, task_id, "orchestrator",
                       "полный прогон после приложений", run.detail)
         return
-    if run.outcome == acceptance.FULL_SUITE_TIMEOUT:
+    if run.outcome == acceptance.FULL_SUITE_TIMEOUT and \
+            isinstance(command, tuple):
+        # Предел — свой у компонента; его называет деталь прогона.
+        detail = (f"прогон не уложился в предел компонента (полный набор "
+                  f"после приложений): {run.detail}")
+        advice = (f"прогон оборван по пределу времени, это не исход "
+                  f"тестов; повтори: artel.py approve {task_id}")
+    elif run.outcome == acceptance.FULL_SUITE_TIMEOUT:
         seconds, source = project_profile.full_suite_limit(ctx.target)
         detail = (f"прогон не уложился в {seconds} с "
                   f"(источник: {source}; "
@@ -998,11 +1081,19 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
         # Файлы БД пульта в дереве прогона (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3,
         # требование 4) — тоже «не начат», но ждать освобождения машины тут
         # бессмысленно: команду уборки называет сам `run.detail`.
-        advice = ("прогон не запускался; убери файлы БД пульта командой из "
-                  f"причины и повтори: artel.py approve {task_id}"
-                  if "worktree-db-clean" in run.detail else
-                  f"прогон не запускался; повтори, когда машина "
-                  f"освободится: artel.py approve {task_id}")
+        if acceptance.is_unknown(run):
+            # Прогон был, но итог тестов из отчёта не прочитан (SPEC
+            # 01M590GJAF0EDV4NBC4C99MFVH, требование 3): ждать машину
+            # бессмысленно — причину называет деталь, вывод — лог прогона.
+            advice = (f"исход «{acceptance.UNKNOWN_OUTCOME}» — итог тестов "
+                      f"не прочитан из отчёта; разберись в причине по логу "
+                      f"прогона и повтори: artel.py approve {task_id}")
+        elif "worktree-db-clean" in run.detail:
+            advice = ("прогон не запускался; убери файлы БД пульта командой "
+                      f"из причины и повтори: artel.py approve {task_id}")
+        else:
+            advice = (f"прогон не запускался; повтори, когда машина "
+                      f"освободится: artel.py approve {task_id}")
     else:
         detail = f"приложения ломают тесты: {run.detail}"
         advice = (f"почини приложение к {', '.join(paths)} и повтори: "
@@ -1349,6 +1440,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
         conn, task_id, state, scratch, ctx,
         fresh_suite or _fresh_suite_for_cycle.get())
     if appendix_kind != "ok":
+        return ("stopped",)
+    if _checks_local_refuse(conn, task_id, applied, scratch, ctx):
         return ("stopped",)
     # Коммит мержа задачи — merge кодовой ветки плюс приложения, без карты:
     # на него адресуется «Итог: done» RETRO закрытия.
