@@ -1,15 +1,14 @@
-# NOTE-reviewer (итерация 2)
+# NOTE-reviewer (итерация 3)
 
 ## Выяснено
-- R1-F1, R1-F2 приняты: пять временных мутаций (ключ `tools`, `declared`, `base`, `decide` без `with_tools`, `_top_level` без `in_class`) — каждая краснит свой тест в tests/test_component_checks.py.
-- R2-F1 (новое, major): вызов `with_tools` в `acceptance._task_own_profile` (acceptance.py:2464) без сторожа в tests/ — мутация «убрать вызов» не краснит 22 файла tests/ (240 passed, ~5 мин).
-- Планка 4 passed; три файла задачи — 33 passed.
+- R2-F1 закрыто (accepted): `TaskOwnProfileToolsTest` в tests/test_component_checks.py ловит мутацию «`_task_own_profile` без `with_tools`» (1 failed).
+- Три файла задачи — 34 passed, планка — 4 passed, карта свежая (отличается только `built_at_sha`).
 
 ## Не сработало
-- Shell шага отклоняет `$(...)`/функции в bash — мутации делать python-скриптом через heredoc.
+- Ничего.
 
 ## Где остановился
-- REVIEW.md итерации 2 записан, changes_requested (R2-F1 open).
+- REVIEW.md итерации 3 записан: approved, реестр закрыт целиком.
 
 ## Чего не хватило
-- В tests/ нет ни одного обращения к `_task_own_profile` — пришлось гонять мутацию по широкому набору, чтобы это доказать.
+- Ничего: пакета и одного чтения `_task_own_profile` (acceptance.py:2441-2468) хватило.
