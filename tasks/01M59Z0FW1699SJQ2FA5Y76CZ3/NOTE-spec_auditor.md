@@ -1,14 +1,14 @@
 ## Выяснено
-- Третий аудит (spec_sha 8b124974…): решения №2 п. 1–6 в SPEC перенесены (треб. 3, 5, 7, 8, AC-4…AC-7, AC-11); адреса сходятся с кодом c2dc427f.
-- `pult-pytest` — значение `runner` (targets.py:69), report компонента — только junit-xml | pult-vitest (targets.py:106). Условие треб. 5 «report, отличным от pult-pytest» всегда истинно.
-- Каналы `_task_own_profile`/`place_channel` (acceptance.py:3282-3294, :374-380) отдают профиль только pytest-own или reported — компонент без report с runner pult-pytest и plank_layout до мест прогона не доходит; AC этого не ловят.
-- Порядок отказа правила (треб. 1) и прежних путей без выкладки (AC-11) не задан.
+- Четвёртый аудит (spec_sha 064a7329…): решения №3 п. 1–3 в SPEC перенесены (треб. 1, 2, 5, AC-3, AC-5, «Не входит» SPEC.md:81). Код orchestrator/scripts/tests с c2dc427f не менялся.
+- Новое противоречие: `pytest-own` без `report` с `plank_layout`. Треб. 2 и «Не входит» его `plank_layout` не читают, а треб. 5 (п. 1), треб. 7 и AC-6 требуют `--ignore=<родитель <id>>` в ветке acceptance.py:2299-2313.
+- SPEC.md:81 «pult-pytest — выкладка прежняя под long_lived_dir» неверно: `_own` есть только у pytest-own (acceptance.py:120-123), у pult-pytest выкладки нет.
+- Порядок «refusal правила» против «нет plank_layout» у pult-vitest без tests не задан. Правило с отказом = умолчание (`components` пуст, guard.py:2627).
 
 ## Не сработало
-- `ls` не найден; `;` + `echo rc=$?` в Bash отвергается — команды без `$`.
+- `cd <dir> && git …` в Bash отвергается — нужны абсолютные пути без cd.
 
 ## Где остановился
 - SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-- Словарь: `pult-pytest` — runner, `junit-xml`/`pult-vitest` — report; какой профиль идёт в места прогона — `place_channel` (acceptance.py:374).
+- Ветка полного набора acceptance.py:2299 — это pytest-own без report; с report уходит в :2288. Это ключ к противоречию AC-6 и «Не входит».
