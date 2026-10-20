@@ -1,13 +1,18 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ достаточно; SPEC.md написан (status: ready, 15 AC, budget_usd 45), guard — ок.
-- Адреса ТЗ сверены: PASSED_ACTION — outcome_integrity.py:51, _checkouts — :303, _outcome_integrity_gate — :363; окно мержа fsm_merge_gate.py:1480–1487 (sync → acceptance_locks); _report_suite_result_key — acceptance.py:3170; in_outcome_bounds — advance_gates/acceptance.py:213; REFUSAL_CLASSES — refusal_classes.py:92.
-- Сигналы деления: зона ≥5 файлов, AC ≥10. В SPEC — обоснование монолита; отмечено, что требование 6 (two_sided.py) технически отделимо — решение за Оператором.
-- merge_after не ставлен: строки «Порядок: после …» в ТЗ нет, G3а-1б уже в main (d1a8e153).
+- Итерация 2 (возврат с гейта SPEC №1): решения 1–9 Оператора внесены в SPEC.md точечно, остальное без изменений; 15 AC, budget_usd 45, status: ready, guard — ок.
+- База мержа: повторный фетч `fsm_merge_gate._origin_main_sha(ctx)` (:150) после «fresh» + `git merge-base <голова> <sha>`; pull.py/fsm.py не трогаются («Не входит»).
+- Сбой подготовки расширен (AC-3): «fresh» без sha main (pull.py:770), документное отставание (pull.py:785), ключ компонента None (`_report_suite_result_key`, acceptance.py:3170, base=False).
+- Отпечаток мандата: sha256 hex от элементов, отсортированных и соединённых "\n" (utf-8), иначе «нет» (AC-1).
+- AC-2: ключ в `REFUSAL_CLASSES` (refusal_classes.py:92) со значением «чинит Оператор», проверка членства.
+- Канарейка в пакете ревьювера — прежнее условие review.py:635-637 (требование 5, AC-10).
+- `_check_failure_kind` — tests_writing.py:752.
+- «без правок и зелёные» возвращено в требование 8; в «Не входит» — только отсутствие отдельного AC.
+- Решение «не делится» записано цитатой возврата в «Оценке объёма».
 
 ## Не сработало
-- Bash с `cd …;` и цепочками команд требует подтверждения — использовать абсолютные пути и одну команду.
+- `ls` в шелле недоступен; Bash с `cd …;` требует подтверждения.
 
 ## Где остановился
 - Шаг завершён.
