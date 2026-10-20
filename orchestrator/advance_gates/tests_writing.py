@@ -1,14 +1,26 @@
 """`_tests_writing_*`, `_origin_push_gate`, `_registry_gate`,
 `_freshness_refuses` (SPEC 01M2CYQR0357VAQFZ5VACJD9TD, требование 1) —
 перенесено дословно из `orchestrator/fsm_advance.py`."""
+import re
+from pathlib import Path
+
 from scripts import guard
 
-from .. import (acceptance, artifact_branch, artifacts, checkpoint,
+from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
                 cycle_hint, fixation, github_adapter, gitcmd, knowledge_cards,
                 project_profile, repo_context, store, workspace)
+from ..reporters import outcome
 from ._base import GateRefusal
-from .acceptance import blob_sha256, long_lived_manifest_rel
-from .refusal_classes import LONG_LIVED_GIT_REFUSAL_ACTION
+from .acceptance import (blob_sha256, criterion_files, file_records,
+                         in_outcome_bounds, long_lived_manifest_rel,
+                         not_passed_kind, outcome_kind, record_criterion,
+                         record_location)
+from .refusal_classes import (FAIL_TO_PASS_PREPARE_REFUSAL_ACTION,
+                              FAIL_TO_PASS_REFUSAL_ACTION,
+                              LONG_LIVED_GIT_REFUSAL_ACTION,
+                              NO_FAILURE_ERRORS_REFUSAL_ACTION,
+                              SPEC_ANCHOR_REFUSAL_ACTION,
+                              SPEC_CHANGED_AFTER_GATE_REFUSAL_ACTION)
 
 
 def _freshness_refuses(conn, task_id: str, t, meta, status: str) -> bool:
@@ -189,7 +201,12 @@ def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | N
     требование 5): `_pult.py` первого уровня планки в ссылке документов
     отклоняет выход своим действием; тот же файл черновика автокоммит
     отбрасывает как посторонний (`guard.is_extraneous_acceptance_test_file`),
-    и отказ по записи журнала ниже называет то же основание в подсказке."""
+    и отказ по записи журнала ниже называет то же основание в подсказке.
+
+    Запись «правило планки: взято умолчание»
+    (`project_profile.PLANK_RULE_DEFAULT_ACTION`) тоже пропускается (SPEC
+    01M5AQH8M2DKBV30NBY86J34A7, требование 8): чекпоинт пишет её раз на
+    визит, и она не активность роли, замещающая запись о посторонних."""
     reserved = _reserved_plank_helper_refusal(task_id)
     if reserved is not None:
         return reserved
@@ -197,6 +214,7 @@ def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | N
                          knowledge_cards.HINT_REFUSAL_ACTION)
     rows = [r for r in store.task_steps(conn, task_id)
             if r["actor"] != "lease"
+            and r["action"] != project_profile.PLANK_RULE_DEFAULT_ACTION
             and not (r["actor"] == knowledge_cards.JOURNAL_ACTOR
                      and r["action"] in knowledge_actions)]
     marker = "state -> tests_writing"
@@ -364,7 +382,10 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
               + guard.long_lived_errors_from_files(
                   files, task_id, network_addresses=network_addresses,
                   project_imports=_project_imports(task_id, profile),
-                  rule=rule))
+                  rule=rule)
+              # Запреты в тексте файлов с меткой `AC-<n>: ` (SPEC
+              # 01M5AQH8M2DKBV30NBY86J34A7, требование 7).
+              + guard.plank_ban_errors(files, rule))
     if not errors:
         return None
     hint = f"исправь файл планки и повтори artel.py advance {task_id}"
@@ -487,6 +508,7 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
             sorted(files.items()), task_id,
             network_addresses=network_addresses,
             project_imports=_project_imports(task_id, profile), rule=rule)
+        errors += guard.plank_ban_errors(sorted(files.items()), rule)
         if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "
                           f"выписана — долгоживущие файлы не собрать")
@@ -586,3 +608,354 @@ def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
         return None
     hint = f"почини импорт/синтаксис планки и повтори artel.py advance {task_id}"
     return GateRefusal("переход отклонён: планка не собирается", tail, hint)
+
+
+# ------------------------------------------------ честный `FAIL_TO_PASS`
+#
+# Выход из `tests_writing` у компонента записи `components:` с `report`
+# (SPEC 01M5AQH8M2DKBV30NBY86J34A7, требования 2-5): тест каждого
+# покрытого критерия на коде базы обязан упасть провалом проверки, а тест
+# файла с маркером «Зелёный с рождения:» — пройти.
+
+# Деталь перехода гейта SPEC (`orchestrator/fsm.py`, `cmd_approve`):
+# опора перечня «Зелёный с рождения» — фиксация именно этого перехода.
+SPEC_GATE_PASSED_DETAIL = "гейт SPEC пройден — приёмочные тесты до кода"
+_TRANSITION_ACTION = "state -> tests_writing"
+_FIXATION_ACTION = "sha зафиксирован"
+_STEP_START_ACTION = "agent run started"
+# Хвост детали `store.set_state` при непрочитанной голове ссылки документов.
+_UNFIXED_TRANSITION = "без паспорта и фиксации"
+_ARTIFACTS_SHA = re.compile(r"артефакты=(\S+)")
+GREEN_SECTION = "Зелёный с рождения"
+NO_TESTED_CRITERIA_NOTE = "честный FAIL_TO_PASS: критериев с тестом нет"
+ANCHOR_NOT_FOUND = "опора SPEC для перечня «Зелёный с рождения» не найдена: "
+NO_RECORD_FINDING = "теста нет в отчёте"
+REPEAT_FINDING = "повтор имени теста в файле: "
+FILE_LEVEL_FINDING = "ошибка уровня файла — тесты файла не исполнены"
+PREPARE_PREFIX = "отказ подготовки: "
+# Вид падения записи JUnit об ошибке сбора файла (pytest
+# `--continue-on-collection-errors`).
+_COLLECTION_FAILURE = "collection failure"
+
+
+def _spec_anchor(conn, task_id: str) -> tuple[str, str]:
+    """(sha опоры, причина ненахода): `артефакты=` ПЕРВОЙ записи «sha
+    зафиксирован» после последней записи перехода гейта SPEC, если она
+    раньше первой «agent run started» после того же перехода и между ними
+    нет перехода «без паспорта и фиксации» (требование 5)."""
+    rows = store.task_steps(conn, task_id)
+    start = None
+    for i, row in enumerate(rows):
+        if row["action"] == _TRANSITION_ACTION and \
+                (row["detail"] or "") == SPEC_GATE_PASSED_DETAIL:
+            start = i
+    if start is None:
+        return "", (f"в журнале нет записи «{_TRANSITION_ACTION}» с деталью "
+                    f"«{SPEC_GATE_PASSED_DETAIL}»")
+    for row in rows[start + 1:]:
+        if _UNFIXED_TRANSITION in (row["detail"] or ""):
+            return "", (f"переход гейта SPEC прошёл {_UNFIXED_TRANSITION} — "
+                        f"версия SPEC.md на переходе не зафиксирована")
+        if row["action"] == _STEP_START_ACTION:
+            return "", (f"после перехода гейта SPEC запись «{_FIXATION_ACTION}» "
+                        f"появилась только после начала шага роли — это "
+                        f"фиксация чекпоинта, а не перехода")
+        if row["action"] == _FIXATION_ACTION:
+            match = _ARTIFACTS_SHA.search(row["detail"] or "")
+            sha = match.group(1) if match else ""
+            if not sha or sha == "—":
+                return "", (f"в опорной записи «{_FIXATION_ACTION}» "
+                            f"артефакты=— (голова ссылки документов на "
+                            f"переходе не прочитана)")
+            return sha, ""
+    return "", f"после перехода гейта SPEC нет записи «{_FIXATION_ACTION}»"
+
+
+def _spec_anchor_check(conn, task_id: str) -> tuple[GateRefusal | None, str]:
+    """(отказ, текст SPEC.md опорной версии): опора не найдена или SPEC.md
+    на голове ссылки документов отличается от опорной версии — отказ
+    своего действия (требование 5)."""
+    rel = f"tasks/{task_id}/SPEC.md"
+    hint = (f"опору чинит Оператор (журнал перехода гейта SPEC, ссылка "
+            f"документов), затем artel.py advance {task_id}")
+    sha, reason = _spec_anchor(conn, task_id)
+    anchor = None
+    if sha:
+        anchor, why = artifact_branch.show(task_id, sha, rel)
+        if anchor is None:
+            reason = f"SPEC.md в опорном коммите {sha} не прочитан: {why}"
+    if anchor is None:
+        return GateRefusal(SPEC_ANCHOR_REFUSAL_ACTION,
+                           f"{ANCHOR_NOT_FOUND}{reason}", hint), ""
+    ref = artifact_branch.branch_name(task_id)
+    head, why = artifact_branch.show(task_id, ref, rel)
+    if head is None:
+        return GateRefusal(
+            SPEC_ANCHOR_REFUSAL_ACTION,
+            f"SPEC.md на голове {ref} не прочитан ({why}) — сверка с опорной "
+            f"версией {sha} невозможна", hint), ""
+    if head != anchor:
+        return GateRefusal(
+            SPEC_CHANGED_AFTER_GATE_REFUSAL_ACTION,
+            f"SPEC.md изменён после одобрения на гейте SPEC — верни его к "
+            f"версии {sha}",
+            f"верни tasks/{task_id}/SPEC.md к версии {sha} (правку SPEC после "
+            f"гейта вносит Оператор) и повтори artel.py advance {task_id}"), ""
+    return None, anchor
+
+
+def _green_list(spec_text: str) -> set[int]:
+    """Критерии раздела SPEC «## Зелёный с рождения» (строки `AC-<n>`)."""
+    body = guard.section_body(spec_text, GREEN_SECTION)
+    return {int(n) for n in re.findall(r"\bAC-(\d+)\b", body)}
+
+
+def _criterion_numbers(covered) -> set[int]:
+    """Номера критериев `covered`: `AC-<n>` (ответ Оператора, ANSWER-1) или
+    числа."""
+    numbers = set()
+    for item in covered:
+        if isinstance(item, int):
+            numbers.add(item)
+            continue
+        match = re.fullmatch(r"AC-(\d+)", str(item))
+        if match:
+            numbers.add(int(match.group(1)))
+    return numbers
+
+
+def _task_long_lived_paths(conn, task_id: str, profiles
+                           ) -> tuple[list[str] | None, GateRefusal | None]:
+    """Пути долгоживущих файлов, которые кодовая ветка задачи добавила
+    против базы, по шаблонам `profiles` — для вызова гейта без путей
+    перехода. Ветки ещё нет — файлов нет; сбой git — отказ подготовки."""
+    branch = store.get_task(conn, task_id)["branch"]
+    repo = workspace.task_repo(task_id)
+    if not gitcmd.branch_exists(branch, repo=repo):
+        return [], None
+    base = gitcmd.diff_base(branch, repo=repo)
+    entries = (gitcmd.diff_name_status(base, branch, repo=repo)
+               if base else None)
+    if entries is None:
+        return None, GateRefusal(
+            FAIL_TO_PASS_PREPARE_REFUSAL_ACTION,
+            f"{PREPARE_PREFIX}дифф кодовой ветки {branch} против базы не "
+            f"прочитан — git не ответил",
+            f"разберись, почему git не отвечает, и повтори artel.py advance "
+            f"{task_id}")
+    return sorted(path for status, path, _new in entries
+                  if status == "A" and any(
+                      p.long_lived_dir and p.is_long_lived(task_id, path)
+                      for p in profiles)), None
+
+
+def _check_failure_kind(record, profile) -> str:
+    """Вид записи, не являющейся провалом проверки (требование 3); пусто —
+    провал проверки: у `pult-vitest` — `failed` с именем из
+    `failure_errors`, у `junit-xml` — `failed` с видом падения от
+    «assert » или от имени из `failure_errors`."""
+    if record.retries:
+        return f"{outcome.RETRY_NOTE} внутри прогона: {record.retries}"
+    if record.outcome != outcome.FAILED:
+        return outcome_kind(record)
+    if record.fails:
+        return "fails (тест помечен it.fails)"
+    failure = record.failure or ""
+    names = tuple(profile.failure_errors)
+    if profile.report == project_profile.REPORT_VITEST:
+        check = failure in names
+    else:
+        check = failure.startswith("assert ") or failure.startswith(names)
+    return "" if check else f"имя ошибки {failure or 'без имени'}"
+
+
+def _component_runs(tdir: Path, run_cwd, components, files
+                    ) -> tuple[dict, list[str], list[str]]:
+    """({компонент: записи}, причины отказа подготовки, находки таймаута) —
+    прогон планки и своих долгоживущих файлов каждого компонента на коде
+    базы рабочей копии (`acceptance.run` с `records`)."""
+    runs: dict = {}
+    prepare: list[str] = []
+    timeouts: list[str] = []
+    for profile in components:
+        name = profile.component
+        extra = [f.rel for f in files
+                 if not f.plank and f.profile.component == name]
+        records: list = []
+        acceptance.run(tdir, cwd=run_cwd, extra=extra, command=profile,
+                       records=records, continue_on_collection_errors=True)
+        state = next((r for r in records
+                      if isinstance(r, acceptance.ReportRun)), None)
+        runs[name] = [r for r in records if isinstance(r, outcome.CaseResult)]
+        if state is None:
+            prepare.append(f"компонент {name}: прогон не вернул исхода")
+        elif state.refusal:
+            prepare.append(f"компонент {name}: {state.refusal}")
+        elif state.timed_out:
+            timeouts.append(f"таймаут прогона компонента {name}: прогон "
+                            f"превысил {config.ACCEPTANCE_TIMEOUT_SEC}с — "
+                            f"тесты не исполнены до конца")
+        elif state.state == outcome.UNKNOWN and not state.block:
+            # Записей нет вовсе (`block` пуст только у отчёта, которого нет
+            # или который не разобран): «теста нет в отчёте» было бы ложью.
+            prepare.append(f"компонент {name}: {state.reason}")
+    return runs, prepare, timeouts
+
+
+def _file_level_findings(files, runs: dict, by_file: dict) -> list[str]:
+    """Ошибки уровня файла (требование 4): запись JUnit `error` с видом
+    «collection failure» — файл по имени записи; тестовый файл планки
+    `pult-vitest` без записей в отчёте."""
+    plank_names = {Path(f.name).stem: f.name for f in files if f.plank}
+    found = []
+    for records in runs.values():
+        for record in records:
+            if record.outcome != outcome.ERROR or \
+                    not record.failure.startswith(_COLLECTION_FAILURE):
+                continue
+            where = record_location(record)
+            dotted = where[2] if where is not None else record.id
+            name = plank_names.get(dotted.rsplit(".", 1)[-1], dotted)
+            found.append(f"{name}: {FILE_LEVEL_FINDING}")
+    for cfile in files:
+        if cfile.plank and not by_file[cfile] and \
+                cfile.profile.report == project_profile.REPORT_VITEST:
+            found.append(f"{cfile.name}: {FILE_LEVEL_FINDING}")
+    return list(dict.fromkeys(found))
+
+
+def _criterion_findings(numbers: set[int], files, by_file: dict,
+                        green: set[int]) -> list[str]:
+    """Находки по критериям (требования 3, 5): запись каждого покрытого
+    критерия — провал проверки, у файла с маркером «Зелёный с рождения:»
+    (все его критерии — из перечня) — прошла; маркер у файла с критерием вне
+    перечня — находка."""
+    findings: list[str] = []
+    green_files = set()
+    for cfile in files:
+        if not (cfile.plank and cfile.green):
+            continue
+        outside = sorted(cfile.numbers - green)
+        if outside:
+            listed = ", ".join(f"AC-{n}" for n in outside)
+            findings.append(
+                f"{cfile.name}: маркер «Зелёный с рождения:» у файла с тестом "
+                f"критерия вне раздела SPEC «## {GREEN_SECTION}»: {listed}")
+        else:
+            green_files.add(cfile)
+    by_number: dict[int, list] = {}
+    for cfile in files:
+        seen = set()
+        for record in by_file[cfile]:
+            n = record_criterion(record, cfile)
+            if n is not None:
+                seen.add(n)
+                by_number.setdefault(n, []).append((record, cfile))
+        if cfile in green_files:
+            findings += [f"AC-{n}: {NO_RECORD_FINDING} (файл {cfile.name} с "
+                         f"маркером «Зелёный с рождения:»)"
+                         for n in sorted(cfile.numbers - seen)]
+    in_files = set().union(*(f.numbers for f in files)) if files else set()
+    for n in sorted(numbers & in_files):
+        pairs = by_number.get(n, [])
+        if not pairs:
+            findings.append(f"AC-{n}: {NO_RECORD_FINDING}")
+            continue
+        for record, cfile in pairs:
+            if cfile in green_files:
+                kind = not_passed_kind(record)
+                if kind:
+                    findings.append(f"{record.id}: не прошёл на базе у файла "
+                                    f"с маркером «Зелёный с рождения:» — {kind}")
+            else:
+                kind = _check_failure_kind(record, cfile.profile)
+                if kind:
+                    findings.append(f"{record.id}: не провал проверки на базе "
+                                    f"— {kind}")
+    return findings
+
+
+def _task_plank_dir(acc_tdir) -> Path:
+    """Каталог задачи с `acceptance_tests/`: переход передаёт выкладку
+    `<рабочая копия>/tasks/<id>`, прямой вызов — сам каталог планки."""
+    path = Path(acc_tdir)
+    return path.parent if path.name == "acceptance_tests" else path
+
+
+def _tests_writing_fail_to_pass_gate(conn, task_id: str, acc_tdir, run_cwd,
+                                     covered: set[str], profiles: list, *,
+                                     long_lived_paths: list[str] | None = None
+                                     ) -> GateRefusal | None:
+    """Честный `FAIL_TO_PASS` на выходе из `tests_writing` (SPEC
+    01M5AQH8M2DKBV30NBY86J34A7, требования 2-5; подпись — ANSWER-1, п. 1).
+
+    `acc_tdir` — каталог планки, `run_cwd` — рабочая копия кодовой ветки
+    (код базы), `covered` — критерии `AC-<n>`, покрытые тестом, `profiles`
+    — профили компонентов; компонент файла гейт выбирает сам.
+    `long_lived_paths` — пути своих долгоживущих файлов от `run_cwd`, уже
+    прочитанные переходом; не переданы — гейт читает их из диффа кодовой
+    ветки.
+
+    Порядок: граница (вне — `None`, гейта нет) → опора SPEC и «SPEC изменён
+    после одобрения» → правило планки не построено → критериев с тестом нет
+    (запись журнала, `None`) → пустой `failure_errors` компонента файла →
+    прогон (отказ подготовки) → находки одним отказом: таймаут → повторы
+    `#<n>` → по критериям → ошибки уровня файла."""
+    if not any(in_outcome_bounds(p) for p in profiles):
+        return None
+    refusal, anchor_text = _spec_anchor_check(conn, task_id)
+    if refusal is not None:
+        return refusal
+    target = store.task_target(conn, task_id)
+    rule = project_profile.plank_rule(target)
+    if rule.refusal:
+        return GateRefusal(project_profile.REFUSAL_ACTION, rule.refusal,
+                           project_profile.refusal_hint(task_id))
+    numbers = _criterion_numbers(covered)
+    if not numbers:
+        store.journal(conn, task_id, "fsm", NO_TESTED_CRITERIA_NOTE,
+                      "у каждого критерия пометка вместо теста — прогона "
+                      "планки на базе нет")
+        return None
+    if long_lived_paths is None:
+        long_lived_paths, refusal = _task_long_lived_paths(conn, task_id,
+                                                           profiles)
+        if refusal is not None:
+            return refusal
+    tdir = _task_plank_dir(acc_tdir)
+    files = [f for f in criterion_files(task_id, tdir, Path(run_cwd), rule,
+                                        list(profiles), list(long_lived_paths),
+                                        target)
+             if in_outcome_bounds(f.profile)]
+    components = list({f.profile.component: f.profile for f in files}.values())
+    empty = [p.component for p in components if not p.failure_errors]
+    if empty:
+        return GateRefusal(
+            NO_FAILURE_ERRORS_REFUSAL_ACTION,
+            "; ".join(f"список «провал проверки» не задан у компонента {name}"
+                      for name in empty),
+            f"задай failure_errors компонента в targets.yaml и повтори "
+            f"artel.py advance {task_id}")
+    runs, prepare, timeouts = _component_runs(tdir, run_cwd, components, files)
+    if prepare:
+        return GateRefusal(
+            FAIL_TO_PASS_PREPARE_REFUSAL_ACTION,
+            "; ".join(f"{PREPARE_PREFIX}{reason}" for reason in prepare),
+            f"разберись с подготовкой прогона компонента и повтори artel.py "
+            f"advance {task_id}")
+    by_file = file_records(files, runs)
+    repeats = [f"{REPEAT_FINDING}{record.id}" for cfile in files
+               for record in by_file[cfile]
+               if (where := record_location(record)) is not None
+               and where[3] is not None]
+    findings = (timeouts + repeats
+                + _criterion_findings(numbers, files, by_file,
+                                      _green_list(anchor_text))
+                + _file_level_findings(files, runs, by_file))
+    if not findings:
+        return None
+    hint = (f"перепиши тесты критериев так, чтобы на коде базы каждый падал "
+            f"провалом проверки (имя ошибки из failure_errors компонента), и "
+            f"повтори artel.py advance {task_id}")
+    return GateRefusal(FAIL_TO_PASS_REFUSAL_ACTION,
+                       "; ".join(findings) + f"\nдальше: {hint}", hint)

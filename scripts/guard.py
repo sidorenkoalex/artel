@@ -246,13 +246,30 @@ def _skip_js_string(source: str, i: int) -> int | None:
     return None
 
 
+def _skip_js_comment(source: str, j: int) -> int | None:
+    """Индекс за комментарием, начатым в `source[j]` (`//` до конца строки,
+    `/* … */` до закрытия); `None` — в `source[j]` комментария нет."""
+    if source.startswith("//", j):
+        end = source.find("\n", j)
+        return len(source) if end < 0 else end
+    if source.startswith("/*", j):
+        end = source.find("*/", j + 2)
+        return len(source) if end < 0 else end + 2
+    return None
+
+
 def _closing_paren(source: str, i: int) -> int | None:
-    """Индекс `)`, парной `(` в `source[i]`, мимо скобок внутри строк;
-    `None` — пары нет."""
+    """Индекс `)`, парной `(` в `source[i]`, мимо скобок внутри строк и
+    комментариев (апостроф в `// don't` строки не открывает, SPEC
+    01M5AQH8M2DKBV30NBY86J34A7, требование 8); `None` — пары нет."""
     depth = 0
     j = i
     while j < len(source):
         ch = source[j]
+        after_comment = _skip_js_comment(source, j)
+        if after_comment is not None:
+            j = after_comment
+            continue
         if ch in _JS_QUOTES:
             end = _skip_js_string(source, j)
             if end is None:
@@ -310,6 +327,188 @@ def plank_test_names(source: str) -> list[str]:
     требования 4 (у `.each` — первый аргумент второго вызова), в порядке
     файла."""
     return [name for _line, name in _test_calls(source)]
+
+
+# Запреты в тексте файла с меткой `AC-<n>: ` (SPEC 01M5AQH8M2DKBV30NBY86J34A7,
+# требование 7): конструкции, меняющие исход теста мимо его проверки, —
+# фокус, пропуск по условию, ожидаемое падение, повтор и предел времени
+# теста. Ищутся текстом без комментариев и строковых литералов, без разбора
+# синтаксиса JS (доступ по строке и параметры через переменную — принятое
+# ограничение SPEC).
+PLANK_BAN_TAIL = "запрещено в тексте планки"
+_BANNED_MEMBER = re.compile(r"\.\s*(fails|skipIf|runIf|only)\b")
+_BANNED_SET_CONFIG = re.compile(r"(?<![\w$.])vi\s*\.\s*setConfig\b")
+_BAN_CALL = re.compile(
+    r"(?<![\w$.])(it|test|describe|suite)((?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(")
+_BAN_NUMBER = re.compile(
+    r"[+-]?(?:0[xXoObB][0-9a-fA-F_]+|(?:\d[\d_]*(?:\.\d*)?|\.\d+)"
+    r"(?:[eE][+-]?\d+)?)n?")
+_BAN_OBJECT_KEY = re.compile(r"\s*([A-Za-z_$][\w$]*)")
+_BAN_KEYS = ("retry", "timeout")
+_OPENERS, _CLOSERS = "([{", ")]}"
+
+
+def _js_mask(source: str) -> str:
+    """Текст `source`, где комментарии и содержимое строковых литералов
+    заменены пробелами; кавычки, переводы строк и позиции сохранены —
+    находку по маске можно читать в исходном тексте по тем же индексам."""
+    out = list(source)
+
+    def blank(start: int, end: int) -> None:
+        for k in range(start, end):
+            if out[k] != "\n":
+                out[k] = " "
+
+    i = 0
+    while i < len(source):
+        end = _skip_js_comment(source, i)
+        if end is not None:
+            blank(i, end)
+            i = end
+            continue
+        if source[i] in _JS_QUOTES:
+            end = _skip_js_string(source, i)
+            if end is None:
+                line_end = source.find("\n", i)
+                stop = len(source) if line_end < 0 or source[i] == "`" \
+                    else line_end
+                blank(i + 1, stop)
+                i = stop
+                continue
+            blank(i + 1, end - 1)
+            i = end
+            continue
+        i += 1
+    return "".join(out)
+
+
+def _masked_closing(masked: str, i: int) -> int | None:
+    """Индекс скобки, закрывающей `masked[i]`, по маске (без строк и
+    комментариев); `None` — пары нет."""
+    depth = 0
+    for j in range(i, len(masked)):
+        if masked[j] in _OPENERS:
+            depth += 1
+        elif masked[j] in _CLOSERS:
+            depth -= 1
+            if depth == 0:
+                return j
+    return None
+
+
+def _top_level_parts(masked: str, start: int, end: int) -> list[tuple[int, int]]:
+    """(начало, конец) элементов списка через запятую первого уровня в
+    `masked[start:end]`, без пробелов по краям; пустые пропущены."""
+    parts, depth, begin = [], 0, start
+    for j in range(start, end + 1):
+        ch = masked[j] if j < end else ","
+        if ch in _OPENERS:
+            depth += 1
+        elif ch in _CLOSERS:
+            depth -= 1
+        elif ch == "," and depth == 0:
+            left, right = begin, j
+            while left < right and masked[left].isspace():
+                left += 1
+            while right > left and masked[right - 1].isspace():
+                right -= 1
+            if left < right:
+                parts.append((left, right))
+            begin = j + 1
+    return parts
+
+
+def _object_keys(source: str, masked: str, start: int, end: int) -> list[str]:
+    """Собственные ключи объекта-литерала `masked[start:end]` (`{ … }`):
+    имя, ключ в кавычках и сокращение `{ retry }`; объекты глубже не
+    рассматриваются."""
+    keys = []
+    for left, right in _top_level_parts(masked, start + 1, end - 1):
+        if source[left] in _JS_QUOTES:
+            close = _skip_js_string(source, left)
+            if close is not None:
+                keys.append(source[left + 1:close - 1])
+            continue
+        match = _BAN_OBJECT_KEY.match(masked, left, right)
+        if match:
+            keys.append(match.group(1))
+    return keys
+
+
+def _call_arguments(masked: str, match) -> tuple[int, int] | None:
+    """(открывающая, закрывающая) скобки аргументов вызова `match`
+    `_BAN_CALL`; у цепочки с `.each` — вторая пара скобок (первая —
+    таблица)."""
+    open_at = match.end() - 1
+    close = _masked_closing(masked, open_at)
+    if close is None:
+        return None
+    chain = [part.strip() for part in match.group(2).split(".") if part.strip()]
+    if "each" not in chain:
+        return open_at, close
+    k = close + 1
+    while k < len(masked) and masked[k].isspace():
+        k += 1
+    if k >= len(masked) or masked[k] != "(":
+        return None
+    second = _masked_closing(masked, k)
+    return None if second is None else (k, second)
+
+
+def _ban_findings(source: str) -> list[tuple[int, str]]:
+    """(позиция, что найдено) запретов требования 7 в тексте файла с
+    меткой."""
+    masked = _js_mask(source)
+    found = [(m.start(), f"вызов .{m.group(1)}")
+             for m in _BANNED_MEMBER.finditer(masked)]
+    found += [(m.start(), "vi.setConfig")
+              for m in _BANNED_SET_CONFIG.finditer(masked)]
+    for m in _BAN_CALL.finditer(masked):
+        callee = m.group(1) + "".join(m.group(2).split())
+        span = _call_arguments(masked, m)
+        if span is None:
+            continue
+        args = _top_level_parts(masked, span[0] + 1, span[1])
+        for left, right in args:
+            text = masked[left:right]
+            if _BAN_NUMBER.fullmatch(text):
+                found.append((left, f"числовой литерал {text} в аргументах "
+                                    f"{callee}"))
+            elif text.startswith("{") and text.endswith("}"):
+                found += [(left, f"объект с ключом {key} в аргументах {callee}")
+                          for key in _object_keys(source, masked, left, right)
+                          if key in _BAN_KEYS]
+        if not args or source[args[0][0]] not in _JS_QUOTES:
+            continue
+        left, right = args[0]
+        name = source[left + 1:right - 1]
+        if len(AC_LABEL_LITERAL.findall(name)) > 1:
+            found.append((left, f"две метки AC-<n>: в одном литерале имени "
+                                f"«{name}»"))
+        if m.group(1) == "describe" and AC_LABEL_LITERAL.match(name):
+            found.append((left, f"литерал describe с меткой AC-<n>: в начале "
+                                f"«{name}»"))
+    return sorted(set(found))
+
+
+def plank_ban_errors(files: list[tuple[str, str]],
+                     rule: "PlankRule | None") -> list[str]:
+    """Запреты в тексте файлов с меткой `AC-<n>: ` по правилу `rule` (SPEC
+    01M5AQH8M2DKBV30NBY86J34A7, требование 7): `.fails`, `.skipIf`,
+    `.runIf`, `.only`, `vi.setConfig`; объект с ключом `retry`/`timeout`
+    или числовой литерал в аргументах первого уровня вызова
+    `it`/`test`/`describe`/`suite` (у `.each(t)(…)` — во второй паре
+    скобок); две метки `AC-<n>: ` в литерале имени; литерал `describe` с
+    меткой в начале. Файлы pytest и прочие без метки не проверяются.
+    Отказ — «<файл>:<строка>: <что найдено> — запрещено в тексте планки»."""
+    errors = []
+    for label, source in files:
+        if rule is None or not rule.is_labelled(Path(label).name):
+            continue
+        for pos, what in _ban_findings(source):
+            line = source.count("\n", 0, pos) + 1
+            errors.append(f"{label}:{line}: {what} — {PLANK_BAN_TAIL}")
+    return errors
 
 
 def _labelled_ac_content(content: str) -> tuple[set, dict]:

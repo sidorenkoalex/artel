@@ -1260,7 +1260,10 @@ class Ac5LabelledLongLivedFlowTest(LabelledSandbox):
     def test_ac5_checkpoint_manifest_verification_and_zones(self):
         """Долгоживущий `frontend/src/components/button.<id>.test.jsx` test_author коммитится чекпоинтом, попадает в перечень на выходе из `tests_writing`, сверяется на переходе и признаётся гейтом зон своим.
 
-        Сценарий: компонент `pult-vitest` с шаблоном; test_author пишет
+        Сценарий: компонент `pult-vitest` с шаблоном; задача входит в
+        `tests_writing` переходом гейта SPEC (опора честного FAIL_TO_PASS,
+        SPEC 01M5AQH8M2DKBV30NBY86J34A7), и отчёт базы на выходе несёт провал
+        проверки тестов `AC-<n>`; test_author пишет
         планку и долгоживущий файл. (1) После чекпоинта шага файл есть в
         дереве головы кодовой ветки. (2) `advance` переводит задачу в
         `in_dev`, перечень лока несёт путь файла с SHA-256 его байтов на
@@ -1278,6 +1281,16 @@ class Ac5LabelledLongLivedFlowTest(LabelledSandbox):
         """
         name = self.vitest_project()
         t = self.new_task(name)
+        # Опора перечня «Зелёный с рождения»: SPEC.md в ссылке документов и
+        # переход гейта SPEC; чекпоинт уносит SPEC.md из каталога документов
+        # — на старте шага роли пульт материализует его снова.
+        store.update_task(self.conn, t.id, state="spec_gate")
+        checkpoint.commit_step_artifacts(self.conn, t.id, "analyst")
+        store.set_state(self.conn, t.id, "tests_writing", "operator",
+                        expected_state="spec_gate",
+                        detail=transition_gates.SPEC_GATE_PASSED_DETAIL)
+        t.docs.mkdir(parents=True, exist_ok=True)
+        (t.docs / "SPEC.md").write_text(spec_text(t.id, (1,)), encoding="utf-8")
         self.write_plank(t, {f"ac{self.word()}.test.jsx": self.plank_jsx()})
         rel = f"frontend/src/components/button.{t.low}.test.jsx"
         text = self.long_jsx()
@@ -1285,9 +1298,37 @@ class Ac5LabelledLongLivedFlowTest(LabelledSandbox):
         checkpoint.commit_step_artifacts(self.conn, t.id, "test_author")
         checkpoint.commit_success_checkpoint(self.conn, t.id, "test_author")
         self.assertIn(rel, self.branch_files(t), self.note("файл не закоммичен"))
+
+        def failing_base(argv, *args, **kwargs):
+            # Отчёт базы: тесты `AC-<n>` переданных раннеру файлов падают
+            # провалом проверки (`AssertionError`).
+            proc = self.spy_popen(argv, *args, **kwargs)
+            parts = [str(a) for a in argv] if isinstance(argv, (list, tuple)) \
+                else []
+            path = (arg_value(parts, "--outputFile")
+                    if parts[:1] == [VITEST_BIN] else None)
+            if path:
+                cwd = Path(str(kwargs.get("cwd") or os.getcwd()))
+                tests = []
+                for part in parts[1:]:
+                    file = Path(part) if os.path.isabs(part) else cwd / part
+                    if not (file.is_file() and file.name.endswith(".test.jsx")):
+                        continue
+                    tests += [{"file": os.path.relpath(file, cwd),
+                               "name": m.group(1), "state": "fail",
+                               "mode": "run", "fails": False, "retry_count": 0,
+                               "error_name": "AssertionError", "timeout": False,
+                               "hook": None, "duration_ms": 5}
+                              for m in re.finditer(r"\bit\('(AC-\d+: [^']*)'",
+                                                   file.read_text(encoding="utf-8"))]
+                Path(path).write_text(json.dumps({"tests": tests}),
+                                      encoding="utf-8")
+            return proc
+
         before = len(store.task_steps(self.conn, t.id))
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf), \
+                mock.patch.object(subprocess, "Popen", failing_base):
             try:
                 fsm.cmd_advance(t.id)
             except SystemExit as exc:

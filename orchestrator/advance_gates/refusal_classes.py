@@ -62,6 +62,23 @@ ACCEPTANCE_CODE_COPY_REFUSAL_ACTION = ("переход отклонён: раб�
 LONG_LIVED_GIT_REFUSAL_ACTION = ("переход отклонён: долгоживущие файлы tests/ — "
                                  "git не ответил")
 
+# Честный `FAIL_TO_PASS` на выходе из `tests_writing` и тесты критериев на
+# ветке (SPEC 01M5AQH8M2DKBV30NBY86J34A7, требование 11): находки чинит
+# test_author, отсутствие теста критерия на ветке — developer, правку SPEC
+# после гейта — тот, кто правил; список «провал проверки», подготовку
+# прогона и опору SPEC — Оператор.
+FAIL_TO_PASS_REFUSAL_ACTION = "переход отклонён: честный FAIL_TO_PASS"
+BRANCH_CRITERION_REFUSAL_ACTION = ("переход отклонён: приёмочные тесты — тест "
+                                   "критерия не в отчёте")
+SPEC_CHANGED_AFTER_GATE_REFUSAL_ACTION = ("переход отклонён: SPEC изменён после "
+                                          "гейта SPEC")
+NO_FAILURE_ERRORS_REFUSAL_ACTION = ("переход отклонён: честный FAIL_TO_PASS — "
+                                    "список «провал проверки» не задан")
+FAIL_TO_PASS_PREPARE_REFUSAL_ACTION = ("переход отклонён: честный FAIL_TO_PASS — "
+                                       "отказ подготовки")
+SPEC_ANCHOR_REFUSAL_ACTION = ("переход отклонён: честный FAIL_TO_PASS — опора "
+                              "SPEC не найдена")
+
 # Таблица «Перечень отказов» SPEC: действие журнала -> класс.
 REFUSAL_CLASSES = {
     GUARD_REFUSAL_ACTION: ROLE_FIXES,
@@ -84,8 +101,14 @@ REFUSAL_CLASSES = {
     "переход отклонён: долгоживущие файлы tests/": ROLE_FIXES,
     "переход отклонён: планка читает артефакты с диска": ROLE_FIXES,
     "переход отклонён: планка не собирается": ROLE_FIXES,
+    FAIL_TO_PASS_REFUSAL_ACTION: ROLE_FIXES,
+    BRANCH_CRITERION_REFUSAL_ACTION: ROLE_FIXES,
+    SPEC_CHANGED_AFTER_GATE_REFUSAL_ACTION: ROLE_FIXES,
 
     BRANCH_UNREAD_REFUSAL_ACTION: OPERATOR_FIXES,
+    NO_FAILURE_ERRORS_REFUSAL_ACTION: OPERATOR_FIXES,
+    FAIL_TO_PASS_PREPARE_REFUSAL_ACTION: OPERATOR_FIXES,
+    SPEC_ANCHOR_REFUSAL_ACTION: OPERATOR_FIXES,
     MUTATION_CLAIM_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
     ACCEPTANCE_CODE_COPY_REFUSAL_ACTION: OPERATOR_FIXES,
     LONG_LIVED_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
