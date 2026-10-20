@@ -27,15 +27,23 @@
 `test_profile`, запись из нескольких компонентов и канареечная задача
 гейта не создают — ни прогона, ни записи журнала. Внутри границы любой
 сбой подготовки — отказ, не пропуск (fail-closed, ADR-0002).
+
+Тот же гейт стоит в окне мержа (`merge_gate_escalates`, SPEC
+01M5DDTVZEA40ZB9BHEH4YDEE7): база — merge-base головы со свежим sha main.
+Запись пройденного гейта несёт строку `голова …; база …; ключ …; мандат …`
+— доказательство: запись с той же четвёркой избавляет мерж от прогона.
 """
+import hashlib
+import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
 from .. import acceptance
 from .. import artifact_branch as docs_ref
-from .. import gitcmd, project_profile, store, workspace
+from .. import artifact_source, gitcmd, project_profile, store, workspace
 from ..reporters import outcome
 from ._base import GateRefusal, _run_gates
 from .acceptance import in_outcome_bounds
@@ -50,6 +58,19 @@ BROKEN_REFUSAL_ACTION = f"{OUTCOME_REFUSAL_ACTION} — сломан правко
 PREPARE_REFUSAL_ACTION = f"{OUTCOME_REFUSAL_ACTION} — подготовка"
 PASSED_ACTION = "гейт неослабления по исходам пройден"
 FLAKY_ON_BASE = "нестабилен и на базе"
+
+# Гейт исходов на гейте мержа (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7, требования
+# 1-4): действие находки без мандата повторено литералом в
+# `refusal_classes.REFUSAL_CLASSES`.
+MERGE_REFUSAL_ACTION = "merge отклонён: гейт неослабления по исходам"
+MERGE_PREPARE_ACTION = f"{MERGE_REFUSAL_ACTION} — подготовка"
+PROVEN_ACTION = "гейт исходов: доказан"
+NOT_RUN_LINE = "гейт исходов для головы {head} не исполнялся"
+MANDATE_NONE = "нет"
+COVERED_MARK = " — покрыто мандатом "
+# Строка доказательства записи `PASSED_ACTION` — сразу после строки чисел.
+PROOF_LINE = re.compile(r"^голова ([0-9a-f]{40}); база ([0-9a-f]{40}); "
+                        r"ключ (\S+); мандат (\S+)$")
 
 # Виды находок в порядке старшинства отказа (требование 6): исчезнувшие,
 # «сломан правкой», «нестабилен после правки», прочие находки сравнения.
@@ -162,6 +183,13 @@ def covering(cid: str, mandate: dict):
     """Имя ANSWER-n, чей элемент мандата покрывает тест `cid` (требование
     5): путь его файла либо префикс `путь::имя`, за которым конец имени,
     `::`, `[` или `#`; `None` — не покрыт."""
+    pair = _covering_element(cid, mandate)
+    return pair[1] if pair is not None else None
+
+
+def _covering_element(cid: str, mandate: dict):
+    """(элемент мандата, ANSWER-n) — правило `covering`; `None` — не
+    покрыт."""
     try:
         _comp, path, _name, _n = project_profile.parse_test_id(cid)
     except ValueError:
@@ -169,12 +197,12 @@ def covering(cid: str, mandate: dict):
     rest = cid.partition(":")[2]
     for element, source in mandate.items():
         if element == path:
-            return source
+            return element, source
         if "::" not in element or not rest.startswith(element):
             continue
         tail = rest[len(element):]
         if not tail or tail.startswith(("::", "[", "#")):
-            return source
+            return element, source
     return None
 
 
@@ -182,8 +210,28 @@ def _covering(cid: str, mandate: dict, id_mandate: dict):
     """Имя ANSWER-n, покрывающего тест `cid`: мандат по идентификатору —
     только точным равенством (с `#n`, без префиксного правила), прежний
     мандат — `covering`; `None` — не покрыт."""
+    pair = _covering_pair(cid, mandate, id_mandate)
+    return pair[1] if pair is not None else None
+
+
+def _covering_pair(cid: str, mandate: dict, id_mandate: dict):
+    """(элемент мандата, ANSWER-n) по правилу `_covering`; `None` — не
+    покрыт."""
     source = id_mandate.get(cid)
-    return source if source is not None else covering(cid, mandate)
+    if source is not None:
+        return cid, source
+    return _covering_element(cid, mandate)
+
+
+def fingerprint(elements_used) -> str:
+    """Отпечаток мандата записи пройденного гейта (SPEC
+    01M5DDTVZEA40ZB9BHEH4YDEE7, требование 1): sha256 (hex) элементов,
+    покрывших находки, — отсортированы и соединены переводом строки,
+    utf-8; таких элементов нет — «нет»."""
+    used = sorted(set(elements_used))
+    if not used:
+        return MANDATE_NONE
+    return hashlib.sha256("\n".join(used).encode("utf-8")).hexdigest()
 
 
 def _answer_mandates(artifact_branch: str, task_id: str) -> tuple:
@@ -300,15 +348,13 @@ def _redness(red: list, history: dict) -> tuple:
     return found, flaky
 
 
-def _checkouts(repo: Path, branch: str, scratch: Path, trees: dict) -> None:
-    """Выписки базы и головы кодовой ветки в `scratch`; заведённые
-    дописываются в `trees` (уборка — у вызывающего)."""
-    base_sha = gitcmd.diff_base(branch, repo=repo)
-    if not base_sha:
-        raise _Prepare(f"база сравнения ветки {branch} (diff_base) не определена")
-    head_sha = gitcmd.branch_head_sha(branch, repo=repo)
-    if not head_sha:
-        raise _Prepare(f"голова кодовой ветки {branch} не прочитана")
+def _checkouts(repo: Path, scratch: Path, trees: dict, base_sha: str,
+               head_sha: str) -> None:
+    """Выписки базы `base_sha` и головы кодовой ветки `head_sha` в
+    `scratch`; заведённые дописываются в `trees` (уборка — у вызывающего).
+    База — параметр (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7, требование 2): на
+    выходе из `in_dev` — `diff_base`, на мерже — merge-base головы со
+    свежим sha main."""
     for side, key, sha in ((BASE, "base", base_sha), (HEAD, "head", head_sha)):
         tree = scratch / key
         res = gitcmd.in_repo(repo, "worktree", "add", "--detach", str(tree), sha)
@@ -318,9 +364,127 @@ def _checkouts(repo: Path, branch: str, scratch: Path, trees: dict) -> None:
         trees[side] = tree
 
 
-def _judge(conn, task_id: str, t, artifact_branch: str, profile, repo: Path,
-           scratch: Path, trees: dict) -> GateRefusal | None:
-    _checkouts(repo, t["branch"], scratch, trees)
+def _diff_base(repo: Path, branch: str, _head_sha: str) -> str:
+    """База выхода из `in_dev` — `gitcmd.diff_base`, как до задачи."""
+    base_sha = gitcmd.diff_base(branch, repo=repo)
+    if not base_sha:
+        raise _Prepare(f"база сравнения ветки {branch} (diff_base) не определена")
+    return base_sha
+
+
+def _merge_base_of(main_sha_of):
+    """База гейта на мерже (требование 2): `git merge-base <голова> <sha
+    main>`, sha main — повторный фетч `main_sha_of()` после «fresh». Голова,
+    влившая main, даёт базой этот main; документные коммиты main после
+    точки расхождения в базу не входят."""
+    def base_of(repo: Path, _branch: str, head_sha: str) -> str:
+        main_sha = main_sha_of()
+        if not main_sha:
+            raise _Prepare("sha main не получен повторным фетчем после сверки "
+                           "свежести — база гейта на мерже не определена")
+        res = gitcmd.in_repo(repo, "merge-base", head_sha, main_sha)
+        base_sha = (res.stdout.strip()
+                    if res is not None and res.returncode == 0 else "")
+        if not base_sha:
+            raise _Prepare(f"merge-base головы {head_sha[:12]} и main "
+                           f"{main_sha[:12]} не определён: {_git_reason(res)}")
+        return base_sha
+    return base_of
+
+
+def _component_key(repo: Path, head_sha: str, profile, head_tree: Path) -> str:
+    """Ключ компонента записи (требование 1): `_report_suite_result_key`
+    по дереву головы с `base=False` и рабочей копией головы (файлы
+    блокировки). `None` — сбой подготовки: без ключа нет ни доказательства,
+    ни записи."""
+    res = gitcmd.in_repo(repo, "rev-parse", f"{head_sha}^{{tree}}")
+    tree = res.stdout.strip() if res is not None and res.returncode == 0 else ""
+    key = (acceptance._report_suite_result_key(tree, profile, False,
+                                               root=head_tree)
+           if tree else None)
+    if key is None:
+        raise _Prepare(f"ключ компонента для головы {head_sha[:12]} не снят "
+                       f"(дерево или суммы файлов блокировки не прочитаны)")
+    return key
+
+
+def proof_fields(detail: str):
+    """(голова, база, ключ, отпечаток) строки доказательства детали записи
+    `PASSED_ACTION`; `None` — строки нет (прежняя запись)."""
+    for line in (detail or "").splitlines():
+        m = PROOF_LINE.match(line.strip())
+        if m:
+            return m.groups()
+    return None
+
+
+_KINDS = (GONE, BROKEN, UNSTABLE, BECAME_SKIPPED, TODO_APPEARED,
+          FAILS_APPEARED, NEW_SKIPPED, NEW_TODO, NEW_FAILS)
+
+
+def _finding_id(line: str):
+    """Идентификатор теста строки находки `Finding.line`; `None` — не
+    разобран."""
+    for kind in _KINDS:
+        prefix = f"{kind}: "
+        if not line.startswith(prefix):
+            continue
+        # Исходы «сломан правкой»/«нестабилен» начинаются с ветки,
+        # находки сравнения — с базы (`_redness`, `compare`).
+        marker = " — ветка: " if kind in (BROKEN, UNSTABLE) else " — база: "
+        cid, sep, _runs = line[len(prefix):].partition(marker)
+        return cid if sep else None
+    return None
+
+
+def _covered_ids(detail: str) -> list:
+    """Идентификаторы находок, покрытых мандатом, из записи `PASSED_ACTION`
+    (строки «… — покрыто мандатом ANSWER-n»); неразобранный — `None`."""
+    return [_finding_id(line.rpartition(COVERED_MARK)[0])
+            for line in (detail or "").splitlines() if COVERED_MARK in line]
+
+
+def _passed_details(conn, task_id: str) -> list:
+    return [r["detail"] or "" for r in store.task_steps(conn, task_id)
+            if r["action"] == PASSED_ACTION]
+
+
+def _proven(conn, task_id: str, artifact_branch: str, head_sha: str,
+            base_sha: str, key: str) -> bool:
+    """Есть запись `PASSED_ACTION` с той же головой, базой, ключом и
+    отпечатком ТЕКУЩЕГО мандата над покрытыми находками той записи
+    (требование 3): отозванный элемент мандата меняет отпечаток."""
+    mandates = None
+    for detail in reversed(_passed_details(conn, task_id)):
+        fields = proof_fields(detail)
+        if fields is None or fields[:3] != (head_sha, base_sha, key):
+            continue
+        ids = _covered_ids(detail)
+        if ids and mandates is None:
+            mandates = _answer_mandates(artifact_branch, task_id)
+        pairs = [None if cid is None else _covering_pair(cid, *mandates)
+                 for cid in ids]
+        if any(pair is None for pair in pairs):
+            continue
+        if fingerprint(element for element, _source in pairs) == fields[3]:
+            return True
+    return False
+
+
+def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
+           repo: Path, scratch: Path, trees: dict, base_of,
+           merge: bool) -> GateRefusal | None:
+    head_sha = gitcmd.branch_head_sha(branch, repo=repo)
+    if not head_sha:
+        raise _Prepare(f"голова кодовой ветки {branch} не прочитана")
+    base_sha = base_of(repo, branch, head_sha)
+    _checkouts(repo, scratch, trees, base_sha, head_sha)
+    key = _component_key(repo, head_sha, profile, trees[HEAD])
+    if merge and _proven(conn, task_id, artifact_branch, head_sha, base_sha,
+                         key):
+        store.journal(conn, task_id, "fsm", PROVEN_ACTION,
+                      f"для головы {head_sha[:7]} и базы {base_sha[:7]}")
+        return None
     runs = _full_runs(task_id, profile, trees)
     base, head = runs[BASE], runs[HEAD]
     head_map = {c.id: c for c in head}
@@ -337,9 +501,9 @@ def _judge(conn, task_id: str, t, artifact_branch: str, profile, repo: Path,
                                  if f.id not in taken])
     mandate, id_mandate = (_answer_mandates(artifact_branch, task_id)
                            if findings else ({}, {}))
-    covered = [(f, _covering(f.id, mandate, id_mandate)) for f in findings]
-    uncovered = [f for f, source in covered if source is None]
-    covered = [(f, source) for f, source in covered if source is not None]
+    covered = [(f, _covering_pair(f.id, mandate, id_mandate)) for f in findings]
+    uncovered = [f for f, pair in covered if pair is None]
+    covered = [(f, pair) for f, pair in covered if pair is not None]
     flaky_lines = [f"{FLAKY_ON_BASE}: {cid}" for cid in flaky]
     if uncovered:
         lines = [f.line for f in uncovered]
@@ -354,30 +518,50 @@ def _judge(conn, task_id: str, t, artifact_branch: str, profile, repo: Path,
     counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; тестов, "
               f"прошедших перепрогон, {len(red)}; прогонов файлов "
               f"{file_runs}; находок, покрытых мандатом, {len(covered)}")
+    proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
+             f"{fingerprint(element for _f, (element, _s) in covered)}")
     store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(
-        [counts, *flaky_lines,
-         *(f"{f.line} — покрыто мандатом {source}" for f, source in covered)]))
+        [counts, proof, *flaky_lines,
+         *(f"{f.line}{COVERED_MARK}{source}" for f, (_e, source) in covered)]))
     return None
+
+
+def _bounds(is_canary, target: str):
+    """Профиль задачи в границе гейта (`in_outcome_bounds` профиля
+    решения `decide`, не канарейка); `None` — вне границы."""
+    if is_canary:
+        return None
+    decision = project_profile.decide(target)
+    if decision.refusal or decision.skip or \
+            not in_outcome_bounds(decision.profile):
+        return None
+    return decision.profile
 
 
 def _outcome_integrity_gate(conn, task_id: str, t,
                             artifact_branch: str) -> GateRefusal | None:
     """Гейт (требования 1-6): вне границы — `None` без прогона и записи;
     иначе прогоны, сравнение, мандат; сбой подготовки — отказ."""
-    if t["is_canary"]:
+    profile = _bounds(t["is_canary"], t["target"])
+    if profile is None:
         return None
-    decision = project_profile.decide(t["target"])
-    if decision.refusal or decision.skip or \
-            not in_outcome_bounds(decision.profile):
-        return None
+    return _gate(conn, task_id, t["branch"], artifact_branch, profile,
+                 _diff_base, merge=False)
+
+
+def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
+          base_of, merge: bool) -> GateRefusal | None:
+    """Ядро гейта на обоих рубежах: выписки, ключ, (на мерже)
+    доказательство, прогоны, сравнение, мандат; сбой подготовки — отказ
+    `PREPARE_REFUSAL_ACTION`, не пропуск."""
     repo = workspace.task_repo(task_id)
     # `resolve()`: временный каталог macOS — символическая ссылка, а пути
     # отчёта раннер считает от реального корня выписки.
     scratch = Path(tempfile.mkdtemp(prefix="artel-outcome-")).resolve()
     trees: dict = {}
     try:
-        return _judge(conn, task_id, t, artifact_branch, decision.profile,
-                      repo, scratch, trees)
+        return _judge(conn, task_id, branch, artifact_branch, profile,
+                      repo, scratch, trees, base_of, merge)
     except _Prepare as exc:
         reason = str(exc)
     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
@@ -399,3 +583,61 @@ def _outcome_integrity_gate_refuses(conn, task_id: str, t,
     return _run_gates(conn, task_id,
                       [lambda: _outcome_integrity_gate(conn, task_id, t,
                                                        artifact_branch)])
+
+
+def merge_gate_escalates(conn, task_id: str, state: str, main_sha_of) -> bool:
+    """Гейт исходов в окне мержа (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7,
+    требования 2-4): цель и признак канарейки — из БД; вне границы —
+    `False` без фетча и записей. Доказательство для головы и базы — запись
+    «доказан» без прогона; иначе прогон тем же ядром, что на `in_dev`.
+    Мандат — с ветки-источника `tasks/<id>/` (`artifact_source.resolve`).
+
+    Находка без мандата (и «сломан правкой») — запись
+    `MERGE_REFUSAL_ACTION` с находками и `escalated`, `True`. Сбой
+    подготовки — запись `MERGE_PREPARE_ACTION` и `sys.exit`: задача на
+    `merge_gate`, push нет, пропуска гейта нет."""
+    # Граница по цели — до строки задачи: вне границы шаг не читает БД
+    # сверх `task_target`, как прежний маршрут мержа.
+    profile = _bounds(False, store.task_target(conn, task_id))
+    if profile is None:
+        return False
+    t = store.get_task(conn, task_id)
+    if t["is_canary"]:
+        return False
+    artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+    refusal = _gate(conn, task_id, t["branch"], artifact_branch, profile,
+                    _merge_base_of(main_sha_of), merge=True)
+    if refusal is None:
+        return False
+    if refusal.action == PREPARE_REFUSAL_ACTION:
+        store.journal(conn, task_id, "fsm", MERGE_PREPARE_ACTION,
+                      refusal.detail)
+        sys.exit(f"[{task_id}] {MERGE_PREPARE_ACTION}: {refusal.detail}\n"
+                 f"  задача осталась на гейте merge; разберись с подготовкой "
+                 f"прогона и повтори artel.py approve {task_id}")
+    store.journal(conn, task_id, "fsm", MERGE_REFUSAL_ACTION, refusal.detail)
+    store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
+                    detail=refusal.detail)
+    print(f"[{task_id}] {MERGE_REFUSAL_ACTION}: задача эскалирована\n"
+          f"{refusal.detail}\n  дальше: находку снимает мандат Оператора — "
+          f"строка «{TEST_WEAKENING_MANDATE_MARKER} <пути и имена>» или "
+          f"«{TEST_ID_MANDATE_MARKER} <идентификатор теста>» в "
+          f"tasks/{task_id}/ANSWER-n.md")
+    return True
+
+
+def review_lines(conn, task_id: str, head_sha: str) -> list:
+    """Строки гейта исходов для пакета ревьювера (требование 5): по
+    последней записи `PASSED_ACTION` с головой `head_sha` — числа базы и
+    ветки, перепрогоны, «нестабилен и на базе», находки под мандатом с
+    ANSWER; записи нет — строка «не исполнялся»."""
+    for detail in reversed(_passed_details(conn, task_id) if head_sha else []):
+        fields = proof_fields(detail)
+        if fields is None or fields[0] != head_sha:
+            continue
+        lines = [line for line in detail.splitlines()
+                 if line.strip() and not PROOF_LINE.match(line.strip())]
+        return [f"гейт исходов для головы {head_sha[:7]} и базы "
+                f"{fields[1][:7]}: {lines[0] if lines else ''}",
+                *(f"гейт исходов: {line}" for line in lines[1:])]
+    return [NOT_RUN_LINE.format(head=head_sha[:7] or "(не прочитана)")]

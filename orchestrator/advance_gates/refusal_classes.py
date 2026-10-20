@@ -87,6 +87,9 @@ OUTCOME_BROKEN_REFUSAL_ACTION = ("переход отклонён: гейт не
                                  "исходам — сломан правкой")
 OUTCOME_PREPARE_REFUSAL_ACTION = ("переход отклонён: гейт неослабления по "
                                   "исходам — подготовка")
+# Тот же гейт на гейте мержа (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7, требование 4):
+# находка без мандата — эскалация, решение Оператора.
+OUTCOME_MERGE_REFUSAL_ACTION = "merge отклонён: гейт неослабления по исходам"
 
 # Таблица «Перечень отказов» SPEC: действие журнала -> класс.
 REFUSAL_CLASSES = {
@@ -124,6 +127,7 @@ REFUSAL_CLASSES = {
     LONG_LIVED_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
     OUTCOME_INTEGRITY_REFUSAL_ACTION: OPERATOR_FIXES,
     OUTCOME_PREPARE_REFUSAL_ACTION: OPERATOR_FIXES,
+    OUTCOME_MERGE_REFUSAL_ACTION: OPERATOR_FIXES,
     SPEC_AUDIT_SPEC_CHANGED_REFUSAL_ACTION: OPERATOR_FIXES,
     "переход отклонён: результат шага не закоммичен": OPERATOR_FIXES,
     "переход отклонён: рабочая копия артефактов грязная": OPERATOR_FIXES,
