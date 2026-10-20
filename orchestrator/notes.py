@@ -276,7 +276,15 @@ def _silence_window_reason() -> str | None:
     задача внешнего проекта — ни в состоянии окна, ни как задача держателя
     — пропускается, а не закрывает окно досрочно (внешний триггер не гасит
     триггер артели). Проект не определён (`_task_project` — `None`) —
-    окно открыто с причиной «проект задачи не определён»."""
+    окно открыто с причиной «проект задачи не определён».
+
+    Живой прогон канарейки любого набора (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0,
+    требование 4) — первый триггер: канарейка идёт на вершине main, которая
+    станет пином, и запись в main сдвинула бы её под прогоном."""
+    from . import canary
+    canary_note = canary.live_run_note()
+    if canary_note is not None:
+        return canary_note
     conn = store.db()
     # Мьютекс держится по проекту (SPEC 01M57PM7NBFX34319TR0F9CB4F,
     # требование 9): строк несколько, и держатель артели может стоять
@@ -1386,7 +1394,29 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--drop-pending", dest="drop_pending")
     # Принимается, поведения не несёт сверх приёма (SPEC «Не входит»).
     parser.add_argument("--task")
+    _add_during_canary_arg(parser)
     return parser.parse_args(argv)
+
+
+def _add_during_canary_arg(parser: argparse.ArgumentParser) -> None:
+    """`--during-canary "<основание>"` (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0,
+    требования 6, 8) — приёмом `--accept-red`: голый флаг доходит до
+    именованного отказа `_during_canary_or_refuse`, а не до кода выхода 2
+    самого argparse."""
+    parser.add_argument("--during-canary", dest="during_canary", nargs="?",
+                        const="")
+
+
+def _during_canary_or_refuse(args: argparse.Namespace,
+                             command: str) -> str | None:
+    """Основание флага без пробелов по краям; флаг без основания — отказ до
+    исполнения команды и при живом прогоне, и без него."""
+    if args.during_canary is None:
+        return None
+    if not args.during_canary.strip():
+        from . import canary
+        sys.exit(canary.during_canary_reason_refusal(command))
+    return args.during_canary.strip()
 
 
 def cmd_note(argv: list[str]) -> None:
@@ -1394,6 +1424,15 @@ def cmd_note(argv: list[str]) -> None:
         sys.exit("note отказана — вызов из окружения роли (role_env): "
                  "записи копилки и бэклога вносит Оператор")
     args = _parse_args(argv)
+    during_canary = _during_canary_or_refuse(args, "note")
+    # Обходы окна `--now`/`--flush` двигают main мимо окна тишины — при
+    # живой канарейке только с основанием (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0,
+    # требование 8).
+    if args.now is not None or args.flush:
+        from . import canary
+        canary.refuse_main_move_during_canary(
+            "note --now" if args.now is not None else "note --flush",
+            during_canary)
     # Просмотр и снятие удержанных записей — до попутного допуша: иначе он
     # отправил бы запись, которую Оператор как раз пришёл снять.
     if args.pending:
@@ -1471,6 +1510,7 @@ def _parse_doc_commit_args(argv: list[str]) -> argparse.Namespace:
     # отказа ниже, а не до кода выхода 2 самого argparse.
     parser.add_argument("--accept-red", dest="accept_red", nargs="?", const="")
     parser.add_argument("--flush", action="store_true")
+    _add_during_canary_arg(parser)
     return parser.parse_args(argv)
 
 
@@ -1518,6 +1558,11 @@ def cmd_doc_commit(argv: list[str]) -> None:
     if runner.in_role_environment():
         sys.exit(DOC_COMMIT_ROLE_REFUSAL)
     args = _parse_doc_commit_args(argv)
+    during_canary = _during_canary_or_refuse(args, "doc-commit")
+    if args.flush:
+        from . import canary
+        canary.refuse_main_move_during_canary("doc-commit --flush",
+                                              during_canary)
     if args.flush or _silence_window_reason() is None:
         _flush_pending(explicit=args.flush)
     if args.path is None:

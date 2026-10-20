@@ -1248,6 +1248,39 @@ def _push_rejected_by_moved_main(stderr: str) -> bool:
     return any(marker in lowered for marker in _MAIN_MOVED_PUSH_MARKERS)
 
 
+MERGE_DURING_CANARY_REFUSED_ACTION = "merge отклонён: идёт канарейка"
+MERGE_DURING_CANARY_ACTION = "merge во время канарейки"
+
+
+def _refuse_during_canary(conn, task_id: str, ctx: repo_context.RepoContext,
+                          during_canary: str | None) -> None:
+    """Живой прогон канарейки набора по умолчанию держит мерж задачи артели
+    (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требования 5-7): канарейка идёт на
+    вершине main, которая станет пином. Стоит непосредственно перед push —
+    ловит и одобрение, ждавшее очередь или CI, и канарейку, стартовавшую
+    после входа в тело. Отказ — `sys.exit`, задача остаётся на
+    `merge_gate`, мьютекс снимает `finally` вызывающего цикла. С основанием
+    `--during-canary` — строка журнала задачи и прежний путь; без живого
+    прогона флаг принимается молча (требование 10)."""
+    if not repo_context.is_artel(ctx):
+        return
+    from . import canary
+    note = canary.live_run_note(default_set_only=True)
+    if note is None:
+        return
+    if during_canary is not None:
+        store.journal(conn, task_id, "operator", MERGE_DURING_CANARY_ACTION,
+                      f"{note}; основание: {during_canary}")
+        return
+    detail = (f"{note}: мерж сдвинет main под проверяемым коммитом — "
+              f"дождись итога или повтори с {canary.DURING_CANARY_FLAG} "
+              f'"<основание>"')
+    store.journal(conn, task_id, "fsm", MERGE_DURING_CANARY_REFUSED_ACTION,
+                  detail)
+    sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+             f"  задача осталась на гейте merge")
+
+
 def _push_merged_main(conn, task_id: str, final_sha: str,
                       ctx: repo_context.RepoContext) -> str:
     """Push ЯВНОГО sha (не текущего чекаута) прямо в `refs/heads/
@@ -1379,7 +1412,8 @@ def _profile_refusal_exit(conn, task_id: str, target: str) -> None:
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             confirmed_ci_note: str | None = None,
                             fixes_main: str | None = None,
-                            fresh_suite: bool = False) -> tuple:
+                            fresh_suite: bool = False,
+                            during_canary: str | None = None) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
     (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): короткая
     композиция шагов — защищённые пути в диффе (SPEC
@@ -1425,6 +1459,10 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     `fixes_main` — основание флага `--fixes-main`); после push, `done` и
     уборки — ожидание CI новой головы main (`_await_main_ci`); guard по
     дереву мержа и по документам задачи — внутри `_publish_merge_artifacts`.
+
+    SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0 (требование 5): непосредственно перед
+    push — сверка живого прогона канарейки (`_refuse_during_canary`,
+    `during_canary` — основание флага `--during-canary`).
     """
     target = store.task_target(conn, task_id)
     ctx = repo_context.resolve(target)
@@ -1467,6 +1505,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     # на него адресуется «Итог: done» RETRO закрытия.
     merge_sha = gitcmd.head_sha(scratch)
     final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx)
+    _refuse_during_canary(conn, task_id, ctx, during_canary)
     if _push_merged_main(conn, task_id, final_sha, ctx) == "moved":
         return ("moved", branch)
     _finalize_done_state(conn, task_id, state, branch)
@@ -1509,7 +1548,8 @@ def _rebuild_core_reference(conn, task_id: str, final_sha: str) -> None:
 def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
                                    state: str,
                                    fixes_main: str | None = None,
-                                   fresh_suite: bool = False) -> None:
+                                   fresh_suite: bool = False,
+                                   during_canary: str | None = None) -> None:
     """Внешний цикл гейта `merge_gate` (SPEC T087, требования 1-6, 10;
     решение Оператора 31.08, аудит v6 Q-5; SPEC
     01M291EJMA995AZ61MEMDZKWRY, требования 1-2, 4-5): чередует тело
@@ -1563,7 +1603,13 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
 
     `fixes_main` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — основание
     `--fixes-main`, доезжает до каждого захода в тело этого вызова.
+
+    `during_canary` (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6) —
+    основание `--during-canary`, доезжает до тела только когда передано:
+    заглушки тела в существующих тестах держат прежнюю сигнатуру.
     """
+    body_extra = ({} if during_canary is None
+                  else {"during_canary": during_canary})
     start: float | None = None
     deadline: float | None = None
     confirmed_ci_note: str | None = None
@@ -1576,7 +1622,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
         while True:
             outcome = _cmd_approve_merge_gate(
                 conn, task_id, state, t, confirmed_ci_note,
-                fixes_main=fixes_main)
+                fixes_main=fixes_main, **body_extra)
             confirmed_ci_note = None
             if outcome[0] not in ("wait", "moved"):
                 return

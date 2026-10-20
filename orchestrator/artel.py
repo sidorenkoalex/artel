@@ -164,7 +164,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   hook-migrate inspect|apply|restore --client codex|claude --config <path>
                [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
-           [--fresh-suite] [--no-answer] [--accept-audit-fail] |
+           [--fresh-suite] [--no-answer] [--accept-audit-fail]
+           [--during-canary "<основание>"] |
   reject <id> "<причина>" | spec-audit <id> |
   answer <id> <файл-с-ответом> |
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
@@ -179,7 +180,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pair-resume <роль> <модель> "<решение>" |
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] [--detach] |
            --detach: отвязанный запуск штатный для сессии Оператора |
-  canary pool-seal |
+  canary pool-seal [--during-canary "<основание>"] |
   prune [--execute] | explore-stats [--days N] [--role <роль>] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   artifact-history-snapshots [--dry-run] |
@@ -1546,7 +1547,12 @@ def _cmd_canary(rest: list) -> None:
     без `--k` даёт прежний отказ «нужен параметр --k», а не выводит число
     задач из длины списка имён."""
     if rest and rest[0] == "pool-seal":
-        pool_seal.cmd_pool_seal()
+        during_canary = _during_canary_arg(rest, "canary pool-seal")
+        # Без флага — прежний вызов без аргументов (требование 10).
+        if during_canary is None:
+            pool_seal.cmd_pool_seal()
+        else:
+            pool_seal.cmd_pool_seal(during_canary=during_canary)
         return
     if "--detach" in rest:
         if rest.count("--detach") != 1 or "--result-file" in rest:
@@ -1560,13 +1566,17 @@ def _cmd_canary(rest: list) -> None:
             sys.exit("canary: --result-file требует путь")
         result_path = Path(rest[index + 1])
         rest = rest[:index] + rest[index + 2:]
-    previous_id = (max((row["id"] for row in store.all_canary_runs(store.db())),
-                       default=0) if result_path is not None else 0)
+    # Строки своего прогона — по `run_stamp`, который `cmd_canary` сообщает
+    # приёмнику до первого клона (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0,
+    # требование 9), а не по номеру строки: одновременный чужой прогон в
+    # той же БД в файл не попадает, а обрыв сигналом свою строку отдаёт.
+    stamps: list = []
+    options = {} if result_path is None else {"on_run_stamp": stamps.append}
     result = {"status": "complete"}
     try:
         canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest),
                           set_name=_set_arg(rest),
-                          templates=_template_arg(rest))
+                          templates=_template_arg(rest), **options)
     except BaseException as exc:
         result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
         raise
@@ -1577,7 +1587,7 @@ def _cmd_canary(rest: list) -> None:
                  "task_id": row["task_id"], "verdict": row["verdict"],
                  "outcome": row["outcome"]}
                 for row in store.all_canary_runs(store.db())
-                if row["id"] > previous_id]
+                if row["run_stamp"] in stamps]
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(result, ensure_ascii=False),
                                    encoding="utf-8")
@@ -1765,14 +1775,41 @@ def _fixes_main_arg(rest: list) -> str | None:
     return reason
 
 
+DURING_CANARY_FLAG = canary.DURING_CANARY_FLAG
+
+
+def _during_canary_arg(rest: list, command: str = "approve <id>") -> str | None:
+    """Основание флага `--during-canary "<основание>"` (SPEC
+    01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6) — мерж или запись в main при
+    живом прогоне канарейки; `None` — флага нет. Без основания — отказ до
+    исполнения, приёмом `_fixes_main_arg`, и при живом прогоне, и без
+    него."""
+    if DURING_CANARY_FLAG not in rest:
+        return None
+    idx = rest.index(DURING_CANARY_FLAG)
+    reason = rest[idx + 1] if idx + 1 < len(rest) else ""
+    if not reason.strip():
+        sys.exit(canary.during_canary_reason_refusal(command))
+    return reason.strip()
+
+
+def _approve_during_canary_kwargs(rest: list) -> dict:
+    """Без флага — прежний вызов `fsm.cmd_approve` без нового параметра
+    (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, «Не входит»: сигнатуры для
+    вызывающих не меняются)."""
+    reason = _during_canary_arg(rest)
+    return {} if reason is None else {"during_canary": reason}
+
+
 NO_ANSWER_FLAG = fsm.NO_ANSWER_FLAG
 ACCEPT_AUDIT_FAIL_FLAG = spec_audit.ACCEPT_FAIL_FLAG
 
 
 def _approve_reason_indices(rest: list) -> set[int]:
-    """Позиции флагов `--accept-red`/`--fixes-main` и их оснований."""
+    """Позиции флагов `--accept-red`/`--fixes-main`/`--during-canary` и их
+    оснований."""
     skipped: set[int] = set()
-    for flag in (ACCEPT_RED_FLAG, FIXES_MAIN_FLAG):
+    for flag in (ACCEPT_RED_FLAG, FIXES_MAIN_FLAG, DURING_CANARY_FLAG):
         if flag in rest:
             flag_idx = rest.index(flag)
             skipped.update((flag_idx, flag_idx + 1))
@@ -2053,7 +2090,8 @@ def main() -> None:
             fixes_main=_fixes_main_arg(rest),
             fresh_suite=FRESH_SUITE_FLAG in rest[1:],
             no_answer=_approve_no_answer_arg(rest),
-            accept_audit_fail=_approve_accept_audit_fail_arg(rest)),
+            accept_audit_fail=_approve_accept_audit_fail_arg(rest),
+            **_approve_during_canary_kwargs(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),

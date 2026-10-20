@@ -144,6 +144,7 @@ NBJCR5Q6C3B итерации 2, R2-F1), которого эта задача н�
 канарейки.
 """
 import fcntl
+import importlib
 import json
 import os
 import random
@@ -2780,6 +2781,197 @@ def _target_origin_note(explicit_sha: str | None, target_sha: str,
     return "HEAD главной копии — origin не ответил"
 
 
+# Реестр живого прогона (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требования 1-3):
+# правило «пока идёт канарейка, main не двигать» держится не дисциплиной
+# сессии, а записью, которую читают окно тишины `note`/`doc-commit`, гейт
+# мержа и обходы окна. Потребители импортируют этот модуль лениво: он сам
+# тянет `pool_seal` -> `notes` и `fsm`.
+DURING_CANARY_FLAG = fsm.DURING_CANARY_FLAG
+LIVE_RUN_SWEPT_ACTION = "канарейка: запись реестра живого прогона убрана"
+DURING_CANARY_ACTION = "команда во время канарейки"
+_LIVE_RECORD_SUFFIX = ".json"
+_LIVE_MARK_SUFFIX = ".lock"
+
+
+def _live_dir() -> Path:
+    return config.ROOT / ".artel" / config.CANARY_LIVE_DIRNAME
+
+
+def _stale_cycles():
+    """Модуль `doctor/stale_cycles` — не имя пакета `doctor`: фасад
+    реэкспортирует одноимённую функцию `stale_cycles`. Лениво: `doctor`
+    импортирует этот модуль."""
+    return importlib.import_module(".doctor.stale_cycles", __package__)
+
+
+def _moment_text(moment: datetime | None) -> str | None:
+    return None if moment is None else moment.isoformat()
+
+
+def _parse_moment(text) -> datetime | None:
+    if not isinstance(text, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(
+        tzinfo=timezone.utc)
+
+
+@contextmanager
+def _live_run_record(run_stamp: str, target_sha: str, set_name: str,
+                     task_count: int):
+    """Запись реестра на время прогона и метка `run_stamp` рядом с ней.
+
+    Метка создаётся исключительно (`O_EXCL`) ДО записи — повтор
+    `run_stamp` отказывает без «прочитать, потом записать», в том числе
+    между двумя процессами; при отказе чужие метка и запись не трогаются.
+    Пути запоминаются здесь: во время ведения `_ephemeral_clone` уводит
+    `config.ROOT` на клон, а снять надо файлы пульта. Снятие — `finally`:
+    штатный конец, исключение и сигнал (`_interrupt_on_signal` снаружи
+    превращает его в исключение)."""
+    directory = _live_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    mark = directory / f"{run_stamp}{_LIVE_MARK_SUFFIX}"
+    record = directory / f"{run_stamp}-{pid}{_LIVE_RECORD_SUFFIX}"
+    try:
+        fd = os.open(mark, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        sys.exit(f"canary: прогон {run_stamp} уже идёт")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(f"{pid}\n")
+        started = _stale_cycles().process_start_time(pid)
+        payload = {"pid": pid, "process_start": _moment_text(started),
+                   "run_stamp": run_stamp, "sha": target_sha,
+                   "set_name": set_name,
+                   "started_at": datetime.now(timezone.utc).isoformat(),
+                   "tasks": task_count}
+        tmp = record.with_name(record.name + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, record)
+        yield record
+    finally:
+        record.unlink(missing_ok=True)
+        record.with_name(record.name + ".tmp").unlink(missing_ok=True)
+        mark.unlink(missing_ok=True)
+
+
+def _live_verdict(entry: dict | None) -> str | None:
+    """`None` — запись живая; иначе — почему нет (строка журнала)."""
+    if entry is None:
+        return "запись не читается"
+    try:
+        pid = int(entry["pid"])
+        tasks = int(entry["tasks"])
+    except (KeyError, TypeError, ValueError):
+        return "запись не читается"
+    started_at = _parse_moment(entry.get("started_at"))
+    if started_at is None:
+        return "запись не читается"
+    if not liveness._pid_alive(pid):
+        return f"pid {pid} не жив"
+    ceiling = CANARY_DRIVE_TIMEOUT_SEC * tasks + 3600
+    age = (datetime.now(timezone.utc) - started_at).total_seconds()
+    if age >= ceiling:
+        return f"возраст {int(age)} с не меньше потолка {int(ceiling)} с"
+    recorded = _parse_moment(entry.get("process_start"))
+    if recorded is None:
+        return None
+    module = _stale_cycles()
+    current = module.process_start_time(pid)
+    # Неопределимое при сверке время старта — безопасная сторона: окно
+    # держится, запись остаётся.
+    if current is None:
+        return None
+    if abs(current - recorded) > module._LSTART_SPAN:
+        return (f"pid {pid} — другой процесс: старт {current.isoformat()}, "
+                f"записан {recorded.isoformat()}")
+    return None
+
+
+def _drop_live_record(path: Path, entry: dict | None, why: str) -> None:
+    path.unlink(missing_ok=True)
+    stamp = path.name.split("-", 1)[0]
+    mark = path.with_name(f"{stamp}{_LIVE_MARK_SUFFIX}")
+    try:
+        owner = mark.read_text(encoding="utf-8").strip()
+    except OSError:
+        owner = None
+    pid = (entry or {}).get("pid")
+    # Метку чужого (живого) прогона того же `run_stamp` не трогаем.
+    if owner is not None and (pid is None or owner in ("", str(pid))):
+        mark.unlink(missing_ok=True)
+    store.journal(store.db(), None, "orchestrator", LIVE_RUN_SWEPT_ACTION,
+                  f"{path.name}: {why}")
+
+
+def live_runs() -> list[dict]:
+    """Живые прогоны канарейки по реестру (требование 2), по имени записи.
+
+    Живая — pid жив, время старта процесса совпало с записанным в пределах
+    `_LSTART_SPAN` (`process_start_time` — тот же помощник, что при
+    записи; не определилось при сверке — живая; не определилось при
+    записи — сверка только по pid и возрасту) и возраст меньше
+    `CANARY_DRIVE_TIMEOUT_SEC` × число задач + час. Остальные записи
+    убираются вместе с меткой, каждая — строкой журнала пульта без задачи."""
+    directory = _live_dir()
+    if not directory.is_dir():
+        return []
+    alive = []
+    for path in sorted(directory.glob(f"*{_LIVE_RECORD_SUFFIX}")):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            entry = None
+        if not isinstance(entry, dict):
+            entry = None
+        why = _live_verdict(entry)
+        if why is None:
+            alive.append(entry)
+        else:
+            _drop_live_record(path, entry, why)
+    return alive
+
+
+def live_run_note(default_set_only: bool = False) -> str | None:
+    """«идёт канарейка <run_stamp> на <sha7>» первого живого прогона;
+    `default_set_only` — только прогоны набора по умолчанию (мерж,
+    требование 7). `None` — такого прогона нет."""
+    for entry in live_runs():
+        if default_set_only and entry.get("set_name") != config.CANARY_DEFAULT_SET:
+            continue
+        return (f"идёт канарейка {entry.get('run_stamp')} на "
+                f"{str(entry.get('sha') or '')[:7]}")
+    return None
+
+
+def during_canary_reason_refusal(command: str) -> str:
+    """Отказ флага без основания (требование 6) — общий у всех команд."""
+    return (f"{DURING_CANARY_FLAG} требует основание следующим аргументом: "
+            f'artel.py {command} {DURING_CANARY_FLAG} "<основание>"')
+
+
+def refuse_main_move_during_canary(command: str, during_canary: str | None,
+                                   ) -> None:
+    """Обход окна, двигающий main (требование 8): при живом прогоне любого
+    набора без `--during-canary` — отказ `sys.exit`; с флагом — строка
+    журнала пульта с основанием, команда идёт дальше. Без живого прогона —
+    ничего, флаг принимается молча (требование 10)."""
+    note = live_run_note()
+    if note is None:
+        return
+    if during_canary is None:
+        sys.exit(f"{note}: команда сдвинет main — дождись итога или повтори "
+                 f'с {DURING_CANARY_FLAG} "<основание>"')
+    store.journal(store.db(), None, "operator", DURING_CANARY_ACTION,
+                  f"{command}: {note}; основание: {during_canary}")
+
+
 class CanaryInterrupted(BaseException):
     def __init__(self, signum: int):
         self.signum = signum
@@ -2806,7 +2998,8 @@ def _interrupt_on_signal():
 
 def cmd_canary(*, k: int, sha: str | None = None,
                set_name: str = config.CANARY_DEFAULT_SET,
-               templates: list | None = None) -> None:
+               templates: list | None = None,
+               on_run_stamp=None) -> str:
     """`set_name` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 1) — имя
     набора ролей прогона из `canary_sets:` локального слоя; значение по
     умолчанию — набор по умолчанию, то есть прогон «как пульт».
@@ -2816,7 +3009,13 @@ def cmd_canary(*, k: int, sha: str | None = None,
     берёт из пула ровно их, без случайной выборки. `None` (по умолчанию) —
     выбор прежний, случайная выборка `k` шаблонов из пула, байт-в-байт как
     до этой задачи: развилка ровно одна и стоит здесь, прежняя ветка не
-    переписана."""
+    переписана.
+
+    `on_run_stamp` (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требования 1, 9) —
+    приёмник `run_stamp` прогона: зовётся `on_run_stamp(run_stamp)` после
+    записи реестра и до первого клона, чтобы вызывающий (файл результата
+    отвязанного запуска) знал свой прогон и на обрыве. Возврат —
+    `run_stamp`."""
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
@@ -2846,27 +3045,43 @@ def cmd_canary(*, k: int, sha: str | None = None,
         sha_label = _target_origin_note(sha, target_sha, origin_sha)
 
         run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        # Требование 5: имена выбранных шаблонов в порядке прогона — в САМОЙ
-        # первой строке вывода, до первого эфемерного клона. Иначе состав
-        # прогона Оператор узнавал бы по мере того, как задачи одна за другой
-        # доходят до конца, то есть через десятки минут, а при падении первого
-        # же клона — не узнал бы вовсе.
-        print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
-             f"{pool_dir} в порядке прогона: "
-             f"{', '.join(p.stem for p in templates)}; целевой sha {target_sha} "
-             f"({sha_label}), набор {plan.name}{_summary_note(plan)}")
-        with _interrupt_on_signal():
-            for template_path in templates:
-                try:
-                    _run_one_task(template_path, run_stamp,
-                                  config.CANARY_DEVIATION_RATIO,
-                                  target_sha, sha_label, plan, codex_auth)
-                except CanaryInterrupted as exc:
-                    note = f"оборвана сигналом {signal.Signals(exc.signum).name}"
-                    store.insert_canary_run(
-                        store.db(), run_stamp, template_path.stem, None,
-                        0, 0.0, 0, 0, note, None, False, False,
-                        main_sha=target_sha, verdict="red",
-                        set_name=plan.name, models_summary=plan.summary or None)
-                    raise SystemExit(128 + exc.signum) from None
+        # Реестр — внутри перехвата сигналов: сигнал на любом участке
+        # прогона, включая саму запись, снимает запись и метку `finally`
+        # менеджера (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 1).
+        try:
+            with _interrupt_on_signal(), _live_run_record(
+                    run_stamp, target_sha, plan.name, len(templates)):
+                if on_run_stamp is not None:
+                    on_run_stamp(run_stamp)
+                # Требование 5: имена выбранных шаблонов в порядке прогона — в
+                # САМОЙ первой строке вывода, до первого эфемерного клона.
+                # Иначе состав прогона Оператор узнавал бы по мере того, как
+                # задачи одна за другой доходят до конца, то есть через
+                # десятки минут, а при падении первого же клона — не узнал бы
+                # вовсе.
+                print(f"[canary] прогон {run_stamp}: {len(templates)} задач из "
+                      f"пула {pool_dir} в порядке прогона: "
+                      f"{', '.join(p.stem for p in templates)}; целевой sha "
+                      f"{target_sha} ({sha_label}), набор "
+                      f"{plan.name}{_summary_note(plan)}")
+                for template_path in templates:
+                    try:
+                        _run_one_task(template_path, run_stamp,
+                                      config.CANARY_DEVIATION_RATIO,
+                                      target_sha, sha_label, plan, codex_auth)
+                    except CanaryInterrupted as exc:
+                        note = (f"оборвана сигналом "
+                                f"{signal.Signals(exc.signum).name}")
+                        store.insert_canary_run(
+                            store.db(), run_stamp, template_path.stem, None,
+                            0, 0.0, 0, 0, note, None, False, False,
+                            main_sha=target_sha, verdict="red",
+                            set_name=plan.name,
+                            models_summary=plan.summary or None)
+                        raise SystemExit(128 + exc.signum) from None
+        except CanaryInterrupted as exc:
+            # Сигнал вне ведения задачи (запись реестра, первая строка) —
+            # тот же код выхода, строки прогона нет: ни одна задача не шла.
+            raise SystemExit(128 + exc.signum) from None
         print(f"[canary] прогон {run_stamp} завершён")
+        return run_stamp
