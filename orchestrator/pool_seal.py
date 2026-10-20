@@ -313,14 +313,20 @@ def _commit_through_clone(files: dict, message: str) -> str:
              f"повтори canary pool-seal")
 
 
-def cmd_pool_seal() -> None:
+def cmd_pool_seal(during_canary: str | None = None) -> None:
     """`canary pool-seal` (требование 2, AC-3/AC-4): шифрует открытый пул
     `~/.artel-canary` в `canary/pool.sealed`, обновляет манифест GUID
     `canary/guids.txt` (требование 4, AC-9..AC-11). Оба файла коммитятся в
     `main` и отправляются в `origin` через клон артели (SPEC
     01M42PENCS26D0656X8FR7DFA7, требование 5, AC-9) — рабочее дерево и git
     главной копии не меняются; главная копия получит их штатным
-    `pin-update`."""
+    `pin-update`.
+
+    `during_canary` — основание `--during-canary` (SPEC
+    01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 8): коммит в main при живом
+    прогоне канарейки идёт только с ним."""
+    from . import canary
+    canary.refuse_main_move_during_canary("canary pool-seal", during_canary)
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary pool-seal: каталог пула не найден: {pool_dir}")

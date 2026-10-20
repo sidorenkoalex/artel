@@ -426,6 +426,11 @@ CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
 # имя отделяет прогоны, годные для сдвига пина, от прогонов по требованию
 # (`store.green_canary_runs`, docs/operator-session.md).
 CANARY_DEFAULT_SET = "default"
+# Каталог реестра живых прогонов канарейки под `ROOT / ".artel"` (SPEC
+# 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 1) — вне git; полный путь
+# считается от `ROOT` в момент вызова (`canary._live_dir`), поэтому
+# песочница уводит его вместе с `ROOT`.
+CANARY_LIVE_DIRNAME = "canary-live"
 # Маркер учитывается при импорте только процессом `python -m
 # orchestrator.canary_drive`; обычный пульт не может наследовать обход.
 CANARY_SKIP_FULL_SUITE_ENV = "ARTEL_CANARY_SKIP_FULL_SUITE"

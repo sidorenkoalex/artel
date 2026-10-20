@@ -84,6 +84,10 @@ ROLE_STEP_REQUIRED_MARKERS = (pull.PULL_CONFLICT_ROLE_STEP_MARKER,
 ANSWER_CREATED_ACTION_PREFIX = "ANSWER создан"
 
 NO_ANSWER_FLAG = "--no-answer"
+# Мерж и запись в main при живом прогоне канарейки (SPEC
+# 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6); здесь, а не в `canary`:
+# `canary` импортирует этот модуль.
+DURING_CANARY_FLAG = "--during-canary"
 APPROVE_NO_ANSWER_REFUSED_ACTION = "approve отклонён: нет ANSWER после эскалации"
 ESCALATION_CLEARED_WITHOUT_ANSWER_ACTION = "эскалация снята без ответа"
 
@@ -910,7 +914,8 @@ def cmd_approve(task_id: str, sha: str | None = None,
                fixes_main: str | None = None,
                no_answer: bool = False,
                fresh_suite: bool = False,
-               accept_audit_fail: bool = False) -> None:
+               accept_audit_fail: bool = False,
+               during_canary: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -935,14 +940,19 @@ def cmd_approve(task_id: str, sha: str | None = None,
     `accept_audit_fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) —
     флаг `approve <id> [sha] --accept-audit-fail`: принятие последнего
     вердикта `fail` аудита SPEC Оператором; допустим только на
-    `spec_gate`."""
+    `spec_gate`.
+
+    `during_canary` (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6) —
+    основание флага `approve <id> [sha] --during-canary "<основание>"`:
+    мерж при живом прогоне канарейки набора по умолчанию; допустим только
+    на `merge_gate`."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
                                  fixes_main, no_answer, fresh_suite,
-                                 accept_audit_fail))
+                                 accept_audit_fail, during_canary))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -1390,7 +1400,8 @@ def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
 
 def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
                         fixes_main: str | None = None,
-                        fresh_suite: bool = False) -> None:
+                        fresh_suite: bool = False,
+                        during_canary: str | None = None) -> None:
     # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
     # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
     # из merge_gate, пока мьютекс занят, получает немедленный
@@ -1407,9 +1418,12 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
     if merge_after.merge_gate_refuses(conn, task_id, t):
         return
     from . import fsm_merge_gate
+    # Основание `--during-canary` — только когда передано: заглушки цикла в
+    # существующих тестах держат прежнюю сигнатуру.
+    extra = {} if during_canary is None else {"during_canary": during_canary}
     fsm_merge_gate._cmd_approve_merge_gate_cycle(
         conn, task_id, sid, t, state, fixes_main=fixes_main,
-        fresh_suite=fresh_suite)
+        fresh_suite=fresh_suite, **extra)
 
 
 def unanswered_role_step_escalation(conn, task_id: str) -> str | None:
@@ -1522,12 +1536,16 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                 fixes_main: str | None = None,
                 no_answer: bool = False,
                  fresh_suite: bool = False,
-                 accept_audit_fail: bool = False) -> None:
+                 accept_audit_fail: bool = False,
+                 during_canary: str | None = None) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if no_answer and state != "escalated":
         sys.exit(f"[{task_id}] approve отклонён: флаг {NO_ANSWER_FLAG} "
                  f"допустим только в состоянии escalated, задача в {state}")
+    if during_canary is not None and state != "merge_gate":
+        sys.exit(f"[{task_id}] approve отклонён: флаг {DURING_CANARY_FLAG} "
+                 f"допустим только в состоянии merge_gate, задача в {state}")
     if accept_audit_fail and state != "spec_gate":
         from .advance_gates import spec_audit
         sys.exit(f"[{task_id}] approve отклонён: флаг "
@@ -1559,7 +1577,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
         "acceptance": partial(_approve_acceptance, accept_red=accept_red,
                               fresh_suite=fresh_suite),
         "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main,
-                              fresh_suite=fresh_suite),
+                              fresh_suite=fresh_suite,
+                              during_canary=during_canary),
         "escalated": partial(_approve_escalated, no_answer=no_answer),
     }.get(state)
     if handler is None:
