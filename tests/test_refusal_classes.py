@@ -7,9 +7,9 @@
 import unittest
 
 from orchestrator import fixation
-from orchestrator.advance_gates import (acceptance, plan_appendix,
-                                        refusal_classes, test_integrity,
-                                        tests_writing, zones)
+from orchestrator.advance_gates import (acceptance, outcome_integrity,
+                                        plan_appendix, refusal_classes,
+                                        test_integrity, tests_writing, zones)
 
 ROLE = refusal_classes.ROLE_FIXES
 OPERATOR = refusal_classes.OPERATOR_FIXES
@@ -36,6 +36,26 @@ class GateConstantsClassifiedTest(unittest.TestCase):
             acceptance.LONG_LIVED_MANIFEST_ACTION: OPERATOR,
             test_integrity.TEST_INTEGRITY_REFUSAL_ACTION: OPERATOR,
             f"переход отклонён: {fixation.DOCS_REF_UNREAD_ACTION}": OPERATOR,
+        }
+        for action, klass in expected.items():
+            with self.subTest(action=action):
+                self.assertIn(action, refusal_classes.REFUSAL_CLASSES)
+                self.assertEqual(refusal_classes.refusal_class(action), klass)
+
+    def test_outcome_integrity_actions_have_their_spec_class(self):
+        """Три действия гейта неослабления по исходам — константы модуля
+        гейта — в перечне своим классом: «сломан правкой» чинит роль,
+        общий отказ и подготовка — Оператор.
+
+        Ловит мутацию: литерал перечня разошёлся с константой
+        `outcome_integrity` (опечатка в тире или слове) — «сломан правкой»
+        ушёл бы в класс по умолчанию, и `auto` встал бы вместо шага
+        developer.
+        """
+        expected = {
+            outcome_integrity.BROKEN_REFUSAL_ACTION: ROLE,
+            outcome_integrity.OUTCOME_REFUSAL_ACTION: OPERATOR,
+            outcome_integrity.PREPARE_REFUSAL_ACTION: OPERATOR,
         }
         for action, klass in expected.items():
             with self.subTest(action=action):

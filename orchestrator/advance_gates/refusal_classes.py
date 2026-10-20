@@ -79,6 +79,15 @@ FAIL_TO_PASS_PREPARE_REFUSAL_ACTION = ("переход отклонён: чес�
 SPEC_ANCHOR_REFUSAL_ACTION = ("переход отклонён: честный FAIL_TO_PASS — опора "
                               "SPEC не найдена")
 
+# Гейт неослабления по исходам (SPEC 01M5CJVB5B5V55PQQVR2QRHWZN, требование
+# 6): только «сломан правкой» чинит developer; нестабильность, исчезновение,
+# пропуски и подготовка прогона — решение или окружение Оператора.
+OUTCOME_INTEGRITY_REFUSAL_ACTION = "переход отклонён: гейт неослабления по исходам"
+OUTCOME_BROKEN_REFUSAL_ACTION = ("переход отклонён: гейт неослабления по "
+                                 "исходам — сломан правкой")
+OUTCOME_PREPARE_REFUSAL_ACTION = ("переход отклонён: гейт неослабления по "
+                                  "исходам — подготовка")
+
 # Таблица «Перечень отказов» SPEC: действие журнала -> класс.
 REFUSAL_CLASSES = {
     GUARD_REFUSAL_ACTION: ROLE_FIXES,
@@ -104,6 +113,7 @@ REFUSAL_CLASSES = {
     FAIL_TO_PASS_REFUSAL_ACTION: ROLE_FIXES,
     BRANCH_CRITERION_REFUSAL_ACTION: ROLE_FIXES,
     SPEC_CHANGED_AFTER_GATE_REFUSAL_ACTION: ROLE_FIXES,
+    OUTCOME_BROKEN_REFUSAL_ACTION: ROLE_FIXES,
 
     BRANCH_UNREAD_REFUSAL_ACTION: OPERATOR_FIXES,
     NO_FAILURE_ERRORS_REFUSAL_ACTION: OPERATOR_FIXES,
@@ -112,6 +122,8 @@ REFUSAL_CLASSES = {
     MUTATION_CLAIM_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
     ACCEPTANCE_CODE_COPY_REFUSAL_ACTION: OPERATOR_FIXES,
     LONG_LIVED_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
+    OUTCOME_INTEGRITY_REFUSAL_ACTION: OPERATOR_FIXES,
+    OUTCOME_PREPARE_REFUSAL_ACTION: OPERATOR_FIXES,
     SPEC_AUDIT_SPEC_CHANGED_REFUSAL_ACTION: OPERATOR_FIXES,
     "переход отклонён: результат шага не закоммичен": OPERATOR_FIXES,
     "переход отклонён: рабочая копия артефактов грязная": OPERATOR_FIXES,
