@@ -199,7 +199,8 @@ def _groups(task_id: str, docs: Path, profile, rule,
                 example=profile.long_lived_hint(task_id))
             + guard.long_lived_errors_from_files(
                 files, task_id, network_addresses=network_addresses,
-                project_imports=project_imports, rule=rule))
+                project_imports=project_imports, rule=rule)
+            + guard.plank_ban_errors(files, rule))
 
 
 def _long_lived(task_id: str, files: list[tuple[str, str]], profile, rule,
@@ -211,9 +212,10 @@ def _long_lived(task_id: str, files: list[tuple[str, str]], profile, rule,
     for path, text in files:
         errors += guard.long_lived_group_errors([(path, text)],
                                                 profile.long_lived_dir, rule)
-    return errors + guard.long_lived_errors_from_files(
+    return (errors + guard.long_lived_errors_from_files(
         files, task_id, network_addresses=network_addresses,
         project_imports=project_imports, rule=rule)
+        + guard.plank_ban_errors(files, rule))
 
 
 def _report(check: str, errors: list[str]) -> bool:

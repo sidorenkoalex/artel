@@ -60,10 +60,30 @@ def _is_stray_acceptance_test_file(task_rel: str, rule=None) -> bool:
 def _plank_rule(conn, task_id: str):
     """Правило планки проекта задачи; при отказе построения — умолчание
     (оно строже) и запись причины в журнал (SPEC
-    01M59KMPG2ZMK10V556VZVQD65, требование 2)."""
+    01M59KMPG2ZMK10V556VZVQD65, требование 2) — один раз на визит
+    `tests_writing` и только в нём (SPEC 01M5AQH8M2DKBV30NBY86J34A7,
+    требование 8): планку правит только test_author, а запись на каждом
+    чекпоинте каждой роли была шумом журнала."""
     rule = project_profile.plank_rule(store.task_target(conn, task_id))
-    project_profile.journal_plank_default(conn, task_id, "orchestrator", rule)
+    if rule.refusal and _plank_default_unjournaled_in_visit(conn, task_id):
+        project_profile.journal_plank_default(conn, task_id, "orchestrator",
+                                              rule)
     return rule
+
+
+def _plank_default_unjournaled_in_visit(conn, task_id: str) -> bool:
+    """Задача в `tests_writing`, и записи о взятом умолчании правила планки
+    после последней «state -> tests_writing» ещё нет (нет такой записи
+    перехода — весь журнал считается одним визитом)."""
+    if store.task_state(conn, task_id) != "tests_writing":
+        return False
+    visit = []
+    for row in store.task_steps(conn, task_id):
+        if row["action"] == "state -> tests_writing":
+            visit = []
+        else:
+            visit.append(row["action"])
+    return project_profile.PLANK_RULE_DEFAULT_ACTION not in visit
 
 
 # RETRO.md первого уровня `tasks/<id>/` — легитимный наравне с

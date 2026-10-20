@@ -25,7 +25,8 @@ from .advance_gates import spec_audit as spec_audit_gate
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _acceptance_run_refuses,
-                                       _long_lived_manifest_refuses)
+                                       _long_lived_manifest_refuses,
+                                       in_outcome_bounds)
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
 from .advance_gates.plan_appendix import (
@@ -50,6 +51,7 @@ from .advance_gates.tests_writing import (_freshness_refuses,
                                           _tests_writing_code_copy_gate,
                                           _tests_writing_code_diff,
                                           _tests_writing_dry_collect_gate,
+                                          _tests_writing_fail_to_pass_gate,
                                           _tests_writing_long_lived_gate,
                                           _tests_writing_manifest_gate,
                                           _tests_writing_stray_plank_files_gate,
@@ -604,6 +606,14 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                if profile is not None else None)
     gates.append(lambda: _tests_writing_dry_collect_gate(
         acc_tdir, run_cwd, task_id, extra=long_lived_paths, command=command))
+    # Честный `FAIL_TO_PASS` (SPEC 01M5AQH8M2DKBV30NBY86J34A7, требование 2)
+    # — только у компонента записи `components:` с `report`: вне границы
+    # гейта нет, выход прежний.
+    if in_outcome_bounds(profile):
+        covered = {f"AC-{n}" for n in tested}
+        gates.append(lambda: _tests_writing_fail_to_pass_gate(
+            conn, task_id, acc_tdir, run_cwd, covered, [profile],
+            long_lived_paths=long_lived_paths))
     if code_diff is not None:
         gates.append(lambda: _tests_writing_manifest_gate(
             conn, task_id, t["branch"], long_lived_paths))

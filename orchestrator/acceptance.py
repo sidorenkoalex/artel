@@ -716,8 +716,15 @@ def is_pytest_command(command) -> bool:
                for flag, module in zip(command, command[1:]))
 
 
+# Ключ прогона планки на базе в гейте честного `FAIL_TO_PASS` (SPEC
+# 01M5AQH8M2DKBV30NBY86J34A7, требование 1): ошибка сбора одного файла не
+# снимает прогон остальных — у команды pytest и только по флагу гейта.
+CONTINUE_ON_COLLECTION_ERRORS = "--continue-on-collection-errors"
+
+
 def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
-                 report: Path) -> tuple[list | None, str]:
+                 report: Path, continue_on_collection_errors: bool = False
+                 ) -> tuple[list | None, str]:
     """(argv прогона по отчёту, отказ подготовки)."""
     from . import project_profile
     from .reporters import outcome
@@ -754,6 +761,8 @@ def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
         extra = []
     if own is not None:
         extra += ["-p", "no:cacheprovider"]
+    if continue_on_collection_errors and not vitest and is_pytest_command(head):
+        extra.append(CONTINUE_ON_COLLECTION_ERRORS)
     tail = [a.replace("{path}", str(report))
             .replace("{pult_reporter}", str(outcome.VITEST_REPORTER))
             for a in args]
@@ -782,13 +791,15 @@ def _session_to_log(argv: list, cwd: Path, env: dict, timeout: float,
 
 
 def _report_run(profile, tree: Path, subset: list | None, timeout: float,
-                log: Path | None = None) -> ReportRun:
+                log: Path | None = None,
+                continue_on_collection_errors: bool = False) -> ReportRun:
     """Прогон компонента по отчёту в дереве `tree`: `subset` — пути тестов
     от корня дерева (планка, повтор, `--failed`), `None` — полный набор.
     Подготовка (сверка `workdir`, `report_args`, команды `pult-vitest`,
     установка и подключение зависимостей, версия Vitest) отказывает до
     запуска — `refusal`; иначе итог читается из отчёта
-    (`reporters.outcome`)."""
+    (`reporters.outcome`). `continue_on_collection_errors` — ключ pytest
+    гейта честного `FAIL_TO_PASS` (`_report_argv`)."""
     from . import project_profile
     from .reporters import outcome
     cwd, refusal = _own_cwd(profile, Path(tree))
@@ -800,7 +811,8 @@ def _report_run(profile, tree: Path, subset: list | None, timeout: float,
     try:
         vitest = profile.report == project_profile.REPORT_VITEST
         report = holder / ("report.json" if vitest else "report.xml")
-        argv, refusal = _report_argv(profile, Path(tree), cwd, subset, report)
+        argv, refusal = _report_argv(profile, Path(tree), cwd, subset, report,
+                                     continue_on_collection_errors)
         if refusal:
             return ReportRun(refusal=refusal)
         try:
@@ -1468,7 +1480,9 @@ def _laid_plank(plan: _PlankPlan, task_id: str, tests_dir: Path,
 def run(tdir: Path, cwd: Path | None = None,
         extra: list[str] = (),
         command: list[str] | None = None,
-        file_times: dict[str, float] | None = None) -> tuple[bool, str]:
+        file_times: dict[str, float] | None = None,
+        records: list | None = None,
+        continue_on_collection_errors: bool = False) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
     01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `cwd`, равным
     рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
@@ -1520,12 +1534,20 @@ def run(tdir: Path, cwd: Path | None = None,
 
     Профиль компонента с `report`: файлы планки — по правилу планки
     проекта и выкладке `_plank_plan` (SPEC 01M59Z0FW1699SJQ2FA5Y76CZ3).
+
+    `records` (SPEC 01M5AQH8M2DKBV30NBY86J34A7, требование 1) — у профиля с
+    отчётом в список ложится исход прогона `ReportRun` (`refusal`,
+    `timed_out`, `state`) и его записи `CaseResult`; на ранних выходах
+    подготовки — `ReportRun` с отказом. `continue_on_collection_errors` —
+    ключ pytest прогона на базе гейта честного `FAIL_TO_PASS`.
     """
     tests_dir = tdir / "acceptance_tests"
     plan = _plank_plan(tests_dir, command)
     targets = list(extra) if plan.absent else _run_targets(tests_dir, extra)
     if not targets:
         return True, PLANK_ABSENT_NOTE
+    reported = _reported(command)
+    keep = records if reported is not None else None
     tree = run_cwd = cwd if cwd is not None else config.ROOT
     own, refusal = _own(command), ""
     if own is not None:
@@ -1535,6 +1557,8 @@ def run(tdir: Path, cwd: Path | None = None,
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
     refusal = refusal or plan.refusal
     if refusal:
+        if keep is not None:
+            keep.append(ReportRun(refusal=refusal))
         return False, f"{location_note}\n{refusal}"
     with _laid_plank(plan, Path(tdir).name, tests_dir, tree,
                      own if plank_present(tests_dir) else None) as laid:
@@ -1542,13 +1566,14 @@ def run(tdir: Path, cwd: Path | None = None,
         if case_note:
             location_note += f"\n{case_note}"
         if laid.refusal:
+            if keep is not None:
+                keep.append(ReportRun(refusal=laid.refusal))
             return False, f"{location_note}\n{laid.refusal}"
         if laid.targets is not None:
             targets = [*laid.targets, *extra]
-        reported = _reported(command)
         if reported is not None:
             return _run_reported(reported, targets, tree, location_note, extra,
-                                 file_times)
+                                 file_times, keep, continue_on_collection_errors)
         if own is not None:
             targets = [_own_target(own, t) for t in targets]
         return _run_now(command, targets, run_cwd, location_note, extra,
@@ -1561,12 +1586,18 @@ def _report_timeout_text(run: ReportRun, what: str = "прогон") -> str:
 
 
 def _run_reported(profile, targets: list[str], tree: Path, location_note: str,
-                  extra: list[str], file_times: dict[str, float] | None
+                  extra: list[str], file_times: dict[str, float] | None,
+                  records: list | None = None,
+                  continue_on_collection_errors: bool = False
                   ) -> tuple[bool, str]:
     """`run()` профиля с отчётом: цели — подмножество компонента, исход —
-    из отчёта (требования 1, 8)."""
+    из отчёта (требования 1, 8); `records` — исход и записи прогона."""
     run = _report_run(profile, tree, list(targets),
-                      config.ACCEPTANCE_TIMEOUT_SEC)
+                      config.ACCEPTANCE_TIMEOUT_SEC,
+                      continue_on_collection_errors=continue_on_collection_errors)
+    if records is not None:
+        records.append(run)
+        records.extend(run.tests)
     if file_times is not None:
         file_times.update(_report_file_times(run.tests, list(extra)))
     text = _report_timeout_text(run) if run.timed_out else run.text(tail=2000)

@@ -7,15 +7,20 @@
 докстрингом фиксирует это решение дословно, перенесено без правки."""
 import contextlib
 import hashlib
+import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from scripts import guard
 
 from .. import (acceptance, agent_log, appendix_tree, artifact_branch, config,
                fsm, gitcmd, project_profile, store, workspace, yamlmini)
+from ..reporters import outcome
 from .plan_appendix import (PLAN_APPENDIX_GATE_FAILURE_ACTION,
                             PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION)
-from .refusal_classes import ACCEPTANCE_CODE_COPY_REFUSAL_ACTION
+from .refusal_classes import (ACCEPTANCE_CODE_COPY_REFUSAL_ACTION,
+                              BRANCH_CRITERION_REFUSAL_ACTION)
 
 LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень долгоживущих тестов"
 # Подсказка отказа сверки перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
@@ -184,6 +189,236 @@ def _seed_repeats_escalate(conn, task_id: str, t, long_lived: list[str],
                     expected_state=t["state"], detail=detail)
     print(f"  дальше: тест чинит Оператор командой amend-tests по ответу "
           f"на эскалацию задачи {task_id}")
+    return True
+
+
+# ------------------------------------------- записи отчёта по критериям
+#
+# Один разбор на выход из `tests_writing` (честный `FAIL_TO_PASS`) и на
+# приёмку ветки (SPEC 01M5AQH8M2DKBV30NBY86J34A7, требования 3, 6): файлы
+# задачи с тестами критериев, их компонент и путь в отчёте, номер критерия
+# записи отчёта.
+
+# Маркер файла планки, тесты которого на базе обязаны пройти (требование 5):
+# тот же текст, что одна из форм `guard.REDNESS_MARKER`.
+GREEN_FROM_BIRTH_MARKER = re.compile(r"Зелёный с рождения:[^\S\n]*\S")
+_AC_LABEL_HEAD = re.compile(r"AC-(\d+): ")
+_PYTEST_LABEL_HEAD = re.compile(r"test_ac(\d+)_")
+# Разделитель полного имени теста в отчёте: у `pult-vitest` — цепочка
+# `describe`, у JUnit — класс и метод.
+_VITEST_NAME_SEP = " > "
+_JUNIT_NAME_SEP = "::"
+
+
+def in_outcome_bounds(profile) -> bool:
+    """Профиль в границе проверок исхода тестов критериев (требование 2):
+    компонент записи `components:` с `report`. Артель, `test_profile` (в
+    том числе `pytest-own` с `report`) и компоненты без `report` — вне."""
+    return (profile is not None and project_profile.reported(profile)
+            and bool(getattr(profile, "from_components", False)))
+
+
+@dataclass(frozen=True)
+class CriterionFile:
+    """Файл задачи с тестами критериев: `rel` — путь записей отчёта от
+    корня репозитория, `name` — как файл называют находки (имя файла
+    планки либо путь долгоживущего), `profile` — компонент-владелец,
+    `labelled` — метка `AC-<n>: `, `numbers` — критерии его тестов по
+    тексту, `green` — у файла планки маркер «Зелёный с рождения:»."""
+    rel: str
+    name: str
+    profile: object
+    labelled: bool
+    numbers: frozenset
+    plank: bool
+    green: bool = False
+
+
+def _plank_file_profile(name: str, rule, profiles):
+    """Компонент файла планки `name`: по `PlankRule.component_of`; у
+    правила по умолчанию компонентов в правиле нет — первый компонент с
+    командой pytest (тот, чьей разметке файл подчиняется)."""
+    if rule.is_default:
+        pytest = [p for p in profiles if acceptance.is_pytest_command(p.command)]
+        chosen = pytest or list(profiles)
+        return chosen[0] if chosen else None
+    comp = rule.component_of(name)
+    return next((p for p in profiles if p.component == comp), None)
+
+
+def _plank_record_rel(task_id: str, tests_dir: Path, name: str, profile,
+                      run_cwd: Path) -> str:
+    """Путь файла планки в записях отчёта: выкладка `<plank_layout>` с id
+    задачи (требование 3) либо, без выкладки, сам файл каталога планки."""
+    if profile.plank_layout:
+        return f"{profile.plank_layout.replace('<id>', task_id)}/{name}"
+    return os.path.relpath(tests_dir / name, run_cwd).replace(os.sep, "/")
+
+
+def criterion_files(task_id: str, tdir: Path, run_cwd: Path, rule, profiles,
+                    long_lived: list[str], target: str) -> list[CriterionFile]:
+    """Тестовые файлы планки каталога `tdir/acceptance_tests` и свои
+    долгоживущие файлы `long_lived` (пути от `run_cwd`) с компонентом из
+    `profiles`: файл планки — по правилу планки, долгоживущий — по
+    компоненту, чьему шаблону он подходит. Файл без компонента пропущен."""
+    files: list[CriterionFile] = []
+    tests_dir = Path(tdir) / "acceptance_tests"
+    if tests_dir.is_dir():
+        for path in sorted(tests_dir.iterdir()):
+            if not path.is_file() or not rule.is_test(path.name):
+                continue
+            profile = _plank_file_profile(path.name, rule, profiles)
+            text = _read_text(path)
+            if profile is None or text is None:
+                continue
+            labelled = rule.is_labelled(path.name)
+            head = (guard.first_comment(text) if labelled
+                    else guard.module_docstring(text)) or ""
+            numbers, _markers = guard.scan_ac_content([(path.name, text)],
+                                                      rule=rule)
+            files.append(CriterionFile(
+                _plank_record_rel(task_id, tests_dir, path.name, profile,
+                                  Path(run_cwd)),
+                path.name, profile, labelled, frozenset(numbers), True,
+                bool(GREEN_FROM_BIRTH_MARKER.search(head))))
+    for rel in long_lived:
+        profile = next((p for p in profiles if p.long_lived_dir
+                        and p.is_long_lived(task_id, rel)), None)
+        text = _read_text(Path(run_cwd) / rel)
+        if profile is None or text is None:
+            continue
+        rule_ll = project_profile.long_lived_rule(target, profile)
+        labelled = rule_ll is not None and rule_ll.is_labelled(Path(rel).name)
+        numbers, _markers = guard.scan_ac_content([(rel, text)], rule=rule_ll)
+        files.append(CriterionFile(rel, rel, profile, labelled,
+                                   frozenset(numbers), False))
+    return files
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def record_location(record) -> tuple[str, str, str, int | None] | None:
+    """(компонент, путь, полное имя, номер повтора) идентификатора записи;
+    `None` — идентификатор не той формы."""
+    try:
+        return project_profile.parse_test_id(record.id)
+    except ValueError:
+        return None
+
+
+def record_criterion(record, cfile: CriterionFile) -> int | None:
+    """Номер критерия записи по метке в последнем сегменте полного имени
+    (требование 3): `AC-<n>: ` в начале — у файла с меткой, `test_ac<n>_`
+    — у pytest; `None` — запись не тест критерия."""
+    where = record_location(record)
+    if where is None:
+        return None
+    sep = (_VITEST_NAME_SEP if cfile.profile.report == project_profile.REPORT_VITEST
+           else _JUNIT_NAME_SEP)
+    last = where[2].rsplit(sep, 1)[-1]
+    match = (_AC_LABEL_HEAD if cfile.labelled else _PYTEST_LABEL_HEAD).match(last)
+    return int(match.group(1)) if match else None
+
+
+def file_records(files: list[CriterionFile], runs: dict) -> dict:
+    """{файл: [записи]} — записи прогона компонента файла (`runs`: имя
+    компонента -> записи `CaseResult`) с путём файла."""
+    found: dict = {f: [] for f in files}
+    by_key = {(f.profile.component, os.path.normpath(f.rel)): f for f in files}
+    for component, records in runs.items():
+        for record in records:
+            where = record_location(record)
+            if where is None:
+                continue
+            cfile = by_key.get((component, os.path.normpath(where[1])))
+            if cfile is not None:
+                found[cfile].append(record)
+    return found
+
+
+def not_passed_kind(record) -> str:
+    """Вид исхода записи, которая обязана пройти (тест на ветке, тест
+    файла «Зелёный с рождения:»); пусто — прошла без повтора."""
+    where = record_location(record)
+    if where is not None and where[3] is not None:
+        return "повтор имени теста в файле"
+    if record.retries:
+        return f"{outcome.RETRY_NOTE} внутри прогона: {record.retries}"
+    if record.outcome == outcome.PASSED:
+        return ""
+    return outcome_kind(record)
+
+
+def outcome_kind(record) -> str:
+    """Вид исхода записи для текста находки: прошёл, пропуск или `todo` с
+    `mode`, таймаут, падение хука, имя ошибки."""
+    if record.outcome == outcome.PASSED:
+        return "прошёл"
+    if record.outcome == outcome.SKIPPED:
+        if record.mode == "todo":
+            return f"todo (mode: {record.mode})"
+        if record.mode:
+            return f"пропуск (mode: {record.mode})"
+        return f"пропуск ({record.skip_reason or 'без причины'})"
+    failure = record.failure or "без имени"
+    if record.outcome == outcome.ERROR:
+        if failure.startswith("timeout"):
+            return f"таймаут теста ({failure})"
+        if failure.startswith("падение хука"):
+            return failure
+        return f"ошибка {failure}"
+    return f"падение {failure}"
+
+
+def branch_criterion_problems(files: list[CriterionFile], runs: dict) -> list[str]:
+    """Находки проверки ветки (требование 6): у каждого критерия, покрытого
+    тестом файлов задачи, есть запись с его меткой, и все такие записи —
+    `passed` без повторов."""
+    by_number: dict[int, list] = {}
+    for cfile, records in file_records(files, runs).items():
+        for record in records:
+            n = record_criterion(record, cfile)
+            if n is not None:
+                by_number.setdefault(n, []).append(record)
+    problems = []
+    for n in sorted(set().union(*(f.numbers for f in files)) if files else ()):
+        records = by_number.get(n, [])
+        if not records:
+            problems.append(f"AC-{n} — теста нет в отчёте прогона ветки")
+            continue
+        bad = [f"{r.id} ({kind})" for r in records if (kind := not_passed_kind(r))]
+        if bad:
+            problems.append(f"AC-{n} — тест критерия не прошёл на ветке: "
+                            f"{', '.join(bad)}")
+    return problems
+
+
+def _branch_criteria_refuses(conn, task_id: str, profile, acc_tdir: Path,
+                             run_cwd: Path, long_lived: list[str] | None,
+                             records: list) -> bool:
+    """Тесты критериев в отчёте прогона ветки (требование 6) — после
+    зелёного прогона: у профиля в границе каждый критерий, покрытый тестом
+    зафиксированной планки и долгоживущих файлов перечня, представлен в
+    отчёте записями, и все они прошли без повторов. `True` — отказ
+    (журнал и печать сделаны)."""
+    target = store.task_target(conn, task_id)
+    files = criterion_files(task_id, acc_tdir, run_cwd,
+                            project_profile.plank_rule(target), [profile],
+                            list(long_lived or ()), target)
+    cases = [r for r in records if isinstance(r, outcome.CaseResult)]
+    problems = branch_criterion_problems(files, {profile.component: cases})
+    if not problems:
+        return False
+    detail = "; ".join(problems)
+    store.journal(conn, task_id, "fsm", BRANCH_CRITERION_REFUSAL_ACTION, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    print(f"  дальше: почини код (не тест) так, чтобы тест каждого критерия "
+          f"исполнялся и проходил, и повтори artel.py advance {task_id}")
     return True
 
 
@@ -400,6 +635,13 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     if _missing_plank_refuses():
         return True
     kwargs = {"command": command} if command else {}
+    # Записи прогона — только у профиля в границе: по ним после зелёного
+    # исхода сверяются тесты критериев (SPEC 01M5AQH8M2DKBV30NBY86J34A7,
+    # требование 6); вне границы прогон и исходы прежние.
+    records: list | None = None
+    if in_outcome_bounds(decision.profile):
+        records = []
+        kwargs["records"] = records
     file_times: dict[str, float] = {}
     if long_lived:
         green, tail = acceptance.run(acc_tdir, cwd=run_cwd, extra=long_lived,
@@ -424,6 +666,10 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
         print(tail)
         print(f"  дальше: почини код (не тест) и повтори "
               f"artel.py advance {task_id}")
+        return True
+    if records is not None and _branch_criteria_refuses(
+            conn, task_id, decision.profile, acc_tdir, run_cwd, long_lived,
+            records):
         return True
     if long_lived and _seed_repeats_escalate(conn, task_id, t, long_lived,
                                              run_cwd, command):
