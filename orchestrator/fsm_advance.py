@@ -29,6 +29,7 @@ from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        in_outcome_bounds)
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
+from .advance_gates.outcome_integrity import _outcome_integrity_gate_refuses
 from .advance_gates.plan_appendix import (
     PLAN_APPENDIX_GATE_FAILURE_ACTION,
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION, _plan_appendix_gate,
@@ -802,6 +803,11 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # (`tests/test_fsm_advance_gate_smoke.py` сверяет журнал и stdout
     # существующих сценариев байт-в-байт).
     if _test_integrity_gate_refuses(conn, task_id, t, branch):
+        return False
+    # Гейт неослабления по исходам (SPEC 01M5CJVB5B5V55PQQVR2QRHWZN,
+    # требование 1) — за гейтом по тексту: дешёвый отказ по тексту идёт
+    # раньше двух полных прогонов набора.
+    if _outcome_integrity_gate_refuses(conn, task_id, t, branch):
         return False
     if _review_rework_gate_refuses(conn, task_id, t, branch):
         return False
