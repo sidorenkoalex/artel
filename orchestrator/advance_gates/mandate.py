@@ -44,10 +44,21 @@ TEST_WEAKENING_MANDATE_MARKER = "Ослабление тестов разреш�
 # `orchestrator/merge_after.py`, а не правила путей ниже.
 MERGE_AFTER_MANDATE_MARKER = "Зависимости мержа:"
 
+# Маркер мандата Оператора на ослабление ОДНОГО теста компонента по его
+# идентификатору (SPEC 01M5D02N3B428V8BWC3PAM9QCT, требование 1; ADR-0026
+# п. 3): имя теста Vitest несёт пробелы, « > » и запятые, поэтому строка
+# несёт ровно один идентификатор и по запятым не делится (`id_elements`).
+TEST_ID_MANDATE_MARKER = "Ослабление теста по идентификатору разрешено:"
+
 # Все виды мандата. Порядок — порядок появления в пульте, на результат не
 # влияет.
 MANDATE_MARKERS = (_ZONES_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER,
-                   MERGE_AFTER_MANDATE_MARKER)
+                   MERGE_AFTER_MANDATE_MARKER, TEST_ID_MANDATE_MARKER)
+
+# Причина отказа идентификатору, который построчный разбор и ячейка
+# матрицы передать не могут (обратная кавычка ограничивает ячейку, «|» —
+# столбец таблицы).
+FILE_MANDATE_REASON = "такой тест покрывается мандатом на путь файла"
 
 # Путь репозитория в элементе мандата: буквы, цифры, `_`, `-`, `.` и `/`.
 # Абсолютный путь отсекается требованием к первому символу, сегмент `..` —
@@ -89,6 +100,29 @@ def elements(line: str, marker: str) -> list[str] | None:
     if not stripped.startswith(marker):
         return None
     return _split_zone_paths(stripped[len(marker):])
+
+
+def id_elements(line: str) -> list[str] | None:
+    """Элемент ОДНОЙ строки маркера `TEST_ID_MANDATE_MARKER` (SPEC
+    01M5D02N3B428V8BWC3PAM9QCT, требование 1): весь остаток строки после
+    маркера со срезом пробелов по краям, без деления по запятым — список
+    из одного элемента. `None` и пустой список — как у `elements`: строка
+    не маркер / голый маркер."""
+    stripped = line.strip()
+    if not stripped.startswith(TEST_ID_MANDATE_MARKER):
+        return None
+    rest = stripped[len(TEST_ID_MANDATE_MARKER):].strip()
+    return [rest] if rest else []
+
+
+def line_elements(line: str, marker: str) -> list[str] | None:
+    """Элементы строки `line` по маркеру `marker` его собственным разбором:
+    `id_elements` у маркера по идентификатору, `elements` у прочих.
+    Перечни маркеров перебираются этой функцией — иначе новый маркер
+    делился бы по запятым."""
+    if marker == TEST_ID_MANDATE_MARKER:
+        return id_elements(line)
+    return elements(line, marker)
 
 
 def _looks_like_path(text: str) -> bool:
@@ -220,6 +254,47 @@ def _element_refusal(element: str, marker: str,
     return None
 
 
+def _outcome_profile(decision):
+    """Профиль решения, если он в границе гейта исходов (`in_outcome_bounds`);
+    `None` — вне границы, без решения или при отказе/пропуске."""
+    # Ленивый импорт: `advance_gates.acceptance` тянет прогон приёмки,
+    # который узлу разбора строки не нужен.
+    from .acceptance import in_outcome_bounds
+    if decision is None or decision.refusal or decision.profile is None:
+        return None
+    return decision.profile if in_outcome_bounds(decision.profile) else None
+
+
+def _test_id_refusal(element: str, decision) -> str | None:
+    """Причина, по которой идентификатор нового маркера не годен; `None` —
+    годен (SPEC 01M5D02N3B428V8BWC3PAM9QCT, требование 2). Граница — та же,
+    что у гейта исходов: находку другого профиля этот мандат не снимет
+    никогда."""
+    from .. import project_profile
+    if "`" in element or "|" in element:
+        return FILE_MANDATE_REASON
+    try:
+        component, path, _name, _n = project_profile.parse_test_id(element)
+    except ValueError as exc:
+        return str(exc)
+    if decision is not None and decision.refusal:
+        return (f"гейт неослабления по исходам мандат не засчитает — решение "
+                f"профиля тестов проекта: отказ: {decision.refusal}")
+    profile = _outcome_profile(decision)
+    if profile is None:
+        return ("мандат по идентификатору действует только у компонента "
+                "записи components: с полем report — гейт неослабления по "
+                "исходам у профиля задачи не выполняется")
+    if component != profile.component:
+        return (f"компонента «{component}» нет в записи components: проекта "
+                f"(компонент профиля — «{profile.component}»)")
+    if not profile.in_weakening_scope(path):
+        scope = ", ".join(profile.weakening_scope)
+        return (f"путь {path} вне области {scope} компонента "
+                f"{profile.component}")
+    return None
+
+
 def refusals(text: str, code_branch: str | None,
             repo: Path | None = None, *, conn=None,
             task_id: str | None = None) -> list[str]:
@@ -256,12 +331,12 @@ def refusals(text: str, code_branch: str | None,
     # неё `targets.yaml` не нужен, и его сбой такому ответу не отказывает.
     decision = None
     if any(elements(line, TEST_WEAKENING_MANDATE_MARKER)
-           for line in text.splitlines()):
+           or id_elements(line) for line in text.splitlines()):
         decision = _task_decision(conn, task_id)
     found: list[str] = []
     for line in text.splitlines():
         for marker in MANDATE_MARKERS:
-            parsed = elements(line, marker)
+            parsed = line_elements(line, marker)
             if parsed is None:
                 continue
             shown = line.strip()
@@ -272,6 +347,12 @@ def refusals(text: str, code_branch: str | None,
             if marker == MERGE_AFTER_MANDATE_MARKER:
                 found.extend(f"строка «{shown}»: {reason}" for reason in
                              merge_after.value_refusals(conn, task_id, parsed))
+                break
+            if marker == TEST_ID_MANDATE_MARKER:
+                reason = _test_id_refusal(parsed[0], decision)
+                if reason is not None:
+                    found.append(f"строка «{shown}»: идентификатор "
+                                 f"«{parsed[0]}» — {reason}")
                 break
             for element in parsed:
                 reason = _element_refusal(element, marker, files, decision)
@@ -294,7 +375,8 @@ MATRIX_DOC_REF = "docs/operator-gates.md, раздел «Матрица неос
 
 # Маркеры, строка которых — мандат, требующий матрицы. «Зависимости мержа:»
 # сюда не входит: это не ослабление и не расширение (требование 1).
-MATRIX_MANDATE_MARKERS = (_ZONES_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER)
+MATRIX_MANDATE_MARKERS = (_ZONES_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER,
+                          TEST_ID_MANDATE_MARKER)
 
 _MATRIX_HEADING_RE = re.compile(r"##\s+Матрица неослабления(?!\w)")
 
@@ -320,6 +402,11 @@ _TEST_REF_RE = re.compile(r"(?<![\w/])tests/[\w./-]*\.py(?!\w)")
 _PY_PATH_RE = re.compile(r"(?<![\w./-])[\w][\w./-]*\.py(?!\w)")
 
 _EMPHASIS_RE = re.compile(r"(?<!\S)[*_`]+|[*_`]+(?!\S)")
+
+# Содержимое между парой ОДИНАРНЫХ обратных кавычек ячейки (SPEC
+# 01M5D02N3B428V8BWC3PAM9QCT, требование 4): идентификатор теста с
+# пробелами и « > » отдельным токеном не выделяется, его границы — кавычки.
+_BACKTICK_SPAN_RE = re.compile(r"(?<!`)`([^`]+)`(?!`)")
 
 _CONDITIONAL = "ок при условии"
 _REPLACEMENTS_SEPARATORS = ":—-,;."
@@ -395,14 +482,43 @@ def _names(cell: str, element: str) -> bool:
                for token in _TOKEN_SPLIT_RE.split(cell) if token)
 
 
+def _backtick_spans(cell: str) -> list[str]:
+    return [m.group(1) for m in _BACKTICK_SPAN_RE.finditer(cell)]
+
+
+def _names_test_id(cell: str, element: str) -> bool:
+    """Идентификатор нового маркера назван в ячейке целиком между парой
+    одинарных обратных кавычек; сверка побайтно, без нормализации."""
+    return element in _backtick_spans(cell)
+
+
+def _component_covered(cell: str, profile) -> bool:
+    """Покрытие сверх прежнего правила у профиля в границе гейта исходов
+    (SPEC 01M5D02N3B428V8BWC3PAM9QCT, требование 4): идентификатор теста
+    своего компонента в кавычках с путём в области либо путь любого файла
+    области — в кавычках или отдельным токеном."""
+    from .. import project_profile
+    for span in _backtick_spans(cell):
+        try:
+            component, path, _name, _n = project_profile.parse_test_id(span)
+        except ValueError:
+            continue
+        if component == profile.component and profile.in_weakening_scope(path):
+            return True
+    candidates = _backtick_spans(cell) + _TOKEN_SPLIT_RE.split(cell)
+    return any(profile.in_weakening_scope(token.strip("*_"))
+               for token in candidates if token.strip("*_"))
+
+
 def _remains(cell: str) -> bool:
     return not _normalized(cell).startswith(("нет", "не остается", "исчезает"))
 
 
-def _covered(cell: str, profile=None) -> bool:
+def _covered(cell: str, profile=None, outcome_bounds: bool = False) -> bool:
     """Ячейка «Чем покрыто после» несёт ссылку на тест. `profile` — профиль
     тестов проекта задачи: ссылка — путь `*.py` в его области ослабления;
-    `None` — прежнее правило `tests/…`."""
+    `None` — прежнее правило `tests/…`. `outcome_bounds` — профиль в
+    границе гейта исходов: ссылкой служит и `_component_covered`."""
     value = _normalized(cell)
     if "не покрыто" in value or value.startswith(("нет", "—", "–", "-")):
         return False
@@ -411,8 +527,10 @@ def _covered(cell: str, profile=None) -> bool:
     # Путь сверяется с масками без нижнего регистра нормализации: маска
     # профиля сравнивается с путём буквально, как у гейта.
     raw = _EMPHASIS_RE.sub("", cell.strip())
-    return any(profile.in_weakening_scope(m.group(0))
-               for m in _PY_PATH_RE.finditer(raw))
+    if any(profile.in_weakening_scope(m.group(0))
+           for m in _PY_PATH_RE.finditer(raw)):
+        return True
+    return outcome_bounds and _component_covered(cell.strip(), profile)
 
 
 def _conditional_with_replacements(cell: str) -> bool:
@@ -425,7 +543,8 @@ def _conditional_with_replacements(cell: str) -> bool:
 
 
 def matrix_refusals(text: str, elements: list[str], *, conn=None,
-                    task_id: str | None = None) -> list[str]:
+                    task_id: str | None = None,
+                    test_ids: list[str] = ()) -> list[str]:
     """Причины отказа по форме матрицы неослабления в тексте `text` при
     мандате на `elements` (SPEC 01M4NZ5QRB7MNEYCWGXEWVWFP0, требования 1-3,
     7); пустой список — форма годна. Одна функция на оба канала — `answer`
@@ -435,12 +554,18 @@ def matrix_refusals(text: str, elements: list[str], *, conn=None,
     тест в «Чем покрыто после» — путь в области ослабления профиля (SPEC
     01M55VDVVDVWW2MTJ01F88N5FM, требование 4); у артели, без задачи и без
     профиля (решение — отказ или пропуск) — прежнее правило `tests/…`
-    (у артели — буквально прежнее, а не его пересказ масками профиля)."""
+    (у артели — буквально прежнее, а не его пересказ масками профиля).
+
+    `test_ids` — идентификаторы мандата `TEST_ID_MANDATE_MARKER` (SPEC
+    01M5D02N3B428V8BWC3PAM9QCT, требование 4): «Что меняется» называет
+    каждый целиком между одинарными обратными кавычками, побайтно."""
     from .. import repo_context
     decision = _task_decision(conn, task_id)
     profile = None
     if decision is not None and not repo_context.is_artel(decision.target):
         profile = decision.profile
+    outcome_bounds = profile is not None and \
+        _outcome_profile(decision) is not None
     section = matrix_section(text)
     if section is None:
         return ["нет раздела «## Матрица неослабления»"]
@@ -461,9 +586,16 @@ def matrix_refusals(text: str, elements: list[str], *, conn=None,
     if unnamed:
         found.append("в столбце «Что меняется» не названы элементы мандата: "
                      + ", ".join(unnamed))
+    unnamed_ids = [e for e in test_ids
+                   if not any(_names_test_id(row[0], e) for row in rows)]
+    if unnamed_ids:
+        found.append("в столбце «Что меняется» не названы между одинарными "
+                     "обратными кавычками идентификаторы мандата: "
+                     + ", ".join(f"«{e}»" for e in unnamed_ids))
     for number, row in enumerate(rows, start=1):
         cells = row + [""] * (len(MATRIX_HEADERS) - len(row))
-        if (_remains(cells[2]) and not _covered(cells[3], profile)
+        if (_remains(cells[2])
+                and not _covered(cells[3], profile, outcome_bounds)
                 and not _conditional_with_replacements(cells[4])):
             found.append(f"строка данных {number}: свойство остаётся и не "
                          f"покрыто, а «Решение» не начинается с «ок при "

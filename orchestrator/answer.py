@@ -92,6 +92,19 @@ def _test_mandate_marker_elements(raw: str) -> list[str]:
     return found
 
 
+def _test_id_mandate_elements(raw: str) -> list[str]:
+    """Идентификаторы ВСЕХ строк маркера `mandate.TEST_ID_MANDATE_MARKER`
+    в тексте файла ответа, в порядке появления, без повторов (SPEC
+    01M5D02N3B428V8BWC3PAM9QCT, требование 3) — тем же разбором, что
+    засчитывает гейт исходов."""
+    found: list[str] = []
+    for line in raw.splitlines():
+        for element in mandate.id_elements(line) or ():
+            if element not in found:
+                found.append(element)
+    return found
+
+
 def _read_answer_file(task_id: str, file_path: str) -> str:
     try:
         return Path(file_path).read_text(encoding="utf-8")
@@ -126,15 +139,18 @@ INDEPENDENT_CHECK_MARKER = "Независимая проверка:"
 
 def _matrix_mandate_elements(raw: str) -> list[str] | None:
     """Элементы ВСЕХ строк мандатов зон и тестов файла, без повторов;
-    `None` — строки мандата нет (матрица не требуется)."""
+    `None` — строки мандата нет (матрица не требуется). Строка маркера по
+    идентификатору тоже требует матрицы, но её элемент сверяется с «Что
+    меняется» иначе — его здесь нет, его даёт `_test_id_mandate_elements`."""
     found: list[str] | None = None
     for line in raw.splitlines():
         for marker in mandate.MATRIX_MANDATE_MARKERS:
-            parsed = mandate.elements(line, marker)
+            parsed = mandate.line_elements(line, marker)
             if parsed is None:
                 continue
             found = found if found is not None else []
-            found.extend(e for e in parsed if e not in found)
+            if marker != mandate.TEST_ID_MANDATE_MARKER:
+                found.extend(e for e in parsed if e not in found)
     return found
 
 
@@ -156,13 +172,16 @@ def _matrix_problems(raw: str, conn=None,
     elements = _matrix_mandate_elements(raw)
     if elements is None:
         return []
-    problems = mandate.matrix_refusals(raw, elements, conn=conn,
-                                       task_id=task_id)
-    weakening = any(
-        mandate.elements(line, mandate.TEST_WEAKENING_MANDATE_MARKER)
-        is not None for line in raw.splitlines())
+    problems = mandate.matrix_refusals(
+        raw, elements, conn=conn, task_id=task_id,
+        test_ids=_test_id_mandate_elements(raw))
+    weakening = [marker for marker in (mandate.TEST_WEAKENING_MANDATE_MARKER,
+                                       mandate.TEST_ID_MANDATE_MARKER)
+                 if any(mandate.line_elements(line, marker) is not None
+                        for line in raw.splitlines())]
     if weakening and not _has_independent_check(raw):
-        problems.append(f"при мандате «{mandate.TEST_WEAKENING_MANDATE_MARKER}» "
+        shown = "», «".join(weakening)
+        problems.append(f"при мандате «{shown}» "
                         f"нет строки «{INDEPENDENT_CHECK_MARKER} <вердикт>» "
                         f"с непустым вердиктом")
     return problems
@@ -205,11 +224,12 @@ def _has_mandate_lines(raw: str) -> bool:
     даже с пустым или негодным списком элементов: такой файл идёт
     прежним путём мандата (SPEC 01M443BPQEA9ZMJ3R50THNB1MF, требование 1),
     где его элементы проверяет и отказывает `mandate.refusals`."""
-    return any(mandate.elements(line, marker) is not None
+    return any(mandate.line_elements(line, marker) is not None
                for line in raw.splitlines()
                for marker in (fsm_advance._ZONES_MANDATE_MARKER,
                               mandate.TEST_WEAKENING_MANDATE_MARKER,
-                              mandate.MERGE_AFTER_MANDATE_MARKER))
+                              mandate.MERGE_AFTER_MANDATE_MARKER,
+                              mandate.TEST_ID_MANDATE_MARKER))
 
 
 SPEC_GATE_REFUSED_MARKERS = (fsm_advance._ZONES_MANDATE_MARKER,
@@ -238,12 +258,17 @@ def _spec_gate_answer_text(conn, task_id: str, file_path: str,
                  f"снимает reject → эскалация аналитика → answer в "
                  f"escalated. ANSWER не создан")
     # Голый маркер без элементов — не «нет мандата», а ошибка строки:
-    # её называет `mandate.refusals` в `_read_checked_answer_file`.
-    if not any(mandate.elements(line, mandate.TEST_WEAKENING_MANDATE_MARKER)
-               is not None for line in raw.splitlines()):
+    # её называет `mandate.refusals` в `_read_checked_answer_file`. Мандат
+    # по идентификатору теста — тоже мандат тестов (SPEC
+    # 01M5D02N3B428V8BWC3PAM9QCT, требование 3).
+    if not any(mandate.line_elements(line, marker) is not None
+               for line in raw.splitlines()
+               for marker in (mandate.TEST_WEAKENING_MANDATE_MARKER,
+                              mandate.TEST_ID_MANDATE_MARKER)):
         sys.exit(f"[{task_id}] answer на spec_gate принимает только мандат "
                  f"тестов — строку «{mandate.TEST_WEAKENING_MANDATE_MARKER} "
-                 f"…»; решения по SPEC передаются reject. ANSWER не создан")
+                 f"…» или «{mandate.TEST_ID_MANDATE_MARKER} …»; решения по "
+                 f"SPEC передаются reject. ANSWER не создан")
     return _read_checked_answer_file(conn, task_id, file_path, code_branch)
 
 
@@ -370,6 +395,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     state = t["state"]
     mandate_paths: list[str] = []
     test_elements: list[str] = []
+    test_ids: list[str] = []
     merge_deps: list[str] | None = None
     if state == "escalated":
         raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])
@@ -384,8 +410,10 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
         # требование 3): иначе уточнить его в `in_dev` можно было только
         # новой эскалацией developer — полным шагом роли.
         test_elements = _test_mandate_marker_elements(raw)
+        test_ids = _test_id_mandate_elements(raw)
         merge_deps = merge_after.mandate_value(conn, task_id, raw)
-        if not mandate_paths and not test_elements and merge_deps is None:
+        if not (mandate_paths or test_elements or test_ids) \
+                and merge_deps is None:
             sys.exit(f"[{task_id}] answer доступна только для задачи в "
                      f"состоянии escalated (сейчас: {state})")
     elif state == "merge_gate":
@@ -406,6 +434,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
             sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
         raw = _spec_gate_answer_text(conn, task_id, file_path, t["branch"])
         test_elements = _test_mandate_marker_elements(raw)
+        test_ids = _test_id_mandate_elements(raw)
     else:
         sys.exit(f"[{task_id}] answer доступна только для задачи в "
                  f"состоянии escalated (сейчас: {state})")
@@ -417,7 +446,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
                             f"мандат Оператора {Path(rel_answer).name}",
                             "operator")
 
-    if mandate_paths or test_elements or merge_deps is not None:
+    if mandate_paths or test_elements or test_ids or merge_deps is not None:
         kinds = []
         if mandate_paths:
             kinds.append(f"мандат на расширение зон: "
@@ -425,6 +454,11 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
         if test_elements:
             kinds.append(f"мандат на ослабление тестов: "
                          f"{', '.join(test_elements)}")
+        if test_ids:
+            # Каждый идентификатор в «»: имя Vitest несёт запятые, и
+            # перечень через «, » без кавычек был бы неразборчив.
+            kinds.append(f"мандат на ослабление теста по идентификатору: "
+                         f"{', '.join(f'«{cid}»' for cid in test_ids)}")
         if merge_deps is not None:
             kinds.append(f"мандат на зависимости мержа: "
                          f"{', '.join(merge_deps) or merge_after.NONE_WORD}")

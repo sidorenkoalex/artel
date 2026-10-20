@@ -18,8 +18,10 @@
 Сравнение двух отчётов (`compare`) находит исчезнувшие тесты базы, тесты,
 ставшие пропуском, появившиеся `todo`/`fails` и новые тесты с пропуском,
 `todo` или `fails`. Находку снимает мандат Оператора «Ослабление тестов
-разрешено:» на путь файла или префикс `путь::имя` (`test_integrity.
-_answer_mandate` — тот же сбор с отбраковкой автокоммита роли).
+разрешено:» на путь файла или префикс `путь::имя` либо «Ослабление теста по
+идентификатору разрешено:» на идентификатор теста целиком, с `#n` (SPEC
+01M5D02N3B428V8BWC3PAM9QCT, требование 5; сбор — `_answer_mandates`, с
+отбраковкой автокоммита роли тем же признаком, что у гейта по тексту).
 
 Граница — `in_outcome_bounds` профиля решения `decide`: артель, запись
 `test_profile`, запись из нескольких компонентов и канареечная задача
@@ -31,11 +33,15 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
-from .. import acceptance, gitcmd, project_profile, store, workspace
+from .. import acceptance
+from .. import artifact_branch as docs_ref
+from .. import gitcmd, project_profile, store, workspace
 from ..reporters import outcome
 from ._base import GateRefusal, _run_gates
 from .acceptance import in_outcome_bounds
-from .test_integrity import _answer_mandate, _mandate_hint
+from .mandate import (TEST_ID_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER,
+                      elements, id_elements)
+from .zones import _answer_commit_is_role_step_autocommit
 
 # Действия журнала (требование 6); литералы повторены в
 # `refusal_classes.REFUSAL_CLASSES`.
@@ -172,6 +178,53 @@ def covering(cid: str, mandate: dict):
     return None
 
 
+def _covering(cid: str, mandate: dict, id_mandate: dict):
+    """Имя ANSWER-n, покрывающего тест `cid`: мандат по идентификатору —
+    только точным равенством (с `#n`, без префиксного правила), прежний
+    мандат — `covering`; `None` — не покрыт."""
+    source = id_mandate.get(cid)
+    return source if source is not None else covering(cid, mandate)
+
+
+def _answer_mandates(artifact_branch: str, task_id: str) -> tuple:
+    """({элемент прежнего маркера: ANSWER-n}, {идентификатор нового
+    маркера: ANSWER-n}) по ВСЕМ `tasks/<id>/ANSWER-n.md` ссылки документов.
+    Файл, чей последний коммит — доказанный автокоммит шага роли, не
+    мандат Оператора (`zones._answer_commit_is_role_step_autocommit`):
+    иначе developer выписал бы себе разрешение сам."""
+    paths = docs_ref.ls_tree(task_id, artifact_branch, f"tasks/{task_id}") or []
+    mandate: dict = {}
+    id_mandate: dict = {}
+    for p in sorted(paths):
+        name = p.rsplit("/", 1)[-1]
+        if not (name.startswith("ANSWER-") and name.endswith(".md")):
+            continue
+        if _answer_commit_is_role_step_autocommit(artifact_branch, task_id, p):
+            continue
+        text, _reason = docs_ref.show(task_id, artifact_branch, p)
+        if text is None:
+            continue
+        source = name[:-len(".md")]
+        for line in text.splitlines():
+            for element in elements(line, TEST_WEAKENING_MANDATE_MARKER) or ():
+                mandate.setdefault(element, source)
+            for element in id_elements(line) or ():
+                id_mandate.setdefault(element, source)
+    return mandate, id_mandate
+
+
+def _mandate_hint(task_id: str) -> str:
+    """Подсказка отказа с обоими маркерами, снимающими находку этого
+    гейта (SPEC 01M5D02N3B428V8BWC3PAM9QCT, требование 5)."""
+    return (f"либо верни тесты на место, либо получи мандат Оператора — "
+            f"строка «{TEST_WEAKENING_MANDATE_MARKER} <пути и имена>» или "
+            f"«{TEST_ID_MANDATE_MARKER} <идентификатор теста>» (по строке на "
+            f"идентификатор) в tasks/{task_id}/ANSWER-n.md (команда artel.py "
+            f"answer {task_id} <файл>: в состоянии in_dev — без смены "
+            f"состояния, в состоянии escalated — ответом на эскалацию; со "
+            f"ссылкой на основание), и повтори artel.py advance {task_id}")
+
+
 def _git_reason(res) -> str:
     if res is None:
         return "git не ответил"
@@ -282,8 +335,9 @@ def _judge(conn, task_id: str, t, artifact_branch: str, profile, repo: Path,
     taken = {f.id for f in senior}
     findings = ordered(senior + [f for f in compare(base, head)
                                  if f.id not in taken])
-    mandate = _answer_mandate(artifact_branch, task_id) if findings else {}
-    covered = [(f, covering(f.id, mandate)) for f in findings]
+    mandate, id_mandate = (_answer_mandates(artifact_branch, task_id)
+                           if findings else ({}, {}))
+    covered = [(f, _covering(f.id, mandate, id_mandate)) for f in findings]
     uncovered = [f for f, source in covered if source is None]
     covered = [(f, source) for f, source in covered if source is not None]
     flaky_lines = [f"{FLAKY_ON_BASE}: {cid}" for cid in flaky]
