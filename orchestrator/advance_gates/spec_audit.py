@@ -50,7 +50,8 @@ _ENTRY_RE = re.compile(
     r"разбор: (?P<depth>полный|краткий)$", re.S)
 _VERDICT_RE = re.compile(r"\bвердикт (pass|concerns|fail)\b")
 _MANDATE_MARKERS = (mandate._ZONES_MANDATE_MARKER,
-                    mandate.TEST_WEAKENING_MANDATE_MARKER)
+                    mandate.TEST_WEAKENING_MANDATE_MARKER,
+                    mandate.TEST_ID_MANDATE_MARKER)
 
 NO_SIGNALS = "нет"
 
@@ -117,7 +118,7 @@ def signals(spec_text: str, meta: dict, tz_text: str,
         found.append("а) раздел «Меняемое поведение» непуст")
     mandates = sorted({line.strip() for text in answers
                        for line in text.splitlines()
-                       if any(mandate.elements(line, marker) is not None
+                       if any(mandate.line_elements(line, marker) is not None
                               for marker in _MANDATE_MARKERS)})
     if mandates:
         found.append(f"б) мандат в ANSWER: {' / '.join(mandates)}")
