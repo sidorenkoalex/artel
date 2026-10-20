@@ -121,6 +121,40 @@ class RecordLevelTest(unittest.TestCase):
         self.assertIsNone(gate.covering(other, {f"{rel}::K": "ANSWER-2"}))
         self.assertIsNone(gate.covering(cid, {"tests/test_b.py": "ANSWER-1"}))
 
+    def test_covered_ids_round_trip_every_finding_kind(self):
+        """Идентификаторы покрытых находок разбираются из строк записи пройденного гейта для каждого вида находки, в том числе вида с тире («новый тест — пропуск») и исходов перепрогона («сломан правкой» начинается с ветки).
+
+        Ловит мутацию: разбор строки по первому « — » — у вида «новый
+        тест — пропуск» идентификатор теряется; маркер исходов «база: » у
+        «сломан правкой» — идентификатор не разобран, доказательство на
+        мерже никогда не срабатывает; строки без пометки мандата
+        (числа, «нестабилен и на базе») дают идентификаторы.
+        """
+        cid = project_profile.test_id("web", PATH, "suite > case — b")
+        lines = ["тестов базы 3; тестов ветки 2", f"{gate.FLAKY_ON_BASE}: {cid}"]
+        kinds = (gate.GONE, gate.BECAME_SKIPPED, gate.TODO_APPEARED,
+                 gate.FAILS_APPEARED, gate.NEW_SKIPPED, gate.NEW_TODO,
+                 gate.NEW_FAILS)
+        findings = [gate.Finding(kind, cid, "база: прошёл; ветка: нет записи")
+                    for kind in kinds]
+        findings += [gate.Finding(kind, cid, "ветка: failed, failed; база: passed")
+                     for kind in (gate.BROKEN, gate.UNSTABLE)]
+        lines += [f"{f.line}{gate.COVERED_MARK}ANSWER-1" for f in findings]
+        self.assertEqual(gate._covered_ids("\n".join(lines)),
+                         [cid] * len(findings))
+
+    def test_fingerprint_sorted_unique_or_none(self):
+        """Отпечаток мандата — sha256 отсортированных уникальных элементов через перевод строки; без элементов — «нет».
+
+        Ловит мутацию: отпечаток без сортировки или с повтором элемента —
+        отпечаток зависит от порядка находок и записи на `in_dev` и мерже
+        расходятся.
+        """
+        import hashlib
+        wanted = hashlib.sha256(b"a/x.py\nb/y.py").hexdigest()
+        self.assertEqual(gate.fingerprint(["b/y.py", "a/x.py", "b/y.py"]), wanted)
+        self.assertEqual(gate.fingerprint([]), gate.MANDATE_NONE)
+
 
 if __name__ == "__main__":
     unittest.main()

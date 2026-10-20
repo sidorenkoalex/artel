@@ -654,10 +654,21 @@ def _changed_assertions_part(conn, task_id: str, branch: str,
         # Тот же сбой git, что `git_diff_part` превращает в «diff не
         # собран» (T011): наблюдение — не повод ронять сборку пакета.
         return None
-    if not lines and not unobserved:
+    # Профиль в границе гейта исходов (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7,
+    # требование 5): раздел есть всегда — у компонента без Python строк
+    # гейта по тексту нет, а строки гейта исходов для головы есть всегда.
+    outcome_lines = _outcome_gate_lines(conn, task_id, branch,
+                                        decision.profile)
+    if not lines and not unobserved and outcome_lines is None:
         return None
     body = "\n".join(lines + [f"{test_integrity.ASSERTION_UNOBSERVED_PREFIX}: "
-                              f"{reason}" for reason in unobserved])
+                              f"{reason}" for reason in unobserved]
+                     + (outcome_lines or []))
+    outcome_note = ("" if outcome_lines is None else
+                    " Строки «гейт исходов» — запись гейта неослабления по "
+                    "исходам для текущей головы ветки: числа тестов базы и "
+                    "ветки, перепрогоны, тесты, нестабильные и на базе, "
+                    "находки, покрытые мандатом Оператора (с ANSWER).")
     return (f"### {CHANGED_ASSERTIONS_SECTION}\n\n"
             f"Наблюдение гейта неослабления тестов: утверждения методов, "
             f"сохранивших имя, которых в голове ветки нет в той же "
@@ -666,8 +677,21 @@ def _changed_assertions_part(conn, task_id: str, branch: str,
             f"ослабление отказывают переходу `in_dev -> verifying` и "
             f"эскалируют гейт мержа до мандата Оператора — сверь каждое "
             f"изменённое ожидание с требованием SPEC и строкой «было → "
-            f"стало» по Фазе B чек-листа.\n\n"
+            f"стало» по Фазе B чек-листа.{outcome_note}\n\n"
             f"{brief.wrap_boundary(run_id, body)}\n")
+
+
+def _outcome_gate_lines(conn, task_id: str, branch: str,
+                        profile) -> list | None:
+    """Строки гейта исходов для текущей головы кодовой ветки (SPEC
+    01M5DDTVZEA40ZB9BHEH4YDEE7, требование 5); `None` — профиль вне
+    границы гейта, строк нет и условие раздела прежнее. Канареечная задача
+    сюда не доходит — её отсекает начало `_changed_assertions_part`."""
+    from .advance_gates import outcome_integrity
+    if not outcome_integrity.in_outcome_bounds(profile):
+        return None
+    head = gitcmd.branch_head_sha(branch, repo=workspace.task_repo(task_id))
+    return outcome_integrity.review_lines(conn, task_id, head)
 
 
 def _increment_note(shown: dict, prev_sha: str, branch: str) -> str:

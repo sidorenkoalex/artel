@@ -427,6 +427,8 @@ class ChecksLocalFromRecordTest(ReportSandbox):
                               lambda *a, **k: "ok"),
             mock.patch.object(fsm_merge_gate, "_sync_main_or_wait",
                               lambda *a, **k: "fresh"),
+            mock.patch.object(fsm_merge_gate, "_outcome_integrity_merge_gate",
+                              ok),
             mock.patch.object(fsm_merge_gate, "_acceptance_locks_refuse", ok),
             mock.patch.object(fsm_merge_gate, "_ci_ready_or_wait",
                               lambda *a, **k: "ok"),

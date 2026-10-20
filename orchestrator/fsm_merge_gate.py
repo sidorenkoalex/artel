@@ -32,7 +32,7 @@ from . import (acceptance, alerts, appendix_tree, artifact_branch,
               workspace)
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
-from .advance_gates import plan_appendix
+from .advance_gates import outcome_integrity, plan_appendix
 from .advance_gates.test_integrity import merge_gate_escalates
 
 _fresh_suite_for_cycle: ContextVar[bool] = ContextVar(
@@ -1361,6 +1361,18 @@ def _cleanup_merged_task(conn, task_id: str, branch: str) -> None:
     store.journal(conn, task_id, "orchestrator", "ветка убрана", branch_note)
 
 
+def _outcome_integrity_merge_gate(conn, task_id: str, state: str,
+                                  ctx: repo_context.RepoContext) -> bool:
+    """Гейт неослабления по исходам в окне мержа (SPEC
+    01M5DDTVZEA40ZB9BHEH4YDEE7, требования 2-4) — после «fresh» и до
+    `_acceptance_locks_refuse`: сравниваются исходы головы, которая уйдёт в
+    main, с merge-base её и только что зафетченного main
+    (`_origin_main_sha`, не повторный `diff_base`). `True` — эскалировано;
+    сбой подготовки — `sys.exit` внутри, задача остаётся на `merge_gate`."""
+    return outcome_integrity.merge_gate_escalates(
+        conn, task_id, state, lambda: _origin_main_sha(ctx))
+
+
 def _acceptance_locks_refuse(conn, task_id: str) -> bool:
     """Лок каталога приёмочных тестов (`_acceptance_lock_refuses`) и перечень
     долгоживущих файлов (`_long_lived_manifest_refuses`) на гейте мержа
@@ -1420,7 +1432,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     01M27JPEGCGMDDRX5A98QWJW0Z, требование 3/AC-5) -> неослабление тестов
     в диффе (SPEC 01M3FQ2V77QNK95Z599DM124QN, требование 7/AC-12) ->
     публикация головы ->
-    свежесть main -> зелёный CI -> плотницкий merge в scratch-worktree
+    свежесть main -> гейт неослабления по исходам (SPEC
+    01M5DDTVZEA40ZB9BHEH4YDEE7) -> зелёный CI -> плотницкий merge в scratch-worktree
     (Stage0, AC-8) -> приложения PLAN к защищённым путям (SPEC
     01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6) -> документы задачи на
     ссылке/карта/`guard --all` -> push явным sha -> done -> коммит закрытия
@@ -1484,6 +1497,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch, ctx)
     if sync_outcome != "fresh":
         return sync_outcome
+    if _outcome_integrity_merge_gate(conn, task_id, state, ctx):
+        return ("stopped",)
     if _acceptance_locks_refuse(conn, task_id):
         return ("stopped",)
     ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)

@@ -48,6 +48,7 @@ PASSED = "пройден"
 SIDE_ASSERTION = "утверждение"
 SIDE_GREEN = "зелёная"
 SIDE_LIMIT = "не прогнан: предел"
+NOT_ON_CHECK = "упал не на проверке"
 
 # Имя модуля плагина отчёта — уникальное, чтобы не встретиться ни с одним
 # модулем проверяемого дерева; переменная окружения — путь файла отчёта.
@@ -203,6 +204,9 @@ def _verdict(records: list, nodeid: str) -> str:
             return f"ошибка setUp: {name}"
         if record.get("timeout"):
             return f"{TIMEOUT} теста (pytest-timeout): {name}"
+        if record.get("kind"):
+            # Вид записи отчёта профиля в границе (`_run_side_report`).
+            return f"{NOT_ON_CHECK}: {record['kind']}"
         if record.get("assertion"):
             return ""
         return f"исключение {name} в фазе call"
@@ -339,9 +343,18 @@ def _run_side_report(tree: Path, nodes: list, profile,
     файлы узлов гонятся подмножеством компонента, итог узла — запись
     отчёта с тем же путём и именем (`passed`/`failed`/`skipped`; ошибка —
     падение не на утверждении). Отказ подготовки, предел и исход
-    «неизвестно» — сбой стороны, не доказательство."""
+    «неизвестно» — сбой стороны, не доказательство.
+
+    Профиль в границе гейта исходов (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7,
+    требование 6): провал проверки — только запись, для которой
+    классификатор FAIL_TO_PASS `_check_failure_kind` даёт пусто; `failed`
+    с иным именем ошибки, `error` и `passed` с повтором несут вид (`kind`)
+    — «упал не на проверке». Вне границы — прежнее правило."""
     from .. import project_profile  # project_profile -> store -> … -> acceptance
     from ..reporters import outcome
+    from .acceptance import in_outcome_bounds
+    from .tests_writing import _check_failure_kind
+    strict = in_outcome_bounds(profile)
     files = sorted({node.partition("::")[0] for node in nodes})
     run = acceptance._report_run(profile, tree, files, timeout)
     if run.refusal:
@@ -360,7 +373,16 @@ def _run_side_report(tree: Path, nodes: list, profile,
                   "outcome": "passed" if case.outcome == outcome.PASSED
                   else "skipped" if case.outcome == outcome.SKIPPED
                   else "failed"}
-        if case.outcome in (outcome.FAILED, outcome.ERROR):
+        if strict and (case.outcome in (outcome.FAILED, outcome.ERROR)
+                       or (case.outcome == outcome.PASSED and case.retries)):
+            kind = _check_failure_kind(case, profile)
+            record["outcome"] = "failed"
+            record["exception"] = (case.failure.partition(":")[0]
+                                   or case.outcome)
+            record["assertion"] = not kind
+            if kind:
+                record["kind"] = kind
+        elif case.outcome in (outcome.FAILED, outcome.ERROR):
             record["exception"] = case.failure.partition(":")[0] or "?"
             record["assertion"] = case.outcome == outcome.FAILED
         records.append(record)
