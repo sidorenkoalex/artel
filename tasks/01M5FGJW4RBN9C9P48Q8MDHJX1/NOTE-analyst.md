@@ -1,16 +1,19 @@
 # Записка analyst — 01M5FGJW4RBN9C9P48Q8MDHJX1
 
 ## Выяснено
-- ТЗ полное: SPEC написан (status: ready, 9 AC, budget_usd 25, zones из ТЗ), guard — ок.
-- Адреса ТЗ сверены по коду ветки: `_push_merged_main` fsm_merge_gate.py:1284, `_cleanup_merged_task` :1352, вызов :1529 (после `_finalize_done_state`, до `_await_main_ci` :1530); cleanup.py `_left_reason` :229, `_delete_origin_branch` :253 (lowSpeed-предел :256), `cleanup_project_remote` :266.
-- tests/test_merge_gate_ci_wait.py:415 подменяет `_cleanup_merged_task` через `lambda *a, **k: None` — добавление параметра `final_sha` её не ломает.
-- Раздел «Меняемое поведение» не нужен: ТЗ требует существующие тесты без правок.
+- Круг 2 (возврат из spec_gate): решения Оператора О-1…О-4 и фраза о PR внесены в SPEC.
+  - Требование 2: голова читается в cleanup.py через `gitcmd.in_repo(..., "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=<GH_TIMEOUT_SEC>", "ls-remote", "origin", "refs/heads/<branch>")`, у исходов та же семантика, что у `remote_ref_state` (gitcmd.py:673–687); gitcmd.py не меняется.
+  - Требование 3: подсказка удаления печатается и при `None` на push; при исключении подсказки нет.
+  - Требование 6 и AC-9: добавлена фраза о PR на GitHub.
+  - AC-1: проверяются аргументы обоих вызовов git (пары `-c http.lowSpeed*`).
+  - AC-6 разбит на сценарии (а)–(г): None на чтении, ненулевой код ls-remote, None на push, исключение.
+- Критериев по-прежнему 9, budget_usd 25, guard — ок, status: ready.
 
 ## Не сработало
-- Первый прогон guard: сигнал «число файлов» (guard считает все пути, упомянутые в тексте SPEC) + «прогноз диффа не дан»; и docs/backlog.md не классифицирован. Закрыто разделом «Оценка объёма» (монолит, прогноз 30 КиБ) и строкой в «Не входит».
+- Составная bash-команда (ls + cat) потребовала подтверждения — файлы читал через Read.
 
 ## Где остановился
 - SPEC готов, шаг завершён.
 
 ## Чего не хватило
-- Что guard считает «файлами зоны» по всем упомянутым в тексте путям, а не по полю zones — узнал только из отказа (scripts/guard.py::split_signal_names).
+- Ничего существенного: все решения пришли причиной возврата.
