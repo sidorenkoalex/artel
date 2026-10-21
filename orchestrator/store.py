@@ -21,6 +21,7 @@
 import re
 import sqlite3
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -257,18 +258,25 @@ def record_observed_run(conn, observation_id: str, task_id: str,
 
 
 class _AutoClosingConnection(sqlite3.Connection):
-    """Соединение, закрывающееся само при потере последней ссылки.
+    """Соединение `db()`, брошенное без явного `close()`, закрывается пультом.
 
     `db()` зовётся сотнями мест кодовой базы инлайн (`store.get_task(
     store.db(), ...)`), без переменной, которую вызывающий код мог бы
     закрыть явно (tasks/T090/SPEC.md, требование 1) — переписывать каждое
-    такое место несоразмерно требованию. `__del__` закрывает БД раньше,
-    чем её увидит С-уровневый деаллокатор `sqlite3.Connection` — именно
-    он печатает `ResourceWarning: unclosed database`, если объект
-    уничтожается незакрытым. CPython уничтожает нециклические объекты по
-    счётчику ссылок немедленно (не дожидаясь GC или выхода из процесса),
-    так что закрытие происходит на месте, а не «только за счёт завершения
-    процесса» — тем же путём для любой точки вызова `db()`.
+    такое место несоразмерно требованию. Соединение `sqlite3` в CPython
+    3.11+ сидит в цикле ссылок (кэш выражений держит само соединение), и
+    счётчик ссылок его не освобождает: без сборки циклов брошенные
+    соединения копили дескрипторы БД и WAL сотнями (SPEC
+    01M5G6PDQA7AYDYDPA7DD5JD4S). Поэтому брошенные соединения закрывает
+    учёт `db()` (`_TRACKED`): каждый вызов `db()` просматривает его и
+    закрывает соединение, на которое кроме учёта и собственного цикла
+    никто не ссылается (`_close_abandoned`).
+
+    `__del__` остаётся для соединений, вышедших из учёта (закрытие из
+    чужого потока не удалось), — их добивает сборка циклов. Он закрывает
+    БД раньше, чем её увидит С-уровневый деаллокатор `sqlite3.Connection`
+    — именно он печатает `ResourceWarning: unclosed database`, если объект
+    уничтожается незакрытым.
 
     Финализация из потока, отличного от создавшего соединение (сборщик
     мусора добивает объект там, куда его занесла последняя ссылка), —
@@ -328,12 +336,55 @@ def db_usable() -> bool:
     return row is not None
 
 
+#: Учёт выданных `db()` соединений (SPEC 01M5G6PDQA7AYDYDPA7DD5JD4S,
+#: требование 1): `id` -> соединение, сильные ссылки. Эталон числа ссылок
+#: брошенного соединения — атрибут `abandoned_refs` самого соединения.
+_TRACKED: dict = {}
+_TRACKED_LOCK = threading.Lock()
+
+
+def db_tracked_count() -> int:
+    """Число соединений в учёте `db()` сейчас."""
+    with _TRACKED_LOCK:
+        return len(_TRACKED)
+
+
+def _close_abandoned() -> None:
+    """Закрывает соединения учёта, на которые никто, кроме учёта и их
+    собственного цикла ссылок, не ссылается. Вызывается под `_TRACKED_LOCK`.
+
+    Число ссылок замеряется в тех же условиях, что эталон в `db()`: на
+    соединение ссылаются учёт, его цикл и одна локальная переменная `conn`.
+    Любая внешняя ссылка (переменная, курсор, связанный метод, `closing`)
+    добавляет к счётчику хотя бы единицу — такое соединение не трогается.
+    Соединение чужого потока `close()` отвергает `ProgrammingError`: оно
+    выходит из учёта, и дальше его освобождает сборка циклов (`__del__`).
+    """
+    for key in list(_TRACKED):
+        conn = _TRACKED[key]
+        if sys.getrefcount(conn) - 1 != conn.abandoned_refs:
+            continue
+        del _TRACKED[key]
+        try:
+            conn.close()
+        except sqlite3.ProgrammingError:
+            pass
+
+
 def db() -> sqlite3.Connection:
     config.DB.parent.mkdir(exist_ok=True)
+    with _TRACKED_LOCK:
+        _close_abandoned()
     conn = sqlite3.connect(config.DB, factory=_AutoClosingConnection)
     conn.row_factory = sqlite3.Row
     enable_wal(conn)
     migrate(conn)
+    with _TRACKED_LOCK:
+        _TRACKED[id(conn)] = conn
+        # Эталон — замер, а не число: внутренних ссылок цикла у соединения
+        # столько, сколько их заводит данная версия CPython. Минус один —
+        # ссылка локальной переменной `conn`.
+        conn.abandoned_refs = sys.getrefcount(conn) - 1
     return conn
 
 

@@ -8,7 +8,6 @@ import contextlib
 import json
 import os
 import re
-import select
 import signal
 import subprocess
 import sys
@@ -16,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import acceptance, config, project_profile, store, suite_lock
+from tests.fd_wait import wait_readable
 from tests.sandbox import TmpRootTest
 
 
@@ -165,7 +165,7 @@ class SeparateSuiteScenarios(TmpRootTest):
                             return real_communicate(timeout=10)
                         first = False
                         timeouts.append(comm_kwargs.get("timeout"))
-                        ready, _, _ = select.select([proc.stdout], [], [], 10)
+                        ready = wait_readable(proc.stdout, 10)
                         self.assertTrue(ready, "ребёнок не подал сигнал готовности")
                         self.assertTrue(proc.stdout.readline().strip().isdigit())
                         if exceptional:
