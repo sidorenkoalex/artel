@@ -69,6 +69,16 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
         brief_text = brief.analyst_map_component(conn, task_id)
     elif role == "test_author":
         long_lived = _long_lived_paths(conn, task_id)
+        labelled = _labelled_profile(conn, task_id)
+        if labelled is None:
+            plank_point = (
+                f"2) Для каждого AC-n напиши unittest в "
+                f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
+                f"ТОЛЬКО из формулировки критерия.\n")
+            marker = "#"
+        else:
+            plank_point = _labelled_plank_point(task_id, task_ref, labelled)
+            marker = guard.MARKER_SLASH
         mission = (
             f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
             f"{t['branch']} — уже выписана в этом рабочем каталоге "
@@ -77,15 +87,15 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"1) {task_ref}/SPEC.md на диске — актуальная версия "
             f"(материализована из артефактной ветки на старте шага). "
             f"Изучи раздел «Критерии приёмки» (AC-1, AC-2, …).\n"
-            f"2) Для каждого AC-n напиши unittest в "
-            f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
-            f"ТОЛЬКО из формулировки критерия.\n"
+            f"{plank_point}"
             f"{_long_lived_author_note(task_ref, long_lived)}"
             f"3) Критерий нельзя проверить тестом напрямую — пометь "
-            f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
-            f"или `# AC-n: skip — <причина>`.\n"
+            f"`{marker} AC-n: manual — <причина>` (Оператор проверит на "
+            f"приёмке) или `{marker} AC-n: skip — <причина>`"
+            f"{_labelled_marker_place(labelled)}.\n"
             f"4) Критерий в принципе неисполним тестом — не изобретай "
-            f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
+            f"компромисс: `{marker} AC-n: escalate — <вопрос Оператору>`"
+            f"{_labelled_marker_place(labelled)}.\n"
             f"{_plank_run_point(task_id, task_ref, artel, long_lived)}"
             f". tasks/<id>/ коммитить "
             f"не нужно — автокоммит оркестратора сам перенесёт написанное в "
@@ -196,6 +206,57 @@ def _long_lived_paths(conn, task_id: str) -> tuple[str, str, str, bool] | None:
     return (profile.long_lived_dir, profile.long_lived_hint(task_id),
             profile.long_lived_hint(task_id, "*"),
             "<dir>" in profile.long_lived_template)
+
+
+def _labelled_profile(conn, task_id: str):
+    """Профиль проекта задачи, если его компонент получает от правила планки
+    метку `AC-<n>: ` (SPEC 01M5ENWTDD8NP9SMPFX3JN08J9, требование 1) — тот
+    же источник, что у guard; `None` — прежнее задание test_author
+    (артель, `test_profile`, pytest-компонент, профиль не определён,
+    правило не построено)."""
+    target = (store.task_target(conn, task_id) if conn is not None
+              else config.DEFAULT_TARGET)
+    profile = project_profile.decide(target).profile
+    if profile is None:
+        return None
+    labelled = project_profile.plank_rule(target).labelled_components()
+    return profile if profile.component in labelled else None
+
+
+# Строка запретов текста Vitest-планки (SPEC 01M5ENWTDD8NP9SMPFX3JN08J9,
+# требование 1) — то, что отвергает `guard.plank_ban_errors`.
+_LABELLED_PLANK_BANS = (
+    "В тексте планки запрещены `.fails`, `.skipIf`, `.runIf`, `.only`, "
+    "`vi.setConfig`, ключи `retry`/`timeout` и числовой литерал в "
+    "аргументах `it`/`test`/`describe`/`suite`.")
+
+
+def _labelled_plank_point(task_id: str, task_ref: str, profile) -> str:
+    """Пункт 2 и строка запретов задания test_author у компонента с меткой
+    `AC-<n>: `: имена файлов — последние сегменты масок `tests` в порядке
+    записи; фраза о каталоге выкладки — только при `plank_layout`, `<id>`
+    в нём заменён id задачи как есть (как выкладка планки)."""
+    segments = ", ".join(f"`{mask.rsplit('/', 1)[-1]}`"
+                         for mask in profile.tests)
+    layout = ""
+    if profile.plank_layout:
+        layout = (f" На прогоне файлы лежат в "
+                  f"`{profile.plank_layout.replace('<id>', task_id)}`: импорты "
+                  f"кода пиши относительно этого каталога.")
+    return (f"2) Для каждого AC-n напиши тест в {task_ref}/acceptance_tests/ "
+            f"(без подкаталогов), имя файла — по маскам {segments}; "
+            f"помощники — `_<имя>.<расширение>`. Имя теста `it`/`test` "
+            f"начинается с `AC-<n>: `, одна метка на тест, `describe` меткой "
+            f"не начинается — ТОЛЬКО из формулировки критерия.{layout}\n"
+            f"{_LABELLED_PLANK_BANS}\n")
+
+
+def _labelled_marker_place(profile) -> str:
+    """Где стоит пометка `// AC-n: …` у компонента с меткой `AC-<n>: `;
+    пусто — прежний текст пунктов 3–4."""
+    if profile is None:
+        return ""
+    return " — с начала строки в файле планки компонента"
 
 
 def _long_lived_author_note(task_ref: str, long_lived) -> str:

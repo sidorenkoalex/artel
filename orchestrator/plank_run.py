@@ -28,10 +28,11 @@
 import sys
 from pathlib import Path
 
-from . import (acceptance, artifact_branch, config, project_profile, store,
-               workspace)
+from . import (acceptance, agent_log, artifact_branch, config,
+               project_profile, store, workspace)
 
 NO_PLANK = "планки нет"
+NO_SUMMARY_LINE = "итоговой строки нет"
 
 
 def _code_dir(task_id: str, target: str) -> Path:
@@ -284,10 +285,22 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
                 if own is not None
                 else acceptance.run_plank([target_arg], code_dir))
     print(output)
-    summary = acceptance.run_summary_line(output) or "итоговой строки нет"
+    # Итог компонента `pult-vitest` — по блоку Vitest (SPEC
+    # 01M5ENWTDD8NP9SMPFX3JN08J9, требование 6), признак тот же, что у
+    # насоса шага; у прочих, в том числе без профиля, — прежние строки.
+    task_profile = project_profile.decide(target).profile
+    if task_profile is not None and \
+            task_profile.report == project_profile.REPORT_VITEST:
+        runner_name = "vitest"
+        summaries = agent_log.vitest_summaries(output)
+        summary = summaries[-1] if summaries else NO_SUMMARY_LINE
+    else:
+        runner_name = "pytest"
+        summary = acceptance.run_summary_line(output) or NO_SUMMARY_LINE
     if code is None:
-        sys.exit(f"{head}: итог pytest: {summary}; прогон превысил "
+        sys.exit(f"{head}: итог {runner_name}: {summary}; прогон превысил "
                  f"{config.ACCEPTANCE_TIMEOUT_SEC}с и оборван")
-    print(f"{head}: итог pytest: {summary}; код выхода pytest: {code}")
+    print(f"{head}: итог {runner_name}: {summary}; код выхода {runner_name}: "
+          f"{code}")
     if code != 0:
         sys.exit(code)

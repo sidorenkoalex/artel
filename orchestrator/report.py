@@ -947,7 +947,7 @@ def _in_window(ts) -> bool:
 def _test_author_steps(steps: list) -> list:
     """Запуски test_author за окно: запись «agent run started» открывает
     запуск задачи, следующие записи test_author той же задачи (прогоны
-    pytest, стоимость, провайдер) относятся к нему."""
+    pytest и vitest, стоимость, провайдер) относятся к нему."""
     current: dict = {}
     found = []
     for row in steps:
@@ -966,7 +966,8 @@ def _test_author_steps(steps: list) -> list:
         step = current.get(row["task_id"])
         if step is None:
             continue
-        if row["action"] == agent_log.PYTEST_RUN_ACTION:
+        if row["action"] in (agent_log.PYTEST_RUN_ACTION,
+                             agent_log.VITEST_RUN_ACTION):
             match = _PYTEST_SECONDS_RE.search(detail)
             step["pytest"].append(float(match.group(1)) if match else 0.0)
             continue

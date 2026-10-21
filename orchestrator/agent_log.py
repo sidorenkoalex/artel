@@ -248,6 +248,47 @@ def pytest_summaries(text: str) -> list:
     return found
 
 
+# Итоговый блок прогона Vitest в результате инструмента шага (SPEC
+# 01M5ENWTDD8NP9SMPFX3JN08J9, требование 2): записывается тем же насосом, что
+# строка pytest, и читается дозором и отчётом в паре с `PYTEST_RUN_ACTION`.
+VITEST_RUN_ACTION = "прогон vitest"
+
+# Блок Vitest: строка «Test Files», сразу за ней «Tests», и в пределах
+# следующих четырёх строк «Duration». Одной строки «Tests» мало: в листинге
+# кода она без «Test Files» перед ней итогом не является.
+_VITEST_COUNTS = (r"(?:\d+ (?:failed|passed|skipped|todo)"
+                  r"(?: \| \d+ (?:failed|passed|skipped|todo))*|no tests)")
+_VITEST_FILES_RE = re.compile(rf"^Test Files  {_VITEST_COUNTS} \(\d+\)$")
+_VITEST_TESTS_RE = re.compile(rf"^Tests  ({_VITEST_COUNTS} \(\d+\))$")
+_VITEST_DURATION_RE = re.compile(r"^Duration  (\d+(?:\.\d+)?)(ms|s)(?: .*)?$")
+_VITEST_DURATION_WINDOW = 4
+
+
+def vitest_summaries(text: str) -> list:
+    """Детали итоговых блоков Vitest в тексте результата инструмента —
+    «<сч Tests> (<n>) in <секунды>s», секунды с двумя знаками, — в порядке
+    появления: блок печатается один на прогон."""
+    lines = [line.strip()
+             for line in _ANSI_ESCAPE_RE.sub("", text).splitlines()]
+    found = []
+    for index in range(len(lines) - 1):
+        if not _VITEST_FILES_RE.match(lines[index]):
+            continue
+        tests = _VITEST_TESTS_RE.match(lines[index + 1])
+        if tests is None:
+            continue
+        window = lines[index + 2:index + 2 + _VITEST_DURATION_WINDOW]
+        for line in window:
+            duration = _VITEST_DURATION_RE.match(line)
+            if duration is not None:
+                value = float(duration.group(1))
+                if duration.group(2) == "ms":
+                    value /= 1000
+                found.append(f"{tests.group(1)} in {value:.2f}s")
+                break
+    return found
+
+
 def _tool_use_calls(events: list) -> list:
     """Вызовы инструментов (`providers.ToolCall`) из событий общего вида,
     в порядке появления. Сам разбор блоков — у провайдера."""
@@ -360,13 +401,17 @@ class OutputPump(threading.Thread):
     """
 
     def __init__(self, stream, log_path: Path, provider=None,
-                 on_pytest_summary=None):
+                 on_pytest_summary=None, on_vitest_summary=None):
         super().__init__(daemon=True)
         # Получатель итоговой строки pytest из результата инструмента
         # (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требование 1): шаг пишет её в
         # журнал задачи, пока шаг ещё идёт, — дозору это и нужно. `None`
         # — строки никуда не идут (прямые вызовы и тесты насоса).
         self.on_pytest_summary = on_pytest_summary
+        # Получатель детали итогового блока Vitest (SPEC
+        # 01M5ENWTDD8NP9SMPFX3JN08J9, требование 3): шаг передаёт его только
+        # задаче с компонентом `pult-vitest`.
+        self.on_vitest_summary = on_vitest_summary
         self.stream = stream
         self.log_path = log_path
         # Провайдер роли шага: он и разбирает строки вывода (SPEC
@@ -414,6 +459,10 @@ class OutputPump(threading.Thread):
             for result in event.tool_results:
                 for summary in pytest_summaries(result.text):
                     self._report_pytest_summary(summary)
+        if self.on_vitest_summary is not None:
+            for result in event.tool_results:
+                for summary in vitest_summaries(result.text):
+                    self._report_vitest_summary(summary)
 
     def _report_pytest_summary(self, summary: str) -> None:
         """Сбой записи итоговой строки не роняет насос: перестать читать
@@ -423,6 +472,14 @@ class OutputPump(threading.Thread):
             self.on_pytest_summary(summary)
         except Exception as exc:  # noqa: BLE001 — см. докстринг
             print(f"строка pytest не записана в журнал: {exc}",
+                  file=sys.stderr)
+
+    def _report_vitest_summary(self, summary: str) -> None:
+        """Тот же довод, что у `_report_pytest_summary`."""
+        try:
+            self.on_vitest_summary(summary)
+        except Exception as exc:  # noqa: BLE001 — см. `_report_pytest_summary`
+            print(f"сводка vitest не записана в журнал: {exc}",
                   file=sys.stderr)
 
     @property
