@@ -401,6 +401,11 @@ _TEST_REF_RE = re.compile(r"(?<![\w/])tests/[\w./-]*\.py(?!\w)")
 # требование 4).
 _PY_PATH_RE = re.compile(r"(?<![\w./-])[\w][\w./-]*\.py(?!\w)")
 
+# Путь файла токеном ячейки у профиля в границе гейта исходов (SPEC
+# 01M5FRYVP4NF81VT00FYPHPWJH, требование 8): совпадение целиком, с
+# необязательной ссылкой на строку; каталог, маска и `::имя` — не путь.
+_FILE_PATH_TOKEN_RE = re.compile(r"(?P<path>[\w][\w./-]*\.\w+)(?::\d+)?")
+
 _EMPHASIS_RE = re.compile(r"(?<!\S)[*_`]+|[*_`]+(?!\S)")
 
 # Содержимое между парой ОДИНАРНЫХ обратных кавычек ячейки (SPEC
@@ -506,8 +511,11 @@ def _component_covered(cell: str, profile) -> bool:
         if component == profile.component and profile.in_weakening_scope(path):
             return True
     candidates = _backtick_spans(cell) + _TOKEN_SPLIT_RE.split(cell)
-    return any(profile.in_weakening_scope(token.strip("*_"))
-               for token in candidates if token.strip("*_"))
+    for token in candidates:
+        match = _FILE_PATH_TOKEN_RE.fullmatch(token.strip("*_"))
+        if match and profile.in_weakening_scope(match.group("path")):
+            return True
+    return False
 
 
 def _remains(cell: str) -> bool:

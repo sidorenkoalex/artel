@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
-from .. import acceptance, config, gitcmd
+from .. import acceptance, config, gitcmd, liveness
 
 NEW_ON_BASE = "новая версия на базе"
 OLD_ON_BRANCH = "старая версия на ветке"
@@ -452,6 +452,15 @@ def run(repo: Path, code_branch: str, base_sha: str, methods: list,
     scratch = Path(tempfile.mkdtemp(prefix="artel-two-sided-")).resolve()
     trees: list = []
     try:
+        # Маркер владельца — до первого `git worktree add` (SPEC
+        # 01M5FRYVP4NF81VT00FYPHPWJH, требование 5): каталог, брошенный
+        # обрывом процесса, `doctor --fix` узнаёт сиротой.
+        try:
+            (scratch / liveness.GATE_OWNER_MARKER).write_text(
+                str(os.getpid()), encoding="utf-8")
+        except OSError as exc:
+            return _failed(methods, f"маркер владельца выписки не записан: "
+                           f"{exc}", head_sha, base_sha)
         for side, sha in (("base", base_sha), ("head", head_sha)):
             tree = scratch / side
             res = gitcmd.in_repo(repo, "worktree", "add", "--detach",
