@@ -20,6 +20,10 @@ bare-`origin` (`self.bare`); внешний проект — клон по ад�
 `task/*`. Подставной `gh` в начале `PATH` пишет в тот же журнал свой argv.
 `gitcmd.in_repo` обёрнут шпионом: каждый вызов записан, по правилу сценария
 вызов подменяется ответом `None`, ответом с ненулевым кодом или исключением.
+Шпион ставится строковой целью `mock.patch("orchestrator.gitcmd.in_repo")`:
+это подмена зависимости, через которую SPEC велит идти чтению головы и
+удалению, — наблюдаемое свойство (аргументы вызова, ответ `None`), а не
+чтение git-истории задачи.
 
 Имя проекта, его база, id задач, предел `config.GH_TIMEOUT_SEC` и тексты
 сбоев — из `random`, зерно печатается и входит в текст провала.
@@ -36,8 +40,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (cleanup, config, gitcmd, keychain, repo_context,
-                          store, workspace)
+from orchestrator import (cleanup, config, keychain, repo_context, store,
+                          workspace)
 from tests.sandbox import ARTEL_TEST_PROFILE, AutoOriginSandbox, capture
 
 ZERO_OID = "0" * 40
@@ -221,7 +225,8 @@ class MergedRemoteSandbox(AutoOriginSandbox):
         """Шпион `gitcmd.in_repo`: вызов записан в `self.calls`; правило
         `self.rule(args)` возвращает `(True, ответ)` — подменить ответ,
         `(True, исключение)` — поднять его, иначе — настоящий вызов."""
-        real = gitcmd.in_repo
+        real = cleanup.gitcmd.in_repo
+        self.real_in_repo = real
 
         def spy(repo, *args, **kwargs):
             self.calls.append(tuple(args))
@@ -233,7 +238,7 @@ class MergedRemoteSandbox(AutoOriginSandbox):
                     return value
             return real(repo, *args, **kwargs)
 
-        patcher = mock.patch.object(gitcmd, "in_repo", spy)
+        patcher = mock.patch("orchestrator.gitcmd.in_repo", spy)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -531,7 +536,7 @@ class LeaseTest(MergedRemoteSandbox):
                             and f"refs/heads/{task.branch}" in args):
                         state["moved"] = True
                         self.rule = None
-                        res = gitcmd.in_repo(task.clone, *args)
+                        res = self.real_in_repo(task.clone, *args)
                         self.cgit(task.clone, "push", "-q", "origin",
                                   f"{newer}:refs/heads/{task.branch}")
                         self.rule = rule
@@ -556,7 +561,7 @@ class GitFailuresTest(MergedRemoteSandbox):
         super().setUp()
         self.spy_in_repo()
 
-    def test_ac6a_none_on_read_noted_with_two_hints(self):
+    def test_ac6_a_none_on_read_noted_with_two_hints(self):
         """`in_repo` вернул `None` на `ls-remote`: исход «оставлено — git не ответил», push нет, подсказки `ls-remote` и удаления.
 
         Сценарий (артель и внешний проект): шпион отвечает `None` на чтение
@@ -594,7 +599,7 @@ class GitFailuresTest(MergedRemoteSandbox):
                 self.assertLess(at, read[0], self.why(out))
                 self.assertLess(read[0], delete[0], self.why(out))
 
-    def test_ac6b_nonzero_ls_remote_reason_carries_stderr(self):
+    def test_ac6_b_nonzero_ls_remote_reason_carries_stderr(self):
         """`ls-remote` завершился ненулевым кодом: причина исхода несёт его stderr, push нет.
 
         Сценарий (артель и внешний проект): шпион отвечает на чтение
@@ -610,7 +615,8 @@ class GitFailuresTest(MergedRemoteSandbox):
             with self.subTest(kind=kind):
                 task = self.merged(kind)
                 text = f"fatal: сбой чтения фикстуры {self.rng.randrange(10 ** 9)}"
-                failed = subprocess.CompletedProcess(["git"], 128, "", text + "\n")
+                failed = subprocess.CompletedProcess(("ls-remote",), 128, "",
+                                                    text + "\n")
                 self.rule = lambda args, b=task.branch: (
                     ("ls-remote" in args and f"refs/heads/{b}" in args), failed)
                 self.calls.clear()
@@ -623,7 +629,7 @@ class GitFailuresTest(MergedRemoteSandbox):
                 self.assertIn(text, journal, self.why(journal))
                 self.assertEqual(self.push_calls(), [], self.why(f"{self.calls}"))
 
-    def test_ac6c_none_on_push_noted_with_read_head_hint(self):
+    def test_ac6_v_none_on_push_noted_with_read_head_hint(self):
         """`in_repo` вернул `None` на push удаления: исход «оставлено — git не ответил», подсказка удаления с прочитанной головой.
 
         Сценарий (артель и внешний проект): чтение головы настоящее, шпион
@@ -656,7 +662,7 @@ class GitFailuresTest(MergedRemoteSandbox):
                 self.assertEqual(
                     self.origin_head(task, f"refs/heads/{task.branch}"), head)
 
-    def test_ac6g_exception_inside_cleanup_noted_without_hint(self):
+    def test_ac6_g_exception_inside_cleanup_noted_without_hint(self):
         """Исключение внутри уборки: исход «оставлено — <тип>: <текст>», без подсказки и без исключения наружу.
 
         Сценарий (артель и внешний проект): шпион поднимает
@@ -687,7 +693,7 @@ class GitFailuresTest(MergedRemoteSandbox):
 
 class KillNoneTest(MergedRemoteSandbox):
 
-    def test_ac6c_kill_delete_primitive_parses_none(self):
+    def test_ac6_v_kill_delete_primitive_parses_none(self):
         """`kill` задачи проекта: `in_repo` вернул `None` на push удаления — заметка «ветка origin <ветка>: оставлено — git не ответил», без `AttributeError`.
 
         Сценарий: задача внешнего проекта в `verifying`, её ветка
