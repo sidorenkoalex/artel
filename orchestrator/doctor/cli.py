@@ -151,6 +151,9 @@ def all_checks(conn) -> list[doctor.Check]:
     # за неё заплачено попыткой.
     checks.append(doctor.check_canary_sets())
     checks.append(doctor.check_canary_trigger(conn))
+    # Реестр живого прогона (SPEC 01M5FA4NR91PCF47SZT6V0Q9HS, требование
+    # 4) — рядом со строками канарейки: только чтение, уборка — под --fix.
+    checks.append(doctor.check_canary_live())
     checks.append(doctor.check_pending_notes())
     checks.extend(doctor.check_token_repo_scope())
     checks.extend(doctor.stack.check_stack())
@@ -205,6 +208,10 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
         doctor._fix_orphan_temp_dirs()
+        # Мёртвые записи и метки реестра живой канарейки (SPEC
+        # 01M5FA4NR91PCF47SZT6V0Q9HS, требование 4) — до `all_checks`:
+        # строка `canary-live` того же прогона видит уже убранный реестр.
+        doctor._fix_canary_live()
         # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
         # требование 7) — до `all_checks` ниже, чтобы проверка
         # «models-local» в том же прогоне уже видела положенный шаблон

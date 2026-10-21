@@ -152,7 +152,9 @@ from .orphans import (_is_legit_task_worktree, _orphan_worktrees,
                        _orphan_temp_dirs, _temp_owner_alive,
                        _fix_orphan_temp_dirs, check_orphans)
 from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
-                          check_token_repo_scope, check_canary_trigger)
+                          check_token_repo_scope, check_canary_trigger,
+                          CANARY_LIVE_CHECK, check_canary_live,
+                          _fix_canary_live)
 from .canary_sets import CANARY_SETS_CHECK, check_canary_sets
 from .branch_freshness import check_branch_freshness
 from .artifact_branches import (ARTIFACT_REF_SYNC_CHECK, _origin_artifact_refs,
