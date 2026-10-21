@@ -241,3 +241,68 @@ def check_canary_trigger(conn) -> doctor.Check:
     return doctor.Check("canary-trigger", "warn", detail)
 
 
+# --- реестр живого прогона канарейки (SPEC 01M5FA4NR91PCF47SZT6V0Q9HS,
+#     требование 4) -------------------------------------------------------
+
+CANARY_LIVE_CHECK = "canary-live"
+
+
+def check_canary_live() -> doctor.Check:
+    """Живые прогоны канарейки по реестру. Реестр только читается
+    (`canary.registry_view`): мёртвое убирает `doctor --fix`
+    (`_fix_canary_live`) или `canary live --drop`, не эта проверка — без
+    `--fix` файлы остаются и журнал не растёт. Запись или метка без записи
+    старше `CANARY_DRIVE_TIMEOUT_SEC` — `warn`: ведение одной задачи дольше
+    не идёт, такой прогон, скорее всего, завис."""
+    canary = doctor.canary
+    timeout = canary.CANARY_DRIVE_TIMEOUT_SEC
+    records, marks = canary.registry_view()
+    live, warns = [], []
+
+    def drop_hint(stamp: str) -> str:
+        return f'canary live --drop {stamp} "<основание>"'
+
+    for path, entry, why in records:
+        stamp = path.name.split("-", 1)[0]
+        if why is not None:
+            warns.append(f"{path.name}: {why} — убрать: doctor --fix или "
+                         f"{drop_hint(stamp)}")
+            continue
+        age = canary.record_age(entry)
+        line = (f"{stamp} на {str(entry.get('sha') or '')[:7]}, "
+                f"pid {entry.get('pid')}, возраст {canary.hours_text(age)}")
+        if age >= timeout:
+            warns.append(f"{line} — дольше {timeout // 3600} ч, снять "
+                         f"зависший: {drop_hint(stamp)}")
+        else:
+            live.append(line)
+    for mark in marks:
+        stamp = mark["run_stamp"]
+        if mark["why"] is not None:
+            warns.append(f"{mark['path'].name}: {mark['why']} — убрать: "
+                         f"doctor --fix или {drop_hint(stamp)}")
+            continue
+        line = (f"{stamp} {canary.LIVE_MARK_ABSENT_NOTE}, pid {mark['pid']}, "
+                f"возраст {canary.hours_text(mark['age'])}")
+        if mark["age"] >= timeout:
+            warns.append(f"{line} — дольше {timeout // 3600} ч, снять "
+                         f"зависший: {drop_hint(stamp)}")
+        else:
+            live.append(line)
+    if warns:
+        return doctor.Check(CANARY_LIVE_CHECK, "warn", "; ".join(warns + live))
+    if not live:
+        return doctor.Check(CANARY_LIVE_CHECK, "ok",
+                            "живых прогонов канарейки нет")
+    return doctor.Check(CANARY_LIVE_CHECK, "ok",
+                        "живые прогоны канарейки: " + "; ".join(live))
+
+
+def _fix_canary_live() -> None:
+    """`doctor --fix`: мёртвые записи и метки реестра — прежним путём
+    чтения реестра (`live_runs`, затем `live_marks`), со строкой журнала
+    `LIVE_RUN_SWEPT_ACTION` на каждую."""
+    doctor.canary.live_runs()
+    doctor.canary.live_marks()
+
+

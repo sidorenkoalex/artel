@@ -189,7 +189,13 @@ class CmdCanaryTemplateSelectionTest(_PoolDirTest):
 
     def setUp(self):
         super().setUp()
+        # Реестр живого прогона — во временном каталоге, не под настоящим
+        # корнем пульта (SPEC 01M5FA4NR91PCF47SZT6V0Q9HS, требование 5).
+        live = tempfile.TemporaryDirectory()
+        self.addCleanup(live.cleanup)
+        self.live = Path(live.name)
         for target, attr, value in (
+                (canary, "_live_dir", lambda: self.live),
                 (canary, "_pool_dir", lambda: self.pool),
                 (canary, "_resolve_target_sha", lambda sha: ("0" * 40, None)),
                 (canary, "_sha_label", lambda sha, origin: "код пина")):
