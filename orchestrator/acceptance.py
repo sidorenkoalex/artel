@@ -721,6 +721,22 @@ def is_pytest_command(command) -> bool:
 # снимает прогон остальных — у команды pytest и только по флагу гейта.
 CONTINUE_ON_COLLECTION_ERRORS = "--continue-on-collection-errors"
 
+# Повторы внутри прогона запрещены (ADR-0026, «Решение» п. 4): в junit-xml
+# перезапуск не виден, упавший и повторённый тест выглядел бы зелёным.
+NO_RERUN_PLUGINS_ARGS = ("-p", "no:rerunfailures", "-p", "no:flaky")
+
+
+def _bans_rerun_plugins(profile) -> bool:
+    """Прогон профиля несёт запрет плагинов повторов (SPEC
+    01M5FRYVP4NF81VT00FYPHPWJH, требования 1-2): условие
+    `advance_gates.acceptance.in_outcome_bounds`, повторённое здесь — её
+    модуль импортирует этот на уровне модуля, — плюс команда pytest."""
+    from . import project_profile
+    return (project_profile.reported(profile)
+            and bool(getattr(profile, "from_components", False))
+            and profile.report != project_profile.REPORT_VITEST
+            and is_pytest_command(profile.command))
+
 
 def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
                  report: Path, continue_on_collection_errors: bool = False
@@ -746,6 +762,8 @@ def _report_argv(profile, tree: Path, cwd: Path, subset: list | None,
             return None, refusal
     else:
         head = list(profile.command)
+        if _bans_rerun_plugins(profile):
+            head += NO_RERUN_PLUGINS_ARGS
     # Цель `long_lived_dir`, `--ignore` выкладки и `-p no:cacheprovider` —
     # аргументы pytest: к иной команде компонента (Vitest, свой раннер) их
     # не добавляет и `runner: pytest-own` (требования 4, 7).
@@ -3190,6 +3208,9 @@ def _report_suite_result_key(tree: str, profile, base: bool,
                 "component": _component_name(profile),
                 "runner": profile.runner, "workdir": profile.workdir,
                 "env": dict(profile.env)}
+        # Итог, посчитанный до запрета повторов, переиспользоваться не должен.
+        if _bans_rerun_plugins(profile):
+            data["no_rerun_plugins"] = True
         return hashlib.sha256(json.dumps(data, sort_keys=True,
                                          ensure_ascii=False).encode()).hexdigest()
     except (OSError, ValueError, KeyError, TypeError, AttributeError):

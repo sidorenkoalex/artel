@@ -26,6 +26,10 @@ from pathlib import Path
 
 CANARY_OWNER_MARKER = ".artel-canary-owner"
 SUITE_OWNER_MARKER = ".artel-suite-owner"
+# Каталоги выписок гейтов `artel-outcome-*`/`artel-two-sided-*` (SPEC
+# 01M5FRYVP4NF81VT00FYPHPWJH, требование 5): без маркера живого владельца
+# `doctor --fix` считает каталог сиротой и чистит записи `git worktree`.
+GATE_OWNER_MARKER = ".artel-gate-owner"
 
 
 def owner_pid(directory: Path, marker: str = CANARY_OWNER_MARKER) -> int | None:

@@ -14,6 +14,7 @@ targets.yaml» — свойство файла, и узнать о сломан�
 на первом же чтении, чем на подключении того проекта через месяц.
 """
 import re
+import shlex
 from pathlib import Path
 
 from . import config, yamlmini
@@ -402,6 +403,59 @@ def _check_components(name: str, where: str, comps: object) -> None:
             if reason:
                 raise TargetsError(f"{here}: поле '{field}' — {reason}")
         _check_component_rules(name, here, fields, single)
+        _check_rerun_ban(here, fields)
+
+
+# Плагины повторов pytest и их аргументы (SPEC 01M5FRYVP4NF81VT00FYPHPWJH,
+# требование 3; ADR-0026, «Решение» п. 4): итог компонента с `report`
+# берётся из отчёта, а в junit-xml перезапуск не виден.
+RERUN_FLAGS = ("--reruns", "--reruns-delay", "--force-flaky", "--max-runs")
+RERUN_PLUGINS = ("rerunfailures", "pytest_rerunfailures", "flaky",
+                 "flaky.flaky_pytest_plugin")
+
+
+def _rerun_argument(args: list) -> str:
+    """Первый запрещённый аргумент повторов в `args`; пусто — его нет."""
+    for i, arg in enumerate(args):
+        if any(arg == flag or arg.startswith(flag + "=") for flag in RERUN_FLAGS):
+            return arg
+        if arg == "-p" and i + 1 < len(args):
+            if args[i + 1].strip() in RERUN_PLUGINS:
+                return f"{arg} {args[i + 1]}"
+        elif arg.startswith("-p") and arg[2:].strip() in RERUN_PLUGINS:
+            return arg
+    return ""
+
+
+def _check_rerun_ban(here: str, fields: dict) -> None:
+    """Отказ компоненту с `report` и командой pytest, которому заданы
+    повторы: аргументы `command`/`report_args`/`select`, `PYTEST_ADDOPTS`
+    и `PYTEST_PLUGINS`. Команда-обёртка (голова не pytest) — осознанная
+    граница: что она запускает, пульт не разбирает."""
+    if "report" not in fields or not _is_pytest_command(fields.get("command")):
+        return
+    env = fields.get("env") or {}
+    sources = [(field, list(fields.get(field) or ()))
+               for field in ("command", "report_args", "select")]
+    if "PYTEST_ADDOPTS" in env:
+        try:
+            sources.append(("env.PYTEST_ADDOPTS",
+                            shlex.split(env["PYTEST_ADDOPTS"])))
+        except ValueError as exc:
+            raise TargetsError(f"{here}: поле 'env' — PYTEST_ADDOPTS не "
+                               f"разбирается ({exc})") from exc
+    for field, args in sources:
+        found = _rerun_argument(args)
+        if found:
+            raise TargetsError(
+                f"{here}: поле '{field}' — {found!r}: повторы тестов внутри "
+                f"прогона запрещены (в отчёте перезапуск не виден)")
+    plugins = [part.strip() for part in env.get("PYTEST_PLUGINS", "").split(",")]
+    found = [part for part in plugins if part in RERUN_PLUGINS]
+    if found:
+        raise TargetsError(
+            f"{here}: поле 'env' — PYTEST_PLUGINS с {', '.join(found)}: "
+            f"повторы тестов внутри прогона запрещены")
 
 
 def _check_component_rules(name: str, here: str, fields: dict,
