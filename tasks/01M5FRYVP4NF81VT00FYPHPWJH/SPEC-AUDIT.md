@@ -5,188 +5,187 @@ author_role: spec_auditor
 status: ready
 verdict: concerns
 signals: "в) пути-признаки (тесты): tests/; в) пути-признаки (гейты): orchestrator/advance_gates/mandate.py, orchestrator/advance_gates/outcome_integrity.py, orchestrator/advance_gates/refusal_classes.py, orchestrator/advance_gates/two_sided.py; д) ТЗ ссылается на ADR: ADR-0026"
-spec_sha: d786169c8f5d6977d261804e0afc874ef14ea173
+spec_sha: 4ef614735736ce3793ef768c5365e254b5f5bf9c
 schema_version: 5
 ---
 
 # SPEC-AUDIT: G3а-2б-2: запрет повторов через плагины pytest и переносы из приёмок
 
 ## ТЗ и SPEC
-ТЗ → SPEC: требование ТЗ 1 разложено на требования SPEC 1–3 и AC-1..AC-4;
-переносы 11, 18, 20, 21, 22, 23 — требования 4–10 и AC-5..AC-12; п. 3 ТЗ
-(детерминизм, существующие тесты без правок) — требование 11. Граница
-задачи, исключения (перенос 11 — текст не меняется, перенос 18 — маркер и у
-артели), «Не входит», «Только чтение», бюджет ($40 = верх рамки) перенесены
-без потерь. ANSWER-n нет, решений Оператора на гейте SPEC в брифе нет.
+ТЗ → SPEC: требование 1 ТЗ разложено на требования SPEC 1–3 и AC-1..AC-4.
+Переносы 11, 18, 20, 21, 22, 23 стали требованиями 4–10 и AC-5..AC-12.
+Пункт 3 ТЗ — требование 11. Граница задачи, оба исключения, «Не входит»,
+«Только чтение» и бюджет ($40 — верх рамки) перенесены без потерь.
+ANSWER-n нет.
 
-Расхождения:
-- **а1.** ТЗ п. 2 (18) требует тесты уборки, которые «зовут
-  `doctor._fix_orphan_temp_dirs()` напрямую, не `cmd_doctor(fix=True)`»; в
-  SPEC это осталось только в AC-8 («прямой вызов»), а требование 6
-  (SPEC.md:73-83) этого не несёт. Потери смысла нет — замечание формы.
-- **а2.** AC-4 (SPEC.md:116) добавляет то, чего нет в ТЗ: «та же запись под
-  `test_profile` отказа не получает». ТЗ говорит только «запись
-  `test_profile` не проверяется». В буквальном виде критерий невыполним
-  (см. б4).
-- SPEC без требований сверх ТЗ. Пункт «Не входит» про `auto.py`,
-  `tests_writing.py`, `doctor/cli.py`, `doctor/__init__.py` повторяет список
-  «Только чтение» ТЗ.
-- Порядок «после G3а-2б-1» из «Фактов» ТЗ выполнен по факту: мерж 8b47a1f5
-  (01M5EDW6KD) — предок HEAD ветки. Отсутствие `merge_after` (SPEC
-  «Материалы») ничему не мешает.
+Решения Оператора на гейте SPEC (круг 1) — все девять перенесены:
+1. Поля `test_profile` в AC-4 — SPEC.md:139.
+2. Имя плагина сравнивается после снятия пробелов: форма — SPEC.md:52-60,
+   критерий — AC-4, SPEC.md:139.
+3. Ленивый импорт `tests_writing` в fsm.py и подпроцесс-проверка: требование 4
+   (SPEC.md:68-75) и AC-5 (SPEC.md:141).
+4. Точка подмены `orchestrator.doctor.orphans._project_clones`, проверка, что
+   подмена вызвана, и запрет git в настоящих клонах: требование 6
+   (SPEC.md:82-101) и AC-8 (SPEC.md:147).
+5. Токены — прежним `_TOKEN_SPLIT_RE`, `strip("*_")`, «src/a.test.ts,» —
+   покрытие, «src/a.test.ts.» и «::x» — нет: требование 8 (SPEC.md:107-118)
+   и AC-10 (SPEC.md:151).
+6. Литералов обоих текстов действий в outcome_integrity.py нет: требование 10
+   и AC-12 (SPEC.md:155).
+7. Маркер канарейки без маркера гейта — сирота, ветка гейта стоит до общей
+   проверки: требование 6 и AC-7 (SPEC.md:145).
+8. `env.PYTEST_PLUGINS` — требование 3 (SPEC.md:61-67) и AC-13 (SPEC.md:157).
+   Прочие плагины повторов и `pytest_plugins` в conftest.py — «Не входит»
+   (SPEC.md:203).
+9. Прямой вызов `_fix_orphan_temp_dirs()` назван и в требовании 6.
+
+Требований сверх ТЗ и решений Оператора нет. Решения Оператора друг другу не
+противоречат. Порядок «после G3а-2б-1» выполнен: мерж 8b47a1f5 — предок
+HEAD ветки, поэтому отсутствие `merge_after` ничему не мешает.
 
 ## Факты против кода
 Подтвердилось:
-- `_pytest_command` — orchestrator/acceptance.py:37; `is_pytest_command` —
-  :709; `_report_argv` — :725; `_report_suite_result_key` — :3170. Данные
-  ключа (:3184-3192) аргументов пульта не несут.
-- `in_outcome_bounds` — orchestrator/advance_gates/acceptance.py:213-217:
-  `reported(profile) and from_components`.
-- Литерал детали — orchestrator/fsm.py:1266; константа —
-  orchestrator/advance_gates/tests_writing.py:623; третья копия —
-  orchestrator/auto.py:314.
-- `mkdtemp` в outcome_integrity.py:564 (`_gate` :556) и two_sided.py:452
-  (`run` :433); `git worktree add` — outcome_integrity.py:364 (в `_checkouts`,
-  внутри `try` `_gate`) и two_sided.py:457. Выписки ложатся в подкаталоги
-  `scratch/base`/`scratch/head`, поэтому маркер в корне `scratch` git не
-  мешает.
-- `MERGE_REFUSAL_ACTION`/`MERGE_PREPARE_ACTION` — outcome_integrity.py:65-66;
-  `OUTCOME_MERGE_REFUSAL_ACTION` — refusal_classes.py:92; у модуля
-  refusal_classes импортов нет (refusal_classes.py:1-157).
-- `_temp_owner_alive` — doctor/orphans.py:82; `_orphan_temp_dirs` — :106
-  (фильтр префиксов `artel-canary-`/`artel-suite-base-`, :114);
-  `_fix_orphan_temp_dirs` — :118; `liveness.owner_alive(directory, marker)` —
-  liveness.py:39.
-- `_component_covered` — mandate.py:495-510: сейчас признаёт любой токен
-  или фрагмент в кавычках, который подходит под маску области (:508-510);
-  `_PY_PATH_RE` — :402.
-- Все прогоны по отчёту идут через `_report_argv`, то есть «каждый прогон»
-  достижим одной правкой: вызовы `_report_run` — acceptance.py:1595, :1761,
-  :1889, :2243, :2658; outcome_integrity.py:316; two_sided.py:359.
+- `_pytest_command` — acceptance.py:37; `is_pytest_command` — :709;
+  `_report_argv` — :725. Порядок сборки сейчас: `[*head, *extra, *tail]`
+  (:766), `head = list(profile.command)` у не-vitest (:747). Значит «сразу за
+  `command`» — это вставка между `head` и `extra`, другие места не нужны.
+  `_report_suite_result_key` — :3170. Данные ключа (:3184-3192) аргументов
+  пульта не несут.
+- `in_outcome_bounds` — advance_gates/acceptance.py:213-217.
+- Цикл импорта существует. advance_gates/acceptance.py:17-18 импортирует
+  `fsm` на уровне модуля, tests_writing.py:15 импортирует
+  `from .acceptance import blob_sha256`. В fsm.py:792 уже есть ленивый импорт
+  (`from . import fsm_advance`). Сейчас все три порядка импорта
+  (`advance_gates.acceptance`, `fsm`, `tests_writing`) первым в чистом
+  интерпретаторе проходят — проверено.
+- Литерал детали встречается только в fsm.py:1266, tests_writing.py:623 и
+  auto.py:314 (grep по `orchestrator/`). Комментарий brief.py:89 цитирует
+  текст, но это не fsm.py.
+- `mkdtemp` в outcome_integrity.py:564 и two_sided.py:452;
+  `git worktree add` — outcome_integrity.py:364 и two_sided.py:457. Выписки —
+  подкаталоги `scratch/<side>`, поэтому маркер в корне `scratch` git не мешает.
+- Репозиторий выписок — `workspace.task_repo` (outcome_integrity.py:561):
+  это `workspace.repo(target)`, тот же клон, что отдаёт `_project_clones`
+  (orphans.py:25-32). Значит prune в `_project_clones` достаёт записи гейта.
+- orphans.py:38 зовёт `_project_clones()` по имени модуля. Решение
+  Оператора 4 с кодом согласовано.
+- `_temp_owner_alive` (orphans.py:82): общая проверка
+  `owner_alive(path)` — :98, ветка `artel-suite-base-` — :100;
+  `_orphan_temp_dirs` — префиксы на :114; `check_orphans` → `orphans-temp` —
+  :195-203.
+- `liveness.owner_alive(directory, marker)` — liveness.py:39.
+- `MERGE_REFUSAL_ACTION`/`MERGE_PREPARE_ACTION` — outcome_integrity.py:65-66.
+  Подстрока «merge отклонён: гейт неослабления по исходам» в модуле больше
+  нигде не встречается, так что проверка текста AC-12 не заденет другие
+  строки. `OUTCOME_MERGE_REFUSAL_ACTION` — refusal_classes.py:92. Импортов у
+  модуля нет. `refusal_class` по умолчанию отдаёт «чинит Оператор» (:154),
+  поэтому AC-11 через индексацию `REFUSAL_CLASSES[...]` — верная форма.
+- `_TOKEN_SPLIT_RE` — mandate.py:392; `_PY_PATH_RE` — :402;
+  `_component_covered` — :495-510.
+- `select`/`report_args` есть только в `COMPONENT_FIELDS` (targets.py:94-95).
+  `env` подчинено `PROFILE_OWN_RUNNER_ONLY` (targets.py:74, :372, :432),
+  поэтому тесты AC-4/AC-13 с `env` у компонента ставят `runner: pytest-own`.
 
-Не подтвердилось или не названо в SPEC:
-- **б1. Круговой импорт у переноса 11.** Требование 4 (SPEC.md:61-66)
-  требует, чтобы fsm брал деталь «импортом из `advance_gates.tests_writing`»,
-  но не говорит, что импорт должен быть ленивым. При модульном импорте в
-  fsm.py получается цикл. advance_gates/acceptance.py:17-18 импортирует
-  `fsm` на уровне модуля, tests_writing.py:15 — `.acceptance`. Тогда
-  `import orchestrator.advance_gates.acceptance` первым кончится цепочкой
-  acceptance(частично) → fsm → tests_writing → `from .acceptance import
-  blob_sha256` → ImportError. ТЗ такую оговорку сделал для acceptance.py, а
-  для fsm.py нет. Нужен импорт внутри `_cmd_approve` — так fsm.py уже
-  импортирует в :792, :1127, :1210 и других местах.
-- **б2.** Точка подмены `_project_clones` не названа. doctor/orphans.py:38
-  зовёт `_project_clones()` по локальному имени, а тесты doctor подменяют
-  имена фасада: `mock.patch.object(doctor, …)`, как в
-  tests/test_canary_doctor_owner.py:19 и tests/test_doctor_closed_ref_fix.py:169.
-  Если планка подменит `doctor._project_clones`, а код позовёт локальное имя
-  (или наоборот), подмена не сработает. Тогда тест AC-8 выполнит `git
-  worktree prune` в настоящих клонах пульта (`workspace.repo(n)`).
-- **б3.** Требование 6 не оговаривает, что ветка для
-  `artel-outcome-*`/`artel-two-sided-*` в `_temp_owner_alive` должна стоять до
-  общей проверки `owner_alive(path)` с маркером канарейки
-  (doctor/orphans.py:98). Формулировка «возвращает только» это подразумевает,
-  но AC-7 не ловит, если ветку поставить после :98 (см. в).
-- **б4. AC-4 невыполним для `select`/`report_args`.** Этих полей нет в
-  `PROFILE_FIELDS` (targets.py:45-61) — они только в `COMPONENT_FIELDS`
-  (targets.py:94-95). `_check_profile` отказывает неизвестному подполю
-  (targets.py:356-360). Поле `env` у `test_profile` допустимо только при
-  `runner: pytest-own` (targets.py:370-377), а `report` — только `junit-xml`
-  (targets.py:69). «Та же запись под `test_profile`» с запрещённым
-  аргументом в `select`/`report_args` ОТКАЗ получит — по другой причине.
+Существующие тесты, которые требование 11 запрещает править, изменение не
+ломает:
+- AC-17/AC-18/AC-19 предыдущей задачи
+  (tests/test_01m5d02n3b428v8bwc3pam9qct_id_mandate_answer.py:784-890):
+  пути `src/…/….test.ts` полностью совпадают с новой регуляркой; случаи
+  «неразборчивый» и «без кавычек» (`comp:src/…`, `…::имя`) по-прежнему не
+  покрытие.
+- Сверки argv компонента: tests/test_component_report_gates.py:141 (vitest)
+  и :164 (pytest-own, `from_components=False`) — вне границы.
+- Ключ компонента в тестах не захардкожен
+  (tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py:953-1040 сравнивает
+  ключи между собой; захардкожен только ключ артели).
+- Уборка в тестах изолирована песочницей
+  (tests/test_sandbox_determinism_helpers.py:130-160), системный tmp не
+  задевается.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да | флаги после подмножества или `report_args`; флаги у артели или у `test_profile`; правка `_pytest_command` |
-| AC-2 | частично | условие только `reported(profile)` (флаги у `pytest-own`+`report`) — ловится. Условие только `from_components` не ловится: у артели и у `test_profile` без `report` `_report_argv` отказывает до сборки argv («нет {path}», acceptance.py:731-737), и проверка у них пустая |
-| AC-3 | да | поле в ключе у всех профилей (ключ `test_profile` сменился); поле не добавлено (ключ компонента прежний) |
-| AC-4 | нет в буквальном виде | формы ловятся; часть «та же запись под `test_profile` отказа не получает» невыполнима для `select`/`report_args` (б4). Варианты с пробелами вокруг имени не названы (е1) |
-| AC-5 | да | литерал остался в fsm.py; деталь разошлась с константой |
-| AC-6 | да | маркер после `worktree add`; маркер не у артели; содержимое не pid |
-| AC-7 | частично | каталоги не включены в `_orphan_temp_dirs` — ловится. Если ветку гейта поставить ПОСЛЕ `owner_alive(path)` (doctor/orphans.py:98), каталог с живым `.artel-canary-owner` без маркера гейта уцелеет, а AC-7 этот случай не проверяет (б3) |
-| AC-8 | да | удалён каталог живого владельца; prune не вызван; git вызван без удалений |
-| AC-9 | да (регресс) | `_component_covered` зовётся вне границы |
-| AC-10 | частично | прежнее широкое правило ловится. «Иной знак сразу за путём» неоднозначен: `_TOKEN_SPLIT_RE = [\s`,;()«»]+` (mandate.py:392) режет по запятой, точке с запятой и скобкам, так что «src/a.test.ts,» даёт токен-путь. Тест на запятую и код по ТЗ разойдутся. Не сказано, снимается ли выделение `*`/`_` (сейчас `strip("*_")`, mandate.py:509-510) |
-| AC-11 | да | ключа нет в `REFUSAL_CLASSES` (индексация даёт KeyError), не тот класс |
-| AC-12 | слабо | проверка на равенство не ловит главную мутацию требования 10: в outcome_integrity осталась своя копия литерала с тем же текстом. Нужна проверка текста модуля (как в AC-5) или `is` |
+| AC-1 | да | флаги после подмножества, `--ignore` или `report_args`; флаги у артели или `test_profile`; правка `_pytest_command` |
+| AC-2 | да | условие только `reported(profile)` — флаги у `pytest-own`+`report`. Мутация «только `from_components`» поведенчески равна правильному коду: компонент без `report` отказывает до сборки argv (acceptance.py:731-737), так что пропустить её не страшно |
+| AC-3 | да | поле в ключе у всех профилей (ключ `test_profile` сменился); поле не добавлено |
+| AC-4 | да | пропущена форма или поле; сравнение без `strip` (пробельные формы); проверка распространена на `test_profile` |
+| AC-5 | да | литерал остался в fsm.py; деталь разошлась с константой; модульный импорт (ImportError в подпроцессе) |
+| AC-6 | да | маркер после `worktree add`; нет у артели; не pid |
+| AC-7 | да | каталоги не включены; ветка гейта после `owner_alive(path)` (:98) — случай маркера канарейки |
+| AC-8 | да, с оговоркой к1 | удалён каталог живого владельца; prune не вызван; git вызван без удалений; подмена по фасаду, а не по модулю |
+| AC-9 | да (регресс) | новое правило включено вне границы |
+| AC-10 | да | прежнее широкое правило по маске; поиск пути внутри токена (`::x`, хвостовая точка); пропал `strip("*_")` |
+| AC-11 | да | ключа нет (KeyError), не тот класс, не тот текст |
+| AC-12 | да | своя копия литерала в outcome_integrity; импорт пакета в refusal_classes |
+| AC-13 | да | `PYTEST_PLUGINS` не проверяется; нет разбиения по запятой или `strip` |
 
 ## Зоны
-Зоны SPEC совпадают с зонами ТЗ и покрывают все требования: acceptance.py
-(1, 2), targets.py (3), fsm.py (4), liveness.py, outcome_integrity.py,
-two_sided.py (5), doctor/orphans.py (6), mandate.py (7, 8),
-refusal_classes.py и outcome_integrity.py (9, 10), tests/.
-docs/codebase-map.md и config.py — в `config.COMMON_ZONES` (config.py:814),
-карту можно регенерировать без расширения зон. Защищённых путей
-(`skills/`, `templates/`, `gates.yaml`, `roles.yaml`, `.github/`) требования
-не трогают. Песочница ролей не расширяется. Правка read-only путей не
-нужна: константа в tests_writing.py:623 уже есть, auto.py остаётся
-литералом по ТЗ, `_fix_orphan_temp_dirs` уже в фасаде
-(doctor/__init__.py:153).
+Зоны SPEC совпадают с зонами ТЗ и покрывают требования:
+- acceptance.py — 1, 2;
+- targets.py — 3;
+- fsm.py — 4;
+- liveness.py, outcome_integrity.py, two_sided.py — 5;
+- doctor/orphans.py — 6;
+- mandate.py — 7, 8;
+- refusal_classes.py, outcome_integrity.py — 9, 10;
+- tests/.
+
+Карта кодовой базы входит в `config.COMMON_ZONES`. Защищённых путей
+требования не трогают, песочница ролей не расширяется. Правка путей «Только
+чтение» не нужна:
+- константа в tests_writing.py:623 уже есть;
+- `auto.py` остаётся литералом;
+- `_fix_orphan_temp_dirs` уже в фасаде (doctor/__init__.py:153).
 
 ## Матрица неослабления
-Раздела «Матрица неослабления» и раздела «Меняемое поведение» в SPEC нет.
-Существующие тесты по требованию 11 не правятся. Ниже — свойства, которые
-задача трогает; ни одно не ослабляется.
+Раздела «Меняемое поведение» в SPEC нет, и он не нужен: существующие тесты
+не правятся (требование 11). Ни одно свойство не ослабляется.
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `_component_covered` (mandate.py:495) | признание «Чем покрыто после» компонента в границе — tests/test_01m5d02n3b428v8bwc3pam9qct_id_mandate_answer.py:785, :831 | да, сужается (идентификатор и `src/…test.ts` остаются покрытием) | существующие AC-17/AC-18 + новый тест AC-10 | ок |
-| `_temp_owner_alive`/`_orphan_temp_dirs`/`_fix_orphan_temp_dirs` (doctor/orphans.py:82-128) | живые каталоги канарейки и базы не удаляются — tests/test_canary_doctor_owner.py:26, :46 | да | те же тесты + новые AC-7/AC-8 | ок |
-| `_report_suite_result_key` (acceptance.py:3170) | переиспользование итога и «доказан» гейта исходов на мерже (outcome_integrity.py:399-412) | да; прежние ключи компонентов обесцениваются — прогон заново, не пропуск | новый тест AC-3 | ок |
-| текст `MERGE_*_ACTION` (outcome_integrity.py:65-66) | класс отказа в `auto` — tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:493 | да | тот же тест + AC-11/AC-12 | ок |
+| `_component_covered` (mandate.py:495) | признание «Чем покрыто после» компонента в границе — tests/test_01m5d02n3b428v8bwc3pam9qct_id_mandate_answer.py:784, :831 | да, сужается | те же AC-17/AC-18 + новый тест AC-10 | ок |
+| `_temp_owner_alive`/`_orphan_temp_dirs`/`_fix_orphan_temp_dirs` (doctor/orphans.py:82-128) | живые каталоги канарейки и базы не удаляются — tests/test_canary_doctor_owner.py:26, :46; песочница — tests/test_sandbox_determinism_helpers.py:130 | да | те же тесты + новые AC-7/AC-8 | ок |
+| `_report_suite_result_key` (acceptance.py:3170) | переиспользование итога и «доказан» гейта исходов на мерже | да; прежние ключи компонентов обесцениваются — прогон заново, не пропуск | новый тест AC-3 | ок |
+| текст `MERGE_*_ACTION` (outcome_integrity.py:65-66) | класс отказа в `auto` — tests/test_refusal_classes.py:42, :62 | да | те же + AC-11/AC-12 | ок |
 
 ## Пути обхода гейтов
-- **е1. Пробел вокруг имени плагина.** pytest 9.1.1
-  (`PytestPluginManager.consider_preparse`) делает `parg.strip()`, а
-  `-p <имя>` снимает блок, поставленный `-p no:<имя>` раньше
-  (`consider_pluginarg` → `unblock`). Элементы `-p`, `" rerunfailures"` и
-  один элемент `"-p rerunfailures"` (с пробелом) снова загружают плагин, а
-  буквальное правило требования 3 (SPEC.md:55-57) их не ловит. В `select` и
-  `report_args`, которые в argv стоят ПОСЛЕ `-p no:…`, это рабочий обход:
-  `--reruns` снова действует, отчёт junit повторов не видит. В `command` и
-  `PYTEST_ADDOPTS` (они раньше блока) вред снимает поздний `no:`. Правило
-  стоит сверять по имени после `strip()`.
-- **е2. `env.PYTEST_PLUGINS`.** `-p no:flaky` блокирует имена `flaky` и
-  `pytest_flaky`, но не модуль `flaky.flaky_pytest_plugin`. Значение
-  `PYTEST_PLUGINS=flaky.flaky_pytest_plugin` в `env` компонента (pytest-own)
-  его загрузит, а `targets.check` по требованию 3 смотрит только
-  `PYTEST_ADDOPTS`. У `rerunfailures` этот путь закрыт: блокируется и
-  `pytest_rerunfailures`. Это вне буквы ТЗ — вопрос Оператору, расширять ли
-  проверку.
-- **е3.** Другие плагины повторов (например, pytest-retry), а также
-  `pytest_plugins` в conftest.py проекта ТЗ не покрывает — только к сведению,
-  в смысл ADR-0026 п. 4 это входит.
-- **е4.** AC-12, исполненный буквально (равенство), допускает оставить в
-  outcome_integrity свои копии литералов — второй источник текста, ради
-  устранения которого и задан перенос 23.
+- **е1 (к сведению, вне ТЗ). Команда-обёртка.** Если `command` компонента —
+  обёртка (`["./run-tests.sh"]`, `["sh", "-c", "python -m pytest --reruns 3
+  \"$@\"", "sh"]`), то `is_pytest_command(head)` ложно (acceptance.py:709-716)
+  и флаги `-p no:` не ставятся. `targets.check` тоже ничего не находит:
+  запрещённый аргумент не стоит отдельным элементом, он внутри строки или
+  скрипта. Повторы снова невидимы для `junit-xml`. Это тот же класс, что и
+  `pytest_plugins` в conftest.py (повтор задаёт код проекта, а не запись
+  пульта), который Оператор отправил в бэклог (SPEC.md:203). Строки «Не
+  входит» на обёртки нет.
+- Прочие пути, найденные в круге 1 (пробельные формы `-p`,
+  `PYTEST_PLUGINS`, копия литерала в AC-12, маркер канарейки), закрыты
+  решениями Оператора и требованиями SPEC.
+- `PYTEST_ADDOPTS` и `-o addopts=…` pytest вставляет ДО аргументов командной
+  строки, поэтому поздний `-p no:…` их перекрывает. Обхода нет, проверка
+  `PYTEST_ADDOPTS` — запас прочности.
 
 ## Вердикт
-concerns. SPEC верен по фактам и зонам. Отклонения ниже решаемы на гейте
-уточнением формулировок, без нового разбора:
+concerns. Все решения Оператора круга 1 перенесены, факты о коде
+подтверждены, критерии ловят свои мутации. Остались мелкие пункты, решаемые
+на гейте уточнением:
 
-1. AC-4 (SPEC.md:116) невыполним в буквальном виде: у `test_profile` нет
-   `select`/`report_args` (targets.py:45-61, :356-360), `env` — только при
-   pytest-own (targets.py:370-377). Ограничить «ту же запись под
-   `test_profile`» полями `command` и `env.PYTEST_ADDOPTS` при
-   `runner: pytest-own`. (б4, а2)
-2. Требование 3 (SPEC.md:52-57) пропускает `-p`, `" rerunfailures"` и
-   `"-p rerunfailures"` — pytest делает strip имени. В `select`/`report_args`
-   это обход запрета. (е1)
-3. Требование 4 (SPEC.md:63-64) не оговаривает ленивый импорт.
-   Модульный импорт tests_writing в fsm.py даёт ImportError по циклу
-   advance_gates/acceptance.py:17-18 → fsm → tests_writing.py:15. (б1)
-4. AC-8 (SPEC.md:124) не называет точку подмены `_project_clones`
-   (локальное имя doctor/orphans.py:38 против фасада `doctor`). При
-   расхождении тест выполнит `git worktree prune` в настоящих клонах. (б2)
-5. AC-10 (SPEC.md:128): «иной знак сразу за путём» неоднозначен при
-   разделителях `_TOKEN_SPLIT_RE` (mandate.py:392); не сказано про снятие
-   выделения `*`/`_` (mandate.py:509-510).
-6. AC-12 (SPEC.md:132) проверяет только равенство и не ловит оставленную
-   копию литерала. (е4)
-7. AC-7 (SPEC.md:122) не проверяет, что маркер канарейки не защищает
-   каталог выписки (doctor/orphans.py:98). (б3)
-8. На усмотрение Оператора: `env.PYTEST_PLUGINS` с
-   `flaky.flaky_pytest_plugin` обходит `-p no:flaky` (е2); другие плагины
-   повторов (е3) вне ТЗ.
+1. **к1. AC-8 (SPEC.md:147), «тест проверяет, что подмена вызвана».** Не
+   сказано, в каких случаях. В случае «этим вызовом не удалён ни один
+   каталог» код вправе вообще не звать `_project_clones`: требование 6
+   (SPEC.md:93-96) говорит только, что git не вызывается. Тест, который
+   требует вызова подмены во всех случаях, навяжет коду устройство — вызов
+   `_project_clones` без удалений (класс `тест-навязывает-устройство`).
+   Уточнение: проверка вызова подмены — в случае с удалённым каталогом.
+2. **к2. Требование 3 (SPEC.md:61-63), ошибка разбора `shlex`.** Не задано,
+   что делает `targets.check` со значением `env.PYTEST_ADDOPTS`, которое
+   `shlex.split` не разбирает (несбалансированная кавычка, `ValueError`):
+   отказ записи или исключение наружу (`doctor`, `init`, загрузка
+   `targets.yaml`). Обхода тут нет — pytest такое значение тоже не примет.
+   Но поведение проверки записи на этом входе стоит назвать, например:
+   отказ «PYTEST_ADDOPTS не разбирается».
+3. **е1 (к сведению).** Команда-обёртка компонента обходит и флаги, и
+   проверку (acceptance.py:709-716). Это вне буквы ТЗ. Если это осознанная
+   граница, её стоит назвать в «Не входит» рядом с `pytest_plugins` в
+   conftest.py (SPEC.md:203).

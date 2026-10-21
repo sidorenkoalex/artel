@@ -1,20 +1,17 @@
 # Записка spec_auditor — 01M5FRYVP4NF81VT00FYPHPWJH
 
 ## Выяснено
-- Адреса SPEC сверены: acceptance.py:37/:709/:725/:3170, advance_gates/acceptance.py:213, fsm.py:1266, tests_writing.py:623, auto.py:313, outcome_integrity.py:65-66/:556/:564, two_sided.py:433/:452, refusal_classes.py:92, doctor/orphans.py:82/:106/:118, liveness.py:27-41 — совпадают.
-- G3а-2б-1 (8b47a1f5) уже в базе ветки — порядок «после G3а-2б-1» выполнен, merge_after не нужен.
-- Все прогоны компонента по отчёту идут через `_report_argv` (вызовы `_report_run`: acceptance.py:1595/1761/1889/2243/2658, outcome_integrity.py:316, two_sided.py:359). Ключ доказательства гейта исходов на мерже — тот же `_report_suite_result_key` (outcome_integrity.py:399-412), т.е. смена ключа обесценит старые «доказан».
-- pytest 9.1.1 `consider_preparse` делает `parg.strip()` → `-p`, ` rerunfailures` и элемент `-p rerunfailures` (с пробелом) грузят плагин; буквальное правило требования 3 их не ловит. В `select`/`report_args` (стоят ПОСЛЕ `-p no:`) это реальный обход. `env.PYTEST_PLUGINS=flaky.flaky_pytest_plugin` не блокируется `-p no:flaky` (блок по имени точки входа `flaky`/`pytest_flaky`).
-- AC-4 «та же запись под test_profile отказа не получает» невыполнимо для `select`/`report_args`: их нет в PROFILE_FIELDS (targets.py:45-61) → `_check_profile` откажет «неизвестное подполе» (targets.py:356-360); `env` у test_profile — только при runner: pytest-own (targets.py:370-377).
-- Модульный импорт `tests_writing` в fsm.py даст цикл: advance_gates/acceptance.py:17-18 импортирует `fsm` на уровне модуля, tests_writing.py:15 — `.acceptance`; вход через `import orchestrator.advance_gates.acceptance` упадёт ImportError. Нужен ленивый импорт (fsm.py так делает много где).
-- `_TOKEN_SPLIT_RE = [\s`,;()«»]+` (mandate.py:392): запятая/скобки — разделители, «иной знак сразу за путём» в AC-10 неоднозначен.
-- orphans.py:38 зовёт `_project_clones()` локально, а фасадный `doctor._project_clones` подменяют тесты — точка подмены в SPEC не названа.
+- Круг 2 (spec_sha 4ef61473…): все 9 решений Оператора круга 1 перенесены в SPEC (треб. 3, 4, 6; AC-4, AC-5, AC-7, AC-8, AC-10, AC-12, AC-13; «Не входит»).
+- Адреса SPEC сверены повторно: acceptance.py:37/:709/:725/:3170, fsm.py:792 (ленивый импорт)/:1266, tests_writing.py:623, auto.py:314, outcome_integrity.py:65-66/:364/:556/:564, two_sided.py:452/:457, refusal_classes.py:92, orphans.py:25/:38/:82/:106/:118, liveness.py:27-41, mandate.py:392/:402/:495-510 — совпадают.
+- Цикл импорта подтверждён: advance_gates/acceptance.py:17-18 (fsm на уровне модуля) ↔ tests_writing.py:15 (`from .acceptance import blob_sha256`). Сейчас все три порядка импорта проходят.
+- Существующие тесты, которые изменение не ломает: AC-17/18/19 (tests/test_01m5d02n3b428v8bwc3pam9qct_id_mandate_answer.py:784-890) — пути `src/…test.ts` полностью совпадают с новой регуляркой; argv-тесты компонента — только vitest/pytest-own без from_components (test_component_report_gates.py:141,164); ключ компонента в тестах не захардкожен; уборка в тестах изолирована песочницей (test_sandbox_determinism_helpers.py:130-160).
+- Новые мелочи: (1) AC-8 «тест проверяет, что подмена вызвана» неоднозначен для случая без удалений; (2) поведение при ошибке shlex на несбалансированных кавычках PYTEST_ADDOPTS не задано; (3) обёртка-команда (sh -c / скрипт) обходит и флаги, и проверку — вне ТЗ.
 
 ## Не сработало
-- `cd ... ; sed` в Bash требует подтверждения — читать абсолютными путями/Read.
+- `$VAR` в Bash и `ls` недоступны — пути писать литералом.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict concerns (8 пунктов), guard — ок.
+- SPEC-AUDIT.md: status ready, verdict concerns (2 мелких пункта + 1 к сведению).
 
 ## Чего не хватило
-- Точки подмены `_project_clones` (фасад vs модуль) в ТЗ/SPEC; поведение `-p` pytest пришлось смотреть в исходнике _pytest/config.
+- Ничего существенного; поведение `-p` pytest — по памяти из круга 1.
