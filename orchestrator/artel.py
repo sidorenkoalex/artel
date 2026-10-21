@@ -1558,6 +1558,9 @@ def _cmd_canary(rest: list) -> None:
     if rest and rest[0] == "live":
         _cmd_canary_live(rest[1:])
         return
+    if rest and rest[0] == "run-task":
+        _cmd_canary_run_task(rest[1:])
+        return
     if "--detach" in rest:
         if rest.count("--detach") != 1 or "--result-file" in rest:
             sys.exit("canary: повторный или несовместимый --detach")
@@ -1595,6 +1598,43 @@ def _cmd_canary(rest: list) -> None:
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(result, ensure_ascii=False),
                                    encoding="utf-8")
+
+
+_RUN_TASK_FLAGS = ("--stamp", "--template", "--sha", "--set", "--summary")
+
+
+def _cmd_canary_run_task(rest: list) -> None:
+    """Внутренняя подкоманда `canary run-task` (SPEC
+    01M5FZ9G7ME2F1T5TYEWSVNA1R, требование 1): её зовёт родитель
+    параллельного прогона, не Оператор, — в справку она не входит. Все пять
+    флагов обязательны, каждый ровно один раз и со значением; значение —
+    следующий элемент, если он не начинается с `--` (пустая строка
+    законна). Любой отказ — до записи реестра."""
+    usage = ("canary run-task --stamp <run_stamp> --template <путь> "
+             "--sha <sha> --set <набор> --summary <сводка>")
+    values: dict = {}
+    index = 0
+    while index < len(rest):
+        flag = rest[index]
+        if flag not in _RUN_TASK_FLAGS:
+            sys.exit(f"canary run-task: лишний аргумент {flag!r} — {usage}")
+        if flag in values:
+            sys.exit(f"canary run-task: повтор {flag} — {usage}")
+        if index + 1 >= len(rest) or rest[index + 1].startswith("--"):
+            sys.exit(f"canary run-task: {flag} без значения — {usage}")
+        values[flag] = rest[index + 1]
+        index += 2
+    missing = [flag for flag in _RUN_TASK_FLAGS if flag not in values]
+    if missing:
+        sys.exit(f"canary run-task: нет {', '.join(missing)} — {usage}")
+    stamp = values["--stamp"]
+    if not canary.RUN_STAMP_RE.fullmatch(stamp):
+        sys.exit(f"canary run-task: run_stamp {stamp!r} не по шаблону "
+                 f"ГГГГММДДTЧЧММССZ — {usage}")
+    canary.cmd_canary_run_task(
+        run_stamp=stamp, template_path=Path(values["--template"]),
+        target_sha=values["--sha"], set_name=values["--set"],
+        summary=values["--summary"])
 
 
 def _cmd_canary_live(rest: list) -> None:

@@ -3321,3 +3321,95 @@ def cmd_canary(*, k: int, sha: str | None = None,
             raise SystemExit(128 + exc.signum) from None
         print(f"[canary] прогон {run_stamp} завершён")
         return run_stamp
+
+
+def _write_child_record(record: Path, run_stamp: str, target_sha: str,
+                        set_name: str, template: str) -> None:
+    """Запись дочернего процесса прогона (SPEC 01M5FZ9G7ME2F1T5TYEWSVNA1R,
+    требование 3) приёмом `_live_run_record`: временный `.json.tmp` вне
+    маски `*.json`, затем атомарная замена. Метку не создаёт — она
+    родителя."""
+    pid = os.getpid()
+    started = _stale_cycles().process_start_time(pid)
+    payload = {"pid": pid, "process_start": _moment_text(started),
+               "run_stamp": run_stamp, "sha": target_sha,
+               "set_name": set_name,
+               "started_at": datetime.now(timezone.utc).isoformat(),
+               "tasks": 1, "parent_pid": os.getppid(), "template": template}
+    tmp = record.with_name(record.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, record)
+
+
+def _mark_owned_by_parent(mark: Path) -> bool:
+    try:
+        owner = mark.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return owner == str(os.getppid())
+
+
+def cmd_canary_run_task(*, run_stamp: str, template_path: Path,
+                        target_sha: str, set_name: str, summary: str) -> None:
+    """`canary run-task` — одна задача прогона `run_stamp` в отдельном
+    процессе (SPEC 01M5FZ9G7ME2F1T5TYEWSVNA1R, требования 1-3). Внутренняя:
+    её зовёт родитель параллельного прогона, который уже разрешил sha,
+    выбрал шаблоны и держит метку `<run_stamp>.lock`; поэтому здесь нет ни
+    обращения к origin, ни выбора шаблонов, ни своей метки.
+
+    Двух эфемерных клонов в одном процессе не бывает (`_ephemeral_clone`
+    переадресует модульные пути `config`), поэтому на процесс — ровно одна
+    задача. Профиль Codex канарейки один на машину — набор с ролями Codex
+    отдельным процессом не ведётся.
+
+    Всё тело под `_interrupt_on_signal`: сигнал на любом участке снимает
+    свою запись в `finally`; строку «оборвана сигналом» пишет только сигнал
+    во время ведения задачи. Пути записи запомнены до клона — во время
+    ведения `config.ROOT` уведён на клон."""
+    title = template_path.stem
+    directory = _live_dir()
+    record = directory / f"{run_stamp}-{os.getpid()}{_LIVE_RECORD_SUFFIX}"
+    mark = directory / f"{run_stamp}{_LIVE_MARK_SUFFIX}"
+    try:
+        with _interrupt_on_signal():
+            try:
+                plan = _set_plan(set_name)
+                if plan.codex_roles:
+                    sys.exit(f"canary run-task: набор {plan.name} с ролями на "
+                             f"провайдере codex не ведётся отдельным "
+                             f"процессом — профиль Codex канарейки один на "
+                             f"машину")
+                directory.mkdir(parents=True, exist_ok=True)
+                _write_child_record(record, run_stamp, target_sha, set_name,
+                                    title)
+                if not _mark_owned_by_parent(mark):
+                    sys.exit(f"canary run-task: метка прогона {run_stamp} не "
+                             f"принадлежит родителю {os.getppid()}")
+                if plan.summary != summary:
+                    store.insert_canary_run(
+                        store.db(), run_stamp, title, None, 0, 0.0, 0, 0,
+                        _DRIVE_FAILED_OUTCOME, None, False, False,
+                        main_sha=None, verdict="red", set_name=set_name,
+                        models_summary=summary or None)
+                    sys.exit(f"canary run-task: {title}: набор изменился во "
+                             f"время прогона — сводка набора {set_name} "
+                             f"«{plan.summary}», передана «{summary}»; "
+                             f"прогон красный")
+                try:
+                    _run_one_task(template_path, run_stamp,
+                                  config.CANARY_DEVIATION_RATIO, target_sha,
+                                  None, plan, None)
+                except CanaryInterrupted as exc:
+                    note = f"оборвана сигналом {signal.Signals(exc.signum).name}"
+                    store.insert_canary_run(
+                        store.db(), run_stamp, title, None,
+                        0, 0.0, 0, 0, note, None, False, False,
+                        main_sha=target_sha, verdict="red",
+                        set_name=plan.name,
+                        models_summary=plan.summary or None)
+                    raise SystemExit(128 + exc.signum) from None
+            finally:
+                record.unlink(missing_ok=True)
+                record.with_name(record.name + ".tmp").unlink(missing_ok=True)
+    except CanaryInterrupted as exc:
+        raise SystemExit(128 + exc.signum) from None
