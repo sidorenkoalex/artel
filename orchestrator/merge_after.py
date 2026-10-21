@@ -253,11 +253,13 @@ def spec_gate_declared_refusal(conn, task_id: str, t, meta: dict,
     lost = [d for d in declared if d not in new_ids]
     if lost:
         return [], (f"{FIELD} SPEC теряет зависимости, заявленные Оператором "
-                    f"строкой ТЗ «{ORDER_LINE}»: {_text(lost)} — снять "
-                    f"заявленную может только Оператор: мандат "
-                    f"«{MERGE_AFTER_MANDATE_MARKER} …» в ANSWER (artel.py "
-                    f"answer {task_id} <файл>) либо эскалация аналитика с "
-                    f"вопросом")
+                    f"строкой ТЗ «{ORDER_LINE}»: {_text(lost)} — верни SPEC "
+                    f"аналитику: artel.py reject {task_id} \"аналитик, "
+                    f"эскалируй вопрос о зависимости {_text(lost)}\"; после "
+                    f"эскалации аналитика ответ в escalated — artel.py "
+                    f"answer {task_id} <файл> со строкой "
+                    f"«{MERGE_AFTER_MANDATE_MARKER} …», затем artel.py "
+                    f"approve {task_id}")
     section = guard.section_body(spec_text, JUSTIFICATION_SECTION)
     # `new_value` — итог `check` по элементам поля: тот же порядок и длина.
     pairs = [(item, dep) for item, dep in

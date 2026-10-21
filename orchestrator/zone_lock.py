@@ -144,6 +144,19 @@ RELEASE_ACTION = "ждёт зоны — снято Оператором (осо�
 # что уже развёл REFUSAL_ACTION/RELEASE_ACTION по этому модулю).
 _WAIT_ENTER_PREFIX = "ждёт зоны "
 _WAIT_EXIT_PREFIX = "зона свободна через"
+# Выход из ожидания без освобождения зоны (stop, потолок, потеря lease;
+# SPEC 01M5FGHNB29QA254FM07QR55AB, требование 1): не начинается ни с
+# входа, ни с «зона свободна через» — по тексту видно, что зона не
+# освободилась.
+_WAIT_INTERRUPTED_PREFIX = "ожидание зоны прервано:"
+
+# Записи цикла `auto` (требование 2): `auto.py` пишет их через эти
+# константы, `wait_minutes` считает каждую закрытием ожидания — цикл,
+# стартовавший заново, остановленный или оборванный, уже не ждёт зону
+# прежним входом.
+AUTO_START_ACTION = "auto старт"
+AUTO_STOPPED_ACTION = "auto остановлен"
+CYCLE_ABORTED_ACTION = "цикл оборван"
 
 
 def wait_enter_action(path: str, occupier_id: str, occupier_state: str) -> str:
@@ -154,6 +167,14 @@ def wait_enter_action(path: str, occupier_id: str, occupier_state: str) -> str:
 def wait_exit_action(occupier_id: str, minutes: int) -> str:
     """Текст выхода из ожидания (требование 2, AC-3), буквально."""
     return f"{_WAIT_EXIT_PREFIX} {minutes} мин, держал {occupier_id}"
+
+
+def wait_interrupted_action(reason: str, minutes: int, holder: str) -> str:
+    """Текст выхода из ожидания без освобождения зоны (SPEC
+    01M5FGHNB29QA254FM07QR55AB, требование 1): причина — `Stop.reason`
+    этого выхода, `holder` — последний известный держатель."""
+    return (f"{_WAIT_INTERRUPTED_PREFIX} {reason}; {minutes} мин, "
+            f"держал {holder}")
 
 
 def wait_minutes(conn, task_id: str) -> int | None:
@@ -169,15 +190,27 @@ def wait_minutes(conn, task_id: str) -> int | None:
     настройка `config.AUTO_WAIT_ZONE_DEFAULT` (включена решением
     Оператора 28.09.2026) его не затрагивает — он отказывает на занятой
     зоне немедленно и этой записи не оставляет. `auto` же ждёт любым
-    вызовом, с флагом `--wait-zone` и без него."""
+    вызовом, с флагом `--wait-zone` и без него.
+
+    Закрывает вход любая из записей: «зона свободна через», прерванный
+    выход (`wait_interrupted_action`), «auto старт», «auto остановлен»,
+    «цикл оборван» (SPEC 01M5FGHNB29QA254FM07QR55AB, требование 2) — без
+    последних трёх процесс, оборванный до записи выхода, оставлял бы
+    ожидание открытым навсегда. `RELEASE_ACTION` начинается тем же
+    «ждёт зоны», но входом не является."""
     last_enter_ts = None
     last_exit_id = -1
     last_enter_id = -1
     for row in store.task_steps(conn, task_id):
-        if row["action"].startswith(_WAIT_ENTER_PREFIX):
+        action = row["action"]
+        if action == RELEASE_ACTION:
+            continue
+        if action.startswith(_WAIT_ENTER_PREFIX):
             last_enter_ts = row["ts"]
             last_enter_id = row["id"]
-        elif row["action"].startswith(_WAIT_EXIT_PREFIX):
+        elif (action.startswith((_WAIT_EXIT_PREFIX, _WAIT_INTERRUPTED_PREFIX))
+              or action in (AUTO_START_ACTION, AUTO_STOPPED_ACTION,
+                            CYCLE_ABORTED_ACTION)):
             last_exit_id = row["id"]
     if last_enter_ts is None or last_enter_id < last_exit_id:
         return None
