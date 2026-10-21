@@ -687,11 +687,19 @@ def _outcome_gate_lines(conn, task_id: str, branch: str,
     01M5DDTVZEA40ZB9BHEH4YDEE7, требование 5); `None` — профиль вне
     границы гейта, строк нет и условие раздела прежнее. Канареечная задача
     сюда не доходит — её отсекает начало `_changed_assertions_part`."""
-    from .advance_gates import outcome_integrity
+    from .advance_gates import outcome_integrity, tests_writing
     if not outcome_integrity.in_outcome_bounds(profile):
         return None
     head = gitcmd.branch_head_sha(branch, repo=workspace.task_repo(task_id))
-    return outcome_integrity.review_lines(conn, task_id, head)
+    # Засчитывание ошибки уровня файла красным (SPEC
+    # 01M5EDW6KD1ESCEVRSV2WPNXAP, требование 3) — по строке на различную
+    # деталь журнала задачи.
+    counted = dict.fromkeys(
+        row["detail"] or "" for row in store.task_steps(conn, task_id)
+        if row["action"] == tests_writing.FILE_LEVEL_COUNTED_ACTION)
+    return (outcome_integrity.review_lines(conn, task_id, head)
+            + [f"{tests_writing.FILE_LEVEL_COUNTED_ACTION}: {detail}"
+               for detail in counted])
 
 
 def _increment_note(shown: dict, prev_sha: str, branch: str) -> str:

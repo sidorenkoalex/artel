@@ -34,13 +34,24 @@ UNKNOWN = "неизвестно"
 # Тест, прошедший с повтором внутри прогона, не зелёный (инвариант 41).
 RETRY_NOTE = "повтор"
 
+# Запись сбора pytest в xunit2 (`--continue-on-collection-errors`): атрибут
+# `message` элемента `<error>`; трассировка — в тексте элемента.
+COLLECTION_FAILURE = "collection failure"
+DETAIL_LIMIT = 2000
+
 
 class CaseResult(NamedTuple):
     """Итог одного теста компонента (ANSWER-2, В3): `id` — `<компонент>:<путь
     от корня репозитория>::<полное имя>`, `outcome` — `passed`/`failed`/
     `error`/`skipped`, `failure` — вид падения, `skip_reason` — причина
     пропуска, `time` — секунды; у `pult-vitest` ещё `mode`
-    (`run`/`skip`/`todo`/`only`), `fails` (`it.fails`) и `retries`."""
+    (`run`/`skip`/`todo`/`only`), `fails` (`it.fails`) и `retries`.
+
+    `file_level` — запись ошибки уровня файла (импорт, сбор модуля), а не
+    теста; `detail` — её текст: трассировка сбора pytest либо сообщение
+    ошибки модуля Vitest (SPEC 01M5EDW6KD1ESCEVRSV2WPNXAP, требование 1).
+    Поля — последними: позиционное построение прежних записей не
+    сдвигается."""
     id: str
     outcome: str
     failure: str = ""
@@ -49,6 +60,8 @@ class CaseResult(NamedTuple):
     mode: str = ""
     fails: bool = False
     retries: int = 0
+    file_level: bool = False
+    detail: str = ""
 
 
 def _first_line(text: str) -> str:
@@ -148,7 +161,12 @@ def parse_junit(report: Path, component: str, workdir: str,
         path, name = _junit_location(case, cwd)
         found = {child.tag: child for child in case
                  if child.tag in ("failure", "error", "skipped")}
-        failure = skip_reason = ""
+        failure = skip_reason = detail = ""
+        level = next((found[tag] for tag in ("error", "failure")
+                      if tag in found and found[tag].get("message")
+                      == COLLECTION_FAILURE), None)
+        if level is not None:
+            detail = (level.text or "")[:DETAIL_LIMIT]
         if "error" in found:
             outcome, failure = ERROR, _junit_failure(found["error"])
         elif "failure" in found:
@@ -160,7 +178,8 @@ def parse_junit(report: Path, component: str, workdir: str,
         else:
             outcome = PASSED
         records.append(CaseResult(ids(path, name), outcome, failure,
-                                  skip_reason, _seconds(case.get("time"))))
+                                  skip_reason, _seconds(case.get("time")),
+                                  file_level=level is not None, detail=detail))
     return records, ""
 
 
@@ -211,11 +230,20 @@ def parse_vitest(report: Path, component: str, workdir: str,
         except (TypeError, ValueError):
             return None, (f"отчёт {report} не разобран: retry_count "
                           f"{item.get('retry_count')!r}")
-        outcome, failure, skip_reason = _vitest_case(item, failure_errors)
+        level = item.get("file_level") is True
+        if level:
+            # Ошибка модуля — не провал проверки, даже если её имя есть в
+            # `failure_errors`: тесты файла не исполнялись.
+            outcome, failure, skip_reason = (
+                ERROR, str(item.get("error_name") or "ошибка без имени"), "")
+        else:
+            outcome, failure, skip_reason = _vitest_case(item, failure_errors)
         records.append(CaseResult(
             ids(str(item.get("file") or ""), str(item["name"])), outcome,
             failure, skip_reason, _seconds(item.get("duration_ms")) / 1000,
-            str(item.get("mode") or "run"), bool(item.get("fails")), retries))
+            str(item.get("mode") or "run"), bool(item.get("fails")), retries,
+            file_level=level,
+            detail=str(item.get("error_message") or "") if level else ""))
     return records, ""
 
 
