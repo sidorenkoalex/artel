@@ -1,0 +1,253 @@
+..................................................................................................................................................................... [ 49%]
+........................................................................ [ 70%]
+................................................... [ 85%]
+................................................             [100%]
+=================================== FAILURES ===================================
+_ Ac4ProofTest.test_ac4_same_quadruple_proves_without_run (case='мандат', seed=398055967) _
+
+self = <tests.test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.Ac4ProofTest testMethod=test_ac4_same_quadruple_proves_without_run>
+
+    def test_ac4_same_quadruple_proves_without_run(self):
+        """Запись пройденного гейта с той же головой, базой, ключом и отпечатком — на мерже прогона нет, запись «гейт исходов: доказан для головы <sha7> и базы <sha7>».
+    
+        Сценарий (подслучай — свежая задача): задача проходит настоящий
+        выход из `in_dev` (гейт исходов пройден) — (а) без находок; (б) с
+        находками исчезнувших тестов удалённого файла под мандатом
+        Оператора. Задача на `merge_gate`, `approve`: полный набор не
+        звался ни разу, раннер полного набора не запускался, среди новых
+        записей — «гейт исходов: доказан для головы <sha7 головы> и базы
+        <sha7 merge-base>», задача в `done`.
+    
+        Ловит мутацию: доказательство не ищется — полный набор прогнан на
+        мерже; доказательство при находках под мандатом не сверяет
+        отпечаток текущего мандата верно — прогон; текст записи с полным
+        sha или без базы — записи нет.
+        """
+        for label in ("без находок", "мандат"):
+            with self.subTest(case=label, seed=self.seed):
+                gone = self.py_rel()
+                tests = {self.py_rel(): [self.py_name()]}
+                if label == "мандат":
+                    tests[gone] = [self.py_name()]
+                project = self.junit_project(tests)
+>               t = self.verifying_task(
+                    project, {gone: None} if label == "мандат" else None,
+                    mandate=[gone] if label == "мандат" else None)
+
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:593: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:239: in verifying_task
+    t = self.task(project)
+        ^^^^^^^^^^^^^^^^^^
+tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:897: in task
+    t = self.in_dev_task(project, canary=canary)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:713: in in_dev_task
+    checkpoint.commit_step_artifacts(self.conn, tid, "test_author")
+orchestrator/checkpoint.py:990: in commit_step_artifacts
+    return _commit_external_step_artifacts(conn, task_id, role, target)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/checkpoint.py:1522: in _commit_external_step_artifacts
+    detail = _commit_step_artifacts_to_branch(conn, task_id, files, removed,
+orchestrator/checkpoint.py:1432: in _commit_step_artifacts_to_branch
+    store.record_fixation(conn, task_id)
+orchestrator/store.py:955: in record_fixation
+    sha, clean = fixation.fix(task_id, target)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/fixation.py:57: in fix
+    return _read_ref(task_id)
+           ^^^^^^^^^^^^^^^^^^
+orchestrator/fixation.py:65: in _read_ref
+    sha = artifact_branch.ref_head(task_id)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/artifact_branch.py:114: in ref_head
+    return _head(task_id, task_repo(task_id))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/artifact_branch.py:108: in _head
+    return gitcmd.branch_head_sha(branch_name(task_id), repo=repo)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/gitcmd.py:603: in branch_head_sha
+    res = in_repo(repo, *args) if repo else git(*args)
+          ^^^^^^^^^^^^^^^^^^^^
+orchestrator/gitcmd.py:385: in in_repo
+    return git("-C", str(repo), *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/gitcmd.py:185: in git
+    return subprocess.run(["git", *args], cwd=config.ROOT, env=env,
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:149: in spy_run
+    return super().spy_run(argv, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:388: in spy_run
+    return REAL_RUN(argv, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:556: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:1222: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:2154: in _communicate
+    ready = selector.select(timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <selectors.PollSelector object at 0x106f22330>, timeout = None
+
+    def select(self, timeout=None):
+        # This is shared between poll() and epoll().
+        # epoll() has a different signature and handling of timeout parameter.
+        if timeout is None:
+            timeout = None
+        elif timeout <= 0:
+            timeout = 0
+        else:
+            # poll() has a resolution of 1 millisecond, round away from
+            # zero to wait *at least* timeout seconds.
+            timeout = math.ceil(timeout * 1e3)
+        ready = []
+        try:
+>           fd_event_list = self._selector.poll(timeout)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: Timeout (>120.0s) from pytest-timeout.
+
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/selectors.py:398: Failed
+_ Ac5ProofMismatchTest.test_ac5_other_base_key_or_mandate_runs_gate (field='ключ', seed=830860070) _
+
+self = <tests.test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.Ac5ProofMismatchTest testMethod=test_ac5_other_base_key_or_mandate_runs_gate>
+
+    def test_ac5_other_base_key_or_mandate_runs_gate(self):
+        """Запись, отличающаяся от текущей четвёрки базой, ключом компонента или отпечатком мандата, доказательством не служит — на мерже прогон.
+    
+        Сценарий (подслучай — свежая задача): настоящий выход из `in_dev`
+        (для подслучая мандата — с удалённым файлом тестов под мандатом
+        Оператора); в записи пройденного гейта в журнале заменено одно
+        поле строки доказательства: (а) база — случайный sha; (б) ключ —
+        случайный; (в) отпечаток мандата — sha256 набора, где к покрывшему
+        элементу добавлен отозванный (текущий мандат его не несёт).
+        `approve`: полный набор прогнан на мерже на обеих сторонах.
+    
+        Ловит мутацию: доказательство сверяет только голову — прогона нет
+        во всех подслучаях; не сверяет ключ — (б) без прогона; отпечаток
+        записи не сравнивается с отпечатком текущего мандата — (в) без
+        прогона.
+        """
+        for field in ("база", "ключ", "мандат"):
+            with self.subTest(field=field, seed=self.seed):
+                keep, gone = self.py_rel(), self.py_rel()
+                project = self.junit_project({keep: [self.py_name()],
+                                              gone: [self.py_name()]})
+                t = self.verifying_task(project, {gone: None}, mandate=[gone])
+                revoked = self.py_rel()
+    
+                def edit(detail, field=field, gone=gone, revoked=revoked):
+                    out = []
+                    for line in detail.splitlines():
+                        m = PROOF_LINE.match(line.strip())
+                        if m:
+                            head, base, key, mark = m.groups()
+                            if field == "база":
+                                base = self.hexword(40)
+                            elif field == "ключ":
+                                key = self.hexword(64)
+                            else:
+                                mark = hashlib.sha256("\n".join(sorted(
+                                    [gone, revoked])).encode("utf-8")).hexdigest()
+                            line = f"голова {head}; база {base}; ключ {key}; мандат {mark}"
+                        out.append(line)
+                    return "\n".join(out)
+                self.rewrite_passed(t, edit)
+                self.to_merge_gate(t)
+>               rows, output = self.approve(t)
+                               ^^^^^^^^^^^^^^^
+
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:655: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:262: in approve
+    fsm.cmd_approve(t.id)
+orchestrator/fsm.py:951: in cmd_approve
+    lease.run_locked(
+orchestrator/lease.py:372: in run_locked
+    return body(sid)
+           ^^^^^^^^^
+orchestrator/fsm.py:953: in <lambda>
+    lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
+orchestrator/fsm.py:1587: in _cmd_approve
+    handler(conn, task_id, t, state, sid)
+orchestrator/fsm.py:1424: in _approve_merge_gate
+    fsm_merge_gate._cmd_approve_merge_gate_cycle(
+orchestrator/fsm_merge_gate.py:1638: in _cmd_approve_merge_gate_cycle
+    outcome = _cmd_approve_merge_gate(
+orchestrator/fsm_merge_gate.py:1500: in _cmd_approve_merge_gate
+    if _outcome_integrity_merge_gate(conn, task_id, state, ctx):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/fsm_merge_gate.py:1372: in _outcome_integrity_merge_gate
+    return outcome_integrity.merge_gate_escalates(
+orchestrator/advance_gates/outcome_integrity.py:608: in merge_gate_escalates
+    refusal = _gate(conn, task_id, t["branch"], artifact_branch, profile,
+orchestrator/advance_gates/outcome_integrity.py:563: in _gate
+    return _judge(conn, task_id, branch, artifact_branch, profile,
+orchestrator/advance_gates/outcome_integrity.py:488: in _judge
+    runs = _full_runs(task_id, profile, trees)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/advance_gates/outcome_integrity.py:288: in _full_runs
+    run = acceptance.components_full_suite(tree, task_id, (profile,),
+orchestrator/acceptance.py:3436: in components_full_suite
+    runs = [(p, full_suite(root, task_id, command=p, fresh=True) if fresh
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:155: in spy_full_suite
+    result = super().spy_full_suite(root, task_id, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:395: in spy_full_suite
+    return self.real_full_suite(root, task_id, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/acceptance.py:3401: in full_suite
+    base_tree = suite_tree_hash(root, base=True)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/acceptance.py:3020: in suite_tree_hash
+    untracked = gitcmd.in_repo(root, "ls-files", "--others",
+orchestrator/gitcmd.py:385: in in_repo
+    return git("-C", str(repo), *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/gitcmd.py:185: in git
+    return subprocess.run(["git", *args], cwd=config.ROOT, env=env,
+tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:149: in spy_run
+    return super().spy_run(argv, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:388: in spy_run
+    return REAL_RUN(argv, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:556: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:1222: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:2154: in _communicate
+    ready = selector.select(timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <selectors.PollSelector object at 0x107b542f0>, timeout = None
+
+    def select(self, timeout=None):
+        # This is shared between poll() and epoll().
+        # epoll() has a different signature and handling of timeout parameter.
+        if timeout is None:
+            timeout = None
+        elif timeout <= 0:
+            timeout = 0
+        else:
+            # poll() has a resolution of 1 millisecond, round away from
+            # zero to wait *at least* timeout seconds.
+            timeout = math.ceil(timeout * 1e3)
+        ready = []
+        try:
+>           fd_event_list = self._selector.poll(timeout)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: Timeout (>120.0s) from pytest-timeout.
+
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/selectors.py:398: Failed
+=========================== short test summary info ============================
+SUBFAILED(case='мандат', seed=398055967) tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py::Ac4ProofTest::test_ac4_same_quadruple_proves_without_run
+SUBFAILED(field='ключ', seed=830860070) tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py::Ac5ProofMismatchTest::test_ac5_other_base_key_or_mandate_runs_gate
+2 failed, 336 passed, 226 subtests passed in 1283.97s (0:21:23)

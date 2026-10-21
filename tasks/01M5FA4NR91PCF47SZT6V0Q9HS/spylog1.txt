@@ -1,0 +1,140 @@
+........................................................ [ 18%]
+............................... [ 29%]
+............................................................................................................... [ 66%]
+......................................................... [ 85%]
+..........................................         [100%]
+=================================== FAILURES ===================================
+_ PultUnchangedTest.test_ac10_artel_unchanged (kind='артель', place='pull с долгоживущими файлами', seed=209789559) _
+
+self = <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.PultUnchangedTest testMethod=test_ac10_artel_unchanged>
+kind = 'артель'
+
+    def check_places(self, kind: str) -> None:
+        """Каждое место AC-1 — AC-9 и AC-12 для профиля `kind` — как на main."""
+        self.write_targets(kind)
+        for label, run, profile_head, cwd in self.places():
+            with self.subTest(kind=kind, place=label, seed=self.seed):
+>               result = run()
+                         ^^^^^
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py:1094: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py:833: in <lambda>
+    ("pull с долгоживущими файлами", lambda: self.run_pull(True),
+                                             ^^^^^^^^^^^^^^^^^^^
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py:659: in run_pull
+    task = self.new_task("verifying", self.code())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py:498: in new_task
+    wt, error = workspace.ensure(task_id, branch)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/workspace.py:210: in ensure
+    origin_sha, fetch_reason = _fetched_base(clone, base)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/workspace.py:182: in _fetched_base
+    return gitcmd.fetch_ref_sha("origin", base, repo=clone,
+orchestrator/gitcmd.py:748: in fetch_ref_sha
+    in_repo(repo, *delete_args) if repo else git(*delete_args)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/gitcmd.py:385: in in_repo
+    return git("-C", str(repo), *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+orchestrator/gitcmd.py:185: in git
+    return subprocess.run(["git", *args], cwd=config.ROOT, env=env,
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:556: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:1222: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/subprocess.py:2154: in _communicate
+    ready = selector.select(timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <selectors.PollSelector object at 0x10b843950>, timeout = None
+
+    def select(self, timeout=None):
+        # This is shared between poll() and epoll().
+        # epoll() has a different signature and handling of timeout parameter.
+        if timeout is None:
+            timeout = None
+        elif timeout <= 0:
+            timeout = 0
+        else:
+            # poll() has a resolution of 1 millisecond, round away from
+            # zero to wait *at least* timeout seconds.
+            timeout = math.ceil(timeout * 1e3)
+        ready = []
+        try:
+            fd_event_list = self._selector.poll(timeout)
+        except InterruptedError:
+            return ready
+    
+        fd_to_key_get = self._fd_to_key.get
+        for fd, event in fd_event_list:
+            key = fd_to_key_get(fd)
+            if key:
+                events = ((event & ~self._EVENT_READ and EVENT_WRITE)
+                           | (event & ~self._EVENT_WRITE and EVENT_READ))
+>               ready.append((key, events & key.events))
+E               Failed: Timeout (>120.0s) from pytest-timeout.
+
+/Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/selectors.py:408: Failed
+=============================== warnings summary ===============================
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::ProfileCallersSandbox::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.ProfileCallersSandbox testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::AutogateTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.AutogateTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::ApproveAcceptanceTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.ApproveAcceptanceTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::MergeGateTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.MergeGateTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::SuiteRunTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.SuiteRunTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::PlankRunTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.PlankRunTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::AmendTestsTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.AmendTestsTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::PullTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.PullTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::TwoSidedTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.TwoSidedTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::TestsWritingCollectTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.TestsWritingCollectTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::InDevPlankTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.InDevPlankTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::PultUnchangedTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.PultUnchangedTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::NoTaskRunTest::tests_dir
+  /Users/al.sidorenko/.pyenv/versions/3.13.12/lib/python3.13/unittest/case.py:707: DeprecationWarning: It is deprecated to return a value that is not None from a test case (<bound method ProfileCallersSandbox.tests_dir of <tests.test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.NoTaskRunTest testMethod=tests_dir>>)
+    return self.run(*args, **kwds)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SUBFAILED(kind='артель', place='pull с долгоживущими файлами', seed=209789559) tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py::PultUnchangedTest::test_ac10_artel_unchanged
+1 failed, 297 passed, 13 warnings, 270 subtests passed in 1302.53s (0:21:42)

@@ -1,0 +1,55 @@
+............................................... [ 14%]
+.................................................. [ 29%]
+................ [ 34%]
+......................F.... [ 42%]
+.................. [ 48%]
+........................................................ [ 65%]
+...................................................... [ 81%]
+...........................................................      [100%]
+=================================== FAILURES ===================================
+______ SilentHostingTest.test_ac6_silent_gh_and_origin_bounded_and_noted _______
+
+self = <tests.test_01m568xfym68eyhh0c16y7d7f0_project_kill_cleanup.SilentHostingTest testMethod=test_ac6_silent_gh_and_origin_bounded_and_noted>
+
+    def test_ac6_silent_gh_and_origin_bounded_and_noted(self):
+        """Молчащие `gh` и `origin` задерживают `kill` не дольше 2 × `GH_TIMEOUT_SEC` + 10 с, обе заметки — «не ответил».
+    
+        Сценарий: `config.GH_TIMEOUT_SEC` уменьшен до 2 с; подставной `gh`
+        молчит 60 с; подставной HTTP-хостинг `origin` принимает
+        соединение и не отвечает на пуш удаления ветки задачи (прочие
+        запросы обслуживает). `kill` укладывается в 2 × 2 + 10 с, задача в
+        `killed`, хостинг получил пуш удаления, в журнале уборки заметки
+        «PR …: оставлено — … не ответил…» и «ветка origin …: оставлено —
+        … не ответил…».
+    
+        Ловит мутацию: пуш удаления без `-c http.lowSpeedLimit=1 -c
+        http.lowSpeedTime=<GH_TIMEOUT_SEC>` — `kill` ждёт, пока хостинг
+        сам не закроет соединение (предел + 15 с), и превышает допуск;
+        либо предел пуша зашит числом, а не прочитан из
+        `config.GH_TIMEOUT_SEC` в момент вызова — тот же перебор времени;
+        либо срабатывание предела пишется как «отказ», без «не ответил».
+        """
+        limit = 2 * SHORT_TIMEOUT_SEC + FIXED_SLACK_SEC
+        self.gh_mode.write_text("silent", encoding="utf-8")
+        self.silence.pattern = (f" {ZERO_OID} refs/heads/{self.branch}"
+                                .encode())
+        self.silence.limit = limit + 5
+    
+        with mock.patch.object(config, "GH_TIMEOUT_SEC", SHORT_TIMEOUT_SEC):
+            started = time.monotonic()
+            out = self.kill(self.ext)
+            elapsed = time.monotonic() - started
+    
+        self.assertEqual(self.state(self.ext), "killed", self.why(out))
+        self.assertGreaterEqual(self.silence.hits, 1,
+                                self.why("пуш удаления до хостинга не дошёл"))
+>       self.assertLessEqual(elapsed, limit, self.why(
+            f"kill шёл {elapsed:.1f} с при допуске {limit} с"))
+E       AssertionError: 17.606053082970902 not less than or equal to 14 : kill шёл 17.6 с при допуске 14 с (зерно 1682076842, проект drovni57)
+
+tests/test_01m568xfym68eyhh0c16y7d7f0_project_kill_cleanup.py:602: AssertionError
+----------------------------- Captured stdout call -----------------------------
+зерно: 1682076842
+=========================== short test summary info ============================
+FAILED tests/test_01m568xfym68eyhh0c16y7d7f0_project_kill_cleanup.py::SilentHostingTest::test_ac6_silent_gh_and_origin_bounded_and_noted
+1 failed, 326 passed, 244 subtests passed in 1411.81s (0:23:31)
