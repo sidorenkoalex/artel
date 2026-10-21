@@ -52,16 +52,25 @@ budget_usd: 40
    Запрещённым считается:
    - элемент, равный `--reruns`, `--reruns-delay`, `--force-flaky`,
      `--max-runs`, или начинающийся с одного из них и `=`;
-   - пара соседних элементов `-p`, `<имя>` и один элемент `-p<имя>`, где
-     `<имя>` — `rerunfailures`, `pytest_rerunfailures`, `flaky` или
-     `flaky.flaky_pytest_plugin`.
+   - пара соседних элементов `-p`, `<x>` и один элемент, начинающийся с
+     `-p`, где `<имя>` — второй элемент пары или остаток элемента после
+     `-p`, со снятыми пробельными символами по краям, и `<имя>` —
+     `rerunfailures`, `pytest_rerunfailures`, `flaky` или
+     `flaky.flaky_pytest_plugin` (то есть `-p`, `" rerunfailures"` и один
+     элемент `"-p rerunfailures"` — тоже запрещённый аргумент).
    Значение `env.PYTEST_ADDOPTS` разбивается по правилам командной строки
-   POSIX (модуль `shlex`), к элементам применяется то же правило. Запись
+   POSIX (модуль `shlex`), к элементам применяется то же правило. Кроме
+   того, `targets.check` отказывает компоненту с `report`, у которого в
+   `env.PYTEST_PLUGINS` (значение разбивается по запятой, у частей сняты
+   пробельные символы по краям) есть часть `rerunfailures`,
+   `pytest_rerunfailures`, `flaky` или `flaky.flaky_pytest_plugin`. Запись
    `test_profile` не проверяется.
 4. **Перенос 11 — одна деталь гейта SPEC.** Единственный источник детали
    — константа `advance_gates.tests_writing.SPEC_GATE_PASSED_DETAIL`;
    `orchestrator/fsm.py` пишет деталь перехода из неё (импорт из
-   `advance_gates.tests_writing`), литерала «гейт SPEC пройден —
+   `advance_gates.tests_writing` внутри функции, как `fsm.py:792`, не на
+   уровне модуля: `advance_gates/acceptance.py` импортирует `fsm` на
+   уровне модуля, модульный импорт дал бы цикл), литерала «гейт SPEC пройден —
    приёмочные тесты до кода» в тексте `orchestrator/fsm.py` нет. Текст
    детали не меняется; `orchestrator/auto.py` не меняется.
 5. **Перенос 18 — маркер владельца выписок.** Новая константа
@@ -74,13 +83,22 @@ budget_usd: 40
    `_temp_owner_alive` для каталогов `artel-outcome-*` и
    `artel-two-sided-*` возвращает только
    `liveness.owner_alive(path, GATE_OWNER_MARKER)`; каталог без маркера —
-   сирота. `_orphan_temp_dirs` включает такие каталоги без живого
+   сирота. Ветка этих каталогов в `_temp_owner_alive` стоит до общей
+   проверки маркера канарейки (`liveness.owner_alive(path)`): живой
+   маркер канарейки `.artel-canary-owner` без маркера гейта владельцем не
+   считается. `_orphan_temp_dirs` включает такие каталоги без живого
    владельца, поэтому проверка `orphans-temp` (без `--fix`) тоже называет
    их — ожидаемое изменение вывода `doctor`. `_fix_orphan_temp_dirs`
    удаляет каталоги `artel-outcome-*` и `artel-two-sided-*` без живого
    владельца; `git worktree prune` выполняется в каждом клоне проекта
    (`_project_clones`) только если этим вызовом удалён хотя бы один такой
-   каталог, иначе git не вызывается. Новых имён в фасаде `doctor` нет.
+   каталог, иначе git не вызывается. Код уборки зовёт `_project_clones`
+   по имени модуля `orchestrator.doctor.orphans` (подмена атрибута этого
+   модуля действует на уборку). Тесты уборки подменяют
+   `orchestrator.doctor.orphans._project_clones` на клон во временном
+   каталоге теста и зовут `doctor._fix_orphan_temp_dirs()` напрямую, не
+   `cmd_doctor(fix=True)`; git в настоящих клонах пульта тест не вызывает.
+   Новых имён в фасаде `doctor` нет.
 7. **Перенос 20 — граница мандата вне `in_outcome_bounds`.** Вне
    `in_outcome_bounds` ячейка «Чем покрыто после», содержащая только путь
    не `*.py` (`src/a.test.ts`) в области, — отказ; подслучаи:
@@ -89,11 +107,14 @@ budget_usd: 40
 8. **Перенос 21 — сужение признания при профиле в границе.** При профиле в
    границе (`_component_covered`, `orchestrator/advance_gates/mandate.py`)
    «Чем покрыто после» отдельным токеном или в кавычках признаёт только
-   путь файла: полное совпадение с `[\w][\w./-]*\.\w+` и необязательным
-   хвостом `:<число>`, путь — в `weakening_scope`. Идентификатор своего
-   компонента в обратных кавычках — покрытие, как прежде. «`src/`»,
-   «src/**», «src/a.test.ts::x» без компонента — не покрытие; точка или
-   иной знак сразу за путём делает токен не путём (не покрытие). Прежнее
+   путь файла. Разбиение ячейки на токены — прежнее (`_TOKEN_SPLIT_RE`,
+   `mandate.py:392`), снятие выделения `*`/`_` по краям — прежнее
+   (`strip("*_")`); после этого токен — путь, только если он полностью
+   совпадает с `[\w][\w./-]*\.\w+` с необязательным хвостом `:<число>`,
+   и путь — в `weakening_scope`. Идентификатор своего компонента в
+   обратных кавычках — покрытие, как прежде. «`src/`», «src/**»,
+   «src/a.test.ts::x», «src/a.test.ts.» без компонента — не покрытие;
+   «src/a.test.ts,» — покрытие (запятая — разделитель токенов). Прежнее
    правило путей `*.py` (`_PY_PATH_RE`, поиск внутри ячейки) не меняется.
 9. **Перенос 22.** `refusal_classes.OUTCOME_MERGE_PREPARE_ACTION =
    "merge отклонён: гейт неослабления по исходам — подготовка"`; в
@@ -101,6 +122,8 @@ budget_usd: 40
 10. **Перенос 23.** `outcome_integrity.MERGE_REFUSAL_ACTION` и
     `outcome_integrity.MERGE_PREPARE_ACTION` берутся из `refusal_classes`
     (`OUTCOME_MERGE_REFUSAL_ACTION`, `OUTCOME_MERGE_PREPARE_ACTION`);
+    литералов обоих текстов действий в тексте
+    `orchestrator/advance_gates/outcome_integrity.py` нет;
     `refusal_classes` остаётся без импортов пакета.
 11. Тесты детерминированы, без сети и без Node; существующие тесты не
     правятся.
@@ -113,28 +136,30 @@ AC-2. Тест сверяет условие добавления `-p no:rerunfa
 
 AC-3. Ключ итога `_report_suite_result_key` у `test_profile` с `report` равен sha256 словаря данных прежнего состава (копия словаря в тесте); у компонента с `report` ключ этому прежнему значению не равен, а его данные несут `"no_rerun_plugins": true`.
 
-AC-4. `targets.check` отказывает компоненту с `report` на каждой форме запрещённого аргумента — элемент `--reruns`, `--reruns-delay`, `--force-flaky`, `--max-runs`; каждый из них с `=<значение>`; пара `-p`, `<имя>`; элемент `-p<имя>` для каждого `<имя>` из `rerunfailures`, `pytest_rerunfailures`, `flaky`, `flaky.flaky_pytest_plugin` — в каждом из полей `command`, `report_args`, `select` и в значении `env.PYTEST_ADDOPTS` (разбор `shlex`); та же запись под `test_profile` отказа не получает, компонент без запрещённых аргументов — тоже.
+AC-4. `targets.check` отказывает компоненту с `report` на каждой форме запрещённого аргумента — элемент `--reruns`, `--reruns-delay`, `--force-flaky`, `--max-runs`; каждый из них с `=<значение>`; пара `-p`, `<имя>`; элемент `-p<имя>` для каждого `<имя>` из `rerunfailures`, `pytest_rerunfailures`, `flaky`, `flaky.flaky_pytest_plugin` — в каждом из полей `command`, `report_args`, `select` и в значении `env.PYTEST_ADDOPTS` (разбор `shlex`); а также на пробельных формах — пара элементов `-p`, `" rerunfailures"` и один элемент `"-p rerunfailures"` (с пробелом) — в каждом из этих четырёх полей (в `env.PYTEST_ADDOPTS` — в кавычках, чтобы `shlex` дал такие элементы). Та же запись под `test_profile` отказа по запрету повторов не получает — для полей, допустимых у `test_profile`: `command` и `env.PYTEST_ADDOPTS` при `runner: pytest-own` (поля `select` и `report_args` у `test_profile` в критерий не входят); компонент без запрещённых аргументов отказа тоже не получает.
 
-AC-5. После сквозного `approve` на `spec_gate` деталь записи перехода равна `advance_gates.tests_writing.SPEC_GATE_PASSED_DETAIL`, константа входит в `auto._LEGIT_FIRST_ENTRY_DETAILS`, а в тексте `orchestrator/fsm.py` нет литерала «гейт SPEC пройден — приёмочные тесты до кода».
+AC-5. После сквозного `approve` на `spec_gate` деталь записи перехода равна `advance_gates.tests_writing.SPEC_GATE_PASSED_DETAIL`, константа входит в `auto._LEGIT_FIRST_ENTRY_DETAILS`, а в тексте `orchestrator/fsm.py` нет литерала «гейт SPEC пройден — приёмочные тесты до кода»; `import orchestrator.advance_gates.acceptance` первым импортом в чистом интерпретаторе (подпроцесс) проходит без ошибки.
 
 AC-6. `liveness.GATE_OWNER_MARKER == ".artel-gate-owner"`; `outcome_integrity._gate` и `two_sided.run` пишут в каталог выписки файл маркера с содержимым `str(os.getpid())` до вызова `git worktree add` (при профиле артели — тоже).
 
-AC-7. Каталог `artel-outcome-*` или `artel-two-sided-*` во временном каталоге без маркера или с маркером мёртвого pid попадает в `_orphan_temp_dirs` (проверку `orphans-temp`); с маркером живого pid — не попадает.
+AC-7. Каталог `artel-outcome-*` или `artel-two-sided-*` во временном каталоге без маркера или с маркером мёртвого pid попадает в `_orphan_temp_dirs` (проверку `orphans-temp`); с маркером `.artel-gate-owner` живого pid — не попадает; с живым маркером канарейки `.artel-canary-owner` и без маркера `.artel-gate-owner` — попадает (сирота).
 
-AC-8. При подменённом `_project_clones` (клон во временном каталоге теста) прямой вызов `doctor._fix_orphan_temp_dirs()`: каталог выписки с живым владельцем остаётся, его запись `git worktree` в клоне — тоже; каталог с мёртвым владельцем удалён, и его запись `git worktree` в клоне убрана (`git worktree prune`); когда этим вызовом не удалён ни один каталог `artel-outcome-*`/`artel-two-sided-*`, git не вызывается.
+AC-8. При подменённом `orchestrator.doctor.orphans._project_clones` (клон во временном каталоге теста; тест проверяет, что подмена вызвана, иначе тест проваливается) прямой вызов `doctor._fix_orphan_temp_dirs()`, не `cmd_doctor(fix=True)`: каталог выписки с живым владельцем остаётся, его запись `git worktree` в клоне — тоже; каталог с мёртвым владельцем удалён, и его запись `git worktree` в клоне убрана (`git worktree prune`); когда этим вызовом не удалён ни один каталог `artel-outcome-*`/`artel-two-sided-*`, git не вызывается.
 
 AC-9. Вне `in_outcome_bounds` ячейка «Чем покрыто после», содержащая только путь `src/a.test.ts` в области, получает отказ мандата — для `test_profile`, для `test_profile` с `runner: pytest-own` и `report` и для компонента без `report`.
 
-AC-10. При профиле в границе «Чем покрыто после» признаёт покрытием путь файла отдельным токеном или в кавычках при полном совпадении с `[\w][\w./-]*\.\w+` и необязательным `:<число>` и пути в `weakening_scope`, а также идентификатор своего компонента в обратных кавычках; не признаёт «`src/`», «src/**», «src/a.test.ts::x» без компонента и путь со следующей сразу за ним точкой или иным знаком; путь `*.py` внутри ячейки признаётся, как прежде.
+AC-10. При профиле в границе «Чем покрыто после» признаёт покрытием путь файла отдельным токеном или в кавычках (токены — прежним `_TOKEN_SPLIT_RE`, выделение `*`/`_` по краям снято) при полном совпадении с `[\w][\w./-]*\.\w+` и необязательным `:<число>` и пути в `weakening_scope`, а также идентификатор своего компонента в обратных кавычках; ячейка «src/a.test.ts,» — покрытие; не признаёт «`src/`», «src/**», «src/a.test.ts::x» и «src/a.test.ts.» без компонента; путь `*.py` внутри ячейки признаётся, как прежде.
 
 AC-11. `refusal_classes.OUTCOME_MERGE_PREPARE_ACTION == "merge отклонён: гейт неослабления по исходам — подготовка"` и `refusal_classes.REFUSAL_CLASSES[OUTCOME_MERGE_PREPARE_ACTION]` — класс «чинит Оператор».
 
-AC-12. `outcome_integrity.MERGE_REFUSAL_ACTION == refusal_classes.OUTCOME_MERGE_REFUSAL_ACTION` и `outcome_integrity.MERGE_PREPARE_ACTION == refusal_classes.OUTCOME_MERGE_PREPARE_ACTION`; `orchestrator/advance_gates/refusal_classes.py` не импортирует ничего из пакета `orchestrator`.
+AC-12. `outcome_integrity.MERGE_REFUSAL_ACTION == refusal_classes.OUTCOME_MERGE_REFUSAL_ACTION` и `outcome_integrity.MERGE_PREPARE_ACTION == refusal_classes.OUTCOME_MERGE_PREPARE_ACTION`; `orchestrator/advance_gates/refusal_classes.py` не импортирует ничего из пакета `orchestrator`; в тексте `orchestrator/advance_gates/outcome_integrity.py` нет литералов «merge отклонён: гейт неослабления по исходам — подготовка» и текста `refusal_classes.OUTCOME_MERGE_REFUSAL_ACTION`.
+
+AC-13. `targets.check` отказывает компоненту с `report`, у которого `env.PYTEST_PLUGINS` после разбиения по запятой и снятия пробелов по краям частей содержит `rerunfailures`, `pytest_rerunfailures`, `flaky` или `flaky.flaky_pytest_plugin` (каждое имя отдельно, в том числе среди других плагинов и с пробелами вокруг запятой); компонент с `env.PYTEST_PLUGINS` без этих имён отказа не получает.
 
 ## Оценка объёма и деление
 
 Сработавшие сигналы: число файлов зоны — 9 (порог 5); число критериев
-приёмки — 12 (порог 10).
+приёмки — 13 (порог 10).
 
 **Обоснование монолита (материал для решения Оператора).** Честно: атомарной
 смены механики здесь нет — требования 1–3 (запрет повторов: `acceptance.py`,
@@ -175,6 +200,8 @@ AC-12. `outcome_integrity.MERGE_REFUSAL_ACTION == refusal_classes.OUTCOME_MERGE_
 - Отдельная обработка каталогов выписок процессов, начатых до этой задачи
   (без маркера): уборка считает их сиротами — принятая цена (отказ
   подготовки гейта, не пропуск).
+- Прочие плагины повторов (например, `pytest-retry`) и `pytest_plugins` в
+  `conftest.py` проекта — бэклог Оператора.
 - Изменение `_pytest_command`, команд и разбора артели и `test_profile`,
   проверки записи `test_profile` в `targets.check`.
 - Правка `orchestrator/auto.py`, `orchestrator/advance_gates/tests_writing.py`,

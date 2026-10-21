@@ -1,17 +1,16 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ достаточно; SPEC.md написан, status: ready, guard — ок. 12 AC (требования 1–3 и переносы 11, 18, 20–23).
-- Адреса ТЗ сверены по коду: acceptance.py:37/709/725/3170, fsm.py:1266, tests_writing.py:623, auto.py:314, outcome_integrity.py:65-66, refusal_classes.py:92/130, orphans.py:82/106/118, liveness.py:27-39.
-- Сигналы деления: 9 файлов зоны, 12 AC. Дано обоснование монолита (состав уже задан делением Оператора 21.10; нарезка дороже рамки $30–40) и запасной вариант нарезки на 4 части.
-- budget_usd: 40 — верх рамки ТЗ, хотя калибровка для 9 файлов советует $85.
-- merge_after не заполнен: в ТЗ нет строки «Порядок: после …», id G3а-2б-1 не назван.
+- Круг 2 (возврат из spec_gate): все 9 решений Оператора внесены в SPEC.md, status: ready, guard — ок.
+- Добавлены: пробельная форма `-p` (имя со снятыми пробелами) в треб. 3/AC-4; AC-4 для test_profile — только `command` и `env.PYTEST_ADDOPTS` при pytest-own; ленивый импорт tests_writing в fsm.py + AC-5 про подпроцесс `import orchestrator.advance_gates.acceptance`; ветка гейта в `_temp_owner_alive` до проверки маркера канарейки (треб. 6, AC-7); подмена `orchestrator.doctor.orphans._project_clones` с проверкой вызова (треб. 6, AC-8); токены AC-10 через прежний `_TOKEN_SPLIT_RE` + `strip("*_")`; AC-12 без литералов в outcome_integrity.py; новый AC-13 — `env.PYTEST_PLUGINS`.
+- 13 AC, 9 файлов зоны, budget_usd 40, монолит с запасной нарезкой — без изменений.
+- `_temp_owner_alive` (orphans.py:82) сейчас сначала зовёт `owner_alive(path)` (маркер канарейки) — ветку гейта ставить выше.
 
 ## Не сработало
-- Bash с `$(...)`/`$var`/xargs требует подтверждения — не смогла найти SPEC соседа G3а-2б-1 в refs/artifacts.
+- —
 
 ## Где остановился
-- Готово, дальше гейт SPEC.
+- Готово, дальше аудит/гейт SPEC.
 
 ## Чего не хватило
-- id задачи G3а-2б-1 (для merge_after), его в ТЗ нет.
+- —
