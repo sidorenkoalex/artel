@@ -2,7 +2,7 @@
 task: 01M5EDW6KD1ESCEVRSV2WPNXAP
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -82,3 +82,6 @@ schema_version: 5
   пробой на sled (этап 2), не тестами пульта.
 
 ## Предложения системе
+- `python3 -m pytest … -n 6` в шаге роли падает «node down: Not properly
+  terminated» до сбора — подсказка coding-standards про прогон затронутых
+  модулей не говорит, что параллель недоступна (гонять без `-n`).

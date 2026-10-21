@@ -1,20 +1,20 @@
 # Записка developer — 01M5EDW6KD1ESCEVRSV2WPNXAP
 
 ## Выяснено
-- Реализовано: поля `CaseResult.file_level/detail` (в конце), разбор в
-  `parse_junit`/`parse_vitest`, запись модуля в `pult_vitest_reporter.js`,
-  `compare` без `file_level`, засчитывание `_counted_new_modules` в
-  `tests_writing.py` (+ `_level_file`, `_missing_import_path`,
-  `_absent_in_base`), строки пакета в `review._outcome_gate_lines`, `hint`
-  отказа FAIL_TO_PASS пуст (перенос 15).
-- Долгоживущий файл задачи — 23/23 зелёные (~140 с).
+- Реализация целиком в WIP-чекпоинте 1f3d1321 (outcome.py, reporter.js,
+  outcome_integrity.compare, tests_writing `_counted_new_modules` и др.,
+  review._outcome_gate_lines, перенос 15 — пустой `hint`). Карта
+  регенерирована там же.
+- Шаг 2: зелёные долгоживущий файл задачи (23), report_outcome,
+  outcome_integrity, fail_to_pass G2б-2, refusal_classes, review_package.
 
 ## Не сработало
-- Длинный heredoc `python3 - <<EOF` в Bash — «Parser aborted»; правки
-  делаются Edit.
+- Длинный heredoc в Bash — «Parser aborted»; `-n 6` pytest-xdist — node down
+  (гонять без -n).
 
 ## Где остановился
-- Прогон тестов затронутых модулей, карта, guard.
+- Шаг завершён: suite-run №2 зелёный (6281 прошло, 0 упало, 2 пропущено),
+  guard ок, PLAN status: ready.
 
 ## Чего не хватило
 - Ничего существенного.
