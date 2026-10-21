@@ -1,20 +1,23 @@
 # Записка developer — 01M5EDW6KD1ESCEVRSV2WPNXAP
 
 ## Выяснено
-- Реализация целиком в WIP-чекпоинте 1f3d1321 (outcome.py, reporter.js,
-  outcome_integrity.compare, tests_writing `_counted_new_modules` и др.,
-  review._outcome_gate_lines, перенос 15 — пустой `hint`). Карта
-  регенерирована там же.
-- Шаг 2: зелёные долгоживущий файл задачи (23), report_outcome,
-  outcome_integrity, fail_to_pass G2б-2, refusal_classes, review_package.
+- Итерация 2 (ревью 1). R1-F1 исправлен в `tests_writing.py`:
+  `_absent_in_base` (P или `P/…` в рекурсивном ls-tree — присутствует) и
+  Vitest-ветка `_missing_import_path` (зона без расширения — не P). Тест —
+  `tests/test_tests_writing_new_module_dir.py`, мутации проверены (оба красные).
+- R1-F2 отклонено: долгоживущий `test_ac12_…` требует записи засчитывания
+  при отказе гейта.
+- Долгоживущий файл задачи + новый тест: 25 passed (134 с). Карта регенерирована.
 
 ## Не сработало
-- Длинный heredoc в Bash — «Parser aborted»; `-n 6` pytest-xdist — node down
-  (гонять без -n).
+- Многооперационный Bash с heredoc/cp требует подтверждения — мутации делать Edit.
+- suite-run: четыре попытки, каждая — отказ: машину занимали прогоны других
+  задач (01M5ENWB2X…, затем гейт 01M5ENWTDD…). Полного набора в этом шаге нет.
+- fail_to_pass G2б-2 не уложился в 590 с: итога нет, 29 точек, ни одного F.
+- report_outcome + outcome_integrity + refusal_classes: 37 passed.
 
 ## Где остановился
-- Шаг завершён: suite-run №2 зелёный (6281 прошло, 0 упало, 2 пропущено),
-  guard ок, PLAN status: ready.
+- REVIEW.md реестр размечен (fixed/rejected), PLAN шаг 6 записан.
 
 ## Чего не хватило
 - Ничего существенного.
