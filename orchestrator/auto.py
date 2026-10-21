@@ -183,24 +183,34 @@ def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | N
     store.journal(conn, task_id, "operator", entry, "")
     print(f"[{task_id}] {entry}")
 
+    def interrupted(stop: "Stop") -> "Stop":
+        # Парная запись выхода без освобождения зоны (SPEC
+        # 01M5FGHNB29QA254FM07QR55AB, требование 1): без неё `status`
+        # считал бы ожидание открытым. Только журнал — вывод цикла прежний.
+        store.journal(conn, task_id, "operator",
+                      zone_lock.wait_interrupted_action(
+                          stop.reason, int(elapsed_sec // 60), occupier_id), "")
+        return stop
+
     elapsed_sec = 0.0
     while True:
         if _stop_requested:
-            return _stop_command_stop(conn, task_id, state)
+            return interrupted(_stop_command_stop(conn, task_id, state))
         if elapsed_sec >= config.ZONE_WAIT_MAX_SEC:
             hint = (f"artel.py status  (кто держит зону) — дождись мержа/kill "
                     f"занявшей задачи либо artel.py zone-release {task_id}, "
                     f"затем " + cycle_hint.launch_text(conn, task_id, "auto"))
-            return Stop(state, _ZONE_WAIT_CEILING_REASON, hint, False)
+            return interrupted(Stop(state, _ZONE_WAIT_CEILING_REASON, hint, False))
         if _sleep_until_next_poll():
-            return _stop_command_stop(conn, task_id, state)
+            return interrupted(_stop_command_stop(conn, task_id, state))
         elapsed_sec += config.ZONE_WAIT_POLL_SEC
         lease_refusal, _ = lease.acquire(conn, task_id, session_id)
         if lease_refusal is not None:
             hint = cycle_hint.launch_text(conn, task_id, "auto",
                                           "— перезапусти ожидание")
-            return Stop(state, f"{_ZONE_WAIT_LEASE_LOST_REASON}: {lease_refusal}",
-                        hint, True)
+            return interrupted(Stop(
+                state, f"{_ZONE_WAIT_LEASE_LOST_REASON}: {lease_refusal}",
+                hint, True))
         t = store.get_task(conn, task_id)
         conflict = zone_lock.blocking_conflict(conn, task_id, t)
         if conflict is None:
@@ -569,7 +579,7 @@ def auto_stop(conn, task_id: str, state: str, reason: str, hint: str, *,
     `False` только для ручного гейта/паузы/нулевого числа шагов без роли
     с самого начала (AC-14..AC-16), `True` во всех прочих случаях.
     """
-    store.journal(conn, task_id, "operator", "auto остановлен",
+    store.journal(conn, task_id, "operator", zone_lock.AUTO_STOPPED_ACTION,
                   f"{state}: {reason}")
     print(f"[{task_id}] auto остановлен: {reason}")
     print(f"  состояние: {state}")
@@ -636,7 +646,7 @@ def cmd_auto(task_id: str, session_id: str | None = None,
         # процесс успевает выполнить код (в отличие от SIGKILL/
         # аварийного убийства ОС), это место его ловит и журналирует
         # причину до того, как исключение уронит процесс.
-        store.journal(conn, task_id, "operator", "цикл оборван",
+        store.journal(conn, task_id, "operator", zone_lock.CYCLE_ABORTED_ACTION,
                       f"{type(exc).__name__}: {exc}")
         raise
 
@@ -995,7 +1005,7 @@ def _auto_cycle(conn, task_id: str, session_id: str, wait_zone: bool = False) ->
     """
     t = store.get_task(conn, task_id)
     state = t["state"]
-    store.journal(conn, task_id, "operator", "auto старт",
+    store.journal(conn, task_id, "operator", zone_lock.AUTO_START_ACTION,
                   f"состояние {state}, лимит {config.AUTO_MAX_STEPS} шагов")
     print(f"[{task_id}] auto: старт из {state}, "
           f"лимит {config.AUTO_MAX_STEPS} шагов за вызов")
