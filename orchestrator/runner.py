@@ -1616,6 +1616,15 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     return None, (log_path, prompt_path, env, cwd, numbered)
 
 
+def _reports_vitest(project: str) -> bool:
+    """Профиль проекта задачи — компонент `pult-vitest` (SPEC
+    01M5ENWTDD8NP9SMPFX3JN08J9, требование 3); профиль не определён —
+    `False`."""
+    profile = project_profile.decide(project).profile
+    return profile is not None and \
+        profile.report == project_profile.REPORT_VITEST
+
+
 def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
                     prompt_path: Path, cwd: Path, env: dict, numbered: str,
                     model_id: str | None, project: str, provider=None):
@@ -1705,10 +1714,18 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # Итоговая строка pytest пишется в журнал из потока насоса — своим
     # соединением: соединение `conn` принадлежит этому потоку, а sqlite
     # не отдаёт его другому (SPEC 01M446X1B7FB8JDMYFP5APWTVE, требование 1).
+    # Сводка Vitest — только у задачи с компонентом `pult-vitest` (SPEC
+    # 01M5ENWTDD8NP9SMPFX3JN08J9, требование 3): у прочих, в том числе при
+    # неопределённом профиле, насос прежний.
+    vitest = {}
+    if _reports_vitest(project):
+        vitest["on_vitest_summary"] = lambda summary: store.journal(
+            store.db(), task_id, role, agent_log.VITEST_RUN_ACTION, summary)
     pump = agent_log.OutputPump(
         proc.stdout, log_path, provider,
         on_pytest_summary=lambda summary: store.journal(
-            store.db(), task_id, role, agent_log.PYTEST_RUN_ACTION, summary))
+            store.db(), task_id, role, agent_log.PYTEST_RUN_ACTION, summary),
+        **vitest)
     pump.start()
     timed_out = False
     killed_group = None
