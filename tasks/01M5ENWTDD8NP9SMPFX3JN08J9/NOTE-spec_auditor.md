@@ -1,12 +1,12 @@
-# Записка spec_auditor — 01M5ENWTDD8NP9SMPFX3JN08J9 (круг 2)
+# Записка spec_auditor — 01M5ENWTDD8NP9SMPFX3JN08J9 (круг 3)
 
 ## Выяснено
-- SPEC b50467bc отражает все 6 решений гейта SPEC №1; места кода снова сошлись (role_prompt.py:70-89/201/237, project_profile.py:95/108/184/328/470, guard.py:494/2880, acceptance.py:254, agent_log.py:221/239/362/413, runner.py:1708-1711, watch.py:221/288/446, report.py:99/969, plank_run.py:287-291, review.py:72 «Изменённые утверждения тестов»).
-- report._PYTEST_SECONDS_RE читает деталь «… in 0.52s» — регулярку менять не нужно, только сравнение действия :969.
-- Тесты в tests/ не закрепляют старое поведение у pult-vitest; OutputPump( вызывается в коде только в runner.py:1708.
+- SPEC fa627541 отражает решения гейта SPEC №1 (6 пп.) и №2 (Duration с хвостом, Start at/Errors между Tests и Duration).
+- Места кода прежние: role_prompt.py:70-89, agent_log.py:221/354/413, runner.py:1708-1711, watch.py:221/288/446, report.py:99/969, plank_run.py:286-291, project_profile.py:328/470, guard.py:2880, acceptance.py:254, review.py:72.
+- template_hints: проекты pair/template — pult-vitest без plank_layout; тесты :177/:249 проверяют только пп. 2а и 5 (assertIn) — новое задание их не ломает. «итог pytest»/«напиши unittest» у vitest в tests/ не закреплены.
 
 ## Где остановился
-Вердикт concerns: одно отклонение — форма строки `Duration` (хвост `(transform …)` настоящего Vitest не оговорён, AC-3 может быть зелёным при мёртвом разборе).
+Вердикт pass, SPEC-AUDIT.md status ready. Замечание к сведению: строка `Errors` не покрыта фикстурой AC-3 (состав фикстуры задан решением №2).
 
 ## Чего не хватило
-Настоящего образца вывода Vitest в репозитории (фикстуры) — форму блока сверял по знанию формата, не по файлу.
+Настоящего образца вывода Vitest в репозитории — форму блока сверял по знанию формата.

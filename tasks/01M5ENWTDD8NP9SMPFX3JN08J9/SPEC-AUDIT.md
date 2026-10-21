@@ -3,147 +3,138 @@ task: 01M5ENWTDD8NP9SMPFX3JN08J9
 type: spec_audit
 author_role: spec_auditor
 status: ready
-verdict: concerns
-signals: "в) пути-признаки (тесты): tests/, tests/test_01m5aa5ts90rdj2afxb882wtpd_template_hints.py; в) пути-признаки (гейты): orchestrator/advance_gates/acceptance.py, orchestrator/advance_gates/plan_appendix.py; в) пути-признаки (песочница ролей): orchestrator/runner.py; в) защищённые пути: skills/review-checklist.md, skills/test-authoring.md; в) SPEC требует приложения PLAN; д) ТЗ ссылается на ADR: ADR-0026."
-spec_sha: b50467bcd87a6ed9625cba48e72754e07dcc30f7
+verdict: pass
+signals: в) пути-признаки (тесты): tests/, tests/test_01m5aa5ts90rdj2afxb882wtpd_template_hints.py; в) пути-признаки (гейты): orchestrator/advance_gates/acceptance.py, orchestrator/advance_gates/plan_appendix.py; в) пути-признаки (песочница ролей): orchestrator/runner.py; в) защищённые пути: skills/review-checklist.md, skills/test-authoring.md; в) SPEC требует приложения PLAN; д) ТЗ ссылается на ADR: ADR-0026.
+spec_sha: fa6275410675e1a188b0e993193c751d2bc2cfdc
 schema_version: 5
 ---
 
 # SPEC-AUDIT: G5б — задание test_author по правилу планки, сводки Vitest, итоговая строка plank-run, скилы приложением
 
-Круг 2. Проверен SPEC с sha b50467bc… (`git hash-object` совпал с миссией).
+Круг 3. Проверяемый SPEC — `git hash-object SPEC.md` = fa627541… (совпадает
+с миссией). Отличие от круга 2 — внесено решение Оператора на гейте SPEC №2
+(форма строки `Duration`, строки между `Tests` и `Duration`).
 
 ## ТЗ и SPEC
-- ТЗ п. 1 → требование 1 SPEC, AC-1/AC-2: текст пункта 2, строка запретов,
-  пометки `//`, пп. 2а и 5 прежние — перенесены дословно. Решения гейта
-  SPEC №1 п. 2 (компонент без `plank_layout` — фраза опускается) и п. 3
-  (подстановки) — в требовании 1 и AC-2.
-- ТЗ п. 2 → требования 2–5, AC-3…AC-7. Решение №1 п. 3 (два знака секунд
-  и для `s`) — требование 2, AC-3; п. 4 (профиль не определён) — требование
-  3, AC-5, AC-9.
-- ТЗ п. 3 → требование 6, AC-8/AC-9.
-- ТЗ п. 4 → требование 7, AC-10; решение №1 п. 6 (название раздела
-  «Изменённые утверждения тестов») — требование 7 и AC-10.
-- ТЗ п. 5 → требование 8 и AC; проба на sled — «Не входит» (решение №1 п. 1).
-- Решение №1 п. 5 (монолит, прогноз диффа) — раздел «Оценка объёма и
-  деление».
-- Зоны, «только чтение», «Не входит» — как в ТЗ (SPEC добавил в «только
-  чтение» перечисленных в ТЗ вызывающих — сужение, не расширение).
-- Требований сверх ТЗ и решений нет. Расхождений не найдено.
+- Требования ТЗ пп. 1–5 отражены: п. 1 → требование 1 + AC-1/AC-2; п. 2 →
+  требования 2–5 + AC-3…AC-7; п. 3 → требование 6 + AC-8/AC-9; п. 4 →
+  требование 7 + AC-10; п. 5 → требование 8 и состав фикстур AC-3/AC-5/AC-7.
+- Решения гейта SPEC №1 (6 пунктов): п. 1 — «Не входит» (проба на sled);
+  п. 2 — требование 1 «Меченый компонент без `plank_layout`» и AC-2; п. 3 —
+  подстановки в требовании 1, два знака секунд в требовании 2 и AC-3; п. 4 —
+  требование 3, AC-5, AC-9; п. 5 — раздел «Оценка объёма и деление»,
+  «Прогноз диффа: 45 КиБ»; п. 6 — требование 7 и AC-10 (название раздела
+  «Изменённые утверждения тестов»). Все отражены.
+- Решение гейта SPEC №2: требование 2 (хвост `Duration`, строки `Errors`/
+  `Start at` в пределах четырёх строк, `Test Files`/`Tests` без хвоста) и
+  AC-3 (фикстура с хвостом `(transform …)` и строкой `Start at`). Отражено.
+- Требований сверх ТЗ и решений нет: «Профиль не определён» (требование 3)
+  — из решения №1 п. 4; остальное — переформулировки ТЗ.
 
 ## Факты против кода
 Подтвердилось:
-- `orchestrator/role_prompt.py:70` ветка test_author, `:80-82` п. 2
-  «unittest … test_ac<n>_…», `:84-88` пометки `#`, `:201`
-  `_long_lived_author_note`, `:237` `_plank_run_point`.
-- `orchestrator/project_profile.py:328` `REPORT_VITEST = "pult-vitest"`,
-  `:470` `plank_rule` (метка `LABEL_AC` — любому компоненту с `tests` и
-  командой не pytest, `:497-503`), `:184` `decide`; `Profile.component`
-  `:95`, `Profile.plank_layout` `:108`.
-- `scripts/guard.py:2880` `labelled_components`, `:494` `plank_ban_errors`
-  (перечень запретов `:497-498` совпадает со строкой запретов).
+- `orchestrator/role_prompt.py:70` — ветка `test_author`; п. 2 «напиши
+  unittest … метод test_ac<n>_...» — `:80-82`; пометки `# AC-n` — `:84-88`;
+  `_long_lived_author_note` вызывается на `:83`, `_plank_run_point` — `:89`.
+- `orchestrator/project_profile.py:328` `REPORT_VITEST = "pult-vitest"`;
+  `:470` `plank_rule` — артель/`test_profile`/нет `components` →
+  `DEFAULT_PLANK_RULE`; метка `LABEL_AC` у компонента с `tests` и командой
+  не pytest (`:497-503`); все `LABEL_TEST_AC` → умолчание (`:504`).
+  `Profile.component` — `:95`; `decide` — `:184`, `profile=None` при
+  отказе/пропуске — `:166-176`.
+- `scripts/guard.py:2880` `labelled_components` — имена компонентов с
+  `LABEL_AC` в порядке записи.
 - `orchestrator/advance_gates/acceptance.py:254` —
-  `profile.plank_layout.replace('<id>', task_id)`.
-- `orchestrator/agent_log.py:221` `PYTEST_RUN_ACTION`, `:239`
-  `pytest_summaries`, `:362-363` `OutputPump.__init__(…, on_pytest_summary=None)`,
-  `:413` разбор результатов только при заданном колбэке.
-- `orchestrator/runner.py:1619` `_spawn_and_wait`, `:1708-1711` насос с
-  `on_pytest_summary` → `store.journal(…, PYTEST_RUN_ACTION, …)`.
-- `orchestrator/watch.py:221` (класс), `:288`, `:446` (бюджет) — сравнение
-  `== PYTEST_RUN_ACTION`.
-- `orchestrator/report.py:99` `_PYTEST_SECONDS_RE = " in (\d+(?:\.\d+)?)s\b"`
-  — деталь «… in 0.52s» требования 2 ею читается; `:947`, `:969`.
-- `orchestrator/plank_run.py:287-291` — «итог pytest: … прогон превысил …
-  оборван» / «итог pytest: …; код выхода pytest: …».
-- `skills/review-checklist.md:39`, `:102` — правила на месте;
-  `orchestrator/review.py:72` `CHANGED_ASSERTIONS_SECTION = "Изменённые
-  утверждения тестов"` — раздел, который требование 7 велит назвать, есть.
-- Существующие тесты не закрепляют ни прежний п. 2 задания у
-  `pult-vitest`, ни «итог pytest» у Vitest (`grep` по `tests/`: `pult-vitest`
-  в тестах plank-run, насоса и отчёта не встречается); вызывающий
-  `OutputPump(` в коде один — `runner.py:1708`.
+  `plank_layout.replace('<id>', task_id)` (подстановка «как есть»).
+- `orchestrator/agent_log.py:221` `PYTEST_RUN_ACTION`, `:354` `OutputPump`,
+  `:363` параметр `on_pytest_summary`, вызов `:413-423`.
+- `orchestrator/runner.py:1708-1711` — единственный в коде вызов
+  `OutputPump(` с `on_pytest_summary`.
+- `orchestrator/watch.py:221`, `:288`, `:446` — сравнения с
+  `PYTEST_RUN_ACTION`; `orchestrator/report.py:99` `_PYTEST_SECONDS_RE`
+  (` in <число>s` — деталь «… in 0.52s» читается без правки регулярки),
+  `:969` — сравнение действия.
+- `orchestrator/plank_run.py:286-291` — `run_summary_line(output) or
+  "итоговой строки нет"`, строки `:289` (оборван) и `:291` (код выхода).
+- `orchestrator/review.py:72` `CHANGED_ASSERTIONS_SECTION = "Изменённые
+  утверждения тестов"`.
+- `tests/test_01m5aa5ts90rdj2afxb882wtpd_template_hints.py`: проекты «pair»
+  и «template» — `pult-vitest` с масками `tests` и без `plank_layout`
+  (`:54-61`, `:95-104`); тесты `:177`, `:249` закрепляют только пункты 2а и
+  5 (`assertIn`), не пункт 2 — новое задание (без фразы о выкладке, по
+  решению №1 п. 2) их не ломает. Тестов, закрепляющих «напиши unittest» или
+  «итог pytest» у `pult-vitest`, в `tests/` нет (поиск по `unittest в`,
+  `итог pytest` в файлах с `cmd_plank_run`).
 
-Не подтвердилось: —.
+Не подтвердилось: —
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да | ветка нового текста срабатывает у `junit-xml` с pytest или у `test_profile` (признак взят по `report`/`tests` вместо `labelled_components`) |
-| AC-2 | да | признак по `report == pult-vitest` (junit-xml не-pytest без нового текста); маски не в порядке записи / без кавычек; `<id>` не заменён; фраза о выкладке при пустом `plank_layout` |
-| AC-3 | да, с оговоркой (см. «Вердикт» п. 1) | `ms` без перевода; один знак у `s`; «Tests» без предшествующей «Test Files» засчитана; ANSI не снят; блок без `Duration` засчитан |
-| AC-4 | да | колбэк не вызывается / вызывается с деталью pytest-формы; действие не `"прогон vitest"` |
-| AC-5 | да | `on_vitest_summary` передаётся всегда; разбор Vitest без колбэка; исключение при `profile is None` |
-| AC-6 | да | смена значения `PYTEST_RUN_ACTION` или регулярки pytest |
-| AC-7 | да | дозор сравнивает только с `PYTEST_RUN_ACTION` (запись vitest не видна или вне бюджета); отчёт не считает секунды vitest |
-| AC-8 | да | «итог pytest» у pult-vitest; деталь не по разбору требования 2; строка оборванного прогона прежняя |
-| AC-9 | да | новая строка у артели/pytest-компонента/`profile is None` |
-| AC-10 | да (гейт `plan_appendix` + текстовая проверка PLAN) | приложение без раздела «Изменённые утверждения тестов»; правка существующих строк `test-authoring.md`; неприменимый патч |
+| AC-1 | да | новый пункт 2 применён безусловно / к `junit-xml` с pytest (у `plank_rule` это умолчание) — эталон расходится |
+| AC-2 | да | признак взят по `report` вместо правила планки (у `junit-xml` с командой не pytest текст прежний); маски в ином порядке/без кавычек; `<id>` не подставлен или переведён в нижний регистр; фраза о выкладке оставлена без `plank_layout` |
+| AC-3 | да | `ms` не переведены / секунды без двух знаков (`1.5s`); `Duration` требует конца строки (хвост `(transform …)`); `Duration` только сразу за `Tests` (`Start at`); ANSI не снят; `Tests` без `Test Files` перед ней принят; блок без `Duration` принят; `no tests`/`todo`/`skipped` не разобраны |
+| AC-4 | да | колбэк не вызывается или пишет с `PYTEST_RUN_ACTION`; деталь не по разбору |
+| AC-5 | да | `on_vitest_summary` передаётся безусловно / при `profile is None` падает `AttributeError`; разбор Vitest включён в насосе без колбэка |
+| AC-6 | да | смена значения `PYTEST_RUN_ACTION` или детали pytest |
+| AC-7 | да | дозор/отчёт сравнивают действие только с `PYTEST_RUN_ACTION`; отдельный бюджет строк для vitest |
+| AC-8 | да | у `pult-vitest` остаётся «итог pytest»; правится только одна из двух строк; деталь не по разбору |
+| AC-9 | да | слово «vitest» или разбор Vitest применены у прочих / при `profile is None` |
+| AC-10 | да (гейт применимости и проверка текста) | приложение не применяется (`git apply --check`); дописка к review-checklist без «Изменённые утверждения тестов» |
+
+Замечание без отклонения: строка `Errors  …` между `Tests` и `Duration`
+разрешена требованием 2, но фикстурой AC-3 не покрыта (состав фикстуры задан
+решением №2); реализация, допускающая между строками только `Start at`,
+прошла бы AC-3. Решение Оператора прямо задало фикстуру — не поднимаю.
 
 ## Зоны
-- Требования 1–6 меняют ровно `role_prompt.py`, `agent_log.py`,
-  `runner.py`, `watch.py`, `report.py`, `plank_run.py` и `tests/` — все в
-  зонах. `report.py` для требования 4 может и не меняться
-  (`_PYTEST_SECONDS_RE` деталь vitest читает), но сравнение действия `:969`
-  менять нужно — в зоне.
-- Защищённые `skills/test-authoring.md`, `skills/review-checklist.md` —
-  только приложением PLAN (требование 7, AC-10).
-- Песочница ролей: `runner.py` в зоне только ради аргумента насоса
-  (`:1708`); `role_env`/`role_cmd`/права не затрагиваются, требований на их
-  расширение нет.
-- Модули «только чтение» (`project_profile`, `guard`, `acceptance`,
-  `brief` и др.) требования менять не заставляют: признак берётся из
-  существующих `decide`, `plank_rule().labelled_components()`.
+- Зоны SPEC = зоны ТЗ: шесть модулей `orchestrator/` + `tests/`. Все
+  требуемые правки (задание — `role_prompt.py`; разбор/параметр насоса —
+  `agent_log.py`; признак — `runner.py`, `plank_run.py`; читатели —
+  `watch.py`, `report.py`) внутри зон. `project_profile.decide`,
+  `plank_rule`, `labelled_components`, `run_summary_line` только
+  вызываются — подписи не меняются.
+- Защищённые пути `skills/test-authoring.md`, `skills/review-checklist.md`
+  — только приложением PLAN (требование 7), в зоны не внесены. `templates/`,
+  `gates.yaml`, `roles.yaml` не трогаются.
+- Песочница ролей (`runner.role_env`, `role_cmd`) не расширяется: правка
+  `runner.py` — только аргумент насоса в `_spawn_and_wait`.
 
 ## Матрица неослабления
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| Задание test_author (ветка по признаку) | прежний текст у артели/pytest; заметка 2а — `tests/test_01m5aa5ts90rdj2afxb882wtpd_template_hints.py:177` | да | AC-1 (эталон), AC-2 (2а/5 прежние), требование 8 (template_hints без правок) | остаётся |
-| Насос: новый колбэк | запись «прогон pytest» — `tests/test_pytest_summary_pump.py` | да | AC-6, требование 8 | остаётся |
-| Дозор: класс/бюджет `pytest` | `watch.py:221/288/446` | да, расширяется парой действий | AC-7 | остаётся |
-| Отчёт: секунды test_author | `report.py:969`, `tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_test_author_report.py` | да | AC-7, требование 8 | остаётся |
-| Итог `plank-run` | `plank_run.py:287-291`, тесты plank-run (`tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py` и др.) | да у прочих | AC-9 | остаётся |
-| Журнал шагов (инвариант 11, `docs/invariants.md:41`) | `tests/test_invariants.py` | да — только новое действие | AC-6, решение №1 п. 5 | остаётся |
+| Задание test_author (`role_prompt.py:70-95`) | пункты 2а/5 — `tests/test_01m5aa5ts90rdj2afxb882wtpd_template_hints.py:177`, `:249` | да, побайтно (требование 1) | те же тесты без правок (требование 8) + AC-1, AC-2 | оставить |
+| Насос `OutputPump` (`agent_log.py:354`) и запись «прогон pytest» (инвариант 11, `docs/invariants.md:41`) | `PYTEST_RUN_ACTION` `agent_log.py:221`, `runner.py:1710` | да; добавляется только новое действие | AC-6, AC-5 | оставить |
+| Дозор/отчёт (`watch.py:221/288/446`, `report.py:969`) | класс `pytest`, бюджет строк, секунды | да, расширение пары действий | AC-7, AC-6 | оставить |
+| Итог `plank-run` (`plank_run.py:289-291`) | существующие тесты plank-run (`tests/test_01m41r4yam4ngeqxw1fwh7t22m_plank_run.py`, `..._plank_run_role.py`) | да у прочих побайтно | эти тесты без правок + AC-9 | оставить |
+| Скилы (приложение PLAN) | гейт применимости `advance_gates/plan_appendix.py` | да | AC-10 | оставить |
 
-Раздела «Меняемое поведение» в SPEC нет — и не нужно: утверждения
-существующих тестов не меняются (требование 8). Ослаблений нет.
+Раздела «Меняемое поведение» в SPEC нет и не нужно: утверждения
+существующих тестов не меняются (требование 8).
 
 ## Пути обхода гейтов
-- AC-3 по фикстурам, сочинённым автором по букве требования 2: если
-  фикстура несёт `Duration  523ms` без хвоста, а разбор требует строку
-  целиком, тест зелёный, а на настоящем выводе Vitest (`Duration  1.52s
-  (transform 45ms, setup 0ms, …)`) сводка не узнаётся никогда — см.
-  «Вердикт» п. 1. Проба на sled (решение №1 п. 1) поймает это только
-  после мержа.
-- AC-4 проверяет насос с колбэком изолированно; запись в журнал делает
-  лямбда `runner` (`runner.py:1710`). Если тест AC-4 подменяет колбэк
-  своим, а AC-5 проверяет лишь факт передачи `on_vitest_summary`, то
-  действие, с которым `runner` пишет в журнал (`PYTEST_RUN_ACTION` вместо
-  `VITEST_RUN_ACTION`), не проверено. Формулировка AC-4 «в журнал попадает
-  запись с действием `VITEST_RUN_ACTION`» это закрывает при буквальном
-  чтении — автору тестов стоит гнать AC-4 через `runner._spawn_and_wait`
-  или через лямбду, переданную `runner`. Отклонением не считаю.
-- Иных путей не найдено: признак задания взят из того же источника, что
-  guard (`labelled_components`), и обе стороны (с признаком / без)
-  закреплены AC-1/AC-2.
+- Признак задания взят по `report == pult-vitest` вместо правила планки —
+  `junit-xml` с командой не pytest получил бы unittest-задание при
+  `//`-правиле guard. Закрыто: признак явно `labelled_components()`
+  (требование 1), AC-2 требует случай `junit-xml` с командой не pytest.
+- «Тривиальный» разбор, ловящий любую `Tests` — закрыто AC-3 (листинг кода,
+  блок без `Duration`).
+- Обход неослабления правкой существующих тестов — запрещён требованием 8;
+  тестов, закрепляющих прежнее поведение у `pult-vitest`, нет (см. «Факты»).
+- Обход гейта применимости приложением, не меняющим строк, — AC-10 требует
+  наличие раздела, вводной фразы и названия раздела пакета ревьювера.
+Иных путей не нашёл.
 
 ## Вердикт
-concerns — одно отклонение, решаемое Оператором на гейте:
-
-1. **Форма строки `Duration` неоднозначна** (SPEC.md, требование 2:
-   «в пределах следующих четырёх строк `Duration  <число>(ms|s)`»; AC-3).
-   Не сказано, допускается ли хвост после числа. Настоящий Vitest печатает
-   `Duration  1.52s (transform 45ms, setup 0ms, collect 60ms, tests 3ms,
-   environment 0ms, prepare 80ms)`, а между `Tests` и `Duration` — строку
-   `Start at  HH:MM:SS` (отсюда «четыре строки»). Прочтение «строка целиком
-   равна `Duration  <число>(ms|s)`» даёт разбор, который на реальном выводе
-   не срабатывает, при зелёном AC-3. Предложение Оператору: уточнить —
-   строка начинается с `Duration  <число>(ms|s)`, далее допускается
-   пробел и произвольный хвост; в AC-3 добавить фикстуру с хвостом
-   `(transform …)` и строкой `Start at` между `Tests` и `Duration`.
-   Аналогично для `Test Files`/`Tests` хвост не ожидается — их форма
-   однозначна.
-
-Прочие разделы — без отклонений; все отклонения круга 1 сняты решением
-Оператора на гейте SPEC №1 и отражены в SPEC.
+pass — отклонений нет. Все решения Оператора на гейте SPEC (№1 пп. 1–6,
+№2) отражены (SPEC требования 1–3, 7, AC-2/3/5/9/10, раздел деления); места
+кода сверены (`orchestrator/role_prompt.py:70-89`,
+`orchestrator/agent_log.py:221/354/413`, `orchestrator/runner.py:1708-1711`,
+`orchestrator/watch.py:221/288/446`, `orchestrator/report.py:99/969`,
+`orchestrator/plank_run.py:286-291`, `orchestrator/project_profile.py:328/470`,
+`scripts/guard.py:2880`, `orchestrator/advance_gates/acceptance.py:254`,
+`orchestrator/review.py:72`). Замечание к сведению (не отклонение): строка
+`Errors` между `Tests` и `Duration` фикстурой AC-3 не покрыта — состав
+фикстуры задан решением №2.
