@@ -32,7 +32,9 @@ budget_usd: 27
 Решения Оператора на гейте SPEC (круг 1) по
 отклонениям аудита вошли в требования 1–5 и критерии ниже; решения круга 2
 (п. 1 — проверка изоляции без вложенного прогона, п. 4 — метка при `--drop`)
-и ответ ANSWER-1 — в требования 3, 5 и AC-9, AC-19, AC-20.
+и ответ ANSWER-1 — в требования 3, 5 и AC-9, AC-19, AC-20; решения круга 4
+(`DoctorFixOrderTest` и классы с `cmd_doctor(fix=True)` в перечне, уточнение
+признаков (1) и (3)) — в требование 5 и AC-19, AC-20.
 
 Граница задачи: новое поведение — только у метки без записи, у подкоманды
 `canary live` и у проверки `doctor` реестра (одна новая строка `canary-live`),
@@ -120,8 +122,10 @@ budget_usd: 27
    читают и не пишут настоящий реестр пульта. Каталог реестра (`_live_dir()`)
    при их прогоне не лежит под настоящим корнем пульта. Способ — песочница
    `ALL_CONFIG_ATTRS` (`tests/sandbox.py:90`) или подмена пути реестра; для
-   `CmdCanaryTemplateSelectionTest` — подмена `canary._live_dir` на временный
-   каталог в `setUp`. В определение изоляции входят все пути к реестру: тело
+   `CmdCanaryTemplateSelectionTest` и `DoctorFixOrderTest`
+   (`tests/test_doctor_closed_ref_fix.py:150`) — подмена `canary._live_dir` на
+   временный каталог в `setUp` (у `DoctorFixOrderTest` `setUp` добавляется,
+   утверждения не меняются). В определение изоляции входят все пути к реестру: тело
    окна мержа до `_refuse_during_canary`, `live_run_note`, `live_runs`, чтение
    и уборка реестра, `doctor.all_checks` с проверкой `canary-live` и команда
    `canary live`. Перечень разработчик может только дополнять, с записью о
@@ -130,13 +134,24 @@ budget_usd: 27
    класс требует правки для изоляции — эскалация, а не правка. Это добавление
    изоляции: существующие утверждения не меняются и не удаляются.
 
-   Перечень — 116 классов в 58 файлах. Он найден прогоном 236 файлов `tests/`,
-   которые упоминают потребителей реестра, `doctor`, `note`, `approve`,
-   `doc-commit`, `canary` или `artel.main`. Прогон шёл со шпионом на
-   `canary._live_dir`, `doctor.all_checks` и
+   Перечень — 119 классов в 61 файле, из двух источников.
+   (а) Прогон 236 файлов `tests/`, которые упоминают потребителей реестра,
+   `doctor`, `note`, `approve`, `doc-commit`, `canary` или `artel.main`. Прогон
+   шёл со шпионом на `canary._live_dir`, `doctor.all_checks` и
    `fsm_merge_gate._refuse_during_canary` на коде main 58c9a84b. В перечень
    вошёл каждый класс, хотя бы один тест которого дошёл до одной из этих
-   функций:
+   функций.
+   (б) Все классы, вызывающие `cmd_doctor(fix=True)`: починка реестра под
+   `--fix` (требование 4) — новый путь к реестру, которого на main не было, и
+   шпион (а) его не видел. Поиск по коду `tests/` на f1f805b6 нашёл шесть
+   таких классов: `PredicateGitTest`, `CanaryDoctorTest`, `OriginSweepTest`
+   (уже в (а)), `DoctorFixOrderTest`, `FixGitHooksTest`,
+   `PultWritesAfterRoleMoveTest` (добавлены). `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py`
+   форму `doctor --fix` передаёт `artel.main` с подменённым `cmd_doctor` и
+   настоящий `cmd_doctor` не зовёт. Разработчик дополняет перечень, если
+   найдёт ещё класс с вызовом `cmd_doctor(fix=True)`.
+
+   Перечень:
 
    - `tests/test_01m3pymq6n4scaj9wwttkh6xng_canary_clone_models.py`: `BaselineModelsChangeTest`, `CodexRoleOfTheSetTest`, `DefaultRunCloneLayerTest`, `RunSummaryModelsTest`, `SetByRolesTest`
    - `tests/test_01m3pymq6n4scaj9wwttkh6xng_role_models.py`: `RoleModelsDoctorLinesTest`
@@ -148,6 +163,7 @@ budget_usd: 27
    - `tests/test_01m3y75x6k2zmd85971tcwv41e_held_base.py`: `DropPendingTest`, `HeldRecordBaseTest`, `ImmediatePinCheckTest`, `LegacyRecordTest`, `MatchingBaseSendTest`, `NewFileBaseTest`, `PendingListTest`, `RoleRefusalTest`, `StaleBaseRefusalTest`
    - `tests/test_01m3ychp14179r32sfjvkqb32g_model_sets.py`: `AdmitShortfallTest`, `AdmitWriteTest`, `CleanRunTest`
    - `tests/test_01m3yxyax5pw9bm67mb4gk85d1_step_provider_preflight.py`: `DoctorSetProvidersTest`
+   - `tests/test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py`: `PultWritesAfterRoleMoveTest`
    - `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`: `CloneCreationTest`, `CloneHooksFromPinTest`, `EndToEndMainCopyUntouchedTest`, `HeldRecordBaseFromCloneTest`, `MergeGateStepsOnCloneTest`, `OperatorCommandsThroughCloneTest`
    - `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`: `AlreadyAppliedAppendixTest`
    - `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`: `MergeGateDoneDependenciesTest`
@@ -188,7 +204,9 @@ budget_usd: 27
    - `tests/test_doc_commit_suite_gate.py`: `AcceptRedOnDocsPathTest`, `AcceptRedTest`, `GateRefusalLeavesNoDirtTest`, `HeldConfigRecordFlushTest`, `RedSuiteTest`, `SuiteTreeTest`
    - `tests/test_doctor.py`: `DoctorCommandTest`
    - `tests/test_doctor_canary_pool.py`: `CanaryPoolDriftCheckTest`
+   - `tests/test_doctor_closed_ref_fix.py`: `DoctorFixOrderTest`
    - `tests/test_fsm_merge_gate_done_snapshot.py`: `DonePathSnapshotTest`
+   - `tests/test_git_hooks.py`: `FixGitHooksTest`
    - `tests/test_invariants.py`: `MainCopyGitUnchangedDuringTaskTest`, `ManualGatesNeedTheOperatorTest`, `MergeNeedsGreenCiTest`, `MergeOnlyFromMergeGateTest`
    - `tests/test_merge_gate_ci_wait.py`: `MovedMainRetryInCycleTest`
    - `tests/test_notes.py`: `CmdNoteArgumentValidationTest`, `SilenceWindowReasonTest`, `WindowBypassAndNoWindowTest`, `WindowHoldsValidNoteTest`
@@ -198,9 +216,13 @@ budget_usd: 27
    - `tests/test_providers.py`: `AllChecksProviderNamesTest`
 
    На main 58c9a84b каталог реестра лежал под настоящим корнем пульта только у
-   `CmdCanaryTemplateSelectionTest`. Для остальных 115 классов, в том числе
-   для четырёх классов `tests/test_invariants.py`, изоляция уже держалась, и
-   по требованию их нужно только проверить (AC-19, AC-20).
+   `CmdCanaryTemplateSelectionTest`. `DoctorFixOrderTest`
+   (`unittest.TestCase`, без подмены `config.ROOT`) зовёт `cmd_doctor(fix=True)`
+   (`tests/test_doctor_closed_ref_fix.py:183`) и после починки требования 4
+   дошёл бы до настоящего реестра — ему изоляция добавляется. Для остальных
+   117 классов, в том числе для четырёх классов `tests/test_invariants.py`,
+   изоляция уже держится, и по требованию их нужно только проверить (AC-19,
+   AC-20).
 
    **Как проверяется изоляция перечня** (решения Оператора на гейте SPEC,
    круг 2, п. 1; ответ ANSWER-1). Вложенного прогона классов перечня нет.
@@ -216,12 +238,16 @@ budget_usd: 27
      шпион круга 2 показал, что у трёх его наследников из перечня реестр
      достигается только через `approve`. Остаток риска (будущий тест
      наследника `FsmTest`, дошедший до реестра не через `approve`) принят
-     Оператором 21.10;
+     Оператором 21.10.
+     Для основ `TmpRootTest` и `RealGitSandbox` признак (1) засчитывается,
+     только если в цепочке класса (от него до основы) нет сужения
+     `PATCHED_ATTRS` без `ROOT` и нет метода `setUp` без вызова
+     `super().setUp()`. Иначе — провал AC-19 с именем класса;
    - (2) метод `setUp` класса подменяет на временный каталог `config.ROOT`
      или путь реестра (`canary._live_dir`). Так изолированы
      `CanaryPoolDriftCheckTest` (`tests/test_doctor_canary_pool.py:249`) и, по
-     этому требованию, `CmdCanaryTemplateSelectionTest`;
-   - (3) тестовый метод определяет подкласс изолирующей основы признака (1)
+     этому требованию, `CmdCanaryTemplateSelectionTest` и `DoctorFixOrderTest`;
+   - (3) каждый тестовый метод класса определяет подкласс изолирующей основы признака (1)
      (`TmpRootTest`, `RealGitSandbox` или их наследника), создаёт его
      экземпляр и зовёт `setUp` этого экземпляра раньше любого другого вызова
      в теле метода. Порядок проверяется разбором Python: до вызова `setUp`
@@ -234,7 +260,8 @@ budget_usd: 27
      `TaskFlowSandbox` → `ProjectAreaSandbox` → `RealGitSandbox`,
      `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py:1244`, `:138`).
      Метод, в котором вызов вне песочницы стоит до её `setUp`, признака не
-     имеет.
+     имеет. Класс имеет признак (3), только если признак выполнен для каждого
+     его тестового метода.
    Класс перечня без единого признака — провал теста с именем класса.
 
    Динамически — для каждого класса, изолированного признаком (2): тест
@@ -341,12 +368,19 @@ AC-18. `doctor` без `--fix` при мёртвой записи и при ме
 AC-19. Статическая проверка (разбор Python, без прогона классов перечня):
 каждый класс перечня требования 5 (и каждый класс, добавленный разработчиком)
 имеет хотя бы один из признаков (1)–(3) требования 5. Класс без признака —
-провал теста с именем класса. Тестовый метод, в котором до вызова `setUp`
-экземпляра вложенной песочницы стоит иной вызов, кроме создания этого
-экземпляра, признака (3) не даёт.
+провал теста с именем класса. Перечень содержит каждый класс `tests/`,
+вызывающий `cmd_doctor(fix=True)`, в том числе `DoctorFixOrderTest`,
+`FixGitHooksTest` и `PultWritesAfterRoleMoveTest`. Признак (1) по основе
+`TmpRootTest` или `RealGitSandbox` не засчитан, если в цепочке класса есть
+сужение `PATCHED_ATTRS` без `ROOT` или метод `setUp` без вызова
+`super().setUp()`: это провал с именем класса. Тестовый метод, в котором до
+вызова `setUp` экземпляра вложенной песочницы стоит иной вызов, кроме создания
+этого экземпляра, признака (3) не даёт. Признак (3) засчитывается классу, только
+если он выполнен для каждого тестового метода класса.
 
 AC-20. Динамическая проверка для каждого класса с признаком (2) (в том числе
-`CmdCanaryTemplateSelectionTest` и `CanaryPoolDriftCheckTest`): после вызова
+`CmdCanaryTemplateSelectionTest`, `CanaryPoolDriftCheckTest` и
+`DoctorFixOrderTest`): после вызова
 его `setUp` путь, который получает функция реестра, не лежит под корнем,
 снятым до подмен (`Path(orchestrator.__file__).resolve().parents[1]`). Сбой
 `setUp` или вызова функции реестра — провал теста.
@@ -391,7 +425,8 @@ AC-21. Без метки без записи поведение `note`, `doc-com
 - В `orchestrator/doctor/__init__.py` — что-либо кроме реэкспорта новой
   проверки и её починки.
 - Правка `tests/sandbox.py`.
-- В `tests/test_canary_template_flag.py` и в классах перечня требования 5 —
+- В `tests/test_canary_template_flag.py`, `tests/test_doctor_closed_ref_fix.py`
+  и в классах перечня требования 5 —
   что-либо кроме добавления изоляции.
 - Правка файлов, которые ТЗ отводит только для чтения: `docs/backlog.md`,
   `orchestrator/notes.py`,
