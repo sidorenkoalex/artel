@@ -1,80 +1,80 @@
-"""Абзац политики об удалении ветки задачи в `origin` после мержа в `docs/retention.md`.
+"""Абзац `docs/retention.md` об удалении ветки задачи в `origin` после мержа.
 
 Группа: разовый
 
-Красен до реализации: раздел «Ветки `task/*` пульта» говорит только об удалении локальной ветки — слов об `origin`, голове ветки, записи «уборка», подсказке и PR в нём нет.
+Красен до реализации: в разделе «Ветки `task/*` пульта» пока нет ни слова об `origin` проекта и о PR — проверки содержания раздела падают.
 
 Документ читается из рабочей копии кода (`CODE_ROOT` помощника пульта) —
-это файл кода задачи, не её артефакт. Разовый: проверяет текст, внесённый
-этой задачей.
+это файл кодовой ветки, не артефакт задачи. Проверяются смысловые опоры
+абзаца, а не его дословный текст.
 """
+import re
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from _pult import CODE_ROOT  # noqa: E402
 
-DOC = "docs/retention.md"
-HEADING = "## Ветки `task/*` пульта"
-
-# Утверждения абзаца AC-9 и признаки каждого (подстроки в нижнем регистре;
-# достаточно одной из перечисленных форм).
-CLAIMS = {
-    "ветка удаляется и в origin проекта": ("origin",),
-    "условие — голова входит в смерженный main": ("голов",),
-    "смерженный main": ("смержен", "влит"),
-    "сбой пишется в журнал записью «уборка»": ("«уборка»", "уборка"),
-    "запись журнала": ("журнал",),
-    "причина сбоя": ("причин",),
-    "подсказка ручной команды": ("подсказк",),
-    "удаление head-ветки закрывает PR": ("закрывает", "закрыва"),
-    "PR": ("pr",),
-    "push в базу помечает PR смерженным": ("помечает", "помеча"),
-    "сверка на первом мерже после внедрения": ("внедрени",),
-}
+SECTION = "## Ветки `task/*` пульта"
 
 
-def _section(text: str) -> str | None:
-    lines = text.splitlines()
-    try:
-        start = lines.index(HEADING)
-    except ValueError:
-        return None
-    body = []
-    for line in lines[start + 1:]:
-        if line.startswith("## ") or line.startswith("# "):
-            break
-        body.append(line)
-    return "\n".join(body)
+def _section_text() -> str:
+    text = (Path(CODE_ROOT) / "docs" / "retention.md").read_text(encoding="utf-8")
+    start = text.find(SECTION)
+    if start < 0:
+        return ""
+    body = text[start + len(SECTION):]
+    nxt = re.search(r"^## ", body, re.M)
+    return body[:nxt.start()] if nxt else body
+
+
+def _paragraphs(section: str) -> list:
+    return [" ".join(p.split()) for p in re.split(r"\n\s*\n", section)
+            if p.strip()]
 
 
 class RetentionDocTest(unittest.TestCase):
 
-    def test_ac9_section_describes_origin_branch_removal(self):
-        """Раздел «Ветки `task/*` пульта» несёт каждое утверждение абзаца AC-9.
+    def test_ac9_retention_paragraph_on_origin_branch_and_pr(self):
+        """Раздел «Ветки `task/*` пульта» несёт абзац об удалении ветки в `origin` после мержа и фразу о PR.
 
-        Сценарий: читается `docs/retention.md` рабочей копии, выделяется
-        текст раздела до следующего заголовка; для каждого утверждения
-        абзаца (удаление в `origin`, условие по голове и смерженному
-        main, запись «уборка» с причиной, подсказка ручной команды,
-        закрытие PR удалением head-ветки, пометка PR смерженным, сверка на
-        первом мерже после внедрения) в тексте раздела есть его признак.
+        Сценарий: в разделе находится абзац, где сказано про `origin`
+        проекта, условие «голова входит в смерженный main», сбой удаления
+        оставляет ветку и пишется в журнал записью «уборка» с причиной,
+        печатается подсказка ручной команды; в том же абзаце — что удаление
+        head-ветки на GitHub закрывает открытый PR, push в базу обычно уже
+        помечает PR смерженным, конечный статус PR сверяется на первом
+        мерже после внедрения.
 
-        Ловит мутацию: абзац не добавлен или добавлен в другой раздел —
-        признаков `origin`/`подсказк`/`внедрени` в разделе нет; из абзаца
-        выпала фраза о PR — нет признаков «закрывает»/«помечает».
+        Ловит мутацию: абзац не добавлен или добавлен в другой раздел — в
+        разделе нет абзаца с `origin`; из абзаца выпала оговорка о PR или
+        об условии головы — нет соответствующей опоры.
         """
-        path = Path(CODE_ROOT) / DOC
-        self.assertTrue(path.is_file(), f"нет {DOC}")
-        section = _section(path.read_text(encoding="utf-8"))
-        self.assertIsNotNone(section, f"в {DOC} нет раздела «{HEADING}»")
-        low = section.lower()
-        missing = [claim for claim, marks in CLAIMS.items()
-                   if not any(mark in low for mark in marks)]
-        self.assertEqual(missing, [],
-                         f"раздел «{HEADING}» не несёт утверждений: {missing}"
-                         f"\n---\n{section}")
+        section = _section_text()
+        self.assertTrue(section, f"нет раздела {SECTION!r}")
+        hits = [p for p in _paragraphs(section) if "origin" in p and "PR" in p]
+        self.assertTrue(hits, f"нет абзаца об origin и PR в разделе:\n{section}")
+        para = hits[0]
+        low = para.lower()
+        checks = {
+            "после мержа": "мерж" in low,
+            "голова входит в смерженный main": "голов" in low
+            and "смерж" in low and "main" in low,
+            "сбой оставляет ветку": "сбой" in low and "оставл" in low,
+            "запись «уборка» в журнале": "журнал" in low and "уборк" in low,
+            "причина": "причин" in low,
+            "подсказка ручной команды": "подсказк" in low,
+            "GitHub закрывает открытый PR": "github" in low
+            and "закрыва" in low and "открыт" in low,
+            "push в базу помечает PR смерженным": "push" in low
+            and "смерженн" in low,
+            "сверка на первом мерже после внедрения": "перв" in low
+            and "внедрен" in low,
+        }
+        missing = [k for k, ok in checks.items() if not ok]
+        self.assertEqual(missing, [], f"в абзаце нет опор {missing}:\n{para}")
 
 
 if __name__ == "__main__":

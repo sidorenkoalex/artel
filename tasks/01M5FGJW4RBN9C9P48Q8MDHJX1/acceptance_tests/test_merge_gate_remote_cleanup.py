@@ -324,42 +324,26 @@ class ArtelGateSandbox(GateSandboxMixin, RealGitSandbox):
         self.install_hook(self.bare_origin)
 
 
-class ArtelMergeTest(ArtelGateSandbox):
+class GateCases:
+    """Сценарии тела гейта — у артели (`ArtelMergeTest`) и у внешнего
+    проекта (`ExternalMergeTest`) одним набором."""
 
-    def test_ac1_artel_merge_deletes_origin_branch(self):
-        """Мерж задачи артели: ветки в `origin` пульта нет, ссылка документов на месте, одна запись «удалена», оба вызова git с пределом.
+    def test_ac1_merge_deletes_origin_branch(self):
+        """Мерж задачи: ветки в `origin` её проекта нет, ссылка документов на месте, одна запись «удалена», оба вызова git с пределом.
 
-        Сценарий: тело гейта доводит задачу артели до `done` (`("done",)`).
-        В bare-`origin` нет `refs/heads/<ветка>`, есть
-        `refs/artifacts/<id>`; у задачи ровно одна запись «уборка» —
-        «ветка origin <ветка>: удалена», она же напечатана с отступом;
-        после `done` шпион видел `ls-remote … refs/heads/<ветка>` и `push …
-        --delete refs/heads/<ветка>`, оба с `-c http.lowSpeedLimit=1` и `-c
+        Сценарий (артель и внешний проект): тело гейта доводит задачу до
+        `done` (`("done",)`). В bare-`origin` проекта нет
+        `refs/heads/<ветка>`, есть `refs/artifacts/<id>`; у задачи ровно
+        одна запись «уборка» — «ветка origin <ветка>: удалена», она же
+        напечатана с отступом; после `done` шпион видел `ls-remote …
+        refs/heads/<ветка>` и `push … --delete refs/heads/<ветка>`, оба с
+        `-c http.lowSpeedLimit=1` и `-c
         http.lowSpeedTime=<config.GH_TIMEOUT_SEC>`.
 
         Ловит мутацию: `_cleanup_merged_task` не зовёт новую уборку (или
-        зовёт только для внешнего проекта) — ветка артели осталась в
-        `origin`, записи «уборка» нет; вызовы без `-c`-пар предела.
-        """
-        result, out = self.approve()
-        self.assert_deleted_with_bounded_args(result, out)
-
-
-class ExternalMergeTest(ExternalGateSandbox):
-
-    def test_ac1_external_merge_deletes_origin_branch(self):
-        """Мерж задачи внешнего проекта: ветки в `origin` проекта нет, ссылка документов на месте, одна запись «удалена», оба вызова git с пределом.
-
-        Сценарий: тело гейта доводит задачу проекта до `done`. Ветка
-        задачи, опубликованная гейтом в bare-`origin` проекта, оттуда
-        удалена; `refs/artifacts/<id>` есть; ровно одна запись «уборка»
-        «ветка origin <ветка>: удалена», напечатана с отступом; после
-        `done` вызовы `ls-remote` и `push … --delete` ветки несут пары
-        предела.
-
-        Ловит мутацию: новая уборка не вызвана из `_cleanup_merged_task` —
-        ветка осталась в `origin` проекта; уборка ходит в `origin` пульта
-        вместо клона проекта — ветка проекта осталась; вызовы без предела.
+        зовёт только для одного вида проекта; или ходит в `origin` пульта
+        вместо клона проекта) — ветка осталась в `origin`, записи «уборка»
+        нет; вызовы без `-c`-пар предела.
         """
         result, out = self.approve()
         self.assert_deleted_with_bounded_args(result, out)
@@ -367,8 +351,8 @@ class ExternalMergeTest(ExternalGateSandbox):
     def test_ac4_refused_delete_task_done_ci_awaited_hint_printed(self):
         """`origin` отклоняет удаление: задача `done`, `_await_main_ci` вызван, исход «оставлено — <причина>», подсказка напечатана и не в журнале.
 
-        Сценарий: хук bare-`origin` проекта отклоняет удаление веток
-        задач. Тело гейта возвращает `("done",)`, задача `done`, шпион
+        Сценарий (артель и внешний проект): хук bare-`origin` отклоняет
+        удаление веток задач. Тело гейта возвращает `("done",)`, задача `done`, шпион
         `_await_main_ci` вызван; запись «уборка» «ветка origin <ветка>:
         оставлено — <причина>»; после строки исхода — `git -C <клон> push
         --force-with-lease=refs/heads/<ветка>:<голова> origin --delete
@@ -402,11 +386,11 @@ class ExternalMergeTest(ExternalGateSandbox):
         self.assertGreater(hint_lines[-1], end, out)
         self.assertNotIn("--force-with-lease", notes[0])
 
-    def test_ac6g_exception_in_cleanup_keeps_merge_done(self):
+    def test_ac6_g_exception_in_cleanup_keeps_merge_done(self):
         """Исключение внутри новой уборки: исход «оставлено — <тип>: <текст>», подсказки нет, задача `done`, `_await_main_ci` и `_rebuild_core_reference` выполнены.
 
-        Сценарий: шпион `gitcmd.in_repo` поднимает `RuntimeError` на
-        чтении головы ветки задачи, как только задача в `done`. Тело
+        Сценарий (артель и внешний проект): шпион `gitcmd.in_repo`
+        поднимает `RuntimeError` на чтении головы ветки задачи, как только задача в `done`. Тело
         гейта возвращает `("done",)` без исключения; запись «уборка»
         «ветка origin <ветка>: оставлено — RuntimeError: <текст>»; в
         выводе нет строк подсказки `git -C`; шпионы `_await_main_ci` и
@@ -433,10 +417,11 @@ class ExternalMergeTest(ExternalGateSandbox):
     def test_ac7_refusal_before_push_keeps_origin_branch(self):
         """Отказ гейта до push (`_checks_local_refuse`): ветка в `origin` на месте, записи «уборка» нет.
 
-        Сценарий: шаг локальных проверок отказывает. Тело гейта
+        Сценарий (артель и внешний проект): шаг локальных проверок
+        отказывает. Тело гейта
         возвращает `("stopped",)`; ветка задачи, опубликованная гейтом в
-        `origin` проекта, на месте; хук не видел её удаления; записи
-        «уборка» у задачи нет.
+        `origin`, на месте; хук не видел её удаления; записи «уборка» у
+        задачи нет.
 
         Ловит мутацию: уборка ветки в `origin` поставлена в тело гейта до
         push мержа (например, рядом с публикацией артефактов мержа) — на
@@ -455,9 +440,10 @@ class ExternalMergeTest(ExternalGateSandbox):
     def test_ac7_moved_keeps_origin_branch(self):
         """Исход push «moved»: ветка в `origin` на месте, записи «уборка» нет.
 
-        Сценарий: push мержа отвечает «main сдвинулся»
+        Сценарий (артель и внешний проект): push мержа отвечает «main
+        сдвинулся»
         (`_push_merged_main` -> `"moved"`). Тело гейта возвращает
-        `("moved", <ветка>)`; ветка задачи в `origin` проекта на месте,
+        `("moved", <ветка>)`; ветка задачи в `origin` на месте,
         хук не видел её удаления; записи «уборка» нет.
 
         Ловит мутацию: уборка вызвана до проверки исхода push (сразу после
@@ -477,7 +463,8 @@ class ExternalMergeTest(ExternalGateSandbox):
     def test_ac8_no_gh_after_merge(self):
         """После перехода в `done` тело гейта не запускает `gh` ни разу.
 
-        Сценарий: подставной `gh` в начале `PATH`; шпион
+        Сценарий (артель и внешний проект): подставной `gh` в начале
+        `PATH`; шпион
         `_finalize_done_state` отмечает число записей журнала событий в
         момент перехода в `done`. После `("done",)` записей `gh` позже
         этой отметки нет.
@@ -501,6 +488,14 @@ class ExternalMergeTest(ExternalGateSandbox):
         after = [e for e in self.events_list()[mark["at"]:]
                  if e["kind"] == "gh"]
         self.assertEqual(after, [], f"gh после мержа: {after}")
+
+
+class ArtelMergeTest(GateCases, ArtelGateSandbox):
+    """Задача артели: `origin` — bare-`origin` пульта."""
+
+
+class ExternalMergeTest(GateCases, ExternalGateSandbox):
+    """Задача внешнего проекта: `origin` — bare-`origin` клона проекта."""
 
 
 if __name__ == "__main__":
