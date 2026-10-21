@@ -6,7 +6,10 @@
 // `--outputFile=<путь>` (`{path}`) и переменной `PULT_VITEST_REPORT`. Итог
 // прогона пульт читает только из этого JSON: по каждому тесту — файл (от
 // `workdir`), полное имя, состояние, `mode`, признак `it.fails`, число
-// повторов, имя ошибки, признак таймаута, падение хука и время.
+// повторов, имя ошибки, признак таймаута, падение хука и время. Ошибка
+// самого модуля (импорт, сбор) — отдельная запись уровня файла
+// (`file_level: true`, имя и сообщение первой ошибки; SPEC
+// 01M5EDW6KD1ESCEVRSV2WPNXAP, требование 1): иначе файл пропал бы из отчёта.
 //
 // API отчётчиков Vitest 3/4 (`onTestRunEnd`, `TestModule`, `TestCase`);
 // соответствие версии подтверждает проба этапа 2 (перевод записи sled).
@@ -15,6 +18,7 @@ import path from "node:path";
 
 const TIMEOUT = /timed? ?out/i;
 const HOOKS = ["beforeAll", "beforeEach", "afterEach", "afterAll"];
+const FILE_LEVEL_NAME = "<ошибка уровня файла>";
 
 function outputPath(ctx) {
   if (process.env.PULT_VITEST_REPORT) {
@@ -74,6 +78,22 @@ function record(test, root) {
   };
 }
 
+function moduleErrorRecord(mod, root) {
+  const errors = (typeof mod.errors === "function" && mod.errors()) || [];
+  if (!errors.length) {
+    return null;
+  }
+  const first = errors[0] || {};
+  return {
+    file: mod.moduleId ? path.relative(root, mod.moduleId) : "",
+    name: FILE_LEVEL_NAME,
+    state: "fail",
+    file_level: true,
+    error_name: first.name || null,
+    error_message: String(first.message || ""),
+  };
+}
+
 export default class PultVitestReporter {
   onInit(ctx) {
     this.ctx = ctx;
@@ -85,6 +105,10 @@ export default class PultVitestReporter {
     for (const mod of testModules || []) {
       for (const test of mod.children.allTests()) {
         tests.push(record(test, root));
+      }
+      const level = moduleErrorRecord(mod, root);
+      if (level) {
+        tests.push(level);
       }
     }
     const target = outputPath(this.ctx);

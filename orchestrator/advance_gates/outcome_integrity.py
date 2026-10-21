@@ -137,9 +137,13 @@ def red_on_branch(case) -> bool:
 def compare(base: list, head: list) -> list:
     """Находки сравнения двух списков `CaseResult` (требование 4), по одной
     на идентификатор, по старшинству и идентификатору. Красноту тестов
-    `PASS_TO_PASS` судят перепрогоны, не эта функция."""
-    base_map = {c.id: c for c in base}
-    head_map = {c.id: c for c in head}
+    `PASS_TO_PASS` судят перепрогоны, не эта функция.
+
+    Запись ошибки уровня файла (`file_level`) — не тест: её исчезновение на
+    ветке значит «ошибку исправили» (SPEC 01M5EDW6KD1ESCEVRSV2WPNXAP,
+    требование 1)."""
+    base_map = {c.id: c for c in base if not c.file_level}
+    head_map = {c.id: c for c in head if not c.file_level}
     found = []
     for cid, b in base_map.items():
         h = head_map.get(cid)
