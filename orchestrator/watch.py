@@ -52,6 +52,9 @@ _AUTO_STOP_ACTION = "auto остановлен"
 # `verifying_status`, что в `branch_status`, переиспользуется, а не
 # копируется заново.
 _CI_STATUS_ACTION_PREFIX = "статус CI ветки"
+# Сводки прогонов тестов шага — класс `pytest` с общим бюджетом строк задачи
+# (SPEC 01M5ENWTDD8NP9SMPFX3JN08J9, требование 4).
+_TEST_RUN_ACTIONS = (agent_log.PYTEST_RUN_ACTION, agent_log.VITEST_RUN_ACTION)
 
 # Отказы предварительного advance подкласса «роль ещё не закончила» (SPEC
 # 01M290PP4KBTG1KYS1PWKQJH6T, требование 5) — из единого перечня классов
@@ -218,7 +221,7 @@ def _matches_class(action: str, detail: str, events: set) -> bool:
     if ("ci" in events and action.startswith(_CI_STATUS_ACTION_PREFIX)
             and ci.verifying_is_red(detail)):
         return True
-    if "pytest" in events and action == agent_log.PYTEST_RUN_ACTION:
+    if "pytest" in events and action in _TEST_RUN_ACTIONS:
         return True
     return False
 
@@ -285,7 +288,7 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
         action, detail = item["action"], item["detail"] or ""
         if _matches_class(action, detail, events):
             if (budget is not None
-                    and action == agent_log.PYTEST_RUN_ACTION
+                    and action in _TEST_RUN_ACTIONS
                     and not budget.take(item["task_id"])):
                 continue
             _print_line(item["ts"], item["task_id"], item["actor"],
@@ -443,7 +446,7 @@ def _emit_steps(conn, task_id: str, events: set, known_step_id: dict,
     for row in new_rows:
         if _matches_class(row["action"], row["detail"], events):
             if (budget is not None
-                    and row["action"] == agent_log.PYTEST_RUN_ACTION
+                    and row["action"] in _TEST_RUN_ACTIONS
                     and not budget.take(task_id)):
                 continue
             _print_line(row["ts"], task_id, row["actor"], row["action"],
