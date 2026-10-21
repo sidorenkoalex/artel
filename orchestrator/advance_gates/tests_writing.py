@@ -1,6 +1,7 @@
 """`_tests_writing_*`, `_origin_push_gate`, `_registry_gate`,
 `_freshness_refuses` (SPEC 01M2CYQR0357VAQFZ5VACJD9TD, требование 1) —
 перенесено дословно из `orchestrator/fsm_advance.py`."""
+import os
 import re
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
                 cycle_hint, fixation, github_adapter, gitcmd, knowledge_cards,
-                project_profile, repo_context, store, workspace)
+                project_profile, repo_context, store, workspace, yamlmini)
 from ..reporters import outcome
 from ._base import GateRefusal
 from .acceptance import (blob_sha256, criterion_files, file_records,
@@ -635,7 +636,19 @@ FILE_LEVEL_FINDING = "ошибка уровня файла — тесты фай
 PREPARE_PREFIX = "отказ подготовки: "
 # Вид падения записи JUnit об ошибке сбора файла (pytest
 # `--continue-on-collection-errors`).
-_COLLECTION_FAILURE = "collection failure"
+_COLLECTION_FAILURE = outcome.COLLECTION_FAILURE
+# Засчитывание ошибки уровня файла «новым модулем» (SPEC
+# 01M5EDW6KD1ESCEVRSV2WPNXAP, требование 2; ADR-0026 п. 5): запись журнала
+# задачи, её деталь — строка пакета ревьювера (`review._outcome_gate_lines`).
+FILE_LEVEL_COUNTED_ACTION = "ошибка уровня файла засчитана красным"
+FILE_LEVEL_COUNTED_DETAIL = "новый модуль {path} (файл {name})"
+# Итоговая строка трассировки сбора pytest о неразрешённом импорте.
+_PY_MISSING_MODULE = re.compile(
+    r"(?:E   )?ModuleNotFoundError: No module named '([^']+)'")
+# Две формы сообщения Vitest о неразрешённом импорте.
+_VITEST_MISSING_MODULE = (
+    re.compile(r'Failed to resolve import "([^"]+)" from "[^"]*"'),
+    re.compile(r"Cannot find module '([^']+)'"))
 
 
 def _spec_anchor(conn, task_id: str) -> tuple[str, str]:
@@ -802,16 +815,36 @@ def _component_runs(tdir: Path, run_cwd, components, files
     return runs, prepare, timeouts
 
 
-def _file_level_findings(files, runs: dict, by_file: dict) -> list[str]:
-    """Ошибки уровня файла (требование 4): запись JUnit `error` с видом
-    «collection failure» — файл по имени записи; тестовый файл планки
-    `pult-vitest` без записей в отчёте."""
+def _is_file_level(record) -> bool:
+    return record.file_level or (
+        record.outcome == outcome.ERROR
+        and record.failure.startswith(_COLLECTION_FAILURE))
+
+
+def _record_owners(by_file: dict) -> dict:
+    """{id(запись): файл задачи} — записи, сопоставленные файлу по пути."""
+    return {id(record): cfile for cfile, records in by_file.items()
+            for record in records}
+
+
+def _file_level_findings(files, runs: dict, by_file: dict,
+                         counted: set = frozenset()) -> list[str]:
+    """Ошибки уровня файла (требование 4; SPEC 01M5EDW6KD1ESCEVRSV2WPNXAP,
+    требование 1): незасчитанная запись `file_level` любого отчёта либо
+    запись JUnit `error` с видом «collection failure» — запись с путём файла
+    задачи (Vitest) по имени этого файла, иначе файл по имени записи;
+    тестовый файл планки `pult-vitest` без записей в отчёте. `counted` —
+    `(компонент, id)` записей, засчитанных красным."""
     plank_names = {Path(f.name).stem: f.name for f in files if f.plank}
+    owners = _record_owners(by_file)
     found = []
-    for records in runs.values():
+    for component, records in runs.items():
         for record in records:
-            if record.outcome != outcome.ERROR or \
-                    not record.failure.startswith(_COLLECTION_FAILURE):
+            if not _is_file_level(record) or (component, record.id) in counted:
+                continue
+            cfile = owners.get(id(record))
+            if cfile is not None:
+                found.append(f"{cfile.name}: {FILE_LEVEL_FINDING}")
                 continue
             where = record_location(record)
             dotted = where[2] if where is not None else record.id
@@ -824,12 +857,146 @@ def _file_level_findings(files, runs: dict, by_file: dict) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+def _dotted_file(rel: str, root: str) -> str | None:
+    """Точечный путь файла `rel` (от корня репозитория) от каталога `root`
+    — имя записи сбора pytest; `None` — файл не `.py` или вне `root`."""
+    if not rel.endswith(".py"):
+        return None
+    inner = os.path.relpath(os.path.normpath(rel),
+                            os.path.normpath(root or ".")).replace(os.sep, "/")
+    if inner == ".." or inner.startswith("../"):
+        return None
+    return inner[:-3].replace("/", ".")
+
+
+def _level_file(component: str, record, files, owners: dict):
+    """Файл задачи записи `file_level`: у Vitest — по пути записи
+    (`file_records`), у JUnit — по ПОЛНОМУ точечному пути файла от
+    `workdir` (SPEC 01M5EDW6KD1ESCEVRSV2WPNXAP, требование 1), не по
+    последнему сегменту: одноимённый долгоживущий файл не засчитывает файл
+    планки."""
+    cfile = owners.get(id(record))
+    if cfile is not None:
+        return cfile
+    where = record_location(record)
+    if where is None:
+        return None
+    return next((f for f in files if f.profile.component == component
+                 and _dotted_file(f.rel, where[1]) == where[2]), None)
+
+
+def _python_module_name(path: str, workdir: str) -> str | None:
+    """Ожидаемое имя модуля пути `path` (от корня проекта) от `workdir`:
+    без `.py` через точки, у `__init__.py` — имя пакета; `None` — путь не
+    модуль Python под `workdir`."""
+    root = workdir.strip("/")
+    if root:
+        if not path.startswith(root + "/"):
+            return None
+        path = path[len(root) + 1:]
+    if not path.endswith(".py"):
+        return None
+    stem = path[:-len(".py")]
+    if stem == "__init__":
+        return None
+    if stem.endswith("/__init__"):
+        stem = stem[:-len("/__init__")]
+    return stem.replace("/", ".")
+
+
+def _missing_import_path(record, cfile, zones: list[str]) -> str | None:
+    """Путь P из `zones`, неразрешённый импорт которого — ошибка записи
+    (условие (б) требования 2 SPEC 01M5EDW6KD1ESCEVRSV2WPNXAP); `None` —
+    ошибка иная.
+
+    Python — только итоговая (последняя непустая) строка трассировки:
+    вхождение того же текста выше — например, в сообщении `RuntimeError` —
+    признаком не является. Vitest — две формы сообщения; спецификатор
+    разрешается от каталога файла в выкладке."""
+    detail = record.detail or ""
+    if cfile.profile.report == project_profile.REPORT_VITEST:
+        spec = next((m.group(1) for form in _VITEST_MISSING_MODULE
+                     if (m := form.search(detail))), None)
+        if spec is None:
+            return None
+        resolved = os.path.normpath(os.path.join(
+            os.path.dirname(cfile.rel), spec)).replace(os.sep, "/")
+        bare = not os.path.splitext(spec)[1]
+        for zone in zones:
+            stem = os.path.splitext(zone)[0]
+            if resolved == zone or (bare and resolved == stem) \
+                    or resolved + "/index" == stem:
+                return zone
+        return None
+    lines = [line.strip() for line in detail.splitlines() if line.strip()]
+    match = _PY_MISSING_MODULE.fullmatch(lines[-1]) if lines else None
+    if match is None:
+        return None
+    workdir = getattr(cfile.profile, "workdir", "") or ""
+    return next((zone for zone in zones
+                 if _python_module_name(zone, workdir) == match.group(1)), None)
+
+
+def _absent_in_base(conn, task_id: str, run_cwd, path: str) -> bool | None:
+    """P нет в дереве `diff_base` кодовой ветки (ветки нет — в HEAD рабочей
+    копии прогона); `None` — git не ответил."""
+    branch = store.get_task(conn, task_id)["branch"]
+    repo = workspace.task_repo(task_id)
+    if gitcmd.branch_exists(branch, repo=repo):
+        rev = gitcmd.diff_base(branch, repo=repo)
+    else:
+        rev, repo = "HEAD", Path(run_cwd)
+    listed = gitcmd.ls_tree_files(rev, path, repo=repo) if rev else None
+    if listed is None:
+        return None
+    return path not in listed
+
+
+def _counted_new_modules(conn, task_id: str, run_cwd, files, runs: dict,
+                         by_file: dict, anchor_text: str
+                         ) -> tuple[dict, GateRefusal | None]:
+    """({(компонент, id записи): (файл, P)}, отказ подготовки) — ошибки
+    уровня файла, засчитанные красным как «новый модуль» (SPEC
+    01M5EDW6KD1ESCEVRSV2WPNXAP, требование 2; ADR-0026 п. 5): файл планки
+    без маркера «Зелёный с рождения:», импорт не разрешён именно у P —
+    элемента `zones:` опорного SPEC (не `zones-extend`), которого нет в
+    базе кодовой ветки. Сбой git — отказ подготовки, не засчитывание."""
+    meta = yamlmini.frontmatter(anchor_text) or {}
+    zones = sorted(guard.zone_items(meta.get("zones")))
+    owners = _record_owners(by_file)
+    counted: dict = {}
+    for component, records in runs.items():
+        for record in records:
+            if not record.file_level:
+                continue
+            cfile = _level_file(component, record, files, owners)
+            if cfile is None or not cfile.plank or cfile.green:
+                continue
+            path = _missing_import_path(record, cfile, zones)
+            if path is None:
+                continue
+            absent = _absent_in_base(conn, task_id, run_cwd, path)
+            if absent is None:
+                return {}, GateRefusal(
+                    FAIL_TO_PASS_PREPARE_REFUSAL_ACTION,
+                    f"{PREPARE_PREFIX}отсутствие {path} в базе кодовой ветки "
+                    f"не проверено — git не ответил",
+                    f"разберись, почему git не отвечает, и повтори artel.py "
+                    f"advance {task_id}")
+            if absent:
+                counted[(component, record.id)] = (cfile, path)
+    return counted, None
+
+
 def _criterion_findings(numbers: set[int], files, by_file: dict,
-                        green: set[int]) -> list[str]:
+                        green: set[int], counted_files=frozenset()
+                        ) -> list[str]:
     """Находки по критериям (требования 3, 5): запись каждого покрытого
     критерия — провал проверки, у файла с маркером «Зелёный с рождения:»
     (все его критерии — из перечня) — прошла; маркер у файла с критерием вне
-    перечня — находка."""
+    перечня — находка. «Теста нет в отчёте» не даёт критерий, все файлы
+    которого засчитаны красным (`counted_files`; SPEC
+    01M5EDW6KD1ESCEVRSV2WPNXAP, требование 2)."""
     findings: list[str] = []
     green_files = set()
     for cfile in files:
@@ -859,7 +1026,8 @@ def _criterion_findings(numbers: set[int], files, by_file: dict,
     for n in sorted(numbers & in_files):
         pairs = by_number.get(n, [])
         if not pairs:
-            findings.append(f"AC-{n}: {NO_RECORD_FINDING}")
+            if not all(f in counted_files for f in files if n in f.numbers):
+                findings.append(f"AC-{n}: {NO_RECORD_FINDING}")
             continue
         for record, cfile in pairs:
             if cfile in green_files:
@@ -944,18 +1112,28 @@ def _tests_writing_fail_to_pass_gate(conn, task_id: str, acc_tdir, run_cwd,
             f"разберись с подготовкой прогона компонента и повтори artel.py "
             f"advance {task_id}")
     by_file = file_records(files, runs)
+    counted, refusal = _counted_new_modules(conn, task_id, run_cwd, files, runs,
+                                            by_file, anchor_text)
+    if refusal is not None:
+        return refusal
+    for cfile, path in dict.fromkeys(counted.values()):
+        store.journal(conn, task_id, "fsm", FILE_LEVEL_COUNTED_ACTION,
+                      FILE_LEVEL_COUNTED_DETAIL.format(path=path, name=cfile.name))
     repeats = [f"{REPEAT_FINDING}{record.id}" for cfile in files
                for record in by_file[cfile]
                if (where := record_location(record)) is not None
                and where[3] is not None]
     findings = (timeouts + repeats
                 + _criterion_findings(numbers, files, by_file,
-                                      _green_list(anchor_text))
-                + _file_level_findings(files, runs, by_file))
+                                      _green_list(anchor_text),
+                                      {cfile for cfile, _path in counted.values()})
+                + _file_level_findings(files, runs, by_file, set(counted)))
     if not findings:
         return None
     hint = (f"перепиши тесты критериев так, чтобы на коде базы каждый падал "
             f"провалом проверки (имя ошибки из failure_errors компонента), и "
             f"повтори artel.py advance {task_id}")
+    # Подсказка — в детали (её читает бриф test_author, `brief.py`); пустой
+    # `hint` — печать отказа не повторяет её второй строкой (перенос 15).
     return GateRefusal(FAIL_TO_PASS_REFUSAL_ACTION,
-                       "; ".join(findings) + f"\nдальше: {hint}", hint)
+                       "; ".join(findings) + f"\nдальше: {hint}", "")
