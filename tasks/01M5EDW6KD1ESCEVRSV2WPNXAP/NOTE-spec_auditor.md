@@ -1,17 +1,16 @@
-# Записка spec_auditor — 01M5EDW6KD1ESCEVRSV2WPNXAP (круг 2, spec_sha f39cde0d)
+# Записка spec_auditor — 01M5EDW6KD1ESCEVRSV2WPNXAP (круг 3, spec_sha a3382bdc)
 
 ## Выяснено
-- Решения Оператора 1–8 круга 1 перенесены в SPEC полностью; адреса кода прежние и верны.
-- AC-3, вторая фраза (из решения 7), противоречит коду: для test_profile гейт FAIL_TO_PASS не добавляется (fsm_advance.py:613) и возвращает None (tests_writing.py:903-904) — прежней находки FILE_LEVEL_FINDING там нет и не было.
-- Запись file_level Vitest попадёт в by_file (acceptance.py:328-341): второе правило (tests_writing.py:820-823) перестанет срабатывать, первое требует «collection failure» (:813-814) — находку уровня файла надо давать явно; в требованиях это не сказано, ловят только AC-8/AC-10.
-- «P/index» у Vitest читается двояко; спецификатор с расширением (`./new.ts`) не описан.
-- GateRefusal.hint читает только _base.py:36-37; тесты hint FAIL_TO_PASS не проверяют.
+- Решения круга 2 (пп. 1–3) перенесены в SPEC: AC-3 «гейт не применяется», FILE_LEVEL_FINDING у незасчитанной записи Vitest (Требования 1, AC-4), три случая спецификатора (2 (б), AC-7, AC-10). Три отклонения круга 2 сняты.
+- Код orchestrator/ и tests/ с a3d1a633 не менялся; адреса SPEC верны.
+- compare (outcome_integrity.py:137) красноту не судит — исключение file_level из идентификаторов не ослабляет.
+- Остатки (ложные отказы, не обход): обрезка detail до 2000 при чтении последней строки; псевдонимы/.js у Vitest; форма «Failed to load url» у Vite.
 
 ## Не сработало
-- `cd X && grep` с относительными путями требует подтверждения — нужны абсолютные пути.
+- `cd X && cmd` и `$VAR` в Bash требуют подтверждения — абсолютные пути, без переменных.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, 3 отклонения.
+- SPEC-AUDIT.md сдан: verdict pass, status ready, guard ок.
 
 ## Чего не хватило
 - Нет.
