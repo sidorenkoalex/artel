@@ -148,12 +148,14 @@ import importlib
 import json
 import os
 import random
+import re
 import signal
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections import namedtuple
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
@@ -2791,6 +2793,12 @@ LIVE_RUN_SWEPT_ACTION = "канарейка: запись реестра жив�
 DURING_CANARY_ACTION = "команда во время канарейки"
 _LIVE_RECORD_SUFFIX = ".json"
 _LIVE_MARK_SUFFIX = ".lock"
+# Метка без записи (SPEC 01M5FA4NR91PCF47SZT6V0Q9HS, требование 1):
+# нечитаемая метка моложе порога — прогон, ещё не записавший в неё pid.
+_LIVE_MARK_UNREADABLE_GRACE_SEC = 60
+LIVE_MARK_ABSENT_NOTE = "(запись реестра отсутствует)"
+LIVE_RUN_DROPPED_ACTION = "канарейка: запись реестра снята Оператором"
+RUN_STAMP_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 
 
 def _live_dir() -> Path:
@@ -2892,17 +2900,26 @@ def _live_verdict(entry: dict | None) -> str | None:
     return None
 
 
-def _drop_live_record(path: Path, entry: dict | None, why: str) -> None:
-    path.unlink(missing_ok=True)
+def _record_mark(path: Path) -> Path:
     stamp = path.name.split("-", 1)[0]
-    mark = path.with_name(f"{stamp}{_LIVE_MARK_SUFFIX}")
+    return path.with_name(f"{stamp}{_LIVE_MARK_SUFFIX}")
+
+
+def _mark_follows_record(mark: Path, entry: dict | None) -> bool:
+    """Метка уходит вместе с мёртвой записью: она пустая либо несёт pid
+    записи. Метку чужого (живого) прогона того же `run_stamp` не трогаем."""
     try:
         owner = mark.read_text(encoding="utf-8").strip()
     except OSError:
-        owner = None
+        return False
     pid = (entry or {}).get("pid")
-    # Метку чужого (живого) прогона того же `run_stamp` не трогаем.
-    if owner is not None and (pid is None or owner in ("", str(pid))):
+    return pid is None or owner in ("", str(pid))
+
+
+def _drop_live_record(path: Path, entry: dict | None, why: str) -> None:
+    path.unlink(missing_ok=True)
+    mark = _record_mark(path)
+    if _mark_follows_record(mark, entry):
         mark.unlink(missing_ok=True)
     store.journal(store.db(), None, "orchestrator", LIVE_RUN_SWEPT_ACTION,
                   f"{path.name}: {why}")
@@ -2938,16 +2955,235 @@ def live_runs() -> list[dict]:
     return alive
 
 
+def _mark_state(mark: Path) -> dict | None:
+    """Метка без записи (SPEC 01M5FA4NR91PCF47SZT6V0Q9HS, требование 1):
+    `why` — `None`, если прогон живой, иначе почему нет. `None` — метки
+    уже нет."""
+    try:
+        text = mark.read_text(encoding="utf-8")
+        age = time.time() - mark.stat().st_mtime
+    except FileNotFoundError:
+        return None
+    except OSError:
+        text, age = "", 0.0
+    try:
+        pid = int(text.strip())
+    except ValueError:
+        pid = None
+    if pid is not None and pid <= 0:
+        pid = None
+    # Нечитаемая метка свежее порога — прогон между созданием метки и
+    # записью в неё pid: безопасная сторона, окно держится.
+    if pid is None:
+        why = (None if age < _LIVE_MARK_UNREADABLE_GRACE_SEC
+               else f"метка не читается, возраст {int(age)} с")
+    elif not liveness._pid_alive(pid):
+        why = f"pid {pid} не жив"
+    else:
+        why = None
+    return {"path": mark, "run_stamp": mark.name[:-len(_LIVE_MARK_SUFFIX)],
+            "pid": pid, "age": age, "why": why}
+
+
+def _record_stamps(directory: Path) -> set:
+    return {p.name.split("-", 1)[0]
+            for p in directory.glob(f"*{_LIVE_RECORD_SUFFIX}")}
+
+
+def live_marks() -> list[dict]:
+    """Живые метки без записи (требование 1), по имени метки. Читается
+    после уборки записей (`live_runs`): метка, рядом с которой осталась
+    запись того же `run_stamp`, не трогается. Мёртвая метка (pid не жив,
+    нечитаемая старше 60 с) убирается строкой журнала пульта без задачи."""
+    directory = _live_dir()
+    if not directory.is_dir():
+        return []
+    with_records = _record_stamps(directory)
+    alive = []
+    for mark in sorted(directory.glob(f"*{_LIVE_MARK_SUFFIX}")):
+        if mark.name[:-len(_LIVE_MARK_SUFFIX)] in with_records:
+            continue
+        state = _mark_state(mark)
+        if state is None:
+            continue
+        if state["why"] is None:
+            alive.append(state)
+            continue
+        mark.unlink(missing_ok=True)
+        store.journal(store.db(), None, "orchestrator", LIVE_RUN_SWEPT_ACTION,
+                      f"{mark.name}: {state['why']}")
+    return alive
+
+
+def _read_live_record(path: Path) -> dict | None:
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return entry if isinstance(entry, dict) else None
+
+
+def registry_view() -> tuple[list, list]:
+    """Реестр без уборки (проверка `doctor`, требование 4): записи
+    `(путь, запись, почему не живая | None)` и метки без живой записи
+    (`_mark_state`). Метка, которую уборка унесла бы вместе с мёртвой
+    записью, — мёртвая."""
+    directory = _live_dir()
+    if not directory.is_dir():
+        return [], []
+    records = []
+    for path in sorted(directory.glob(f"*{_LIVE_RECORD_SUFFIX}")):
+        entry = _read_live_record(path)
+        records.append((path, entry, _live_verdict(entry)))
+    alive_stamps = {path.name.split("-", 1)[0]
+                    for path, _entry, why in records if why is None}
+    doomed = {_record_mark(path).name for path, entry, why in records
+              if why is not None and _mark_follows_record(_record_mark(path), entry)}
+    marks = []
+    for mark in sorted(directory.glob(f"*{_LIVE_MARK_SUFFIX}")):
+        if mark.name[:-len(_LIVE_MARK_SUFFIX)] in alive_stamps:
+            continue
+        state = _mark_state(mark)
+        if state is None:
+            continue
+        if mark.name in doomed:
+            state["why"] = "уходит вместе с мёртвой записью"
+        marks.append(state)
+    return records, marks
+
+
+def record_age(entry: dict) -> float:
+    started_at = _parse_moment(entry.get("started_at"))
+    if started_at is None:
+        return 0.0
+    return (datetime.now(timezone.utc) - started_at).total_seconds()
+
+
+def hours_text(seconds: float) -> str:
+    return f"{seconds / 3600:.1f} ч"
+
+
 def live_run_note(default_set_only: bool = False) -> str | None:
     """«идёт канарейка <run_stamp> на <sha7>» первого живого прогона;
     `default_set_only` — только прогоны набора по умолчанию (мерж,
-    требование 7). `None` — такого прогона нет."""
-    for entry in live_runs():
+    требование 7). Записи — первыми; метка без записи — «идёт канарейка
+    <run_stamp> (запись реестра отсутствует)», её набор неизвестен и
+    считается набором по умолчанию (SPEC 01M5FA4NR91PCF47SZT6V0Q9HS,
+    требование 1). `None` — такого прогона нет."""
+    runs = live_runs()
+    marks = live_marks()
+    for entry in runs:
         if default_set_only and entry.get("set_name") != config.CANARY_DEFAULT_SET:
             continue
         return (f"идёт канарейка {entry.get('run_stamp')} на "
                 f"{str(entry.get('sha') or '')[:7]}")
+    for mark in marks:
+        return f"идёт канарейка {mark['run_stamp']} {LIVE_MARK_ABSENT_NOTE}"
     return None
+
+
+def _record_line(entry: dict) -> str:
+    age = record_age(entry)
+    ceiling = CANARY_DRIVE_TIMEOUT_SEC * int(entry["tasks"]) + 3600
+    parts = [f"{entry.get('run_stamp')}: pid {entry.get('pid')}"]
+    if entry.get("parent_pid") is not None:
+        parts.append(f"parent_pid {entry['parent_pid']}")
+    template = entry.get("template") or ", ".join(
+        str(name) for name in entry.get("templates") or [])
+    if template:
+        parts.append(f"шаблон {template}")
+    parts += [f"sha {str(entry.get('sha') or '')[:7]}",
+              f"набор {entry.get('set_name')}",
+              f"начало {entry.get('started_at')}",
+              f"возраст {hours_text(age)}",
+              f"до потолка {hours_text(ceiling - age)}"]
+    return ", ".join(parts)
+
+
+def _mark_line(mark: dict) -> str:
+    pid = mark["pid"] if mark["pid"] is not None else "не читается"
+    return (f"{mark['run_stamp']}: {LIVE_MARK_ABSENT_NOTE}, pid {pid}, "
+            f"возраст {hours_text(mark['age'])}")
+
+
+def _drop_reason(entry: dict | None) -> str | None:
+    """Почему запись снимается `canary live --drop` (требование 3);
+    `None` — свежая запись живого процесса, строгий вариант её не снимает."""
+    if entry is None:
+        return "запись не читается"
+    if record_age(entry) >= CANARY_DRIVE_TIMEOUT_SEC:
+        return f"старше {CANARY_DRIVE_TIMEOUT_SEC // 3600} ч"
+    if _parse_moment(entry.get("process_start")) is None:
+        return "время старта процесса не определилось при записи"
+    try:
+        pid = int(entry["pid"])
+    except (KeyError, TypeError, ValueError):
+        return "запись не читается"
+    if _stale_cycles().process_start_time(pid) is None:
+        return "время старта процесса не определилось при сверке"
+    return None
+
+
+def cmd_canary_live(drop: str | None = None, reason: str | None = None) -> None:
+    """`canary live` — реестр живых прогонов; `canary live --drop
+    <run_stamp> "<основание>"` — снятие зависшего (SPEC
+    01M5FA4NR91PCF47SZT6V0Q9HS, требования 2-3). Аргументы проверяет
+    вызывающий (`artel._cmd_canary_live`) до чтения реестра. Перед показом
+    и снятием мёртвое убирается прежним путём чтения реестра. Процессам
+    прогона сигналы не шлются."""
+    runs = live_runs()
+    marks = live_marks()
+    if drop is None:
+        if not runs and not marks:
+            print("живых прогонов канарейки нет")
+            return
+        print("живые прогоны канарейки:")
+        for entry in runs:
+            print(f"  {_record_line(entry)}")
+        for mark in marks:
+            print(f"  {_mark_line(mark)}")
+        return
+    directory = _live_dir()
+    mark = directory / f"{drop}{_LIVE_MARK_SUFFIX}"
+    records = sorted(directory.glob(f"{drop}-*{_LIVE_RECORD_SUFFIX}"))
+    if not records and not mark.exists():
+        print(f"canary live: в реестре нет {drop}")
+        return
+    removed, pids, kept = [], [], []
+    for path in records:
+        entry = _read_live_record(path)
+        why = _drop_reason(entry)
+        if why is None:
+            kept.append(entry)
+            continue
+        path.unlink(missing_ok=True)
+        removed.append(f"{path.name} ({why})")
+        pids.append((entry or {}).get("pid"))
+    if not kept and mark.exists():
+        state = _mark_state(mark)
+        mark.unlink(missing_ok=True)
+        removed.append(f"{mark.name} (метка без записи)")
+        pids.append((state or {}).get("pid"))
+    if not removed:
+        entry = kept[0]
+        sys.exit(f"canary live: прогон {drop} жив (pid {entry.get('pid')}, "
+                 f"возраст {hours_text(record_age(entry))}) — снимать нечего; "
+                 f"дождись итога или используй {DURING_CANARY_FLAG} у "
+                 f"конкретной команды")
+    warnings = []
+    for pid in pids:
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            continue
+        warning = f"процесс {pid} жив — прогон продолжается без защиты окна"
+        if pid > 0 and liveness._pid_alive(pid) and warning not in warnings:
+            warnings.append(warning)
+    detail = "; ".join([", ".join(removed), f"основание: {reason}", *warnings])
+    store.journal(store.db(), None, "operator", LIVE_RUN_DROPPED_ACTION, detail)
+    print(f"canary live: снято {', '.join(removed)}; основание: {reason}")
+    for warning in warnings:
+        print(f"canary live: {warning}")
 
 
 def during_canary_reason_refusal(command: str) -> str:

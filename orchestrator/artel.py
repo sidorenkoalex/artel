@@ -181,6 +181,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] [--detach] |
            --detach: отвязанный запуск штатный для сессии Оператора |
   canary pool-seal [--during-canary "<основание>"] |
+  canary live [--drop <run_stamp> "<основание>"] |
   prune [--execute] | explore-stats [--days N] [--role <роль>] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   artifact-history-snapshots [--dry-run] |
@@ -1554,6 +1555,9 @@ def _cmd_canary(rest: list) -> None:
         else:
             pool_seal.cmd_pool_seal(during_canary=during_canary)
         return
+    if rest and rest[0] == "live":
+        _cmd_canary_live(rest[1:])
+        return
     if "--detach" in rest:
         if rest.count("--detach") != 1 or "--result-file" in rest:
             sys.exit("canary: повторный или несовместимый --detach")
@@ -1591,6 +1595,32 @@ def _cmd_canary(rest: list) -> None:
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(result, ensure_ascii=False),
                                    encoding="utf-8")
+
+
+def _cmd_canary_live(rest: list) -> None:
+    """`canary live [--drop <run_stamp> "<основание>"]` (SPEC
+    01M5FA4NR91PCF47SZT6V0Q9HS, требования 2-3): аргументы проверяются
+    здесь, до чтения каталога реестра — `run_stamp` первым, затем
+    основание приёмом `_fixes_main_arg`, затем лишние аргументы."""
+    usage = 'canary live [--drop <run_stamp> "<основание>"]'
+    if not rest:
+        canary.cmd_canary_live()
+        return
+    if rest[0] != "--drop":
+        sys.exit(f"canary live: лишние аргументы {rest!r} — {usage}")
+    if len(rest) < 2:
+        sys.exit(f"canary live: --drop требует run_stamp — {usage}")
+    stamp = rest[1]
+    if not canary.RUN_STAMP_RE.fullmatch(stamp):
+        sys.exit(f"canary live: run_stamp {stamp!r} не по шаблону "
+                 f"ГГГГММДДTЧЧММССZ — {usage}")
+    reason = rest[2] if len(rest) > 2 else ""
+    if not reason.strip():
+        sys.exit(f"canary live: --drop требует основание следующим "
+                 f"аргументом — {usage}")
+    if len(rest) > 3:
+        sys.exit(f"canary live: лишние аргументы {rest[3:]!r} — {usage}")
+    canary.cmd_canary_live(drop=stamp, reason=reason.strip())
 
 
 def _detach_canary(rest: list) -> None:

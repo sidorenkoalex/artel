@@ -10,10 +10,12 @@
 """
 import shutil
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, doctor, snapshot, store, workspace
+from orchestrator import canary, config, doctor, snapshot, store, workspace
 from tests.sandbox import _PROJECT_TARGET_ENTRY, RealGitSandbox, capture
 
 TASK = "01UNITCLOSEDREFFIX00000001"
@@ -148,6 +150,16 @@ class ClosingCommitNowhereTest(MainCopyClosingSandbox):
 
 
 class DoctorFixOrderTest(unittest.TestCase):
+
+    def setUp(self):
+        # Починка реестра живой канарейки под `--fix` читает его каталог:
+        # временный, не под настоящим корнем пульта (SPEC
+        # 01M5FA4NR91PCF47SZT6V0Q9HS, требование 5).
+        live = tempfile.TemporaryDirectory()
+        self.addCleanup(live.cleanup)
+        patcher = mock.patch.object(canary, "_live_dir", lambda: Path(live.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_project_clones_before_closed_refs_before_checks(self):
         """`cmd_doctor(fix=True)`: заведение клонов — раньше досылки
