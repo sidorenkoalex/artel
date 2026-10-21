@@ -1,16 +1,15 @@
 ## Выяснено
-- Круг 2 (возврат с spec_gate): 6 решений Оператора вошли в SPEC — перечень классов изоляции, doctor без --fix только читает, порядок записи→метки, нечитаемая метка, формула остатка, --drop после уборки.
-- Перечень требования 5 (116 классов, 58 файлов) взят из прогона шпиона по 236 файлам tests/ (grep по потребителям реестра/doctor/note/approve/doc-commit/canary/artel.main) на main 58c9a84b. Шпион оборачивал canary._live_dir, doctor.all_checks, fsm_merge_gate._refuse_during_canary.
-- Под настоящим корнем реестр трогает только CmdCanaryTemplateSelectionTest (cmd_canary > _live_run_record). Остальные 115 классов, в том числе 4 класса test_invariants, уже на tmp.
-- Ни один тест не подменяет canary._live_dir сам, поэтому шпион не мог пропустить класс из-за чужой подмены.
-- doctor --fix: починки `_fix_*` выполняются до all_checks (doctor/cli.py:194-217).
+- Круг 3 (возврат с spec_gate, решения круга 2: AC-19 без вложенного прогона, статика + динамика; требование 3 — метка снимается `--drop`, только если не осталось записей того же run_stamp).
+- Разбор наследования 116 классов перечня (ast, main f1f805b6): 91 → RealGitSandbox (tests/sandbox.py:1897), 19 → TmpRootTest (:1581), CanaryPoolDriftCheckTest подменяет config.ROOT в setUp (test_doctor_canary_pool.py:249), CmdCanaryTemplateSelectionTest — подмена по требованию 5.
+- 3 класса test_invariants наследуют FsmTest: ROOT настоящий, подмена только на время fsm.cmd_approve (test_invariants.py:245–267).
+- MainCopyGitUnchangedDuringTaskTest (test_invariants.py:3155) — голый TestCase без setUp, изоляция только вложенной Flow(TaskFlowSandbox) в методе (:3177–3186). Статическое правило Оператора его не пропустит, править файл нельзя.
+- _live_dir = config.ROOT/.artel/<CANARY_LIVE_DIRNAME> (canary.py:2797).
 
 ## Не сработало
-- Подмена функции без functools.wraps ломает тесты inspect.getsource(doctor.all_checks).
-- pytest -n (xdist) под ролью отказывает: сторож conftest.py. Вместо него шли 8 отдельных процессов pytest. Часть 6 оборвалась без итоговой строки после test_notes_row_format; 3 оставшихся файла догнаны отдельно, обращений к реестру нет.
+- `ls`, `$?`, `awk` в Bash под ролью отказывают/требуют подтверждения; Read и grep без подстановок работают.
 
 ## Где остановился
-- SPEC.md: status ready, guard ок. Временные файлы шпиона из каталога документов удалены.
+- QUESTIONS.md (2 вопроса: признак для MainCopyGitUnchanged, FsmTest как основа), guard ок. SPEC.md не тронут — после ANSWER: переписать требование 5/AC-19 по п.1 круга 2 + ответу, требование 3/AC-9/AC-14 по п.4 (метка снимается только без оставшихся записей run_stamp), удалить QUESTIONS.md.
 
 ## Чего не хватило
-- Готового перечня тестов, доходящих до реестра. Его пришлось собирать шпионом за ~25 мин прогона.
+- Знания, что FsmTest держит ROOT настоящим: пришлось читать setUp test_invariants.py:149–317.
