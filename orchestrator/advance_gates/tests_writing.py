@@ -923,7 +923,11 @@ def _missing_import_path(record, cfile, zones: list[str]) -> str | None:
             os.path.dirname(cfile.rel), spec)).replace(os.sep, "/")
         bare = not os.path.splitext(spec)[1]
         for zone in zones:
-            stem = os.path.splitext(zone)[0]
+            stem, ext = os.path.splitext(zone)
+            # Все три случая (б) — про модуль-файл с расширением; элемент
+            # без расширения — каталог, «элементы-каталоги не считаются».
+            if not ext:
+                continue
             if resolved == zone or (bare and resolved == stem) \
                     or resolved + "/index" == stem:
                 return zone
@@ -939,7 +943,9 @@ def _missing_import_path(record, cfile, zones: list[str]) -> str | None:
 
 def _absent_in_base(conn, task_id: str, run_cwd, path: str) -> bool | None:
     """P нет в дереве `diff_base` кодовой ветки (ветки нет — в HEAD рабочей
-    копии прогона); `None` — git не ответил."""
+    копии прогона); `None` — git не ответил. `ls-tree` рекурсивен: P,
+    оказавшийся в базе каталогом, перечислен своими файлами `P/…` — это
+    присутствие, не отсутствие."""
     branch = store.get_task(conn, task_id)["branch"]
     repo = workspace.task_repo(task_id)
     if gitcmd.branch_exists(branch, repo=repo):
@@ -949,7 +955,7 @@ def _absent_in_base(conn, task_id: str, run_cwd, path: str) -> bool | None:
     listed = gitcmd.ls_tree_files(rev, path, repo=repo) if rev else None
     if listed is None:
         return None
-    return path not in listed
+    return not any(rel == path or rel.startswith(path + "/") for rel in listed)
 
 
 def _counted_new_modules(conn, task_id: str, run_cwd, files, runs: dict,
