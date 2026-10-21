@@ -2,7 +2,7 @@
 task: 01M5FA4NR91PCF47SZT6V0Q9HS
 type: spec
 author_role: analyst
-status: draft
+status: ready
 schema_version: 5
 zones: orchestrator/canary.py, orchestrator/artel.py, orchestrator/doctor/canary_pool.py, orchestrator/doctor/cli.py, orchestrator/doctor/__init__.py, tests/
 budget_usd: 27
@@ -120,16 +120,82 @@ budget_usd: 27
    окна мержа до `_refuse_during_canary`, `live_run_note`, `live_runs`, чтение
    и уборка реестра, `doctor.all_checks` с проверкой `canary-live` и команда
    `canary live`. Перечень разработчик может только дополнять, с записью о
-   каждом добавленном классе в отчёте; убрать класс из перечня нельзя. Класс в
-   защищённом пути (`tests/test_invariants.py`) — эскалация, а не правка. Это
-   добавление изоляции: существующие утверждения не меняются и не удаляются.
+   каждом добавленном классе в отчёте; убрать класс из перечня нельзя. Классы
+   защищённого пути `tests/test_invariants.py` входят в перечень; если такой
+   класс требует правки для изоляции — эскалация, а не правка. Это добавление
+   изоляции: существующие утверждения не меняются и не удаляются.
 
-   Перечень (найден прогоном файлов `tests/`, вызывающих потребителей реестра
-   и `doctor.all_checks`, со шпионом на `canary._live_dir` и
-   `doctor.all_checks` при `config.ROOT`, равном настоящему корню, на коде
-   main 58c9a84b):
+   Перечень — 116 классов в 58 файлах. Он найден прогоном 236 файлов `tests/`,
+   которые упоминают потребителей реестра, `doctor`, `note`, `approve`,
+   `doc-commit`, `canary` или `artel.main`. Прогон шёл со шпионом на
+   `canary._live_dir`, `doctor.all_checks` и
+   `fsm_merge_gate._refuse_during_canary` на коде main 58c9a84b. В перечень
+   вошёл каждый класс, хотя бы один тест которого дошёл до одной из этих
+   функций:
 
-   PERECHEN
+   - `tests/test_01m3pymq6n4scaj9wwttkh6xng_canary_clone_models.py`: `BaselineModelsChangeTest`, `CodexRoleOfTheSetTest`, `DefaultRunCloneLayerTest`, `RunSummaryModelsTest`, `SetByRolesTest`
+   - `tests/test_01m3pymq6n4scaj9wwttkh6xng_role_models.py`: `RoleModelsDoctorLinesTest`
+   - `tests/test_01m3s9hfdds9s4274w6tbqjbh7_canary_acceptance.py`: `CanaryAcceptanceResultTest`
+   - `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`: `DoctorMainCiLineTest`, `MergeGuardAfterSnapshotTest`, `MergeWaitsForMainCiTest`, `NextMergeRefusedOnRedMainTest`, `RedMergeThenDocCommitTest`
+   - `tests/test_01m3sk48d7rdqpsen78894gda5_codex_home.py`: `CanaryCodexHomeTest`
+   - `tests/test_01m3v4zpb6hfdj36mtdaqg5vnt_canary_profile.py`: `CanaryProfileTest`
+   - `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`: `DoctorStaleCyclesTest`
+   - `tests/test_01m3y75x6k2zmd85971tcwv41e_held_base.py`: `DropPendingTest`, `HeldRecordBaseTest`, `ImmediatePinCheckTest`, `LegacyRecordTest`, `MatchingBaseSendTest`, `NewFileBaseTest`, `PendingListTest`, `RoleRefusalTest`, `StaleBaseRefusalTest`
+   - `tests/test_01m3ychp14179r32sfjvkqb32g_model_sets.py`: `AdmitShortfallTest`, `AdmitWriteTest`, `CleanRunTest`
+   - `tests/test_01m3yxyax5pw9bm67mb4gk85d1_step_provider_preflight.py`: `DoctorSetProvidersTest`
+   - `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`: `CloneCreationTest`, `CloneHooksFromPinTest`, `EndToEndMainCopyUntouchedTest`, `HeldRecordBaseFromCloneTest`, `MergeGateStepsOnCloneTest`, `OperatorCommandsThroughCloneTest`
+   - `tests/test_01m443hv9sjyvyqthjsq87qv68_merge_gate_applied.py`: `AlreadyAppliedAppendixTest`
+   - `tests/test_01m44ep0d47f498tee08mngbyt_merge_gate_merge_after.py`: `MergeGateDoneDependenciesTest`
+   - `tests/test_01m45fk56dwmnbrka1vwm12h19_merge_gate.py`: `ArtelFullSuiteClassesTest`, `ExternalAppendixTest`, `GeneratorMapTest`, `NoGeneratorMapTest`, `ProfileSuiteTest`, `ProtectedDiffTest`
+   - `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py`: `MergeGateUnchangedTest`
+   - `tests/test_01m484rnv3qbdy3b0m16j916zp_artel_predicate.py`: `PredicateGitTest`
+   - `tests/test_01m48wre8bhfdy011q0hqgq91b_full_suite_limit_runs.py`: `ProfileLimitCutsGateRunTest`
+   - `tests/test_01m48wre8bhfdy011q0hqgq91b_profile_limit_field.py`: `DoctorLimitLineTest`
+   - `tests/test_01m4araxf7vss5xz8c99bx8de2_doctor_duration.py`: `DoctorDurationTest`
+   - `tests/test_01m4axpy1py4ps1yafamd47vby_canary_doctor.py`: `CanaryDoctorTest`
+   - `tests/test_01m4axpy1py4ps1yafamd47vby_canary_lifecycle.py`: `CanaryLifecycleTest`
+   - `tests/test_01m4beg0003ch0qa1gy0pxat03_canary_suite_skip.py`: `AutogateSkipTest`, `CanaryCloneSkipTest`
+   - `tests/test_01m4c954hbjwegd3azs7q3eha4_doctor.py`: `HookAndDocumentationTest`
+   - `tests/test_01m4c954hbjwegd3azs7q3eha4_watch.py`: `WatchContractTest`
+   - `tests/test_01m4fytb8qwjnhycp35k8qc4e3_worktree_db_clean.py`: `DoctorWorktreeDbTest`
+   - `tests/test_01m4g8mnepecnx1tcedw4t4rpx_origin_sweep.py`: `OriginSweepTest`
+   - `tests/test_01m4jd3srn66sd6bm63xaghb11_merge_gate_in_base.py`: `MergeGateAlreadyInBaseTest`
+   - `tests/test_01m4jmmh70nwjg72g422bfy1kc_postmerge_map_interpreter.py`: `PostMergeMapInterpreterTest`
+   - `tests/test_01m4k2767fxkz8ew7ame81sz9n_suite_near_limit.py`: `NotesNearLimitTest`
+   - `tests/test_01m4m67sgneymn9f1c7xvx24xe_merge_closing.py`: `ArtelMergeTest`, `ClosingFailureTest`, `ExternalMergeTest`
+   - `tests/test_01m4m68557tt4kyn814h8az01a_history_snapshots.py`: `DoctorQuietTest`, `DoctorTamperTest`
+   - `tests/test_01m4rzbpg6exm74mtbptegw2d4_note_merge_gate.py`: `NoteMergeGateTest`
+   - `tests/test_01m4s0jvb85w9ty1esgnbh97fp_doc_commit.py`: `KnowledgeCommitTest`
+   - `tests/test_01m4s24ebvb72b8wyj3jy96y0e_merge_reference.py`: `ArtelCodeMergeTest`, `ArtelMergeTest`
+   - `tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py`: `MergeGateTest`, `PultUnchangedTest`
+   - `tests/test_01m545edths47hsb59akc1ez9c_project_token.py`: `ProjectDoctorTest`
+   - `tests/test_01m563947r26nzw2tjekm36qrd_note_window_project.py`: `NoteWindowProjectTest`
+   - `tests/test_01m57pm7nbfx34319tr0f9cb4f_mutex_readers_all_rows.py`: `SilenceWindowAllRowsTest`
+   - `tests/test_01m583rm59dhdrdh877aeravmd_early_signal.py`: `EarlySignalCanaryTest`
+   - `tests/test_01m58pg72pg64gs790xm2ews61_doctor_components.py`: `DoctorOnComponentRecordsTest`, `PathsSourceTest`, `TestProfileRecordsUnchangedTest`, `ToolVersionTest`, `WorkdirTest`
+   - `tests/test_01m5c6qa6s3ry9ps4h9zj58wq0_canary_registry.py`: `CanaryRegistryTest`
+   - `tests/test_01m5c6qa6s3ry9ps4h9zj58wq0_canary_window.py`: `CanaryWindowTest`
+   - `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py`: `Ac14OutOfBoundsTest`, `Ac4ProofTest`, `Ac5ProofMismatchTest`, `Ac6LegacyRecordTest`, `Ac7MergeBaseTest`
+   - `tests/test_canary_live_registry_units.py`: `LiveRunsSweepTest`
+   - `tests/test_canary_template_flag.py`: `CmdCanaryTemplateSelectionTest`
+   - `tests/test_doc_commit.py`: `DocCommitPushTest`, `DocCommitRefusalTest`, `PinBaseCheckTest`, `SilenceWindowAndFlushTest`
+   - `tests/test_doc_commit_held_base.py`: `NetworkHoldBaseTest`
+   - `tests/test_doc_commit_suite_gate.py`: `AcceptRedOnDocsPathTest`, `AcceptRedTest`, `GateRefusalLeavesNoDirtTest`, `HeldConfigRecordFlushTest`, `RedSuiteTest`, `SuiteTreeTest`
+   - `tests/test_doctor.py`: `DoctorCommandTest`
+   - `tests/test_doctor_canary_pool.py`: `CanaryPoolDriftCheckTest`
+   - `tests/test_fsm_merge_gate_done_snapshot.py`: `DonePathSnapshotTest`
+   - `tests/test_invariants.py`: `MainCopyGitUnchangedDuringTaskTest`, `ManualGatesNeedTheOperatorTest`, `MergeNeedsGreenCiTest`, `MergeOnlyFromMergeGateTest`
+   - `tests/test_merge_gate_ci_wait.py`: `MovedMainRetryInCycleTest`
+   - `tests/test_notes.py`: `CmdNoteArgumentValidationTest`, `SilenceWindowReasonTest`, `WindowBypassAndNoWindowTest`, `WindowHoldsValidNoteTest`
+   - `tests/test_notes_apply.py`: `ApplyRefusalTest`, `ApplySilenceWindowTest`, `ApplySuccessTest`
+   - `tests/test_notes_row_format.py`: `StateFlagAliasTest`
+   - `tests/test_plan_appendix.py`: `MergeAppendixTest`
+   - `tests/test_providers.py`: `AllChecksProviderNamesTest`
+
+   На main 58c9a84b каталог реестра лежал под настоящим корнем пульта только у
+   `CmdCanaryTemplateSelectionTest`. Для остальных 115 классов, в том числе
+   для четырёх классов `tests/test_invariants.py`, изоляция уже держалась, и
+   по требованию их нужно только проверить (AC-19).
 
 6. Тесты задачи детерминированы, работают без сети, без настоящих ролей и без
    ожидания по часам. Время правки метки задаётся через `os.utime`.
