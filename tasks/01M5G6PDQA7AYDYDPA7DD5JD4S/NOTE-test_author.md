@@ -27,7 +27,14 @@
 - poll/kqueue на FIFO под macOS (см. выше).
 
 ## Где остановился
-- Планка готова, preflight пройден; шаг сдан с эскалацией AC-7/AC-8 (дефолт — вариант A).
+- Шаг 2 (после ANSWER-3, вариант A) завершён: эскалации AC-7/AC-8 сняты, draft_* заменены тестами
+  test_ac7_…_off_darwin, test_ac8_…_off_darwin; AC-9 проверяет режим «вне Darwin» + зелёный «Darwin».
+- Зонд (_util.PROBE): ARTEL_PROBE_PLATFORM подменяет sys.platform при загрузке зонда (до conftest);
+  в режиме linux select.poll и селекторы заменены эмуляцией (os.dup на низкий fd + настоящий select —
+  EOF FIFO виден и на Darwin); внутри функции ожидания пишутся события select/poll.
+- Стаб (sys.platform-ветка: darwin → select.select, иначе DefaultSelector; dup ≥1100 вне Darwin)
+  — 4/4 зелёные за ~7 с; мутации «всегда poll» и «всегда select.select» краснят AC-7/8(/9).
+  Стаб удалён, git status чист. preflight пройден.
 
 ## Чего не хватило
 - Знания, что на Darwin poll/kqueue не видят EOF FIFO — SPEC (требования 5–6) его не учитывает.

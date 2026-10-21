@@ -127,10 +127,19 @@ def new_test_paths() -> list:
 # --- прогон pytest с зондом -----------------------------------------------
 
 PROBE = r'''
-import json, os, select, selectors
+import json, os, select, selectors, sys
 
 LOG = os.environ["ARTEL_PROBE_LOG"]
-STATE = {"node": ""}
+STATE = {"node": "", "wait": 0}
+
+# Режим платформы (ANSWER-3, вариант A): `sys.platform` подменяется при
+# загрузке зонда — раньше conftest и импорта тестов, — чтобы функция ожидания
+# и тесты выбрали путь «Darwin» либо «вне Darwin» на любой машине.
+REAL_PLATFORM = sys.platform
+if os.environ.get("ARTEL_PROBE_PLATFORM"):
+    sys.platform = os.environ["ARTEL_PROBE_PLATFORM"]
+_real_select = select.select
+_real_close = os.close
 
 
 def _log(**rec):
@@ -181,14 +190,76 @@ class _SelectPoll:
         return list(out.items())
 
 
+def _logged_select(r, w, x, *timeout):
+    """`select.select` с записью дескрипторов вызова внутри функции ожидания."""
+    if STATE["wait"]:
+        _log(kind="select", fds=[_fd(o) for o in [*r, *w, *x]])
+    return _real_select(r, w, x, *timeout)
+
+
+def _low_select(rd, wr, timeout):
+    """Готовность `rd`/`wr` любого номера: копия каждого дескриптора на
+    наименьший свободный номер (`os.dup`, то же открытое описание файла) и
+    настоящий `select.select` по копиям. Так эмуляция `poll`/селекторов
+    видит конец файла именованного канала и на Darwin, где `poll`/`kqueue`
+    его не сообщают (эскалация AC-7, ANSWER-3)."""
+    low = {}
+    try:
+        for f in {*rd, *wr}:
+            low[f] = os.dup(f)
+        r, w, _ = _real_select([low[f] for f in rd], [low[f] for f in wr], [], timeout)
+    finally:
+        for d in low.values():
+            _real_close(d)
+    back = {d: f for f, d in low.items()}
+    return [back[d] for d in r], [back[d] for d in w]
+
+
+class _EmuPoll(_SelectPoll):
+    """`select.poll` режима «вне Darwin»: без предела номера дескриптора."""
+
+    def poll(self, timeout=None):
+        t = None if timeout is None or timeout < 0 else timeout / 1000
+        rd = [f for f, m in self._fds.items() if m & (select.POLLIN | select.POLLPRI)]
+        wr = [f for f, m in self._fds.items() if m & select.POLLOUT]
+        if STATE["wait"]:
+            _log(kind="poll", fds=sorted({*rd, *wr}))
+        r, w = _low_select(rd, wr, t)
+        out = {}
+        for f in r:
+            out[f] = out.get(f, 0) | select.POLLIN
+        for f in w:
+            out[f] = out.get(f, 0) | select.POLLOUT
+        return list(out.items())
+
+
+class _EmuSelector(selectors.SelectSelector):
+    """Селектор режима «вне Darwin» (`DefaultSelector` и прочие)."""
+
+    def _select(self, r, w, _x, timeout=None):
+        if STATE["wait"]:
+            _log(kind="poll", fds=sorted({*map(_fd, r), *map(_fd, w)}))
+        rr, ww = _low_select(list(map(_fd, r)), list(map(_fd, w)), timeout)
+        return rr, ww, []
+
+
+def _replace_selectors(cls):
+    for name in ("DefaultSelector", "PollSelector", "EpollSelector",
+                 "KqueueSelector", "DevpollSelector"):
+        if hasattr(selectors, name):
+            setattr(selectors, name, cls)
+
+
 def pytest_configure(config):
     import importlib, types
     if os.environ.get("ARTEL_PROBE_SELECT"):
-        for name in ("DefaultSelector", "PollSelector", "EpollSelector",
-                     "KqueueSelector", "DevpollSelector"):
-            if hasattr(selectors, name):
-                setattr(selectors, name, selectors.SelectSelector)
+        _replace_selectors(selectors.SelectSelector)
         select.poll = _SelectPoll
+    elif os.environ.get("ARTEL_PROBE_PLATFORM") == "linux":
+        _replace_selectors(_EmuSelector)
+        select.poll = _EmuPoll
+    select.select = _logged_select
+    selectors.SelectSelector._select = staticmethod(_logged_select)
     from orchestrator import config as cfg
 
     class Logged(types.ModuleType):
@@ -209,7 +280,11 @@ def pytest_configure(config):
         def wrapper(*args, **kwargs):
             fds = [_fd(a) for a in list(args) + list(kwargs.values())]
             _log(kind="wait", fds=[f for f in fds if f is not None])
-            return real(*args, **kwargs)
+            STATE["wait"] += 1
+            try:
+                return real(*args, **kwargs)
+            finally:
+                STATE["wait"] -= 1
 
         setattr(mod, func_name, wrapper)
         real_read, real_close, real_fcntl = os.read, os.close, fcntl.fcntl

@@ -2,7 +2,17 @@
 
 Группа: разовый
 
-Красен до реализации: нового модуля `tests/` с функцией ожидания, которую зовут оба метода, нет — AC-9 падает на её поиске; AC-10 зелёный с рождения — имена и сигнатуры `report_outcome` пока не тронуты, тест держит это на всём пути задачи; AC-7 и AC-8 эскалированы (пометки ниже), их черновики — методы `draft_ac7_…`/`draft_ac8_…`, не собираемые раннером.
+Красен до реализации: нового модуля `tests/` с функцией ожидания, которую зовут оба метода, нет — AC-7, AC-8, AC-9 падают на её поиске; AC-10 зелёный с рождения — имена и сигнатуры `report_outcome` пока не тронуты, тест держит это на всём пути задачи.
+
+AC-7 и AC-8 — по ответу Оператора ANSWER-3 (вариант A): на Darwin функция
+ожидания идёт прежним `select.select` по исходному дескриптору, ожидание
+через `selectors`/`poll` и перенос на дескриптор ≥ 1100 — вне Darwin
+(`sys.platform != "darwin"`). Оба пути проверяются на любой машине: зонд
+подменяет `sys.platform` до загрузки conftest и тестов
+(`ARTEL_PROBE_PLATFORM`), а в режиме «вне Darwin» подменяет `select.poll` и
+селекторы эмуляцией без предела номера дескриптора (копия на низкий номер
+и настоящий `select.select`) — на Darwin `poll`/`kqueue` не сообщают конец
+файла именованного канала, эмуляция сообщает, как Linux.
 
 Как тест находит функцию ожидания, имени которой SPEC не называет: это
 функция модуля `tests/<имя>.py`, которого нет на базе диффа, вызванная в
@@ -126,26 +136,53 @@ def select_select_calls(node) -> list:
             and isinstance(n.func.value, ast.Name) and n.func.value.id == "select"]
 
 
+TIMEOUT_NODE = f"{TIMEOUT_INTEGRATIONS}::{TIMEOUT_CLS}::{TIMEOUT_METHOD}"
+OFF_DARWIN, DARWIN = "linux", "darwin"
+FD_SETSIZE = 1024
+_RUNS = {}
+
+
+def probed(nodes: tuple, platform: str, **extra) -> object:
+    """Прогон `nodes` с зондом в режиме платформы `platform` и обёрткой
+    функции ожидания; один прогон на набор аргументов за процесс планки."""
+    mod, fname, _r, _t = wait_function()
+    key = (nodes, platform, tuple(sorted(extra.items())))
+    if key not in _RUNS:
+        env = {"ARTEL_PROBE_WAIT": f"{mod}:{fname}", "ARTEL_PROBE_PLATFORM": platform,
+               **extra}
+        _RUNS[key] = run_pytest(list(nodes), env=env)
+    return _RUNS[key]
+
+
+def node_events(run, method: str) -> list:
+    return [r for r in run.probe if method in r.get("node", "")]
+
+
 class WaitFunctionTest(unittest.TestCase):
 
     maxDiff = None
 
-# AC-7: escalate — на macOS (машина пульта, где идут планка и полный набор пульта) select.poll и kqueue (selectors.DefaultSelector) не сообщают EOF именованного канала (FIFO) — проверено: после закрытия писателя poll/kqueue пусты, select.select видит готовность; test_ac9_timeout_kills_group_not_green ждёт именно EOF FIFO, и с ожиданием через poll/DefaultSelector он локально красен «потомок раннера пережил таймаут» при любой реализации. Как быть: (A) на Darwin test_ac9 ждёт прежним select.select на исходном дескрипторе, а poll/DefaultSelector и перенос на ≥ 1100 — вне Darwin (свойство держит CI Linux; AC-7/AC-8 уточняются «вне Darwin»); (B) test_ac9 на Darwin пропускается (skipIf) с причиной; (C) канал test_ac9 меняется с FIFO на иной (правка фикстуры ReportSandbox без смены имён и сигнатур AC-10)? Дефолт — (A).
-    def draft_ac7_both_methods_wait_through_new_module_without_select(self):
-        """Оба метода ждут готовности через функцию нового модуля `tests/` на `DefaultSelector`/`poll`, без `select.select`, с пределами 30 и 10 с; утверждения прежние; `tests/sandbox.py` не тронут.
+    def test_ac7_both_methods_wait_through_new_module_off_darwin(self):
+        """Оба метода ждут готовности через функцию нового модуля `tests/`: вне Darwin — `selectors`/`poll`, на Darwin — прежний `select.select`; в методах `select.select` нет, пределы 30 и 10 с, утверждения прежние, `tests/sandbox.py` не тронут.
 
         Сценарий: разбор голов обоих файлов — в методах нет вызова
-        `select.select`; функция ожидания найдена (докстринг модуля);
-        модуль функции называет `DefaultSelector` или `select.poll` и не
-        зовёт `select.select`; вызов функции в методе report несёт 30
-        (`CHILD_GUARD_SEC` = 30), в методе timeout — 10; гейт неослабления
-        (`guard.changed_test_assertions`) не находит потерь по обоим
-        методам; `tests/sandbox.py` не входит в `changed_paths()` и не
-        отличается от базы.
+        `select.select`; функция ожидания найдена (докстринг модуля); модуль
+        функции называет `DefaultSelector` или `select.poll`; вызов функции
+        в методе report несёт 30 (`CHILD_GUARD_SEC` = 30), в методе
+        timeout — 10; гейт неослабления (`guard.changed_test_assertions`) не
+        находит потерь по обоим методам; `tests/sandbox.py` не входит в
+        `changed_paths()` и не отличается от базы. Затем оба узла
+        прогоняются с зондом дважды (ANSWER-3): в режиме «вне Darwin» оба
+        зелёные, функция ожидания вызвана, внутри неё ожидание шло через
+        `poll`/селектор и ни разу через `select.select`; в режиме «Darwin»
+        оба зелёные и внутри функции ожидания вызван `select.select`.
 
         Ловит мутацию: функция ожидания заведена только в одном файле
-        (второй остался на `select.select`); функция внутри построена на
-        `select.select`; предел ожидания поднят до 60 с «для надёжности»;
+        (второй остался на `select.select`); функция и вне Darwin зовёт
+        `select.select` (ветка `sys.platform` не заведена) — зонд видит его
+        внутри функции; на Darwin функция ушла на `poll`/`kqueue` — узел
+        report красен (конец файла канала не виден) и `select.select` внутри
+        функции нет; предел ожидания поднят до 60 с «для надёжности»;
         утверждение `assertTrue(ready, …)` снято при переходе на функцию.
         """
         for rel, cls, name in ((REPORT_OUTCOME, REPORT_CLS, REPORT_METHOD),
@@ -165,7 +202,6 @@ class WaitFunctionTest(unittest.TestCase):
                  and n.value.id == "select"]
         self.assertTrue("DefaultSelector" in names or polls,
                         f"{mod}: ни DefaultSelector, ни select.poll")
-        self.assertEqual(select_select_calls(mod_tree), [], f"{mod}: select.select")
 
         r_const = numeric_constants(parse(head_source(REPORT_OUTCOME)))
         self.assertEqual(r_const.get("CHILD_GUARD_SEC"), 30)
@@ -188,30 +224,42 @@ class WaitFunctionTest(unittest.TestCase):
                               capture_output=True, text=True)
         self.assertEqual((diff.returncode, diff.stdout), (0, ""), "tests/sandbox.py изменён")
 
-# AC-8: escalate — тот же вопрос, что AC-7: на macOS ожидание EOF FIFO через poll/kqueue на дескрипторе ≥ 1100 не наступает (select.select на ≥ 1024 — ValueError), test_ac9 при выполненном AC-8 красен на машине пульта; черновик теста ниже (draft_ac8_…) прогнан стабом — красен именно этим. Применять AC-8 только вне Darwin (дефолт, вариант (A) AC-7), пропускать test_ac9 на Darwin (B) или сменить канал (C)?
-    def draft_ac8_report_waits_and_reads_on_duplicated_high_fd(self):
-        """`test_ac9_timeout_kills_group_not_green` переносит канал на дескриптор ≥ 1100, ждёт и читает по нему, исходный закрывает до ожидания; мягкий предел возвращён.
+        for platform in (OFF_DARWIN, DARWIN):
+            run = probed((REPORT_NODE, TIMEOUT_NODE), platform)
+            self.assertEqual(run.code, 0, f"режим {platform}:\n{run.tail()}")
+            for method in (REPORT_METHOD, TIMEOUT_METHOD):
+                with self.subTest(platform=platform, method=method):
+                    events = node_events(run, method)
+                    kinds = [r["kind"] for r in events]
+                    self.assertIn("wait", kinds, "функция ожидания не вызвана")
+                    selects = [r for r in events if r["kind"] == "select"]
+                    if platform == OFF_DARWIN:
+                        self.assertEqual(selects, [], "вне Darwin — select.select")
+                        self.assertIn("poll", kinds, "вне Darwin нет poll/селектора")
+                    else:
+                        self.assertTrue(selects, "на Darwin нет select.select")
 
-        Сценарий: прогон узла с зондом. Узел зелёный; метод несёт
-        `fcntl.F_DUPFD`; зонд видел `fcntl(fd, F_DUPFD, n ≥ 1100)` с
-        результатом ≥ 1100; функция ожидания получила этот дескриптор;
-        `os.read` шёл по нему же; `os.close` исходного дескриптора — после
-        переноса и раньше первого ожидания; мягкий `RLIMIT_NOFILE` на
-        выходе узла равен входному.
+    def test_ac8_report_waits_and_reads_on_duplicated_high_fd_off_darwin(self):
+        """Вне Darwin `test_ac9_timeout_kills_group_not_green` переносит канал на дескриптор ≥ 1100, ждёт и читает по нему, исходный закрывает до ожидания; мягкий предел возвращён; на Darwin — прежний дескриптор.
+
+        Сценарий: узел report с зондом в режиме «вне Darwin» (ANSWER-3)
+        зелёный; зонд видел `fcntl(fd, F_DUPFD, n ≥ 1100)` с результатом
+        ≥ 1100; каждое ожидание функции получило этот дескриптор; `os.read`
+        шёл по нему же; `os.close` исходного дескриптора — после переноса и
+        раньше первого ожидания; мягкий `RLIMIT_NOFILE` на выходе узла равен
+        входному. В режиме «Darwin» узел зелёный, функция ожидания получает
+        дескриптор меньше 1024 (прежний путь `select.select`), мягкий предел
+        на выходе равен входному.
 
         Ловит мутацию: перенос сделан, но ожидание и чтение остались на
         исходном `reader` (номер < 1100 — свойство «больше 1024» не
         держится); исходный дескриптор не закрыт; поднятый предел не
-        возвращён в `addCleanup`.
+        возвращён в `addCleanup`; перенос на ≥ 1100 сделан и на Darwin —
+        `select.select` падает `ValueError`, узел красен.
         """
-        _tree, func = method_of(REPORT_OUTCOME, REPORT_CLS, REPORT_METHOD)
-        self.assertTrue([n for n in ast.walk(func) if isinstance(n, ast.Attribute)
-                         and n.attr == "F_DUPFD"], "в методе нет fcntl.F_DUPFD")
-        mod, fname, _r, _t = wait_function()
-        run = run_pytest([REPORT_NODE], env={"ARTEL_PROBE_WAIT": f"{mod}:{fname}"})
+        run = probed((REPORT_NODE, TIMEOUT_NODE), OFF_DARWIN)
         self.assertEqual(run.code, 0, run.tail())
-        node = REPORT_METHOD
-        events = [r for r in run.probe if node in r.get("node", "")]
+        events = node_events(run, REPORT_METHOD)
         dups = [(i, r) for i, r in enumerate(events) if r["kind"] == "dupfd"
                 and isinstance(r.get("arg"), int) and r["arg"] >= HIGH_FD
                 and isinstance(r.get("result"), int) and r["result"] >= HIGH_FD]
@@ -232,20 +280,33 @@ class WaitFunctionTest(unittest.TestCase):
         limits = {r["phase"]: r["soft"] for r in events if r["kind"] == "rlimit"}
         self.assertEqual(limits.get("setup"), limits.get("teardown"), limits)
 
+        darwin = probed((REPORT_NODE, TIMEOUT_NODE), DARWIN)
+        self.assertEqual(darwin.code, 0, darwin.tail())
+        events = node_events(darwin, REPORT_METHOD)
+        waits = [r for r in events if r["kind"] == "wait"]
+        self.assertTrue(waits, "функция ожидания не вызвана")
+        self.assertTrue(all(f < FD_SETSIZE for r in events if r["kind"] == "select"
+                            for f in r["fds"] if f is not None),
+                        f"на Darwin select.select не по прежнему дескриптору: {events}")
+        limits = {r["phase"]: r["soft"] for r in events if r["kind"] == "rlimit"}
+        self.assertEqual(limits.get("setup"), limits.get("teardown"), limits)
+
     def test_ac9_separate_wait_test_green_and_red_on_select(self):
         """Отдельный новый файл `tests/` проверяет функцию ожидания на дескрипторе ≥ 1100 и краснеет `ValueError`, когда она построена на `select.select`.
 
         Сценарий: новый файл `tests/test_*.py` (нет на базе диффа, не
         `report_outcome`/`timeout_integrations`), импортирующий модуль
-        функции ожидания (или сам этот модуль). Прогон с зондом — зелёный,
-        функция ожидания вызвана с дескриптором ≥ 1100. Прогон с зондом,
-        подменившим `selectors.DefaultSelector` на `SelectSelector` и
-        `select.poll` на обёртку над `select.select`, — красный, в выводе
-        `ValueError`.
+        функции ожидания (или сам этот модуль). Прогон с зондом в режиме
+        «вне Darwin» (ANSWER-3: свойство держится вне Darwin) — зелёный,
+        функция ожидания вызвана с дескриптором ≥ 1100. Прогон в том же
+        режиме с зондом, подменившим `selectors.DefaultSelector` на
+        `SelectSelector` и `select.poll` на обёртку над `select.select`, —
+        красный, в выводе `ValueError`. Прогон в режиме «Darwin» — зелёный.
 
         Ловит мутацию: тест функции ждёт на дескрипторе исходного номера
         (< 1024) — `select.select` его принимает, мутант зелёный; либо
-        отдельного теста нет.
+        отдельного теста нет; либо тест на Darwin требует ожидания на
+        дескрипторе ≥ 1100 — прогон «Darwin» красен.
         """
         mod, fname, _r, _t = wait_function()
         mod_rel = module_path(mod)
@@ -259,17 +320,21 @@ class WaitFunctionTest(unittest.TestCase):
                                      for m, n in imports_of(parse(head_source(rel))).values()):
                 candidates.append(rel)
         self.assertTrue(candidates, f"нового файла теста функции {mod}.{fname} нет")
-        ok = []
+        ok, seen = [], {}
         for rel in candidates:
-            run = run_pytest([rel], env={"ARTEL_PROBE_WAIT": f"{mod}:{fname}"})
+            run = probed((rel,), OFF_DARWIN)
             high = [f for r in run.probe_of("wait") for f in r["fds"] if f >= HIGH_FD]
-            if run.code != 0 or not high:
-                continue
-            mutant = run_pytest([rel], env={"ARTEL_PROBE_SELECT": "1"})
-            if mutant.code != 0 and "ValueError" in mutant.out:
+            mutant = run_pytest([rel], env={"ARTEL_PROBE_SELECT": "1",
+                                            "ARTEL_PROBE_PLATFORM": OFF_DARWIN})
+            darwin = probed((rel,), DARWIN)
+            seen[rel] = (run.code, bool(high), mutant.code, "ValueError" in mutant.out,
+                         darwin.code)
+            if run.code == 0 and high and mutant.code != 0 and "ValueError" in mutant.out \
+                    and darwin.code == 0:
                 ok.append(rel)
-        self.assertTrue(ok, f"ни один из {candidates} не зелёный на ≥ {HIGH_FD} "
-                            f"и красный ValueError на select.select")
+        self.assertTrue(ok, f"ни один из {candidates} не зелёный на ≥ {HIGH_FD}, "
+                            f"красный ValueError на select.select и зелёный на Darwin "
+                            f"(код, ≥1100, код мутанта, ValueError, код Darwin): {seen}")
 
     def test_ac10_report_outcome_imported_names_and_signatures_unchanged(self):
         """Имена, которые `tests/test_invariants.py` и `tests/test_component_report_gates.py` берут из `report_outcome`, есть с прежними сигнатурами и импортируются.
