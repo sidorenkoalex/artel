@@ -1,15 +1,14 @@
 ## Выяснено
-- Круг 3 (возврат с spec_gate, решения круга 2: AC-19 без вложенного прогона, статика + динамика; требование 3 — метка снимается `--drop`, только если не осталось записей того же run_stamp).
-- Разбор наследования 116 классов перечня (ast, main f1f805b6): 91 → RealGitSandbox (tests/sandbox.py:1897), 19 → TmpRootTest (:1581), CanaryPoolDriftCheckTest подменяет config.ROOT в setUp (test_doctor_canary_pool.py:249), CmdCanaryTemplateSelectionTest — подмена по требованию 5.
-- 3 класса test_invariants наследуют FsmTest: ROOT настоящий, подмена только на время fsm.cmd_approve (test_invariants.py:245–267).
-- MainCopyGitUnchangedDuringTaskTest (test_invariants.py:3155) — голый TestCase без setUp, изоляция только вложенной Flow(TaskFlowSandbox) в методе (:3177–3186). Статическое правило Оператора его не пропустит, править файл нельзя.
-- _live_dir = config.ROOT/.artel/<CANARY_LIVE_DIRNAME> (canary.py:2797).
+- Круг 4 (после ANSWER-1). Решения круга 2 лежат только в журнале (`artel.py log <id>`, строка «возврат из spec_gate … (круг 2)», 14:59:43Z), в брифе их нет.
+- SPEC переписан: требование 3 (метка снимается `--drop`, только если не осталось записей того же run_stamp), требование 5 (признаки (1) основа TmpRootTest/RealGitSandbox/FsmTest, (2) подмена ROOT/_live_dir в setUp, (3) вложенная песочница с setUp первым вызовом; динамика для признака (2)), AC-9 дополнен, AC-19 → статика, новый AC-20 → динамика, прежний AC-20 → AC-21.
+- В методе MainCopyGitUnchangedDuringTaskTest до flow.setUp() стоят импорты (test_invariants.py:3176–3178): в признаке (3) импорт, докстринг и определение класса прямо названы не-вызовами — иначе буквальное «только определение класса и создание экземпляра» провалило бы сам эталон из ANSWER-1 (ссылка :3177–3186 включает импорт).
+- Классы с признаком (2): CmdCanaryTemplateSelectionTest, CanaryPoolDriftCheckTest (test_doctor_canary_pool.py:249).
 
 ## Не сработало
-- `ls`, `$?`, `awk` в Bash под ролью отказывают/требуют подтверждения; Read и grep без подстановок работают.
+- `ls`, `rm` в Bash не найдены (command not found) — удаление через `python3 -c os.remove`.
 
 ## Где остановился
-- QUESTIONS.md (2 вопроса: признак для MainCopyGitUnchanged, FsmTest как основа), guard ок. SPEC.md не тронут — после ANSWER: переписать требование 5/AC-19 по п.1 круга 2 + ответу, требование 3/AC-9/AC-14 по п.4 (метка снимается только без оставшихся записей run_stamp), удалить QUESTIONS.md.
+- SPEC.md status: ready, guard ок, QUESTIONS.md удалён. Шаг завершён.
 
 ## Чего не хватило
-- Знания, что FsmTest держит ROOT настоящим: пришлось читать setUp test_invariants.py:149–317.
+- Текста решений круга 2 в брифе: пришлось искать в журнале задачи.
