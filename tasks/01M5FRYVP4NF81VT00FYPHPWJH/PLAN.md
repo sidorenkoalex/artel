@@ -49,19 +49,20 @@ pytest не Vitest): им пользуются и `_report_argv` (флаги
 6. `orchestrator/advance_gates/mandate.py`: `_FILE_PATH_TOKEN_RE` в `_component_covered` (требования 7–8).
 7. `advance_gates/refusal_classes.py`, `advance_gates/outcome_integrity.py`: тексты действий (требования 9–10).
 8. `python3 scripts/codebase_map.py`; планка (`plank-run`) и тесты затронутых модулей (требование 11).
+9. Ревью R1-F1: сторожа разработчика в `tests/` на требования 1, 2, 5, 6, 8 (планка — `Группа: разовый`): `tests/test_report_argv_rerun_ban.py`, `tests/test_gate_owner_marker.py`, `tests/test_mandate_file_path_token.py`; каждая заявка «Ловит мутацию» проверена временной мутацией кода (12 мутаций — все красные).
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1 |
-| 2 | 1 |
+| 1 | 1, 9 |
+| 2 | 1, 9 |
 | 3 | 2 |
 | 4 | 3 |
-| 5 | 4 |
-| 6 | 5 |
+| 5 | 4, 9 |
+| 6 | 5, 9 |
 | 7 | 6 |
-| 8 | 6 |
+| 8 | 6, 9 |
 | 9 | 7 |
 | 10 | 7 |
 | 11 | 8 |

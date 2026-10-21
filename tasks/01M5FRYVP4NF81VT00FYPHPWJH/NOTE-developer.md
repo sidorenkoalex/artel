@@ -1,15 +1,16 @@
-# Записка developer — 01M5FRYVP4NF81VT00FYPHPWJH
+# Записка developer — 01M5FRYVP4NF81VT00FYPHPWJH (итерация 2)
 
 ## Выяснено
-- Реализовано все 11 требований: acceptance.py (`_bans_rerun_plugins`, `NO_RERUN_PLUGINS_ARGS` в `_report_argv` сразу за `command`, поле ключа), targets.py (`_check_rerun_ban`, вызов в `_check_components`), fsm.py (импорт константы в функции), refusal_classes/outcome_integrity (тексты), liveness.GATE_OWNER_MARKER, маркер в `_gate` и `two_sided.run`, doctor/orphans.py (ветка выписок до маркера канарейки, prune только при удалённой выписке), mandate.py (`_FILE_PATH_TOKEN_RE`).
-- Планка 10/10, долгоживущие 6/6. Карта регенерирована.
-- Свой тест: tests/test_targets_rerun_ban_wrapper.py (граница обёртки, `--reruns-only`, `-p` в конце) — обе мутации ловит.
+- R1-F1 закрыт: новые `tests/test_report_argv_rerun_ban.py`, `tests/test_gate_owner_marker.py`, `tests/test_mandate_file_path_token.py` (требования 1, 2, 5, 6, 8). Код не менялся.
+- 12 временных мутаций кода (флаги argv, поле ключа, условие from_components, fullmatch/search, `:\d+`, префиксы выписок, порядок маркера канарейки, prune никогда/всегда, маркер в `_gate`/`two_sided.run`) — все красят новые тесты.
+- Правило `*.py` в ячейке мандата живёт в `mandate._covered`, не в `_component_covered` — тест зовёт `_covered(cell, profile, True)`.
+- Карта регенерирована; REVIEW R1-F1 размечен `fixed`.
 
 ## Не сработало
-- `pytest -n 8` по списку файлов — воркеры падают (сторож conftest); гонял последовательно, долго (>10 мин на 34 файла).
+- `pytest -n` со списком файлов роняет воркеры — гонять с `-p no:xdist`.
 
 ## Где остановился
-- Прогон тестов затронутых модулей; потом PLAN.md status: ready и guard.
+- guard и PLAN status: ready.
 
 ## Чего не хватило
 - Ничего существенного.
