@@ -248,7 +248,7 @@ class MissionSandbox(TmpRootTest):
             f"4) Критерий в принципе неисполним тестом — не изобретай "
             f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
             f"{self.point_5(task_id, artel, long_lived)}"
-            f". tasks/<id>/ коммитить "
+            f". {TASKS_DIR}/<id>/ коммитить "
             f"не нужно — автокоммит оркестратора сам перенесёт написанное в "
             f"артефактную ветку. Остальной код репозитория и SPEC.md НЕ трогай."
         )
@@ -368,7 +368,7 @@ class Ac2LabelledMissionTest(MissionSandbox):
                       mission, context)
         self.assertIn(self.point_5(task_id, False, (directory,
                                                     f"{directory}/{low}_"))
-                      + ". tasks/<id>/ коммитить", mission, context)
+                      + f". {TASKS_DIR}/<id>/ коммитить", mission, context)
         if not case["layout"]:
             self.assertNotIn("На прогоне файлы лежат в", mission, context)
 

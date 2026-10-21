@@ -4,7 +4,7 @@
 Красен до реализации: `plank-run` у любой задачи пишет «итог pytest: …» по итоговой строке pytest — у компонента `pult-vitest` нет «итог vitest: <деталь>; код выхода vitest: …» и строки оборванного прогона «итог vitest: …»; строки артели, pytest-компонента и неопределённого профиля держат поведение пина и зелены с рождения.
 
 Команда — публичный `plank_run.cmd_plank_run` задачи в `tests_writing`
-с черновиком планки в каталоге документов (`artifact_branch.docs_dir`) и
+с черновиком планки в каталоге документов (`config.PROJECTS/<проект>`) и
 каталогом рабочей копии кода (`workspace.path`). Выкладка
 (`acceptance.plank_in_code_copy`) подменена каталогом без записи файлов,
 прогон (`acceptance.run_plank`) — заготовленным ответом (код выхода,
@@ -26,14 +26,15 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from orchestrator import (acceptance, artifact_branch, config, plank_run,
-                          project_profile, store, workspace)
+from orchestrator import (acceptance, config, plank_run, project_profile,
+                          store, workspace)
 from tests.sandbox import TmpRootTest, artel_target_entry, make_project_repo
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 LETTERS = "abcdefghijkmnpqrstuvwxyz"
 ARTEL = config.DEFAULT_TARGET
 NO_SUMMARY = "итоговой строки нет"
+DOCS_DIR = "tasks"
 
 ENTRY_HEAD = """  {name}:
     forge: github
@@ -115,7 +116,7 @@ class PlankRunSandbox(TmpRootTest):
 
     @contextlib.contextmanager
     def fake_copy(self, task_id, _branch, code_dir, files=None):
-        yield code_dir / "tasks" / task_id
+        yield code_dir / DOCS_DIR / task_id
 
     def fake_run(self, *args, **kwargs):
         return self.answer
@@ -133,7 +134,8 @@ class PlankRunSandbox(TmpRootTest):
                           config.DEFAULT_BUDGET_USD)
         workspace.path(task_id, target).mkdir(parents=True, exist_ok=True)
         name = "a.test.js" if kind == "vitest" else "test_a.py"
-        plank = artifact_branch.docs_dir(task_id, target) / "acceptance_tests"
+        plank = (config.PROJECTS / target / DOCS_DIR / task_id
+                 / "acceptance_tests")
         plank.mkdir(parents=True, exist_ok=True)
         (plank / name).write_text("// тест\n" if kind == "vitest"
                                   else "def test_a():\n    pass\n",
