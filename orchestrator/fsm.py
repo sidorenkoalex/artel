@@ -1261,9 +1261,11 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
         print("  дальше: " + cycle_hint.launch_text(
             conn, task_id, "run", "(запуск разработчика)"))
     else:
+        # Импорт внутри функции: `advance_gates.acceptance` импортирует fsm
+        # на уровне модуля, модульный импорт отсюда дал бы цикл.
+        from .advance_gates.tests_writing import SPEC_GATE_PASSED_DETAIL
         store.set_state(conn, task_id, "tests_writing", "operator",
-                        expected_state=state,
-                        detail="гейт SPEC пройден — приёмочные тесты до кода")
+                        expected_state=state, detail=SPEC_GATE_PASSED_DETAIL)
         print("  дальше: " + cycle_hint.launch_text(
             conn, task_id, "run", "(запуск test_author)"))
 

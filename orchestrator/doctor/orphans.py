@@ -79,7 +79,18 @@ def _live_suite_run_in(path: Path) -> bool:
     return False
 
 
+# Каталоги выписок гейтов исходов и двустороннего прогона (SPEC
+# 01M5FRYVP4NF81VT00FYPHPWJH, требование 6): их записи `git worktree`
+# живут в клонах проектов.
+GATE_TEMP_PREFIXES = ("artel-outcome-", "artel-two-sided-")
+
+
 def _temp_owner_alive(path: Path) -> bool:
+    # Владелец выписки — только маркер гейта: живой маркер канарейки в
+    # таком каталоге его не заменяет.
+    if path.name.startswith(GATE_TEMP_PREFIXES):
+        return doctor.liveness.owner_alive(path,
+                                           doctor.liveness.GATE_OWNER_MARKER)
     if path.name.startswith("artel-canary-origin-"):
         marker_alive = doctor.liveness.owner_alive(path)
         # До записи remote URL origin защищает собственный маркер. После
@@ -111,7 +122,8 @@ def _orphan_temp_dirs() -> list[Path]:
         return []
     return [entry for entry in entries
             if entry.is_dir() and not entry.is_symlink()
-            and entry.name.startswith(("artel-canary-", "artel-suite-base-"))
+            and entry.name.startswith(("artel-canary-", "artel-suite-base-",
+                                       *GATE_TEMP_PREFIXES))
             and not _temp_owner_alive(entry)]
 
 
@@ -121,11 +133,21 @@ def _fix_orphan_temp_dirs() -> None:
     entries = sorted(_orphan_temp_dirs(),
                      key=lambda p: (not p.name.startswith("artel-canary-origin-"),
                                     str(p)))
+    gate_removed = False
     for entry in entries:
         # Повторная проверка сужает окно между наблюдением и удалением.
         if not _temp_owner_alive(entry):
             doctor.shutil.rmtree(entry, ignore_errors=True)
             print(f"  [FIX] временный каталог-сирота удалён: {entry}")
+            gate_removed |= entry.name.startswith(GATE_TEMP_PREFIXES)
+    # Запись `git worktree` удалённой выписки иначе остаётся в клоне; без
+    # удалённых выписок клоны не трогаются вовсе.
+    if gate_removed:
+        for clone in _project_clones():
+            res = doctor.gitcmd.in_repo(clone, "worktree", "prune")
+            if res is None or res.returncode != 0:
+                print(f"  [FIX] git worktree prune в {clone} не удался: "
+                      f"{(res.stderr or '').strip() if res else 'git не ответил'}")
 
 
 def check_orphans(conn) -> list[doctor.Check]:

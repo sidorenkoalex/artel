@@ -34,6 +34,7 @@
 — доказательство: запись с той же четвёркой избавляет мерж от прогона.
 """
 import hashlib
+import os
 import re
 import shutil
 import sys
@@ -43,8 +44,10 @@ from typing import NamedTuple
 
 from .. import acceptance
 from .. import artifact_branch as docs_ref
-from .. import artifact_source, gitcmd, project_profile, store, workspace
+from .. import (artifact_source, gitcmd, liveness, project_profile, store,
+               workspace)
 from ..reporters import outcome
+from . import refusal_classes
 from ._base import GateRefusal, _run_gates
 from .acceptance import in_outcome_bounds
 from .mandate import (TEST_ID_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER,
@@ -60,10 +63,10 @@ PASSED_ACTION = "гейт неослабления по исходам прой�
 FLAKY_ON_BASE = "нестабилен и на базе"
 
 # Гейт исходов на гейте мержа (SPEC 01M5DDTVZEA40ZB9BHEH4YDEE7, требования
-# 1-4): действие находки без мандата повторено литералом в
-# `refusal_classes.REFUSAL_CLASSES`.
-MERGE_REFUSAL_ACTION = "merge отклонён: гейт неослабления по исходам"
-MERGE_PREPARE_ACTION = f"{MERGE_REFUSAL_ACTION} — подготовка"
+# 1-4): тексты действий — из `refusal_classes`, один источник с их классом
+# (SPEC 01M5FRYVP4NF81VT00FYPHPWJH, требование 10).
+MERGE_REFUSAL_ACTION = refusal_classes.OUTCOME_MERGE_REFUSAL_ACTION
+MERGE_PREPARE_ACTION = refusal_classes.OUTCOME_MERGE_PREPARE_ACTION
 PROVEN_ACTION = "гейт исходов: доказан"
 NOT_RUN_LINE = "гейт исходов для головы {head} не исполнялся"
 MANDATE_NONE = "нет"
@@ -564,6 +567,10 @@ def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
     scratch = Path(tempfile.mkdtemp(prefix="artel-outcome-")).resolve()
     trees: dict = {}
     try:
+        # Маркер владельца — до первого `git worktree add`: каталог,
+        # брошенный обрывом процесса, `doctor --fix` узнаёт сиротой.
+        (scratch / liveness.GATE_OWNER_MARKER).write_text(
+            str(os.getpid()), encoding="utf-8")
         return _judge(conn, task_id, branch, artifact_branch, profile,
                       repo, scratch, trees, base_of, merge)
     except _Prepare as exc:
