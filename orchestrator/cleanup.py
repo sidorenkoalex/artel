@@ -250,12 +250,25 @@ def _close_project_pr(branch: str, url: str, task_id: str) -> str:
     return f"PR {branch}: оставлено — {_left_reason(res, silent, 'gh')}"
 
 
-def _delete_origin_branch(repo, branch: str) -> str:
-    # Предел — в самом вызове пуша (`gitcmd.git` без таймаута): хостинг,
-    # принявший соединение и замолчавший, иначе держал бы kill без конца.
-    res = gitcmd.in_repo(repo, "-c", "http.lowSpeedLimit=1", "-c",
-                         f"http.lowSpeedTime={config.GH_TIMEOUT_SEC}",
-                         "push", "origin", "--delete", branch)
+def _bounded(repo, *args: str):
+    # Предел — в самом вызове (`gitcmd.git` без таймаута): хостинг,
+    # принявший соединение и замолчавший, иначе держал бы шаг без конца.
+    return gitcmd.in_repo(repo, "-c", "http.lowSpeedLimit=1", "-c",
+                          f"http.lowSpeedTime={config.GH_TIMEOUT_SEC}", *args)
+
+
+def _delete_origin_branch(repo, branch: str, head: str | None = None) -> str:
+    """Удаление ветки в `origin`; `head` — голова, прочитанная до этого:
+    удаление тогда условно по ней (`--force-with-lease`) — ветку, сдвинутую
+    после чтения, хостинг не удалит. Без `head` — прежний пуш kill."""
+    if head is None:
+        res = _bounded(repo, "push", "origin", "--delete", branch)
+    else:
+        ref = f"refs/heads/{branch}"
+        res = _bounded(repo, "push", f"--force-with-lease={ref}:{head}",
+                       "origin", "--delete", ref)
+    if res is None:
+        return f"ветка origin {branch}: оставлено — git не ответил"
     if res.returncode == 0:
         return f"ветка origin {branch}: удалена"
     silent = any(mark in (res.stderr or "") for mark in _PUSH_SILENT_MARKS)
@@ -294,6 +307,81 @@ def cleanup_project_remote(conn, task_id: str, branch: str) -> None:
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
     for note in notes:
         print(f"  {note}")
+
+
+def _origin_branch_head(repo, branch: str) -> tuple[str, str]:
+    """(голова, "") / ("", "") — ветки нет / ("", причина) — `origin` не
+    ответил: семантика `gitcmd.remote_ref_state`, но с пределом
+    `http.lowSpeedTime` — чтение идёт под мьютексом мержа."""
+    ref = f"refs/heads/{branch}"
+    res = _bounded(repo, "ls-remote", "origin", ref)
+    if res is None:
+        return "", "git не ответил"
+    if res.returncode != 0:
+        return "", (res.stderr or "").strip()[:200] or "ls-remote не удался"
+    for line in res.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == ref:
+            return fields[0], ""
+    return "", ""
+
+
+def _merged_remote_outcome(repo, branch: str,
+                           merged_sha: str) -> tuple[str, list[str]]:
+    """(исход, подсказки) уборки ветки смерженной задачи в `origin`."""
+    ref = f"refs/heads/{branch}"
+    left = f"ветка origin {branch}: оставлено — "
+
+    def delete_hint(head: str) -> str:
+        return (f"вручную: git -C {repo} push --force-with-lease={ref}:{head} "
+                f"origin --delete {ref}")
+
+    head, reason = _origin_branch_head(repo, branch)
+    if reason:
+        return left + reason, [
+            f"вручную: git -C {repo} ls-remote origin {ref}",
+            delete_hint("<голова>")]
+    if not head:
+        return f"ветка origin {branch}: нет — удалять нечего", []
+    if not gitcmd.is_ancestor(head, merged_sha, repo=repo):
+        return (left + f"голова {head} не входит в смерженный main "
+                       f"{merged_sha}",
+                [f"сверка: git -C {repo} log --oneline {merged_sha}..{head}"])
+    note = _delete_origin_branch(repo, branch, head=head)
+    if note == f"ветка origin {branch}: удалена":
+        return note, []
+    return note, [delete_hint(head)]
+
+
+def cleanup_merged_remote(conn, task_id: str, branch: str,
+                          merged_sha: str) -> None:
+    """Уборка ветки задачи в `origin` проекта после мержа (SPEC
+    01M5FGJW4RBN9C9P48Q8MDHJX1): только на пути `merge_gate -> done` после
+    успешного push мержа (`fsm_merge_gate._cleanup_merged_task`), у артели
+    и у внешнего проекта — клон задачи и его `origin`, как у kill.
+
+    Ветка удаляется, только если её голова в `origin` входит в смерженный
+    main `merged_sha`, и условно по прочитанной голове. Задача уже `done`:
+    ни один исход, включая исключение, не срывает мерж — это «оставлено» с
+    причиной в одной записи «уборка». Подсказка ручной команды печатается
+    после исхода и в журнал не пишется. `refs/artifacts/<id>` и ветки
+    `artifact/*` не трогаются; `gh` не зовётся.
+    """
+    if not branch:
+        return
+    try:
+        note, hints = _merged_remote_outcome(
+            workspace.task_repo(task_id), branch, merged_sha)
+    except Exception as exc:  # noqa: BLE001 — задача уже done, мерж не срывается
+        note, hints = (f"ветка origin {branch}: оставлено — "
+                       f"{type(exc).__name__}: {exc}"), []
+    try:
+        store.journal(conn, task_id, "orchestrator", "уборка", note)
+    except Exception:  # noqa: BLE001 — то же: запись журнала мерж не срывает
+        pass
+    print(f"  {note}")
+    for hint in hints:
+        print(f"    {hint}")
 
 
 def _live_cycle_holder(row) -> bool:

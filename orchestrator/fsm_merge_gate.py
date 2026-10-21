@@ -1349,16 +1349,20 @@ def _docs_ref_unsynced(conn, task_id: str) -> bool:
     return True
 
 
-def _cleanup_merged_task(conn, task_id: str, branch: str) -> None:
+def _cleanup_merged_task(conn, task_id: str, branch: str,
+                         merged_sha: str) -> None:
     """Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
     смержено, дальше агентным шагам там делать нечего. Ветка задачи —
     следом за worktree (tasks/T073/SPEC.md, требование 2): `-d` откажет,
-    пока ветку держит worktree, поэтому порядок обязателен."""
+    пока ветку держит worktree, поэтому порядок обязателен. Последней —
+    ветка задачи в `origin` проекта, если её голова входит в `merged_sha`,
+    ушедший в `origin` (SPEC 01M5FGJW4RBN9C9P48Q8MDHJX1)."""
     note = workspace.remove(task_id)
     store.journal(conn, task_id, "orchestrator", "worktree убран", note)
     branch_note = cleanup.drop_merged_task_branch(
         branch, workspace.task_repo(task_id))
     store.journal(conn, task_id, "orchestrator", "ветка убрана", branch_note)
+    cleanup.cleanup_merged_remote(conn, task_id, branch, merged_sha)
 
 
 def _outcome_integrity_merge_gate(conn, task_id: str, state: str,
@@ -1526,7 +1530,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     _finalize_done_state(conn, task_id, state, branch)
     cleanup._commit_closing(conn, task_id, merge_sha=merge_sha,
                             applied_appendices=applied)
-    _cleanup_merged_task(conn, task_id, branch)
+    _cleanup_merged_task(conn, task_id, branch, final_sha)
     _await_main_ci(conn, task_id, final_sha, ctx)
     _rebuild_core_reference(conn, task_id, final_sha)
     return ("done",)
