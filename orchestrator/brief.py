@@ -13,6 +13,7 @@
 """
 import bisect
 import hashlib
+import posixpath
 import re
 import secrets
 import subprocess
@@ -22,7 +23,7 @@ from pathlib import Path
 from scripts import codebase_map
 
 from . import (alerts, artifact_branch, config, context_package, gitcmd,
-               reference_cache, repo_context, store)
+               reference_cache, repo_context, store, targets)
 from .advance_gates import refusal_classes
 
 MAP_REL = "docs/codebase-map.md"
@@ -45,6 +46,14 @@ PROJECT_CONVENTIONS = ("CLAUDE.md", "AGENTS.md")
 PROJECT_CONVENTIONS_ABSENT_MARK = "файла нет"
 PROJECT_CONVENTIONS_UNREAD_MARK = "конвенции проекта не прочитаны"
 PROJECT_CONVENTIONS_UNREAD_ACTION = "бриф: конвенции проекта не прочитаны"
+# Документы `knowledge` единственного компонента записи `components:`
+# (SPEC 01M5ENWB2XHZFRNQ3Q3PZSAH2T; ADR-0026 «Решение» п. 11) — дополнение
+# к `PROJECT_CONVENTIONS`; предел — на один элемент-каталог.
+KNOWLEDGE_DIR_MAX_FILES = 20
+KNOWLEDGE_TRUNCATED_ACTION = "бриф: документы knowledge сокращены"
+# Режимы обычного файла в дереве git; 120000 — символьная ссылка, 160000 —
+# подмодуль.
+_REGULAR_FILE_MODES = ("100644", "100755")
 # Те же три glob'а, что и у CI-джобы codebase-map — общий способ сверки
 # свежести карты (SPEC T028, требование 5).
 MAP_WATCH_GLOBS = ("orchestrator/*.py", "scripts/*.py", "tests/*.py")
@@ -530,13 +539,17 @@ def is_artel_task(conn, task_id: str) -> bool:
     return repo_context.is_artel(store.task_target(conn, task_id))
 
 
-def _clone_git(clone: Path, *args: str) -> tuple[bytes | None, str]:
+def _clone_git(clone: Path, *args: str,
+               literal: bool = False) -> tuple[bytes | None, str]:
     """(stdout байтами, "") git-команды в клоне проекта; (None, причина) —
     git не ответил или отказал. Байтами, а не `gitcmd.git`: текст файла
     проекта не обязан быть UTF-8, а декодирование внутри `subprocess.run`
-    уронило бы сборку брифа исключением."""
+    уронило бы сборку брифа исключением. `literal` — пути как есть
+    (`--literal-pathspecs`): элемент `knowledge` с `*` или `:` в имени — не
+    маска."""
+    opts = ["--literal-pathspecs"] if literal else []
     try:
-        res = subprocess.run(["git", "-C", str(clone), *args],
+        res = subprocess.run(["git", "-C", str(clone), *opts, *args],
                              capture_output=True, env=gitcmd.pult_env(),
                              timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -547,40 +560,212 @@ def _clone_git(clone: Path, *args: str) -> tuple[bytes | None, str]:
     return res.stdout, ""
 
 
-def _read_project_conventions(ctx) -> tuple[list, str]:
-    """([(файл, текст | None, причина)], "") — файлы `PROJECT_CONVENTIONS`
-    корня `refs/heads/<base>` клона проекта (требование 4): текст `None` с
-    пустой причиной — файла в корне нет (требование 7), с причиной — файл
-    есть, а чтение не удалось (требование 9). ([], причина) — базу прочитать
-    не удалось (требование 8).
+def _tree_entries(clone: Path, sha: str, path: str = "",
+                  recursive: bool = False) -> tuple[list | None, str]:
+    """([(режим, тип, путь)], "") — состав дерева коммита `sha` (под
+    `path`, если задан); (None, причина) — git не ответил. `-z`: имена без
+    кавычек и восьмеричных escape при `core.quotePath` — не-ASCII имя
+    иначе не совпало бы с путём записи (SPEC 01M5ENWB2XHZFRNQ3Q3PZSAH2T,
+    требование 3)."""
+    args = ["ls-tree", "-z", *(["-r"] if recursive else []), sha]
+    if path:
+        args += ["--", path]
+    listing, reason = _clone_git(clone, *args, literal=True)
+    if listing is None:
+        return None, reason
+    entries = []
+    for record in listing.split(b"\0"):
+        meta, _, name = record.partition(b"\t")
+        fields = meta.decode("ascii", "replace").split()
+        if len(fields) >= 2 and name:
+            entries.append((fields[0], fields[1],
+                            name.decode("utf-8", "replace")))
+    return entries, ""
+
+
+def _read_blob(clone: Path, sha: str, rel: str) -> tuple[str | None, str]:
+    """(текст, "") файла `rel` коммита `sha`; (None, причина) — сбой git
+    (причина со stderr) или текст не в UTF-8 (причина — ровно
+    `_NOT_UTF8`)."""
+    data, reason = _clone_git(clone, "show", f"{sha}:{rel}")
+    if data is None:
+        return None, reason
+    try:
+        return data.decode("utf-8"), ""
+    except UnicodeDecodeError:
+        return None, _NOT_UTF8
+
+
+_NOT_UTF8 = "текст не в UTF-8"
+
+
+def _read_project_conventions(ctx) -> tuple[list, str | None, str]:
+    """([(файл, текст | None, причина)], sha базы, "") — файлы
+    `PROJECT_CONVENTIONS` корня `refs/heads/<base>` клона проекта
+    (требование 4): текст `None` с пустой причиной — файла в корне нет
+    (требование 7), с причиной — файл есть, а чтение не удалось
+    (требование 9). ([], None, причина) — базу прочитать не удалось
+    (требование 8).
 
     Состав корня — `ls-tree` коммита базы, а не `gitcmd.show`: тот отвечает
     `None` одинаково на «файла нет» и на сбой git."""
     sha, reason = reference_cache.branch_commit(ctx.path, ctx.base)
     if sha is None:
-        return [], reason
-    listing, reason = _clone_git(ctx.path, "ls-tree", sha)
+        return [], None, reason
+    listing, reason = _tree_entries(ctx.path, sha)
     if listing is None:
-        return [], f"корень ветки {ctx.base} не прочитан: {reason}"
-    blobs = set()
-    for line in listing.decode("utf-8", "replace").splitlines():
-        meta, _, name = line.partition("\t")
-        if meta.split()[1:2] == ["blob"]:
-            blobs.add(name)
+        return [], None, f"корень ветки {ctx.base} не прочитан: {reason}"
+    blobs = {name for _mode, kind, name in listing if kind == "blob"}
     entries = []
     for rel in PROJECT_CONVENTIONS:
         if rel not in blobs:
             entries.append((rel, None, ""))
             continue
-        data, reason = _clone_git(ctx.path, "show", f"{sha}:{rel}")
-        if data is None:
-            entries.append((rel, None, f"{rel}: {reason}"))
+        text, reason = _read_blob(ctx.path, sha, rel)
+        entries.append((rel, text, f"{rel}: {reason}" if reason else ""))
+    return entries, sha, ""
+
+
+def _knowledge_of(target: str) -> tuple[str, list] | None:
+    """(имя компонента, элементы `knowledge`) — только у профиля из записи
+    `components:`, единственный компонент которой несёт `knowledge` (SPEC
+    01M5ENWB2XHZFRNQ3Q3PZSAH2T, требование 1); иначе `None` — прежний
+    вывод. Отказ или пропуск `decide` (в том числе запись из нескольких
+    компонентов до G3б) и ошибка записи проекта — тоже `None`: документы
+    `knowledge` — подспорье, сборку брифа они не останавливают
+    (требование 9).
+
+    `project_profile` — импортом здесь: на уровне модуля он замкнул бы
+    круг `project_profile` → `acceptance` → `suite_lock` →
+    `knowledge_cards` → `brief`."""
+    from . import project_profile
+    try:
+        profile = project_profile.decide(target).profile
+        if profile is None or not profile.from_components:
+            return None
+        comps = project_profile.components(target)
+    except targets.TargetsError:
+        return None
+    if len(comps) != 1 or not comps[0].fields.get("knowledge"):
+        return None
+    return comps[0].name, list(comps[0].fields["knowledge"])
+
+
+def _unread_mark(conn, task_id: str, role: str, why: str, where: str) -> str:
+    store.journal(conn, task_id, role, PROJECT_CONVENTIONS_UNREAD_ACTION, why)
+    return f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {why} — {where}\n"
+
+
+def _knowledge_parts(conn, task_id: str, role: str, run_id: str, render,
+                     ctx, sha: str, component: str, elements: list,
+                     shown: set) -> list[str]:
+    """Куски элементов `knowledge` в порядке записи (SPEC
+    01M5ENWB2XHZFRNQ3Q3PZSAH2T, требования 2-7). `shown` — пути дерева,
+    куски которых уже переданы в `render`; пополняется до `render`, так что
+    пропуск по размеру внутри него повтор не открывает, а пути с пометкой
+    в него не попадают."""
+    where = (f"knowledge компонента {component}, ветка {ctx.base} проекта "
+             f"{ctx.target}")
+    parts = []
+    for element in elements:
+        is_dir = element.endswith("/")
+        rel = posixpath.normpath(element)
+        rel = "" if rel == "." else rel
+        if rel and rel in shown and not is_dir:
             continue
-        try:
-            entries.append((rel, data.decode("utf-8"), ""))
-        except UnicodeDecodeError:
-            entries.append((rel, None, f"{rel}: текст не в UTF-8"))
-    return entries, ""
+        own, reason = (_tree_entries(ctx.path, sha, rel) if rel
+                       else ([("040000", "tree", "")], ""))
+        if own is None:
+            parts.append(_unread_mark(conn, task_id, role,
+                                      f"{element}: {reason}", where))
+            continue
+        own = [entry for entry in own if entry[2] == rel]
+        if not own:
+            parts.append(f"конвенции проекта: {element} — "
+                         f"{PROJECT_CONVENTIONS_ABSENT_MARK} ({where})\n")
+            continue
+        mode, kind, _ = own[0]
+        if is_dir:
+            if kind != "tree":
+                parts.append(_unread_mark(
+                    conn, task_id, role,
+                    f"{element}: не каталог — элемент-файл пишется без «/»",
+                    where))
+                continue
+            parts.extend(_knowledge_dir_parts(conn, task_id, role, run_id,
+                                              render, ctx, sha, component,
+                                              element, rel, shown, where))
+            continue
+        if kind == "tree":
+            parts.append(_unread_mark(
+                conn, task_id, role,
+                f"{element}: каталог — элемент-каталог пишется с «/» на конце",
+                where))
+            continue
+        if kind != "blob" or mode not in _REGULAR_FILE_MODES:
+            parts.append(_unread_mark(conn, task_id, role,
+                                      f"{element}: не обычный файл", where))
+            continue
+        text, reason = _read_blob(ctx.path, sha, rel)
+        if text is None:
+            parts.append(_unread_mark(conn, task_id, role,
+                                      f"{element}: {reason}", where))
+            continue
+        shown.add(rel)
+        parts.append(render(conn, task_id, role, f"{rel} ({where})", text,
+                            run_id))
+    return parts
+
+
+def _knowledge_dir_parts(conn, task_id: str, role: str, run_id: str, render,
+                         ctx, sha: str, component: str, element: str,
+                         rel: str, shown: set, where: str) -> list[str]:
+    """Куски элемента-каталога: обычные `*.md` под ним по пути, без уже
+    показанных, не больше `KNOWLEDGE_DIR_MAX_FILES` (требование 5). Имена
+    файлов листинга — чужой репозиторий — только внутри границы
+    недоверенных данных, первой строкой тела (требование 7): в подписи,
+    строках, пометках и журнале — элемент записи и номер документа."""
+    listing, reason = _tree_entries(ctx.path, sha, rel, recursive=True)
+    if listing is None:
+        return [_unread_mark(conn, task_id, role, f"{element}: {reason}",
+                             where)]
+    regular = [name for mode, kind, name in listing
+               if kind == "blob" and mode in _REGULAR_FILE_MODES]
+    irregular = len(listing) - len(regular)
+    docs = sorted(name for name in regular if name.endswith(".md"))
+    lines = []
+    if not docs:
+        lines.append(f"документы knowledge: каталог {element} — файлов *.md "
+                     f"нет\n")
+    docs = [name for name in docs if name not in shown]
+    total = len(docs)
+    docs = docs[:KNOWLEDGE_DIR_MAX_FILES]
+    parts = []
+    for k, path in enumerate(docs, start=1):
+        text, reason = _read_blob(ctx.path, sha, path)
+        if text is None:
+            cause = _NOT_UTF8 if reason == _NOT_UTF8 else "сбой git"
+            why = f"каталог {element}, документ {k}: {cause}"
+            store.journal(conn, task_id, role,
+                          PROJECT_CONVENTIONS_UNREAD_ACTION, why)
+            parts.append(f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {why}\n")
+            continue
+        shown.add(path)
+        label = (f"knowledge компонента {component}, каталог {element}, "
+                 f"документ {k} из {len(docs)} (ветка {ctx.base} проекта "
+                 f"{ctx.target})")
+        parts.append(render(conn, task_id, role, label,
+                            f"путь: {path}\n{text}", run_id))
+    if total > len(docs):
+        store.journal(conn, task_id, role, KNOWLEDGE_TRUNCATED_ACTION,
+                      f"каталог {element}: показаны первые {len(docs)} "
+                      f"файлов из {total}")
+        lines.append(f"документы knowledge: каталог {element} — показаны "
+                     f"первые {len(docs)} файлов из {total}\n")
+    if irregular:
+        lines.append(f"документы knowledge: каталог {element} — пропущено "
+                     f"не обычных файлов: {irregular}\n")
+    return parts + lines
 
 
 def _project_conventions_parts(conn, task_id: str, role: str, run_id: str,
@@ -591,24 +776,32 @@ def _project_conventions_parts(conn, task_id: str, role: str, run_id: str,
     пометка «файла нет» на месте отсутствующего; пометка «конвенции проекта
     не прочитаны: <причина>» и запись журнала с той же причиной на месте
     нечитаемого файла или вместо всех, если не прочитана база. Сборку брифа
-    сбой не останавливает."""
+    сбой не останавливает.
+
+    За ними — документы `knowledge` единственного компонента записи
+    `components:` (SPEC 01M5ENWB2XHZFRNQ3Q3PZSAH2T): `_knowledge_parts`."""
     target = store.task_target(conn, task_id)
     ctx = repo_context.resolve(target)
+    knowledge = None
     if ctx is None:
-        entries, reason = [], repo_context.unresolved_reason(target)
+        entries, sha, reason = [], None, repo_context.unresolved_reason(target)
         where = f"проекта {target}"
     else:
-        entries, reason = _read_project_conventions(ctx)
+        knowledge = _knowledge_of(target)
+        entries, sha, reason = _read_project_conventions(ctx)
         where = f"корень ветки {ctx.base} проекта {target}"
-    names = ", ".join(PROJECT_CONVENTIONS)
+    names = ", ".join([*PROJECT_CONVENTIONS,
+                       *(knowledge[1] if knowledge else ())])
     if reason:
         store.journal(conn, task_id, role, PROJECT_CONVENTIONS_UNREAD_ACTION,
                       reason)
         return [f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {reason} — {names}, "
                 f"{where}\n"]
     parts = []
+    shown = set()
     for rel, text, why in entries:
         if text is not None:
+            shown.add(rel)
             parts.append(render(conn, task_id, role, f"{rel} ({where})", text,
                                 run_id))
         elif why:
@@ -619,6 +812,9 @@ def _project_conventions_parts(conn, task_id: str, role: str, run_id: str,
         else:
             parts.append(f"конвенции проекта: {rel} — "
                          f"{PROJECT_CONVENTIONS_ABSENT_MARK} ({where})\n")
+    if knowledge:
+        parts.extend(_knowledge_parts(conn, task_id, role, run_id, render,
+                                      ctx, sha, *knowledge, shown))
     return parts
 
 
