@@ -1,12 +1,13 @@
 ## Выяснено
-- Код cleanup.py/fsm_merge_gate.py соответствует SPEC по требованиям 1–7; планка 13/13 зелёная, долгоживущий файл + kill-тесты 24 passed; карта свежа (diff только built_at_sha).
-- Временная мутация: удалил строку `cleanup.cleanup_merged_remote(...)` в `_cleanup_merged_task` — все 12 файлов tests/ про гейт мержа (84 теста) зелёные. Проводку гейта держит только разовая планка → R1-F1 major.
+- Итерация 2: R1-F1 закрыт — `tests/test_fsm_merge_gate_remote_branch_cleanup.py` (4 теста) ловит обе заявленные мутации (вызов удалён → 2 красных; уборка до проверки "moved" → 4 красных).
+- Код cleanup.py/fsm_merge_gate.py/retention.md с итерации 1 не менялся; планка 13/13; затронутые модули 48 passed; карта свежа.
+- Вердикт approved, реестр: R1-F1 accepted.
 
 ## Не сработало
-- `pytest -n 8` в этом окружении падает (node down) — гонял с `-p no:xdist`.
+- `sed -i` в составной команде требует подтверждения — мутации делал через Edit + `git checkout`.
 
 ## Где остановился
-- REVIEW.md итерации 1: changes_requested, R1-F1 open.
+- REVIEW.md итерации 2 записан, status: approved.
 
 ## Чего не хватило
 - Нет.
