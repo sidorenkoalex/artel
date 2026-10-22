@@ -59,7 +59,7 @@ from scripts import guard
 
 from .. import artifact_branch as docs_ref
 from .. import (config, gitcmd, project_profile, repo_context, store,
-               workspace)
+               targets, workspace)
 from . import two_sided
 from ..targets import PROFILE_RUNNER_OWN
 from ._base import GateRefusal, _run_gates
@@ -1290,13 +1290,21 @@ def _external_helpers(conn, task_id: str, scope) -> _ExternalHelpers | None:
     """Режим помощников проекта задачи — по признаку артели и профилю,
     прочитанным здесь, на общем узле, чтобы его получили все три входа
     (требование 3). `None` — артель (или задача без строки в БД): прежнее
-    правило. Внешний проект без профиля остаётся на переданной области."""
+    правило. Внешний проект без профиля остаётся на переданной области.
+
+    Запись из нескольких компонентов — область компонента задачи
+    (`for_task`); компонент не выбран — `targets.ComponentsPending`, а не
+    откат на область по умолчанию (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y,
+    требование 2): все три входа отказывают раньше, по тому же `for_task`."""
     if conn is None:
         return None
     target = store.task_target(conn, task_id)
     if repo_context.is_artel(target):
         return None
-    profile = project_profile.decide(target).profile
+    decision = project_profile.for_task_target(target, task_id, conn)
+    profile = decision.profile
+    if profile is None and project_profile.is_multi(target):
+        raise targets.ComponentsPending(decision.refusal)
     if profile is None:
         return _ExternalHelpers("", scope or _in_scope)
     return _ExternalHelpers(profile.workdir, profile.in_weakening_scope)
@@ -1753,7 +1761,7 @@ def _test_integrity_gate(conn, task_id: str, t,
     """
     if t["is_canary"]:
         return None
-    decision = project_profile.decide(t["target"])
+    decision = project_profile.for_task_target(t["target"], task_id, conn)
     if decision.refusal:
         return GateRefusal(project_profile.REFUSAL_ACTION, decision.refusal,
                            project_profile.refusal_hint(task_id))

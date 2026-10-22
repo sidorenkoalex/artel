@@ -249,8 +249,19 @@ def _plank_rule_refusal(rule, t) -> str | None:
         return None
     # Отложенный импорт: гейт исходов тянет прогоны и выписки, которые
     # модулю автогейта нужны только здесь.
-    from .advance_gates.outcome_integrity import _bounds
-    if _bounds(t["is_canary"], t["target"]) is not None:
+    from .advance_gates.outcome_integrity import _bounds, in_outcome_bounds
+    target = t["target"] or config.DEFAULT_TARGET
+    if project_profile.is_multi(target):
+        # Запись из нескольких компонентов: граница — компонент задачи
+        # (`for_task` по строке), не канарейка (SPEC
+        # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
+        if not t["is_canary"]:
+            decision = project_profile.for_row(t)
+            if decision.refusal:
+                return f"автогейт: {decision.refusal}"
+            if in_outcome_bounds(decision.profile):
+                return None
+    elif _bounds(t["is_canary"], t["target"]) is not None:
         return None
     names = ", ".join(rule.labelled_components())
     return (f"автогейт: прогон планки компонента {names} по правилу — до "

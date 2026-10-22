@@ -662,7 +662,18 @@ def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
         long_lived = sorted(digests) if t["tests_locked_sha"] else []
         # Профиль `pytest-own` проекта задачи — каналом `command` (SPEC
         # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — прежний вызов без него.
-        own = acceptance._task_own_profile(conn, task_id)
+        from . import project_profile, targets
+        try:
+            own = acceptance._task_own_profile(conn, task_id)
+        except targets.ComponentsPending as exc:
+            # Компонент задачи не выбран — отказ, не прогон прежним
+            # раннером пульта (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
+            detail = (f"планка после подтяжки {source_branch} не прогнана: "
+                      f"{exc}")
+            store.journal(conn, task_id, "fsm", project_profile.REFUSAL_ACTION,
+                          detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            return Refused(detail)
         kwargs = {"command": own} if own is not None else {}
         if long_lived:
             green, tail = acceptance.run(tdir, cwd=wt_path, extra=long_lived,

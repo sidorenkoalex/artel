@@ -181,7 +181,7 @@ def _group_line_errors(t, rel_tests_dir: str,
     раньше, строк группы не несёт и не проверяется). Лок не читается —
     сверять не с чем, правку не проверяем: тот же исход, что у планки до
     правила."""
-    decision = project_profile.decide(t["target"])
+    decision = project_profile.for_row(t)
     if decision.refusal:
         return [decision.refusal]
     if decision.profile is None:
@@ -199,7 +199,8 @@ def _task_profile(task_id: str):
     """Профиль тестов проекта задачи для узлов долгоживущих файлов, когда
     вызывающий его не передал: они работают только при непустом перечне
     лока, а перечень бывает только у проекта с профилем."""
-    return project_profile.decide(workspace.task_target(task_id)).profile
+    return project_profile.for_task_target(workspace.task_target(task_id),
+                                           task_id).profile
 
 
 def _profile_or_exit(conn, task_id: str):
