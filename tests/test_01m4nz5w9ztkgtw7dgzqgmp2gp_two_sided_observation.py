@@ -707,7 +707,7 @@ class OutcomeLocationTest(GitignoreCommittedRealGitSandbox):
         helper_source = lit["helper_source"]
         base_source, head_source = lit["base_source"], lit["head_source"]
 
-        names =("test_self", "test_bare", "test_other", "test_same", "test_green")
+        names = ("test_self", "test_bare", "test_other", "test_same", "test_green")
         methods = [two_sided.Method(path, path, f"{cls}::{m}", base_source,
                                     head_source) for m in names]
         outcome = two_sided.run(self.root, branch, base_sha, methods)

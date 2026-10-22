@@ -270,7 +270,10 @@ class _AutoClosingConnection(sqlite3.Connection):
     01M5G6PDQA7AYDYDPA7DD5JD4S). Поэтому брошенные соединения закрывает
     учёт `db()` (`_TRACKED`): каждый вызов `db()` просматривает его и
     закрывает соединение, на которое кроме учёта и собственного цикла
-    никто не ссылается (`_close_abandoned`).
+    никто не ссылается (`_close_abandoned`). Явный `close()` вызывающего
+    кода выводит соединение из учёта сам: закрытое соединение разрывает
+    свой цикл, число ссылок падает ниже эталона, и просмотр его бы уже не
+    узнал — учёт рос бы без предела.
 
     `__del__` остаётся для соединений, вышедших из учёта (закрытие из
     чужого потока не удалось), — их добивает сборка циклов. Он закрывает
@@ -286,9 +289,18 @@ class _AutoClosingConnection(sqlite3.Connection):
     исключения — чтобы не скрыть настоящую ошибку `close()` (CR-2).
     """
 
+    def close(self):
+        super().close()
+        with _TRACKED_LOCK:
+            _TRACKED.pop(id(self), None)
+
     def __del__(self):
+        # Мимо `close()` этого класса: финализатор может сработать при
+        # сборке циклов внутри `_close_abandoned`, где `_TRACKED_LOCK` уже
+        # взят, а финализируемого соединения в учёте нет (учёт держит
+        # сильные ссылки).
         try:
-            self.close()
+            sqlite3.Connection.close(self)
         except sqlite3.ProgrammingError:
             pass
 
@@ -366,7 +378,8 @@ def _close_abandoned() -> None:
             continue
         del _TRACKED[key]
         try:
-            conn.close()
+            # Мимо `close()` класса: блокировка учёта уже взята.
+            sqlite3.Connection.close(conn)
         except sqlite3.ProgrammingError:
             pass
 
