@@ -41,8 +41,8 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/store.py:351-370 | явно закрытое соединение (`close()`/`closing`) не выходит из `_TRACKED`: после `close()` число ссылок ниже эталона, `!=` не срабатывает | неограниченный рост учёта и памяти в долгоживущем процессе, O(n) проход на каждый `db()`; 500 закрытий → учёт 501 | выводить из учёта при явном `close()` (или при числе ссылок ниже эталона) + долгоживущий тест в `tests/` с заявкой «Ловит мутацию» |
-| R1-F2 | open | tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py:710 | `names =(` — форматирование | вкус | `names = (` |
+| R1-F1 | fixed | orchestrator/store.py:351-370 | явно закрытое соединение (`close()`/`closing`) не выходит из `_TRACKED`: после `close()` число ссылок ниже эталона, `!=` не срабатывает | неограниченный рост учёта и памяти в долгоживущем процессе, O(n) проход на каждый `db()`; 500 закрытий → учёт 501 | fixed: `_AutoClosingConnection.close()` после `super().close()` под `_TRACKED_LOCK` убирает себя из `_TRACKED`; `_close_abandoned` и `__del__` зовут `sqlite3.Connection.close` мимо переопределения (без повторного взятия `Lock`). Тест `tests/test_store_db_tracking.py` (N × `close()`, N × `closing` при `gc.disable()`), мутация «`close()` не выводит из учёта» краснит оба метода |
+| R1-F2 | fixed | tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py:710 | `names =(` — форматирование | вкус | fixed: `names = (` |
 
 ## Вердикт
 changes_requested — исправить R1-F1 (выход явно закрытого соединения из учёта + тест в `tests/`); R1-F2 — попутно. Остальные части (fd_wait, зерно, `SilentHostingTest` без часов) замечаний не имеют.

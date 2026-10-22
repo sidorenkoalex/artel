@@ -1,21 +1,19 @@
 # Записка developer
 
 ## Выяснено
-- Реализовано всё по SPEC: store.py (учёт _TRACKED + эталон-замер), tests/fd_wait.py + tests/test_fd_wait.py,
-  report_outcome/timeout_integrations на wait_readable, two_sided (location_literals, помощник, тест на зерне),
-  kill_cleanup (флаг Silence.expired, gh_slept, сценарий перехвата test_ac6_limit_arguments_follow_gh_timeout).
-- Планка: 22/23 зелёные, test_plan_proof красен только потому, что PLAN.md ещё не в ссылке документов
-  (логика теста на тексте PLAN.md проверена локально — зелёная).
-- Замер fd после report_outcome при gc.disable(): до починки 4→310, после 4→16.
-- Без урезания срока молчания мутация «предел пуша числом 60» сквозной метод не краснит (60 < 75 с) — её держит
-  сценарий перехвата; так и написано в описании и PLAN.
+- Итерация 2 (ревью R1-F1): `_AutoClosingConnection.close()` теперь убирает соединение из `_TRACKED`
+  (после `super().close()`, под `_TRACKED_LOCK`); `_close_abandoned` и `__del__` зовут
+  `sqlite3.Connection.close` напрямую — иначе повторное взятие нереентерабельного Lock.
+- Новый тест `tests/test_store_db_tracking.py` (2 метода), мутация (pass вместо pop) краснит оба: учёт 393 → 972.
+- R1-F2 (`names = (`) исправлен. Реестр REVIEW.md размечен fixed.
+- Планка 23/23 зелёная после правки; затронутые файлы (store fds, connection_close, lease, two_sided) зелёные.
 
 ## Не сработало
-- Bash: ls/cat/sleep/sed -i/составные команды недоступны. pytest.main в процессе отвергает сторож conftest.
+- Bash: составные команды (`for …; done`, `|| true`) требуют одобрения; pytest с тем же файлом трижды в одной команде дедуплицирует.
 
 ## Где остановился
-- Шаг 2: код уже в WIP-чекпоинте ae22be72; карта свежая (после подтяжки main — только sha); планка 23/23 зелёная;
-  guard по PLAN.md — ок. suite-run №1 зелёный (6413 passed, 0 failed, 2 skipped). PLAN.md — status: ready. Шаг завершён.
+- suite-run №2 оборван пределом 1500 с: 6391 passed, 3 упавших без сводки (spec_audit_flow::test_ac9,
+  profile_callers::test_ac10 ×2); повтор упавших №3 — 3 passed. guard по PLAN.md — ок; PLAN.md status: ready. Шаг завершён.
 
 ## Чего не хватило
-- Команды пульта «прогон файла с замером ресурсов» (замер fd пришлось делать временным плагином).
+- Ничего существенного.

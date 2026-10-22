@@ -25,7 +25,20 @@ schema_version: 5
    ссылка (переменная, курсор, `conn.execute`, `contextlib.closing`) даёт
    +1 — такое соединение не трогается. `db_tracked_count()` — размер учёта
    под той же блокировкой. Описание `_AutoClosingConnection` переписано:
-   цикл ссылок, учёт и просмотр как механизм; `__del__` прежний.
+   цикл ссылок, учёт и просмотр как механизм.
+   **Итерация 2 (R1-F1).** Явно закрытое соединение выходит из учёта само:
+   `_AutoClosingConnection.close()` после `super().close()` под
+   `_TRACKED_LOCK` делает `_TRACKED.pop(id(self), None)` (после `close()`
+   цикл разорван, число ссылок ниже эталона — просмотр его не узнал бы).
+   Внутренние пути закрытия — `_close_abandoned` (блокировка уже взята) и
+   `__del__` (может сработать при сборке циклов внутри просмотра) — зовут
+   `sqlite3.Connection.close` мимо переопределения, чтобы не взять
+   нереентерабельный `Lock` повторно. Если `close()` из чужого потока
+   отвергнут `ProgrammingError`, соединение остаётся в учёте (оно открыто).
+   Тест — `tests/test_store_db_tracking.py` (N × `close()` и N ×
+   `contextlib.closing` при `gc.disable()` → `db_tracked_count()` не растёт);
+   мутация «`close()` не выводит из учёта» краснит оба метода (проверено:
+   учёт 393 → 972). R1-F2: `names = (` в two_sided.
 2. **Ожидание без `select.select`.** Новый модуль `tests/fd_wait.py`:
    `wait_readable(fileobj, timeout) -> bool` — вне Darwin
    `selectors.DefaultSelector`, на Darwin прежний `select.select`
@@ -140,6 +153,7 @@ schema_version: 5
 | test_fd_wait.py | 2 passed | 2 passed | 2 passed |
 | test_01m5g6pdqa7aydydpa7dd5jd4s_store_db_fds.py | 4 passed | 4 passed | 4 passed |
 | test_store_db_connection_close.py | 5 passed | 5 passed | 5 passed |
+| test_store_db_tracking.py (итерация 2) | 2 passed | 2 passed | 2 passed |
 
 Замер дескрипторов процесса pytest после файла report_outcome при выключенной сборке мусора (`gc.disable()` плагином до сбора, `/dev/fd` в `pytest_sessionfinish`): до починки 4 на старте → 310 в конце; после починки 4 на старте → 16 в конце.
 
@@ -165,6 +179,10 @@ schema_version: 5
 - Сквозной `SilentHostingTest` без урезания срока не ловит «предел пуша
   числом 60» флагом (60 с < 75 с срока молчания) — эту мутацию держит
   сценарий перехвата; описание метода говорит именно так.
+- Явный `close()` соединения, вызванный финализатором другого объекта во
+  время просмотра учёта в том же потоке, взял бы `_TRACKED_LOCK` повторно
+  (взаимоблокировка `threading.Lock`); в пульте таких финализаторов нет —
+  собственный `__del__` соединения идёт мимо блокировки.
 
 ## Предложения системе
 - Сторож `conftest.py` отвергает `pytest.main([...файл])` внутри процесса как «полный прогон» — замер в одном процессе пришлось делать плагином через `python -m pytest`; полезна команда пульта «прогон файла с замером ресурсов».
