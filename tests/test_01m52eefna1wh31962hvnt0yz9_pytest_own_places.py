@@ -65,6 +65,9 @@ PLACES = ("acceptance.run", "acceptance.collect", "acceptance.run_repeat",
           "two_sided._run_side")
 FULL_PLACES = PLACES[4:7]
 TWO_SIDED = PLACES[7]
+# Доли `PLACES` у тестов, гоняющих каждое место настоящим прогоном
+# (SPEC 01M5H1A4GS19TPR4RJ8XRVVYZQ): по методу на долю `[i::PLACE_SHARES]`.
+PLACE_SHARES = 4
 # Параметры `run_plank` и `two_sided.run` до задачи: новый параметр
 # профиля — тот, которого среди них нет.
 RUN_PLANK_PARAMS = ("targets", "cwd")
@@ -178,6 +181,13 @@ def resolves_to(arg: str, cwd, target) -> bool:
 def has_pair(argv: list, first: str, second: str) -> bool:
     return any(argv[i] == first and argv[i + 1] == second
                for i in range(len(argv) - 1))
+
+
+def places_share(index: int) -> list:
+    """Доля `index` мест: сортированная копия `PLACES`, срез
+    `[index::PLACE_SHARES]`. Сам литерал и его порядок не трогаются — от
+    них зависят `FULL_PLACES` и `TWO_SIDED`."""
+    return sorted(PLACES)[index::PLACE_SHARES]
 
 
 class ProbeRun:
@@ -511,8 +521,98 @@ class PytestOwnEnvironmentTest(PytestOwnProjectTest):
         несколько прогонов или временный каталог не убирается после
         прогона — совпадение с прежним `HOME` или каталог существует после
         возврата.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        0 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
         """
-        for place in PLACES:
+        share = places_share(0)
+        self.assertTrue(share)
+        for place in share:
+            with self.subTest(place=place, seed=self.seed):
+                self.check_home(place, self.scenario(place, "pass"),
+                                "прогон завершился")
+
+    def test_ac3_home_fresh_and_removed_after_completion_share1(self):
+        """Завершённый прогон: `HOME` — свой новый каталог, после прогона удалён.
+
+        Восемь мест, режим обёртки `pass`: на прогоне `HOME` — каталог,
+        не `HOME` пульта и не `HOME` любого другого прогона теста (у
+        двустороннего — у каждой стороны свой); после возврата места
+        каталога нет.
+
+        Ловит мутацию: `HOME` прогона — `HOME` пульта, общий каталог на
+        несколько прогонов или временный каталог не убирается после
+        прогона — совпадение с прежним `HOME` или каталог существует после
+        возврата.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        1 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(1)
+        self.assertTrue(share)
+        for place in share:
+            with self.subTest(place=place, seed=self.seed):
+                self.check_home(place, self.scenario(place, "pass"),
+                                "прогон завершился")
+
+    def test_ac3_home_fresh_and_removed_after_completion_share2(self):
+        """Завершённый прогон: `HOME` — свой новый каталог, после прогона удалён.
+
+        Восемь мест, режим обёртки `pass`: на прогоне `HOME` — каталог,
+        не `HOME` пульта и не `HOME` любого другого прогона теста (у
+        двустороннего — у каждой стороны свой); после возврата места
+        каталога нет.
+
+        Ловит мутацию: `HOME` прогона — `HOME` пульта, общий каталог на
+        несколько прогонов или временный каталог не убирается после
+        прогона — совпадение с прежним `HOME` или каталог существует после
+        возврата.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        2 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(2)
+        self.assertTrue(share)
+        for place in share:
+            with self.subTest(place=place, seed=self.seed):
+                self.check_home(place, self.scenario(place, "pass"),
+                                "прогон завершился")
+
+    def test_ac3_home_fresh_and_removed_after_completion_share3(self):
+        """Завершённый прогон: `HOME` — свой новый каталог, после прогона удалён.
+
+        Восемь мест, режим обёртки `pass`: на прогоне `HOME` — каталог,
+        не `HOME` пульта и не `HOME` любого другого прогона теста (у
+        двустороннего — у каждой стороны свой); после возврата места
+        каталога нет.
+
+        Ловит мутацию: `HOME` прогона — `HOME` пульта, общий каталог на
+        несколько прогонов или временный каталог не убирается после
+        прогона — совпадение с прежним `HOME` или каталог существует после
+        возврата.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        3 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(3)
+        self.assertTrue(share)
+        for place in share:
             with self.subTest(place=place, seed=self.seed):
                 self.check_home(place, self.scenario(place, "pass"),
                                 "прогон завершился")
@@ -529,9 +629,99 @@ class PytestOwnEnvironmentTest(PytestOwnProjectTest):
         Ловит мутацию: уборка временного `HOME` стоит после ожидания
         прогона, а не в `finally` — по `TimeoutExpired` или исключению
         каталог остаётся.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        0 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
         """
+        share = places_share(0)
+        self.assertTrue(share)
         for mode, outcome in (("sleep", "таймаут"), ("signal", "исключение")):
-            for place in PLACES:
+            for place in share:
+                with self.subTest(place=place, mode=mode, seed=self.seed):
+                    self.check_home(place, self.scenario(place, mode), outcome)
+
+    def test_ac3_home_removed_after_timeout_and_exception_share1(self):
+        """Таймаут и исключение на прогоне: `HOME` прогона после исхода удалён.
+
+        Восемь мест, режимы обёртки `sleep` (предел прогона
+        `TIMEOUT_SEC`, обёртка спит дольше) и `signal` (обработчик
+        `SIGUSR1` поднимает исключение, пока место ждёт прогон): на
+        прогоне `HOME` — новый каталог, после возврата или исключения
+        места каталога нет.
+
+        Ловит мутацию: уборка временного `HOME` стоит после ожидания
+        прогона, а не в `finally` — по `TimeoutExpired` или исключению
+        каталог остаётся.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        1 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(1)
+        self.assertTrue(share)
+        for mode, outcome in (("sleep", "таймаут"), ("signal", "исключение")):
+            for place in share:
+                with self.subTest(place=place, mode=mode, seed=self.seed):
+                    self.check_home(place, self.scenario(place, mode), outcome)
+
+    def test_ac3_home_removed_after_timeout_and_exception_share2(self):
+        """Таймаут и исключение на прогоне: `HOME` прогона после исхода удалён.
+
+        Восемь мест, режимы обёртки `sleep` (предел прогона
+        `TIMEOUT_SEC`, обёртка спит дольше) и `signal` (обработчик
+        `SIGUSR1` поднимает исключение, пока место ждёт прогон): на
+        прогоне `HOME` — новый каталог, после возврата или исключения
+        места каталога нет.
+
+        Ловит мутацию: уборка временного `HOME` стоит после ожидания
+        прогона, а не в `finally` — по `TimeoutExpired` или исключению
+        каталог остаётся.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        2 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(2)
+        self.assertTrue(share)
+        for mode, outcome in (("sleep", "таймаут"), ("signal", "исключение")):
+            for place in share:
+                with self.subTest(place=place, mode=mode, seed=self.seed):
+                    self.check_home(place, self.scenario(place, mode), outcome)
+
+    def test_ac3_home_removed_after_timeout_and_exception_share3(self):
+        """Таймаут и исключение на прогоне: `HOME` прогона после исхода удалён.
+
+        Восемь мест, режимы обёртки `sleep` (предел прогона
+        `TIMEOUT_SEC`, обёртка спит дольше) и `signal` (обработчик
+        `SIGUSR1` поднимает исключение, пока место ждёт прогон): на
+        прогоне `HOME` — новый каталог, после возврата или исключения
+        места каталога нет.
+
+        Ловит мутацию: уборка временного `HOME` стоит после ожидания
+        прогона, а не в `finally` — по `TimeoutExpired` или исключению
+        каталог остаётся.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        3 (её непустоту утверждает `assertTrue`) — в доле не меньше
+        двух прогонов, так что проверка «HOME не общий у нескольких
+        прогонов» держится в каждой доле; прочие доли — у метода без
+        суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(3)
+        self.assertTrue(share)
+        for mode, outcome in (("sleep", "таймаут"), ("signal", "исключение")):
+            for place in share:
                 with self.subTest(place=place, mode=mode, seed=self.seed):
                     self.check_home(place, self.scenario(place, mode), outcome)
 
@@ -551,9 +741,103 @@ class PytestOwnProcessGroupTest(PytestOwnProjectTest):
         по таймауту/исключению убивает только главный процесс
         (`subprocess.run(timeout=…)`, `proc.kill()`), а не группу — дочерний
         процесс обёртки жив, канал не закрыт.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        0 (её непустоту утверждает `assertTrue`); прочие доли — у
+        метода без суффикса и методов с суффиксом `_share<i>`.
         """
+        share = places_share(0)
+        self.assertTrue(share)
         for mode in ("sleep", "signal"):
-            for place in PLACES:
+            for place in share:
+                with self.subTest(place=place, mode=mode, seed=self.seed):
+                    run = self.scenario(place, mode)
+                    self.wrapper_records(place, run)
+                    self.assertTrue(run["probe"].children_gone(),
+                                    f"{self.where(place)}, режим {mode}: "
+                                    f"дочерний процесс обёртки жив")
+
+    def test_ac6_child_gone_after_timeout_and_exception_share1(self):
+        """Дочерний процесс обёртки не живёт после таймаута и после исключения.
+
+        Восемь мест, режимы `sleep` (таймаут) и `signal` (исключение на
+        прогоне). Обёртка порождает дочерний процесс, держащий конец
+        записи именованного канала зонда; после возврата или исключения
+        места читатель канала получает конец файла — все держатели мертвы.
+
+        Ловит мутацию: место запускает прогон без собственного сеанса или
+        по таймауту/исключению убивает только главный процесс
+        (`subprocess.run(timeout=…)`, `proc.kill()`), а не группу — дочерний
+        процесс обёртки жив, канал не закрыт.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        1 (её непустоту утверждает `assertTrue`); прочие доли — у
+        метода без суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(1)
+        self.assertTrue(share)
+        for mode in ("sleep", "signal"):
+            for place in share:
+                with self.subTest(place=place, mode=mode, seed=self.seed):
+                    run = self.scenario(place, mode)
+                    self.wrapper_records(place, run)
+                    self.assertTrue(run["probe"].children_gone(),
+                                    f"{self.where(place)}, режим {mode}: "
+                                    f"дочерний процесс обёртки жив")
+
+    def test_ac6_child_gone_after_timeout_and_exception_share2(self):
+        """Дочерний процесс обёртки не живёт после таймаута и после исключения.
+
+        Восемь мест, режимы `sleep` (таймаут) и `signal` (исключение на
+        прогоне). Обёртка порождает дочерний процесс, держащий конец
+        записи именованного канала зонда; после возврата или исключения
+        места читатель канала получает конец файла — все держатели мертвы.
+
+        Ловит мутацию: место запускает прогон без собственного сеанса или
+        по таймауту/исключению убивает только главный процесс
+        (`subprocess.run(timeout=…)`, `proc.kill()`), а не группу — дочерний
+        процесс обёртки жив, канал не закрыт.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        2 (её непустоту утверждает `assertTrue`); прочие доли — у
+        метода без суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(2)
+        self.assertTrue(share)
+        for mode in ("sleep", "signal"):
+            for place in share:
+                with self.subTest(place=place, mode=mode, seed=self.seed):
+                    run = self.scenario(place, mode)
+                    self.wrapper_records(place, run)
+                    self.assertTrue(run["probe"].children_gone(),
+                                    f"{self.where(place)}, режим {mode}: "
+                                    f"дочерний процесс обёртки жив")
+
+    def test_ac6_child_gone_after_timeout_and_exception_share3(self):
+        """Дочерний процесс обёртки не живёт после таймаута и после исключения.
+
+        Восемь мест, режимы `sleep` (таймаут) и `signal` (исключение на
+        прогоне). Обёртка порождает дочерний процесс, держащий конец
+        записи именованного канала зонда; после возврата или исключения
+        места читатель канала получает конец файла — все держатели мертвы.
+
+        Ловит мутацию: место запускает прогон без собственного сеанса или
+        по таймауту/исключению убивает только главный процесс
+        (`subprocess.run(timeout=…)`, `proc.kill()`), а не группу — дочерний
+        процесс обёртки жив, канал не закрыт.
+
+        Сценарий доли: места `PLACES` по сортировке копии перечня делятся
+        на `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
+        3 (её непустоту утверждает `assertTrue`); прочие доли — у
+        метода без суффикса и методов с суффиксом `_share<i>`.
+        """
+        share = places_share(3)
+        self.assertTrue(share)
+        for mode in ("sleep", "signal"):
+            for place in share:
                 with self.subTest(place=place, mode=mode, seed=self.seed):
                     run = self.scenario(place, mode)
                     self.wrapper_records(place, run)

@@ -1158,6 +1158,12 @@ class Ac4PrepareTest(OutcomeGateSandbox):
         пропущен (задача уходит дальше без отказа); сбой выписки
         проглочен — сравнение по одной стороне даёт «сломан правкой» или
         проход.
+
+        Метод исполняет подслучай (а) «база не определена» (`cases[0]`):
+        ветки и помощники всех подслучаев — в теле, исполняется одна
+        ветка; (б)–(г) — методы `test_ac4_git_head_not_read_refuses`,
+        `test_ac4_git_base_checkout_failure_refuses`,
+        `test_ac4_git_head_checkout_failure_refuses`.
         """
         def merge_base(t, base):
             return lambda args: "merge-base" in args
@@ -1185,12 +1191,151 @@ class Ac4PrepareTest(OutcomeGateSandbox):
                  ("голова не прочитана", head_read),
                  ("выписка базы", checkout("base")),
                  ("выписка головы", checkout("head")))
-        for label, rule in cases:
-            with self.subTest(case=label, seed=self.seed):
-                t = self.prepared(git_fail=rule)
-                rows, output = self.developer_advance(t)
-                self.git_fail = None
-                self.assert_prepare(t, rows, output)
+        label, rule = cases[0]  # «база не определена»
+        with self.subTest(case=label, seed=self.seed):
+            t = self.prepared(git_fail=rule)
+            rows, output = self.developer_advance(t)
+            self.git_fail = None
+            self.assert_prepare(t, rows, output)
+
+    def test_ac4_git_head_not_read_refuses(self):
+        """Сбой чтения кодовой ветки (кроме `merge-base`) — отказ «… — подготовка» с причиной, без сравнения и перепрогонов.
+
+        Сценарий (подслучай (б) `test_ac4_git_preparation_failures_refuse`
+        — свежая задача, тест базы на ветке красен): git отказывает только
+        вызовам из модуля гейта, читающим кодовую ветку, кроме
+        `merge-base` (голова не прочитана). Отказ «переход отклонён: гейт
+        неослабления по исходам — подготовка» с непустой деталью, ни «… —
+        сломан правкой», ни общего отказа, перепрогонов нет, задача не в
+        `verifying`.
+
+        Ловит мутацию: пустая голова — гейт пропущен (задача уходит
+        дальше без отказа).
+        """
+        def merge_base(t, base):
+            return lambda args: "merge-base" in args
+
+        def head_read(t, base):
+            return lambda args: "merge-base" not in args and any(
+                t.branch in a for a in args)
+
+        def checkout(side):
+            def rule(t, base):
+                head = self.git("-C", str(t.project.clone), "rev-parse",
+                                t.branch).strip()
+                wanted = base if side == "base" else head
+
+                def fail(args):
+                    making = ("worktree" in args and "add" in args) or \
+                        "clone" in args or "archive" in args
+                    return making and any(
+                        wanted in a or (side == "head" and t.branch in a)
+                        for a in args)
+                return fail
+            return rule
+
+        cases = (("база не определена", merge_base),
+                 ("голова не прочитана", head_read),
+                 ("выписка базы", checkout("base")),
+                 ("выписка головы", checkout("head")))
+        label, rule = cases[1]  # «голова не прочитана»
+        with self.subTest(case=label, seed=self.seed):
+            t = self.prepared(git_fail=rule)
+            rows, output = self.developer_advance(t)
+            self.git_fail = None
+            self.assert_prepare(t, rows, output)
+
+    def test_ac4_git_base_checkout_failure_refuses(self):
+        """Сбой выписки дерева с sha базы — отказ «… — подготовка» с причиной, без сравнения и перепрогонов.
+
+        Сценарий (подслучай (в) `test_ac4_git_preparation_failures_refuse`
+        — свежая задача, тест базы на ветке красен): git отказывает только
+        выписке (`worktree add`, `clone`, `archive`) модуля гейта с sha
+        базы. Отказ «переход отклонён: гейт неослабления по исходам —
+        подготовка» с непустой деталью, ни «… — сломан правкой», ни
+        общего отказа, перепрогонов нет, задача не в `verifying`.
+
+        Ловит мутацию: сбой выписки проглочен — сравнение по одной
+        стороне даёт «сломан правкой» или проход.
+        """
+        def merge_base(t, base):
+            return lambda args: "merge-base" in args
+
+        def head_read(t, base):
+            return lambda args: "merge-base" not in args and any(
+                t.branch in a for a in args)
+
+        def checkout(side):
+            def rule(t, base):
+                head = self.git("-C", str(t.project.clone), "rev-parse",
+                                t.branch).strip()
+                wanted = base if side == "base" else head
+
+                def fail(args):
+                    making = ("worktree" in args and "add" in args) or \
+                        "clone" in args or "archive" in args
+                    return making and any(
+                        wanted in a or (side == "head" and t.branch in a)
+                        for a in args)
+                return fail
+            return rule
+
+        cases = (("база не определена", merge_base),
+                 ("голова не прочитана", head_read),
+                 ("выписка базы", checkout("base")),
+                 ("выписка головы", checkout("head")))
+        label, rule = cases[2]  # «выписка базы»
+        with self.subTest(case=label, seed=self.seed):
+            t = self.prepared(git_fail=rule)
+            rows, output = self.developer_advance(t)
+            self.git_fail = None
+            self.assert_prepare(t, rows, output)
+
+    def test_ac4_git_head_checkout_failure_refuses(self):
+        """Сбой выписки дерева головы — отказ «… — подготовка» с причиной, без сравнения и перепрогонов.
+
+        Сценарий (подслучай (г) `test_ac4_git_preparation_failures_refuse`
+        — свежая задача, тест базы на ветке красен): git отказывает только
+        выписке модуля гейта с sha головы или по имени ветки. Отказ
+        «переход отклонён: гейт неослабления по исходам — подготовка» с
+        непустой деталью, ни «… — сломан правкой», ни общего отказа,
+        перепрогонов нет, задача не в `verifying`.
+
+        Ловит мутацию: сбой выписки проглочен — сравнение по одной
+        стороне даёт «сломан правкой» или проход.
+        """
+        def merge_base(t, base):
+            return lambda args: "merge-base" in args
+
+        def head_read(t, base):
+            return lambda args: "merge-base" not in args and any(
+                t.branch in a for a in args)
+
+        def checkout(side):
+            def rule(t, base):
+                head = self.git("-C", str(t.project.clone), "rev-parse",
+                                t.branch).strip()
+                wanted = base if side == "base" else head
+
+                def fail(args):
+                    making = ("worktree" in args and "add" in args) or \
+                        "clone" in args or "archive" in args
+                    return making and any(
+                        wanted in a or (side == "head" and t.branch in a)
+                        for a in args)
+                return fail
+            return rule
+
+        cases = (("база не определена", merge_base),
+                 ("голова не прочитана", head_read),
+                 ("выписка базы", checkout("base")),
+                 ("выписка головы", checkout("head")))
+        label, rule = cases[3]  # «выписка головы»
+        with self.subTest(case=label, seed=self.seed):
+            t = self.prepared(git_fail=rule)
+            rows, output = self.developer_advance(t)
+            self.git_fail = None
+            self.assert_prepare(t, rows, output)
 
     def test_ac4_side_not_started_or_timeout_refuses_naming_side(self):
         """Исход стороны «неизвестно/не начат» или таймаут на базе либо на ветке — отказ подготовки, названа сторона.
@@ -1206,21 +1351,111 @@ class Ac4PrepareTest(OutcomeGateSandbox):
         `PASS_TO_PASS` пуст, гейт пройден; таймаут головы принят за
         красный прогон — находки «сломан правкой» вместо отказа подготовки;
         сторона в отказе не названа.
+
+        Метод исполняет подслучай (а) «неизвестно база» (`cases[0]`);
+        (б)–(г) — методы `test_ac4_side_head_unknown_refuses_naming_head`,
+        `test_ac4_side_base_timeout_refuses_naming_base`,
+        `test_ac4_side_head_timeout_refuses_naming_head`.
         """
         base_words, head_words = ("баз",), ("ветк", "голов")
         cases = (("неизвестно база", "base", "report", base_words),
                  ("неизвестно голова", "head", "report", head_words),
                  ("таймаут база", "base", "timeout", base_words),
                  ("таймаут голова", "head", "timeout", head_words))
-        for label, side, kind, words in cases:
-            with self.subTest(case=label, seed=self.seed):
-                def pick(run, side=side):
-                    return run["full"] and not run["plank"] and run["side"] == side
-                t = self.prepared(timeout_when=pick if kind == "timeout" else None,
-                                  no_report_when=pick if kind == "report" else None)
-                rows, output = self.developer_advance(t)
-                self.timeout_when = self.no_report_when = None
-                self.assert_prepare(t, rows, output, words)
+        label, side, kind, words = cases[0]  # «неизвестно база»
+        with self.subTest(case=label, seed=self.seed):
+            def pick(run, side=side):
+                return run["full"] and not run["plank"] and run["side"] == side
+            t = self.prepared(timeout_when=pick if kind == "timeout" else None,
+                              no_report_when=pick if kind == "report" else None)
+            rows, output = self.developer_advance(t)
+            self.timeout_when = self.no_report_when = None
+            self.assert_prepare(t, rows, output, words)
+
+    def test_ac4_side_head_unknown_refuses_naming_head(self):
+        """Исход «неизвестно» полного прогона на голове — отказ подготовки, названа ветка.
+
+        Сценарий (подслучай (б)
+        `test_ac4_side_not_started_or_timeout_refuses_naming_side` —
+        свежая задача, тест базы на ветке красен): раннер полного набора
+        на голове не пишет отчёт. Отказ «… — подготовка», деталь называет
+        сторону («ветк…»/«голов…»), перепрогонов нет, отказа «… — сломан
+        правкой» нет.
+
+        Ловит мутацию: «неизвестно» на голове принят за красный прогон
+        или пустой отчёт — находки «сломан правкой» или проход вместо
+        отказа подготовки; сторона в отказе не названа.
+        """
+        base_words, head_words = ("баз",), ("ветк", "голов")
+        cases = (("неизвестно база", "base", "report", base_words),
+                 ("неизвестно голова", "head", "report", head_words),
+                 ("таймаут база", "base", "timeout", base_words),
+                 ("таймаут голова", "head", "timeout", head_words))
+        label, side, kind, words = cases[1]  # «неизвестно голова»
+        with self.subTest(case=label, seed=self.seed):
+            def pick(run, side=side):
+                return run["full"] and not run["plank"] and run["side"] == side
+            t = self.prepared(timeout_when=pick if kind == "timeout" else None,
+                              no_report_when=pick if kind == "report" else None)
+            rows, output = self.developer_advance(t)
+            self.timeout_when = self.no_report_when = None
+            self.assert_prepare(t, rows, output, words)
+
+    def test_ac4_side_base_timeout_refuses_naming_base(self):
+        """Таймаут полного прогона базы — отказ подготовки, названа база.
+
+        Сценарий (подслучай (в)
+        `test_ac4_side_not_started_or_timeout_refuses_naming_side` —
+        свежая задача, тест базы на ветке красен): полный прогон базы
+        превышает предел. Отказ «… — подготовка», деталь называет сторону
+        («баз…»), перепрогонов нет, отказа «… — сломан правкой» нет.
+
+        Ловит мутацию: таймаут базы принят за пустой отчёт — набор
+        `PASS_TO_PASS` пуст, гейт пройден; сторона в отказе не названа.
+        """
+        base_words, head_words = ("баз",), ("ветк", "голов")
+        cases = (("неизвестно база", "base", "report", base_words),
+                 ("неизвестно голова", "head", "report", head_words),
+                 ("таймаут база", "base", "timeout", base_words),
+                 ("таймаут голова", "head", "timeout", head_words))
+        label, side, kind, words = cases[2]  # «таймаут база»
+        with self.subTest(case=label, seed=self.seed):
+            def pick(run, side=side):
+                return run["full"] and not run["plank"] and run["side"] == side
+            t = self.prepared(timeout_when=pick if kind == "timeout" else None,
+                              no_report_when=pick if kind == "report" else None)
+            rows, output = self.developer_advance(t)
+            self.timeout_when = self.no_report_when = None
+            self.assert_prepare(t, rows, output, words)
+
+    def test_ac4_side_head_timeout_refuses_naming_head(self):
+        """Таймаут полного прогона головы — отказ подготовки, названа ветка.
+
+        Сценарий (подслучай (г)
+        `test_ac4_side_not_started_or_timeout_refuses_naming_side` —
+        свежая задача, тест базы на ветке красен): полный прогон головы
+        превышает предел. Отказ «… — подготовка», деталь называет сторону
+        («ветк…»/«голов…»), перепрогонов нет, отказа «… — сломан правкой»
+        нет.
+
+        Ловит мутацию: таймаут головы принят за красный прогон — находки
+        «сломан правкой» вместо отказа подготовки; сторона в отказе не
+        названа.
+        """
+        base_words, head_words = ("баз",), ("ветк", "голов")
+        cases = (("неизвестно база", "base", "report", base_words),
+                 ("неизвестно голова", "head", "report", head_words),
+                 ("таймаут база", "base", "timeout", base_words),
+                 ("таймаут голова", "head", "timeout", head_words))
+        label, side, kind, words = cases[3]  # «таймаут голова»
+        with self.subTest(case=label, seed=self.seed):
+            def pick(run, side=side):
+                return run["full"] and not run["plank"] and run["side"] == side
+            t = self.prepared(timeout_when=pick if kind == "timeout" else None,
+                              no_report_when=pick if kind == "report" else None)
+            rows, output = self.developer_advance(t)
+            self.timeout_when = self.no_report_when = None
+            self.assert_prepare(t, rows, output, words)
 
 
 # ---------------------------------------------------------------- AC-5
@@ -1358,33 +1593,195 @@ class Ac7RerunPrepareTest(OutcomeGateSandbox):
         подготовки нет; «неизвестно»/предел перепрогона принят за красный —
         отказ «сломан правкой»; пропуск или отсутствие записи на базе
         принят за красный базы — «нестабилен и на базе», гейт пройден.
+
+        Метод исполняет подслучай (а) «без select» (`cases[0]`); (б)–(д) —
+        методы `test_ac7_rerun_unknown_outcome_refuses`,
+        `test_ac7_rerun_timeout_refuses`,
+        `test_ac7_rerun_base_skipped_refuses`,
+        `test_ac7_rerun_base_record_missing_refuses`.
         """
         def rerun_head(run):
             return not run["full"] and not run["plank"] and run["side"] == "head"
 
         cases = ("без select", "неизвестно", "таймаут", "база пропуск",
                  "база нет записи")
-        for label in cases:
-            with self.subTest(case=label, seed=self.seed):
-                vitest = label == "без select"
-                rel = self.js_rel() if vitest else self.py_rel()
-                name = self.js_name() if vitest else self.py_name()
-                project = (self.vitest_project({rel: [name]}) if vitest
-                           else self.junit_project({rel: [name]}))
-                t = self.task(project)
-                if vitest:
-                    # Выход из `tests_writing` гоняет планку подмножеством —
-                    # `select` снимается с записи после него.
-                    self.drop_select()
-                base = {"база пропуск": ["passed", "skipped"],
-                        "база нет записи": ["passed", "missing"]}.get(
-                            label, ["passed"])
-                self.cases[(rel, name)] = {"base": base, "head": ["failed"]}
-                self.no_report_when = rerun_head if label == "неизвестно" else None
-                self.timeout_when = rerun_head if label == "таймаут" else None
-                rows, output = self.developer_advance(t)
-                self.no_report_when = self.timeout_when = None
-                self.refusal(rows, output, PREPARE_ACTION)
+        label = cases[0]  # «без select»
+        with self.subTest(case=label, seed=self.seed):
+            vitest = label == "без select"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            if vitest:
+                # Выход из `tests_writing` гоняет планку подмножеством —
+                # `select` снимается с записи после него.
+                self.drop_select()
+            base = {"база пропуск": ["passed", "skipped"],
+                    "база нет записи": ["passed", "missing"]}.get(
+                        label, ["passed"])
+            self.cases[(rel, name)] = {"base": base, "head": ["failed"]}
+            self.no_report_when = rerun_head if label == "неизвестно" else None
+            self.timeout_when = rerun_head if label == "таймаут" else None
+            rows, output = self.developer_advance(t)
+            self.no_report_when = self.timeout_when = None
+            self.refusal(rows, output, PREPARE_ACTION)
+
+    def test_ac7_rerun_unknown_outcome_refuses(self):
+        """Перепрогон ветки без отчёта (исход «неизвестно») — отказ подготовки перепрогона.
+
+        Сценарий (подслучай (б) `test_ac7_rerun_preparation_refusals` —
+        свежая задача, тест базы на ветке красен): компонент `junit-xml`,
+        перепрогон ветки не пишет отчёт. Отказ «переход отклонён: гейт
+        неослабления по исходам — подготовка», находки «сломан правкой»
+        нет.
+
+        Ловит мутацию: «неизвестно» перепрогона принят за красный — отказ
+        «сломан правкой».
+        """
+        def rerun_head(run):
+            return not run["full"] and not run["plank"] and run["side"] == "head"
+
+        cases = ("без select", "неизвестно", "таймаут", "база пропуск",
+                 "база нет записи")
+        label = cases[1]  # «неизвестно»
+        with self.subTest(case=label, seed=self.seed):
+            vitest = label == "без select"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            if vitest:
+                # Выход из `tests_writing` гоняет планку подмножеством —
+                # `select` снимается с записи после него.
+                self.drop_select()
+            base = {"база пропуск": ["passed", "skipped"],
+                    "база нет записи": ["passed", "missing"]}.get(
+                        label, ["passed"])
+            self.cases[(rel, name)] = {"base": base, "head": ["failed"]}
+            self.no_report_when = rerun_head if label == "неизвестно" else None
+            self.timeout_when = rerun_head if label == "таймаут" else None
+            rows, output = self.developer_advance(t)
+            self.no_report_when = self.timeout_when = None
+            self.refusal(rows, output, PREPARE_ACTION)
+
+    def test_ac7_rerun_timeout_refuses(self):
+        """Перепрогон ветки превышает предел — отказ подготовки перепрогона.
+
+        Сценарий (подслучай (в) `test_ac7_rerun_preparation_refusals` —
+        свежая задача, тест базы на ветке красен): компонент `junit-xml`,
+        перепрогон ветки превышает предел. Отказ «переход отклонён: гейт
+        неослабления по исходам — подготовка», находки «сломан правкой»
+        нет.
+
+        Ловит мутацию: предел перепрогона принят за красный — отказ
+        «сломан правкой».
+        """
+        def rerun_head(run):
+            return not run["full"] and not run["plank"] and run["side"] == "head"
+
+        cases = ("без select", "неизвестно", "таймаут", "база пропуск",
+                 "база нет записи")
+        label = cases[2]  # «таймаут»
+        with self.subTest(case=label, seed=self.seed):
+            vitest = label == "без select"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            if vitest:
+                # Выход из `tests_writing` гоняет планку подмножеством —
+                # `select` снимается с записи после него.
+                self.drop_select()
+            base = {"база пропуск": ["passed", "skipped"],
+                    "база нет записи": ["passed", "missing"]}.get(
+                        label, ["passed"])
+            self.cases[(rel, name)] = {"base": base, "head": ["failed"]}
+            self.no_report_when = rerun_head if label == "неизвестно" else None
+            self.timeout_when = rerun_head if label == "таймаут" else None
+            rows, output = self.developer_advance(t)
+            self.no_report_when = self.timeout_when = None
+            self.refusal(rows, output, PREPARE_ACTION)
+
+    def test_ac7_rerun_base_skipped_refuses(self):
+        """Запись теста `skipped` на перепрогоне базы — отказ подготовки перепрогона.
+
+        Сценарий (подслучай (г) `test_ac7_rerun_preparation_refusals` —
+        свежая задача, тест базы на ветке красен): компонент `junit-xml`,
+        на перепрогоне базы запись теста `skipped`. Отказ «переход
+        отклонён: гейт неослабления по исходам — подготовка», находки
+        «сломан правкой» нет.
+
+        Ловит мутацию: пропуск на базе принят за красный базы —
+        «нестабилен и на базе», гейт пройден.
+        """
+        def rerun_head(run):
+            return not run["full"] and not run["plank"] and run["side"] == "head"
+
+        cases = ("без select", "неизвестно", "таймаут", "база пропуск",
+                 "база нет записи")
+        label = cases[3]  # «база пропуск»
+        with self.subTest(case=label, seed=self.seed):
+            vitest = label == "без select"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            if vitest:
+                # Выход из `tests_writing` гоняет планку подмножеством —
+                # `select` снимается с записи после него.
+                self.drop_select()
+            base = {"база пропуск": ["passed", "skipped"],
+                    "база нет записи": ["passed", "missing"]}.get(
+                        label, ["passed"])
+            self.cases[(rel, name)] = {"base": base, "head": ["failed"]}
+            self.no_report_when = rerun_head if label == "неизвестно" else None
+            self.timeout_when = rerun_head if label == "таймаут" else None
+            rows, output = self.developer_advance(t)
+            self.no_report_when = self.timeout_when = None
+            self.refusal(rows, output, PREPARE_ACTION)
+
+    def test_ac7_rerun_base_record_missing_refuses(self):
+        """Нет записи теста на перепрогоне базы — отказ подготовки перепрогона.
+
+        Сценарий (подслучай (д) `test_ac7_rerun_preparation_refusals` —
+        свежая задача, тест базы на ветке красен): компонент `junit-xml`,
+        на перепрогоне базы записи теста нет. Отказ «переход отклонён:
+        гейт неослабления по исходам — подготовка», находки «сломан
+        правкой» нет.
+
+        Ловит мутацию: отсутствие записи на базе принято за красный базы
+        — «нестабилен и на базе», гейт пройден.
+        """
+        def rerun_head(run):
+            return not run["full"] and not run["plank"] and run["side"] == "head"
+
+        cases = ("без select", "неизвестно", "таймаут", "база пропуск",
+                 "база нет записи")
+        label = cases[4]  # «база нет записи»
+        with self.subTest(case=label, seed=self.seed):
+            vitest = label == "без select"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            if vitest:
+                # Выход из `tests_writing` гоняет планку подмножеством —
+                # `select` снимается с записи после него.
+                self.drop_select()
+            base = {"база пропуск": ["passed", "skipped"],
+                    "база нет записи": ["passed", "missing"]}.get(
+                        label, ["passed"])
+            self.cases[(rel, name)] = {"base": base, "head": ["failed"]}
+            self.no_report_when = rerun_head if label == "неизвестно" else None
+            self.timeout_when = rerun_head if label == "таймаут" else None
+            rows, output = self.developer_advance(t)
+            self.no_report_when = self.timeout_when = None
+            self.refusal(rows, output, PREPARE_ACTION)
 
     def test_ac7_branch_rerun_red_kinds(self):
         """На перепрогоне ветки `failed`, `error`, `passed` с повтором, `skipped` или нет записи — красный этого прогона: трижды красный — «сломан правкой».
@@ -1399,21 +1796,133 @@ class Ac7RerunPrepareTest(OutcomeGateSandbox):
         — зелёный либо отказ подготовки; `passed` с повтором — зелёный;
         итог — «нестабилен после правки» (общий отказ) вместо «сломан
         правкой».
+
+        Метод исполняет подслучай (а) `failed`; (б)–(д) — методы
+        `test_ac7_branch_rerun_error_is_red`,
+        `test_ac7_branch_rerun_skipped_is_red`,
+        `test_ac7_branch_rerun_missing_is_red`,
+        `test_ac7_branch_rerun_retried_is_red`.
         """
-        for kind in ("failed", "error", "skipped", "missing", "retried"):
-            with self.subTest(kind=kind, seed=self.seed):
-                vitest = kind == "retried"
-                rel = self.js_rel() if vitest else self.py_rel()
-                name = self.js_name() if vitest else self.py_name()
-                project = (self.vitest_project({rel: [name]}) if vitest
-                           else self.junit_project({rel: [name]}))
-                t = self.task(project)
-                self.cases[(rel, name)] = {"base": ["passed"],
-                                           "head": ["failed", kind]}
-                rows, output = self.developer_advance(t)
-                detail = self.refusal(rows, output, BROKEN_ACTION)
-                self.assertIn(self.case_id(project, rel, name), detail,
-                              self.explain(rows, output))
+        kind = "failed"
+        with self.subTest(kind=kind, seed=self.seed):
+            vitest = kind == "retried"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            self.cases[(rel, name)] = {"base": ["passed"],
+                                       "head": ["failed", kind]}
+            rows, output = self.developer_advance(t)
+            detail = self.refusal(rows, output, BROKEN_ACTION)
+            self.assertIn(self.case_id(project, rel, name), detail,
+                          self.explain(rows, output))
+
+    def test_ac7_branch_rerun_error_is_red(self):
+        """`error` на обоих перепрогонах ветки — красный прогона: трижды красный — «сломан правкой».
+
+        Сценарий (подслучай (б) `test_ac7_branch_rerun_red_kinds` —
+        свежая задача, `junit-xml`): тест базы зелён на базе трижды, на
+        ветке полный прогон — `failed`, оба перепрогона ветки — `error`.
+        Отказ «… — сломан правкой» с идентификатором теста.
+
+        Ловит мутацию: `error` перепрогона не считается красным — зелёный
+        либо итог «нестабилен после правки» (общий отказ) вместо «сломан
+        правкой».
+        """
+        kind = "error"
+        with self.subTest(kind=kind, seed=self.seed):
+            vitest = kind == "retried"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            self.cases[(rel, name)] = {"base": ["passed"],
+                                       "head": ["failed", kind]}
+            rows, output = self.developer_advance(t)
+            detail = self.refusal(rows, output, BROKEN_ACTION)
+            self.assertIn(self.case_id(project, rel, name), detail,
+                          self.explain(rows, output))
+
+    def test_ac7_branch_rerun_skipped_is_red(self):
+        """`skipped` на обоих перепрогонах ветки — красный прогона: трижды красный — «сломан правкой».
+
+        Сценарий (подслучай (в) `test_ac7_branch_rerun_red_kinds` —
+        свежая задача, `junit-xml`): тест базы зелён на базе трижды, на
+        ветке полный прогон — `failed`, оба перепрогона ветки — `skipped`.
+        Отказ «… — сломан правкой» с идентификатором теста.
+
+        Ловит мутацию: `skipped` на перепрогоне ветки — зелёный либо
+        отказ подготовки.
+        """
+        kind = "skipped"
+        with self.subTest(kind=kind, seed=self.seed):
+            vitest = kind == "retried"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            self.cases[(rel, name)] = {"base": ["passed"],
+                                       "head": ["failed", kind]}
+            rows, output = self.developer_advance(t)
+            detail = self.refusal(rows, output, BROKEN_ACTION)
+            self.assertIn(self.case_id(project, rel, name), detail,
+                          self.explain(rows, output))
+
+    def test_ac7_branch_rerun_missing_is_red(self):
+        """Нет записи теста на обоих перепрогонах ветки — красный прогона: трижды красный — «сломан правкой».
+
+        Сценарий (подслучай (г) `test_ac7_branch_rerun_red_kinds` —
+        свежая задача, `junit-xml`): тест базы зелён на базе трижды, на
+        ветке полный прогон — `failed`, на обоих перепрогонах ветки записи
+        теста нет. Отказ «… — сломан правкой» с идентификатором теста.
+
+        Ловит мутацию: отсутствие записи на перепрогоне ветки — зелёный
+        либо отказ подготовки.
+        """
+        kind = "missing"
+        with self.subTest(kind=kind, seed=self.seed):
+            vitest = kind == "retried"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            self.cases[(rel, name)] = {"base": ["passed"],
+                                       "head": ["failed", kind]}
+            rows, output = self.developer_advance(t)
+            detail = self.refusal(rows, output, BROKEN_ACTION)
+            self.assertIn(self.case_id(project, rel, name), detail,
+                          self.explain(rows, output))
+
+    def test_ac7_branch_rerun_retried_is_red(self):
+        """`passed` с повтором на обоих перепрогонах ветки — красный прогона: трижды красный — «сломан правкой».
+
+        Сценарий (подслучай (д) `test_ac7_branch_rerun_red_kinds` —
+        свежая задача, `pult-vitest`): тест базы зелён на базе трижды, на
+        ветке полный прогон — `failed`, оба перепрогона ветки — `passed` с
+        `retry_count: 1`. Отказ «… — сломан правкой» с идентификатором
+        теста.
+
+        Ловит мутацию: `passed` с повтором — зелёный; итог — «нестабилен
+        после правки» (общий отказ) вместо «сломан правкой».
+        """
+        kind = "retried"
+        with self.subTest(kind=kind, seed=self.seed):
+            vitest = kind == "retried"
+            rel = self.js_rel() if vitest else self.py_rel()
+            name = self.js_name() if vitest else self.py_name()
+            project = (self.vitest_project({rel: [name]}) if vitest
+                       else self.junit_project({rel: [name]}))
+            t = self.task(project)
+            self.cases[(rel, name)] = {"base": ["passed"],
+                                       "head": ["failed", kind]}
+            rows, output = self.developer_advance(t)
+            detail = self.refusal(rows, output, BROKEN_ACTION)
+            self.assertIn(self.case_id(project, rel, name), detail,
+                          self.explain(rows, output))
 
 
 # ---------------------------------------------------------------- AC-8
@@ -1436,32 +1945,113 @@ class Ac8VerdictByRecordTest(OutcomeGateSandbox):
         действие «… — сломан правкой»; красная база перепрогона не читается
         — в (в) отказ «сломан правкой»; строка о базе не пишется — её нет
         в журнале.
+
+        Метод исполняет подслучай (а) «сломан»: ветки и помощники всех
+        подслучаев — в теле, исполняется одна ветка; (б) и (в) — методы
+        `test_ac8_unstable_after_change_general_refusal`,
+        `test_ac8_flaky_on_base_no_refusal`.
         """
-        for label in ("сломан", "нестабилен", "база"):
-            with self.subTest(case=label, seed=self.seed):
-                rel, name = self.py_rel(), self.py_name()
-                project = self.junit_project({rel: [name, self.py_name()]})
-                t = self.task(project)
-                tid = self.case_id(project, rel, name)
-                head = ["failed", "failed", "failed"]
-                base = ["passed", "passed", "passed"]
-                if label == "нестабилен":
-                    head[self.rng.choice((1, 2))] = "passed"
-                if label == "база":
-                    base[self.rng.choice((1, 2))] = self.rng.choice(("failed", "error"))
-                self.cases[(rel, name)] = {"base": base, "head": head}
-                rows, output = self.developer_advance(t)
-                if label == "сломан":
-                    self.assertIn(tid, self.refusal(rows, output, BROKEN_ACTION),
-                                  self.explain(rows, output))
-                elif label == "нестабилен":
-                    self.assertIn(tid, self.refusal(rows, output, OUTCOME_ACTION),
-                                  self.explain(rows, output))
-                else:
-                    self.no_gate_refusal(rows, output)
-                    texts = [f"{r['action']} {r['detail'] or ''}" for r in rows]
-                    self.assertTrue(any(FLAKY_ON_BASE + tid in x for x in texts),
-                                    self.explain(rows, output))
+        label = "сломан"
+        with self.subTest(case=label, seed=self.seed):
+            rel, name = self.py_rel(), self.py_name()
+            project = self.junit_project({rel: [name, self.py_name()]})
+            t = self.task(project)
+            tid = self.case_id(project, rel, name)
+            head = ["failed", "failed", "failed"]
+            base = ["passed", "passed", "passed"]
+            if label == "нестабилен":
+                head[self.rng.choice((1, 2))] = "passed"
+            if label == "база":
+                base[self.rng.choice((1, 2))] = self.rng.choice(("failed", "error"))
+            self.cases[(rel, name)] = {"base": base, "head": head}
+            rows, output = self.developer_advance(t)
+            if label == "сломан":
+                self.assertIn(tid, self.refusal(rows, output, BROKEN_ACTION),
+                              self.explain(rows, output))
+            elif label == "нестабилен":
+                self.assertIn(tid, self.refusal(rows, output, OUTCOME_ACTION),
+                              self.explain(rows, output))
+            else:
+                self.no_gate_refusal(rows, output)
+                texts = [f"{r['action']} {r['detail'] or ''}" for r in rows]
+                self.assertTrue(any(FLAKY_ON_BASE + tid in x for x in texts),
+                                self.explain(rows, output))
+
+    def test_ac8_unstable_after_change_general_refusal(self):
+        """«Нестабилен после правки»: на ветке красный, затем зелёный — общий отказ гейта исходов.
+
+        Сценарий (подслучай (б) `test_ac8_broken_unstable_and_flaky_on_base`
+        — свежая задача, проект `junit-xml`): на ветке красный, затем
+        зелёный (порядок из `random`), база зелёна трижды — общий отказ
+        «переход отклонён: гейт неослабления по исходам» с
+        идентификатором.
+
+        Ловит мутацию: «нестабилен» не отличается от «сломан» — действие
+        «… — сломан правкой».
+        """
+        label = "нестабилен"
+        with self.subTest(case=label, seed=self.seed):
+            rel, name = self.py_rel(), self.py_name()
+            project = self.junit_project({rel: [name, self.py_name()]})
+            t = self.task(project)
+            tid = self.case_id(project, rel, name)
+            head = ["failed", "failed", "failed"]
+            base = ["passed", "passed", "passed"]
+            if label == "нестабилен":
+                head[self.rng.choice((1, 2))] = "passed"
+            if label == "база":
+                base[self.rng.choice((1, 2))] = self.rng.choice(("failed", "error"))
+            self.cases[(rel, name)] = {"base": base, "head": head}
+            rows, output = self.developer_advance(t)
+            if label == "сломан":
+                self.assertIn(tid, self.refusal(rows, output, BROKEN_ACTION),
+                              self.explain(rows, output))
+            elif label == "нестабилен":
+                self.assertIn(tid, self.refusal(rows, output, OUTCOME_ACTION),
+                              self.explain(rows, output))
+            else:
+                self.no_gate_refusal(rows, output)
+                texts = [f"{r['action']} {r['detail'] or ''}" for r in rows]
+                self.assertTrue(any(FLAKY_ON_BASE + tid in x for x in texts),
+                                self.explain(rows, output))
+
+    def test_ac8_flaky_on_base_no_refusal(self):
+        """«Нестабилен и на базе»: база красна на одном из перепрогонов — отказа нет, строка о базе в журнале.
+
+        Сценарий (подслучай (в) `test_ac8_broken_unstable_and_flaky_on_base`
+        — свежая задача, проект `junit-xml`): на ветке трижды красный,
+        база красна на одном из перепрогонов (`failed` или `error`) —
+        отказа гейта исходов нет, в журнале строка «нестабилен и на базе:
+        <идентификатор>».
+
+        Ловит мутацию: красная база перепрогона не читается — отказ
+        «сломан правкой»; строка о базе не пишется — её нет в журнале.
+        """
+        label = "база"
+        with self.subTest(case=label, seed=self.seed):
+            rel, name = self.py_rel(), self.py_name()
+            project = self.junit_project({rel: [name, self.py_name()]})
+            t = self.task(project)
+            tid = self.case_id(project, rel, name)
+            head = ["failed", "failed", "failed"]
+            base = ["passed", "passed", "passed"]
+            if label == "нестабилен":
+                head[self.rng.choice((1, 2))] = "passed"
+            if label == "база":
+                base[self.rng.choice((1, 2))] = self.rng.choice(("failed", "error"))
+            self.cases[(rel, name)] = {"base": base, "head": head}
+            rows, output = self.developer_advance(t)
+            if label == "сломан":
+                self.assertIn(tid, self.refusal(rows, output, BROKEN_ACTION),
+                              self.explain(rows, output))
+            elif label == "нестабилен":
+                self.assertIn(tid, self.refusal(rows, output, OUTCOME_ACTION),
+                              self.explain(rows, output))
+            else:
+                self.no_gate_refusal(rows, output)
+                texts = [f"{r['action']} {r['detail'] or ''}" for r in rows]
+                self.assertTrue(any(FLAKY_ON_BASE + tid in x for x in texts),
+                                self.explain(rows, output))
 
     def test_ac8_neighbour_red_in_same_file_does_not_redden_rerun(self):
         """Итог перепрогона — по записи теста: красный сосед в том же файле не делает зелёную запись красной.
@@ -1693,25 +2283,124 @@ class Ac11MandateTest(OutcomeGateSandbox):
         Ловит мутацию: мандат сверяется точным равенством с
         идентификатором — префикс класса и метод с вариантами не покрывают;
         покрытие по имени файла без пути — мандат другого файла покрывает.
+
+        Метод исполняет подслучай (а) «файл»: ветки всех подслучаев — в
+        теле, исполняется одна; (б)–(г) — методы
+        `test_ac11_class_prefix_mandate_covers`,
+        `test_ac11_method_prefix_mandate_covers_variants`,
+        `test_ac11_other_file_mandate_does_not_cover`.
         """
-        for label in ("файл", "класс", "метод", "другой файл"):
-            with self.subTest(case=label, seed=self.seed):
-                klass = "K" + self.word().capitalize()
-                method = self.py_name()
-                if label == "метод":
-                    names = [f"{klass}{SEP}{method}[a]", f"{klass}{SEP}{method}[b]"]
-                else:
-                    names = [f"{klass}{SEP}{self.py_name()}" for _ in range(2)]
-                project, t, rel = self.broken_task(names)
-                element = {"файл": rel, "класс": f"{rel}{SEP}{klass}",
-                           "метод": f"{rel}{SEP}{klass}{SEP}{method}",
-                           "другой файл": self.py_rel()}[label]
-                self.operator_mandate(t, [element])
-                rows, output = self.developer_advance(t, finished=True)
-                if label == "другой файл":
-                    self.refusal(rows, output, BROKEN_ACTION)
-                else:
-                    self.no_gate_refusal(rows, output)
+        label = "файл"
+        with self.subTest(case=label, seed=self.seed):
+            klass = "K" + self.word().capitalize()
+            method = self.py_name()
+            if label == "метод":
+                names = [f"{klass}{SEP}{method}[a]", f"{klass}{SEP}{method}[b]"]
+            else:
+                names = [f"{klass}{SEP}{self.py_name()}" for _ in range(2)]
+            project, t, rel = self.broken_task(names)
+            element = {"файл": rel, "класс": f"{rel}{SEP}{klass}",
+                       "метод": f"{rel}{SEP}{klass}{SEP}{method}",
+                       "другой файл": self.py_rel()}[label]
+            self.operator_mandate(t, [element])
+            rows, output = self.developer_advance(t, finished=True)
+            if label == "другой файл":
+                self.refusal(rows, output, BROKEN_ACTION)
+            else:
+                self.no_gate_refusal(rows, output)
+
+    def test_ac11_class_prefix_mandate_covers(self):
+        """Мандат Оператора на префикс `путь::Класс` снимает находки класса.
+
+        Сценарий (подслучай (б)
+        `test_ac11_file_and_prefix_mandate_cover_findings` — свежая
+        задача, тесты класса `K` трижды красные на ветке): ANSWER
+        Оператора с маркером «Ослабление тестов разрешено:» на `путь::K`.
+        Отказа гейта исходов нет.
+
+        Ловит мутацию: мандат сверяется точным равенством с
+        идентификатором — префикс класса не покрывает.
+        """
+        label = "класс"
+        with self.subTest(case=label, seed=self.seed):
+            klass = "K" + self.word().capitalize()
+            method = self.py_name()
+            if label == "метод":
+                names = [f"{klass}{SEP}{method}[a]", f"{klass}{SEP}{method}[b]"]
+            else:
+                names = [f"{klass}{SEP}{self.py_name()}" for _ in range(2)]
+            project, t, rel = self.broken_task(names)
+            element = {"файл": rel, "класс": f"{rel}{SEP}{klass}",
+                       "метод": f"{rel}{SEP}{klass}{SEP}{method}",
+                       "другой файл": self.py_rel()}[label]
+            self.operator_mandate(t, [element])
+            rows, output = self.developer_advance(t, finished=True)
+            if label == "другой файл":
+                self.refusal(rows, output, BROKEN_ACTION)
+            else:
+                self.no_gate_refusal(rows, output)
+
+    def test_ac11_method_prefix_mandate_covers_variants(self):
+        """Мандат Оператора на `путь::Класс::метод` снимает находки его вариантов.
+
+        Сценарий (подслучай (в)
+        `test_ac11_file_and_prefix_mandate_cover_findings` — свежая
+        задача): единственный красный метод `K::test_x[a]`/`[b]`
+        (варианты), ANSWER Оператора с маркером «Ослабление тестов
+        разрешено:» на `путь::K::test_x`. Отказа гейта исходов нет.
+
+        Ловит мутацию: мандат сверяется точным равенством с
+        идентификатором — метод с вариантами не покрывается.
+        """
+        label = "метод"
+        with self.subTest(case=label, seed=self.seed):
+            klass = "K" + self.word().capitalize()
+            method = self.py_name()
+            if label == "метод":
+                names = [f"{klass}{SEP}{method}[a]", f"{klass}{SEP}{method}[b]"]
+            else:
+                names = [f"{klass}{SEP}{self.py_name()}" for _ in range(2)]
+            project, t, rel = self.broken_task(names)
+            element = {"файл": rel, "класс": f"{rel}{SEP}{klass}",
+                       "метод": f"{rel}{SEP}{klass}{SEP}{method}",
+                       "другой файл": self.py_rel()}[label]
+            self.operator_mandate(t, [element])
+            rows, output = self.developer_advance(t, finished=True)
+            if label == "другой файл":
+                self.refusal(rows, output, BROKEN_ACTION)
+            else:
+                self.no_gate_refusal(rows, output)
+
+    def test_ac11_other_file_mandate_does_not_cover(self):
+        """Мандат Оператора на путь другого файла находки не снимает.
+
+        Сценарий (подслучай (г)
+        `test_ac11_file_and_prefix_mandate_cover_findings` — свежая
+        задача, тесты класса `K` трижды красные на ветке): ANSWER
+        Оператора с маркером «Ослабление тестов разрешено:» на путь
+        другого файла. Отказ «… — сломан правкой».
+
+        Ловит мутацию: покрытие по имени файла без пути — мандат другого
+        файла покрывает.
+        """
+        label = "другой файл"
+        with self.subTest(case=label, seed=self.seed):
+            klass = "K" + self.word().capitalize()
+            method = self.py_name()
+            if label == "метод":
+                names = [f"{klass}{SEP}{method}[a]", f"{klass}{SEP}{method}[b]"]
+            else:
+                names = [f"{klass}{SEP}{self.py_name()}" for _ in range(2)]
+            project, t, rel = self.broken_task(names)
+            element = {"файл": rel, "класс": f"{rel}{SEP}{klass}",
+                       "метод": f"{rel}{SEP}{klass}{SEP}{method}",
+                       "другой файл": self.py_rel()}[label]
+            self.operator_mandate(t, [element])
+            rows, output = self.developer_advance(t, finished=True)
+            if label == "другой файл":
+                self.refusal(rows, output, BROKEN_ACTION)
+            else:
+                self.no_gate_refusal(rows, output)
 
     def test_ac11_prefix_needs_separator_after_it(self):
         """Префикс `путь::Класс` не покрывает `путь::КлассДругой::метод`: за префиксом иной символ.
