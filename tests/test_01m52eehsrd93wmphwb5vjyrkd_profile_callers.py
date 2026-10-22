@@ -552,7 +552,7 @@ class ProfileCallersSandbox(RealGitSandbox):
     def code(self) -> dict:
         return {f"kod/{self.word()}.py": f"A = {self.seed}\n"}
 
-    def project_tests_dir(self) -> str:
+    def tests_dir(self) -> str:
         """Каталог тестов проекта по профилю сценария."""
         return self.lld if self.kind == OWN else "tests"
 
@@ -562,7 +562,7 @@ class ProfileCallersSandbox(RealGitSandbox):
         Возвращает путь долгоживущего файла (или пусто)."""
         rel = ""
         if long_lived:
-            rel = (f"{self.project_tests_dir()}/test_{task_id.lower()}_"
+            rel = (f"{self.tests_dir()}/test_{task_id.lower()}_"
                    f"{self.word()}.py")
             self.commit_code(task_id, {rel: LONG_LIVED_TEXT.format(
                 cls=self.word().capitalize(), word=self.word())})
@@ -670,7 +670,7 @@ class ProfileCallersSandbox(RealGitSandbox):
         """`advance` из `in_dev` с изменённым ожиданием существующего теста
         проекта: двусторонний прогон гейта (смена объявлена в SPEC) либо
         наблюдения (смена не объявлена, наблюдение включено)."""
-        rel = f"{self.project_tests_dir()}/{self.base_name}"
+        rel = f"{self.tests_dir()}/{self.base_name}"
         node = f"{rel}::BaseTest::test_value"
         section = "" if observation else CHANGE_SECTION.format(
             node=node, old=self.old_value, new=self.new_value)
@@ -698,7 +698,7 @@ class ProfileCallersSandbox(RealGitSandbox):
         task = self.new_task("tests_writing")
         if long_lived:
             self.commit_code(task, {
-                f"{self.project_tests_dir()}/test_{task.lower()}_{self.word()}.py":
+                f"{self.tests_dir()}/test_{task.lower()}_{self.word()}.py":
                     LONG_LIVED_TEXT.format(cls=self.word().capitalize(),
                                            word=self.word())})
         store.record_fixation(self.conn, task)
@@ -1086,18 +1086,16 @@ class InDevPlankTest(ProfileCallersSandbox):
 
 class PultUnchangedTest(ProfileCallersSandbox):
 
-    # Места `places()` делятся на доли `[i::PLACE_SHARES]` по сортировке
-    # метки — по методу на долю: один тест не проходит все места подряд
-    # (SPEC 01M5H1A4GS19TPR4RJ8XRVVYZQ).
-    PLACE_SHARES = 8
-
-    def share(self, kind: str, index: int) -> list:
-        """Доля `index` мест AC-1 — AC-9 и AC-12 для профиля `kind`:
-        `targets.yaml` песочницы под `kind`, перечень `places()` по
-        сортировке метки, срез `[index::PLACE_SHARES]`."""
+    def check_places(self, kind: str) -> None:
+        """Каждое место AC-1 — AC-9 и AC-12 для профиля `kind` — как на main."""
         self.write_targets(kind)
-        ordered = sorted(self.places(), key=lambda place: place[0])
-        return ordered[index::self.PLACE_SHARES]
+        for label, run, profile_head, cwd in self.places():
+            with self.subTest(kind=kind, place=label, seed=self.seed):
+                result = run()
+                calls = self.calls_of(f"{kind}: {label}", result)
+                where = self.context(*result) + f"\n--- место: {label}"
+                for call in calls:
+                    self.assert_pult(call, where, profile_head, cwd)
 
     def test_ac10_external_pult_pytest_unchanged(self):
         """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
@@ -1117,267 +1115,8 @@ class PultUnchangedTest(ProfileCallersSandbox):
         в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
         корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
         переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        0 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
         """
-        kind = EXT_PULT
-        share = self.share(kind, 0)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share1(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        1 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 1)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share2(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        2 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 2)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share3(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        3 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 3)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share4(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        4 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 4)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share5(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        5 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 5)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share6(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        6 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 6)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_external_pult_pytest_unchanged_share7(self):
-        """У внешнего проекта с `pult-pytest` каждое место запускается как на main.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи внешнего
-        проекта с `runner: pult-pytest`, чья команда профиля — `python3 -m
-        pytest` с добавочным флагом. argv — с интерпретатором пульта и `-p
-        timeout`; голова — команда профиля с флагом там, где на main её
-        брал вызывающий (гейт мержа, `suite-run`, сухой сбор, прогон
-        планки и повторы `in_dev`), и команда пульта без флага в остальных
-        местах; `cwd` — корень дерева прогона (у `amend-tests` без
-        долгоживущих файлов — корень пульта); окружение — окружение пульта.
-
-        Ловит мутацию: профиль передаётся безусловно — у `pult-pytest`
-        `pull`, `amend-tests`, `plank-run`, двусторонний прогон, автогейт и
-        `approve` пойдут командой профиля с её флагом; `cwd` рабочей копии
-        в `amend-tests` выставлен и без `pytest-own` — `cwd` перестаёт быть
-        корнем пульта; окружение `pytest-own` применено к `pult-pytest` —
-        переменной пульта в прогоне нет.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        7 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = EXT_PULT
-        share = self.share(kind, 7)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
+        self.check_places(EXT_PULT)
 
     def test_ac10_artel_unchanged(self):
         """У задачи артели каждое место запускается как на main — командой пульта.
@@ -1393,239 +1132,8 @@ class PultUnchangedTest(ProfileCallersSandbox):
         первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
         рабочей копии в `amend-tests` выставлен безусловно — у артели
         меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        0 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
         """
-        kind = ARTEL_PULT
-        share = self.share(kind, 0)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share1(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        1 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 1)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share2(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        2 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 2)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share3(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        3 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 3)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share4(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        4 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 4)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share5(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        5 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 5)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share6(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        6 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 6)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
-
-    def test_ac10_artel_unchanged_share7(self):
-        """У задачи артели каждое место запускается как на main — командой пульта.
-
-        Сценарий: каждое место AC-1 — AC-9 и AC-12 для задачи артели (её
-        профиль — `python3 -m pytest`), в то время как внешний проект
-        объявлен с `runner: pytest-own`. argv — интерпретатор пульта, `-m
-        pytest`, `-p timeout`; `cwd` — корень дерева прогона (у
-        `amend-tests` без долгоживущих файлов — корень пульта); окружение —
-        окружение пульта, без `env` профиля внешнего проекта.
-
-        Ловит мутацию: профиль для места берётся не по проекту задачи (у
-        первого проекта с `pytest-own` в `targets.yaml`) или `cwd`
-        рабочей копии в `amend-tests` выставлен безусловно — у артели
-        меняются argv, `cwd` или окружение.
-
-        Сценарий доли: места `places()` по сортировке метки делятся на
-        `PLACE_SHARES` долей `[i::PLACE_SHARES]`; метод проходит долю
-        7 (её непустоту утверждает `assertTrue`), прочие доли — у
-        метода без суффикса и методов с суффиксом `_share<i>`.
-        """
-        kind = ARTEL_PULT
-        share = self.share(kind, 7)
-        self.assertTrue(share)
-        for label, run, profile_head, cwd in share:
-            with self.subTest(kind=kind, place=label, seed=self.seed):
-                result = run()
-                calls = self.calls_of(f"{kind}: {label}", result)
-                where = self.context(*result) + f"\n--- место: {label}"
-                for call in calls:
-                    self.assert_pult(call, where, profile_head, cwd)
+        self.check_places(ARTEL_PULT)
 
 
 class NoTaskRunTest(ProfileCallersSandbox):
