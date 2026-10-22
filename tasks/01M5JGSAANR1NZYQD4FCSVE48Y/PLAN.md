@@ -25,7 +25,10 @@ schema_version: 5
     conn=None)` / `for_row(row)` — общее тело `_by_zones`: сначала
     `decide`, а зоны строки задачи читаются лениво и только у записи из
     нескольких компонентов (таблица без колонок `zones` у прочих записей
-    не ломается — AC-5).
+    не ломается — AC-5). Строка задачи читается функциями store
+    (`store.task_exists` + `store.get_task`), без SQL в
+    `project_profile.py` — возврат из verifying: CI красил
+    `tests/test_multitarget.py::SqlOnlyInStoreTest::test_no_sql_outside_store`.
   - Тексты трёх отказов дополняются причиной `decide` через «; ».
   - Ровно один компонент — та же проверка обязательных подполей, что у
     `profile_of`: `repo_context` — модуль «только чтение», поэтому

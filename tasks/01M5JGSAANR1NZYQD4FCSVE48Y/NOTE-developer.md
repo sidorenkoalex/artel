@@ -1,20 +1,15 @@
 # Записка developer
 
 ## Выяснено
-- Планка — acceptance_tests/ (test_places_*.py, test_pin_etalon.py, test_layers_and_prior_test.py); долгоживущие tests/test_01m5jgsaanr1nzyqd4fcsve48y_{task_component,outcome_components,mandate_components,role_outputs}.py.
-- `repo_context.profile_of` — «только чтение»: проверка обязательных подполей компонента продублирована в `project_profile._by_zones`.
-- Помощники в project_profile: `decide_task`, `for_task`, `for_task_target(target, task_id, conn=None)` (decide как раньше, строку задачи читает только у multi), `for_row(row)`, `is_multi(target)`, `task_components` (зона-каталог — `git ls-tree` базы в клоне, сбой → ZoneListingError → отказ).
-- Гейт исходов multi: `outcome_integrity._components_gate` (select_components диффа, запись на компонент, строки «вне границы» в каждой записи, запись пропуска `journal_skip(CHECK_OUTCOME)` с «голова <sha>»), `_components_review_lines`.
-- Планка чужого компонента: `tests_writing._tests_writing_foreign_plank_gate` первым в списке гейтов выхода из tests_writing.
-- Мандат: `_record_outcome_profiles`, `_record_test_id_refusal`, покрытие матрицы по компонентам в границе.
+- Возврат из verifying (CI 39862690857): SQL в `project_profile.for_task_target` (`SELECT zones, zones_extension FROM tasks`). Заменён на `store.task_exists` + `store.get_task` (store.py не тронут — «только чтение» по SPEC). Нет строки — пустые зоны, как раньше.
+- `tests/test_multitarget.py::SqlOnlyInStoreTest` сканирует только `orchestrator/*.py` верхнего уровня; в диффе ветки SQL больше нет (grep по `git diff main -- orchestrator`).
+- Прочее устройство — см. PLAN.md: `decide_task`/`for_task`/`for_task_target`/`for_row`/`is_multi`, `outcome_integrity._components_gate`, `tests_writing._tests_writing_foreign_plank_gate`, мандат по компонентам записи.
 
 ## Не сработало
-- Длинный python-heredoc в Bash — «Parser aborted»: правки большими кусками — Edit.
-- `cat`, `ls`, `sed -i` в Bash недоступны/требуют подтверждения.
+- Длинный python-heredoc в Bash — «Parser aborted»; `cat`/`ls`/`sed -i` недоступны.
 
 ## Где остановился
-- Шаг завершён: все места таблицы переведены (кроме недостижимых fsm_merge_gate :858/:912/:1093); PLAN.md status: ready; карта регенерирована.
-- Прогоны: долгоживущие 4 файла — 46 passed; plank-run — 69 passed; тесты затронутых модулей (≈75 файлов тремя пачками) — зелёные; свой tests/test_profile_layers_declared.py (мутация layers_of проверена).
+- Шаг завершён: test_multitarget + 4 долгоживущих + components + project_profile_gates — 119 passed; plank-run — 69 passed; карта регенерирована; PLAN.md status: ready.
 
 ## Чего не хватило
-- Дольше всего — опись мест: где `t` — dict без `id`/зон (amend._group_line_errors, fsm_autogate._plank_rule_refusal в старых тестах) — отсюда `for_task_target`/`for_row` с ленивым чтением зон только у multi.
+- Правило «SQL только в store.py» (ADR-0003 3ж) не было в брифе — нашлось только красным CI.
