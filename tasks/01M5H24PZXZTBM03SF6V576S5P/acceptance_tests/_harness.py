@@ -49,7 +49,7 @@ SAFETY_SEC = 60
 _FINISHED = object()
 
 _CHILD = r'''
-import json, os, signal, sys
+import json, os, signal, sys, time
 settings = json.loads(open(sys.argv[1], encoding="utf-8").read())
 sys.path.insert(0, settings["repo"])
 from pathlib import Path
@@ -79,7 +79,16 @@ def wait_fifo(path):
 
 def hold():
     if spec.get("ignore_term"):
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        # SIGTERM учтён и проигнорирован: процесс ждёт дальше, снять его
+        # может только SIGKILL. Метка времени — общие монотонные часы машины.
+        def ignore(signum, frame):
+            note("term", at=time.monotonic(), **parent_files())
+        signal.signal(signal.SIGTERM, ignore)
+    if spec.get("term_exit"):
+        def leave(signum, frame):
+            note("term", **parent_files())
+            os._exit(128 + signum)
+        signal.signal(signal.SIGTERM, leave)
     if spec.get("hold", True):
         wait_fifo(settings["fifos"][tpl])
 
@@ -230,6 +239,18 @@ class Coordinator:
             self.seen.append(item)
         return list(self.seen)
 
+    def wait_finished(self) -> None:
+        """Блокирует до возврата `cmd_canary`; страховка — снять дочерних."""
+        while True:
+            try:
+                item = self.events.get(timeout=SAFETY_SEC)
+            except queue.Empty:
+                raise AssertionError(
+                    f"страховка: прогон не завершился за {SAFETY_SEC} с") from None
+            if item is _FINISHED:
+                raise _Done
+            self.seen.append(item)
+
     def next_spawn(self):
         return self.wait_spawns(len(self.seen) + 1)[-1]
 
@@ -274,6 +295,35 @@ def release_all(c: Coordinator) -> None:
         template = c.next_spawn()
         if c.h.children.get(template, {}).get("hold", True):
             c.release(template)
+
+
+class WaitFault:
+    """Подмена функции ожидания дочернего `canary._wait_child` (ANSWER-1).
+
+    Первый вызов ждёт `ready` (координатор: дочерние дошли до точки
+    ожидания), запоминает запущенные к этому моменту шаблоны, ставит
+    `raised` и бросает `exc`; остальные вызовы — настоящая функция.
+    Подпись функции SPEC не задаёт — аргументы передаются как есть."""
+
+    def __init__(self, harness, exc):
+        self.real = canary._wait_child
+        self.h = harness
+        self.exc = exc
+        self.ready = threading.Event()
+        self.raised = threading.Event()
+        self.lock = threading.Lock()
+        self.fired = False
+        self.spawned_at_raise = None
+
+    def __call__(self, *args, **kwargs):
+        with self.lock:
+            first, self.fired = not self.fired, True
+        if not first:
+            return self.real(*args, **kwargs)
+        self.ready.wait(SAFETY_SEC)
+        self.spawned_at_raise = [s.template for s in self.h.spawns]
+        self.raised.set()
+        raise self.exc
 
 
 def _kill_group(pid):
@@ -329,6 +379,36 @@ class CanaryParallelSandbox(InitializedTmpRootTest):
             canary, "_run_one_task",
             side_effect=self.forbid("_run_one_task в процессе родителя")))
         self.addCleanup(self.stop_children)
+
+    def patch_grace(self, seconds) -> None:
+        """Срок остановки дочерних (ANSWER-1: `PARALLEL_STOP_GRACE_SEC`) подменён."""
+        patcher = mock.patch.object(canary, "PARALLEL_STOP_GRACE_SEC", seconds)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def patch_wait(self, exc) -> WaitFault:
+        """Функция ожидания дочернего (ANSWER-1: `_wait_child`) подменена `WaitFault`."""
+        fault = WaitFault(self, exc)
+        patcher = mock.patch.object(canary, "_wait_child", fault)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fault
+
+    def record_unlinks(self) -> list:
+        """Удаления файлов реестра процессом родителя: (имя, листинг перед ним)."""
+        seen = []
+        for name in ("unlink", "remove"):
+            real = getattr(os, name)
+
+            def spy(path, *args, _real=real, **kwargs):
+                target = Path(os.fsdecode(path))
+                if target.parent == self.registry and target.exists():
+                    seen.append((target.name, self.listing()))
+                return _real(path, *args, **kwargs)
+            patcher = mock.patch.object(os, name, spy)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return seen
 
     def plan(self, name):
         return canary.CanarySetPlan(name, {}, None, self.summary,

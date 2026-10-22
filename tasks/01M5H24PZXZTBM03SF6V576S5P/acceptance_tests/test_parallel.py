@@ -1,32 +1,36 @@
 """Родитель параллельного прогона канарейки: очередь, argv дочернего, общий итог, сигнал и реестр.
 
 Группа: разовый
-Красен до реализации: --parallel ещё не разбирается — прогон идёт последовательно в процессе родителя, подменённое ведение родителя роняет сценарий, дочерних процессов нет.
+Красен до реализации: --parallel ещё не разбирается — прогон идёт последовательно в процессе родителя, подменённое ведение родителя роняет сценарий, дочерних процессов нет; констант PARALLEL_CHILD_LIMIT, PARALLEL_STOP_GRACE_SEC и функции _wait_child (имена — ANSWER-1) в canary ещё нет — AttributeError.
 
 Сценарии идут через `artel._cmd_canary([... "--parallel"])` в главном потоке;
-дочерний подменяется на создании процесса (`_harness.py`). Файл держит
-приёмку задачи через закрытые швы `canary` (`_run_one_task`, `_set_plan`,
-`_resolve_target_sha`) — правила долгоживущих файлов их запрещают, поэтому
+дочерний подменяется на создании процесса (`_harness.py`). Срок остановки и
+функция ожидания дочернего подменяются по именам, назначенным ответом
+Оператора (ANSWER-1): `canary.PARALLEL_STOP_GRACE_SEC`, `canary._wait_child`.
+Файл держит приёмку задачи через закрытые швы `canary` (`_run_one_task`,
+`_set_plan`, `_resolve_target_sha`, `_wait_child`) — правила долгоживущих файлов их запрещают, поэтому
 группа разовая; долгоживущую проверку свойства несут тесты разработчика по
 требованию 9 SPEC.
 """
+import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _harness import (CanaryParallelSandbox, FULL_SHA, PARALLEL_SUFFIX,  # noqa: E402
-                      SET_NAME, SHORT_SHA, SUMMARY, flag_value)
-from orchestrator import canary, config, store  # noqa: E402
+                      SAFETY_SEC, SET_NAME, SHORT_SHA, SUMMARY, flag_value)
+from orchestrator import canary, config, liveness, store  # noqa: E402
 
-# AC-13: escalate — SPEC не называет имя константы срока остановки дочерних (60 с), а критерий требует подменить срок до появления кода; назначьте имя в SPEC (дефолт: canary.PARALLEL_STOP_GRACE_SEC) и заодно имя константы предела AC-6 (дефолт: canary.PARALLEL_CHILD_LIMIT)
-# AC-19: escalate — тот же вопрос, что у AC-13: SIGKILL после подменённого срока требует имени константы срока (дефолт: canary.PARALLEL_STOP_GRACE_SEC)
-# AC-20: escalate — SPEC оставляет имя функции ожидания дочернего разработчику («называет в отчёте»), а критерий требует подменить именно её до появления кода; назначьте имя в SPEC (дефолт: canary._wait_child) либо разрешите планке брать имя из PLAN.md
-# AC-21: escalate — тот же вопрос, что у AC-20: исключение при ожидании вызывается подменой функции ожидания, имя которой SPEC не называет (дефолт: canary._wait_child)
+# Подменённый срок остановки (SPEC, требование 9): целое, чтобы причина
+# «снят SIGKILL после <N> с» читалась однозначно.
+GRACE = 1
+WAIT_ERROR = "подменённый сбой ожидания"
 
 TEMPLATES3 = ["alfa", "beta", "gamma"]
 HEADER = re.compile(r"^\[canary\] (\w+): процесс (\d+) завершён с кодом (-?\d+), "
@@ -65,6 +69,8 @@ class QueueTest(CanaryParallelSandbox):
         self.assertEqual(by["alfa"].unfinished_before, [])
         self.assertEqual(by["beta"].unfinished_before, ["alfa"], run.describe())
         self.assertEqual(by["gamma"].unfinished_before, ["beta"], run.describe())
+        # Имя константы предела назначено ответом Оператора (ANSWER-1).
+        self.assertEqual(canary.PARALLEL_CHILD_LIMIT, 2)
 
     def test_ac7_nonzero_child_does_not_stop_queue(self):
         """Дочерний `alfa` выходит с кодом 3 — очередь запускает `gamma`.
@@ -504,3 +510,211 @@ class RegistryTest(CanaryParallelSandbox):
         gamma = [r for r in self.rows(run.stamp) if r["title"] == "gamma"]
         self.assertEqual(len(gamma), 1, run.describe())
         self.assert_red_row(gamma[0], run.stamp, "gamma")
+
+
+def _kill_after_grace(c):
+    """Сценарий срока: `alfa` в ведении, SIGTERM родителю, ждать конца прогона."""
+    c.wait_spawns(1)
+    c.reach("alfa")
+    c.signal_parent(signal.SIGTERM)
+    c.wait_finished()
+
+
+class StopGraceTest(CanaryParallelSandbox):
+    def test_ac13_term_ignoring_child_killed_only_after_grace(self):
+        """Дочерний игнорирует SIGTERM — SIGKILL только после подменённого срока.
+
+        `alfa` — настоящая подкоманда `run-task` без строки прогона, в ведении
+        учитывает и игнорирует SIGTERM; родителю идёт SIGTERM, срок подменён на
+        `GRACE` с. От SIGTERM дочернему до возврата родителя прошло не меньше
+        срока; дочерний снят SIGKILL; у `alfa` одна красная строка родителя, в
+        выводе — причина «снят SIGKILL после <N> с; группа ведения в клоне могла
+        остаться — проверь doctor». Запись дочернего (её не снять самому после
+        SIGKILL) снята родителем, и в этот момент метка и запись родителя целы;
+        метка снята не раньше записи родителя; реестр после прогона пуст.
+        Константа срока равна 60 и больше двух `GROUP_TERMINATE_GRACE_SEC`.
+
+        Ловит мутацию: родитель шлёт SIGKILL сразу вслед за SIGTERM (срок не
+        выдержан — прогон кончается раньше `GRACE` с); либо запись снятого
+        SIGKILL дочернего остаётся в реестре; либо её снимают уборкой
+        `_drop_live_record`, уносящей метку прогона вместе с записью.
+        """
+        self.assertEqual(canary.PARALLEL_STOP_GRACE_SEC, 60)
+        self.assertGreater(canary.PARALLEL_STOP_GRACE_SEC,
+                           2 * liveness.GROUP_TERMINATE_GRACE_SEC)
+        self.patch_grace(GRACE)
+        self.children = {"alfa": {"mode": "real", "ignore_term": True}}
+        unlinks = self.record_unlinks()
+        run = self.run_parallel(["alfa"], _kill_after_grace)
+        ended = time.monotonic()
+        self.assert_clean(run)
+        self.assertEqual(run.code, 128 + signal.SIGTERM, run.describe())
+        terms = run.calls_of("term", "alfa")
+        self.assertEqual(len(terms), 1, run.describe())
+        self.assertGreaterEqual(ended - terms[0]["at"], GRACE, run.describe())
+        (spawn,) = run.spawns
+        self.assertEqual(spawn.proc.returncode, -signal.SIGKILL, run.describe())
+        alfa = [r for r in self.rows(run.stamp) if r["title"] == "alfa"]
+        self.assertEqual(len(alfa), 1, run.describe())
+        self.assert_red_row(alfa[0], run.stamp, "alfa")
+        self.assertTrue(_reason_line(
+            run.stdout, "alfa",
+            f"снят SIGKILL после {GRACE} с; группа ведения в клоне могла "
+            f"остаться — проверь doctor"), run.describe())
+        child = f"{run.stamp}-{spawn.pid}.json"
+        parent = f"{run.stamp}-{os.getpid()}.json"
+        mark = f"{run.stamp}.lock"
+        names = [name for name, _ in unlinks]
+        self.assertIn(child, names, unlinks)
+        listing = dict(unlinks)[child]
+        self.assertIn(mark, listing, unlinks)
+        self.assertIn(parent, listing, unlinks)
+        self.assertIn(parent, names, unlinks)
+        if mark in names:
+            self.assertLess(names.index(parent), names.index(mark), unlinks)
+        self.assertEqual(self.listing(), [])
+
+    def test_ac19_killed_child_with_row_gets_no_duplicate(self):
+        """Дочерний записал строку и затем снят SIGKILL — дубля нет.
+
+        `alfa` — настоящая подкоманда, записавшая зелёную строку прогона, в
+        ведении игнорирует SIGTERM; сигнал родителю, срок подменён, дочерний
+        снят SIGKILL. За `alfa` в `canary_runs` и в файле результата ровно одна
+        строка с `run_stamp` прогона — его собственная (задача и вердикт
+        дочернего).
+
+        Ловит мутацию: родитель пишет красную строку «снят SIGKILL…» любому
+        снятому SIGKILL дочернему, не сверяя `canary_runs`, — у `alfa` две
+        строки.
+        """
+        self.patch_grace(GRACE)
+        self.children = {"alfa": {"mode": "real", "row": True, "ignore_term": True}}
+        result = self.root / "result.json"
+        run = self.run_parallel(["alfa"], _kill_after_grace,
+                                extra=["--result-file", str(result)])
+        self.assert_clean(run)
+        self.assertEqual(run.code, 128 + signal.SIGTERM, run.describe())
+        (spawn,) = run.spawns
+        self.assertEqual(spawn.proc.returncode, -signal.SIGKILL, run.describe())
+        alfa = [r for r in self.rows(run.stamp) if r["title"] == "alfa"]
+        self.assertEqual([(r["task_id"], r["verdict"], r["outcome"]) for r in alfa],
+                         [("01FIXTUREALFA", "green", "merged")], run.describe())
+        runs = json.loads(result.read_text(encoding="utf-8"))["runs"]
+        self.assertEqual([(r["title"], r["task_id"], r["verdict"]) for r in runs
+                          if r["title"] == "alfa"],
+                         [("alfa", "01FIXTUREALFA", "green")], runs)
+
+
+class WaitFailureTest(CanaryParallelSandbox):
+    def test_ac20_base_exception_in_wait_then_signal_during_stop(self):
+        """`KeyboardInterrupt` из функции ожидания при живых дочерних, затем SIGHUP.
+
+        `alfa` и `beta` в ведении (третий шаблон в очереди), первый вызов
+        подменённой `_wait_child` бросает `KeyboardInterrupt`; дочерние держат
+        свой обработчик SIGTERM, и в это время родителю идёт SIGHUP. Очередь не
+        продолжена (`gamma` не запускался), остановка дошла до конца (оба
+        дочерних получили SIGTERM и пожаты, реестр пуст), код выхода —
+        128 + SIGHUP.
+
+        Ловит мутацию: `KeyboardInterrupt` из ожидания выходит из родителя
+        мимо остановки дочерних — дочерние живы, исход — сам `KeyboardInterrupt`;
+        либо код выхода не учитывает сигнал, пришедший во время остановки.
+        """
+        self.children = {n: {"mode": "exit", "term_hold": True} for n in TEMPLATES3}
+        fault = self.patch_wait(KeyboardInterrupt())
+
+        def script(c):
+            c.wait_spawns(2)
+            c.reach("alfa")
+            c.reach("beta")
+            fault.ready.set()
+            if not fault.raised.wait(SAFETY_SEC):
+                raise AssertionError("функция ожидания дочернего не вызвана")
+            c.reach("alfa", term=True)
+            c.reach("beta", term=True)
+            c.signal_parent(signal.SIGHUP)
+            c.release("alfa", term=True)
+            c.release("beta", term=True)
+
+        run = self.run_parallel(TEMPLATES3, script)
+        self.assert_clean(run)
+        self.assertEqual(run.code, 128 + signal.SIGHUP, run.describe())
+        self.assertEqual(sorted(fault.spawned_at_raise), ["alfa", "beta"])
+        self.assertEqual([s.template for s in run.attempts], ["alfa", "beta"])
+        self.assertEqual(sorted(c["template"] for c in run.calls_of("term")),
+                         ["alfa", "beta"])
+        for spawn in run.spawns:
+            self.assertIsNotNone(spawn.proc.returncode,
+                                 f"{spawn.template} не пожат родителем")
+        self.assertEqual(self.listing(), [])
+
+    def _wait_exception_run(self, children):
+        """`alfa`/`beta` в ведении, первый вызов `_wait_child` бросает исключение."""
+        self.children = children
+        fault = self.patch_wait(RuntimeError(WAIT_ERROR))
+
+        def script(c):
+            c.wait_spawns(2)
+            c.reach("alfa")
+            c.reach("beta")
+            fault.ready.set()
+            c.wait_spawns(3)
+            for template in TEMPLATES3:
+                c.release(template)
+
+        run = self.run_parallel(TEMPLATES3, script)
+        self.assert_clean(run)
+        terms = run.calls_of("term")
+        self.assertEqual(len(terms), 1, run.describe())
+        failed = terms[0]["template"]
+        self.assertIn(failed, ("alfa", "beta"))
+        self.assertEqual([s.template for s in run.spawns], TEMPLATES3)
+        self.assertNotIn(run.code, (0, None), run.describe())
+        by = {s.template: s for s in run.spawns}
+        self.assertIsNotNone(by[failed].proc.returncode, run.describe())
+        return run, failed
+
+    def test_ac21_wait_exception_red_row_group_stopped_queue_goes_on(self):
+        """`Exception` из функции ожидания: красная строка, SIGTERM группе, очередь дальше.
+
+        Первый вызов подменённой `_wait_child` бросает `RuntimeError`; дочерний,
+        чьё ожидание прервано, получает SIGTERM (порядок остановки требования 5)
+        и пожат; у его шаблона одна красная строка по образцу
+        `_report_drive_failure`, в выводе — причина «ожидание процесса задачи
+        прервано: <ошибка>»; `gamma` запущен; код выхода ненулевой.
+
+        Ловит мутацию: исключение ожидания пробрасывается и обрывает прогон —
+        `gamma` не запущен; либо глотается без строки — шаблон пропадает из
+        итога, код 0; либо группа дочернего не снимается — SIGTERM не приходит.
+        """
+        run, failed = self._wait_exception_run(
+            {"alfa": {"mode": "exit", "term_exit": True},
+             "beta": {"mode": "exit", "term_exit": True},
+             "gamma": {"mode": "exit"}})
+        mine = [r for r in self.rows(run.stamp) if r["title"] == failed]
+        self.assertEqual(len(mine), 1, run.describe())
+        self.assert_red_row(mine[0], run.stamp, failed)
+        self.assertTrue(_reason_line(
+            run.stdout, failed, f"ожидание процесса задачи прервано: {WAIT_ERROR}"),
+            run.describe())
+
+    def test_ac21_wait_exception_no_second_row_when_row_exists(self):
+        """`Exception` из функции ожидания у дочернего со строкой — второй строки нет.
+
+        Все дочерние — настоящие подкоманды, записавшие зелёную строку до точки
+        ожидания; дочерний с прерванным ожиданием снят SIGTERM. За каждый шаблон
+        ровно одна строка `run_stamp` прогона — собственная зелёная.
+
+        Ловит мутацию: родитель пишет красную строку «ожидание процесса задачи
+        прервано» без сверки `canary_runs` — у шаблона две строки.
+        """
+        run, failed = self._wait_exception_run(
+            {"alfa": {"mode": "real", "row": True, "term_exit": True},
+             "beta": {"mode": "real", "row": True, "term_exit": True},
+             "gamma": {"mode": "real", "row": True}})
+        rows = self.rows(run.stamp)
+        for template in TEMPLATES3:
+            with self.subTest(template):
+                self.assertEqual(
+                    [(r["task_id"], r["verdict"]) for r in rows if r["title"] == template],
+                    [("01FIXTURE" + template.upper(), "green")], run.describe())
