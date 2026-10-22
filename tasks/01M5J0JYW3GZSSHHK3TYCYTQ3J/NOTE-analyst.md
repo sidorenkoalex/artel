@@ -1,16 +1,21 @@
-# Записка аналитика 01M5J0JYW3
+# Записка аналитика 01M5J0JYW3 (шаг 2, после ANSWER-1)
 
 ## Выяснено
-- Возврат аудита (fail) принят: противоречие ТЗ п. 2 (TZ.md:29) и п. 8 (TZ.md:37) о C у компонента без `tests` реально. junit_project (outcome_gate.py:563-602) без `tests`, vitest_project с `tests` (:614). `junit_project(` — 65 вызовов: outcome_gate 29, merge_outcome_gate 18, file_level 11, fail_to_pass 7.
-- По прочтению п. 2 краснеют Ac6RerunTest :1552-1556 и :1573 (третья выписка метится side=head). По прочтению п. 8 (у junit_project нет test_support) C пуст, правок нет.
-- Записан QUESTIONS.md (3 вопроса: C без tests; сбой диффа → _Prepare; канарейка в предикате автогейта), guard ок. SPEC.md не тронут.
-- `_bounds(is_canary, target)` — outcome_integrity.py:536; ядро fail-closed через `except Exception` (:578).
+- ANSWER-1: в.1 — C (у компонента без `tests` C = пути диффа, кроме A, у R прежний, которые есть среди файлов отчёта базы, + test_support + замены). в.2 — A (сбой обоих диффов → _Prepare). в.3 — A (граница автогейта = `_bounds(is_canary, target)` не None).
+- Опись по варианту C сделана: краснеющих методов НЕТ → SPEC без мандата.
+  - outcome_gate: правят базовые тестовые файлы только Ac2PlaceTest (:1024, гейт по тексту раньше) и Ac13PassedRecordTest (:2480, D под мандатом; прежняя версия зелёная, числа строки счёта целы). Ac6 (:1550/:1572) кода тестов не правит → C пуст. Vitest Ac9 (:2126) совместим (аудит).
+  - merge_outcome_gate: D под мандатом — Ac1 (:403), Ac4 (:594), Ac5 (:634, sides() — множество), Ac8 (:872, числа ⊆). Ac11/12 зовут two_sided.run напрямую.
+  - fail_to_pass/file_level: developer_advance правит только код (app.py / lib/app.js), long-lived — A.
+  - id_mandate_outcome_gate: только app.py. labelled_gates Ac5 (:1347) — файл A от базы, раньше отказ перечня. component_report_gates мокает гейт исходов.
+  - Треб. 5 (_weakening_scope_refusal): тесты отказа — только вне границы (test_profile в weakening_mandate_scope.py, артель). Новый маркер по id — своя проверка mandate.py:291, не меняется.
+  - test_fsm_autogate — только артель (правило по умолчанию).
 
 ## Где остановился
-- Батч сдан, задача эскалирует. После ANSWER в SPEC нужно: (1) C по ответу на вопрос 1, AC-9; (2) AC-16 переписать — у исчезнувшего теста только «исчез … замена SPEC», а снятие «прежняя версия красная» проверить на заменяемом тесте, который на ветке есть; (3) раздел «Матрица неослабления» — строки на `_plank_rule_refusal` (fsm_autogate.py:236-253) и `_weakening_scope_refusal` (mandate.py:214-218, тесты weakening_mandate_scope.py:49, id_mandate_answer.py:462); (4) сбой диффов → _Prepare (вопрос 2); (5) предикат автогейта с канарейкой (вопрос 3); (6) AC-12 усилить (маркер до третьей выписки, а не только до первой); (7) убрать вывод «правок не нужно» из «Материалов», если выбран не A; удалить QUESTIONS.md.
+- SPEC.md сдан (status: ready, 30 AC, $75), QUESTIONS.md удалён, guard — ок.
+- Правки против прежнего SPEC: треб. 2 «тестовые файлы компонента» (без `tests` = файлы отчёта базы; применено и к строгому режиму и исключениям в коде — прочтение ANSWER-1 «роль масок tests»), C по ANSWER-1 C; треб. 8 сбой диффов → _Prepare (AC-12); треб. 10 граница `_bounds` (AC-29 канарейка); AC-13 маркер на момент третьего `worktree add`; AC-17 разделён (а) исчез / (б) есть на ветке; раздел «Матрица неослабления» (автогейт, _weakening_scope_refusal).
 
 ## Не сработало
-- pytest -n в шаге падает (node down) — гонять с -p no:xdist.
+- Bash: ls/wc/пайпы требуют подтверждения; одиночный grep — можно.
 
 ## Чего не хватило
-- Опись прогонов фикстуры outcome_gate (subset_runs/side_of по app.py) — без неё вывод о совместимости в прошлом SPEC оказался ложным.
+- Списка «какие файлы tests/ доходят до _gate с правкой тестовых файлов базы» — собирал grep'ом по developer_advance/commit_code.
