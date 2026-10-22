@@ -31,7 +31,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -53,10 +52,16 @@ ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 # Предел `ci.gh` и пуша удаления на время сценария молчащего хостинга
 # (AC-6): одна константа `config.GH_TIMEOUT_SEC` задаёт оба.
 SHORT_TIMEOUT_SEC = 2
-FIXED_SLACK_SEC = 10
-# Сколько подставной `gh` молчит в режиме «молчание» — заведомо дольше
-# предела `ci.gh`.
-GH_SILENT_SEC = 60
+# Сколько подставной `gh` молчит в режиме «молчание»: дольше предела
+# `ci.gh`, но меньше исходного `config.GH_TIMEOUT_SEC` — `gh`, снятый чужим
+# пределом, успевает досыпать и записать конец сна.
+GH_SILENT_SEC = 2 * SHORT_TIMEOUT_SEC + 15
+# Срок молчания хостинга на пуше удаления: заведомо дольше предела пуша и
+# меньше таймаута теста (`pyproject.toml`) с запасом на остальной `kill` —
+# пуш без предела краснит тест флагом истечения, а не таймаутом pytest.
+SILENCE_LIMIT_SEC = 75
+# Диапазон случайного предела сценария перехвата.
+INTERCEPT_LIMITS = (7, 300)
 # Исполняемый git серверной стороны подставного HTTP-хостинга
 # (`git http-backend` — это «origin», не вопрос к репозиторию задачи).
 GIT_BIN = shutil.which("git") or "git"
@@ -88,6 +93,8 @@ if mode == "fail":
     sys.exit(1)
 if mode == "silent":
     time.sleep({silent})
+    with open({log!r}, "a", encoding="utf-8") as f:
+        f.write(json.dumps({{"kind": "gh_slept"}}) + "\\n")
 '''
 
 PRE_RECEIVE = '''#!{python}
@@ -112,15 +119,23 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+def _has_pair(args, flag: str, value: str) -> bool:
+    return any(args[i] == flag and args[i + 1] == value
+               for i in range(len(args) - 1))
+
+
 class Silence:
     """Правило молчания подставного HTTP-хостинга: тело POST
     `git-receive-pack`, несущее `pattern`, остаётся без ответа до
-    `release` либо `limit` секунд — дальше соединение закрывается."""
+    `release` либо `limit` секунд — дальше соединение закрывается.
+    `expired` поднят, только когда срок `limit` вышел без `release`: клиент
+    ждал ответа весь срок молчания."""
 
     def __init__(self):
         self.pattern = b""
         self.limit = 0.0
         self.hits = 0
+        self.expired = False
         self.release = threading.Event()
 
 
@@ -159,7 +174,8 @@ class GitHttpHosting(BaseHTTPRequestHandler):
         if (path.endswith("/git-receive-pack") and silence.pattern
                 and silence.pattern in plain):
             silence.hits += 1
-            silence.release.wait(silence.limit)
+            if not silence.release.wait(silence.limit):
+                silence.expired = True
             return
         env = dict(os.environ, GIT_PROJECT_ROOT=str(self.server.project_root),
                    GIT_HTTP_EXPORT_ALL="1", PATH_INFO=path,
@@ -568,41 +584,101 @@ class SilentHostingTest(ProjectKillSandbox):
     HTTP_ORIGIN = True
 
     def test_ac6_silent_gh_and_origin_bounded_and_noted(self):
-        """Молчащие `gh` и `origin` задерживают `kill` не дольше 2 × `GH_TIMEOUT_SEC` + 10 с, обе заметки — «не ответил».
+        """Молчащие `gh` и `origin`: пуш удаления и `gh pr close` обрывает их предел раньше срока молчания хостинга (флаг истечения не поднят), ровно по одному вызову, обе заметки — «не ответил».
 
         Сценарий: `config.GH_TIMEOUT_SEC` уменьшен до 2 с; подставной `gh`
-        молчит 60 с; подставной HTTP-хостинг `origin` принимает
-        соединение и не отвечает на пуш удаления ветки задачи (прочие
-        запросы обслуживает). `kill` укладывается в 2 × 2 + 10 с, задача в
-        `killed`, хостинг получил пуш удаления, в журнале уборки заметки
-        «PR …: оставлено — … не ответил…» и «ветка origin …: оставлено —
-        … не ответил…».
+        молчит 2 × 2 + 15 с и после сна пишет в журнал событие конца сна;
+        подставной HTTP-хостинг `origin` принимает соединение и не отвечает
+        на пуш удаления ветки задачи 75 с (прочие запросы обслуживает).
+        После `kill` задача в `killed`, хостинг получил ровно один пуш
+        удаления (`silence.hits`), флаг истечения молчания хостинга не
+        поднят — пуш оборвал сам клиент; `gh pr close` запущен ровно один
+        раз, события конца сна `gh` нет — его снял предел; в журнале уборки
+        заметки «PR …: оставлено — … не ответил…» и «ветка origin …:
+        оставлено — … не ответил…».
 
         Ловит мутацию: пуш удаления без `-c http.lowSpeedLimit=1 -c
-        http.lowSpeedTime=<GH_TIMEOUT_SEC>` — `kill` ждёт, пока хостинг
-        сам не закроет соединение (предел + 15 с), и превышает допуск;
-        либо предел пуша зашит числом, а не прочитан из
-        `config.GH_TIMEOUT_SEC` в момент вызова — тот же перебор времени;
-        либо срабатывание предела пишется как «отказ», без «не ответил».
+        http.lowSpeedTime=<GH_TIMEOUT_SEC>` — пуш ждёт, пока хостинг сам не
+        закроет соединение, и флаг истечения молчания поднят; либо предел
+        пуша или `gh` зашит числом, а не прочитан из `config.GH_TIMEOUT_SEC`
+        в момент вызова — сценарий перехвата
+        (`test_ac6_limit_arguments_follow_gh_timeout`) видит в аргументах
+        чужое значение, а подставной `gh`, снятый чужим пределом, досыпает
+        и пишет конец сна; либо срабатывание предела пишется как «отказ»,
+        без «не ответил»; либо уборка повторяет пуш или `gh pr close` —
+        счёт вызовов не равен одному.
         """
-        limit = 2 * SHORT_TIMEOUT_SEC + FIXED_SLACK_SEC
         self.gh_mode.write_text("silent", encoding="utf-8")
         self.silence.pattern = (f" {ZERO_OID} refs/heads/{self.branch}"
                                 .encode())
-        self.silence.limit = limit + 5
+        self.silence.limit = SILENCE_LIMIT_SEC
 
         with mock.patch.object(config, "GH_TIMEOUT_SEC", SHORT_TIMEOUT_SEC):
-            started = time.monotonic()
             out = self.kill(self.ext)
-            elapsed = time.monotonic() - started
 
         self.assertEqual(self.state(self.ext), "killed", self.why(out))
         self.assertGreaterEqual(self.silence.hits, 1,
                                 self.why("пуш удаления до хостинга не дошёл"))
-        self.assertLessEqual(elapsed, limit, self.why(
-            f"kill шёл {elapsed:.1f} с при допуске {limit} с"))
+        self.assertFalse(self.silence.expired, self.why(
+            "хостинг домолчал весь срок: пуш удаления ждал ответа без предела"))
+        self.assertEqual(self.silence.hits, 1, self.why("пуш удаления не один"))
+        self.assertEqual(len(self.pr_closes(self.branch)), 1,
+                         self.why(f"запуски gh pr close: {self.gh_calls()}"))
+        self.assertEqual([e for e in self.new_events() if e["kind"] == "gh_slept"],
+                         [], self.why("gh досыпал: предел gh не сработал"))
         self.assertIn(SILENT, self.left_reason(self.ext, PR_PREFIX))
         self.assertIn(SILENT, self.left_reason(self.ext, BRANCH_PREFIX))
+
+    def test_ac6_limit_arguments_follow_gh_timeout(self):
+        """Предел пуша удаления, `gh pr close` и текст заметок «не ответил за N с» берут значение `config.GH_TIMEOUT_SEC` в момент вызова.
+
+        Сценарий: `config.GH_TIMEOUT_SEC` подменён случайным значением из
+        7…300, отличным от исходного; `subprocess.run` перехвачен без
+        настоящего ожидания: запуск `gh` поднимает `TimeoutExpired`, пуш
+        удаления ветки задачи отвечает молчанием curl («Operation too
+        slow»), прочие вызовы идут настоящими. Задача в `killed`; пуш
+        удаления один и несёт пары `-c http.lowSpeedLimit=1` и
+        `-c http.lowSpeedTime=<значение>`; `gh pr close` вызван один раз с
+        `timeout=<значение>`; обе заметки несут «не ответил за <значение> с».
+
+        Ловит мутацию: пуш удаления без пар `-c`; предел пуша, `gh` или
+        текста заметки зашит числом вместо `config.GH_TIMEOUT_SEC` — в
+        аргументах или тексте исходное значение, а не подменённое.
+        """
+        low, high = INTERCEPT_LIMITS
+        value = self.rng.randrange(low, high + 1)
+        while value == config.GH_TIMEOUT_SEC:
+            value = self.rng.randrange(low, high + 1)
+        real_run = subprocess.run
+        pushes, gh_runs = [], []
+
+        def spy(argv, *args, **kwargs):
+            if argv[:1] == ["gh"]:
+                gh_runs.append((list(argv), kwargs.get("timeout")))
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+            if argv[:1] == ["git"] and "push" in argv and "--delete" in argv \
+                    and self.branch in argv:
+                pushes.append(list(argv))
+                return subprocess.CompletedProcess(argv, 128, "", (
+                    f"error: RPC failed; curl 28 Operation too slow. Less than "
+                    f"1 bytes/sec transferred the last {value} seconds\n"))
+            return real_run(argv, *args, **kwargs)
+
+        with mock.patch.object(config, "GH_TIMEOUT_SEC", value), \
+                mock.patch.object(subprocess, "run", spy):
+            out = self.kill(self.ext)
+
+        self.assertEqual(self.state(self.ext), "killed", self.why(out))
+        self.assertEqual(len(pushes), 1, self.why(f"пуши удаления: {pushes}"))
+        self.assertTrue(_has_pair(pushes[0], "-c", "http.lowSpeedLimit=1"),
+                        self.why(f"пуш удаления: {pushes[0]}"))
+        self.assertTrue(_has_pair(pushes[0], "-c", f"http.lowSpeedTime={value}"),
+                        self.why(f"пуш удаления: {pushes[0]}"))
+        closes = [timeout for argv, timeout in gh_runs if argv[1:3] == ["pr", "close"]]
+        self.assertEqual(closes, [value], self.why(f"запуски gh: {gh_runs}"))
+        self.assertIn(f"{SILENT} за {value} с", self.left_reason(self.ext, PR_PREFIX))
+        self.assertIn(f"{SILENT} за {value} с",
+                      self.left_reason(self.ext, BRANCH_PREFIX))
 
 
 class ArtelKillUnchangedTest(ProjectKillSandbox):
