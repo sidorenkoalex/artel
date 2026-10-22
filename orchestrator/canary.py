@@ -147,6 +147,7 @@ import fcntl
 import importlib
 import json
 import os
+import queue
 import random
 import re
 import signal
@@ -169,6 +170,7 @@ from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
 from .advance_gates import spec_audit
 from .pool_seal import _pool_dir
 from .providers import codex as codex_provider
+from .reference_cache import SHA_FORM
 
 CANARY_MARK_ACTOR = "canary"
 
@@ -3214,9 +3216,11 @@ class CanaryInterrupted(BaseException):
 
 
 @contextmanager
-def _interrupt_on_signal():
-    previous = {signum: signal.getsignal(signum)
-                for signum in (signal.SIGTERM, signal.SIGHUP)}
+def _interrupt_on_signal(signums=(signal.SIGTERM, signal.SIGHUP)):
+    # `signums` — родитель параллельного прогона добавляет SIGINT: иначе
+    # Ctrl-C пришёл бы `KeyboardInterrupt`, неотличимым от исключения не по
+    # сигналу, и код выхода «128 + номер сигнала» был бы потерян.
+    previous = {signum: signal.getsignal(signum) for signum in signums}
 
     def interrupt(signum, _frame):
         # Повторный сигнал не должен прервать finally посреди уборки.
@@ -3235,7 +3239,7 @@ def _interrupt_on_signal():
 def cmd_canary(*, k: int, sha: str | None = None,
                set_name: str = config.CANARY_DEFAULT_SET,
                templates: list | None = None,
-               on_run_stamp=None) -> str:
+               on_run_stamp=None, parallel: bool = False) -> str:
     """`set_name` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 1) — имя
     набора ролей прогона из `canary_sets:` локального слоя; значение по
     умолчанию — набор по умолчанию, то есть прогон «как пульт».
@@ -3251,7 +3255,12 @@ def cmd_canary(*, k: int, sha: str | None = None,
     приёмник `run_stamp` прогона: зовётся `on_run_stamp(run_stamp)` после
     записи реестра и до первого клона, чтобы вызывающий (файл результата
     отвязанного запуска) знал свой прогон и на обрыве. Возврат —
-    `run_stamp`."""
+    `run_stamp`.
+
+    `parallel` (SPEC 01M5H24PZXZTBM03SF6V576S5P) — задачи прогона идут
+    отдельными процессами `canary run-task` (`_cmd_canary_parallel`).
+    Развилка одна и стоит после разбора набора: прежняя ветка ниже не
+    переписана."""
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
@@ -3264,6 +3273,9 @@ def cmd_canary(*, k: int, sha: str | None = None,
     # битый набор Оператор не платит ни обращением к сети, ни `git clone`,
     # ни заведённой задачей.
     plan = _set_plan(set_name)
+    if parallel:
+        return _cmd_canary_parallel(pool_dir, templates, plan, sha,
+                                    on_run_stamp)
     # Вход Codex для клона — здесь же, на той же стадии (SPEC
     # 01M3HST1381E1FZCYAN2TSB1F3, требование 3): за неподготовленный
     # отдельный профиль пульт тоже не платит ни сетью, ни `git clone`, ни
@@ -3323,6 +3335,269 @@ def cmd_canary(*, k: int, sha: str | None = None,
         return run_stamp
 
 
+# Параллельный прогон (SPEC 01M5H24PZXZTBM03SF6V576S5P). Задачи — отдельными
+# процессами: `_ephemeral_clone` переадресует модульные пути `config`
+# процесса, двух клонов в одном процессе не бывает. Предел — два: замок
+# полных прогонов тестов (`suite_lock.directory`) считается от каталога
+# журналов, а в клоне тот переадресован, и прогоны клонов друг друга не ждут.
+PARALLEL_CHILD_LIMIT = 2
+# Срок между SIGTERM группам дочерних и SIGKILL. Дочерний по SIGTERM сам
+# снимает группу ведения в клоне (`liveness.terminate_process_group`, срок
+# `GROUP_TERMINATE_GRACE_SEC`) и пишет строку «оборвана сигналом» — срок
+# берётся с запасом больше двух таких.
+PARALLEL_STOP_GRACE_SEC = 60
+_PARALLEL_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
+class _Child:
+    """Запущенный дочерний процесс параллельного прогона."""
+
+    def __init__(self, template_path: Path, proc, log_path: Path):
+        self.template_path = template_path
+        self.title = template_path.stem
+        self.proc = proc
+        self.log_path = log_path
+        self.killed = False
+
+
+def _child_argv(run_stamp: str, template_path: Path, target_sha: str,
+                plan: CanarySetPlan) -> list:
+    """argv дочернего: подкоманда `canary run-task` интерпретатором пульта
+    без буферизации — как `artel._detach_canary`: вывод идёт в файл, и
+    снятие сигналом не должно терять последние строки."""
+    return [sys.executable, "-u",
+            str(Path(__file__).resolve().with_name("artel.py")),
+            "canary", "run-task", "--stamp", run_stamp,
+            "--template", str(template_path), "--sha", target_sha,
+            "--set", plan.name, "--summary", plan.summary or ""]
+
+
+def _wait_child(proc) -> int:
+    """Ожидание завершения дочернего — код выхода (отрицательный — номер
+    сигнала). Зовётся потоком-ожидателем родителя."""
+    return proc.wait()
+
+
+def _has_run_row(run_stamp: str, title: str) -> bool:
+    return any(row["run_stamp"] == run_stamp and row["title"] == title
+               for row in store.all_canary_runs(store.db()))
+
+
+def _report_child_failure(run_stamp: str, title: str, plan: CanarySetPlan,
+                          reason: str) -> None:
+    """Красная строка родителя за шаблон без своей строки прогона — по
+    образцу `_report_drive_failure`: нули, коммит пуст; задачи и маркера
+    ожидания эскалации родитель не знает. Причина — в выводе, не в БД."""
+    store.insert_canary_run(
+        store.db(), run_stamp, title, None, 0, 0.0, 0, 0,
+        _DRIVE_FAILED_OUTCOME, None, False, False, main_sha=None,
+        verdict="red", set_name=plan.name,
+        models_summary=plan.summary or None)
+    print(f"[canary] {title}: учебная задача шаблона {title} не доведена — "
+          f"{reason}; прогон красный")
+
+
+def _signal_group(child: _Child, signum: int) -> None:
+    # Пожатый (потоком-ожидателем) процесс — его номер группы уже может
+    # носить чужая группа.
+    if child.proc.returncode is not None:
+        return
+    try:
+        os.killpg(child.proc.pid, signum)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _stop_children(children: list) -> None:
+    """SIGTERM группам всех сразу, общий срок `PARALLEL_STOP_GRACE_SEC`,
+    SIGKILL не успевшим, ожидание всех. Зовётся под `_SignalDeferral`."""
+    for child in children:
+        _signal_group(child, signal.SIGTERM)
+    deadline = time.monotonic() + PARALLEL_STOP_GRACE_SEC
+    for child in children:
+        try:
+            child.proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+    for child in children:
+        if child.proc.returncode is None:
+            child.killed = True
+            _signal_group(child, signal.SIGKILL)
+    for child in children:
+        child.proc.wait()
+
+
+def _finish_child(child: _Child, run_stamp: str, plan: CanarySetPlan,
+                  live_dir: Path, reason: str | None = None) -> bool:
+    """Итог завершившегося дочернего: блок вывода целиком, снятие его
+    записи реестра (снятый SIGKILL сам её не убрал; метка — родителя и
+    остаётся), красная строка, если своей строки шаблон не записал.
+    `True` — задача прошла: код 0 и строка прогона есть."""
+    code = child.proc.returncode
+    print(f"[canary] {child.title}: процесс {child.proc.pid} завершён с кодом "
+          f"{code}, журнал {child.log_path}")
+    try:
+        text = child.log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        text = f"журнал не читается: {exc}\n"
+    if text:
+        sys.stdout.write(text if text.endswith("\n") else text + "\n")
+    sys.stdout.flush()
+    record = live_dir / f"{run_stamp}-{child.proc.pid}{_LIVE_RECORD_SUFFIX}"
+    record.unlink(missing_ok=True)
+    record.with_name(record.name + ".tmp").unlink(missing_ok=True)
+    if _has_run_row(run_stamp, child.title):
+        return code == 0 and reason is None and not child.killed
+    if child.killed:
+        killed = (f"снят SIGKILL после {PARALLEL_STOP_GRACE_SEC} с; группа "
+                  f"ведения в клоне могла остаться — проверь doctor")
+        reason = killed if reason is None else f"{reason}; {killed}"
+    elif reason is None:
+        reason = f"процесс задачи завершился с кодом {code} без строки прогона"
+    _report_child_failure(run_stamp, child.title, plan, reason)
+    return False
+
+
+def _start_child(template_path: Path, run_stamp: str, target_sha: str,
+                 plan: CanarySetPlan) -> _Child:
+    """Журнал открывает родитель: файл переживает прогон и читается целиком
+    по завершении процесса. Своя группа — чтобы снять и ведение в клоне;
+    без оболочки — дочерний сверяет метку с `os.getppid()`."""
+    directory = config.LOGS / "canary"
+    directory.mkdir(parents=True, exist_ok=True)
+    log_path = directory / f"{run_stamp}-{template_path.stem}.log"
+    with open(log_path, "wb", buffering=0) as log:
+        proc = subprocess.Popen(
+            _child_argv(run_stamp, template_path, target_sha, plan),
+            cwd=config.ROOT, stdin=subprocess.DEVNULL, stdout=log,
+            stderr=subprocess.STDOUT, start_new_session=True)
+    return _Child(template_path, proc, log_path)
+
+
+def _run_children(templates: list, run_stamp: str, target_sha: str,
+                  plan: CanarySetPlan) -> bool:
+    """Очередь дочерних: не больше `PARALLEL_CHILD_LIMIT` живых, следующий —
+    по завершении любого; исход дочернего очередь не останавливает. `True`
+    — все задачи прошли.
+
+    Каждого дочернего ждёт свой поток через `_wait_child`, исход — в общую
+    очередь; главный поток ждёт её, и сигнал (`CanaryInterrupted`) его
+    прерывает. Запуск и разбор исхода — под `_SignalDeferral`: дочерний,
+    созданный, но ещё не учтённый, сигнал оставил бы сиротой.
+
+    На любом выходе, кроме штатного, живые дочерние снимаются
+    `_stop_children` под откладыванием сигналов; пришедший во время
+    остановки сигнал заново не поднимается: если родитель выходил не по
+    сигналу, выход становится `CanaryInterrupted` этого сигнала, иначе
+    код выхода — первого."""
+    live_dir = _live_dir()
+    pending = list(templates)
+    running: list = []
+    outcomes = queue.Queue()
+    passed = True
+
+    def wait(child: _Child) -> None:
+        try:
+            outcomes.put((child, _wait_child(child.proc), None))
+        except BaseException as exc:  # noqa: BLE001 — исход в главный поток
+            outcomes.put((child, None, exc))
+
+    try:
+        while pending or running:
+            while pending and len(running) < PARALLEL_CHILD_LIMIT:
+                template_path = pending.pop(0)
+                deferral = _SignalDeferral()
+                try:
+                    try:
+                        child = _start_child(template_path, run_stamp,
+                                             target_sha, plan)
+                    except Exception as exc:  # noqa: BLE001 — красная строка
+                        passed = False
+                        _report_child_failure(
+                            run_stamp, template_path.stem, plan,
+                            f"процесс задачи не запущен: {exc}")
+                        continue
+                    running.append(child)
+                    threading.Thread(target=wait, args=(child,),
+                                     daemon=True).start()
+                finally:
+                    deferral.release()
+            if not running:
+                continue
+            child, _code, error = outcomes.get()
+            if error is not None and not isinstance(error, Exception):
+                raise error
+            deferral = _SignalDeferral()
+            try:
+                reason = None
+                if error is not None:
+                    reason = f"ожидание процесса задачи прервано: {error}"
+                    _stop_children([child])
+                running.remove(child)
+                passed = _finish_child(child, run_stamp, plan, live_dir,
+                                       reason) and passed
+            finally:
+                deferral.release()
+    except BaseException as exc:
+        if not running:
+            raise
+        deferral = _SignalDeferral()
+        try:
+            _stop_children(running)
+            for child in running:
+                _finish_child(child, run_stamp, plan, live_dir)
+        finally:
+            late, deferral.pending = deferral.pending, None
+            deferral.release()
+        if late is not None and not isinstance(exc, CanaryInterrupted):
+            raise CanaryInterrupted(late) from exc
+        raise
+    return passed
+
+
+def _cmd_canary_parallel(pool_dir: Path, templates: list, plan: CanarySetPlan,
+                         sha: str | None, on_run_stamp) -> str:
+    """Родитель параллельного прогона (SPEC 01M5H24PZXZTBM03SF6V576S5P,
+    требования 2-6): один раз — проверки, проверяемый sha, `run_stamp`,
+    запись реестра и первая строка; задачи — дочерними `canary run-task`
+    (`_run_children`). Запись и метка снимаются прежним `_live_run_record`
+    после завершения всех дочерних: пока жив хоть один, окно тишины держит
+    и запись родителя."""
+    if plan.codex_roles:
+        sys.exit(f"canary: --parallel недоступен для набора {plan.name}: роли "
+                 f"{', '.join(plan.codex_roles)} на провайдере codex — "
+                 f"профиль Codex канарейки один на машину; веди прогон без "
+                 f"--parallel")
+    names = [p.stem for p in templates]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        sys.exit(f"canary: --parallel: имена шаблонов повторяются: "
+                 f"{', '.join(repeated)} — журнал и строка прогона ключуются "
+                 f"именем шаблона")
+    target_sha, origin_sha = _resolve_target_sha(sha)
+    sha_label = _target_origin_note(sha, target_sha, origin_sha)
+    run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    try:
+        with _interrupt_on_signal(_PARALLEL_SIGNALS), _live_run_record(
+                run_stamp, target_sha, plan.name, len(templates)):
+            if on_run_stamp is not None:
+                on_run_stamp(run_stamp)
+            print(f"[canary] прогон {run_stamp}: {len(templates)} задач из "
+                  f"пула {pool_dir} в порядке прогона: "
+                  f"{', '.join(names)}; целевой sha {target_sha} "
+                  f"({sha_label}), набор {plan.name}{_summary_note(plan)} "
+                  f"параллельно: не более {PARALLEL_CHILD_LIMIT} процессов",
+                  flush=True)
+            passed = _run_children(templates, run_stamp, target_sha, plan)
+    except CanaryInterrupted as exc:
+        raise SystemExit(128 + exc.signum) from None
+    print(f"[canary] прогон {run_stamp} завершён")
+    if not passed:
+        sys.exit(f"canary: прогон {run_stamp} красный — не все задачи "
+                 f"завершились с кодом 0 со строкой прогона")
+    return run_stamp
+
+
 def _write_child_record(record: Path, run_stamp: str, target_sha: str,
                         set_name: str, template: str) -> None:
     """Запись дочернего процесса прогона (SPEC 01M5FZ9G7ME2F1T5TYEWSVNA1R,
@@ -3365,7 +3640,14 @@ def cmd_canary_run_task(*, run_stamp: str, template_path: Path,
     Всё тело под `_interrupt_on_signal`: сигнал на любом участке снимает
     свою запись в `finally`; строку «оборвана сигналом» пишет только сигнал
     во время ведения задачи. Пути записи запомнены до клона — во время
-    ведения `config.ROOT` уведён на клон."""
+    ведения `config.ROOT` уведён на клон.
+
+    `target_sha` — полный sha, разрешённый родителем (SPEC
+    01M5H24PZXZTBM03SF6V576S5P, требование 4): иное значение — отказ до
+    записи реестра, клон с таким sha вёл бы не проверяемый коммит."""
+    if not SHA_FORM.fullmatch(target_sha):
+        sys.exit(f"canary run-task: --sha {target_sha} — не полный "
+                 f"40-символьный sha")
     title = template_path.stem
     directory = _live_dir()
     record = directory / f"{run_stamp}-{os.getpid()}{_LIVE_RECORD_SUFFIX}"
