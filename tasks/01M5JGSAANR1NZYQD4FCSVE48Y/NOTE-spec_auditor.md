@@ -1,17 +1,18 @@
-# Записка spec_auditor (круг 2, spec_sha 5bde9f09)
+# Записка spec_auditor (круг 3, spec_sha 3c6483ea)
 
 ## Выяснено
-- Пункты круга 1 (матрица, маркеры мандата, таблица рубежей, _profile_refusal_exit, review.py:691, layers: []) в SPEC закрыты.
-- Таблица мест снова не закрыта: вне таблицы decide() в контексте задачи — advance_gates/review.py:209 (_mutation_claim_gate; таблица ошибочно относит заявку мутации к tests_writing.py/zones.py), advance_gates/acceptance.py:73/:111/:561, advance_gates/zones.py:287, advance_gates/test_integrity.py:1299 (_external_helpers: profile None → прежняя область, не отказ), fsm_advance.py:318, fsm_merge_gate.py:1093 (full_suite_limit → TargetsError у записи из нескольких компонентов при таймауте).
-- fsm_merge_gate.py:912 (_gate_profiles) — только checks_local, не «перечень долгоживущих» (он — :1393 через for_task). :858/:912 у записи из нескольких компонентов недостижимы (_selected_components раньше) — тест AC-22 их не ловит.
-- Мандат: AC-13/14 не ловят «любой компонент записи» без условия границы.
-- Подслучай «г» Ac14 и Ac5 совместимы с SPEC.
+- Все места decide()/profile_of() в контексте задачи теперь в таблице SPEC (grep по orchestrator/).
+- Ошибка прошлого круга аудита: fsm_merge_gate.py:1093 у записи из нескольких компонентов НЕДОСТИЖИМА — _full_suite_command отдаёт кортеж профилей (:853–856), таймаут идёт веткой :1086–1091 (предел компонента). TargetsError там нет; AC-27 стоит на ложной посылке.
+- fsm_advance.py:609 — FAIL_TO_PASS добавляется только при in_outcome_bounds профиля задачи: чужой файл X в границе у задачи Y вне границы не проверяется.
+- mandate._outcome_profile канарейку не проверяет («как сейчас» в SPEC неверно).
+- matrix_refusals (mandate.py:584, _covered/_component_covered) — покрытие только по профилю задачи: строка «остаётся, покрыто frontend:…» у задачи backend получит отказ на answer.
+- review.py:691 фильтр по границе профиля задачи: у задачи вне границы строки потребителя скрыты.
 
 ## Не сработало
-- bash: ls нет, $(...)/${...} в команде требуют подтверждения — python3 -c для выборок.
+- Команда bash с `cd … &&` и `$?` — отказ «simple_expansion»; guard гонять абсолютным путём без $.
 
 ## Где остановился
-- SPEC-AUDIT.md: status ready, verdict concerns.
+- SPEC-AUDIT.md: status ready, verdict concerns, 7 отклонений; guard ок.
 
 ## Чего не хватило
-- Полного перечня decide()-мест: grep `project_profile\.decide(` по orchestrator/ — главный инструмент.
+- Ветвление по типу command в _merge_full_suite (isinstance tuple, :1069/:1086) — без него :1093 кажется достижимой.
