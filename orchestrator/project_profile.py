@@ -249,9 +249,11 @@ def for_task_target(target: str, task_id: str, conn=None) -> Decision:
     зонам строки задачи из `conn` (не передан — БД пульта)."""
     def zones():
         db = conn if conn is not None else store.db()
-        row = db.execute("SELECT zones, zones_extension FROM tasks "
-                         "WHERE id=?", (task_id,)).fetchone()
-        return _row_zones(row) if row is not None else set()
+        # `get_task` при отсутствии строки завершает процесс — пропавшая
+        # строка здесь даёт пустые зоны, т. е. отказ «зоны не заданы».
+        if not store.task_exists(db, task_id):
+            return set()
+        return _row_zones(store.get_task(db, task_id))
     return _by_zones(target, decide(target), zones)
 
 
