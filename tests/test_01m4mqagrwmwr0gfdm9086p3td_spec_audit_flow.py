@@ -701,25 +701,6 @@ class SignalDepthTest(SpecAuditSandbox):
             self.assertTrue(any(n.lower() in entry.lower() for n in names), context)
         return entry
 
-    # Подслучаи «путь <категория>» test_ac9 делятся на доли
-    # `[i::CATEGORY_SHARES]` по сортировке метки — по методу на долю
-    # (SPEC 01M5H1A4GS19TPR4RJ8XRVVYZQ).
-    CATEGORY_SHARES = 2
-
-    def category_cases(self, categories: dict, index: int) -> list:
-        """Доля `index` подслучаев «путь <категория>» test_ac9: по
-        подслучаю на категорию `categories` (путь — случайный из её
-        перечня), по сортировке метки срез `[index::CATEGORY_SHARES]`,
-        порядок внутри доли — зерном."""
-        cases = []
-        for category, paths in categories.items():
-            path = self.rng.choice(sorted(paths))
-            cases.append((f"путь {category}", {"zones": f"{NEUTRAL_ZONE}, {path}"},
-                          None, None, (path, str(category))))
-        share = sorted(cases, key=lambda case: case[0])[index::self.CATEGORY_SHARES]
-        self.rng.shuffle(share)
-        return share
-
     def test_ac8_behavior_section_full_review_and_no_signal_short_review(self):
         """SPEC с непустым «Меняемое поведение» — полный разбор и сигнал в журнале; SPEC без сигналов — краткий разбор и «нет».
 
@@ -761,23 +742,17 @@ class SignalDepthTest(SpecAuditSandbox):
         нестрого не на том пороге — 44 даёт полный; ADR ищется в SPEC, а
         не в ТЗ; мандат ищется только в последнем ANSWER или не ищется
         вовсе; защищённый путь сверяется не `config.is_protected_path`.
-
-        Метод исполняет подслучай «ADR в ТЗ» — первый по сортировке метки
-        среди подслучаев метода: ветки и помощники всех фиксированных
-        подслучаев — в теле, исполняется одна ветка. Прочие фиксированные
-        подслучаи — методы `test_ac9_budget_44_keeps_short_review`,
-        `test_ac9_budget_45_switches_to_full_review`,
-        `test_ac9_protected_path_switches_to_full_review`,
-        `test_ac9_answer_mandate_switches_to_full_review`,
-        `test_ac9_plan_appendix_switches_to_full_review`; подслучаи «путь
-        <категория>» — доли `test_ac9_path_category_share<i>_switches_to_full_review`.
         """
-        label = "ADR в ТЗ"
         constants = path_signal_categories()
         self.assertEqual(len(constants), 1, self.msg(
             f"константа путей-признаков сигнала 7в в config не найдена или не "
             f"одна: {sorted(constants)}"))
+        categories = next(iter(constants.values()))
         cases = []
+        for category, paths in categories.items():
+            path = self.rng.choice(sorted(paths))
+            cases.append((f"путь {category}", {"zones": f"{NEUTRAL_ZONE}, {path}"},
+                          None, None, (path, str(category))))
         protected = self.rng.choice([p for p in config.PROTECTED_PATHS
                                      if "*" not in p])
         self.assertTrue(config.is_protected_path(protected), protected)
@@ -794,14 +769,8 @@ class SignalDepthTest(SpecAuditSandbox):
                                    f"Ослабление тестов разрешено: "
                                    f"tests/test_fx_{word(self.rng)}.py"])
         cases.append(("мандат в ANSWER", {}, None, mandate, self.NAMES["б"]))
-        if label == "бюджет 44":
-            with self.subTest(признак="бюджет 44"):
-                task = self.new_task()
-                self.enter_audit(task, self.spec(task, budget=44))
-                self.assert_depth(task, False, (), "бюджет 44")
-        else:
-            case, spec_kwargs, tz, answer_body, names = next(
-                item for item in cases if item[0] == label)
+        self.rng.shuffle(cases)
+        for case, spec_kwargs, tz, answer_body, names in cases:
             with self.subTest(признак=case):
                 task = self.new_task(tz=tz or "")
                 if answer_body:
@@ -809,324 +778,10 @@ class SignalDepthTest(SpecAuditSandbox):
                 self.enter_audit(task, self.spec(task, **spec_kwargs))
                 self.assert_depth(task, True, names, case)
 
-    def test_ac9_budget_44_keeps_short_review(self):
-        """`budget_usd: 44` на SPEC без иных сигналов — краткий разбор.
-
-        Сценарий (подслучай «бюджет 44»
-        `test_ac9_each_signal_alone_switches_to_full_review`): задача без ТЗ и
-        ответов, SPEC без единого сигнала с `budget_usd: 44`. Промпт аудитора
-        требует краткого разбора.
-
-        Ловит мутацию: порог бюджета сравнивается нестрого не на том пороге —
-        44 даёт полный разбор.
-        """
-        label = "бюджет 44"
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        cases = []
-        protected = self.rng.choice([p for p in config.PROTECTED_PATHS
-                                     if "*" not in p])
-        self.assertTrue(config.is_protected_path(protected), protected)
-        cases.append(("защищённый путь",
-                      {"zones": f"{NEUTRAL_ZONE}, {protected}"}, None, None,
-                      self.NAMES["защищённый"] + (protected,)))
-        cases.append(("приложение PLAN",
-                      {"extra": "\n2. Правка шаблона едет приложением PLAN."},
-                      None, None, self.NAMES["приложение"]))
-        cases.append(("бюджет 45", {"budget": 45}, None, None, self.NAMES["г"]))
-        cases.append(("ADR в ТЗ", {}, f"ТЗ по ADR-0022: {word(self.rng)}.\n",
-                      None, self.NAMES["д"]))
-        mandate = self.rng.choice([f"Расширение зон разрешено: {NEUTRAL_ZONE}",
-                                   f"Ослабление тестов разрешено: "
-                                   f"tests/test_fx_{word(self.rng)}.py"])
-        cases.append(("мандат в ANSWER", {}, None, mandate, self.NAMES["б"]))
-        if label == "бюджет 44":
-            with self.subTest(признак="бюджет 44"):
-                task = self.new_task()
-                self.enter_audit(task, self.spec(task, budget=44))
-                self.assert_depth(task, False, (), "бюджет 44")
-        else:
-            case, spec_kwargs, tz, answer_body, names = next(
-                item for item in cases if item[0] == label)
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
-
-    def test_ac9_budget_45_switches_to_full_review(self):
-        """`budget_usd: 45` на SPEC без иных сигналов — полный разбор, сигнал бюджета в журнале.
-
-        Сценарий (подслучай «бюджет 45»
-        `test_ac9_each_signal_alone_switches_to_full_review`): SPEC, иначе не
-        дающий ни одного сигнала, с `budget_usd: 45` (г). Вход в аудит даёт
-        полный разбор, журнал входа называет сигнал бюджета.
-
-        Ловит мутацию: порог бюджета сравнивается строго (`> 45`) — 45 даёт
-        краткий разбор.
-        """
-        label = "бюджет 45"
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        cases = []
-        protected = self.rng.choice([p for p in config.PROTECTED_PATHS
-                                     if "*" not in p])
-        self.assertTrue(config.is_protected_path(protected), protected)
-        cases.append(("защищённый путь",
-                      {"zones": f"{NEUTRAL_ZONE}, {protected}"}, None, None,
-                      self.NAMES["защищённый"] + (protected,)))
-        cases.append(("приложение PLAN",
-                      {"extra": "\n2. Правка шаблона едет приложением PLAN."},
-                      None, None, self.NAMES["приложение"]))
-        cases.append(("бюджет 45", {"budget": 45}, None, None, self.NAMES["г"]))
-        cases.append(("ADR в ТЗ", {}, f"ТЗ по ADR-0022: {word(self.rng)}.\n",
-                      None, self.NAMES["д"]))
-        mandate = self.rng.choice([f"Расширение зон разрешено: {NEUTRAL_ZONE}",
-                                   f"Ослабление тестов разрешено: "
-                                   f"tests/test_fx_{word(self.rng)}.py"])
-        cases.append(("мандат в ANSWER", {}, None, mandate, self.NAMES["б"]))
-        if label == "бюджет 44":
-            with self.subTest(признак="бюджет 44"):
-                task = self.new_task()
-                self.enter_audit(task, self.spec(task, budget=44))
-                self.assert_depth(task, False, (), "бюджет 44")
-        else:
-            case, spec_kwargs, tz, answer_body, names = next(
-                item for item in cases if item[0] == label)
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
-
-    def test_ac9_protected_path_switches_to_full_review(self):
-        """Защищённый путь в зонах SPEC — полный разбор, сигнал в журнале.
-
-        Сценарий (подслучай «защищённый путь»
-        `test_ac9_each_signal_alone_switches_to_full_review`): на SPEC, иначе
-        не дающем ни одного сигнала, в зонах — случайный защищённый путь
-        `config.PROTECTED_PATHS` без `*` (в). Вход в аудит даёт полный разбор
-        и называет сигнал в журнале.
-
-        Ловит мутацию: защищённый путь сверяется не `config.is_protected_path`.
-        """
-        label = "защищённый путь"
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        cases = []
-        protected = self.rng.choice([p for p in config.PROTECTED_PATHS
-                                     if "*" not in p])
-        self.assertTrue(config.is_protected_path(protected), protected)
-        cases.append(("защищённый путь",
-                      {"zones": f"{NEUTRAL_ZONE}, {protected}"}, None, None,
-                      self.NAMES["защищённый"] + (protected,)))
-        cases.append(("приложение PLAN",
-                      {"extra": "\n2. Правка шаблона едет приложением PLAN."},
-                      None, None, self.NAMES["приложение"]))
-        cases.append(("бюджет 45", {"budget": 45}, None, None, self.NAMES["г"]))
-        cases.append(("ADR в ТЗ", {}, f"ТЗ по ADR-0022: {word(self.rng)}.\n",
-                      None, self.NAMES["д"]))
-        mandate = self.rng.choice([f"Расширение зон разрешено: {NEUTRAL_ZONE}",
-                                   f"Ослабление тестов разрешено: "
-                                   f"tests/test_fx_{word(self.rng)}.py"])
-        cases.append(("мандат в ANSWER", {}, None, mandate, self.NAMES["б"]))
-        if label == "бюджет 44":
-            with self.subTest(признак="бюджет 44"):
-                task = self.new_task()
-                self.enter_audit(task, self.spec(task, budget=44))
-                self.assert_depth(task, False, (), "бюджет 44")
-        else:
-            case, spec_kwargs, tz, answer_body, names = next(
-                item for item in cases if item[0] == label)
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
-
-    def test_ac9_answer_mandate_switches_to_full_review(self):
-        """Мандат Оператора в ANSWER — полный разбор, сигнал в журнале.
-
-        Сценарий (подслучай «мандат в ANSWER»
-        `test_ac9_each_signal_alone_switches_to_full_review`): на SPEC, иначе
-        не дающем ни одного сигнала, ANSWER-1 несёт строку мандата
-        («Расширение зон разрешено» либо «Ослабление тестов разрешено»,
-        случайно) (б). Вход в аудит даёт полный разбор и называет сигнал в
-        журнале.
-
-        Ловит мутацию: мандат ищется только в последнем ANSWER или не ищется
-        вовсе.
-        """
-        label = "мандат в ANSWER"
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        cases = []
-        protected = self.rng.choice([p for p in config.PROTECTED_PATHS
-                                     if "*" not in p])
-        self.assertTrue(config.is_protected_path(protected), protected)
-        cases.append(("защищённый путь",
-                      {"zones": f"{NEUTRAL_ZONE}, {protected}"}, None, None,
-                      self.NAMES["защищённый"] + (protected,)))
-        cases.append(("приложение PLAN",
-                      {"extra": "\n2. Правка шаблона едет приложением PLAN."},
-                      None, None, self.NAMES["приложение"]))
-        cases.append(("бюджет 45", {"budget": 45}, None, None, self.NAMES["г"]))
-        cases.append(("ADR в ТЗ", {}, f"ТЗ по ADR-0022: {word(self.rng)}.\n",
-                      None, self.NAMES["д"]))
-        mandate = self.rng.choice([f"Расширение зон разрешено: {NEUTRAL_ZONE}",
-                                   f"Ослабление тестов разрешено: "
-                                   f"tests/test_fx_{word(self.rng)}.py"])
-        cases.append(("мандат в ANSWER", {}, None, mandate, self.NAMES["б"]))
-        if label == "бюджет 44":
-            with self.subTest(признак="бюджет 44"):
-                task = self.new_task()
-                self.enter_audit(task, self.spec(task, budget=44))
-                self.assert_depth(task, False, (), "бюджет 44")
-        else:
-            case, spec_kwargs, tz, answer_body, names = next(
-                item for item in cases if item[0] == label)
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
-
-    def test_ac9_plan_appendix_switches_to_full_review(self):
-        """Упоминание приложения PLAN в требованиях — полный разбор, сигнал в журнале.
-
-        Сценарий (подслучай «приложение PLAN»
-        `test_ac9_each_signal_alone_switches_to_full_review`): на SPEC, иначе
-        не дающем ни одного сигнала, требование упоминает правку, которая
-        едет приложением PLAN (в). Вход в аудит даёт полный разбор и
-        называет сигнал в журнале.
-
-        Ловит мутацию: упоминание приложения PLAN не считается сигналом —
-        краткий разбор.
-        """
-        label = "приложение PLAN"
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        cases = []
-        protected = self.rng.choice([p for p in config.PROTECTED_PATHS
-                                     if "*" not in p])
-        self.assertTrue(config.is_protected_path(protected), protected)
-        cases.append(("защищённый путь",
-                      {"zones": f"{NEUTRAL_ZONE}, {protected}"}, None, None,
-                      self.NAMES["защищённый"] + (protected,)))
-        cases.append(("приложение PLAN",
-                      {"extra": "\n2. Правка шаблона едет приложением PLAN."},
-                      None, None, self.NAMES["приложение"]))
-        cases.append(("бюджет 45", {"budget": 45}, None, None, self.NAMES["г"]))
-        cases.append(("ADR в ТЗ", {}, f"ТЗ по ADR-0022: {word(self.rng)}.\n",
-                      None, self.NAMES["д"]))
-        mandate = self.rng.choice([f"Расширение зон разрешено: {NEUTRAL_ZONE}",
-                                   f"Ослабление тестов разрешено: "
-                                   f"tests/test_fx_{word(self.rng)}.py"])
-        cases.append(("мандат в ANSWER", {}, None, mandate, self.NAMES["б"]))
-        if label == "бюджет 44":
-            with self.subTest(признак="бюджет 44"):
-                task = self.new_task()
-                self.enter_audit(task, self.spec(task, budget=44))
-                self.assert_depth(task, False, (), "бюджет 44")
-        else:
-            case, spec_kwargs, tz, answer_body, names = next(
-                item for item in cases if item[0] == label)
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
-
-    def test_ac9_path_category_share0_switches_to_full_review(self):
-        """Каждый признак сигнала по отдельности переключает бриф на полный разбор и называется в журнале; бюджет 44 — нет.
-
-        Сценарий: на SPEC, иначе не дающем ни одного сигнала, по одному
-        признаку на задачу — мандат в ANSWER (б); путь-признак каждой из
-        четырёх категорий константы `config` в зонах SPEC (в); защищённый
-        путь в зонах (в); упоминание приложения PLAN в требованиях (в);
-        `budget_usd: 45` (г); `ADR-0022` в ТЗ (д). Каждый вход даёт полный
-        разбор и называет сигнал в журнале; `budget_usd: 44` — краткий
-        разбор.
-
-        Ловит мутацию: признак одной из категорий не проверяется (пустая
-        категория, путь гейтов без `orchestrator/advance_gates/`); порог
-        бюджета сравнивается строго (`> 45`) — 45 даёт краткий разбор; или
-        нестрого не на том пороге — 44 даёт полный; ADR ищется в SPEC, а
-        не в ТЗ; мандат ищется только в последнем ANSWER или не ищется
-        вовсе; защищённый путь сверяется не `config.is_protected_path`.
-
-        Сценарий доли: подслучаи «путь <категория>» (по категории константы
-        `config`) по сортировке метки делятся на `CATEGORY_SHARES` долей
-        `[i::CATEGORY_SHARES]`, порядок внутри доли — зерном; метод проходит
-        долю 0 (её непустоту утверждает `assertTrue`), прочие доли —
-        методы `test_ac9_path_category_share<i>_switches_to_full_review`.
-        """
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        share = self.category_cases(next(iter(constants.values())), 0)
-        self.assertTrue(share)
-        for case, spec_kwargs, tz, answer_body, names in share:
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
-
-    def test_ac9_path_category_share1_switches_to_full_review(self):
-        """Каждый признак сигнала по отдельности переключает бриф на полный разбор и называется в журнале; бюджет 44 — нет.
-
-        Сценарий: на SPEC, иначе не дающем ни одного сигнала, по одному
-        признаку на задачу — мандат в ANSWER (б); путь-признак каждой из
-        четырёх категорий константы `config` в зонах SPEC (в); защищённый
-        путь в зонах (в); упоминание приложения PLAN в требованиях (в);
-        `budget_usd: 45` (г); `ADR-0022` в ТЗ (д). Каждый вход даёт полный
-        разбор и называет сигнал в журнале; `budget_usd: 44` — краткий
-        разбор.
-
-        Ловит мутацию: признак одной из категорий не проверяется (пустая
-        категория, путь гейтов без `orchestrator/advance_gates/`); порог
-        бюджета сравнивается строго (`> 45`) — 45 даёт краткий разбор; или
-        нестрого не на том пороге — 44 даёт полный; ADR ищется в SPEC, а
-        не в ТЗ; мандат ищется только в последнем ANSWER или не ищется
-        вовсе; защищённый путь сверяется не `config.is_protected_path`.
-
-        Сценарий доли: подслучаи «путь <категория>» (по категории константы
-        `config`) по сортировке метки делятся на `CATEGORY_SHARES` долей
-        `[i::CATEGORY_SHARES]`, порядок внутри доли — зерном; метод проходит
-        долю 1 (её непустоту утверждает `assertTrue`), прочие доли —
-        методы `test_ac9_path_category_share<i>_switches_to_full_review`.
-        """
-        constants = path_signal_categories()
-        self.assertEqual(len(constants), 1, self.msg(
-            f"константа путей-признаков сигнала 7в в config не найдена или не "
-            f"одна: {sorted(constants)}"))
-        share = self.category_cases(next(iter(constants.values())), 1)
-        self.assertTrue(share)
-        for case, spec_kwargs, tz, answer_body, names in share:
-            with self.subTest(признак=case):
-                task = self.new_task(tz=tz or "")
-                if answer_body:
-                    self.add_answer(task, 1, answer_body)
-                self.enter_audit(task, self.spec(task, **spec_kwargs))
-                self.assert_depth(task, True, names, case)
+        with self.subTest(признак="бюджет 44"):
+            task = self.new_task()
+            self.enter_audit(task, self.spec(task, budget=44))
+            self.assert_depth(task, False, (), "бюджет 44")
 
 
 # ---------------------------------------------------------------- AC-11
@@ -1578,73 +1233,32 @@ class AcceptAuditFailTest(SpecAuditSandbox):
         флаг за sha (вторая форма отказывает «sha --accept-audit-fail не
         совпадает»); sha второй формы игнорируется (чужой sha проходит);
         принятие fail не журналируется.
-
-        Метод исполняет форму `"sha"` — первую по сортировке меток форм
-        (`sorted(forms)[0]`) — своей задачей; форма `"short"` — метод
-        `test_ac20_fail_verdict_short_form_needs_flag`.
         """
         forms = ["short", "sha"]
-        form = sorted(forms)[0]  # «sha»
-        with self.subTest(форма=form):
-            task = self.fail_gate()
-            out = self.cli("approve", task)
-            context = self.msg(f"без флага:\n{out}\n{self.journal(task)}")
-            self.assertEqual(self.state(task), "spec_gate", context)
-            self.assertIn(FLAG, out, context)
-            start = self.max_step_id(task)
-            if form == "sha":
-                sha = self.live_sha(task)
-                wrong = "".join("0" if c != "0" else "1" for c in sha)
-                out = self.cli("approve", task, wrong, FLAG)
-                context = self.msg(f"чужой sha:\n{out}\n{self.journal(task)}")
+        self.rng.shuffle(forms)
+        for form in forms:
+            with self.subTest(форма=form):
+                task = self.fail_gate()
+                out = self.cli("approve", task)
+                context = self.msg(f"без флага:\n{out}\n{self.journal(task)}")
                 self.assertEqual(self.state(task), "spec_gate", context)
-                self.assertIn("не совпадает", out, context)
-                out = self.cli("approve", task, sha, FLAG)
-            else:
-                out = self.cli("approve", task, FLAG)
-            after = self.text_since(task, start)
-            context = self.msg(f"с флагом ({form}):\n{out}\n{after}")
-            self.assertNotEqual(self.state(task), "spec_gate", context)
-            self.assertTrue(any(re.search(r"\bfail\b", line) and "operator" in line
-                                for line in after.splitlines()), context)
-
-    def test_ac20_fail_verdict_short_form_needs_flag(self):
-        """approve при последнем fail без флага — отказ с именем флага; `approve <id> --accept-audit-fail` — проход и запись о принятии fail.
-
-        Сценарий (форма `"short"` `test_ac20_fail_verdict_needs_flag_in_both_forms`):
-        задача на `spec_gate` после третьего `fail`. `approve <id>` — отказ,
-        текст называет `--accept-audit-fail`, состояние `spec_gate`. Затем
-        `approve <id> --accept-audit-fail` — задача уходит с гейта, в журнале
-        после approve есть запись о принятии `fail`.
-
-        Ловит мутацию: approve не смотрит вердикт журнала (fail проходит без
-        флага); флаг не разбирается диспетчером; принятие fail не
-        журналируется.
-        """
-        forms = ["short", "sha"]
-        form = sorted(forms)[1]  # «short»
-        with self.subTest(форма=form):
-            task = self.fail_gate()
-            out = self.cli("approve", task)
-            context = self.msg(f"без флага:\n{out}\n{self.journal(task)}")
-            self.assertEqual(self.state(task), "spec_gate", context)
-            self.assertIn(FLAG, out, context)
-            start = self.max_step_id(task)
-            if form == "sha":
-                sha = self.live_sha(task)
-                wrong = "".join("0" if c != "0" else "1" for c in sha)
-                out = self.cli("approve", task, wrong, FLAG)
-                context = self.msg(f"чужой sha:\n{out}\n{self.journal(task)}")
-                self.assertEqual(self.state(task), "spec_gate", context)
-                self.assertIn("не совпадает", out, context)
-                out = self.cli("approve", task, sha, FLAG)
-            else:
-                out = self.cli("approve", task, FLAG)
-            after = self.text_since(task, start)
-            context = self.msg(f"с флагом ({form}):\n{out}\n{after}")
-            self.assertNotEqual(self.state(task), "spec_gate", context)
-            self.assertTrue(any(re.search(r"\bfail\b", line) and "operator" in line
-                                for line in after.splitlines()), context)
+                self.assertIn(FLAG, out, context)
+                start = self.max_step_id(task)
+                if form == "sha":
+                    sha = self.live_sha(task)
+                    wrong = "".join("0" if c != "0" else "1" for c in sha)
+                    out = self.cli("approve", task, wrong, FLAG)
+                    context = self.msg(f"чужой sha:\n{out}\n{self.journal(task)}")
+                    self.assertEqual(self.state(task), "spec_gate", context)
+                    self.assertIn("не совпадает", out, context)
+                    out = self.cli("approve", task, sha, FLAG)
+                else:
+                    out = self.cli("approve", task, FLAG)
+                after = self.text_since(task, start)
+                context = self.msg(f"с флагом ({form}):\n{out}\n{after}")
+                self.assertNotEqual(self.state(task), "spec_gate", context)
+                self.assertTrue(any(re.search(r"\bfail\b", line) and "operator" in line
+                                    for line in after.splitlines()), context)
 
     def test_ac20_flag_outside_spec_gate_refused_and_no_verdict_passes(self):
         """Флаг вне spec_gate — отказ без смены состояния; задача без вердикта в журнале проходит approve на spec_gate без флага.
