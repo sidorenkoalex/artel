@@ -287,6 +287,13 @@ def check_zone_waits(conn) -> list[doctor.Check]:
     Ожидание и очередь — `zone_lock.queue_wait`, то же решение, что у
     `claim` и строки `status` (SPEC 01M4JC5B3TYFCVY51RKZ1AM1VF,
     требование 5), с пометкой «не держит очередь» после позиции.
+
+    Взаимная блокировка (SPEC 01M5JPEHY8HY70R5T5AQ0EDSH1, требование 3):
+    задача, названная конфликтом, сама зависит от ждущей по `merge_after`
+    (прямо или транзитивно) — держатель не смержится раньше ждущей, а та
+    не стартует, пока зона занята. Сама не снимается; деталь называет выходы
+    Оператора. Мандат «Зависимости мержа» `answer` принимает не в любом
+    состоянии держателя — в остальных выход печатается отложенным.
     """
     blocked = []
     for row in doctor.store.all_tasks(conn):
@@ -300,6 +307,18 @@ def check_zone_waits(conn) -> list[doctor.Check]:
             parts.append(f"очередь {wait.position}/{wait.total}")
             if not wait.holds:
                 parts.append("не держит очередь")
+        conflict = doctor.zone_lock.blocking_conflict(conn, row["id"], row)
+        if conflict is not None:
+            _path, holder, holder_state = conflict
+            holder_row = doctor.store.get_task(conn, holder)
+            if row["id"] in doctor.zone_lock._ancestors(conn, holder_row):
+                answer = (f"answer {holder} <файл> со строкой "
+                          f"«Зависимости мержа: …»")
+                if holder_state not in ("escalated", "in_dev", "review",
+                                        "merge_gate"):
+                    answer = f"после перехода держателя в merge_gate: {answer}"
+                parts.append(f"взаимная блокировка с {holder} по merge_after; "
+                             f"выходы: {answer}; zone-release {row['id']}")
         blocked.append(doctor.Check(
             "zone-waits", "warn",
             f"{row['id']} ждёт зоны {wait.path} — {', '.join(parts)}"))
