@@ -1,5 +1,5 @@
 ---
-built_at_sha: ea4a838b2e229bccf78b6d62c361615b31c684e7
+built_at_sha: db8942f2b4c3d5c963b752ea7b0913910bce6375
 ---
 
 # Codebase-map пульта
@@ -4993,6 +4993,7 @@ built_at_sha: ea4a838b2e229bccf78b6d62c361615b31c684e7
 **Публичные функции:**
 - `has_pair`
 - `own_profile`
+- `places_share`
 - `resolves_to`
 - `via_command`
 - `via_new_param`
