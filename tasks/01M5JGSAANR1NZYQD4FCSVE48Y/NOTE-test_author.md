@@ -27,5 +27,13 @@
 - Было в списке: AC-21, AC-10, AC-13/14/15 (мандат), AC-16/17/18/23 (гейт исходов e2e), AC-19/25/27 (планка чужого компонента), места ролей (чекпоинт, runner, бриф, role_prompt, plank-run, amend, preflight, pull, матрица) AC-22/24 + AC-20, AC-26 (эталон пина).
 - Бриф: песочница `tests/test_01m5enwb2xhzfrnq3q3pzsah2t_knowledge_brief.py` (prepare/build, BUILDERS).
 
+- Шаг 3 (23.10): test_places_roles.py на диске (AC-22/24/9 ролей) — есть; стабов в worktree нет (чисто). Пишу test_pin_etalon.py (AC-15, AC-26).
+- Готово: test_pin_etalon.py + _etalon.py — сценарий мест гонится отдельным процессом из `git archive DIFF_BASE` (без tasks/) и из ветки, выводы сравниваются; зелён, мутация for_task у записи из одного компонента ловится (2 failed), мутация откачена. Осталось: preflight, полный прогон планки.
+- preflight отказал «номер задачи» у _foreign_plank.py: импорт `tests.test_01m5jgsaanr1nzyqd4fcsve48y_outcome_components` несёт id своей задачи. Классы AC-19/25/27 перенесены в конец _outcome_components.py, _foreign_plank.py удалён. Импорт из файлов чужих задач guard пропускает.
+- Итог шага: preflight — все проверки «пройдена»; plank-run всей планки — 119 failed / 36 passed, ошибок сбора нет; worktree: только D _foreign_plank.py, M _outcome_components.py. Карту codebase-map не регенерировал (правка вне tests/ откатывается пультом).
+
+## Где остановился (итог)
+- Планка сдана: AC-1…AC-28 покрыты; стабов в worktree нет.
+
 ## Чего не хватило
 - —
