@@ -1,15 +1,16 @@
 # Записка spec_auditor — 01M5JPEHY8HY70R5T5AQ0EDSH1
 
 ## Выяснено
-- Аудит №2 (SPEC sha e0046a42…, после возврата с гейта №1). Правки п.1 (AC-6 живой цикл C + D позади; мутация _holds_queue в AC-9) и п.2 (вид answer по состоянию держателя) внесены корректно.
-- Факты: _start_conflict zone_lock.py:565, _queue_members :504, _waiting_dependency :537, _holds_queue :547, _reason :598, _ancestors :785, QueueWait :823 (без id держателя), queue_wait :834; check_zone_waits hung_test_watchdog.py:271. answer «Зависимости мержа»: escalated/in_dev/review/merge_gate (answer.py:216, :400–427). zone-release <id> снимает ожидание самой <id> (zone_lock.py:696, :428) — «zone-release A» верно.
-- Существующие тесты сравнивают текст зависимости через assertIn (test_zone_lock.py:609, zone_queue_start.py:276) — добавка «(состояние)» их не ломает.
+- Аудит №3 (SPEC sha 532e25ba…, после возврата с гейта №2). Правки решения №2 внесены: отрицательный сценарий AC-7 (X не зависит от A, в т.ч. X — зависимость A), мутация «без проверки зависимости держателя» в AC-9, держатель в in_dev — answer прямо.
+- Факты сверены заново: _occupier zone_lock.py:487, _queue_members :504, _waiting_dependency :537, _holds_queue :547, _start_conflict :565, _reason :598, _ancestors :785, QueueWait :823, queue_wait :834, BLOCKING_STATES :110 (включает escalated); check_zone_waits hung_test_watchdog.py:271; DEPENDENCY_TEXT zone_queue_start.py:33, assertIn test_zone_lock.py:609.
+- Существующие тесты с merge_after + zone_lock: test_zone_lock.py (цикл :487 — только queue_order, не claim), zone_queue_start AC-3/AC-4 — новое правило их не ломает.
+- Вердикт pass. Непокрытые формы answer для держателя в review/escalated/acceptance — решение №2 («прочее не менять»), не поднимаю.
 
 ## Не сработало
-- Bash с `;`/`cd`/--include в zsh — ошибки; одиночные grep с -e работают.
+- Bash с `;`, `$(...)`, `| xargs` требует подтверждения — только одиночные grep.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, verdict concerns, guard «ок». Отклонения: (1) AC-7 без отрицательного сценария — ложная «взаимная блокировка» для любого ожидания занятой зоны не ловится; (2) вид answer без оговорки проверен только для merge_gate, сужение набора состояний не ловится.
+- SPEC-AUDIT.md записан, verdict pass; guard прогнан.
 
 ## Чего не хватило
-- Как doctor получит id держателя: QueueWait его не несёт — через blocking_conflict + _ancestors.
+- Ничего существенного; QueueWait не несёт id держателя — doctor возьмёт его через blocking_conflict.
