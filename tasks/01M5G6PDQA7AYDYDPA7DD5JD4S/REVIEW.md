@@ -2,57 +2,50 @@
 task: 01M5G6PDQA7AYDYDPA7DD5JD4S
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Неустойчивые тесты: зерно двустороннего наблюдения, select() и утечка дескрипторов БД, допуск времени kill
 
 ## Фаза A: план
-- Таблица покрытия полна (требования 1–14 → шаги 1–5), шаги размера MR, подход согласован с SPEC и ANSWER-1…3.
-- «Влияние на систему» соответствует diff: код пульта тронут только в `orchestrator/store.py`; `tests/sandbox.py`, `tests/test_store_db_connection_close.py`, `conftest.py` не тронуты; карта `docs/codebase-map.md` свежа (проверено перегенерацией). Откат — revert. Но раздел «Влияние» и «Риски» не называют рост учёта на явно закрытых соединениях (см. R1-F1).
+- Таблица покрытия полна (требования 1–14 → шаги 1–5); блок «Итерация 2 (R1-F1)» в подходе описывает переопределение `close()`, обход переопределения во внутренних путях закрытия и новый тест — совпадает с инкрементальным diff (`orchestrator/store.py`, `tests/test_store_db_tracking.py`, `names = (`).
+- «Влияние на систему» соответствует diff: код пульта — только `orchestrator/store.py`; «Риски» честно называют повторный вход в нереентерабельный `_TRACKED_LOCK` из чужого финализатора. Проверил, что в пульте такого пути нет: `grep "def __del__\|weakref.finalize" orchestrator/ scripts/` — только `store.py:297` (идёт мимо блокировки); `closing(...db())` и генераторов, держащих `db()` через `yield`, в `orchestrator/` нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | реализовано не полностью | Брошенные соединения закрываются (AC-1 зелёный, без `gc`/`weakref`, эталон — замер). Но явно закрытые соединения никогда не выходят из учёта — R1-F1 |
-| 2 | OK | `isinstance`, `backup`, `with conn:`, `test_store_db_connection_close.py` зелёные |
-| 3 | OK | описание `_AutoClosingConnection` называет цикл ссылок, учёт и `_close_abandoned` |
-| 4 | OK | `tests/test_01m5g6pdqa7aydydpa7dd5jd4s_store_db_fds.py` — 4 теста зелёные |
-| 5 | OK | `tests/fd_wait.py::wait_readable`, оба файла импортируют; пределы 30 с / 10 с; Darwin — `select.select` по ANSWER-3 |
-| 6 | OK | `high_fd`: `F_DUPFD 1100`, исходный закрыт, rlimit возвращается `addCleanup` (порядок LIFO: сначала закрытие дескриптора, затем возврат предела) |
-| 7 | OK | `tests/test_fd_wait.py`, оба пути с подменой `sys.platform` |
-| 8 | OK | `location_literals(seed)`, `BARE_SHIFT = 4000`; помощник `check_relative_location(seed, base_sha, branch)`; подготовка с пятью `self.git` в теле обоих методов |
-| 9 | OK | `LocationLiteralsTest::test_literals_never_collide`, `test_ac1_relative_location_on_colliding_seed` |
-| 10 | OK | `test_ac6_limit_arguments_follow_gh_timeout`: случайный предел 7…300 ≠ исходного, перехват `subprocess.run`, пары `-c`, `timeout=`, «за N с» |
-| 11 | OK | `GH_SILENT_SEC = 2*2+15`, `SILENCE_LIMIT_SEC = 75` ∈ [60,120), флаг `expired` ставится только при `release.wait` → False, событие `gh_slept` |
-| 12 | OK | `silence.hits == 1` дополнительно к прежнему `>= 1`, один `gh pr close` по журналу; `serve` вне правила молчания не менялся |
-| 13 | OK | удалено только `assertLessEqual(elapsed, limit, …)` (мандат ANSWER-1, исход рубежа — «покрыто мандатом»); описание переформулировано, три мутации сохранены |
-| 14 | OK | раздел «Доказательство неослабления» PLAN: утверждения по местам, таблица мутаций, трёхкратные прогоны, замер дескрипторов 310 → 16 |
+| 1 | OK | Брошенные соединения закрывает просмотр учёта (без `gc`/`weakref`, эталон — замер); явно закрытые теперь выходят из учёта в `_AutoClosingConnection.close()` (`store.py:292-295`); чужепоточный `ProgrammingError` у `close()` поднимается до `pop` — открытое соединение остаётся в учёте, у `_close_abandoned` — глотается, соединение выходит из учёта |
+| 2 | OK | `isinstance`, `backup`, `with conn:`, `test_store_db_connection_close.py` зелёные; повторный `close()` без ошибки (`test_closing_wrapper_does_not_grow_tracking`) |
+| 3 | OK | описание называет цикл ссылок, учёт, просмотр и выход из учёта при явном `close()` |
+| 4 | OK | долгоживущий `tests/test_01m5g6pdqa7aydydpa7dd5jd4s_store_db_fds.py` — 4 зелёных |
+| 5–7 | OK | без изменений с итерации 1 (`tests/fd_wait.py`, `tests/test_fd_wait.py`, ANSWER-3) |
+| 8–9 | OK | без изменений, кроме форматирования `names = (` |
+| 10–13 | OK | без изменений с итерации 1; удаление `assertLessEqual(elapsed, limit, …)` — покрыто мандатом ANSWER-1 (исход рубежа в пакете) |
+| 14 | OK | раздел «Доказательство неослабления» PLAN дополнен строкой `test_store_db_tracking.py` в трёхкратных прогонах |
 
 ## Замечания
 
-- major — `orchestrator/store.py:351-370` (`_close_abandoned`, `db`) — соединение, которое вызывающий код закрыл явно (`conn.close()`, `contextlib.closing(store.db())`), навсегда остаётся в `_TRACKED`: `close()` разрывает внутренний цикл (кэш выражений), число ссылок падает НИЖЕ эталона (замер на 3.13: эталон 4, после `close()` — 2), условие `!= conn.abandoned_refs` не срабатывает никогда. Проверено исполнением: 500 × `x = store.db(); x.close()` → `db_tracked_count()` 1 → 501; ещё 500 × `with closing(store.db())` → 1001. Сценарий последствий: места пульта, закрывающие соединение явно (`orchestrator/suite_lock.py:280-287`, `orchestrator/knowledge_cards.py:821-826`), и десятки тестов с `addCleanup(conn.close)` (`tests/test_acceptance.py`, `tests/test_canary_sets.py`, `tests/test_steps_task_id_index.py`, `tests/test_01m4xv9xpjzd29py0ntnz98m02_lease.py` и др.) монотонно растят учёт в долгоживущем процессе (пульт, исполнитель xdist): объекты `Connection` не освобождаются никогда (раньше их освобождала сборка циклов), а каждый `db()` проходит весь учёт `sys.getrefcount` — O(n) на вызов, O(n²) на процесс. Это та же утечка, которую задача чинит, только сменившая ресурс (память и время вместо дескрипторов), и `db_tracked_count()` перестаёт быть «числом соединений в учёте» в смысле живых. Предложение: выводить соединение из учёта при явном `close()` (переопределить `close` в `_AutoClosingConnection`: под `_TRACKED_LOCK` `_TRACKED.pop(id(self), None)`, затем `super().close()` — аккуратно с повторным входом из `_close_abandoned`, где блокировка уже взята) либо в `_close_abandoned` выводить из учёта и соединения с числом ссылок ниже эталона, не трогая те, что выше. Долгоживущий тест в `tests/` (в новом файле разработчика, долгоживущий файл задачи залочен): N × явный `close()` (и `closing`) → `db_tracked_count()` не растёт; заявка «Ловит мутацию: закрытое соединение не выходит из учёта — учёт растёт на N».
-- minor — `tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py:710` — `names =(` без пробела после `=`; при правке R1-F1 заодно.
+Новых замечаний нет. Наблюдение без severity: при мутации учёт протекает между методами `ExplicitCloseLeavesTrackingTest` (второй метод стартовал с `before = 413`) — на зелёном коде неважно, тест сравнивает с собственным замером.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/store.py:351-370 | явно закрытое соединение (`close()`/`closing`) не выходит из `_TRACKED`: после `close()` число ссылок ниже эталона, `!=` не срабатывает | неограниченный рост учёта и памяти в долгоживущем процессе, O(n) проход на каждый `db()`; 500 закрытий → учёт 501 | fixed: `_AutoClosingConnection.close()` после `super().close()` под `_TRACKED_LOCK` убирает себя из `_TRACKED`; `_close_abandoned` и `__del__` зовут `sqlite3.Connection.close` мимо переопределения (без повторного взятия `Lock`). Тест `tests/test_store_db_tracking.py` (N × `close()`, N × `closing` при `gc.disable()`), мутация «`close()` не выводит из учёта» краснит оба метода |
-| R1-F2 | fixed | tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py:710 | `names =(` — форматирование | вкус | fixed: `names = (` |
+| R1-F1 | accepted | orchestrator/store.py:292-295, 378-384 | явно закрытое соединение не выходило из `_TRACKED` | неограниченный рост учёта и O(n) проход на `db()` | принято: `close()` выводит соединение из учёта; `_close_abandoned`/`__del__` зовут `sqlite3.Connection.close` мимо блокировки; `tests/test_store_db_tracking.py` (оба метода) красен под мутацией «`close()` не выводит из учёта» — проверено исполнением |
+| R1-F2 | accepted | tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py:710 | `names =(` | вкус | принято: `names = (` |
 
 ## Вердикт
-changes_requested — исправить R1-F1 (выход явно закрытого соединения из учёта + тест в `tests/`); R1-F2 — попутно. Остальные части (fd_wait, зерно, `SilentHostingTest` без часов) замечаний не имеют.
+approved — R1-F1 и R1-F2 закрыты, реестр закрыт целиком, blocker/major нет.
 
 ## Проверено исполнением
-- `python3 -m pytest -q -p no:cacheprovider tests/test_01m5g6pdqa7aydydpa7dd5jd4s_store_db_fds.py tests/test_fd_wait.py tests/test_store_db_connection_close.py tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py …report_outcome.py::VitestReporterTest::test_ac9_timeout_kills_group_not_green …project_kill_cleanup.py::SilentHostingTest …two_sided_observation.py::LocationLiteralsTest …two_sided_observation.py::OutcomeLocationTest` — 20 passed, 27 subtests passed, 27,7 с (Python 3.13.12, Darwin).
-- `artel.py plank-run 01M5G6PDQA7AYDYDPA7DD5JD4S` — 23 passed за 138 с, код выхода 0.
-- Временная мутация `BARE_SHIFT = 7` (подменой атрибута модуля, файл не правился): `test_ac1_relative_location_on_colliding_seed` красный (лишний отказ `test_bare: старая версия на ветке: зелёная`), `test_literals_never_collide` красный (8 зёрен, в том числе 12, 9694, 11783, 189949286) — заявки обоих тестов подтверждены.
-- Скрипт на `store.db()` во временном каталоге: эталон 4, после `close()` число ссылок 2; 500 × `db().close()` → `db_tracked_count()` 501; ещё 500 × `with closing(db())` → 1001 (основание R1-F1).
-- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md` — расхождение только в `built_at_sha`, карта свежа (изменение откатил).
+- `python3 -m pytest -q -p no:cacheprovider tests/test_store_db_tracking.py tests/test_01m5g6pdqa7aydydpa7dd5jd4s_store_db_fds.py tests/test_store_db_connection_close.py tests/test_fd_wait.py tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_two_sided_observation.py::LocationLiteralsTest` — 14 passed, 3 subtests passed, 2,1 с (Python 3.13, Darwin).
+- Временная мутация (подмена атрибута в процессе, файл не правился): `store._AutoClosingConnection.close = lambda self: sqlite3.Connection.close(self)` → `unittest` по `tests/test_store_db_tracking.py`: 2 failures (`413 not less than or equal to 0` для `closing`, `803 not less than or equal to 413` для явного `close()`) — заявка «Ловит мутацию» обоих методов подтверждена.
+- `artel.py plank-run 01M5G6PDQA7AYDYDPA7DD5JD4S` — 23 passed за 153,9 с, код выхода pytest 0.
+- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md` без строки `built_at_sha` — расхождений нет, карта свежа (изменение откатил, `git status` чист).
+- `grep` финализаторов/`closing(db())` в `orchestrator/` — пути повторного входа в `_TRACKED_LOCK` нет (основание принять риск из PLAN).
 
 ## Предложения системе
-- Класс «учёт ресурса без пути выхода при штатном освобождении»: SPEC требования 1 описал выход из учёта только для брошенных и чужепоточных соединений, про явно закрытые — лишь «повторное `close()` без ошибки»; аналитику (skills analyst) стоит спрашивать «как запись покидает учёт в каждом исходе жизни объекта».
+- `_TRACKED` — глобальный учёт процесса, песочница `TmpRootTest` его не сбрасывает: тесты учёта поэтому обязаны сравнивать с собственным замером, а не с нулём; стоит упомянуть в описании `TmpRootTest` (`tests/sandbox.py`), если учёт появится и у других ресурсов.
