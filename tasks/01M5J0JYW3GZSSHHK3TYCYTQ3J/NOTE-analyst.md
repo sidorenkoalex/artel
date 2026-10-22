@@ -1,18 +1,16 @@
 # Записка аналитика 01M5J0JYW3
 
 ## Выяснено
-- SPEC.md написан (status: ready, 28 AC, budget 75, монолит с запасной нарезкой на 3 части), guard ок.
-- Ссылки ТЗ сверены: outcome_integrity.py (_judge:481, _KINDS:428, _RANK:89), mandate.py:194 _weakening_scope_refusal, fsm_autogate.py:236/253 (_plank_sources и scan_ac_content уже принимают rule=), targets.py:461.
-- Опись существующих тестов, доходящих до _gate, — в SPEC «Материалы». Правок существующих тестов не нужно. Ac9CompareTest (vitest, строгий режим) совместим: находки строгого режима — по путям; находки прежних версий у тестов с находкой прежнего вида не добавляются (правило «одна на идентификатор»).
-- Фикстура junit в outcome_gate.py:563-602 без `tests` → по требованию 2 C = все файлы отчёта базы → третья выписка почти у каждого прогона гейта; фальшивый раннер судит её как голову (app.py-метка), тест без сценария = passed.
-- Условия совместимости: строка «прежние версии» после доказательства (merge Ac1 :411), _proven до третьей выписки (merge Ac4 :601), прогоны третьей выписки не в «прогонов файлов» (Ac13 :2488).
-
-## Не сработало
-- Shell шага: `ls`, `$VAR`, цепочки `;` требуют подтверждения — пользоваться git ls-files / Read.
-- pytest -n в шаге падает (node down) — гонять без xdist (-p no:xdist); последовательный прогон 5 файлов долгий.
+- Возврат аудита (fail) принят: противоречие ТЗ п. 2 (TZ.md:29) и п. 8 (TZ.md:37) о C у компонента без `tests` реально. junit_project (outcome_gate.py:563-602) без `tests`, vitest_project с `tests` (:614). `junit_project(` — 65 вызовов: outcome_gate 29, merge_outcome_gate 18, file_level 11, fail_to_pass 7.
+- По прочтению п. 2 краснеют Ac6RerunTest :1552-1556 и :1573 (третья выписка метится side=head). По прочтению п. 8 (у junit_project нет test_support) C пуст, правок нет.
+- Записан QUESTIONS.md (3 вопроса: C без tests; сбой диффа → _Prepare; канарейка в предикате автогейта), guard ок. SPEC.md не тронут.
+- `_bounds(is_canary, target)` — outcome_integrity.py:536; ядро fail-closed через `except Exception` (:578).
 
 ## Где остановился
-- SPEC сдан. Прогон 5 файлов (outcome_gate, merge_outcome_gate, id_mandate_outcome_gate, file_level, fail_to_pass) на текущем коде без xdist: 139 passed, 183 subtests passed, 10 мин 41 с.
+- Батч сдан, задача эскалирует. После ANSWER в SPEC нужно: (1) C по ответу на вопрос 1, AC-9; (2) AC-16 переписать — у исчезнувшего теста только «исчез … замена SPEC», а снятие «прежняя версия красная» проверить на заменяемом тесте, который на ветке есть; (3) раздел «Матрица неослабления» — строки на `_plank_rule_refusal` (fsm_autogate.py:236-253) и `_weakening_scope_refusal` (mandate.py:214-218, тесты weakening_mandate_scope.py:49, id_mandate_answer.py:462); (4) сбой диффов → _Prepare (вопрос 2); (5) предикат автогейта с канарейкой (вопрос 3); (6) AC-12 усилить (маркер до третьей выписки, а не только до первой); (7) убрать вывод «правок не нужно» из «Материалов», если выбран не A; удалить QUESTIONS.md.
+
+## Не сработало
+- pytest -n в шаге падает (node down) — гонять с -p no:xdist.
 
 ## Чего не хватило
-- Как тесты собирают профиль `components:` — через локальные помощники файлов, не через tests/sandbox.py; поиск по `components:` + `report` дал мало, пришлось описывать сценарии по файлам.
+- Опись прогонов фикстуры outcome_gate (subset_runs/side_of по app.py) — без неё вывод о совместимости в прошлом SPEC оказался ложным.
