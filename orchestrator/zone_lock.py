@@ -534,13 +534,31 @@ def _dependencies(row) -> list[str]:
     return merge_after.stored(row["merge_after"])
 
 
-def _waiting_dependency(t, members: dict) -> str | None:
-    """Зависимость `merge_after` задачи, которая сама ждёт ту же зону
-    (входит в состав очереди — значит, `in_dev` и не `done`), — требование
-    3; `None` — такой нет."""
-    for dep in _dependencies(t):
-        if dep != t["id"] and dep in members:
-            return dep
+# Состояния завершённой зависимости: она старт последователя не держит.
+_FINISHED_STATES = ("done", "killed")
+
+
+def _waiting_dependency(conn, t, own: set[str]) -> tuple[str, str, str] | None:
+    """(путь, id, состояние) — незавершённая зависимость `merge_after`
+    задачи, прямая или транзитивная, чьи зоны пересекаются с `own` (SPEC
+    01M5JPEHY8HY70R5T5AQ0EDSH1, требование 1): в любом состоянии, кроме
+    `done`/`killed`, а не только ждущая в составе очереди — иначе
+    зависимость в `escalated`/`spec_*`/`tests_writing` пропускала
+    последователя в зону, и тот держал её до мержа, который сам ждёт мержа
+    зависимости. Зависимости нет в БД — старт не держит; `None` — такой
+    нет."""
+    deps = _ancestors(conn, t)
+    if not deps:
+        return None
+    project = _project(t)
+    for row in store.all_tasks(conn):
+        if row["id"] not in deps or row["state"] in _FINISHED_STATES:
+            continue
+        if _project(row) != project:
+            continue
+        shared = _shared_zone(own, _own_paths(row["zones"]))
+        if shared is not None:
+            return shared, row["id"], row["state"]
     return None
 
 
@@ -557,9 +575,7 @@ def _holds_queue(conn, row) -> bool:
     from . import lease  # lease -> runner -> zone_lock
     if row["paused"] or lease.foreign_live_lease(conn, row["id"], None) is None:
         return False
-    own = _own_paths(row["zones"])
-    members = _queue_members(conn, row["id"], row, own)
-    return _waiting_dependency(row, members) is None
+    return _waiting_dependency(conn, row, _own_paths(row["zones"])) is None
 
 
 def _start_conflict(conn, task_id: str, t) -> tuple[str, str, str, str] | None:
@@ -579,12 +595,10 @@ def _start_conflict(conn, task_id: str, t) -> tuple[str, str, str, str] | None:
     occupier = _occupier(conn, task_id, t, own)
     if occupier is not None:
         return (_OCCUPIED, *occupier)
-    members = _queue_members(conn, task_id, t, own)
-    dep = _waiting_dependency(t, members)
+    dep = _waiting_dependency(conn, t, own)
     if dep is not None:
-        dep_row = members[dep]
-        return (_DEPENDENCY, _shared_zone(own, _own_paths(dep_row["zones"])),
-                dep, dep_row["state"])
+        return (_DEPENDENCY, *dep)
+    members = _queue_members(conn, task_id, t, own)
     for other in queue_order(conn, list(members)):
         if other == task_id:
             return None
@@ -600,7 +614,7 @@ def _reason(kind: str, other_id: str, other_state: str) -> str:
     if kind == _QUEUE:
         return f"ждёт очереди зоны: впереди {other_id}"
     if kind == _DEPENDENCY:
-        return f"ждёт зону ради зависимости {other_id}"
+        return f"ждёт зону ради зависимости {other_id} ({other_state})"
     return f"занята {other_id} ({other_state})"
 
 
@@ -783,7 +797,10 @@ def queue_order(conn, task_ids: list[str]) -> list[str]:
 
 
 def _ancestors(conn, row) -> set[str]:
-    """Все задачи, от которых `row` зависит по `merge_after`, транзитивно."""
+    """Все задачи, от которых `row` зависит по `merge_after`, транзитивно.
+    Id, которого нет в БД, дальше не раскрывается: `store.get_task` на нём
+    завершает процесс, а такая зависимость ничего не держит (SPEC
+    01M5JPEHY8HY70R5T5AQ0EDSH1, требование 1)."""
     seen: set[str] = set()
     stack = list(_dependencies(row))
     while stack:
@@ -791,9 +808,8 @@ def _ancestors(conn, row) -> set[str]:
         if dep in seen or dep == row["id"]:
             continue
         seen.add(dep)
-        dep_row = store.get_task(conn, dep)
-        if dep_row is not None:
-            stack.extend(_dependencies(dep_row))
+        if store.task_exists(conn, dep):
+            stack.extend(_dependencies(store.get_task(conn, dep)))
     return seen
 
 
