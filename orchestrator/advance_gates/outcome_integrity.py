@@ -32,11 +32,24 @@
 01M5DDTVZEA40ZB9BHEH4YDEE7): база — merge-base головы со свежим sha main.
 Запись пройденного гейта несёт строку `голова …; база …; ключ …; мандат …`
 — доказательство: запись с той же четвёркой избавляет мерж от прогона.
+
+G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J; ADR-0026, «Решение» пп. 6-7):
+прежние версии изменённых и удалённых файлов тестов и поддержки (набор C)
+и файлы утверждённых заменяемых тестов гоняются на третьей выписке —
+голове с восстановленными из базы путями C и без добавленных веткой
+файлов тестов и поддержки: тест, «подогнанный» правкой под сломанный код,
+там красный. Утверждённая замена (`mandate.approved_replacements`)
+сверяется на деле и снимает только «исчез» и «прежняя версия красная» своего
+теста. Без слоя `python-ast` правка существующего файла тестов или
+поддержки — находка строгого режима; добавленная строка кода с подстрокой
+`CODE_EXCEPTION_TOKENS` — находка «исключение в коде». Обе снимает только
+мандат на путь файла.
 """
 import hashlib
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -51,7 +64,7 @@ from . import refusal_classes
 from ._base import GateRefusal, _run_gates
 from .acceptance import in_outcome_bounds
 from .mandate import (TEST_ID_MANDATE_MARKER, TEST_WEAKENING_MANDATE_MARKER,
-                      elements, id_elements)
+                      approved_replacements, elements, id_elements)
 from .zones import _answer_commit_is_role_step_autocommit
 
 # Действия журнала (требование 6); литералы повторены в
@@ -86,11 +99,43 @@ FAILS_APPEARED = "появилось fails"
 NEW_SKIPPED = "новый тест — пропуск"
 NEW_TODO = "новый тест — todo"
 NEW_FAILS = "новый тест — fails"
-_RANK = {GONE: 0, BROKEN: 1, UNSTABLE: 2}
+# Виды G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 9) — после
+# прежних, в порядке требования.
+PRIOR_RED = "прежняя версия красная на коде ветки"
+PRIOR_UNSTABLE = "прежняя версия нестабильна на коде ветки"
+REPLACED_MISSING = "заменяемый тест не найден в отчёте базы"
+REPLACED_NOT_GREEN = "заменяемый тест не зелёный на базе"
+REPLACED_NEEDLESS = "замена не нужна: прежняя версия зелёная на коде ветки"
+STRICT_EDIT = "строгий режим — правка существующего файла"
+CODE_EXCEPTION = "исключение в коде"
+_RANK = {GONE: 0, BROKEN: 1, UNSTABLE: 2, PRIOR_RED: 4, PRIOR_UNSTABLE: 5,
+         REPLACED_MISSING: 6, REPLACED_NOT_GREEN: 7, REPLACED_NEEDLESS: 8,
+         STRICT_EDIT: 9, CODE_EXCEPTION: 10}
 _OTHER_RANK = 3
+# Находки, идентификатор которых — путь файла, а не тест: снимает их только
+# мандат на путь (`_path_covering`).
+_PATH_KINDS = (STRICT_EDIT, CODE_EXCEPTION)
+_NEW_KINDS = (PRIOR_RED, PRIOR_UNSTABLE, REPLACED_MISSING, REPLACED_NOT_GREEN,
+              REPLACED_NEEDLESS, STRICT_EDIT, CODE_EXCEPTION)
+# Находки, которые снимает утверждённая замена своего теста (требование 4).
+_REPLACEABLE_KINDS = (GONE, PRIOR_RED)
+REPLACED = "заменён по SPEC"
+REPLACEMENT_ELEMENT = "замена:{id}→AC-{n}"
+REPLACEMENT_SOURCE = "замена SPEC → AC-{n}"
+PRIOR_LINE = "прежние версии: файлов {files}; прогонов {runs}"
+# Подстроки исключений в коде (требование 7): текстовый поиск в
+# добавленных строках, без разбора синтаксиса.
+CODE_EXCEPTION_TOKENS = ("v8 ignore", "istanbul ignore", "c8 ignore",
+                         "eslint-disable", "import.meta.env.MODE",
+                         "process.env.VITEST", "NODE_ENV")
+_PYTHON_AST = "python-ast"
 
 BASE = "база"
 HEAD = "голова ветки"
+PRIOR = "прежние версии"
+# Каталог третьей выписки в `scratch` — рядом с выписками базы и головы.
+_PRIOR_DIR = "prior"
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 # Перепрогонов красного теста на каждой стороне сверх полного прогона.
 RERUNS = 2
 _TODO_MODE = "todo"
@@ -230,11 +275,58 @@ def _covering_pair(cid: str, mandate: dict, id_mandate: dict):
     return _covering_element(cid, mandate)
 
 
+def _path_covering(path: str, mandate: dict):
+    """(элемент, ANSWER-n) прежнего маркера, равный пути `path` (SPEC
+    01M5J0JYW3GZSSHHK3TYCYTQ3J, требования 5, 7): мандат по идентификатору
+    и префикс `путь::имя` находку пути не снимают; `None` — не покрыта."""
+    source = mandate.get(path)
+    return (path, source) if source is not None else None
+
+
+def _cover(finding: Finding, mandate: dict, id_mandate: dict,
+           replacements: dict):
+    """(элемент, источник), покрывающие находку; `None` — не покрыта.
+    Находку пути — `_path_covering`; находку теста — мандат Оператора
+    (`_covering_pair`), затем утверждённая замена, но только «исчез» и
+    «прежняя версия красная» своего теста (требование 4)."""
+    if finding.kind in _PATH_KINDS:
+        return _path_covering(finding.id, mandate)
+    pair = _covering_pair(finding.id, mandate, id_mandate)
+    if pair is None and finding.kind in _REPLACEABLE_KINDS and \
+            finding.id in replacements:
+        n = replacements[finding.id]
+        return (REPLACEMENT_ELEMENT.format(id=finding.id, n=n),
+                REPLACEMENT_SOURCE.format(n=n))
+    return pair
+
+
+def _replacements(conn, task_id: str, profile) -> dict:
+    """{идентификатор: номер критерия} утверждённых замен компонента
+    профиля по последней записи утверждения."""
+    found = {}
+    for cid, n in approved_replacements(conn, task_id).items():
+        try:
+            component = project_profile.parse_test_id(cid)[0]
+        except ValueError:
+            continue
+        if component == profile.component:
+            found[cid] = n
+    return found
+
+
+def _replacement_elements(replacements: dict) -> list:
+    """Элементы отпечатка всех утверждённых замен компонента (требование
+    9): смена их состава или содержимого отменяет доказательство."""
+    return [REPLACEMENT_ELEMENT.format(id=cid, n=n)
+            for cid, n in replacements.items()]
+
+
 def fingerprint(elements_used) -> str:
     """Отпечаток мандата записи пройденного гейта (SPEC
     01M5DDTVZEA40ZB9BHEH4YDEE7, требование 1): sha256 (hex) элементов,
-    покрывших находки, — отсортированы и соединены переводом строки,
-    utf-8; таких элементов нет — «нет»."""
+    покрывших находки, и элементов `замена:…` утверждённых замен (SPEC
+    01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 9) — отсортированы и соединены
+    переводом строки, utf-8; таких элементов нет — «нет»."""
     used = sorted(set(elements_used))
     if not used:
         return MANDATE_NONE
@@ -268,14 +360,20 @@ def _answer_mandates(artifact_branch: str, task_id: str) -> tuple:
     return mandate, id_mandate
 
 
-def _mandate_hint(task_id: str) -> str:
+def _mandate_hint(task_id: str, path_mandate: bool = False) -> str:
     """Подсказка отказа с обоими маркерами, снимающими находку этого
-    гейта (SPEC 01M5D02N3B428V8BWC3PAM9QCT, требование 5)."""
+    гейта (SPEC 01M5D02N3B428V8BWC3PAM9QCT, требование 5); при находке
+    вида G3б-2 — ещё мандат на путь файла (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J,
+    требование 9)."""
+    path_note = (f"; находку «{STRICT_EDIT}» и «{CODE_EXCEPTION}» снимает "
+                 f"только мандат на путь файла — строка "
+                 f"«{TEST_WEAKENING_MANDATE_MARKER} <путь файла>»"
+                 if path_mandate else "")
     return (f"либо верни тесты на место, либо получи мандат Оператора — "
             f"строка «{TEST_WEAKENING_MANDATE_MARKER} <пути и имена>» или "
             f"«{TEST_ID_MANDATE_MARKER} <идентификатор теста>» (по строке на "
-            f"идентификатор) в tasks/{task_id}/ANSWER-n.md (команда artel.py "
-            f"answer {task_id} <файл>: в состоянии in_dev — без смены "
+            f"идентификатор){path_note} в tasks/{task_id}/ANSWER-n.md "
+            f"(команда artel.py answer {task_id} <файл>: в состоянии in_dev — без смены "
             f"состояния, в состоянии escalated — ответом на эскалацию; со "
             f"ссылкой на основание), и повтори artel.py advance {task_id}")
 
@@ -290,23 +388,28 @@ def _git_reason(res) -> str:
 def _full_runs(task_id: str, profile, trees: dict) -> dict:
     """{сторона: записи полного набора}; исход «не начат»/«неизвестно» или
     таймаут — `_Prepare` с названной стороной."""
-    runs = {}
-    for side, tree in trees.items():
-        run = acceptance.components_full_suite(tree, task_id, (profile,),
-                                               fresh=True)
-        if run.outcome in (acceptance.FULL_SUITE_NOT_STARTED,
-                           acceptance.FULL_SUITE_TIMEOUT):
-            raise _Prepare(f"полный набор на стороне «{side}»: {run.outcome} "
-                           f"— {run.detail.strip()[:500]}")
-        runs[side] = ([] if run.outcome == acceptance.FULL_SUITE_NO_TESTS
-                      else list(run.tests))
-    return runs
+    return {side: _full_run(task_id, profile, side, tree)
+            for side, tree in trees.items()}
 
 
-def _rerun(profile, trees: dict, red: list, history: dict) -> int:
-    """Перепрогоны красных тестов `red` по их файлам (требование 3):
-    дописывает в `history` {id: {сторона: [(красный, исход)]}}; число
-    прогонов файлов. Отказ подготовки — `_Prepare`."""
+def _full_run(task_id: str, profile, side: str, tree: Path) -> list:
+    """Записи полного набора стороны `side`; отказ — `_Prepare`."""
+    run = acceptance.components_full_suite(tree, task_id, (profile,),
+                                           fresh=True)
+    if run.outcome in (acceptance.FULL_SUITE_NOT_STARTED,
+                       acceptance.FULL_SUITE_TIMEOUT):
+        raise _Prepare(f"полный набор на стороне «{side}»: {run.outcome} "
+                       f"— {run.detail.strip()[:500]}")
+    return ([] if run.outcome == acceptance.FULL_SUITE_NO_TESTS
+            else list(run.tests))
+
+
+def _rerun(profile, trees: dict, red: list, history: dict,
+           sides: tuple = (HEAD, BASE)) -> int:
+    """Перепрогоны красных тестов `red` по их файлам (требование 3) на
+    сторонах `sides` (сторона ветки и база): дописывает в `history` {id:
+    {сторона: [(красный, исход)]}}; число прогонов файлов. Отказ
+    подготовки — `_Prepare`."""
     files: dict = {}
     for cid in red:
         path = project_profile.parse_test_id(cid)[1]
@@ -314,7 +417,7 @@ def _rerun(profile, trees: dict, red: list, history: dict) -> int:
     limit = project_profile.component_limit(profile)[0]
     count = 0
     for _round in range(RERUNS):
-        for side in (HEAD, BASE):
+        for side in sides:
             for path in sorted(files):
                 run = acceptance._report_run(profile, trees[side], [path], limit)
                 count += 1
@@ -353,6 +456,298 @@ def _redness(red: list, history: dict) -> tuple:
         else:
             found.append(Finding(UNSTABLE, cid, runs))
     return found, flaky
+
+
+def _prior_runs_text(sides: dict) -> tuple:
+    """(исходы прежней версии, исходы базы) истории третьей выписки."""
+    return tuple(", ".join(text for _red, text in sides[side])
+                 for side in (PRIOR, BASE))
+
+
+def _prior_redness(red: list, history: dict) -> tuple:
+    """(находки «прежняя версия красная/нестабильна на коде ветки», тесты,
+    нестабильные и на базе) — правило `_redness` по истории третьей
+    выписки (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 3)."""
+    found, flaky = [], []
+    for cid in red:
+        sides = history[cid]
+        prior, base = _prior_runs_text(sides)
+        runs = f"прежняя версия: {prior}; база: {base}"
+        if any(is_red for is_red, _text in sides[BASE]):
+            flaky.append(cid)
+        elif all(is_red for is_red, _text in sides[PRIOR]):
+            found.append(Finding(PRIOR_RED, cid, runs))
+        else:
+            found.append(Finding(PRIOR_UNSTABLE, cid, runs))
+    return found, flaky
+
+
+def _record_paths(records) -> set:
+    """Пути файлов записей отчёта, включая записи ошибок уровня файла."""
+    found = set()
+    for case in records:
+        try:
+            found.add(project_profile.parse_test_id(case.id)[1])
+        except ValueError:
+            continue
+    return found
+
+
+class _Files(NamedTuple):
+    """Роли файлов компонента в гейте (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J,
+    требование 2): `base_paths`/`head_paths` — пути файлов записей полных
+    отчётов базы и головы."""
+    profile: object
+    base_paths: set
+    head_paths: set
+
+    def is_test(self, path: str) -> bool:
+        """Тестовый файл компонента: под масками `tests`, без них — среди
+        файлов полного отчёта базы."""
+        if self.profile.tests:
+            return any(project_profile.mask_matches(mask, path)
+                       for mask in self.profile.tests)
+        return path in self.base_paths
+
+    def is_support(self, path: str) -> bool:
+        return any(project_profile.mask_matches(mask, path)
+                   for mask in self.profile.test_support)
+
+    def dropped_on_prior(self, path: str) -> bool:
+        """Файл `A`, удаляемый на третьей выписке: под масками `tests` и
+        `test_support`, у компонента без `tests` — любой под
+        `weakening_scope` (ANSWER-2)."""
+        if self.is_support(path):
+            return True
+        if self.profile.tests:
+            return self.is_test(path)
+        return self.profile.in_weakening_scope(path)
+
+    def in_component(self, path: str) -> bool:
+        """Файл компонента по `paths`; без `paths` — любой файл."""
+        return not self.profile.paths or any(
+            re.search(regex, path) for regex in self.profile.paths)
+
+
+def _name_status(repo: Path, base_sha: str, head_sha: str) -> list:
+    """Записи `diff --name-status` базы и головы; сбой — `_Prepare`, не
+    пустой набор (требование 8)."""
+    entries = gitcmd.diff_name_status(base_sha, head_sha, repo=repo)
+    if entries is None:
+        raise _Prepare(f"diff --name-status базы {base_sha[:12]} и головы "
+                       f"{head_sha[:12]} не получен")
+    return entries
+
+
+def _unquote(text: str) -> str:
+    """Путь вывода git, взятый в кавычки с экранированием в стиле C."""
+    if not (len(text) >= 2 and text.startswith('"') and text.endswith('"')):
+        return text
+    escapes = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13,
+               '"': 34, "\\": 92}
+    body, out, i = text[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        octal = body[i + 1:i + 4]
+        if ch == "\\" and len(octal) == 3 and all(c in "01234567"
+                                                  for c in octal):
+            out.append(int(octal, 8) & 0xFF)
+            i += 4
+        elif ch == "\\" and body[i + 1:i + 2] in escapes:
+            out.append(escapes[body[i + 1]])
+            i += 2
+        else:
+            out += ch.encode("utf-8")
+            i += 1
+    return out.decode("utf-8", errors="replace")
+
+
+def _added_lines(repo: Path, base_sha: str, head_sha: str) -> dict:
+    """{путь головы: [(номер строки по голове, текст)]} строк, добавленных
+    диффом `git diff -M -U0` базы и головы (требование 7): переименование
+    без правки строк и двоичный файл ханков не дают. Вывод читается
+    байтами: текст не в utf-8 не роняет гейт. Сбой — `_Prepare`
+    (требование 8)."""
+    argv = ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff",
+            "--no-color", "--no-ext-diff", "-M", "-U0", base_sha, head_sha]
+    try:
+        res = subprocess.run(argv, capture_output=True, env=gitcmd.pult_env())
+    except OSError as exc:
+        raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+                       f"{head_sha[:12]} не получен: {exc}") from exc
+    if res.returncode != 0:
+        reason = (res.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+                       f"{head_sha[:12]} не получен: "
+                       f"{reason[:300] or f'git вернул код {res.returncode}'}")
+    added: dict = {}
+    path, old_left, new_left, number = None, 0, 0, 0
+    for line in res.stdout.decode("utf-8", errors="replace").split("\n"):
+        if old_left > 0 or new_left > 0:
+            if line.startswith("+") and new_left > 0:
+                if path is not None:
+                    added.setdefault(path, []).append((number, line[1:]))
+                number += 1
+                new_left -= 1
+                continue
+            if line.startswith("-") and old_left > 0:
+                old_left -= 1
+                continue
+            if line.startswith("\\"):
+                continue
+            old_left = new_left = 0
+        if line.startswith("diff --git "):
+            path = None
+        elif line.startswith("+++ "):
+            target = _unquote(line[4:])
+            path = target[2:] if target.startswith("b/") else None
+        else:
+            m = _HUNK_RE.match(line)
+            if m:
+                old_left = int(m.group(1) if m.group(1) is not None else 1)
+                number = int(m.group(2))
+                new_left = int(m.group(3) if m.group(3) is not None else 1)
+    return added
+
+
+def _strict_findings(profile, files: _Files, entries: list) -> list:
+    """Находки строгого режима (требование 5): без `python-ast` — каждый
+    существующий файл тестов или поддержки из диффа (у `R` — прежний путь),
+    с `python-ast` — только файлы не `.py` под `test_support`."""
+    strict = _PYTHON_AST not in project_profile.layers_of(profile)
+    found = []
+    for status, path, _new in entries:
+        if status.startswith(("A", "C")):
+            continue
+        support = files.is_support(path)
+        hit = (support or files.is_test(path)) if strict else \
+            (support and not path.endswith(".py"))
+        if hit:
+            found.append(Finding(STRICT_EDIT, path, f"статус {status}"))
+    return found
+
+
+def _code_exception_findings(files: _Files, entries: list,
+                             added: dict) -> list:
+    """Находки «исключение в коде» (требование 7) по добавленным строкам
+    файлов компонента вне тестовых файлов и `test_support`; у компонента
+    без `tests` тестовым считается и файл `A` под `weakening_scope` с
+    записями в отчёте головы."""
+    origin = {(new or path): (status, path) for status, path, new in entries}
+    found = []
+    for path in sorted(added):
+        status, old = origin.get(path, ("M", path))
+        if not files.in_component(path):
+            continue
+        if any(files.is_test(p) or files.is_support(p) for p in (path, old)):
+            continue
+        if (not files.profile.tests and status.startswith("A")
+                and files.profile.in_weakening_scope(path)
+                and path in files.head_paths):
+            continue
+        for number, text in added[path]:
+            for token in CODE_EXCEPTION_TOKENS:
+                if token in text:
+                    found.append(Finding(CODE_EXCEPTION, path,
+                                         f"строка {number}: {token}"))
+    return found
+
+
+def _prior_checkout(repo: Path, scratch: Path, trees: dict, base_sha: str,
+                    head_sha: str, paths: list, files: _Files,
+                    entries: list) -> Path:
+    """Третья выписка (требование 3): голова в `scratch`, пути C — из
+    базы, добавленные веткой файлы тестов и поддержки удалены. Заведённая
+    дописывается в `trees` (уборка — у вызывающего)."""
+    tree = scratch / _PRIOR_DIR
+    res = gitcmd.in_repo(repo, "worktree", "add", "--detach", str(tree),
+                         head_sha)
+    if res is None or res.returncode != 0:
+        raise _Prepare(f"выписка стороны «{PRIOR}» ({head_sha[:12]}) не "
+                       f"создана: {_git_reason(res)}")
+    trees[PRIOR] = tree
+    res = gitcmd.in_repo(tree, "checkout", base_sha, "--",
+                         *(f":(literal){p}" for p in paths))
+    if res is None or res.returncode != 0:
+        raise _Prepare(f"прежние версии {len(paths)} файлов из базы "
+                       f"{base_sha[:12]} не восстановлены: {_git_reason(res)}")
+    for status, path, _new in entries:
+        if not status.startswith("A") or not files.dropped_on_prior(path):
+            continue
+        target = tree / path
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        elif target.is_symlink() or target.exists():
+            target.unlink()
+    return tree
+
+
+def _prior_versions(task_id: str, profile, trees: dict, tree: Path,
+                    paths: list, files: _Files, base: list) -> tuple:
+    """(история прежних версий {id: {сторона: [(красный, исход)]}},
+    красные, прогонов на третьей выписке): путь `test_support` в C —
+    полный набор компонента, иначе только файлы C; судятся тесты
+    `PASS_TO_PASS` базы, чей файл попал в прогон, красный — перепрогон
+    на третьей выписке и на базе."""
+    if any(files.is_support(p) for p in paths):
+        records = _full_run(task_id, profile, PRIOR, tree)
+        ran = None
+    else:
+        limit = project_profile.component_limit(profile)[0]
+        run = acceptance._report_run(profile, tree, list(paths), limit)
+        where = f"прогон прежних версий {len(paths)} файлов"
+        if run.refusal:
+            raise _Prepare(f"{where}: {run.refusal}")
+        if run.timed_out:
+            raise _Prepare(f"{where}: таймаут ({limit} с)")
+        if run.state not in (outcome.GREEN, outcome.RED):
+            raise _Prepare(f"{where}: исход «{run.state}» — {run.reason}")
+        records, ran = list(run.tests), set(paths)
+    by_id = {c.id: c for c in records}
+    history = {}
+    for b in base:
+        if b.file_level or not in_pass_to_pass(b):
+            continue
+        if ran is not None and not (_record_paths([b]) & ran):
+            continue
+        case = by_id.get(b.id)
+        green = case is not None and in_pass_to_pass(case)
+        history[b.id] = {PRIOR: [(not green, describe(case))],
+                         BASE: [(False, describe(b))]}
+    red = sorted(cid for cid, sides in history.items() if sides[PRIOR][0][0])
+    reruns = (_rerun(profile, trees, red, history, sides=(PRIOR, BASE))
+              if red else 0)
+    return history, red, 1 + reruns // 2
+
+
+def _replacement_findings(replacements: dict, base_map: dict,
+                          history: dict) -> tuple:
+    """(находки требования 4, строки «заменён по SPEC») по утверждённым
+    заменам компонента."""
+    found, lines = [], []
+    for cid, n in sorted(replacements.items()):
+        b = base_map.get(cid)
+        if b is None:
+            found.append(Finding(REPLACED_MISSING, cid, "база: нет записи"))
+            continue
+        if not in_pass_to_pass(b):
+            found.append(Finding(REPLACED_NOT_GREEN, cid,
+                                 f"база: {describe(b)}"))
+            continue
+        sides = history.get(cid)
+        if sides is None:
+            raise _Prepare(f"прежняя версия заменяемого теста {cid} не "
+                           f"прогнана на третьей выписке")
+        prior, base = _prior_runs_text(sides)
+        if any(is_red for is_red, _text in sides[BASE]):
+            found.append(Finding(REPLACED_NOT_GREEN, cid,
+                                 f"база: {base}; прежняя версия: {prior}"))
+        elif not all(is_red for is_red, _text in sides[PRIOR]):
+            found.append(Finding(REPLACED_NEEDLESS, cid,
+                                 f"прежняя версия: {prior}; база: {base}"))
+        else:
+            lines.append(f"{REPLACED}: {cid} → AC-{n}")
+    return found, lines
 
 
 def _checkouts(repo: Path, scratch: Path, trees: dict, base_sha: str,
@@ -426,29 +821,56 @@ def proof_fields(detail: str):
 
 
 _KINDS = (GONE, BROKEN, UNSTABLE, BECAME_SKIPPED, TODO_APPEARED,
-          FAILS_APPEARED, NEW_SKIPPED, NEW_TODO, NEW_FAILS)
+          FAILS_APPEARED, NEW_SKIPPED, NEW_TODO, NEW_FAILS, *_NEW_KINDS)
 
 
-def _finding_id(line: str):
-    """Идентификатор теста строки находки `Finding.line`; `None` — не
-    разобран."""
+def _runs_marker(kind: str) -> str:
+    """Граница идентификатора и исходов строки находки вида `kind`."""
+    # Исходы «сломан правкой»/«нестабилен» начинаются с ветки, находки
+    # прежних версий и «замена не нужна» — с прежней версии, находки пути —
+    # со статуса или строки, прочие — с базы (`_redness`, `compare`).
+    if kind in (BROKEN, UNSTABLE):
+        return " — ветка: "
+    if kind in (PRIOR_RED, PRIOR_UNSTABLE, REPLACED_NEEDLESS):
+        return " — прежняя версия: "
+    if kind == STRICT_EDIT:
+        return " — статус "
+    if kind == CODE_EXCEPTION:
+        return " — строка "
+    return " — база: "
+
+
+def _finding_of(line: str):
+    """Вид и идентификатор (тест или путь) строки находки `Finding.line` —
+    `Finding` без исходов: покрытие находки зависит от её вида (SPEC
+    01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 9); `None` — не разобрана."""
     for kind in _KINDS:
         prefix = f"{kind}: "
         if not line.startswith(prefix):
             continue
-        # Исходы «сломан правкой»/«нестабилен» начинаются с ветки,
-        # находки сравнения — с базы (`_redness`, `compare`).
-        marker = " — ветка: " if kind in (BROKEN, UNSTABLE) else " — база: "
-        cid, sep, _runs = line[len(prefix):].partition(marker)
-        return cid if sep else None
+        cid, sep, _runs = line[len(prefix):].partition(_runs_marker(kind))
+        return Finding(kind, cid, "") if sep else None
     return None
 
 
-def _covered_ids(detail: str) -> list:
-    """Идентификаторы находок, покрытых мандатом, из записи `PASSED_ACTION`
-    (строки «… — покрыто мандатом ANSWER-n»); неразобранный — `None`."""
-    return [_finding_id(line.rpartition(COVERED_MARK)[0])
+def _finding_id(line: str):
+    """Идентификатор (тест или путь) строки находки `Finding.line`;
+    `None` — не разобран."""
+    found = _finding_of(line)
+    return found.id if found is not None else None
+
+
+def _covered_findings(detail: str) -> list:
+    """Находки, покрытые мандатом, из записи `PASSED_ACTION` (строки «… —
+    покрыто мандатом ANSWER-n»); неразобранная — `None`."""
+    return [_finding_of(line.rpartition(COVERED_MARK)[0])
             for line in (detail or "").splitlines() if COVERED_MARK in line]
+
+
+def _covered_ids(detail: str) -> list:
+    """Идентификаторы находок, покрытых мандатом, из записи
+    `PASSED_ACTION`; неразобранный — `None`."""
+    return [None if f is None else f.id for f in _covered_findings(detail)]
 
 
 def _passed_details(conn, task_id: str) -> list:
@@ -457,23 +879,29 @@ def _passed_details(conn, task_id: str) -> list:
 
 
 def _proven(conn, task_id: str, artifact_branch: str, head_sha: str,
-            base_sha: str, key: str) -> bool:
+            base_sha: str, key: str, profile) -> bool:
     """Есть запись `PASSED_ACTION` с той же головой, базой, ключом и
     отпечатком ТЕКУЩЕГО мандата над покрытыми находками той записи
-    (требование 3): отозванный элемент мандата меняет отпечаток."""
+    (требование 3): отозванный элемент мандата меняет отпечаток. Покрытие
+    пересчитывается по виду находки (`_cover`), в отпечаток входят все
+    текущие утверждённые замены компонента (SPEC
+    01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 9)."""
     mandates = None
+    replacements = _replacements(conn, task_id, profile)
     for detail in reversed(_passed_details(conn, task_id)):
         fields = proof_fields(detail)
         if fields is None or fields[:3] != (head_sha, base_sha, key):
             continue
-        ids = _covered_ids(detail)
-        if ids and mandates is None:
+        covered = _covered_findings(detail)
+        if covered and mandates is None:
             mandates = _answer_mandates(artifact_branch, task_id)
-        pairs = [None if cid is None else _covering_pair(cid, *mandates)
-                 for cid in ids]
+        pairs = [None if f is None else _cover(f, *mandates, replacements)
+                 for f in covered]
         if any(pair is None for pair in pairs):
             continue
-        if fingerprint(element for element, _source in pairs) == fields[3]:
+        used = [element for element, _source in pairs]
+        if fingerprint(used + _replacement_elements(replacements)) == \
+                fields[3]:
             return True
     return False
 
@@ -488,7 +916,7 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
     _checkouts(repo, scratch, trees, base_sha, head_sha)
     key = _component_key(repo, head_sha, profile, trees[HEAD])
     if merge and _proven(conn, task_id, artifact_branch, head_sha, base_sha,
-                         key):
+                         key, profile):
         store.journal(conn, task_id, "fsm", PROVEN_ACTION,
                       f"для головы {head_sha[:7]} и базы {base_sha[:7]}")
         return None
@@ -504,11 +932,42 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
     file_runs = _rerun(profile, trees, red, history) if red else 0
     senior, flaky = _redness(red, history)
     taken = {f.id for f in senior}
-    findings = ordered(senior + [f for f in compare(base, head)
-                                 if f.id not in taken])
+    findings = senior + [f for f in compare(base, head) if f.id not in taken]
+
+    # G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требования 2-5, 7-8).
+    entries = _name_status(repo, base_sha, head_sha)
+    added = _added_lines(repo, base_sha, head_sha)
+    files = _Files(profile, _record_paths(base), _record_paths(head))
+    replacements = _replacements(conn, task_id, profile)
+    base_map = {c.id: c for c in base if not c.file_level}
+    prior_paths = {path for status, path, _new in entries
+                   if not status.startswith(("A", "C"))
+                   and (files.is_test(path) or files.is_support(path))}
+    prior_paths |= {project_profile.parse_test_id(cid)[1]
+                    for cid in replacements if cid in base_map}
+    prior_history, prior_runs, prior_line = {}, 0, []
+    if prior_paths:
+        paths = sorted(prior_paths)
+        tree = _prior_checkout(repo, scratch, trees, base_sha, head_sha,
+                               paths, files, entries)
+        prior_history, prior_red, prior_runs = _prior_versions(
+            task_id, profile, trees, tree, paths, files, base)
+        prior_found, prior_flaky = _prior_redness(prior_red, prior_history)
+        # Одна находка на идентификатор: прежний вид старше.
+        taken = {f.id for f in findings}
+        findings += [f for f in prior_found if f.id not in taken]
+        flaky += [cid for cid in prior_flaky if cid not in flaky]
+        prior_line = [PRIOR_LINE.format(files=len(paths), runs=prior_runs)]
+    replaced_found, replaced_lines = _replacement_findings(
+        replacements, base_map, prior_history)
+    findings = ordered(findings + replaced_found
+                       + _strict_findings(profile, files, entries)
+                       + _code_exception_findings(files, entries, added))
+
     mandate, id_mandate = (_answer_mandates(artifact_branch, task_id)
                            if findings else ({}, {}))
-    covered = [(f, _covering_pair(f.id, mandate, id_mandate)) for f in findings]
+    covered = [(f, _cover(f, mandate, id_mandate, replacements))
+               for f in findings]
     uncovered = [f for f, pair in covered if pair is None]
     covered = [(f, pair) for f, pair in covered if pair is not None]
     flaky_lines = [f"{FLAKY_ON_BASE}: {cid}" for cid in flaky]
@@ -521,14 +980,16 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
                   if all(f.kind == BROKEN for f in uncovered)
                   else OUTCOME_REFUSAL_ACTION)
         return GateRefusal(action, "\n".join(lines + flaky_lines),
-                           _mandate_hint(task_id))
+                           _mandate_hint(task_id, any(
+                               f.kind in _NEW_KINDS for f in uncovered)))
     counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; тестов, "
               f"прошедших перепрогон, {len(red)}; прогонов файлов "
               f"{file_runs}; находок, покрытых мандатом, {len(covered)}")
+    used = [element for _f, (element, _s) in covered]
     proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
-             f"{fingerprint(element for _f, (element, _s) in covered)}")
+             f"{fingerprint(used + _replacement_elements(replacements))}")
     store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(
-        [counts, proof, *flaky_lines,
+        [counts, proof, *prior_line, *flaky_lines, *replaced_lines,
          *(f"{f.line}{COVERED_MARK}{source}" for f, (_e, source) in covered)]))
     return None
 

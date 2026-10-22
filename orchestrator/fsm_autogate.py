@@ -233,16 +233,24 @@ def _plank_rule(task_id: str):
     return project_profile.plank_rule(workspace.task_target(task_id))
 
 
-def _plank_rule_refusal(rule) -> str | None:
-    """Причина fail-closed автогейта по правилу планки (требование 8): до
-    гейта неослабления по исходам (G3б) прогон планки компонента по правилу
-    не исполняется — приёмку решает Оператор (SPEC
-    01M5AQH8M2DKBV30NBY86J34A7, требование 8); при отказе построения
-    правила — его причина. `None` — правило по умолчанию без отказа:
-    прежние условия."""
+def _plank_rule_refusal(rule, t) -> str | None:
+    """Причина fail-closed автогейта по правилу планки (требование 8): при
+    отказе построения правила — его причина. Правило не по умолчанию
+    снимает отказ только у задачи в границе гейта исходов — той же, что у
+    его ядра (`outcome_integrity._bounds`: профиль в `in_outcome_bounds`,
+    не канарейка; SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 10): там
+    полный гейт исходов уже судил правки тестов. Вне границы — прежний
+    отказ «до G3б», приёмку решает Оператор (SPEC
+    01M5AQH8M2DKBV30NBY86J34A7, требование 8). `None` — условия идут
+    дальше."""
     if rule.refusal:
         return f"автогейт: {rule.refusal}"
     if rule.is_default:
+        return None
+    # Отложенный импорт: гейт исходов тянет прогоны и выписки, которые
+    # модулю автогейта нужны только здесь.
+    from .advance_gates.outcome_integrity import _bounds
+    if _bounds(t["is_canary"], t["target"]) is not None:
         return None
     names = ", ".join(rule.labelled_components())
     return (f"автогейт: прогон планки компонента {names} по правилу — до "
@@ -293,21 +301,25 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     # прежнюю причину «каталог пуст» (SPEC 01M59KMPG2ZMK10V556VZVQD65,
     # требование 8).
     rule = _plank_rule(task_id)
-    refusal = _plank_rule_refusal(rule)
+    refusal = _plank_rule_refusal(rule, t)
     if refusal is not None:
         return ok, refusal
+    # Правило не по умолчанию — пометки планки по правилу (`//` у файлов с
+    # меткой); по умолчанию — прежние вызовы без правила.
+    by_rule = None if rule.is_default else rule
 
     branch, _ = artifact_source.resolve(conn, task_id)
     branch_sha = artifact_branch.rev_sha(task_id, branch)
     source_note = f"источник планки: ветка {branch}, sha {branch_sha}"
 
-    sources, has_files, error = _plank_sources(task_id, branch, conn=conn, t=t)
+    sources, has_files, error = _plank_sources(task_id, branch, conn=conn, t=t,
+                                               rule=by_rule)
     if error is not None:
         return ok, f"автогейт: {error} ({source_note})"
     if not has_files:
         return ok, ("автогейт: каталог приёмочных тестов пуст или "
                     f"отсутствует ({source_note})")
-    _, markers = guard.scan_ac_content(sources)
+    _, markers = guard.scan_ac_content(sources, rule=by_rule)
     manual_ns = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
     skip_ns = sorted(n for n, (kind, _) in markers.items() if kind == "skip")
     if manual_ns:

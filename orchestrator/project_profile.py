@@ -111,6 +111,12 @@ class Profile:
     # из него. У явной пары, `test_profile` и артели — пусто; вне сравнения
     # по той же причине, что поля выше.
     long_lived_template: str = field(default="", compare=False)
+    # Маски `test_support`, слои `layers` и выражения `paths` компонента
+    # (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 1) — читает гейт
+    # исходов; вне сравнения по той же причине, что поля выше.
+    test_support: tuple = field(default=(), compare=False)
+    layers: tuple = field(default=(), compare=False)
+    paths: tuple = field(default=(), compare=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -289,7 +295,22 @@ def _with_component_fields(profile: Profile, comp: Component) -> Profile:
         checks_local=tuple(fields.get("checks_local") or ()),
         tests=tuple(fields.get("tests") or ()),
         plank_layout=fields.get("plank_layout") or "",
-        long_lived_template=fields.get("long_lived") or "")
+        long_lived_template=fields.get("long_lived") or "",
+        test_support=tuple(fields.get("test_support") or ()),
+        layers=tuple(fields.get("layers") or ()),
+        paths=tuple(_regexes(fields.get("paths"))))
+
+
+def layers_of(profile) -> tuple:
+    """Действующие слои компонента (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J,
+    требование 1): явное поле `layers`, без него — `python-ast` у команды
+    pytest и ничего у прочих; без `python-ast` гейт исходов судит правки
+    тестов строгим режимом."""
+    if profile.layers:
+        return tuple(profile.layers)
+    # acceptance -> ... -> store -> ... -> project_profile: цикл импорта.
+    from .acceptance import is_pytest_command
+    return ("python-ast",) if is_pytest_command(profile.command) else ()
 
 
 def component_profiles(target: str, names=None) -> tuple:

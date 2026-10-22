@@ -213,6 +213,19 @@ def _weakening_scope_refusal(path: str, decision) -> str | None:
                 f"проекта: пропуск: {decision.skip}")
     if decision.profile.in_weakening_scope(path):
         return None
+    # В границе гейта исходов мандат на путь снимает и находки строгого
+    # режима и исключений в коде (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J,
+    # требование 6): годен путь под масками `tests`/`test_support` и путь
+    # файла компонента по `paths` (без `paths` — любой путь репозитория).
+    profile = _outcome_profile(decision)
+    if profile is not None:
+        from .. import project_profile
+        if any(project_profile.mask_matches(mask, path)
+               for mask in (*profile.tests, *profile.test_support)):
+            return None
+        if not profile.paths or any(re.search(regex, path)
+                                    for regex in profile.paths):
+            return None
     scope = ", ".join(decision.profile.weakening_scope)
     return (f"путь вне области {scope} — гейт неослабления тестов другие "
             f"пути не рассматривает")
