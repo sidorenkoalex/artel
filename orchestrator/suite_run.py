@@ -31,6 +31,10 @@
 в нём же, а запись журнала задачи, которую прогон без права записи в БД
 сделать не смог, откладывается (`suite_lock.defer_journal`) и досылается
 процессом пульта (`suite_lock.deliver_journal`).
+
+Шагу разработчика (маркер `ARTEL_ROLE=developer`) новый полный прогон не
+положен (SPEC 01M5HDB1GSFDKFM7QB9JZMCCWJ, ADR-0024): `suite-run <id>` без
+флагов отказывает до любой записи; `--wait` и `--failed` — прежние.
 """
 import contextlib
 import json
@@ -168,10 +172,14 @@ def _db():
     try:
         return store.db()
     except (sqlite3.Error, OSError):
-        conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro",
-                               uri=True)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _readonly_db()
+
+
+def _readonly_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro",
+                           uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 @contextlib.contextmanager
@@ -237,6 +245,48 @@ def _alive(pid) -> bool:
 
 def _pult_command(task_id: str) -> str:
     return f"python3 {config.ROOT / 'orchestrator' / 'artel.py'} suite-run {task_id}"
+
+
+# ------------------------------------------------------------ developer
+#
+# Новый полный прогон шагу разработчика не положен (ADR-0024, поправка
+# 22.10.2026): признак — маркер `ARTEL_ROLE`, равный `developer`. Это
+# отсечение ошибочного вызова, не граница против намеренного обхода.
+# Подсказки под тем же маркером не советуют полный прогон.
+
+def _developer() -> bool:
+    return os.environ.get(config.ARTEL_ROLE_ENV) == config.STATE_ROLE["in_dev"]
+
+
+def _developer_hint(task_id: str) -> str:
+    """Что делать developer вместо полного прогона (форма
+    `skills/coding-standards.md`)."""
+    pult = config.ROOT / "orchestrator" / "artel.py"
+    return (f"полный набор прогонят CI и автопроверка приёмки; свои файлы — "
+            f"`python3 -m pytest tests/<файлы> -p no:cacheprovider -p timeout "
+            f"-o timeout=120` в переднем плане; планка — `python3 {pult} "
+            f"plank-run {task_id} [файл]`; повтор упавших прогона Оператора "
+            f"или ревьювера — `{_pult_command(task_id)} --failed`")
+
+
+def _refuse_developer_full_run(task_arg: str) -> None:
+    """Ответ developer на `suite-run <id>` без флагов — до любой записи:
+    задача разрешается только чтением БД (`mode=ro`), журнал не досылается,
+    хозяйство `suite-run` не трогается. Идущий прогон задачи — прежний
+    ответ «уже идёт», код 0."""
+    conn = _readonly_db()
+    try:
+        task_id = store.get_task(conn, task_arg)["id"]
+    finally:
+        conn.close()
+    head = f"[{task_id}] suite-run"
+    running = _running(task_id)
+    if running is not None:
+        print(_running_text(head, task_id, running))
+        return
+    sys.exit(f"{head}: отказ — новый полный прогон `suite-run` недоступен "
+             f"роли developer (ARTEL_ROLE=developer), задача {task_id}; "
+             f"{_developer_hint(task_id)}")
 
 
 # ---------------------------------------------------------------- замок
@@ -719,6 +769,13 @@ def _running(task_id: str) -> dict | None:
     return state
 
 
+def _running_text(head: str, task_id: str, running: dict) -> str:
+    return (f"{head}: прогон №{running.get('run')} этой задачи уже идёт "
+            f"(pid {running.get('pid')}) — второй не запускаю; лог: "
+            f"{running.get('log')}; отчёт: {_pult_command(task_id)} "
+            f"--wait <минуты>")
+
+
 def _progress_text(state: dict) -> str:
     done = []
     for suffix, label in (("", "ветки"), ("-base", "базы")):
@@ -739,9 +796,10 @@ def _wait(task_id: str, minutes: int) -> None:
     head = f"[{task_id}] suite-run"
     state = _read_json(_run_path(task_id))
     if state is None:
+        hint = (_developer_hint(task_id) if _developer() else
+                f"запусти прогон: {_pult_command(task_id)}")
         sys.exit(f"{head}: отказ — у задачи {task_id} нет ни одного прогона "
-                 f"suite-run, ждать нечего; запусти прогон: "
-                 f"{_pult_command(task_id)}")
+                 f"suite-run, ждать нечего; {hint}")
     deadline = time.monotonic() + minutes * 60
     while True:
         result = _read_json(_result_path(task_id))
@@ -754,10 +812,12 @@ def _wait(task_id: str, minutes: int) -> None:
             # Процесс мог дописать отчёт и выйти между двумя чтениями.
             result = _read_json(_result_path(task_id))
             if result is None or result.get("run") != state.get("run"):
+                hint = (_developer_hint(task_id) if _developer() else
+                        f"новый прогон: {_pult_command(task_id)}")
                 sys.exit(f"{head}: прогон №{state.get('run')} оборван — "
                          f"фонового процесса (pid {state.get('pid')}) больше "
                          f"нет, отчёта он не оставил; лог: {state.get('log')}; "
-                         f"новый прогон: {_pult_command(task_id)}")
+                         f"{hint}")
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -771,6 +831,9 @@ def _wait(task_id: str, minutes: int) -> None:
 def cmd_suite_run(rest: list) -> None:
     task_arg, wait, failed = _parse_args(rest)
     minutes = _wait_minutes(wait) if wait is not None else None
+    if minutes is None and not failed and _developer():
+        _refuse_developer_full_run(task_arg)
+        return
     conn = _db()
     task_id = store.resolve_task_id(conn, task_arg)
     # Процесс с правом записи в БД (Оператор, роль на Claude) досылает
@@ -792,19 +855,21 @@ def cmd_suite_run(rest: list) -> None:
     if failed:
         previous = _read_failed(task_id)
         if previous is None:
+            hint = (("перечень упавших пишет только полный прогон Оператора "
+                     "или ревьювера; упавшие тесты CI или гейта запускай по "
+                     "именам — `python3 -m pytest tests/<файл>::<тест> …` в "
+                     "переднем плане") if _developer() else
+                    f"сначала полный прогон: {_pult_command(task_id)}")
             sys.exit(f"{head}: отказ — прошлого прогона suite-run у задачи "
-                     f"нет, повторять нечего; сначала полный прогон: "
-                     f"{_pult_command(task_id)}")
+                     f"нет, повторять нечего; {hint}")
         if not previous:
+            hint = (_developer_hint(task_id) if _developer() else
+                    f"полный прогон: {_pult_command(task_id)}")
             sys.exit(f"{head}: отказ — в прошлом прогоне упавших нет, "
-                     f"повторять нечего; полный прогон: "
-                     f"{_pult_command(task_id)}")
+                     f"повторять нечего; {hint}")
     running = _running(task_id)
     if running is not None:
-        print(f"{head}: прогон №{running.get('run')} этой задачи уже идёт "
-              f"(pid {running.get('pid')}) — второй не запускаю; лог: "
-              f"{running.get('log')}; отчёт: {_pult_command(task_id)} "
-              f"--wait <минуты>")
+        print(_running_text(head, task_id, running))
         return
     # Замок берётся здесь, атомарно, до запуска фонового процесса и
     # передаётся ему: два одновременных запуска не могут оба ответить
