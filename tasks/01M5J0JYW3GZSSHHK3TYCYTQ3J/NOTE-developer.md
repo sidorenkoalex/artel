@@ -1,18 +1,17 @@
-# Записка developer
+# Записка developer (итерация 2 — замечания ревью 1)
 
 ## Выяснено
-- Шаг завершён: PLAN.md `status: ready`, guard — ок.
-- Реализовано: project_profile (поля test_support/layers/paths + `layers_of`), targets (проверка layers в `_check_component_rules`), mandate._weakening_scope_refusal (мандат на путь в границе), fsm_autogate (`_plank_rule_refusal(rule, t)` через `outcome_integrity._bounds`, пометки по правилу), outcome_integrity (третья выписка `scratch/prior`, замены, строгий режим, исключения в коде, `_cover`, `_proven(..., profile)`, отпечаток с элементами «замена:…»).
-- `_covered_ids`/`_finding_id` оставлены с прежней формой (их зовёт tests/test_outcome_integrity.py); вид находки разбирает `_finding_of`.
-- `diff -M -U0` зовётся `subprocess.run` с байтами и `gitcmd.pult_env()`; свой тест tests/test_outcome_integrity_added_lines.py (проверен мутациями).
-- Зелёные: долгоживущие файлы задачи (4 + 44), plank-run (4), соседние файлы гейтов исходов/мержа/мандата/автогейта/профиля.
+- R1-F1: `_added_lines` — в argv `--no-textconv --no-relative --src-prefix=a/ --dst-prefix=b/`; заголовок `+++ ` не `/dev/null` и не `b/…` — `_Prepare`. Тесты в tests/test_outcome_integrity_added_lines.py (noprefix через GIT_CONFIG_COUNT, неожиданный заголовок, удаление файла).
+- R1-F2: `_code_exception_findings` решает вид файла по пути головы; исключение «новый путь под weakening_scope с записями головы» у компонента без `tests` распространено с `A` на `R`/`C` (иначе ложная находка на переименованный тест). Тесты там же (CodeExceptionRenameTest).
+- R1-F3: tests/test_fsm_autogate_plank_rule.py — `_plank_rule_refusal` с настоящим `_bounds`, подменён только `project_profile.decide`.
+- Все новые тесты проверены мутациями (скрипт в worktree, сам себя удаляет) — красные.
 
 ## Не сработало
-- `ls`/`awk`/`sed -i` в Bash шага требуют подтверждения — python-однострочники.
-- `pytest -n` в worktree — «node down»; гонять без -n.
+- heredoc с `{…"…}` в Bash отклоняется («expansion obfuscation»), запись в /tmp требует подтверждения — файлы через Write в worktree.
+- `pytest -n` — «node down», гонять с `-p no:xdist`.
 
 ## Где остановился
-- Всё сдано; код не закоммичен (коммитит пульт).
+- Итерация 2 сдана: затронутые файлы (156 passed), plank-run 4 passed, карта регенерирована, реестр REVIEW размечен fixed, PLAN ready, guard ок. Код не закоммичен (коммитит пульт).
 
 ## Чего не хватило
-- Что tests/test_outcome_integrity.py зовёт закрытый `_covered_ids` — нашёл только финальным grep по `gate._`.
+- —

@@ -91,6 +91,27 @@ schema_version: 5
 `test_gate_owner_marker` и др.) — зелёные без правок. Свой тест проверен
 мутациями (строгое декодирование, путь без снятия кавычек) — красный.
 
+5. Итерация 2 — замечания ревью 1 (реестр REVIEW.md):
+   - R1-F1: `_added_lines` — argv несёт `--src-prefix=a/ --dst-prefix=b/
+     --no-relative --no-textconv` (вывод не зависит от `~/.gitconfig`
+     процесса пульта); заголовок `+++ ` не `/dev/null` и не `b/…` —
+     `_Prepare` (требование 8), а не пропуск строк.
+   - R1-F2: `_code_exception_findings` решает вид файла по пути головы —
+     переименование тест→код проверяется как код. Правило «новый путь
+     под `weakening_scope` с записями в отчёте головы — тестовый» у
+     компонента без `tests` распространено с `A` на новый путь `R`/`C`:
+     иначе переименованный тест давал бы ложную находку.
+   - R1-F3: сторож `tests/test_fsm_autogate_plank_rule.py` на
+     `_plank_rule_refusal` (в границе, канарейка, вне границы, отказ
+     построения, умолчание).
+   - Тесты R1-F1/R1-F2 — в `tests/test_outcome_integrity_added_lines.py`.
+     Все заявки мутаций проверены временной мутацией — красные.
+
+Итог прогонов итерации 2: долгоживущие файлы задачи, `test_outcome_integrity`,
+`test_01m5cjvb…_outcome_gate`, `test_01m5ddtv…_merge_outcome_gate`,
+`test_fsm_autogate*`, `test_01m3rwa…_autogate`, свои тесты — 156 passed;
+`plank-run` — 4 passed; карта регенерирована.
+
 ## Покрытие требований
 
 | Требование | Шаг |
