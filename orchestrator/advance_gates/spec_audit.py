@@ -116,6 +116,8 @@ def signals(spec_text: str, meta: dict, tz_text: str,
     found = []
     if guard.section_body(spec_text, "Меняемое поведение").strip():
         found.append("а) раздел «Меняемое поведение» непуст")
+    if guard.section_body(spec_text, guard.REPLACED_TESTS_SECTION).strip():
+        found.append(f"а) раздел «{guard.REPLACED_TESTS_SECTION}» непуст")
     mandates = sorted({line.strip() for text in answers
                        for line in text.splitlines()
                        if any(mandate.line_elements(line, marker) is not None

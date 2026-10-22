@@ -78,6 +78,9 @@ FAIL_TO_PASS_PREPARE_REFUSAL_ACTION = ("переход отклонён: чес�
                                        "отказ подготовки")
 SPEC_ANCHOR_REFUSAL_ACTION = ("переход отклонён: честный FAIL_TO_PASS — опора "
                               "SPEC не найдена")
+# Критерий утверждённой замены без теста планки (SPEC
+# 01M5GXZK2WTZ89AXQ7QY2RJD9R, требование 4): тест критерия пишет test_author.
+REPLACEMENT_REFUSAL_ACTION = "переход отклонён: заменяемые тесты"
 
 # Гейт неослабления по исходам (SPEC 01M5CJVB5B5V55PQQVR2QRHWZN, требование
 # 6): только «сломан правкой» чинит developer; нестабильность, исчезновение,
@@ -118,6 +121,7 @@ REFUSAL_CLASSES = {
     BRANCH_CRITERION_REFUSAL_ACTION: ROLE_FIXES,
     SPEC_CHANGED_AFTER_GATE_REFUSAL_ACTION: ROLE_FIXES,
     OUTCOME_BROKEN_REFUSAL_ACTION: ROLE_FIXES,
+    REPLACEMENT_REFUSAL_ACTION: ROLE_FIXES,
 
     BRANCH_UNREAD_REFUSAL_ACTION: OPERATOR_FIXES,
     NO_FAILURE_ERRORS_REFUSAL_ACTION: OPERATOR_FIXES,

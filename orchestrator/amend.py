@@ -233,29 +233,102 @@ def _plank_rule_or_exit(conn, task_id: str):
     return rule
 
 
-# Отказ правки файлов с меткой `AC-<n>: ` до G3б (SPEC
-# 01M5AA5TS90RDJ2AFXB882WTPD, требование 8): их строки группы, статика и
-# трассируемость в `amend-tests` не исполняются.
-LABELLED_REFUSAL = ("amend-tests для файлов планки с меткой AC-<n>: — до G3б "
-                    "не исполняется; правка планки — reject на гейте")
+# Файлы с меткой `AC-<n>: ` (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, требование 6):
+# при правиле планки не по умолчанию оба пути команды проверяют планку и
+# долгоживущие файлы тем же составом, что выход из `tests_writing`
+# (`tests_writing._tests_writing_test_groups_gate`,
+# `_tests_writing_long_lived_gate`). При правиле по умолчанию путь прежний.
+def _by_rule(rule) -> bool:
+    return rule is not None and not rule.is_default
 
 
-def _refuse_labelled(task_id: str, rule, profile, rel_tests_dir: str,
-                     plank_paths, long_paths) -> None:
-    """Отказ команды до любой записи, если среди `plank_paths` (снимки
-    планки до и после правки) есть файл с меткой правила планки или среди
-    `long_paths` (долгоживущие пути правки) — файл с меткой у профиля из
-    шаблона `long_lived`."""
+def _rule_plank_errors(task_id: str, files: list[tuple[str, str]], rule,
+                       profile) -> list[str]:
+    """Строки группы, долгоживущий файл в планке, признаки и запреты файлов
+    планки `files` одной суммой — группа «строка группы:»."""
+    target = workspace.task_target(task_id)
+    return (guard.group_line_errors_from_files(files, rule)
+            + guard.long_lived_plank_errors(
+                files, task_id, profile.long_lived_dir,
+                profile.long_lived_name, rule=rule,
+                example=profile.long_lived_hint(task_id))
+            + guard.long_lived_errors_from_files(
+                files, task_id, network_addresses=repo_context.is_artel(target),
+                project_imports=project_profile.long_lived_imports(target,
+                                                                   profile),
+                rule=rule)
+            + guard.plank_ban_errors(files, rule))
+
+
+def _labelled_long_lived_errors(task_id: str, files: dict[str, str],
+                                deleted: dict[str, str | None],
+                                plank_files: list[tuple[str, str]], rule,
+                                profile) -> list[str]:
+    """Долгоживущие файлы с меткой итогового состояния (`rule` —
+    `project_profile.long_lived_rule`): строка группы каждого файла,
+    признаки и запреты, затем удаление — одной суммой, группа
+    «долгоживущие файлы tests/:». Удаление сверяется по именам тестов
+    `guard.plank_test_names`: имя удалённого файла обязано остаться в файле
+    с меткой планки либо в оставшемся долгоживущем файле."""
+    target = workspace.task_target(task_id)
+    items = sorted(files.items())
+    errors: list[str] = []
+    for rel, text in items:
+        errors += guard.long_lived_group_errors([(rel, text)],
+                                                profile.long_lived_dir, rule)
+    errors += guard.long_lived_errors_from_files(
+        items, task_id, network_addresses=repo_context.is_artel(target),
+        project_imports=project_profile.long_lived_imports(target, profile),
+        rule=rule)
+    errors += guard.plank_ban_errors(items, rule)
+    kept_names: set[str] = set()
+    kept_methods: set[str] = set()
+    for label, text in [*plank_files, *items]:
+        if rule.is_labelled(Path(label).name):
+            kept_names |= set(guard.plank_test_names(text))
+        else:
+            kept_methods |= _method_names(text)
+    for rel, text in sorted(deleted.items()):
+        if text is None:
+            errors.append(f"{rel}: удаляемый файл перечня не прочитан — "
+                          f"сверить его методы с итоговой планкой нечем")
+            continue
+        if rule.is_labelled(Path(rel).name):
+            lost = sorted(set(guard.plank_test_names(text)) - kept_names)
+        else:
+            lost = sorted(_method_names(text) - kept_methods)
+        if lost:
+            errors.append(
+                f"{rel}: удаление снимает методы {', '.join(lost)} — их нет "
+                f"ни в acceptance_tests/, ни в долгоживущих файлах задачи; "
+                f"снятие теста — по мандату Оператора на ослабление, не "
+                f"правкой планки (ADR-0020, пункт 8)")
+    return errors
+
+
+def _trace_sources(files: dict[str, str], rule) -> list:
+    """Долгоживущие файлы для трассируемости: при правиле не по умолчанию —
+    парами (путь, текст), `it('AC-<n>: …')` файла с меткой разбирается по
+    правилу, как на выходе из `tests_writing`; иначе — текстами, прежний
+    разбор Python."""
+    if _by_rule(rule):
+        return sorted(files.items())
+    return list(files.values())
+
+
+def _snapshot_plank_files(snapshot: dict[str, str], rel_tests_dir: str,
+                          rule) -> list[tuple[str, str]]:
+    """Файлы планки снимка ветки документов для проверок тем же составом,
+    что `guard.acceptance_test_files(tdir, rule)`: все `test_*.py` на любой
+    глубине (`_test_files`) и файлы с меткой первого уровня
+    (`guard.is_labelled_plank_test`); метка — путь в снимке."""
+    files = _test_files(snapshot)
+    seen = {label for label, _text in files}
     prefix = f"{rel_tests_dir}/"
-    labelled = sorted(
-        p for p in plank_paths
-        if p.startswith(prefix) and rule.is_labelled(p[len(prefix):]))
-    if profile is not None and profile.long_lived_template:
-        labelled += sorted(p for p in long_paths
-                           if rule.is_labelled(Path(p).name))
-    if labelled:
-        sys.exit(f"[{task_id}] amend-tests: отказ — {LABELLED_REFUSAL} "
-                 f"({', '.join(labelled)})")
+    files += sorted((rel, text) for rel, text in snapshot.items()
+                    if rel.startswith(prefix) and rel not in seen
+                    and guard.is_labelled_plank_test(rule, rel[len(prefix):]))
+    return files
 
 
 def _rule_test_files(tdir: Path, rule) -> list[tuple[str, str]]:
@@ -617,9 +690,13 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
                     if not failed or any(rel in line for line in failed)]
         redness_files = (plank_files if rule is None or rule.is_default
                          else _rule_test_files(acc_tdir, rule))
+        # Маркер упавшего долгоживущего файла с меткой — в первом
+        # комментарии, по правилу (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R,
+        # требование 6); у правила по умолчанию меток нет — разбор прежний.
         marker_errors = (guard.redness_marker_errors_from_files(redness_files,
                                                                 rule=rule)
-                         + guard.redness_marker_errors_from_files(suspects))
+                         + guard.redness_marker_errors_from_files(suspects,
+                                                                  rule=rule))
         if marker_errors:
             _refuse(conn, task_id, "прогон планки и долгоживущих файлов не "
                     "«OK», и не все падения промаркированы «Красен до "
@@ -719,8 +796,6 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"содержимое {rel_tests_dir}/")
     baseline = _artifact_tests_snapshot(task_id, rel_tests_dir)
-    _refuse_labelled(task_id, rule, profile, rel_tests_dir,
-                     set(disk) | set(baseline), long_changed)
     # Файл перечня в сверку «есть ли правка» не входит: его пишет только
     # команда (ручная правка — отказ сразу), а его отсутствие на диске —
     # не правка: планку в worktree материализует и выход из
@@ -775,8 +850,13 @@ def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
             created_spec.unlink(missing_ok=True)
     if trace_errors:
         _refuse_traceability(conn, task_id, trace_errors)
-    group_errors = _group_line_errors(t, rel_tests_dir,
-                                      guard.acceptance_test_files(tdir))
+    profile = _task_profile(task_id) if _by_rule(rule) else None
+    if profile is not None:
+        group_errors = _rule_plank_errors(
+            task_id, guard.acceptance_test_files(tdir, rule), rule, profile)
+    else:
+        group_errors = _group_line_errors(t, rel_tests_dir,
+                                          guard.acceptance_test_files(tdir))
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
 
@@ -862,21 +942,34 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     created_spec = _materialize_spec_if_missing(task_id, tdir)
     try:
         trace_errors = guard.acceptance_traceability_errors(
-            tdir, list(files.values()), rule=rule)
+            tdir, _trace_sources(files, rule), rule=rule)
     finally:
         if created_spec is not None:
             created_spec.unlink(missing_ok=True)
     if trace_errors:
         _refuse_traceability(conn, task_id, trace_errors)
     plank_files = guard.acceptance_test_files(tdir)
-    group_errors = (_group_line_errors(t, rel_tests_dir, plank_files)
-                    + guard.long_lived_plank_errors(plank_files, task_id,
-                                                    profile.long_lived_dir,
-                                                    profile.long_lived_name))
+    if _by_rule(rule):
+        group_errors = _rule_plank_errors(
+            task_id, guard.acceptance_test_files(tdir, rule), rule, profile)
+    else:
+        group_errors = (_group_line_errors(t, rel_tests_dir, plank_files)
+                        + guard.long_lived_plank_errors(plank_files, task_id,
+                                                        profile.long_lived_dir,
+                                                        profile.long_lived_name))
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
-    errors = _long_lived_errors(task_id, files, deleted,
-                                [text for _rel, text in plank_files], profile)
+    long_rule = (project_profile.long_lived_rule(workspace.task_target(task_id),
+                                                 profile)
+                 if _by_rule(rule) else None)
+    if long_rule is not None:
+        errors = _labelled_long_lived_errors(
+            task_id, files, deleted, guard.acceptance_test_files(tdir, rule),
+            long_rule, profile)
+    else:
+        errors = _long_lived_errors(task_id, files, deleted,
+                                    [text for _rel, text in plank_files],
+                                    profile)
     if errors:
         _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files,
@@ -1085,9 +1178,6 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
         old_plank, new_plank = old_snapshot, new_snapshot
     long_diverged = sorted(p for p in set(manifest) | set(head_digests)
                            if manifest.get(p) != head_digests.get(p))
-    _refuse_labelled(task_id, rule, profile, rel_tests_dir,
-                     set(old_snapshot) | set(new_snapshot),
-                     set(manifest) | set(head_files))
 
     if old_plank == new_plank and not long_diverged:
         sys.exit(f"[{task_id}] amend-tests: отказ — нет расхождения в "
@@ -1100,24 +1190,44 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     # tests_locked_sha (копилка 11.09, тот же путь мимо проверки, что и
     # у worktree-пути AC-1).
     trace_errors = _branch_traceability_errors(task_id, new_sha, new_snapshot,
-                                               list(head_files.values()), rule)
+                                               _trace_sources(head_files, rule),
+                                               rule)
     if trace_errors is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"tasks/{task_id}/SPEC.md")
     if trace_errors:
         _refuse_traceability(conn, task_id, trace_errors)
     plank_files = _test_files(new_snapshot)
-    group_errors = _group_line_errors(t, rel_tests_dir, plank_files)
-    if manifest:
-        group_errors += guard.long_lived_plank_errors(plank_files, task_id,
-                                                      profile.long_lived_dir,
-                                                      profile.long_lived_name)
+    by_rule = _by_rule(rule) and profile is not None
+    if by_rule:
+        rule_files = _snapshot_plank_files(new_snapshot, rel_tests_dir, rule)
+        group_errors = _rule_plank_errors(task_id, rule_files, rule, profile)
+    else:
+        group_errors = _group_line_errors(t, rel_tests_dir, plank_files)
+        if manifest:
+            group_errors += guard.long_lived_plank_errors(
+                plank_files, task_id, profile.long_lived_dir,
+                profile.long_lived_name)
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
+    long_rule = (project_profile.long_lived_rule(workspace.task_target(task_id),
+                                                 profile)
+                 if by_rule and manifest else None)
+    if long_rule is not None:
+        # Статические проверки долгоживущих файлов с меткой — при каждом
+        # вызове, и без расхождения с перечнем лока (перенос 7): правка
+        # одного `.md` не проводит мимо них неизменённый файл.
+        deleted = {rel: _deleted_file_text(code_head, rel,
+                                             workspace.task_repo(task_id))
+                   for rel in manifest if rel not in head_files}
+        errors = _labelled_long_lived_errors(task_id, head_files, deleted,
+                                             rule_files, long_rule, profile)
+        if errors:
+            _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     if long_diverged:
         _check_code_head_long_lived(conn, t, task_id, branch, code_head,
                                     head_files, manifest, plank_files, profile,
-                                    rule)
+                                    rule, static=long_rule is None)
         _push_code_head(conn, t, task_id)
 
     if manifest:
@@ -1149,21 +1259,28 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                                 code_head: str, head_files: dict[str, str],
                                 manifest: dict[str, str],
                                 plank_files: list[tuple[str, str]],
-                                profile=None, rule=None) -> None:
+                                profile=None, rule=None,
+                                static: bool = True) -> None:
     """Проверки требования 1 по долгоживущим файлам головы кодовой ветки
     для `--from-branch` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
     статические — по текстам из git; сухой сбор и прогон — в worktree
     задачи, куда планка материализуется с головы ветки документов, как на
     `in_dev -> verifying`. Незакоммиченная правка долгоживущих путей в
-    worktree — отказ: прогон проверил бы её, а не голову ветки."""
+    worktree — отказ: прогон проверил бы её, а не голову ветки.
+
+    `static=False` — статические проверки файлов с меткой вызывающий уже
+    выполнил (`_labelled_long_lived_errors`), здесь — только сбор и
+    прогон."""
     profile = profile or _task_profile(task_id)
-    deleted = {rel: _deleted_file_text(code_head, rel,
-                                         workspace.task_repo(task_id))
-               for rel in manifest if rel not in head_files}
-    errors = _long_lived_errors(task_id, head_files, deleted,
-                                [text for _rel, text in plank_files], profile)
-    if errors:
-        _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
+    if static:
+        deleted = {rel: _deleted_file_text(code_head, rel,
+                                             workspace.task_repo(task_id))
+                   for rel in manifest if rel not in head_files}
+        errors = _long_lived_errors(task_id, head_files, deleted,
+                                    [text for _rel, text in plank_files],
+                                    profile)
+        if errors:
+            _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     wt_path, error = workspace.ensure(task_id, t["branch"])
     if error is not None:
         sys.exit(f"[{task_id}] amend-tests: отказ — worktree не готов: {error}")

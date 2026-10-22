@@ -1080,6 +1080,21 @@ def _tests_writing_fail_to_pass_gate(conn, task_id: str, acc_tdir, run_cwd,
     refusal, anchor_text = _spec_anchor_check(conn, task_id)
     if refusal is not None:
         return refusal
+    # Утверждённая на гейте SPEC замена (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R,
+    # требование 4): критерий, которому сопоставлен заменяемый тест, обязан
+    # иметь тест планки — пометка вместо теста замену не несёт.
+    from .mandate import approved_replacements
+    from .refusal_classes import REPLACEMENT_REFUSAL_ACTION
+    tested = set(_criterion_numbers(covered))
+    unmatched = [f"заменяемый тест {test_id} сопоставлен AC-{n}, а у AC-{n} "
+                 f"нет теста планки"
+                 for test_id, n in approved_replacements(conn, task_id).items()
+                 if n not in tested]
+    if unmatched:
+        return GateRefusal(
+            REPLACEMENT_REFUSAL_ACTION, "\n".join(unmatched),
+            f"напиши тест планки каждого такого критерия и повтори artel.py "
+            f"advance {task_id}")
     target = store.task_target(conn, task_id)
     rule = project_profile.plank_rule(target)
     if rule.refusal:
