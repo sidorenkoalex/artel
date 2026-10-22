@@ -2585,20 +2585,26 @@ class Ac24RetroAndPlankRunTest(CarryOverSandbox):
 class Ac25AmendAndTemplateTest(CarryOverSandbox):
 
     def test_ac25_amend_md_only_plank_labelled_long_lived_refused(self):
-        """`amend-tests` в режиме рабочей копии: планка только из `.md`, критерий покрыт долгоживущим файлом с меткой, правится этот файл — отказ, лок не сдвигается.
+        """`amend-tests` в режиме рабочей копии: планка только из `.md`, критерий покрыт долгоживущим файлом с меткой, правится этот файл — проход проверками файлов с меткой (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, AC-21).
 
         Сценарий: задача `in_dev` с локом: планка в ссылке документов — один
         `.md` и перечень сумм; долгоживущий файл с меткой закоммичен в
         кодовую ветку. Оператор правит долгоживущий файл в рабочей копии и
-        зовёт `amend-tests`. Вывод несёт отказ G3б для файлов с меткой;
-        голова ссылки документов, голова кодовой ветки, `tests_locked_sha`
-        и число записей «правка планки» прежние.
+        зовёт `amend-tests`. Вывод без отказа G3б и без «amend-tests:
+        отказ»; `tests_locked_sha` сдвинут и равен голове ссылки
+        документов; записей «правка планки» на одну больше; голова кодовой
+        ветки сдвинута коммитом правки; перечень нового лока несёт сумму
+        правленого файла.
 
-        Ловит мутацию: отказ для файлов с меткой срабатывает только при
-        `.test.jsx` в планке — планка из одного `.md` проходит прежним
-        путём, правка уходит в лок.
+        Ловит мутацию: отказ G3б для файлов с меткой оставлен — планка из
+        одного `.md` с долгоживущим файлом с меткой не проходит, лок не
+        сдвинут; долгоживущий файл с меткой проверяется прежним путём
+        Python (строка группы в докстринге) — отказ «долгоживущие файлы
+        tests/»; перечень нового лока считается по прежней голове — сумма
+        старого текста.
         """
         from orchestrator import amend
+        from orchestrator.advance_gates import acceptance as acceptance_gates
         from scripts import guard
         import hashlib
         n = self.numbers(1)[0]
@@ -2628,7 +2634,8 @@ class Ac25AmendAndTemplateTest(CarryOverSandbox):
             return (self.docs_head(t), code, row["tests_locked_sha"], len(amends))
 
         before = state_of()
-        self.write_code(t, rel, text + "// правка\n")
+        edited = text + "// правка\n"
+        self.write_code(t, rel, edited)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             try:
@@ -2636,8 +2643,20 @@ class Ac25AmendAndTemplateTest(CarryOverSandbox):
             except SystemExit as exc:
                 buf.write(f"\n{exc.code}")
         output = buf.getvalue()
-        self.assertIn(AMEND_REFUSAL, output, self.note(output))
-        self.assertEqual(state_of(), before, self.note(output))
+        after = state_of()
+        context = self.note(f"{output}\nдо {before}\nпосле {after}")
+        self.assertNotIn(AMEND_REFUSAL, output, context)
+        self.assertNotIn("amend-tests: отказ", output, context)
+        self.assertNotEqual(after[2], before[2], context)
+        self.assertEqual(after[2], after[0], context)
+        self.assertEqual(after[3], before[3] + 1, context)
+        self.assertNotEqual(after[1], before[1], context)
+        digests, reason = acceptance_gates.long_lived_manifest(
+            t.id, store.get_task(self.conn, t.id), project.name)
+        self.assertEqual(reason, "", context)
+        self.assertEqual(digests.get(rel),
+                         hashlib.sha256(edited.encode("utf-8")).hexdigest(),
+                         self.note(f"перечень: {digests}"))
 
     def test_ac25_each_template_shape_refusal_by_its_reason(self):
         """Каждый отказ формы шаблона `long_lived` сверяется по своей причине, а не только по имени компонента.

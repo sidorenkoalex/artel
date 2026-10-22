@@ -1427,27 +1427,44 @@ class Ac11AmendLabelledRefusalTest(LabelledSandbox):
         for name, text in files.items():
             (folder / name).write_text(text, encoding="utf-8")
 
-    def assert_refused_without_writes(self, t, text: str, before: tuple) -> None:
-        self.assertIn(AMEND_REFUSAL, text, self.note(text))
-        self.assertEqual(self.state_of(t), before, self.note(
-            f"после отказа есть записи:\n{text}"))
+    def assert_passed(self, t, text: str, before: tuple) -> tuple:
+        """Проход (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, AC-21): вывод без отказа
+        G3б и без «amend-tests: отказ», `tests_locked_sha` сдвинут и равен
+        голове ветки документов, записей «правка планки» на одну больше."""
+        after = self.state_of(t)
+        context = self.note(f"{text}\nдо {before}\nпосле {after}")
+        self.assertNotIn(AMEND_REFUSAL, text, context)
+        self.assertNotIn("amend-tests: отказ", text, context)
+        self.assertNotEqual(after[2], before[2], context)
+        self.assertEqual(after[2], after[0], context)
+        self.assertEqual(after[3], before[3] + 1, context)
+        return after
+
+    def last_amend_detail(self, t) -> str:
+        return [r["detail"] or "" for r in store.task_steps(self.conn, t.id)
+                if r["action"] == amend.AMEND_ACTION][-1]
 
     def test_ac11_worktree_mode_refuses_labelled_files(self):
-        """Рабочая копия: правка `.test.jsx` планки, его удаление, правка только общего файла при лежащем `.test.jsx` и правка долгоживущего файла с меткой — отказ G3б без единой записи.
+        """Рабочая копия: правка `.test.jsx` планки, его удаление, правка только общего файла при лежащем `.test.jsx` и правка долгоживущего файла с меткой — проход проверками файлов с меткой, лок сдвинут (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, AC-21).
 
         Сценарий: задача `in_dev` с локом. Случаи правки Оператора в
         рабочей копии: (а) изменён `.test.jsx` планки; (б) `.test.jsx`
-        удалён из планки; (в) изменён только `.md` планки, `.test.jsx` без
-        изменений; (г) изменён долгоживущий файл с меткой кодовой ветки.
-        Вывод команды несёт текст отказа требования 8; голова ветки
-        документов, голова кодовой ветки, `tests_locked_sha` и число
-        записей «правка планки» прежние.
+        удалён из планки (критерий держит долгоживущий файл); (в) изменён
+        только `.md` планки, `.test.jsx` без изменений; (г) изменён
+        долгоживущий файл с меткой кодовой ветки. В каждом случае вывод без
+        отказа G3б и без «amend-tests: отказ», `tests_locked_sha` сдвинут
+        на голову ветки документов, записей «правка планки» на одну
+        больше. (а), (в) — голова кодовой ветки прежняя; (б) — деталь
+        записи несёт «удалены:» с путём `.test.jsx`, в дереве нового лока
+        файла нет; (г) — голова кодовой ветки сдвинута коммитом правки,
+        перечень нового лока несёт сумму правленого файла.
 
-        Ловит мутацию: файл «в правке» берётся только из снимка после правки
-        — удалённый `.test.jsx` не замечен; только из изменённых файлов —
-        случай (в) проходит дальше; долгоживущие файлы с меткой не
-        проверяются — случай (г) идёт прежним путём Python; отказ стоит
-        после коммита — голова ветки документов сдвинута.
+        Ловит мутацию: отказ G3б оставлен — ни один случай не проходит, лок
+        не сдвинут; удаление `.test.jsx` не переносится коммитом правки —
+        файл остаётся в дереве нового лока; долгоживущий файл с меткой
+        проверяется прежним путём Python — случай (г) отказывает; перечень
+        нового лока считается по прежней голове кодовой ветки — сумма
+        старого текста.
         """
         def modified(plank):
             out = dict(plank)
@@ -1471,29 +1488,51 @@ class Ac11AmendLabelledRefusalTest(LabelledSandbox):
             with self.subTest(case=label, seed=self.seed):
                 t, plank, rel, text = self.locked_task()
                 before = self.state_of(t)
+                jsx = next(n for n in plank if n.endswith(".test.jsx"))
+                edited = text + "// правка\n"
                 if change is None:
-                    self.write_code(t, rel, text + "// правка\n")
+                    self.write_code(t, rel, edited)
                 else:
                     self.wt_plank(t, change(plank))
                     if label == "удаление .test.jsx":
-                        jsx = next(n for n in plank if n.endswith(".test.jsx"))
                         (t.wt / TASKS_DIR / t.id / PLANK_DIR / jsx).unlink(
                             missing_ok=True)
-                self.assert_refused_without_writes(t, self.amend_text(t), before)
+                out = self.amend_text(t)
+                after = self.assert_passed(t, out, before)
+                context = self.note(f"{label}:\n{out}")
+                if change is None:
+                    self.assertNotEqual(after[1], before[1], context)
+                    digests, reason = acceptance_gates.long_lived_manifest(
+                        t.id, store.get_task(self.conn, t.id), t.target)
+                    self.assertEqual(reason, "", context)
+                    self.assertEqual(
+                        digests.get(rel),
+                        hashlib.sha256(edited.encode("utf-8")).hexdigest(),
+                        self.note(f"перечень: {digests}"))
+                else:
+                    self.assertEqual(after[1], before[1], context)
+                if label == "удаление .test.jsx":
+                    detail = self.last_amend_detail(t)
+                    self.assertIn("удалены:", detail, context)
+                    self.assertIn(jsx, detail.split("удалены:", 1)[1], context)
+                    tree = self.git("-C", str(self.clones[t.target]), "ls-tree",
+                                    "-r", "--name-only", after[2])
+                    self.assertNotIn(f"{PLANK_DIR}/{jsx}", tree, context)
 
     def test_ac11_from_branch_mode_refuses_labelled_files(self):
-        """`--from-branch`: `.test.jsx` с меткой в правке ветки документов или на её голове — отказ G3б без единой записи.
+        """`--from-branch`: `.test.jsx` с меткой в правке ветки документов или на её голове — проход проверками файлов с меткой, лок сдвинут на голову ветки документов (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, AC-21).
 
         Сценарий: задача `in_dev` с локом; поверх лока в ветку документов
         записан коммит: (а) с изменённым `.test.jsx`; (б) с изменённым
         только `.md` (`.test.jsx` лежит на голове). `amend-tests
-        --from-branch` выводит текст отказа требования 8; голова ветки
-        документов (после записанного коммита), голова кодовой ветки,
-        `tests_locked_sha` и число записей «правка планки» прежние.
+        --from-branch` — вывод без отказа G3б и без «amend-tests: отказ»;
+        `tests_locked_sha` равен голове ветки документов после записанного
+        коммита; записей «правка планки» на одну больше; голова кодовой
+        ветки прежняя.
 
-        Ловит мутацию: отказ добавлен только в режим рабочей копии —
-        `--from-branch` идёт прежним путём; проверяется только дифф лока и
-        головы — случай (б) проходит дальше.
+        Ловит мутацию: отказ G3б оставлен в `--from-branch` — лок не
+        сдвинут; проверки файлов с меткой отказывают годной правке
+        (строка группы `//` не читается) — «amend-tests: отказ».
         """
         for label, pick in (("правка .test.jsx", ".test.jsx"),
                             ("только общий файл", ".md")):
@@ -1506,8 +1545,9 @@ class Ac11AmendLabelledRefusalTest(LabelledSandbox):
                 self.assertNotEqual(self.docs_head(t), locked,
                                     self.note("правка не легла в ветку документов"))
                 before = self.state_of(t)
-                self.assert_refused_without_writes(
-                    t, self.amend_text(t, from_branch=True), before)
+                out = self.amend_text(t, from_branch=True)
+                after = self.assert_passed(t, out, before)
+                self.assertEqual(after[1], before[1], self.note(f"{label}:\n{out}"))
 
 
 # ---------------------------------------------------------------- AC-12
