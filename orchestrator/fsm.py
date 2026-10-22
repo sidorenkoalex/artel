@@ -1097,6 +1097,79 @@ def _behavior_change_declaration(task_id: str, t, spec_text: str) -> tuple:
     return "\n".join(item.line for item in items), ""
 
 
+def _replaced_tests_declaration(conn, task_id: str, t, spec_text: str) -> tuple:
+    """(деталь записи «утверждены заменяемые тесты» или `None` — записи
+    нет, причина отказа approve) по разделу SPEC «Заменяемые тесты» (SPEC
+    01M5GXZK2WTZ89AXQ7QY2RJD9R, требование 2). Канареечная задача — ни
+    сверки, ни записи. Раздела нет или он пуст: записи нет, а если у задачи
+    уже есть утверждение — пустая деталь (отзыв).
+
+    Непустой раздел сверяется по порядку: форма (`guard.
+    replaced_test_items`, те же тексты, что у CLI); решение профиля задачи
+    без отказа и в границе гейта исходов (`in_outcome_bounds`, решение
+    `skip` — вне границы); компонент каждого идентификатора — компонент
+    профиля; путь — под масками `tests` компонента и есть в голове main
+    репозитория задачи; матрица неослабления SPEC называет каждый
+    идентификатор (`mandate.matrix_refusals`, `test_ids`)."""
+    from .advance_gates import mandate
+    from .advance_gates.acceptance import in_outcome_bounds
+    if t["is_canary"]:
+        return None, ""
+    section = guard.REPLACED_TESTS_SECTION
+    items, errors = guard.replaced_test_items(spec_text)
+    if errors:
+        return None, "; ".join(errors)
+    if not items:
+        approved_before = any(r["action"] == mandate.REPLACED_TESTS_ACTION
+                              for r in store.task_steps(conn, task_id))
+        return ("" if approved_before else None), ""
+    decision = project_profile.for_task(conn, task_id)
+    if decision.refusal:
+        return None, (f"раздел «{section}» не сверить — решение профиля тестов "
+                      f"проекта: отказ: {decision.refusal}")
+    profile = decision.profile
+    if profile is None or not in_outcome_bounds(profile):
+        return None, (f"раздел «{section}» действует только у компонента с "
+                      f"отчётом; у проекта {decision.target} — раздел "
+                      f"«{guard.BEHAVIOR_CHANGE_SECTION}» или мандат Оператора")
+    misplaced = []
+    for item in items:
+        component, path, _name, _n = project_profile.parse_test_id(item.test_id)
+        if component != profile.component:
+            misplaced.append(f"{item.test_id} — компонента «{component}» нет "
+                             f"в профиле задачи (компонент профиля — "
+                             f"«{profile.component}»)")
+        elif not any(project_profile.mask_matches(mask, path)
+                     for mask in profile.tests):
+            misplaced.append(f"{item.test_id} — путь {path} вне масок tests "
+                             f"компонента {profile.component} "
+                             f"({', '.join(profile.tests) or 'масок нет'})")
+    if misplaced:
+        return None, f"раздел «{section}»: {'; '.join(misplaced)}"
+    repo = workspace.task_repo(task_id)
+    head = _main_head_for_declaration(repo)
+    if not head:
+        return None, (f"раздел «{section}»: git не ответил на голову "
+                      f"{config.MAIN_BRANCH} репозитория задачи ({repo}) — "
+                      f"сверить названные файлы не с чем")
+    missing = []
+    for item in items:
+        path = project_profile.parse_test_id(item.test_id)[1]
+        text, why = gitcmd.show(head, path, repo=repo)
+        if text is None:
+            missing.append(f"{item.test_id} — файла {path} нет в "
+                           f"{config.MAIN_BRANCH} ({why})")
+    if missing:
+        return None, (f"раздел «{section}» называет файлы, которых нет в "
+                      f"голове {config.MAIN_BRANCH} {head[:12]}: "
+                      f"{'; '.join(missing)}")
+    found = mandate.matrix_refusals(spec_text, [], conn=conn, task_id=task_id,
+                                    test_ids=[item.test_id for item in items])
+    if found:
+        return None, f"раздел «{section}»: матрица неослабления: {'; '.join(found)}"
+    return "\n".join(item.line for item in items), ""
+
+
 def _spec_protected_zones_refusal(conn, task_id: str, meta: dict) -> str:
     """Причина отказа `approve` на гейте SPEC по защищённым зонам либо
     пустая строка (SPEC 01M45FK56DWMNBRKA1VWM12H19, требования 2-3, AC-10):
@@ -1198,8 +1271,16 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
     # Раздел «Меняемое поведение» (SPEC 01M45FJD46BX45VHC36S4VS9QN,
     # требование 3) — тем же мягким отказом: каждый названный метод обязан
     # существовать в голове main репозитория задачи.
-    declared, reason = _behavior_change_declaration(
-        task_id, t, spec_text if foreign else _disk_spec_text(task_id))
+    declaration_text = spec_text if foreign else _disk_spec_text(task_id)
+    declared, reason = _behavior_change_declaration(task_id, t,
+                                                    declaration_text)
+    # Раздел «Заменяемые тесты» (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, требование
+    # 2) — сразу после сверки «Меняемое поведение» и до записи обеих:
+    # отклонённый approve не оставляет ни одной.
+    replaced = None
+    if not reason:
+        replaced, reason = _replaced_tests_declaration(conn, task_id, t,
+                                                       declaration_text)
     if reason:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
@@ -1212,6 +1293,11 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
                       test_integrity.DECLARED_CHANGE_ACTION, declared)
         print(f"[{task_id}] {test_integrity.DECLARED_CHANGE_ACTION}:\n"
               f"{declared}")
+    if replaced is not None:
+        from .advance_gates import mandate
+        store.journal(conn, task_id, "operator",
+                      mandate.REPLACED_TESTS_ACTION, replaced)
+        print(f"[{task_id}] {mandate.REPLACED_TESTS_ACTION}:\n{replaced}")
     if audit_fail:
         # После всех отказов гейта: запись о принятии остаётся только у
         # approve, который задачу с гейта действительно уводит.

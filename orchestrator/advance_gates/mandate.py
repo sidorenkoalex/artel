@@ -609,3 +609,30 @@ def matrix_refusals(text: str, elements: list[str], *, conn=None,
                          f"покрыто, а «Решение» не начинается с «ок при "
                          f"условии» с перечнем замен")
     return found
+
+
+# Утверждённые заменяемые тесты (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, требование
+# 2; ADR-0026 «Решение» п. 7): `approve` гейта SPEC пишет запись с этим
+# действием, деталь — строки пунктов раздела «Заменяемые тесты» в форме
+# `guard.ReplacedTest.line`, по одной на пункт; пустая деталь — отзыв.
+# Утверждённая замена — мандат: читается по журналу, не по SPEC.md, чтобы
+# правка раздела после `approve` его не меняла.
+REPLACED_TESTS_ACTION = "утверждены заменяемые тесты"
+
+
+def approved_replacements(conn, task_id: str) -> dict:
+    """{идентификатор теста: номер критерия} по последней записи
+    `REPLACED_TESTS_ACTION` задачи; записи нет или последняя — отзыв —
+    пусто. Строки детали разбираются тем же `guard.
+    parse_replaced_test_line`, что строки раздела."""
+    from .. import store
+    rows = [r for r in store.task_steps(conn, task_id)
+            if r["action"] == REPLACED_TESTS_ACTION]
+    if not rows:
+        return {}
+    found = {}
+    for line in (rows[-1]["detail"] or "").splitlines():
+        item, _reason = guard.parse_replaced_test_line(line)
+        if item is not None:
+            found[item.test_id] = item.criterion
+    return found

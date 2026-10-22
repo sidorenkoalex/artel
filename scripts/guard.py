@@ -305,7 +305,9 @@ def _js_literal_at(source: str, i: int) -> str | None:
 def _test_calls(source: str) -> list[tuple[int, str]]:
     """(строка головы вызова, имя теста) вызовов `plank_test_names`, в
     порядке файла; голова `.each(` с многострочной таблицей — строка, где
-    стоит `.each(`."""
+    стоит `.each(`. Шаблонная таблица `.each`…`` (SPEC
+    01M5GXZK2WTZ89AXQ7QY2RJD9R, требование 5) читается так же: имя — первый
+    аргумент вызова сразу за литералом."""
     calls = []
     for m in TEST_CALL_HEAD.finditer(source):
         pos = m.end()
@@ -314,6 +316,11 @@ def _test_calls(source: str) -> list[tuple[int, str]]:
             if close is None:
                 continue
             pos = close + 1
+        elif source.startswith(".each`", pos):
+            end = _skip_js_string(source, pos + len(".each"))
+            if end is None:
+                continue
+            pos = end
         if not source.startswith("(", pos):
             continue
         name = _js_literal_at(source, pos + 1)
@@ -340,6 +347,10 @@ _BANNED_MEMBER = re.compile(r"\.\s*(fails|skipIf|runIf|only)\b")
 _BANNED_SET_CONFIG = re.compile(r"(?<![\w$.])vi\s*\.\s*setConfig\b")
 _BAN_CALL = re.compile(
     r"(?<![\w$.])(it|test|describe|suite)((?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(")
+# Шаблонная таблица: цепочка, оканчивающаяся `.each`, и сразу литерал `` ` ``.
+_BAN_TABLE = re.compile(
+    r"(?<![\w$.])(it|test|describe|suite)"
+    r"((?:\s*\.\s*[A-Za-z_$][\w$]*)*?\s*\.\s*each)\s*`")
 _BAN_NUMBER = re.compile(
     r"[+-]?(?:0[xXoObB][0-9a-fA-F_]+|(?:\d[\d_]*(?:\.\d*)?|\.\d+)"
     r"(?:[eE][+-]?\d+)?)n?")
@@ -455,6 +466,23 @@ def _call_arguments(masked: str, match) -> tuple[int, int] | None:
     return None if second is None else (k, second)
 
 
+def _table_arguments(masked: str, match) -> tuple[int, int] | None:
+    """(открывающая, закрывающая) скобки аргументов шаблонной таблицы
+    `match` `_BAN_TABLE` (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R, требование 5):
+    первая пара скобок после литерала. В маске содержимое литерала
+    затёрто, кавычки сохранены — закрывающая `` ` `` следующая."""
+    close = masked.find("`", match.end())
+    if close < 0:
+        return None
+    k = close + 1
+    while k < len(masked) and masked[k].isspace():
+        k += 1
+    if k >= len(masked) or masked[k] != "(":
+        return None
+    end = _masked_closing(masked, k)
+    return None if end is None else (k, end)
+
+
 def _ban_findings(source: str) -> list[tuple[int, str]]:
     """(позиция, что найдено) запретов требования 7 в тексте файла с
     меткой."""
@@ -463,9 +491,11 @@ def _ban_findings(source: str) -> list[tuple[int, str]]:
              for m in _BANNED_MEMBER.finditer(masked)]
     found += [(m.start(), "vi.setConfig")
               for m in _BANNED_SET_CONFIG.finditer(masked)]
-    for m in _BAN_CALL.finditer(masked):
+    calls = [(m, _call_arguments(masked, m)) for m in _BAN_CALL.finditer(masked)]
+    calls += [(m, _table_arguments(masked, m))
+              for m in _BAN_TABLE.finditer(masked)]
+    for m, span in calls:
         callee = m.group(1) + "".join(m.group(2).split())
-        span = _call_arguments(masked, m)
         if span is None:
             continue
         args = _top_level_parts(masked, span[0] + 1, span[1])
@@ -485,9 +515,9 @@ def _ban_findings(source: str) -> list[tuple[int, str]]:
         if len(AC_LABEL_LITERAL.findall(name)) > 1:
             found.append((left, f"две метки AC-<n>: в одном литерале имени "
                                 f"«{name}»"))
-        if m.group(1) == "describe" and AC_LABEL_LITERAL.match(name):
-            found.append((left, f"литерал describe с меткой AC-<n>: в начале "
-                                f"«{name}»"))
+        if m.group(1) in ("describe", "suite") and AC_LABEL_LITERAL.match(name):
+            found.append((left, f"литерал {m.group(1)} с меткой AC-<n>: в "
+                                f"начале «{name}»"))
     return sorted(set(found))
 
 
@@ -498,8 +528,10 @@ def plank_ban_errors(files: list[tuple[str, str]],
     `.runIf`, `.only`, `vi.setConfig`; объект с ключом `retry`/`timeout`
     или числовой литерал в аргументах первого уровня вызова
     `it`/`test`/`describe`/`suite` (у `.each(t)(…)` — во второй паре
-    скобок); две метки `AC-<n>: ` в литерале имени; литерал `describe` с
-    меткой в начале. Файлы pytest и прочие без метки не проверяются.
+    скобок, у шаблонной таблицы `.each`…`(…)` — в первой паре после
+    литерала); две метки `AC-<n>: ` в литерале имени; литерал `describe`
+    или `suite` с меткой в начале. Файлы pytest и прочие без метки не
+    проверяются.
     Отказ — «<файл>:<строка>: <что найдено> — запрещено в тексте планки»."""
     errors = []
     for label, source in files:
@@ -4098,9 +4130,19 @@ def acceptance_test_files(tdir: Path, rule: "PlankRule | None" = None
         seen = {label for label, _text in files}
         files += [(str(f.relative_to(tdir)), text) for f, text
                   in _rule_plank_files(tdir, rule, tests_only=True)
-                  if rule.is_labelled(f.name)
+                  if is_labelled_plank_test(rule, f.name)
                   and str(f.relative_to(tdir)) not in seen]
     return files
+
+
+def is_labelled_plank_test(rule: "PlankRule", name: str) -> bool:
+    """Тестовый файл планки с меткой `AC-<n>: ` по правилу `rule`: `name` —
+    путь от `acceptance_tests/`, только первый уровень (SPEC
+    01M5GXZK2WTZ89AXQ7QY2RJD9R, требование 6). Один предикат на диск
+    (`acceptance_test_files`) и на снимок ветки документов (`amend-tests
+    --from-branch`), чтобы их составы не разошлись."""
+    return ("/" not in name and rule.owns(name) and rule.is_test(name)
+            and rule.is_labelled(name))
 
 
 # --------------------------------------------------------------------------
@@ -5029,6 +5071,104 @@ def behavior_change_errors(path: Path | str, text: str, meta: dict) -> list[str]
     return [f"{path}: {e}" for e in behavior_change_items(text)[1]]
 
 
+# --------------------------------------------------------------------------
+# Раздел SPEC «## Заменяемые тесты» (SPEC 01M5GXZK2WTZ89AXQ7QY2RJD9R,
+# требование 1; ADR-0026 «Решение» п. 7): тесты компонента с отчётом,
+# которые заменяются тестом критерия `AC-<n>`. Форма проверяется здесь — в
+# CLI и на переходе `spec_writing -> spec_gate`; сверку с профилем и `main`
+# делает `approve` гейта SPEC, разбор тем же `replaced_test_items`, а
+# запись журнала читается обратно `parse_replaced_test_line`.
+REPLACED_TESTS_SECTION = "Заменяемые тесты"
+_REPLACED_HEAD = re.compile(r"^-\s+`([^`]*)`(.*)$")
+_REPLACED_TAIL = re.compile(r"^\s*→\s*AC-(\d+):(.*)$")
+_TEST_ID_FORM = ("<компонент>:<путь>::<полное имя>[#<n>]")
+
+
+class ReplacedTest(NamedTuple):
+    """Пункт раздела «Заменяемые тесты»: идентификатор теста компонента,
+    номер критерия, причина и строка пункта в разобранной форме."""
+
+    test_id: str
+    criterion: int
+    reason: str
+
+    @property
+    def line(self) -> str:
+        return f"- `{self.test_id}` → AC-{self.criterion}: {self.reason}"
+
+
+def is_test_id_form(text: str) -> bool:
+    """Идентификатор теста компонента той же формы, что принимает
+    `orchestrator/project_profile.parse_test_id` (guard не импортирует
+    профиль: тот сам импортирует guard), — тот же разбор `partition`."""
+    component, sep, rest = text.partition(":")
+    path, sep2, name = rest.partition(TEST_NAME_SEP)
+    return bool(sep and sep2 and component and path and name)
+
+
+def parse_replaced_test_line(line: str) -> tuple:
+    """(ReplacedTest | None, причина) одной строки раздела. Номер критерия
+    здесь не сверяется с «Критерии приёмки» — это делает
+    `replaced_test_items`, у которого есть весь SPEC."""
+    stripped = line.strip()
+    if not stripped.startswith(BEHAVIOR_CHANGE_ITEM_PREFIX):
+        return None, "строка непустого раздела не начинается с «- »"
+    head = _REPLACED_HEAD.match(stripped)
+    if head is None:
+        return None, ("идентификатор теста не в обратных кавычках — нужно "
+                      f"`{_TEST_ID_FORM}`")
+    test_id, rest = head.group(1), head.group(2)
+    if not is_test_id_form(test_id):
+        return None, (f"идентификатор `{test_id}` не той формы — нужно "
+                      f"`{_TEST_ID_FORM}`")
+    tail = _REPLACED_TAIL.match(rest)
+    if tail is None:
+        return None, "нет «→ AC-<n>:» после идентификатора"
+    reason = tail.group(2).strip()
+    if not reason:
+        return None, "пустая причина после «→ AC-<n>:»"
+    return ReplacedTest(test_id, int(tail.group(1)), reason), ""
+
+
+def replaced_test_items(text: str) -> tuple[list, list[str]]:
+    """(пункты раздела «Заменяемые тесты» SPEC `text`, нарушения формы).
+    Раздела нет, он пуст или несёт одну шаблонную заглушку `<…>` — пусто
+    без ошибок. Нарушение называет строку раздела: строка не с «- »,
+    идентификатор не в обратных кавычках или не той формы, нет
+    «→ AC-<n>:», пустая причина, критерия нет в «Критерии приёмки», повтор
+    идентификатора. Пустые строки раздела пропускаются."""
+    body = section_body(text, REPLACED_TESTS_SECTION)
+    if not body.strip() or _is_template_placeholder(body):
+        return [], []
+    criteria = {int(n) for n in AC_ITEM.findall(
+        section_body(text, "Критерии приёмки"))}
+    items, errors, seen = [], [], set()
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        item, reason = parse_replaced_test_line(line)
+        if item is not None and item.criterion not in criteria:
+            item, reason = None, (f"критерия AC-{item.criterion} нет в разделе "
+                                  f"«Критерии приёмки»")
+        if item is not None and item.test_id in seen:
+            item, reason = None, f"идентификатор {item.test_id} назван повторно"
+        if item is None:
+            errors.append(f"раздел «{REPLACED_TESTS_SECTION}», строка "
+                          f"«{line.strip()}»: {reason}")
+            continue
+        seen.add(item.test_id)
+        items.append(item)
+    return items, errors
+
+
+def replaced_tests_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Нарушения формы раздела «Заменяемые тесты» SPEC; раздела нет —
+    ошибок нет. `path` — только для текста ошибок."""
+    if (meta.get("type") or "") != "spec":
+        return []
+    return [f"{path}: {e}" for e in replaced_test_items(text)[1]]
+
+
 # Сверка пар раздела «Меняемое поведение» с кодом main на `approve` гейта
 # SPEC (SPEC 01M4NZ5KT0PX0RYWTSTN1XEFS5, требования 4-5, 7): разбор тот же,
 # что у гейта неослабления — `_is_assertion`/`_assertion_kind` для вида,
@@ -5598,6 +5738,7 @@ def _content_errors(label: str, text: str) -> list[str]:
         errors.extend(spec_merge_after_errors(label, meta))
         errors.extend(division_section_errors(label, text, meta))
         errors.extend(behavior_change_errors(label, text, meta))
+        errors.extend(replaced_tests_errors(label, text, meta))
 
     if atype in ("spec", "plan"):
         errors.extend(role_budget_cap_errors(label, meta))
