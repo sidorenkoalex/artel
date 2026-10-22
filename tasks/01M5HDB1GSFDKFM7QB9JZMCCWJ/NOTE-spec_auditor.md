@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде подтверждены: suite_run.py:771 cmd_suite_run, :774 _db, :775 resolve_task_id, :779 deliver_journal, :780 --wait, :792 --failed, :802 _running, :812 _acquire_lock, :819 _new_log, :826-827 снятие маркера, :829 Popen, :838 run.json; _read_failed :224; role_prompt.py:413 suite_run_note (вызов только :134, ветка developer); readonly_db :60/:155/:269/:377 и пять методов — строки верны.
-- store.db() (store.py:387) пишет: mkdir, WAL, migrate — поэтому разрешение id для developer только прямым sqlite3 mode=ro (как _db:171).
-- _running (:705) и suite_lock.holder (:142) только читают — проверку «уже идёт» можно ставить до deliver_journal.
-- Песочницы tests/ (sandbox.py:663 isolate_keychain_and_role, SuiteRunStand :175) снимают ARTEL_ROLE — тесты «процесса Оператора» в шаге developer не покраснеют.
-- docs/codebase-map.md в COMMON_ZONES (config.py:814).
-- Смена ROLES не теряет утверждений — guard.weakened_helpers (:1999) её не видит.
+- Круг 2 (spec_sha f1e2a7df…): О1–О4 гейта перенесены в SPEC (AC-1 ro-подмена + deliver_journal + mode=ro + полный id; AC-2 позитивная форма; AC-4 --wait 0/--failed под ro).
+- Факты о коде снова подтверждены: suite_run.py:771–838, подсказки _pult_command без флагов — :744, :760, :797, :801; role_prompt.py:413/:134, ревьювер внешнего проекта :335; test_ac25 :1441 — подстрока-префикс, останется зелёным.
+- readonly_db: role_process :216–222 подменяет store.db на readonly_db и ставит ARTEL_ROLE=self.role.
 
 ## Где остановился
-- SPEC-AUDIT.md записан: verdict concerns, status ready; guard ок.
-- Отклонения: О1 — тест отказа developer под подменой БД только на чтение (SPEC тр. 8) без AC; О2 — deliver_journal в случае «уже идёт» не определён; О3 — у разрешения префикса в AC-1 нет наблюдаемого признака; О4 — позитивная часть AC-5 не проверяема.
+- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
+- Остаточные пункты: 1) позитивная часть AC-5 без формы; 2) deliver_journal в случае «уже идёт» не определён (ТЗ п.3 «без новых записей»); 3) матрица ANSWER-1 ссылается на «AC-3 SPEC» старой нумерации (теперь AC-1).
+
+## Не сработало
+- `ls`/`$VAR` в Bash недоступны; `git grep -A` — опции до шаблона.
 
 ## Чего не хватило
-- Bash в рабочем каталоге требует абсолютных путей и не пропускает `$VAR` — проще `git grep` из `cd <wt> &&` и Read.
+- Ничего существенного.
