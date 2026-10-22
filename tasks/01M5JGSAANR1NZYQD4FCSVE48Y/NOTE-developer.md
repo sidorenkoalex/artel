@@ -1,15 +1,16 @@
 # Записка developer
 
 ## Выяснено
-- Возврат из verifying (CI 39862690857): SQL в `project_profile.for_task_target` (`SELECT zones, zones_extension FROM tasks`). Заменён на `store.task_exists` + `store.get_task` (store.py не тронут — «только чтение» по SPEC). Нет строки — пустые зоны, как раньше.
-- `tests/test_multitarget.py::SqlOnlyInStoreTest` сканирует только `orchestrator/*.py` верхнего уровня; в диффе ветки SQL больше нет (grep по `git diff main -- orchestrator`).
-- Прочее устройство — см. PLAN.md: `decide_task`/`for_task`/`for_task_target`/`for_row`/`is_multi`, `outcome_integrity._components_gate`, `tests_writing._tests_writing_foreign_plank_gate`, мандат по компонентам записи.
+- Итерация 2 (R1-F1): добавлен `tests/test_task_component_places.py`, 14 тестов на лёгкой песочнице `TaskIdSchemaConnTmpRootTest` с учебной записью `uchplaces` (`backend`/`frontend`), id задач детерминированы. Места: `acceptance_suite`, `_test_integrity_diff_gate`, `_external_helpers`, `matrix_refusals`, предел `full_suite`/`suite-run`, заявка мутации, `_plank_rule_refusal`, `_exit_without_profile`, `pull._materialize_and_run_plank`. Идёт 5 с.
+- 12 временных мутаций (скрипт в worktree, удалён) — все красят свой класс, включая мутацию ревьювера (`acceptance_suite` → `profile = None`; `elif False` в `_test_integrity_diff_gate`).
+- REVIEW.md: R1-F1 → `fixed`. PLAN.md: шаг 7, status: ready. Карта регенерирована.
+- Ранее: SQL в `project_profile` заменён функциями store (`SqlOnlyInStoreTest`).
 
 ## Не сработало
-- Длинный python-heredoc в Bash — «Parser aborted»; `cat`/`ls`/`sed -i` недоступны.
+- `rm`, `cat`, `ls` в песочнице нет; удалял через `python3 -c "os.remove(...)"`. В Bash `$var` требует подтверждения.
 
 ## Где остановился
-- Шаг завершён: test_multitarget + 4 долгоживущих + components + project_profile_gates — 119 passed; plank-run — 69 passed; карта регенерирована; PLAN.md status: ready.
+- Шаг завершён: новые тесты + test_multitarget + task_component — 78 passed; guard ок.
 
 ## Чего не хватило
-- Правило «SQL только в store.py» (ADR-0003 3ж) не было в брифе — нашлось только красным CI.
+- Готовой песочницы учебной записи в `tests/` (она живёт только в разовой планке `_training.py`) — пришлось скопировать минимум в новый файл.
