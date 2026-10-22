@@ -1,18 +1,17 @@
-# Записка developer
+# Записка developer (итерация 2, после ревью 1)
 
 ## Выяснено
-- Планка перехватывает `subprocess.Popen` модуля (argv с `run-task`) — звать `subprocess.Popen`, не импортом имени.
-- Реализация: развилка в `cmd_canary` после `_set_plan` -> `_cmd_canary_parallel` -> `_run_children`; потоки-ожидатели зовут `_wait_child(proc)` по глобальному имени, исходы — в `queue.Queue`; главный поток ждёт `queue.get()` (на macOS сигнал его прерывает — проверено). Остановка `_stop_children` под `_SignalDeferral`, отложенный сигнал вынимается из `deferral.pending` до `release()` (не поднимается заново).
-- `_interrupt_on_signal` получил необязательный перечень сигналов; родитель ставит ещё SIGINT.
-- Сверка формы sha — первой строкой `cmd_canary_run_task` (`reference_cache.SHA_FORM`).
-- Планка: 29/29 зелёная; tests/test_canary_parallel.py 9 тестов, 6 мутаций пойманы.
+- R1-F1 закрыт только тестами: в `tests/test_canary_parallel.py` +7 методов (AC-21 ×2, AC-20, AC-14, AC-19, AC-5/AC-17, верхний регистр sha). Код `orchestrator/` не менялся.
+- В `_CHILD` добавлены режимы `term_exit` (SIGTERM → note("term") + `os._exit`) и `term_hold` (обработчик ждёт канал `<шаблон>.term`); `run_parallel` создаёт оба FIFO на шаблон и принимает `extra` (например `--result-file`).
+- Подмена `_wait_child` — `_WaitFault` (первый вызов ждёт `ready`, бросает).
+- 8 временных мутаций canary.py — каждая краснит свой тест (список в PLAN «Замечания ревью»).
+- tests/test_canary_parallel.py 17 passed; затронутые модули 101 passed; планка 29 passed.
 
 ## Не сработало
-- `pytest -n 4` по tests/ — узлы падают (conftest), гонять последовательно.
-- Составные bash-команды и `rm` недоступны: удалять файл через `python3 -c "os.unlink"`.
+- Bash-heredoc с python отказан фильтром («brace with quote») — мутации гонял временным файлом `_mutations_tmp.py` в worktree, затем удалён через `os.unlink`.
 
 ## Где остановился
-- Шаг сдан: PLAN status: ready, guard ок, планка 29/29. suite-run №1 оборван пределом 1500 с (нагрузка), 2 упавших вне диффа (spec_audit_flow AC-9, outcome_gate AC-4) — по именам зелёные.
+- suite-run №2 запущен; PLAN status: ready после guard.
 
 ## Чего не хватило
 - Ничего существенного.

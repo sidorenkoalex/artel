@@ -113,6 +113,34 @@ schema_version: 5
   test_ac4_side_not_started_or_timeout_refuses_naming_side`; модули вне
   диффа, повтор по именам — оба зелёные (346 с).
 
+## Замечания ревью, итерация 1
+- R1-F1 — fixed. В `tests/test_canary_parallel.py` добавлены долгоживущие
+  тесты (код `orchestrator/` не менялся); `_CHILD` получил режимы
+  `term_exit`/`term_hold` (обработчик SIGTERM дочернего, `term_hold` держит
+  его на канале `<шаблон>.term`), `run_parallel` — параметр `extra`:
+  1. AC-21: `WaitFailureTest::test_wait_exception_red_row_group_stopped_queue_goes_on`,
+     `::test_wait_exception_no_second_row_when_row_exists` (подмена `_wait_child`);
+  2. AC-20: `WaitFailureTest::test_base_exception_in_wait_then_signal_during_stop`;
+  3. AC-14: `StopTest::test_second_signal_does_not_interrupt_stop`;
+  4. AC-19: `StopTest::test_killed_child_with_own_row_gets_no_duplicate`
+     (строки `canary_runs` и файл результата);
+  5. AC-5, AC-17: `ParentRefusalTest::test_repeated_template_refused_before_sha_and_registry`,
+     `::test_live_run_stamp_refused_without_receiver_and_children`;
+  6. AC-9 верхний регистр: новый метод
+     `RunTaskShaTest::test_upper_case_sha_refused_before_record` (прежний
+     метод не тронут).
+- Временные мутации `orchestrator/canary.py` (код возвращён, `git status`
+  без `canary.py`), каждая краснит названный тест:
+  «`Exception` из `_wait_child` пробрасывается» → оба AC-21; «поздний сигнал
+  не в коде выхода» → AC-20; «поздний сигнал подменяет первый» и «остановка
+  в except-ветке без откладывания» → AC-14; «без сверки `_has_run_row`» →
+  AC-19 и AC-21 со строкой; «приёмник до `_live_run_record`» → AC-17;
+  «выход без остановки дочерних» → AC-20 и тесты StopTest; «сверка sha по
+  `.lower()`» → верхний регистр.
+- `tests/test_canary_parallel.py` — 17 passed; затронутые модули — 101
+  passed; `plank-run` — 29 passed; `suite-run` №2 (полный набор) — зелёный:
+  6432 прошло, 0 упало, 2 пропущено.
+
 ## Риски
 - Конкурентный `Popen.wait` из потока-ожидателя и из остановки: `Popen`
   держит `_waitpid_lock`, ожидание со сроком при занятом замке только
