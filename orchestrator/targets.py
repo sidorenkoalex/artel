@@ -463,6 +463,16 @@ def _check_component_rules(name: str, here: str, fields: dict,
     """Правила компонента, зависящие от записи и соседних полей. Шаблон
     `long_lived`: форма → «шаблон или пара» → наличие (SPEC
     01M5AA5TS90RDJ2AFXB882WTPD, требование 1)."""
+    # Слои (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 1): разбор Python
+    # годен только тестам pytest.
+    layers = fields.get("layers") or ()
+    for layer in layers:
+        if layer != "python-ast":
+            raise TargetsError(f"{here}: поле 'layers' — '{layer}': допустим "
+                               f"только python-ast")
+    if layers and not _is_pytest_command(fields.get("command")):
+        raise TargetsError(f"{here}: поле 'layers' — python-ast у команды "
+                           f"не pytest")
     pair = ("long_lived_dir", "long_lived_name")
     if "long_lived" in fields:
         reason = _long_lived_shape_error(fields)
