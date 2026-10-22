@@ -23,7 +23,9 @@
 ## Не сработало
 
 ## Где остановился
-- Далее: amend.py (снять LABELLED_REFUSAL, проверки файлов с меткой), три метода AC-21, PLAN.md
-  с приложениями к templates/SPEC.md и skills/spec-authoring.md, карта.
+- Шаг 2 (после таймаута): код весь в коммите d192d330 (WIP-чекпоинт). Осталось: итог suite-run,
+  plank-run, guard на PLAN.md, status: ready.
+- Итог шага 2: suite-run №1 зелёный (6441 прошло, 0 упало, 2 пропущено); plank-run 8 passed;
+  долгоживущие файлы задачи 26 passed; guard ок; PLAN.md status: ready. Сдано.
 
 ## Чего не хватило

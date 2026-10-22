@@ -2,7 +2,7 @@
 task: 01M5GXZK2WTZ89AXQ7QY2RJD9R
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
