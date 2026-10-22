@@ -2,7 +2,7 @@
 task: 01M5HJ4ZWRTB9481JC7SVYQ07B
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -81,7 +81,11 @@ timeout -o timeout=120 -q`, правка откачена `git checkout -- <фа
 `tests/test_invariants.py::DeterministicTestsLintTest`) — `45 passed, 140
 subtests passed in 11.72s`.
 
-Число тестов набора: SUITE_COUNTS.
+Число тестов набора: на ветке — `suite-run №1` (`artel.py suite-run
+01M5HJ4ZWRTB9481JC7SVYQ07B`), полный набор зелёный: `6475 passed, 2
+skipped, 6852 subtests passed in 1066.06s`, всего 6477 тестов; до задачи —
+6468 (= 6477 − 9: новый файл несёт ровно 9 методов, других изменений в
+`tests/` нет), после — 6477, плюс ровно 9.
 
 ## Покрытие требований
 
