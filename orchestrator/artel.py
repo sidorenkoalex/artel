@@ -178,8 +178,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   admit [--revoke] [--set <имя>] <роль> <модель> [<роль> <модель> ...]
         --basis "<основание>" |
   pair-resume <роль> <модель> "<решение>" |
-  canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] [--detach] |
+  canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] [--detach] [--parallel] |
            --detach: отвязанный запуск штатный для сессии Оператора |
+           --parallel: задачи отдельными процессами, не более двух сразу |
   canary pool-seal [--during-canary "<основание>"] |
   canary live [--drop <run_stamp> "<основание>"] |
   prune [--execute] | explore-stats [--days N] [--role <роль>] |
@@ -1561,6 +1562,11 @@ def _cmd_canary(rest: list) -> None:
     if rest and rest[0] == "run-task":
         _cmd_canary_run_task(rest[1:])
         return
+    # `--parallel` (SPEC 01M5H24PZXZTBM03SF6V576S5P, требование 1) — до
+    # ветки `--detach`: отвязанный процесс получает флаг в своём argv, и
+    # повтор должен отказать здесь, а не в нём.
+    if rest.count("--parallel") > 1:
+        sys.exit("canary: повторный --parallel")
     if "--detach" in rest:
         if rest.count("--detach") != 1 or "--result-file" in rest:
             sys.exit("canary: повторный или несовместимый --detach")
@@ -1579,6 +1585,11 @@ def _cmd_canary(rest: list) -> None:
     # той же БД в файл не попадает, а обрыв сигналом свою строку отдаёт.
     stamps: list = []
     options = {} if result_path is None else {"on_run_stamp": stamps.append}
+    # Без флага — прежний набор именованных аргументов, по образцу
+    # `on_run_stamp`.
+    if "--parallel" in rest:
+        rest = [arg for arg in rest if arg != "--parallel"]
+        options["parallel"] = True
     result = {"status": "complete"}
     try:
         canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest),
