@@ -60,7 +60,6 @@ import io
 import json
 import os
 import random
-import select
 import shutil
 import signal
 import stat
@@ -75,6 +74,7 @@ from unittest import mock
 from orchestrator import (acceptance, config, doctor, idgen, project_profile,
                           stack, store, suite_run)
 from orchestrator.advance_gates import two_sided
+from tests.fd_wait import high_fd, select_limited, wait_readable
 from tests.sandbox import RealGitSandbox, artel_target_entry, make_project_repo
 
 LETTERS = "abcdefghijkmnpqrstuvwxyz"
@@ -1238,6 +1238,10 @@ class VitestReporterTest(ReportSandbox):
         fifo = case["fake"].dir / "fifo"
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        if not select_limited():
+            # Номер выше FD_SETSIZE в каждом прогоне: ожидание держится и
+            # там, где исполнитель xdist уже занял тысячу дескрипторов.
+            reader = high_fd(self, reader)
         self.addCleanup(os.close, reader)
         run, out = self.full_vitest(case, [vitest_test("src/a.test.js", "ok")],
                                     fifo=str(fifo), sleep=120)
@@ -1245,7 +1249,7 @@ class VitestReporterTest(ReportSandbox):
         self.assertTrue(case["fake"].runs(), self.note("раннер не запускался"))
         gone = False
         while True:
-            ready, _, _ = select.select([reader], [], [], CHILD_GUARD_SEC)
+            ready = wait_readable(reader, CHILD_GUARD_SEC)
             if not ready:
                 break
             try:

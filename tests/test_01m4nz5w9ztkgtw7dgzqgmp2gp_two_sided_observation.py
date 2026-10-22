@@ -542,6 +542,83 @@ def location_found(extra: list, path: str, line: int, text: str,
     return False
 
 
+# Сдвиг литерала голого `assert` от значения стороны — вне диапазона сдвига
+# `new` от `old` (1…3999): иначе на части зёрен `new == bare_old`, и старая
+# версия голого `assert` зеленеет на ветке (SPEC 01M5G6PDQA7AYDYDPA7DD5JD4S,
+# зерно 189949286).
+NEW_SHIFT_LIMIT = 4000
+BARE_SHIFT = NEW_SHIFT_LIMIT
+
+
+def location_literals(seed: int) -> dict:
+    """Литералы фикстуры `test_ac1_outcome_carries_relative_assertion_location`
+    от зерна: имена класса, файлов, модуля помощника и ветки, значения
+    `app.VALUE` сторон, литералы утверждений и тексты файлов. При любом зерне
+    `bare_old != new`, `bare_new != old`, `old != new`, а `sent_other` и
+    `sent_same` не равны ни `old`, ни `new`."""
+    rng = random.Random(seed)
+    cls = f"Fx{word(rng).capitalize()}Test"
+    path = f"tests/test_fx_{word(rng)}.py"
+    helper_mod = f"fxcheck_{word(rng)}"
+    old = rng.randrange(1000, 5000)
+    new = old + rng.randrange(1, NEW_SHIFT_LIMIT)
+    bare_old, bare_new = old + BARE_SHIFT, new + BARE_SHIFT
+    sent_other = new + 10000 + rng.randrange(1000)
+    sent_same = sent_other + 20000
+    header = (f"from tests.{helper_mod} import check_other\n\n\n"
+              f"def check_same(value):\n"
+              f"    assert value == {sent_same}, 'помощник того же файла'\n")
+
+    def source(value: int, bare: int, green: bool) -> str:
+        return fixture_source(cls, {
+            "test_self": [f"self.assertEqual(app.VALUE + 0, {value})"],
+            "test_bare": [f"assert app.VALUE * 1 == {bare}"],
+            "test_other": ["check_other(app.VALUE)",
+                           f"self.assertEqual(app.VALUE, {value})"],
+            "test_same": ["check_same(app.VALUE)",
+                          f"self.assertEqual(app.VALUE, {value})"],
+            "test_green": (["self.assertTrue(app.VALUE)"] if green else
+                           [f"self.assertEqual(app.VALUE - 0, {value})"]),
+        }, header)
+
+    return {
+        "cls": cls, "path": path, "helper_mod": helper_mod,
+        "helper_path": f"tests/{helper_mod}.py",
+        "old": old, "new": new, "bare_old": bare_old, "bare_new": bare_new,
+        "sent_other": sent_other, "sent_same": sent_same,
+        "helper_source": (f"def check_other(value):\n"
+                          f"    assert value == {sent_other}, 'помощник другого файла'\n"),
+        "base_source": source(old, bare_old, green=False),
+        "head_source": source(new, bare_new, green=True),
+        "base_app": f"VALUE = {old}\n", "head_app": f"VALUE = {new}\n",
+        "branch": f"task/fx-{word(rng)}",
+    }
+
+
+class LocationLiteralsTest(unittest.TestCase):
+
+    def test_literals_never_collide(self):
+        """`location_literals` на зёрнах 0…19999 и 189949286, 12, 9694, 11783 даёт попарно различные значения сторон и литералов утверждений.
+
+        Сценарий: для каждого зерна `bare_old != new`, `bare_new != old`,
+        `old != new`, `sent_other` и `sent_same` не равны ни `old`, ни
+        `new`.
+
+        Ловит мутацию: сдвиг голого `assert` возвращён к 7 при сдвиге `new`
+        из 1…3999 — на зерне 189949286 `new == bare_old`; `sent_same`
+        выбран из диапазона, пересекающего `new`.
+        """
+        bad = []
+        for seed in [*range(20000), 189949286, 12, 9694, 11783]:
+            v = location_literals(seed)
+            if not (v["bare_old"] != v["new"] and v["bare_new"] != v["old"]
+                    and v["old"] != v["new"]
+                    and v["sent_other"] not in (v["old"], v["new"])
+                    and v["sent_same"] not in (v["old"], v["new"])):
+                bad.append((seed, v["old"], v["new"]))
+        self.assertEqual(bad[:5], [], f"совпадения на {len(bad)} зёрнах")
+
+
 class OutcomeLocationTest(GitignoreCommittedRealGitSandbox):
     """`two_sided.run` на настоящем репозитории песочницы: база на main,
     голова на ветке."""
@@ -570,51 +647,65 @@ class OutcomeLocationTest(GitignoreCommittedRealGitSandbox):
         """
         seed = random.randrange(1 << 30)
         print(f"зерно: {seed}")
-        rng = random.Random(seed)
-        note = lambda text: f"{text} (зерно: {seed})"  # noqa: E731
-        cls = f"Fx{word(rng).capitalize()}Test"
-        path = f"tests/test_fx_{word(rng)}.py"
-        helper_mod = f"fxcheck_{word(rng)}"
-        helper_path = f"tests/{helper_mod}.py"
-        old = rng.randrange(1000, 5000)
-        new = old + rng.randrange(1, 4000)
-        bare_old, bare_new = old + 7, new + 7
-        sent_other = new + 10000 + rng.randrange(1000)
-        sent_same = sent_other + 20000
-        helper_source = (f"def check_other(value):\n"
-                         f"    assert value == {sent_other}, 'помощник другого файла'\n")
-        header = (f"from tests.{helper_mod} import check_other\n\n\n"
-                  f"def check_same(value):\n"
-                  f"    assert value == {sent_same}, 'помощник того же файла'\n")
-
-        def source(value: int, bare: int, green: bool) -> str:
-            return fixture_source(cls, {
-                "test_self": [f"self.assertEqual(app.VALUE + 0, {value})"],
-                "test_bare": [f"assert app.VALUE * 1 == {bare}"],
-                "test_other": ["check_other(app.VALUE)",
-                               f"self.assertEqual(app.VALUE, {value})"],
-                "test_same": ["check_same(app.VALUE)",
-                              f"self.assertEqual(app.VALUE, {value})"],
-                "test_green": (["self.assertTrue(app.VALUE)"] if green else
-                               [f"self.assertEqual(app.VALUE - 0, {value})"]),
-            }, header)
-
-        base_source = source(old, bare_old, green=False)
-        head_source = source(new, bare_new, green=True)
-        branch = f"task/fx-{word(rng)}"
-        for rel, text in (("app.py", f"VALUE = {old}\n"), (path, base_source),
-                          (helper_path, helper_source)):
+        lit = location_literals(seed)
+        for rel in (lit["path"], lit["helper_path"]):
             (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
-            (self.root / rel).write_text(text, encoding="utf-8")
+        (self.root / "app.py").write_text(lit["base_app"], encoding="utf-8")
+        (self.root / lit["path"]).write_text(lit["base_source"], encoding="utf-8")
+        (self.root / lit["helper_path"]).write_text(lit["helper_source"],
+                                                    encoding="utf-8")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "база")
         base_sha = self.git("rev-parse", "HEAD").strip()
-        self.checkout(branch, create=True)
-        (self.root / "app.py").write_text(f"VALUE = {new}\n", encoding="utf-8")
-        (self.root / path).write_text(head_source, encoding="utf-8")
+        self.checkout(lit["branch"], create=True)
+        (self.root / "app.py").write_text(lit["head_app"], encoding="utf-8")
+        (self.root / lit["path"]).write_text(lit["head_source"], encoding="utf-8")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "голова")
         self.checkout(config.MAIN_BRANCH)
+        self.check_relative_location(seed, base_sha, lit["branch"])
+
+    def test_ac1_relative_location_on_colliding_seed(self):
+        """Сценарий `test_ac1_outcome_carries_relative_assertion_location` на зерне 189949286 зелёный.
+
+        Сценарий: подготовка репозитория — как в методе со случайным
+        зерном, литералы — `location_literals(189949286)`; на этом зерне
+        сдвиг `new` от `old` равен 7, прежний сдвиг голого `assert`.
+
+        Ловит мутацию: сдвиг голого `assert` возвращён к 7 — на этом зерне
+        `new == bare_old`, старая версия `test_bare` зелёная на ветке, и
+        `results` несёт для неё не «пройден».
+        """
+        seed = 189949286
+        lit = location_literals(seed)
+        for rel in (lit["path"], lit["helper_path"]):
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / "app.py").write_text(lit["base_app"], encoding="utf-8")
+        (self.root / lit["path"]).write_text(lit["base_source"], encoding="utf-8")
+        (self.root / lit["helper_path"]).write_text(lit["helper_source"],
+                                                    encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "база")
+        base_sha = self.git("rev-parse", "HEAD").strip()
+        self.checkout(lit["branch"], create=True)
+        (self.root / "app.py").write_text(lit["head_app"], encoding="utf-8")
+        (self.root / lit["path"]).write_text(lit["head_source"], encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "голова")
+        self.checkout(config.MAIN_BRANCH)
+        self.check_relative_location(seed, base_sha, lit["branch"])
+
+    def check_relative_location(self, seed: int, base_sha: str, branch: str) -> None:
+        """`two_sided.run` и утверждения `test_ac1_outcome_carries_relative_assertion_location`
+        над репозиторием, подготовленным методом из `location_literals(seed)`."""
+        lit = location_literals(seed)
+        note = lambda text: f"{text} (зерно: {seed})"  # noqa: E731
+        cls, path, helper_path = lit["cls"], lit["path"], lit["helper_path"]
+        old, new = lit["old"], lit["new"]
+        bare_old, bare_new = lit["bare_old"], lit["bare_new"]
+        sent_other, sent_same = lit["sent_other"], lit["sent_same"]
+        helper_source = lit["helper_source"]
+        base_source, head_source = lit["base_source"], lit["head_source"]
 
         names = ("test_self", "test_bare", "test_other", "test_same", "test_green")
         methods = [two_sided.Method(path, path, f"{cls}::{m}", base_source,
