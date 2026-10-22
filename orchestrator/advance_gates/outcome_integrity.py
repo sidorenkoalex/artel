@@ -567,9 +567,16 @@ def _added_lines(repo: Path, base_sha: str, head_sha: str) -> dict:
     диффом `git diff -M -U0` базы и головы (требование 7): переименование
     без правки строк и двоичный файл ханков не дают. Вывод читается
     байтами: текст не в utf-8 не роняет гейт. Сбой — `_Prepare`
-    (требование 8)."""
+    (требование 8).
+
+    Вывод не должен зависеть от конфига git процесса пульта (`pult_env`
+    наследует `~/.gitconfig`): префиксы, `diff.relative` и textconv заданы
+    явно, а заголовок `+++ ` неожиданной формы — тоже `_Prepare`, не
+    молчаливый пропуск строк файла."""
     argv = ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff",
-            "--no-color", "--no-ext-diff", "-M", "-U0", base_sha, head_sha]
+            "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative",
+            "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U0",
+            base_sha, head_sha]
     try:
         res = subprocess.run(argv, capture_output=True, env=gitcmd.pult_env())
     except OSError as exc:
@@ -600,7 +607,14 @@ def _added_lines(repo: Path, base_sha: str, head_sha: str) -> dict:
             path = None
         elif line.startswith("+++ "):
             target = _unquote(line[4:])
-            path = target[2:] if target.startswith("b/") else None
+            if target == "/dev/null":
+                path = None
+            elif target.startswith("b/"):
+                path = target[2:]
+            else:
+                raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+                               f"{head_sha[:12]}: заголовок {line[:200]!r} "
+                               f"без префикса b/")
         else:
             m = _HUNK_RE.match(line)
             if m:
@@ -632,16 +646,19 @@ def _code_exception_findings(files: _Files, entries: list,
     """Находки «исключение в коде» (требование 7) по добавленным строкам
     файлов компонента вне тестовых файлов и `test_support`; у компонента
     без `tests` тестовым считается и файл `A` под `weakening_scope` с
-    записями в отчёте головы."""
-    origin = {(new or path): (status, path) for status, path, new in entries}
+    записями в отчёте головы. Вид файла — по пути головы: файл,
+    переименованный из тестового пути в путь кода, — файл кода."""
+    origin = {(new or path): status for status, path, new in entries}
     found = []
     for path in sorted(added):
-        status, old = origin.get(path, ("M", path))
+        status = origin.get(path, "M")
         if not files.in_component(path):
             continue
-        if any(files.is_test(p) or files.is_support(p) for p in (path, old)):
+        if files.is_test(path) or files.is_support(path):
             continue
-        if (not files.profile.tests and status.startswith("A")
+        # Путь головы, новый на ветке (`A`, новый путь `R`/`C`), у
+        # компонента без `tests` — тестовый по тому же правилу, что `A`.
+        if (not files.profile.tests and status.startswith(("A", "R", "C"))
                 and files.profile.in_weakening_scope(path)
                 and path in files.head_paths):
             continue
