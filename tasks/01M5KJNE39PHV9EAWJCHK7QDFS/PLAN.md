@@ -2,7 +2,7 @@
 task: 01M5KJNE39PHV9EAWJCHK7QDFS
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -192,9 +192,18 @@ else:
 
 Планка `plank-run 01M5KJNE39PHV9EAWJCHK7QDFS`: **1 failed, 1 passed** —
 красный `Ac6InitOnlyWiringTest::test_ac6_init_has_no_other_change` (см.
-«Эскалация»).
+ниже; закрыто ANSWER-3).
 
-## Эскалация
+## Ответ Оператора (ANSWER-3) — исполнение
+Вариант **(а)**: планка AC-6 поправлена Оператором командой `amend-tests`
+(7a1b6853) — в `foreign_statements` допущен один узел `Try` канонической
+формы ограды; ограда этой формы — допустимая часть правки
+`tests/__init__.py` по толкованию AC-6. Код не менялся: `tests/__init__.py`
+рабочей копии (стр. 1–12) — та же ограда, что выше.
+`plank-run 01M5KJNE39PHV9EAWJCHK7QDFS` 23.10.2026: **2 passed** (код выхода
+pytest 0). Эскалация снята, PLAN сдаётся `ready`.
+
+## Вопрос к Оператору по возврату из verifying (закрыт ANSWER-3)
 
 **Вопросы**
 
