@@ -444,8 +444,21 @@ def _refuse_live_cycle(conn, task_id: str, role: str, row) -> None:
     sys.exit(text)
 
 
+KILL_EMPTY_REASON_REFUSAL = "kill: --reason требует непустую причину"
+
+
+def _kill_detail(reason: str | None) -> str:
+    """Деталь перехода `state -> killed` (SPEC 01M5K11K3VV23VK177YWMWKJ14,
+    требование 2): переводы строки причины — в пробел, чтобы строка «Итог:»
+    RETRO, берущая эту деталь, осталась одной строкой."""
+    if reason is None:
+        return "kill switch"
+    flat = reason.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return f"kill switch: {flat.strip()}"
+
+
 def cmd_kill(task_id: str, session_id: str | None = None, *,
-            confirmed: bool = False) -> None:
+            confirmed: bool = False, reason: str | None = None) -> bool:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -459,7 +472,14 @@ def cmd_kill(task_id: str, session_id: str | None = None, *,
     cycle_holder`) отказывает целиком, ничего не меняя (AC-1); с ним —
     прежнее полное поведение `kill`, только с дополнительной записью в
     журнал (AC-2). Мёртвый/отсутствующий держатель не смотрит на
-    `confirmed` вовсе — путь остаётся прежним (AC-3)."""
+    `confirmed` вовсе — путь остаётся прежним (AC-3).
+
+    `reason` — причина `--reason` (SPEC 01M5K11K3VV23VK177YWMWKJ14):
+    пустая отказывает до проверки живого цикла и lease, непустая попадает
+    только в деталь записанного перехода. Возврат — записал ли этот вызов
+    переход в `killed` (подсказка диспетчера о незаписанной причине)."""
+    if reason is not None and not reason.strip():
+        sys.exit(KILL_EMPTY_REASON_REFUSAL)
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     # Снимок lease ДО `run_locked` (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -479,9 +499,10 @@ def cmd_kill(task_id: str, session_id: str | None = None, *,
     # lease сейчас держит живой отвязанный цикл со свежим heartbeat
     # (иначе kill отказал бы «сессия занята», ровно тем же текстом,
     # каким сегодня отказывает run/advance при живом конкуренте).
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_kill(conn, task_id, holder_before),
-                     force=True)
+    return bool(lease.run_locked(
+        conn, task_id, session_id,
+        lambda sid: _cmd_kill(conn, task_id, holder_before, reason),
+        force=True))
 
 
 
@@ -555,7 +576,8 @@ def _group_kill_lease_step(conn, task_id: str) -> None:
                   liveness.group_kill_detail(row["pgid"], count))
 
 
-def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
+def _cmd_kill(conn, task_id: str, holder_before=None,
+              reason: str | None = None) -> bool:
     """Kill switch: убивает задачу из ЛЮБОГО нетерминального состояния,
     даже если конкурентная сессия успела перейти между чтением состояния
     и CAS-попыткой (SPEC T050, требования 6-7, инвариант №14).
@@ -584,7 +606,8 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     while not won and state not in TERMINAL_STATES:
         try:
             store.set_state(conn, task_id, "killed", "operator",
-                            expected_state=state, detail="kill switch")
+                            expected_state=state,
+                            detail=_kill_detail(reason))
             won = True
         except store.CasConflict as exc:
             state = exc.actual
@@ -621,6 +644,7 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     cleanup_killed_task(conn, task_id, t["branch"])
     if won:
         cleanup_project_remote(conn, task_id, t["branch"])
+    return won
 
 
 def _warn_moved_ref(conn, task_id: str, drift) -> None:

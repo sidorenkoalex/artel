@@ -169,7 +169,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   reject <id> "<причина>" | spec-audit <id> |
   answer <id> <файл-с-ответом> |
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
-  kill <id> | release <id> | worktree-db-clean <id> |
+  kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | reference <проект> [--sha <sha>] |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
@@ -1874,6 +1874,23 @@ def _during_canary_arg(rest: list, command: str = "approve <id>") -> str | None:
     return reason.strip()
 
 
+def _cmd_kill(rest: list) -> None:
+    """`kill <id> [--yes] [--reason "<текст>"]` (SPEC
+    01M5K11K3VV23VK177YWMWKJ14): `reason=` уходит в `cleanup.cmd_kill`
+    только при флаге — без него вызов прежний. Подсказка о незаписанной
+    причине — здесь, не в `cmd_kill`: её видит только командная строка, не
+    `canary.py`, и только когда этот вызов записал переход в `killed`."""
+    reason = _reason_arg(rest[1:])
+    if reason is not None and reason.startswith("--"):
+        sys.exit("kill: --reason требует причину следующим аргументом, "
+                 "а не флаг")
+    kwargs = {} if reason is None else {"reason": reason}
+    killed = cleanup.cmd_kill(rest[0], confirmed="--yes" in rest[1:], **kwargs)
+    if reason is None and killed:
+        print(f"причина не записана — в следующий раз: artel.py kill "
+              f'{rest[0]} --reason "<текст>"')
+
+
 def _approve_during_canary_kwargs(rest: list) -> dict:
     """Без флага — прежний вызов `fsm.cmd_approve` без нового параметра
     (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, «Не входит»: сигнатуры для
@@ -2178,7 +2195,7 @@ def main() -> None:
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
         "answer": lambda: answer.cmd_answer(*_answer_args(rest)),
         "zones-extend": lambda: _cmd_zones_extend(rest),
-        "kill": lambda: cleanup.cmd_kill(rest[0], confirmed="--yes" in rest[1:]),
+        "kill": lambda: _cmd_kill(rest),
         "release": lambda: release.cmd_release(rest[0]),
         "pause": lambda: _cmd_pause(rest),
         "resume": lambda: pause.cmd_resume(rest[0]),
