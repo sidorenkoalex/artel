@@ -39,7 +39,7 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | scripts/guard.py:2221; scripts/guard.py:2335 | Помощник фикстуры, импортированный из другого модуля `tests/`, не прослеживается ни в записи данных фикстуры, ни в `weakened_helpers` | Правка литерала такого помощника (5 → 500) не даёт находки гейта неослабления (требования 3–5 SPEC) | Прослеживать импортированного помощника первого уровня (`_HelperScope(module, self.modules)`) и называть его в `weakened_helpers` при смене тела; тест в `tests/`; либо эскалировать ограничение Оператору |
+| R1-F1 | fixed | scripts/guard.py:2221; scripts/guard.py:2335 | Помощник фикстуры, импортированный из другого модуля `tests/`, не прослеживается ни в записи данных фикстуры, ни в `weakened_helpers` | Правка литерала такого помощника (5 → 500) не даёт находки гейта неослабления (требования 3–5 SPEC) | fixed (developer, итерация 2): `_FixtureScope._data` — `_HelperScope(module, self.modules)` + `_fixture_helper_calls` (функция любого модуля `tests/` по импорту, происхождение — файл помощника); `_changed_fixture_names` называет функции модуля с иными литералами; тесты `tests/test_guard_pytest_fixtures.py::test_fixture_helper_imported_from_other_tests_module_is_traced`, `::test_weakened_helpers_names_module_function_with_changed_literal` |
 
 ## Вердикт
 changes_requested: закрыть R1-F1 (помощник фикстуры из другого модуля `tests/` — в записи данных фикстуры и в `weakened_helpers`, с тестом в `tests/`). Остальное соответствует SPEC.
