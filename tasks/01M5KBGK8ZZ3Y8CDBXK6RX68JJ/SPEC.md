@@ -5,7 +5,7 @@ author_role: analyst
 status: ready
 schema_version: 5
 zones: tests/test_suite_run.py
-budget_usd: 25
+budget_usd: 40
 ---
 
 # SPEC: Тест argv гейта полного набора не зависит от имени интерпретатора
@@ -64,8 +64,9 @@ argv получает `sys.executable`, а ожидание вне подмен�
    функцию выбора интерпретатора голым `python3` или `sys.executable`. Тест
    охранный: на текущем коде зелёный.
 4. Код пульта не меняется: `orchestrator/acceptance.py` и
-   `orchestrator/stack.py` — только чтение. Остальные методы
-   `tests/test_suite_run.py` не правятся.
+   `orchestrator/stack.py` — только чтение. Остальные существующие методы
+   `tests/test_suite_run.py` не правятся; новые тесты, модульные помощники
+   и импорты в этом файле допустимы.
 
 ## Критерии приёмки
 
@@ -105,13 +106,25 @@ AC-6. В `tests/test_suite_run.py` есть новый тест: при подм
 пульта и красный, если `run_full_suite`/`_pytest_command` ставит первым
 элементом голый `python3` или `sys.executable` в обход этой функции.
 
-AC-7. Методы `tests/test_suite_run.py`, кроме
-`GateArgvTest::test_gate_call_argv_unchanged`, не изменены; добавлены
-только новые тесты требований 2 и 3 и импорт `stack`.
+AC-7. Существующие методы `tests/test_suite_run.py`, кроме
+`GateArgvTest::test_gate_call_argv_unchanged`, не изменены. Новые тесты,
+модульные помощники и импорты в этом файле допустимы.
+
+AC-8. Дифф ветки задачи относительно базы вне `tests/test_suite_run.py` и
+`docs/codebase-map.md` пуст: в частности, `orchestrator/acceptance.py`,
+`orchestrator/stack.py`, `orchestrator/config.py` и `tests/sandbox.py` не
+изменены.
 
 ## Оценка объёма и деление
-Сигналов нет: одна зона (`tests/test_suite_run.py`), 7 критериев приёмки,
-`budget_usd` ниже $30. Деление не требуется.
+Сработавший сигнал: `budget_usd` ≥ $30 (потолок $40 — решение Оператора на
+гейте SPEC 23.10.2026 по калибровке: 8 критериев, одна зона). Прочих
+сигналов нет: одна зона (`tests/test_suite_run.py`), 8 критериев приёмки.
+
+Материал для решения о монолите: зона задачи — один файл, правка метода
+(требование 1) и тест, красный на прежнем теле метода (требование 2),
+описывают одно свойство; разнесённые по разным задачам, они либо оставляют
+красный тест требования 2 в main, либо мержат правку метода без проверки
+её смысла. Тест требования 3 — охранный и мал. Резать нечего.
 
 ## Не входит
 
@@ -120,8 +133,10 @@ AC-7. Методы `tests/test_suite_run.py`, кроме
   `RealGitSandbox`), `skills/code-revision.md` и вызывающие
   `_pytest_command`/`run_full_suite` (`orchestrator/advance_gates/two_sided.py`,
   `orchestrator/advance_gates/test_integrity.py`, `orchestrator/notes.py`,
-  `orchestrator/suite_lock.py`, `orchestrator/suite_run.py`) — только чтение;
-  неизменность держит гейт зон пульта (зона задачи — один файл).
+  `orchestrator/suite_lock.py`, `orchestrator/suite_run.py`) — только чтение.
+  `orchestrator/config.py` и `tests/` входят в общие зоны
+  (`config.COMMON_ZONES`), и гейт зон их правку не остановит — неизменность
+  держит AC-8.
 - Правка `stack._main_copy_root` или `stack.pytest_python_executable`:
   выбор интерпретатора пульта верен, ошибка — в границе подмены теста.
 - Поиск других тестов, подменяющих `acceptance.subprocess.run` вокруг кода,
@@ -148,7 +163,9 @@ AC-7. Методы `tests/test_suite_run.py`, кроме
   будет находкой, пока строка
   `Ослабление тестов разрешено: tests/test_suite_run.py::GateArgvTest::test_gate_call_argv_unchanged`
   не придёт командой `answer` (`docs/operator-gates.md`, гейт эскалации, п.6).
-- Бюджет: ТЗ называет $10; поставлено $25 — пол калибровки
-  (`config.BUDGET_CALIBRATION_FLOOR_USD`, класс «до 5 критериев и до 3 файлов
-  зоны» — ближайший уровень таблицы, двух итераций ревью ниже пола не
-  уложить). Оператор вправе опустить на гейте SPEC.
+- Бюджет: ТЗ называет $10; поставлено $40 — решение Оператора на гейте SPEC
+  23.10.2026 (круг 1) по калибровке (`config.recommended_budget_usd` для 7–8
+  критериев и одной зоны — $40).
+- Мандат на правку ожидания `test_gate_call_argv_unchanged` Оператор
+  передаёт строкой ANSWER на следующем гейте SPEC (решение гейта 23.10.2026,
+  круг 1).
