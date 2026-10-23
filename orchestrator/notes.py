@@ -1400,6 +1400,12 @@ def _flush_batch(held: list[tuple[Path, dict]]) -> None:
                 _refused_print(exc)
                 continue
             except OSError:
+                # Дерево пакета выводится checkout'ом раз на попытку, а не
+                # перед каждой записью: недописанная правка иначе стала бы
+                # «головой пакета» для следующей записи того же пути.
+                rel = _target_rel(request)
+                gitcmd.in_repo(work_dir, "reset", "-q", "--", rel)
+                _restore_tree(work_dir, rel)
                 continue
             if sha is None:
                 print(f"удержанная запись не отправлена: коммит записи "
@@ -1459,22 +1465,24 @@ def _flush_pending(explicit: bool = False) -> None:
             request = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if _suite_gate_applies(request):
-            if explicit:
-                config_records.append((path, request))
-            else:
-                print(f"{request['path']}: удержанная правка конфигурации "
-                      f"попутно не отправляется — её отправка гоняет полный "
-                      f"набор tests/; отправка — doc-commit --flush либо "
-                      f"note --flush")
+        suite_gated = _suite_gate_applies(request)
+        if suite_gated and not explicit:
+            print(f"{request['path']}: удержанная правка конфигурации "
+                  f"попутно не отправляется — её отправка гоняет полный "
+                  f"набор tests/; отправка — doc-commit --flush либо "
+                  f"note --flush")
             continue
         if (request.get("kind") == DOC_COMMIT_KIND
                 and HELD_BASE_KEY not in request):
             # Запись, удержанная до сверки по базе (требование 4): идёт по
             # пиновой сверке, но Оператор видит, что защиты сценария 02.10
-            # у неё нет.
+            # у неё нет. Правке конфигурации при явном флаше — тоже: её
+            # правила не меняются (требование 3 SPEC 01M5N8A5JBEQ15DCHDP95EBDZR).
             print(f"{request.get('path')}: {NO_BASE_WARNING}")
-        batch.append((path, request))
+        if suite_gated:
+            config_records.append((path, request))
+        else:
+            batch.append((path, request))
     if batch:
         _flush_batch(batch)
     for path, request in config_records:
