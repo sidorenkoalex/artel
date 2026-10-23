@@ -24,8 +24,9 @@ ADR-0027 «Новые тесты артели в стиле pytest» (`docs/adr/
 переходник над классом песочницы, нет. С мержа этой части стиль pytest
 обязателен для новых файлов (ADR-0027 п. 1).
 
-Решения Оператора на гейте SPEC 24.10.2026 (круг 1, по SPEC-AUDIT.md):
-Приложение 4 ТЗ заменено усиленным текстом, добавлено Приложение 5 —
+Решения Оператора на гейте SPEC 24.10.2026 (круги 1 и 2, по SPEC-AUDIT.md):
+Приложение 4 ТЗ заменено усиленным текстом (круг 2 — проверка всех сегментов
+имени импортируемого модуля и псевдонима), добавлено Приложение 5 —
 регистрация инварианта 42 в `docs/invariants.md`; оба текста — в разделе
 «Приложения Оператора (гейт SPEC 24.10.2026)» ниже. Приложения 1–3 —
 тексты из `TZ.md` задачи. CI ветки задачи накладывает приложения PLAN
@@ -55,7 +56,7 @@ ADR-0027 «Новые тесты артели в стиле pytest» (`docs/adr/
 5. Тест (в): инвариант `SharedFixturesWrapSandboxClassesInvariantTest`
    краснеет на временной копии `tests/fixtures.py` с фикстурой, подменяющей
    `config` сама (запуск методов инварианта с подменённым атрибутом `PATH`),
-   и на каждой из четырёх мутаций временной копии, перечисленных в AC-4.
+   и на каждой из пяти мутаций временной копии, перечисленных в AC-4.
 6. Существующие тесты не правятся и остаются зелёными; в `tests/` —
    только новые файлы; защищённые пути ветка не меняет — они правятся
    только Приложениями 1–5.
@@ -68,7 +69,7 @@ AC-2. Во временном каталоге с копией `conftest.py` (п
 
 AC-3. При наличии `tests/fixtures.py` тест-функция, лежащая под `tasks/<id>/acceptance_tests/` и запросившая фикстуру `tmp_root` параметром без импорта, проходит в подпроцессе pytest.
 
-AC-4. Методы `SharedFixturesWrapSandboxClassesInvariantTest`, запущенные с `PATH`, подменённым на временную копию `tests/fixtures.py`, завершаются провалом (хотя бы одного метода) на каждой из мутаций копии: (0) добавлена фикстура, подменяющая `config` сама; (1) помощник `_sandbox` импортирует `config`; (2) у фикстуры дополнительный декоратор сверх `pytest.fixture`; (3) фикстура задана присваиванием (`<имя> = pytest.fixture(<функция>)`); (4) фикстура-переходник импортирует из `tests.sandbox` и отдаёт через `_sandbox` класс, не являющийся наследником `TmpDirTest`/`TmpRootTest`. На немутированной копии `tests/fixtures.py` все методы зелёные.
+AC-4. Методы `SharedFixturesWrapSandboxClassesInvariantTest`, запущенные с `PATH`, подменённым на временную копию `tests/fixtures.py`, завершаются провалом (хотя бы одного метода) на каждой из мутаций копии: (0) добавлена фикстура, подменяющая `config` сама; (1) помощник `_sandbox` импортирует `config`; (2) у фикстуры дополнительный декоратор сверх `pytest.fixture`; (3) фикстура задана присваиванием (`<имя> = pytest.fixture(<функция>)`); (4) фикстура-переходник импортирует из `tests.sandbox` и отдаёт через `_sandbox` класс, не являющийся наследником `TmpDirTest`/`TmpRootTest`; (5) помощник `_sandbox` импортирует `config` с псевдонимом (`import orchestrator.config as cfg`). На немутированной копии `tests/fixtures.py` все методы зелёные.
 
 AC-5. Тесты задачи — новый файл в `tests/` в стиле pytest: тестовые функции уровня модуля без классов `unittest.TestCase`, у каждой тестовой функции в докстринге строка «Ловит мутацию:».
 
@@ -110,22 +111,24 @@ AC-6. Ветка не меняет ни одного существующего 
 - `docs/adr/0027-pytest-style-tests.md`, пп. 1, 2, 6, 7.
 - SPEC части А1: `refs/artifacts/01M5N9V4S984GRRXSMBK5JX7V1`.
 - `scripts/plan_appendix_ci.py` — наложение приложений PLAN в CI ветки задачи.
-- `SPEC-AUDIT.md` задачи (круг 1, вердикт concerns) — основание решений Оператора 24.10.2026.
+- `SPEC-AUDIT.md` задачи (круги 1 и 2, вердикт concerns) — основание решений Оператора 24.10.2026.
 
 ## Приложения Оператора (гейт SPEC 24.10.2026)
 
-Тексты решения Оператора на гейте SPEC (круг 1); проверены сессией на
-дереве main с наложенными приложениями: зелёный; четыре мутации AC-4
-(1)–(4) — красные.
+Тексты решения Оператора на гейте SPEC: Приложение 5 — круг 1, Приложение 4 —
+круг 2 (24.10.2026, по SPEC-AUDIT.md: для импортов проверяются все сегменты
+имени модуля и псевдоним). Приложение 4 проверено сессией на дереве main с
+приложениями 1, 4, 5: зелёный; мутации «импорт `config` с псевдонимом в
+`_sandbox`» и «`from orchestrator import config` в `_sandbox`» — красные.
 
 ### Приложение 4 (заменяет Приложение 4 ТЗ): tests/test_invariants.py
 
 ```diff
 diff --git a/tests/test_invariants.py b/tests/test_invariants.py
-index 3d106dd..cd63c93 100644
+index 3d106dd..2d105f6 100644
 --- a/tests/test_invariants.py
 +++ b/tests/test_invariants.py
-@@ -3165,3 +3165,78 @@ class ReportedOutcomeNotGreenInvariantTest(unittest.TestCase):
+@@ -3165,3 +3165,83 @@ class ReportedOutcomeNotGreenInvariantTest(unittest.TestCase):
                                   vitest["profile"])
              self.assertEqual(run.green, expected, flow.note(
                  f"повторов {retries}: {run}\n{out}"))
@@ -167,13 +170,18 @@ index 3d106dd..cd63c93 100644
 +
 +    def test_no_function_touches_config_or_patching(self):
 +        for node in ast.walk(self._tree()):
-+            name = (node.id if isinstance(node, ast.Name)
-+                    else node.attr if isinstance(node, ast.Attribute)
-+                    else (node.asname or node.name).split(".")[-1]
-+                    if isinstance(node, ast.alias) else None)
-+            with self.subTest(line=getattr(node, "lineno", 0)):
-+                self.assertNotIn(name, self.FORBIDDEN,
-+                                 f"строка {getattr(node, 'lineno', 0)}: {name}")
++            if isinstance(node, ast.Name):
++                names = {node.id}
++            elif isinstance(node, ast.Attribute):
++                names = {node.attr}
++            elif isinstance(node, ast.alias):
++                names = set(node.name.split(".")) | {node.asname}
++            else:
++                continue
++            line = getattr(node, "lineno", 0)
++            with self.subTest(line=line):
++                self.assertFalse(names & self.FORBIDDEN,
++                                 f"строка {line}: {sorted(names & self.FORBIDDEN)}")
 +
 +    def test_every_shared_fixture_wraps_a_sandbox_class(self):
 +        from tests import sandbox
