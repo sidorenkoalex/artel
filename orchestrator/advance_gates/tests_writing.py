@@ -598,7 +598,7 @@ def _tests_writing_dry_collect_gate(acc_tdir, run_cwd, task_id: str,
     refusal = _tests_writing_artifact_source_gate(acc_tdir, task_id)
     if refusal is not None:
         return refusal
-    own = acceptance._own(command) or acceptance._reported(command)
+    own = acceptance.own(command) or acceptance.reported(command)
     kwargs = ({"command": own} if own is not None
               else {"command": list(command)} if command else {})
     if extra:

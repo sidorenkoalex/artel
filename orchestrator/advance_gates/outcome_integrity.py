@@ -419,7 +419,7 @@ def _rerun(profile, trees: dict, red: list, history: dict,
     for _round in range(RERUNS):
         for side in sides:
             for path in sorted(files):
-                run = acceptance._report_run(profile, trees[side], [path], limit)
+                run = acceptance.report_run(profile, trees[side], [path], limit)
                 count += 1
                 where = f"перепрогон {path} на стороне «{side}»"
                 if run.refusal:
@@ -711,7 +711,7 @@ def _prior_versions(task_id: str, profile, trees: dict, tree: Path,
         ran = None
     else:
         limit = project_profile.component_limit(profile)[0]
-        run = acceptance._report_run(profile, tree, list(paths), limit)
+        run = acceptance.report_run(profile, tree, list(paths), limit)
         where = f"прогон прежних версий {len(paths)} файлов"
         if run.refusal:
             raise _Prepare(f"{where}: {run.refusal}")
@@ -818,7 +818,7 @@ def _component_key(repo: Path, head_sha: str, profile, head_tree: Path) -> str:
     ни записи."""
     res = gitcmd.in_repo(repo, "rev-parse", f"{head_sha}^{{tree}}")
     tree = res.stdout.strip() if res is not None and res.returncode == 0 else ""
-    key = (acceptance._report_suite_result_key(tree, profile, False,
+    key = (acceptance.report_suite_result_key(tree, profile, False,
                                                root=head_tree)
            if tree else None)
     if key is None:
