@@ -8,3 +8,4 @@
 2026-10-23 09:39:41Z  review  actor=fsm
 2026-10-23 09:40:59Z  acceptance  actor=fsm
 2026-10-23 09:52:01Z  merge_gate  actor=autogate
+2026-10-23 10:14:32Z  done  actor=orchestrator
