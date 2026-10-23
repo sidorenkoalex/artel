@@ -1,16 +1,16 @@
-# Записка spec_auditor — 01M5K11D3284ZZGRHN39FGQVF2
+# Записка spec_auditor — 01M5K11D3284ZZGRHN39FGQVF2 (круг 2)
 
 ## Выяснено
-- Все ссылки SPEC на код сверены и верны: artifact_branch.py:24–27 (докстринг), :315/:425/:444 (вызовы `_send`), :320, :336, :353, :378, :404, :418, :694; store.py:960, :1185; doctor/artifact_branches.py:180–182 (докстринг `_fix_unsent_closed_refs` с `send_pending`); config.py:654 (пол бюджета $25).
-- SPEC верно уточнил ТЗ по паузе: подмена `artifact_branch.time.sleep` строкой/парой запрещена сторожем tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py — допустима только подмена атрибута `artifact_branch.time` объектом-заместителем.
-- Существующие тесты: `reject_ref_pushes` (tests/test_artifact_ref_sync.py:77) даёт «pre-receive hook declined» → non-ff без повтора; `break_origin` (:69) → «сеть». Строк 5xx в тестах push документов нет. PushSuccessTest (tests/test_artifact_branch_push.py:106, len==1) остаётся зелёным при требовании 4.
-- Вердикт: concerns — пробелы AC (нет проверки: «сеть» не повторяется; повтор без --force; деталь успеха с числом попыток; число пауз = попыток−1; негатив «(failed to …)»).
+- SPEC sha 2fe8c8e9 сверен (`git hash-object`). Все ссылки на код верны: artifact_branch.py:24–27, :99 (`_git`), :315/:425/:444, :320, :336, :353, :378, :390/:412, :418, :694; store.py:890/:960/:976, :1185; doctor/artifact_branches.py:165, :180–185; config.py:814 (COMMON_ZONES с картой и tests/).
+- Решения Оператора на гейте №1 (AC-10–AC-14, точная форма `(failed)`) в SPEC перенесены полностью.
+- В tests/ нет stderr отправки документов, которые после правки станут «сервер» — существующие тесты не получат реальных пауз.
+- Вердикт concerns: AC-8 не ловит «успех журналируется на каждой отправке после любого прошлого FAILED» (нет сценария отказ→успех→успех); мелкое — N в детали отказа «сервер» не проверен при константе ≠3.
 
 ## Не сработало
-- `cd … && grep` в Bash требует подтверждения — пользоваться `git -C <wt> grep`.
+- `cd … && …` и цепочки через `;` в Bash требуют подтверждения — по одной команде, `git -C <wt> grep`.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, guard прогнан.
+- SPEC-AUDIT.md записан (status ready, verdict concerns), guard ок.
 
 ## Чего не хватило
 - Ничего существенного.
