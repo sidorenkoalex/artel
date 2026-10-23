@@ -2,49 +2,52 @@
 task: 01M5KBGF184B07SVXMD4R1NXXC
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Отказ автогейта приёмки из-за окружения — отдельный класс «окружение» в журнале и в подсказке
 
 ## Фаза A — план
-- Таблица покрытия полна (требования 1–6 → шаг 1); один шаг размера MR оправдан: дифф 35 строк в одном модуле.
-- Подход не конфликтует с архитектурой: ветка добавлена после прежних записи/строки, до `suspend_on_autogate_refusal`.
-- PLAN «Риски» сам называет дефект, который ниже стал замечанием R1-F1: «ловит AC-6 планки (разовый), долгоживущего сторожа нет» — риск записан, но не закрыт.
+- Таблица покрытия полна (требования 1–6 → шаги 1, 2); шаг 2 добавлен под R1-F1 и проверяем (файл, 4 метода, названные мутации).
+- «Влияние на систему» соответствует диффу итерации 2: новый файл `tests/test_fsm_autogate_env_refusal.py` и правка одного комментария в `orchestrator/fsm_autogate.py:50`; существующие тесты не тронуты.
+- «Риски» обновлены: сверку текста таймаута теперь держит сторож в `tests/`.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `orchestrator/fsm_autogate.py:45-67`: снятие `AUTOGATE_REFUSAL_PREFIX`, схлопывание пробелов, начала сверены с `acceptance._full_suite_timeout_note` (acceptance.py: `"прогон полного набора tests/ превысил "`) и `f"{FULL_SUITE_NOT_STARTED}: машина занята"` (`_not_started_note`). `_db_in_tree_note` («прогон не начат: полный набор…») и отказ `checks_local … не определены` в класс не попадают. Реальные пути причин проверены: `_autogate_conditions` даёт `f"автогейт: {tree.mark(run.detail)}"`, `tree.mark` добавляет пометку суффиксом, повторно взятый итог таймаута (`full_suite`, ветка `saved`) начинается с того же `_full_suite_timeout_note()`, `checks_local` на незелёном итоге дописывает текст через `\n` в хвост — начало не страдает. |
-| 2 | OK | `fsm_autogate.py:481-487`: прежние запись и строка не тронуты, затем вторая запись (actor `fsm`, деталь `класс: окружение (<вид>) — …; повторить проверку: artel.py approve <id>`) и строка `[<id>] класс отказа: …`; затем прежний `suspend_on_autogate_refusal`. Тексты совпадают с SPEC побайтно. |
-| 3 | OK | при `kind is None` поток прежний. |
-| 4 | OK | переходов, повторов, approve не добавлено; `models` не тронут. |
-| 5 | OK | планка детерминирована (подмены из списка SPEC), 6 passed. |
-| 6 | OK | дифф — только константы, функция, ветка отказа (+ служебный `_TIMEOUT_NOTE_START`, разрешённый требованием 1 «со сверкой»); существующие тесты не тронуты. |
+| 1 | OK | Код без изменений с итерации 1 (проверен там); итерация 2 меняет только комментарий `fsm_autogate.py:50`. |
+| 2 | OK | Без изменений; дополнительно закреплено `tests/test_fsm_autogate_env_refusal.py::test_environment_refusal_adds_record_and_hint`. |
+| 3 | OK | Без изменений; закреплено `test_other_refusal_has_no_environment_record`, `test_other_producers_are_not_environment`. |
+| 4 | OK | Без изменений. |
+| 5 | OK | Новый тест детерминирован: подмены `gates.policy`, `_log_acceptance_checklist`, `_autogate_conditions`, `suspend_on_autogate_refusal` — из списка SPEC; БД — `SchemaConnTmpRootTest`. |
+| 6 | OK | Существующие тесты не правились; новый файл тестов — вне запрета («существующие не правятся»). |
 
 ## Замечания
 
-- major — `orchestrator/fsm_autogate.py:51` (`_TIMEOUT_NOTE_START`), `:58-67` (`autogate_refusal_class`), `:481-487` (ветка отказа); `tests/` — новых тестов нет — Свойство «отказ класса окружение получает вторую запись и строку, и классификатор согласован с текстами производителей `acceptance.py`» после мержа остаётся без сторожа. Вся планка задачи помечена `Группа: разовый` (`acceptance_tests/test_env_refusal_record.py:4`, `test_refusal_class_producers.py:3`, `test_refusal_preserved.py:3`), а по ADR-0018 п.3 планку смерженной задачи не гоняет ни CI, ни автогейт. Предпосылка SPEC «Не входит» («свойства держат долгоживущие приёмочные тесты автора тестов») не сбылась: долгоживущих тестов нет. Проверено grep'ом: `autogate_refusal_class`/`AUTOGATE_ENV_REFUSAL_ACTION`/`ENV_REFUSAL_CLASS` в `tests/` не упоминаются ни разу. Сценарий поломки: правка текста `_full_suite_timeout_note` (например, «прогон полного набора tests/ превысил предел …» или смена слова) — литерал `_TIMEOUT_NOTE_START` молча перестаёт совпадать, таймауты (5 из 7 отказов окружения по находке CR-2026-10-22-17) снова пишутся без класса, весь набор `tests/` зелёный; PLAN «Риски» сам это признаёт. — Предложение: добавить в `tests/` тест (новый файл, существующие не правятся — требование 6 соблюдено; зона `tests/` в SPEC объявлена; «не заказывается» в SPEC — не запрет, а следствие несбывшейся предпосылки) минимум с двумя свойствами: (а) сверка с производителями как в AC-6 — `autogate_refusal_class` для `acceptance._full_suite_timeout_note()`, `_full_suite_timeout_note((N, "…"))`, `_not_started_note(<держатель>)` → вид, для `_db_in_tree_note(…)`/`FULL_SUITE_NO_TESTS_NOTE`/`UNKNOWN_PREFIX…` → `None`; (б) запись `AUTOGATE_ENV_REFUSAL_ACTION` и строка подсказки на отказе окружения и их отсутствие на отказе вне класса (AC-1/AC-3 в сжатом виде). Каждый метод — с заявкой «Ловит мутацию: …». Закрытые имена `acceptance` в `tests/` — обычная практика, ограничения планки на них здесь не действуют. Альтернатива по PLAN «Предложения системе» (константа-начало в `acceptance.py`) вне зоны SPEC — не предлагаю.
+Нет. Сторож проверен временными мутациями (в памяти процесса), каждая красит заявленные методы — см. «Проверено исполнением». Повтора долгоживущего теста задачи нет: файлов `tests/test_01m5kbgf184b07svxmd4r1nxxc_*.py` не существует, планка целиком разовая.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/fsm_autogate.py:51, :58-67, :481-487; tests/ | Новое свойство (класс «окружение», сверка начала текста таймаута с `acceptance._full_suite_timeout_note`) закрыто только разовой планкой; в `tests/` сторожа нет | Смена текста производителя в `acceptance.py` молча выключит класс для таймаутов при зелёном CI | Добавить тест(ы) в `tests/`: сверка классификатора с производителями (AC-6) и вторая запись/строка на отказе окружения vs её отсутствие вне класса, с заявками «Ловит мутацию». **developer, итерация 2:** добавлен `tests/test_fsm_autogate_env_refusal.py` (4 метода с заявками «Ловит мутацию»): сверка `autogate_refusal_class` с `_full_suite_timeout_note()`/`(1500, …)`/`_not_started_note` (с префиксом и без, вина `BLAME_PULT`) и `None` для `_db_in_tree_note`/`FULL_SUITE_NO_TESTS_NOTE`/`UNKNOWN_PREFIX`; вторая запись+строка на таймауте и их отсутствие на красном наборе. Мутации проверены: литерал `_TIMEOUT_NOTE_START` без «tests/» → красные сверка и запись; сверка по одному `FULL_SUITE_NOT_STARTED` и `if kind is not None or True` → красные соответствующие методы; код возвращён. |
+| R1-F1 | accepted | orchestrator/fsm_autogate.py:51, :58-67, :481-487; tests/ | Новое свойство закрыто только разовой планкой; в `tests/` сторожа нет | Смена текста производителя в `acceptance.py` молча выключила бы класс при зелёном CI | **reviewer, итерация 2:** принято. `tests/test_fsm_autogate_env_refusal.py` сверяет классификатор с самими производителями (`_full_suite_timeout_note()`, `(1500, …)`, `_not_started_note`, `_db_in_tree_note`, `FULL_SUITE_NO_TESTS_NOTE`, `UNKNOWN_PREFIX`), вину `BLAME_PULT`, вторую запись/строку на таймауте и их отсутствие на красном наборе. Заявки «Ловит мутацию» у всех 4 методов называют наблюдаемое расхождение; проверены мутациями M1–M3 (ниже). |
 
 ## Вердикт
-changes_requested — закрыть R1-F1 (долгоживущий сторож в `tests/`). Код по существу SPEC выполнен верно; других замечаний нет.
+approved — R1-F1 закрыто, других замечаний нет.
 
 ## Проверено исполнением
-- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M5KBGF184B07SVXMD4R1NXXC` — 6 passed, код выхода 0.
-- `python3 -m pytest -q -p no:cacheprovider tests/test_fsm_autogate*.py tests/test_canary_acceptance_reason.py tests/test_approve_acceptance_full_suite.py` — 43 passed, 6 subtests passed.
-- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md` — расходится только `built_at_sha` (не дефект); изменение откатил `git checkout -- docs/codebase-map.md`, дерево чистое.
-- `grep -rln "autogate_refusal_class\|AUTOGATE_ENV_REFUSAL_ACTION\|отказ окружения\|ENV_REFUSAL_CLASS" tests/ orchestrator/` — в `tests/` только постороннее совпадение `tests/test_01m484rnv3qbdy3b0m16j916zp_wave_breaker_projects.py:56` (другой контекст), сторожа нет → R1-F1.
-- `grep -n "Группа" acceptance_tests/*.py` — все три файла планки «разовый».
-- Чтение `orchestrator/acceptance.py:2320-2400, 2477-2495, 3375-3440, 3487-3525`, `orchestrator/appendix_tree.py:105-117`, `orchestrator/fsm_autogate.py:330-440` — сверка реальных текстов причин, приходящих в классификатор (итог в таблице, требование 1).
+- `python3 -m pytest -q -p no:cacheprovider tests/test_fsm_autogate*.py tests/test_canary_acceptance_reason.py` — 35 passed, 16 subtests passed.
+- `python3 /Users/al.sidorenko/projects/artel/orchestrator/artel.py plank-run 01M5KBGF184B07SVXMD4R1NXXC` — 6 passed, код выхода pytest 0.
+- Временные мутации без правки файлов (`mock.patch.object` в процессе, прогон `tests/test_fsm_autogate_env_refusal.py` через unittest):
+  - M1 `_TIMEOUT_NOTE_START` без «tests/» (смена начала текста производителя) — 5 провалов: `test_environment_refusal_adds_record_and_hint` + 4 подтеста `test_environment_producers_get_their_kind`;
+  - M2 классификатор возвращает вид на любой отказ — 7 провалов: `test_other_refusal_has_no_environment_record` + 6 подтестов `test_other_producers_are_not_environment` (включая `_db_in_tree_note` — «прогон не начат» без «машина занята»);
+  - M3 классификатор всегда `None` (ветка не срабатывает) — 7 провалов: запись/строка и все подтесты видов;
+  - базовый прогон — 0 провалов. Дерево чистое (`git status --short` пуст).
+- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md` без строки `built_at_sha` — пусто, карта свежа; изменение откатил `git checkout`.
+- CI коммита 79ecd333 зелёный (16 проверок, из пакета).
 
 ## Предложения системе
-- Класс «SPEC отказывается от тестов в `tests/`, ссылаясь на долгоживущую планку, а автор тестов помечает всю планку разовой» — предпосылка SPEC не сверяется ни на гейте планки, ни при входе в разработку; стоит, чтобы гейт фиксации планки сверял «Не входит: тест в tests/» с наличием хотя бы одного `Группа: долгоживущий` (skills/test-authoring.md / гейт планки).
+- Временную мутацию правкой файла (`sed -i`, `python -c … write`) харнесс роли не пропускает без подтверждения; работает подмена в памяти (`mock.patch.object` + `unittest` из `python3 -c`) — стоит описать этот приём в skills/review-checklist.md («Сторож — проверен временной мутацией»).
