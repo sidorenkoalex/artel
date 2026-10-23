@@ -2213,22 +2213,30 @@ class _FixtureScope:
         path = module.path or ""
         origin = None if module is self.own else \
             (f"фикстура {fixture.name}", path)
-        parts = [(None, _data_literals(fixture.node))]
+        parts = [(None, _data_literals(fixture.node), origin)]
         if helpers:
-            # Помощники — функции модуля фикстуры и методы её класса;
-            # функции чужих модулей и второй уровень в запись не идут
+            # Помощник первого уровня — метод класса фикстуры, функция её
+            # модуля либо функция другого модуля `tests/` по импорту
+            # (ревью итерации 1, R1-F1); второй уровень в запись не идёт
             # (SPEC, «Не входит»).
-            scope = _HelperScope(module, None)
+            scope = _HelperScope(module, self.modules)
             chain = scope.class_chain(fixture.owner) \
                 if fixture.owner is not None else []
             aliases = _pytest_aliases(module.tree)
-            for _module, helper, _origin in _helper_calls(fixture.node, scope,
-                                                          chain):
-                if helper is not fixture.node and \
-                        _fixture_name(helper, aliases) is None:
-                    parts.append((helper.name, _data_literals(helper)))
+            for helper_module, helper in _fixture_helper_calls(
+                    fixture.node, scope, chain):
+                if helper is fixture.node or \
+                        _fixture_name(helper, aliases) is not None:
+                    continue
+                # Помощник чужого файла: находку покрывает мандат на его
+                # файл, как у помощника теста из чужого модуля.
+                helper_origin = origin if helper_module is module else \
+                    (f"фикстура {fixture.name} → {helper.name}",
+                     helper_module.path or "")
+                parts.append((helper.name, _data_literals(helper),
+                              helper_origin))
         records, index = [], 0
-        for helper, literals in parts:
+        for helper, literals, part_origin in parts:
             where = fixture.name if helper is None else \
                 f"{fixture.name} → помощник {helper}"
             for literal in literals:
@@ -2238,9 +2246,41 @@ class _FixtureScope:
                     text = text[:ASSERTION_TEXT_LIMIT - 1] + "…"
                 records.append(((path, fixture.name, index, ast.dump(literal)),
                                 text, _FixtureDatum(value=copy.deepcopy(literal)),
-                                origin))
+                                part_origin))
                 index += 1
         return records
+
+
+def _fixture_helper_calls(func: ast.AST, scope: _HelperScope,
+                          chain: list) -> list:
+    """(модуль, узел) помощников первого уровня фикстуры `func` по порядку
+    вызовов: то же, что `_helper_calls`, и сверх того функция любого модуля
+    `tests/` (у внешнего проекта — его области) по импорту. У теста
+    функции чужих модулей артели, кроме `tests/sandbox.py`, помощником не
+    считаются: их утверждения — не данные; у фикстуры помощник несёт
+    данные, где бы он ни жил (SPEC 01M5N9WK9SGB7KDYJP736DP6CV, требование
+    3)."""
+    helpers = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        if isinstance(callee, ast.Attribute) and \
+                isinstance(callee.value, ast.Name) and \
+                callee.value.id == "self":
+            found = scope.method(chain, callee.attr)
+        else:
+            found = scope.function(callee)
+            if found is None:
+                resolved = scope.resolve(scope.own, callee)
+                if resolved is not None and \
+                        isinstance(resolved[1], _FUNCTION_NODES) and \
+                        not resolved[1].name.startswith("test_"):
+                    found = (*resolved, None)
+        if found is not None:
+            helpers.append((node.lineno, node.col_offset, found[:2]))
+    helpers.sort(key=lambda item: item[:2])
+    return [helper for _line, _col, helper in helpers]
 
 
 def test_assertions(source, path=None,
@@ -2337,7 +2377,9 @@ def _changed_fixture_names(base_source, head_source) -> set:
     помощников первого уровня этих фикстур с иным телом и фикстур своего
     файла, которые зовут такого помощника или запрашивают такую фикстуру:
     поиск вызывающих вне диффа идёт по словам, и тест, запросивший
-    фикстуру, найдётся только по её имени (требование 5)."""
+    фикстуру, найдётся только по её имени (требование 5). Сверх того —
+    функции модуля (не тесты и не фикстуры) с иными литералами: помощник
+    фикстуры чужого файла по импорту."""
     base_tree = _parse_or_none(base_source)
     if base_tree is None:
         return set()
@@ -2379,7 +2421,25 @@ def _changed_fixture_names(base_source, head_source) -> set:
                 names |= {key[1], name}
         if changed & set(_parameter_names(func)) - {name}:
             names.add(name)
+    # Функция модуля может быть помощником фикстуры другого файла по
+    # импорту (`_fixture_helper_calls`), а у такого помощника запись видит
+    # только литералы: функция с иной последовательностью литералов (или
+    # исчезнувшая) называется, чтобы нашёлся файл фикстуры, которая её
+    # зовёт (ревью итерации 1, R1-F1).
+    head_functions = {node.name: node for node in head_tree.body
+                      if isinstance(node, _FUNCTION_NODES)}
+    for owner, func in functions:
+        if owner is not None or func.name.startswith("test_") or \
+                _fixture_name(func, aliases) is not None:
+            continue
+        other = head_functions.get(func.name)
+        if other is None or _literal_dumps(other) != _literal_dumps(func):
+            names.add(func.name)
     return names
+
+
+def _literal_dumps(func: ast.AST) -> list:
+    return [ast.dump(literal) for literal in _data_literals(func)]
 
 
 def changed_classes(base_source, head_source, path=None,

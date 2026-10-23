@@ -104,3 +104,49 @@ def test_weakened_helpers_names_fixture_requesting_changed_fixture():
                 "def outer(inner):\n    return inner\n")
 
     assert {"inner", "outer"} <= guard.weakened_helpers(source(1), source(2))
+
+
+HELPERS_PATH = "tests/helpers_sample.py"
+IMPORTING = ("import pytest\nfrom tests.helpers_sample import make\n\n\n"
+             "@pytest.fixture\ndef cfg():\n    return make()\n\n\n"
+             "def test_a(cfg):\n    assert cfg\n")
+
+
+def helpers_source(value):
+    return f"def make():\n    return {value}\n"
+
+
+def records_with_helpers(helpers):
+    texts = {PATH: IMPORTING, HELPERS_PATH: helpers}
+    modules = guard.TestModules(lambda p: texts.get(p))
+    return guard._assertion_records(IMPORTING, PATH, modules)["test_a"]
+
+
+def test_fixture_helper_imported_from_other_tests_module_is_traced():
+    """Помощник фикстуры, импортированный из другого модуля `tests/`, —
+    в записи данных фикстуры, с происхождением из файла помощника (ревью
+    итерации 1, R1-F1).
+
+    Ловит мутацию: помощник фикстуры ищется только в модуле фикстуры
+    (`_HelperScope(module, None)`) — правка `5` → `500` в помощнике другого
+    модуля записей теста не меняет.
+    """
+    base = records_with_helpers(helpers_source(5))
+    head = records_with_helpers(helpers_source(500))
+    assert multiset(item[:2] for item in base) != \
+        multiset(item[:2] for item in head)
+    assert {item[3][1] for item in base if item[3]} == {HELPERS_PATH}
+
+
+def test_weakened_helpers_names_module_function_with_changed_literal():
+    """Функция модуля с иным литералом названа, с теми же литералами — нет:
+    по её имени находится файл фикстуры, которая зовёт её по импорту.
+
+    Ловит мутацию: `weakened_helpers` называет функции модуля только по
+    потере утверждений — помощник фикстуры другого файла не называется, и
+    тест, запросивший фикстуру, вне диффа не сравнивается.
+    """
+    assert "make" in guard.weakened_helpers(helpers_source(5),
+                                            helpers_source(500))
+    assert "make" not in guard.weakened_helpers(
+        helpers_source(5), "def make():\n    \"\"\"Пять.\"\"\"\n    return 5\n")

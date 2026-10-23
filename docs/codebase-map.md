@@ -1,5 +1,5 @@
 ---
-built_at_sha: 3ac23a93f84a1491d5e61513ea3c5c58e6f22a78
+built_at_sha: 2d1a47ecc27422431cd04ac91e67a8c633a63929
 ---
 
 # Codebase-map пульта
@@ -8305,13 +8305,17 @@ built_at_sha: 3ac23a93f84a1491d5e61513ea3c5c58e6f22a78
 **Назначение:** Разрешение фикстур pytest в разборе утверждений guard и отказы стиля —
 
 **Публичные функции:**
+- `helpers_source`
 - `multiset`
 - `records`
+- `records_with_helpers`
 - `test_class_fixture_shadows_module_fixture_for_its_methods`
+- `test_fixture_helper_imported_from_other_tests_module_is_traced`
 - `test_indirect_in_module_pytestmark_refused_at_module_address`
 - `test_indirect_parametrize_name_stays_a_fixture`
 - `test_own_fixture_overriding_shared_one_traces_the_shared`
 - `test_weakened_helpers_names_fixture_requesting_changed_fixture`
+- `test_weakened_helpers_names_module_function_with_changed_literal`
 
 **Импортирует:** `scripts/guard.py`
 
