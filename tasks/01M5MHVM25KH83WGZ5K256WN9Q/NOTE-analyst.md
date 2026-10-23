@@ -1,12 +1,12 @@
 ## Выяснено
-- ТЗ достаточно; SPEC.md написан (status: ready, budget_usd 25, 7 AC), guard ок.
-- Места на коде этого worktree: artel.py:950–958 (`_launch_observation`, блок свежести), artel.py:1066–1071 (`_observation_fresh`), watch.py:320–326 (`observation_process_state`, ветка pid is None). `datetime` импортирован в watch.py:27 (`from datetime import datetime, timezone`) — подмена `mock.patch.object(watch, "datetime", ...)` работает по имени модуля.
+- Круг 2 (возврат с spec_gate 23.10): AC-4 и AC-5 дополнены поведенческой проверкой по решениям Оператора — время фиксируется только подменой `watch.datetime`, граница порог / порог+1 с, настоящее время у `last_seen_at` (±1 с); в AC-4 — счётчик вызовов `now` (ровно один за `_launch_observation`). Остальное SPEC без изменений, guard ок.
+- Места на коде: artel.py:950–958 (`_launch_observation`, блок свежести), artel.py:1066–1071 (`_observation_fresh`), watch.py:320–326; watch.py:27 импортирует `datetime` по имени.
 
 ## Не сработало
-- Первый прогон guard: «orchestrator/ упомянут, не классифицирован» — помогла строка «Только чтение: …» в «Не входит».
+- Ничего.
 
 ## Где остановился
-- Шаг завершён: SPEC.md готов.
+- Шаг завершён: SPEC.md status ready.
 
 ## Чего не хватило
 - Ничего существенного.

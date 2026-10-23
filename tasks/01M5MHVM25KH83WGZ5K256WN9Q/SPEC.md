@@ -94,12 +94,28 @@ AC-4. Выбор наблюдения при запуске (`artel.py::_launch_
 прежним текстом «связи с watch ещё нет …» (пустая строка не роняет
 `ValueError`); с возрастом связи больше порога — прежним отказом «связь
 устарела на {age:.0f} с (порог … с)»; с возрастом ровно порог — отказа по
-свежести нет. Текущее время в этом блоке берётся один раз (через
-`watch.observation_age`).
+свежести нет. Текущее время фиксируется только подменой
+`mock.patch.object(watch, "datetime", <подкласс datetime>)`; настоящее время
+машины при этом от `last_seen_at` не дальше 1 с. При «сейчас» подменённого
+`watch.datetime`, равном `last_seen_at` плюс `config.OBSERVATION_STALE_SECONDS`
+плюс 1 с, запуск отказывает «связь устарела …»; при «сейчас», равном
+`last_seen_at` плюс `config.OBSERVATION_STALE_SECONDS`, запуск проходит блок
+свежести (отказа «связь устарела …» нет). Подменённый `watch.datetime` считает
+вызовы `now`: за один вызов `_launch_observation` — ровно один вызов `now`.
+Ловит мутации: копия разбора `last_seen_at` на собственном `datetime.now`
+модуля `artel` (даёт обратный результат при подменённом `watch.datetime`) и
+второй вызов `now` в блоке свежести `artel.py` (краснеет по счётчику).
 
 AC-5. `artel.py::_observation_fresh(row)` возвращает `False` при
 `state != "active"`, при `last_seen_at` `None` и `""` (без `ValueError`), и
-`watch.observation_link_fresh(row)` в остальных случаях.
+`watch.observation_link_fresh(row)` в остальных случаях. Текущее время
+фиксируется только подменой `mock.patch.object(watch, "datetime", <подкласс
+datetime>)`; настоящее время машины при этом от `last_seen_at` не дальше 1 с.
+При `state == "active"` и «сейчас» подменённого `watch.datetime`, равном
+`last_seen_at` плюс `config.OBSERVATION_STALE_SECONDS` плюс 1 с,
+`_observation_fresh` возвращает `False`; при «сейчас», равном `last_seen_at`
+плюс `config.OBSERVATION_STALE_SECONDS`, — `True`. Ловит мутацию: копия
+разбора `last_seen_at` на собственном `datetime.now` модуля `artel`.
 
 AC-6. `watch.observation_process_state(row)` при `row["pid"] is None` возвращает
 `"unstarted"` при пустом `last_seen_at`, `"fresh"` при возрасте не больше
