@@ -226,6 +226,12 @@ def _weakening_scope_refusal(path: str, decision) -> str | None:
         if not profile.paths or any(re.search(regex, path)
                                     for regex in profile.paths):
             return None
+    # Запись из нескольких компонентов: элемент годен и для находки
+    # другого компонента записи в границе гейта исходов (SPEC
+    # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2) — по его области.
+    for other in _record_outcome_profiles(decision):
+        if _path_in_outcome_area(path, other):
+            return None
     scope = ", ".join(decision.profile.weakening_scope)
     return (f"путь вне области {scope} — гейт неослабления тестов другие "
             f"пути не рассматривает")
@@ -267,6 +273,36 @@ def _element_refusal(element: str, marker: str,
     return None
 
 
+def _path_in_outcome_area(path: str, profile) -> bool:
+    """Путь годен мандату ослабления у компонента в границе гейта исходов:
+    область ослабления, маски `tests`/`test_support`, файл компонента по
+    `paths` (без `paths` — любой путь репозитория)."""
+    from .. import project_profile
+    if profile.in_weakening_scope(path):
+        return True
+    if any(project_profile.mask_matches(mask, path)
+           for mask in (*profile.tests, *profile.test_support)):
+        return True
+    return not profile.paths or any(re.search(regex, path)
+                                    for regex in profile.paths)
+
+
+def _record_outcome_profiles(decision) -> tuple:
+    """Профили компонентов записи из нескольких компонентов в границе гейта
+    исходов (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2); у прочих
+    записей, без решения и при отказе — пусто."""
+    from .. import project_profile, targets
+    from .acceptance import in_outcome_bounds
+    if decision is None or decision.refusal or decision.profile is None or \
+            not project_profile.is_multi(decision.target):
+        return ()
+    try:
+        profiles = project_profile.component_profiles(decision.target)
+    except targets.TargetsError:
+        return ()
+    return tuple(p for p in profiles if in_outcome_bounds(p))
+
+
 def _outcome_profile(decision):
     """Профиль решения, если он в границе гейта исходов (`in_outcome_bounds`);
     `None` — вне границы, без решения или при отказе/пропуске."""
@@ -293,6 +329,8 @@ def _test_id_refusal(element: str, decision) -> str | None:
     if decision is not None and decision.refusal:
         return (f"гейт неослабления по исходам мандат не засчитает — решение "
                 f"профиля тестов проекта: отказ: {decision.refusal}")
+    if decision is not None and project_profile.is_multi(decision.target):
+        return _record_test_id_refusal(component, path, decision)
     profile = _outcome_profile(decision)
     if profile is None:
         return ("мандат по идентификатору действует только у компонента "
@@ -301,6 +339,35 @@ def _test_id_refusal(element: str, decision) -> str | None:
     if component != profile.component:
         return (f"компонента «{component}» нет в записи components: проекта "
                 f"(компонент профиля — «{profile.component}»)")
+    if not profile.in_weakening_scope(path):
+        scope = ", ".join(profile.weakening_scope)
+        return (f"путь {path} вне области {scope} компонента "
+                f"{profile.component}")
+    return None
+
+
+def _record_test_id_refusal(component: str, path: str, decision) -> str | None:
+    """`_test_id_refusal` записи из нескольких компонентов (SPEC
+    01M5JGSAANR1NZYQD4FCSVE48Y, требование 2): идентификатор годен для
+    любого компонента записи в границе гейта исходов — по его области;
+    компонент записи вне границы и компонент не из записи — прежние
+    тексты отказа."""
+    from .. import project_profile, targets
+    from .acceptance import in_outcome_bounds
+    try:
+        owners = {p.component: p for p in
+                  project_profile.component_profiles(decision.target)}
+    except targets.TargetsError as exc:
+        return (f"гейт неослабления по исходам мандат не засчитает — запись "
+                f"проекта не прочитана: {exc}")
+    profile = owners.get(component)
+    if profile is None:
+        return (f"компонента «{component}» нет в записи components: проекта "
+                f"(компонент профиля — «{decision.profile.component}»)")
+    if not in_outcome_bounds(profile):
+        return ("мандат по идентификатору действует только у компонента "
+                "записи components: с полем report — гейт неослабления по "
+                "исходам у профиля задачи не выполняется")
     if not profile.in_weakening_scope(path):
         scope = ", ".join(profile.weakening_scope)
         return (f"путь {path} вне области {scope} компонента "
@@ -580,13 +647,20 @@ def matrix_refusals(text: str, elements: list[str], *, conn=None,
     `test_ids` — идентификаторы мандата `TEST_ID_MANDATE_MARKER` (SPEC
     01M5D02N3B428V8BWC3PAM9QCT, требование 4): «Что меняется» называет
     каждый целиком между одинарными обратными кавычками, побайтно."""
-    from .. import repo_context
+    from .. import project_profile, repo_context
     decision = _task_decision(conn, task_id)
+    if decision is not None and decision.refusal and \
+            project_profile.is_multi(decision.target):
+        # Компонент задачи не выбран — отказ команды, не откат на правило
+        # `tests/…` (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
+        return [f"матрица неослабления не сверена — решение профиля тестов "
+                f"проекта: отказ: {decision.refusal}"]
     profile = None
     if decision is not None and not repo_context.is_artel(decision.target):
         profile = decision.profile
     outcome_bounds = profile is not None and \
         _outcome_profile(decision) is not None
+    others = _record_outcome_profiles(decision)
     section = matrix_section(text)
     if section is None:
         return ["нет раздела «## Матрица неослабления»"]
@@ -617,6 +691,8 @@ def matrix_refusals(text: str, elements: list[str], *, conn=None,
         cells = row + [""] * (len(MATRIX_HEADERS) - len(row))
         if (_remains(cells[2])
                 and not _covered(cells[3], profile, outcome_bounds)
+                and not any(_covered(cells[3], other, True)
+                            for other in others)
                 and not _conditional_with_replacements(cells[4])):
             found.append(f"строка данных {number}: свойство остаётся и не "
                          f"покрыто, а «Решение» не начинается с «ок при "

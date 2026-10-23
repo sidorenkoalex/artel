@@ -635,7 +635,7 @@ def _changed_assertions_part(conn, task_id: str, branch: str,
     if not store.task_exists(conn, task_id) \
             or store.get_task(conn, task_id)["is_canary"]:
         return None
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id, conn)
     if decision.refusal:
         return (f"### {CHANGED_ASSERTIONS_SECTION}\n\n"
                 f"Раздел не собран: {decision.refusal}.\n")
@@ -686,9 +686,15 @@ def _outcome_gate_lines(conn, task_id: str, branch: str,
     """Строки гейта исходов для текущей головы кодовой ветки (SPEC
     01M5DDTVZEA40ZB9BHEH4YDEE7, требование 5); `None` — профиль вне
     границы гейта, строк нет и условие раздела прежнее. Канареечная задача
-    сюда не доходит — её отсекает начало `_changed_assertions_part`."""
+    сюда не доходит — её отсекает начало `_changed_assertions_part`.
+
+    У записи из нескольких компонентов строки не фильтруются границей
+    профиля задачи: гейт гоняет компоненты диффа, и строки всех его
+    компонентов — из `review_lines` (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y,
+    требование 3)."""
     from .advance_gates import outcome_integrity, tests_writing
-    if not outcome_integrity.in_outcome_bounds(profile):
+    if not outcome_integrity.in_outcome_bounds(profile) and \
+            not project_profile.is_multi(profile.project):
         return None
     head = gitcmd.branch_head_sha(branch, repo=workspace.task_repo(task_id))
     # Засчитывание ошибки уровня файла красным (SPEC
@@ -749,7 +755,7 @@ def _exit_without_profile(conn, task_id: str, target: str) -> None:
     собран (`_changed_assertions_part`)."""
     if not store.task_exists(conn, task_id):
         return
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id, conn)
     if not decision.refusal or decision.unresolved:
         return
     store.journal(conn, task_id, "fsm", PACKAGE_REFUSED_ACTION, decision.refusal)

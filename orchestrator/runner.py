@@ -1322,7 +1322,7 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str,
         # умолчания артели не подставляются, и файл не засчитывается.
         target = (store.task_target(conn, task_id) if conn is not None
                   else config.DEFAULT_TARGET)
-        decision = project_profile.decide(target)
+        decision = project_profile.for_task_target(target, task_id, conn)
         profile = decision.profile
         if profile is None:
             if decision.refusal and conn is not None:
@@ -1616,11 +1616,12 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     return None, (log_path, prompt_path, env, cwd, numbered)
 
 
-def _reports_vitest(project: str) -> bool:
+def _reports_vitest(project: str, task_id: str, conn=None) -> bool:
     """Профиль проекта задачи — компонент `pult-vitest` (SPEC
-    01M5ENWTDD8NP9SMPFX3JN08J9, требование 3); профиль не определён —
-    `False`."""
-    profile = project_profile.decide(project).profile
+    01M5ENWTDD8NP9SMPFX3JN08J9, требование 3; у записи из нескольких
+    компонентов — компонент задачи, SPEC 01M5JGSAANR1NZYQD4FCSVE48Y);
+    профиль не определён — `False`."""
+    profile = project_profile.for_task_target(project, task_id, conn).profile
     return profile is not None and \
         profile.report == project_profile.REPORT_VITEST
 
@@ -1718,7 +1719,7 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # 01M5ENWTDD8NP9SMPFX3JN08J9, требование 3): у прочих, в том числе при
     # неопределённом профиле, насос прежний.
     vitest = {}
-    if _reports_vitest(project):
+    if _reports_vitest(project, task_id, conn):
         vitest["on_vitest_summary"] = lambda summary: store.journal(
             store.db(), task_id, role, agent_log.VITEST_RUN_ACTION, summary)
     pump = agent_log.OutputPump(

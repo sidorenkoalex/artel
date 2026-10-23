@@ -238,7 +238,7 @@ def cmd_preflight(arg: str) -> None:
     print(f"[{task_id}] предпроверка выхода из {STATE}: черновик {docs}")
 
     refused = False
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id)
     profile = decision.profile
     # Отказ построения правила планки отказывает и переход (SPEC
     # 01M59KMPG2ZMK10V556VZVQD65, требование 2); проверки ниже — по

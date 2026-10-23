@@ -200,7 +200,7 @@ def _long_lived_paths(conn, task_id: str) -> tuple[str, str, str, bool] | None:
     задачи без строки)."""
     target = (store.task_target(conn, task_id) if conn is not None
               else config.DEFAULT_TARGET)
-    profile = project_profile.decide(target).profile
+    profile = project_profile.for_task_target(target, task_id, conn).profile
     if profile is None:
         return None
     return (profile.long_lived_dir, profile.long_lived_hint(task_id),
@@ -216,7 +216,7 @@ def _labelled_profile(conn, task_id: str):
     правило не построено)."""
     target = (store.task_target(conn, task_id) if conn is not None
               else config.DEFAULT_TARGET)
-    profile = project_profile.decide(target).profile
+    profile = project_profile.for_task_target(target, task_id, conn).profile
     if profile is None:
         return None
     labelled = project_profile.plank_rule(target).labelled_components()

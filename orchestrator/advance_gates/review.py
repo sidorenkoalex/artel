@@ -206,7 +206,7 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
     """
     if t["is_canary"]:
         return None
-    decision = project_profile.decide(t["target"])
+    decision = project_profile.for_task_target(t["target"], task_id, conn)
     if decision.refusal:
         return GateRefusal(project_profile.REFUSAL_ACTION, decision.refusal,
                            project_profile.refusal_hint(task_id))

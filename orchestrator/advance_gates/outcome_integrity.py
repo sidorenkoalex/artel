@@ -57,8 +57,8 @@ from typing import NamedTuple
 
 from .. import acceptance
 from .. import artifact_branch as docs_ref
-from .. import (artifact_source, gitcmd, liveness, project_profile, store,
-               workspace)
+from .. import (artifact_source, config, gitcmd, liveness, project_profile,
+               store, workspace)
 from ..reporters import outcome
 from . import refusal_classes
 from ._base import GateRefusal, _run_gates
@@ -925,7 +925,7 @@ def _proven(conn, task_id: str, artifact_branch: str, head_sha: str,
 
 def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
            repo: Path, scratch: Path, trees: dict, base_of,
-           merge: bool) -> GateRefusal | None:
+           merge: bool, extra: tuple = ()) -> GateRefusal | None:
     head_sha = gitcmd.branch_head_sha(branch, repo=repo)
     if not head_sha:
         raise _Prepare(f"голова кодовой ветки {branch} не прочитана")
@@ -1007,7 +1007,8 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
              f"{fingerprint(used + _replacement_elements(replacements))}")
     store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(
         [counts, proof, *prior_line, *flaky_lines, *replaced_lines,
-         *(f"{f.line}{COVERED_MARK}{source}" for f, (_e, source) in covered)]))
+         *(f"{f.line}{COVERED_MARK}{source}" for f, (_e, source) in covered),
+         *extra]))
     return None
 
 
@@ -1026,7 +1027,19 @@ def _bounds(is_canary, target: str):
 def _outcome_integrity_gate(conn, task_id: str, t,
                             artifact_branch: str) -> GateRefusal | None:
     """Гейт (требования 1-6): вне границы — `None` без прогона и записи;
-    иначе прогоны, сравнение, мандат; сбой подготовки — отказ."""
+    иначе прогоны, сравнение, мандат; сбой подготовки — отказ. Запись
+    из нескольких компонентов — компоненты диффа (`_components_gate`)."""
+    target = t["target"] or config.DEFAULT_TARGET
+    if project_profile.is_multi(target):
+        if t["is_canary"]:
+            return None
+        decision = project_profile.for_task_target(target, task_id, conn)
+        if decision.profile is None:
+            return GateRefusal(project_profile.REFUSAL_ACTION,
+                               decision.refusal,
+                               project_profile.refusal_hint(task_id))
+        return _components_gate(conn, task_id, t["branch"], artifact_branch,
+                                target, _diff_base, merge=False)
     profile = _bounds(t["is_canary"], t["target"])
     if profile is None:
         return None
@@ -1034,11 +1047,75 @@ def _outcome_integrity_gate(conn, task_id: str, t,
                  _diff_base, merge=False)
 
 
+# Название проверки записи пропуска гейта, когда вне границы все компоненты
+# диффа (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 3).
+CHECK_OUTCOME = "гейт неослабления по исходам"
+OUT_OF_BOUNDS_LINE = "компонент {name}: вне границы гейта исходов"
+_HEAD_LINE = "голова {head}"
+
+
+def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
+                     target: str, base_of, merge: bool) -> GateRefusal | None:
+    """Гейт записи из нескольких компонентов (SPEC
+    01M5JGSAANR1NZYQD4FCSVE48Y, требование 3): компоненты
+    `select_components` путей диффа (с потребителями по `depends_on`), в
+    порядке записи. Компонент в границе — свой прогон ядра `_gate` и своя
+    запись; первый отказ останавливает гейт («компонент <имя>: …»).
+    Компоненты вне границы — строкой в каждой записи; вне границы все —
+    запись пропуска без прогона. Сбой чтения диффа — отказ подготовки."""
+    repo = workspace.task_repo(task_id)
+    bases: dict = {}
+
+    def cached_base(repo_: Path, branch_: str, head_sha: str) -> str:
+        # На мерже база — повторный фетч main: один на гейт, не на компонент.
+        if head_sha not in bases:
+            bases[head_sha] = base_of(repo_, branch_, head_sha)
+        return bases[head_sha]
+    reason = ""
+    try:
+        head_sha = gitcmd.branch_head_sha(branch, repo=repo)
+        if not head_sha:
+            raise _Prepare(f"голова кодовой ветки {branch} не прочитана")
+        base_sha = cached_base(repo, branch, head_sha)
+        paths = gitcmd.diff_names(base_sha, head_sha, repo=repo)
+        if paths is None:
+            raise _Prepare(f"дифф базы {base_sha[:12]} и головы "
+                           f"{head_sha[:12]} не получен — компоненты гейта "
+                           f"не выбраны")
+        profiles = project_profile.component_profiles(
+            target, project_profile.select_components(target, paths))
+    except _Prepare as exc:
+        reason = str(exc)
+    except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
+        reason = f"сбой {exc!r}"
+    if reason:
+        return GateRefusal(PREPARE_REFUSAL_ACTION, reason,
+                           f"разберись с подготовкой прогона и повтори "
+                           f"artel.py advance {task_id}")
+    outside = tuple(OUT_OF_BOUNDS_LINE.format(name=p.component)
+                    for p in profiles if not in_outcome_bounds(p))
+    inside = [p for p in profiles if in_outcome_bounds(p)]
+    if not inside:
+        project_profile.journal_skip(
+            conn, task_id, CHECK_OUTCOME, project_profile.Decision(
+                target, skip="\n".join([_HEAD_LINE.format(head=head_sha),
+                                        *outside])))
+        return None
+    for profile in inside:
+        refusal = _gate(conn, task_id, branch, artifact_branch, profile,
+                        cached_base, merge, extra=outside)
+        if refusal is not None:
+            return refusal._replace(
+                detail=f"компонент {profile.component}: {refusal.detail}")
+    return None
+
+
 def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
-          base_of, merge: bool) -> GateRefusal | None:
+          base_of, merge: bool, extra: tuple = ()) -> GateRefusal | None:
     """Ядро гейта на обоих рубежах: выписки, ключ, (на мерже)
     доказательство, прогоны, сравнение, мандат; сбой подготовки — отказ
-    `PREPARE_REFUSAL_ACTION`, не пропуск."""
+    `PREPARE_REFUSAL_ACTION`, не пропуск. `extra` — строки, дописываемые в
+    запись пройденного гейта (компоненты вне границы)."""
     repo = workspace.task_repo(task_id)
     # `resolve()`: временный каталог macOS — символическая ссылка, а пути
     # отчёта раннер считает от реального корня выписки.
@@ -1050,7 +1127,7 @@ def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
         (scratch / liveness.GATE_OWNER_MARKER).write_text(
             str(os.getpid()), encoding="utf-8")
         return _judge(conn, task_id, branch, artifact_branch, profile,
-                      repo, scratch, trees, base_of, merge)
+                      repo, scratch, trees, base_of, merge, extra)
     except _Prepare as exc:
         reason = str(exc)
     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
@@ -1087,15 +1164,26 @@ def merge_gate_escalates(conn, task_id: str, state: str, main_sha_of) -> bool:
     `merge_gate`, push нет, пропуска гейта нет."""
     # Граница по цели — до строки задачи: вне границы шаг не читает БД
     # сверх `task_target`, как прежний маршрут мержа.
-    profile = _bounds(False, store.task_target(conn, task_id))
-    if profile is None:
-        return False
-    t = store.get_task(conn, task_id)
-    if t["is_canary"]:
-        return False
-    artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
-    refusal = _gate(conn, task_id, t["branch"], artifact_branch, profile,
-                    _merge_base_of(main_sha_of), merge=True)
+    target = store.task_target(conn, task_id)
+    if project_profile.is_multi(target):
+        t = store.get_task(conn, task_id)
+        if t["is_canary"]:
+            return False
+        _merge_profile_refusal_exit(conn, task_id, target)
+        artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+        refusal = _components_gate(conn, task_id, t["branch"],
+                                   artifact_branch, target,
+                                   _merge_base_of(main_sha_of), merge=True)
+    else:
+        profile = _bounds(False, target)
+        if profile is None:
+            return False
+        t = store.get_task(conn, task_id)
+        if t["is_canary"]:
+            return False
+        artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+        refusal = _gate(conn, task_id, t["branch"], artifact_branch, profile,
+                        _merge_base_of(main_sha_of), merge=True)
     if refusal is None:
         return False
     if refusal.action == PREPARE_REFUSAL_ACTION:
@@ -1115,11 +1203,31 @@ def merge_gate_escalates(conn, task_id: str, state: str, main_sha_of) -> bool:
     return True
 
 
+def _merge_profile_refusal_exit(conn, task_id: str, target: str) -> None:
+    """Компонент задачи на записи из нескольких компонентов не выбран
+    (`for_task`) — отказ мержа, не пропуск гейта и не эскалация (SPEC
+    01M5JGSAANR1NZYQD4FCSVE48Y, требование 2): задача остаётся на
+    `merge_gate`."""
+    decision = project_profile.for_task_target(target, task_id, conn)
+    if decision.profile is not None:
+        return
+    # fsm_merge_gate импортирует этот модуль на верхнем уровне.
+    from ..fsm_merge_gate import MERGE_PROFILE_REFUSAL_ACTION
+    store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
+                  decision.refusal)
+    sys.exit(f"[{task_id}] merge отклонён: {decision.refusal}\n"
+             f"  задача осталась на гейте merge; почини зоны задачи или "
+             f"targets.yaml и повтори: artel.py approve {task_id}")
+
+
 def review_lines(conn, task_id: str, head_sha: str) -> list:
     """Строки гейта исходов для пакета ревьювера (требование 5): по
     последней записи `PASSED_ACTION` с головой `head_sha` — числа базы и
     ветки, перепрогоны, «нестабилен и на базе», находки под мандатом с
-    ANSWER; записи нет — строка «не исполнялся»."""
+    ANSWER; записи нет — строка «не исполнялся». Запись из нескольких
+    компонентов — `_components_review_lines`."""
+    if project_profile.is_multi(store.task_target(conn, task_id)):
+        return _components_review_lines(conn, task_id, head_sha)
     for detail in reversed(_passed_details(conn, task_id) if head_sha else []):
         fields = proof_fields(detail)
         if fields is None or fields[0] != head_sha:
@@ -1130,3 +1238,38 @@ def review_lines(conn, task_id: str, head_sha: str) -> list:
                 f"{fields[1][:7]}: {lines[0] if lines else ''}",
                 *(f"гейт исходов: {line}" for line in lines[1:])]
     return [NOT_RUN_LINE.format(head=head_sha[:7] or "(не прочитана)")]
+
+
+def _record_lines(detail: str, fields) -> list:
+    lines = [line for line in detail.splitlines()
+             if line.strip() and not PROOF_LINE.match(line.strip())]
+    return [f"гейт исходов для головы {fields[0][:7]} и базы "
+            f"{fields[1][:7]}: {lines[0] if lines else ''}",
+            *(f"гейт исходов: {line}" for line in lines[1:])]
+
+
+def _components_review_lines(conn, task_id: str, head_sha: str) -> list:
+    """Строки гейта исходов записи из нескольких компонентов (SPEC
+    01M5JGSAANR1NZYQD4FCSVE48Y, требование 3): последняя запись
+    `PASSED_ACTION` головы по каждому ключу компонента, в порядке записей;
+    их нет, а есть запись пропуска головы — «не исполнялся» и строки
+    компонентов вне границы из неё."""
+    latest: dict = {}
+    for detail in (_passed_details(conn, task_id) if head_sha else []):
+        fields = proof_fields(detail)
+        if fields is not None and fields[0] == head_sha:
+            latest[fields[2]] = (detail, fields)
+    if latest:
+        return [line for detail, fields in latest.values()
+                for line in _record_lines(detail, fields)]
+    lines = [NOT_RUN_LINE.format(head=head_sha[:7] or "(не прочитана)")]
+    skip_action = f"{project_profile.SKIP_ACTION}: {CHECK_OUTCOME}"
+    head_line = _HEAD_LINE.format(head=head_sha)
+    skips = [r["detail"] or "" for r in store.task_steps(conn, task_id)
+             if head_sha and r["action"] == skip_action]
+    for detail in reversed(skips):
+        rows = detail.splitlines()
+        if rows and rows[0] == head_line:
+            lines += [f"гейт исходов: {row}" for row in rows[1:]]
+            break
+    return lines

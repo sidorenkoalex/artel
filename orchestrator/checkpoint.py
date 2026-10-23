@@ -590,8 +590,9 @@ def restore_out_of_bounds_deletions(conn, task_id: str, role: str,
     if not deleted:
         return []
     zones = _zone_paths(conn, task_id) if role == "developer" else []
-    profile = (project_profile.for_task(conn, task_id).profile
-               if role in ("developer", "test_author") else None)
+    decision = (project_profile.for_task(conn, task_id)
+                if role in ("developer", "test_author") else None)
+    profile = decision.profile if decision is not None else None
     doomed = [rel for rel in deleted
               if not _role_may_delete(task_id, role, rel, zones, profile)]
     if zones:
@@ -622,6 +623,7 @@ def restore_out_of_bounds_deletions(conn, task_id: str, role: str,
     if errors:
         detail += (f"; не восстановлено {len(doomed) - len(restored)} — git "
                    f"checkout: {'; '.join(errors)}")
+    detail += _multi_refusal_note(decision)
     store.journal(conn, task_id, "orchestrator", RESTORED_DELETIONS_ACTION,
                   detail)
     return restored
@@ -1649,6 +1651,17 @@ def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
     return stray
 
 
+def _multi_refusal_note(decision) -> str:
+    """Причина отказа `for_task` записи из нескольких компонентов для
+    записи журнала чекпоинта (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование
+    2): своих долгоживущих файлов нет — почему. У прочих записей и без
+    отказа — пусто, запись прежняя."""
+    if decision is None or not decision.refusal or \
+            not project_profile.is_multi(decision.target):
+        return ""
+    return f"; профиль тестов задачи: {decision.refusal}"
+
+
 def _own_long_lived(conn, task_id: str, paths: list[str]) -> list[str]:
     """Подсписок `paths` вне зон задачи — свои долгоживущие файлы задачи по
     профилю проекта (`Profile.is_long_lived`; SPEC
@@ -1842,15 +1855,19 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     stray = _stray_staged_paths(wt, zones)
     if stray is None:
         return False, "", [], "", []
+    note = ""
     if own_long_lived:
         own = set(_own_long_lived(conn, task_id, stray))
         stray = [p for p in stray if p not in own]
+        if stray:
+            note = _multi_refusal_note(project_profile.for_task(conn, task_id))
     mandated = _mandate_covered(task_id, stray)
     stray = [p for p in stray if p not in mandated]
     if stray:
         store.journal(conn, task_id, "orchestrator",
                       STRAY_WORKTREE_FILES_ACTION,
-                      f"{STRAY_WORKTREE_FILES_ACTION}: {', '.join(stray)}")
+                      f"{STRAY_WORKTREE_FILES_ACTION}: {', '.join(stray)}"
+                      f"{note}")
         if refuse_on_stray:
             gitcmd.in_repo(wt, "reset", "-q")
             return False, "", stray, "", mandated
