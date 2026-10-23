@@ -261,13 +261,10 @@ def cmd_workspace(task_id: str, session_id: str | None = None) -> None:
     невозможно безопасно сериализовать иначе (review T045 итерация 1,
     замечание 1).
 
-    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
-    до lease (REVIEW T094 итерация 1, замечание 1).
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится в
+    `lease.run_task_command`, до lease (REVIEW T094 итерация 1, замечание 1).
     """
-    conn = store.db()
-    task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_workspace(conn, task_id))
+    lease.run_task_command(task_id, session_id, _cmd_workspace)
 
 
 def cmd_worktree_db_clean(task_id: str) -> None:

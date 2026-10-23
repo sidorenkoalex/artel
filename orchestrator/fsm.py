@@ -1678,14 +1678,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
 def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
-    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
-    до lease/CAS — иначе `reject` с префиксом на `merge_gate` кидал
-    необработанный `CasConflict` сквозь `lease.run_locked` (REVIEW T094
-    итерация 1, замечание 1)."""
-    conn = store.db()
-    task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_reject(conn, task_id, reason))
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится в
+    `lease.run_task_command`, до lease/CAS — иначе `reject` с префиксом на
+    `merge_gate` кидал необработанный `CasConflict` сквозь
+    `lease.run_locked` (REVIEW T094 итерация 1, замечание 1)."""
+    lease.run_task_command(task_id, session_id,
+                           lambda conn, tid: _cmd_reject(conn, tid, reason))
 
 
 def _cmd_reject(conn, task_id: str, reason: str) -> None:
@@ -1770,10 +1768,7 @@ def cmd_spec_audit(task_id: str, session_id: str | None = None) -> None:
     запись входа), в том числе задача без ТЗ. Счётчик возвратов по `fail`
     команда не сбрасывает. Берёт lease задачи, как прочие команды
     Оператора."""
-    conn = store.db()
-    task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_spec_audit(conn, task_id))
+    lease.run_task_command(task_id, session_id, _cmd_spec_audit)
 
 
 def _cmd_spec_audit(conn, task_id: str) -> None:

@@ -41,10 +41,7 @@ def cmd_pull_main(task_id: str, session_id: str | None = None) -> None:
     журнал, и параллельный держатель — в том числе отвязанный `auto` своей
     сессии под другим pid — не должен делать то же одновременно.
     """
-    conn = store.db()
-    task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_pull_main(conn, task_id))
+    lease.run_task_command(task_id, session_id, _cmd_pull_main)
 
 
 def _refuse(conn, task_id: str, text: str) -> None:
