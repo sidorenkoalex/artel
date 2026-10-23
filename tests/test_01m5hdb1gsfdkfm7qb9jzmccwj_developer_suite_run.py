@@ -678,18 +678,22 @@ class MissionTest(DeveloperSuiteRunStand):
                     r"ревьювер[^\n]{0,40}Оператор)", text)
 
     def test_ac7_external_reviewer_mission_keeps_suite_run(self):
-        """Миссия ревьювера задачи внешнего проекта по-прежнему называет `suite-run <id>` — полный набор тестов.
+        """Миссия ревьювера задачи внешнего проекта несёт правило о полном наборе, `plank-run` и `guard`, но не `suite-run <id>`.
 
         Сценарий: в `targets.yaml` песочницы — артель и учебный внешний
         проект; задача этого проекта в состоянии ревью; миссия ревьювера
         собрана `role_prompt.mission_brief_package` (компоненты брифа и
         ревью-пакет пустые). Она содержит
-        «`python3 <config.ROOT>/orchestrator/artel.py suite-run <id>` —
-        полный набор тестов».
+        `role_prompt.REVIEWER_FULL_SUITE_RULE`,
+        «`python3 <config.ROOT>/orchestrator/artel.py plank-run <id>» и
+        «`python3 <config.ROOT>/orchestrator/artel.py guard <id>», и в ней
+        нет `suite-run <id>` без ` --failed`/` --wait` (решение Оператора
+        23.10, CR-2026-10-22-2, вариант А).
 
-        Ловит мутацию: правка подсказок `suite-run` задела и перечень
-        команд ревьювера внешнего проекта — команда там с `--failed`/
-        `--wait` или пропала."""
+        Ловит мутацию: перечень команд ревьювера внешнего проекта снова
+        называет `suite-run <id>` — полный набор тестов; правило
+        `REVIEWER_FULL_SUITE_RULE` пропало из миссии; `plank-run` или
+        `guard` пропали из перечня либо названы без полного пути пульта."""
         ext = "sled" + "".join(self.rng.choice(LETTERS) for _ in range(6))
         config.TARGETS.write_text(
             "targets:\n" + artel_target_entry() + EXTERNAL_ENTRY.format(
@@ -702,8 +706,11 @@ class MissionTest(DeveloperSuiteRunStand):
             mission, _b, _p = role_prompt.mission_brief_package(
                 self.conn, task_id, t, "reviewer", "/tmp/cwd",
                 config.PROJECTS / ext / "tasks" / task_id)
-        self.assertIn(f"`{self.pult()} suite-run {task_id}` — полный набор "
-                      f"тестов", mission, self.msg(mission))
+        text = self.msg(mission)
+        self.assertIn(role_prompt.REVIEWER_FULL_SUITE_RULE, mission, text)
+        self.assertIn(f"`{self.pult()} plank-run {task_id}", mission, text)
+        self.assertIn(f"`{self.pult()} guard {task_id}", mission, text)
+        self.assertEqual(bare_full_run(mission, task_id), [], text)
 
 
 if __name__ == "__main__":

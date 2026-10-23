@@ -13,6 +13,16 @@ from scripts import guard
 from . import brief, config, project_profile, review, stack, store
 from .advance_gates import spec_audit
 
+# Правило о полном наборе тестов для ревьювера — единственный его источник
+# (SPEC 01M5KP57JXWKKKCJKY47HT21W8, решение Оператора 23.10, вариант А):
+# скил и образец REVIEW.md его не повторяют, как `suite_run_note` у
+# разработчика.
+REVIEWER_FULL_SUITE_RULE = (
+    "Полный набор тестов в шаге ревью не запускай — ни командой пульта "
+    "`suite-run`, ни `pytest` или `unittest` по всему `tests/`: его гоняют CI "
+    "и гейты пульта (приёмка и мерж). В шаге — планка задачи и тесты файлов "
+    "задачи.")
+
 
 def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                           docs_dir=None):
@@ -148,7 +158,8 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             f"Работай от пакета, а не от обхода репозитория.\n"
             f"Файлы сверх пакета читай точечно и только когда без них не "
             f"проверить конкретное замечание; причину чтения называй в самом "
-            f"замечании. {_reviewer_checks_note(task_id, artel)}\n"
+            f"замечании. {_reviewer_checks_note(task_id, artel)} "
+            f"{REVIEWER_FULL_SUITE_RULE}\n"
             f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
             f"заполни {task_ref}/REVIEW.md по форме из пакета "
             f"(iteration: {iteration}). Код НЕ правь. Коммитить "
@@ -323,7 +334,8 @@ def _plank_run_point(task_id: str, task_ref: str, artel: bool,
 def _reviewer_checks_note(task_id: str, artel: bool) -> str:
     """Фраза миссии ревьювера о проверках (SPEC 01M56G23ZQDHV2BKEVWWC22R96,
     требование 9): у внешнего проекта права роли сужены до команд пульта
-    белого списка ролей."""
+    белого списка ролей. `suite-run` в перечне нет: полный набор ревьюверу
+    не положен (`REVIEWER_FULL_SUITE_RULE`, SPEC 01M5KP57JXWKKKCJKY47HT21W8)."""
     if artel:
         return ("Права не сужены: тесты, guard и другие исполняемые "
                 "проверки запускай, когда они доказывают или опровергают "
@@ -332,9 +344,8 @@ def _reviewer_checks_note(task_id: str, artel: bool) -> str:
     return (f"Исполняемые проверки доступны только командами пульта: "
             f"`{pult} guard {task_id} [<файл>]` — структура артефактов, "
             f"`{pult} plank-run {task_id} [<файл>]` — планка и долгоживущие "
-            f"файлы задачи, `{pult} suite-run {task_id}` — полный набор "
-            f"тестов; запускай их, когда они доказывают или опровергают "
-            f"замечание.")
+            f"файлы задачи; запускай их, когда они доказывают или "
+            f"опровергают замечание.")
 
 
 def _long_lived_run_note(long_lived) -> str:
