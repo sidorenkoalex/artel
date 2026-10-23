@@ -186,7 +186,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   prune [--execute] | explore-stats [--days N] [--role <роль>] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   artifact-history-snapshots [--dry-run] |
-  amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
+  amend-tests <id> --reason "<основание>" [--from-branch] |
+  pin-update <sha main артели> [--wait-ci] |
+           --wait-ci: ждать завершения CI коммита вместо отказа |
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
   knowledge <id> <путь>[::<символ>]|::<символ> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
@@ -298,6 +300,10 @@ models.yaml) гоняет перед отправкой на дереве с у�
 канарейки не старше `config.CANARY_MAX_MERGES_SINCE_GREEN` мержей main
 на целевом sha (ADR-0013) — `doctor` поднимает триггер по тому же
 порогу заранее.
+`pin-update <sha> --wait-ci` (SPEC 01M5K9M5DGPDRXG2M5B4KKGQ54) — при
+незавершённом или неизвестном CI коммита команда не отказывает сразу, а
+ждёт его исхода с периодом и потолком гейта мержа
+(`MERGE_GATE_CI_WAIT_POLL_SEC`/`MERGE_GATE_CI_WAIT_CEILING_SEC`).
 
 `pin --to [<sha>]` (tasks/01M1NGFK3N6MRMYGCC09H975V3, ADR-0013 ч.3) —
 откат пина: с явным `<sha>` (обязан быть предком текущего HEAD) —
@@ -2028,6 +2034,27 @@ def _cmd_pin(rest: list) -> None:
     pin.cmd_pin_to(rest[1] if len(rest) > 1 else None)
 
 
+_PIN_UPDATE_USAGE = "artel.py pin-update <sha> [--wait-ci]"
+
+
+def _cmd_pin_update(rest: list) -> None:
+    """`pin-update <sha> [--wait-ci]` (SPEC 01M5K9M5DGPDRXG2M5B4KKGQ54,
+    требования 1-3): форма команды сверяется до `cmd_pin_update` — отказ
+    формы не делает `fetch` и не пишет журнал."""
+    sha = None
+    for arg in rest:
+        if arg == "--wait-ci":
+            continue
+        if arg.startswith("--") or sha is not None:
+            sys.exit(f"pin-update: неизвестный аргумент {arg} — "
+                     f"{_PIN_UPDATE_USAGE}")
+        sha = arg
+    if sha is None:
+        sys.exit(f"pin-update: нужен полный sha main артели — "
+                 f"{_PIN_UPDATE_USAGE}")
+    pin.cmd_pin_update(sha, wait_ci="--wait-ci" in rest)
+
+
 def _cmd_pause(rest: list) -> None:
     """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
     тем же местом разбора, что уже держит команду `pause` в таблице
@@ -2249,7 +2276,7 @@ def main() -> None:
         # Подтягивает main в ветку задачи и отправляет её в origin — вне
         # белого списка ролей (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 14).
         "pull-main": lambda: pull_main.cmd_pull_main(rest[0]),
-        "pin-update": lambda: pin.cmd_pin_update(rest[0]),
+        "pin-update": lambda: _cmd_pin_update(rest),
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
