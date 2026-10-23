@@ -38,7 +38,7 @@ from pathlib import Path
 # переименование действия не обнулило счёт молча.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config  # noqa: E402
+from orchestrator import config, store  # noqa: E402
 from orchestrator.advance_gates.test_integrity import (  # noqa: E402
     TEST_INTEGRITY_REFUSAL_ACTION)
 
@@ -69,9 +69,8 @@ def journal(db_path: Path, since: date) -> dict:
     `mode=ro` отказывает в любой записи на уровне SQLite."""
     if not db_path.is_file():
         raise StatsError(f"нет БД пульта {db_path}")
-    uri = f"{db_path.resolve().as_uri()}?mode=ro"
     try:
-        conn = sqlite3.connect(uri, uri=True)
+        conn = store.db_readonly(path=db_path, rows=False)
         try:
             rows = conn.execute(
                 "SELECT task_id, ts, action, detail FROM steps "
