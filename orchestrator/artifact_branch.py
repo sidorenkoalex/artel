@@ -469,7 +469,7 @@ def _last_send_failed(task_id: str) -> bool:
     # не заводим (как `task_repo`).
     if not store.db_usable():
         return False
-    last =store.last_task_step_of(store.db(), task_id,
+    last = store.last_task_step_of(store.db(), task_id,
                                    (_PUSH_OK_ACTION, _PUSH_FAILED_ACTION))
     return last is not None and last["action"] == _PUSH_FAILED_ACTION
 
