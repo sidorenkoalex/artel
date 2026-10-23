@@ -1,0 +1,1 @@
+64a4cd457758a51840384ec303a79046a113f36a3cdc6977d82fc2488a261113  tests/test_01m5m0kqpv0fj9nsmdcq3xb76w_help_registry.py
