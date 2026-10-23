@@ -18,6 +18,7 @@
 развилка миссий по `brief.is_artel_task`; все методы зелёные.
 """
 import random
+import re
 import unittest
 from unittest import mock
 
@@ -183,25 +184,32 @@ class Ac7TestAuthorRunNoteTest(ExternalMissionSandbox):
 class Ac8ReviewerChecksTest(ExternalMissionSandbox):
 
     def test_ac8_external_reviewer_lists_pult_check_commands(self):
-        """Миссия ревьювера задачи учебного проекта перечисляет `guard`, `plank-run`, `suite-run` командами пульта и не пишет «Права не сужены».
+        """Миссия ревьювера задачи учебного проекта перечисляет `guard`, `plank-run` командами пульта, не называет `suite-run <id>` и не пишет «Права не сужены».
 
         Несколько случайных задач учебного проекта в `review`; миссия
-        содержит `python3 <config.ROOT>/orchestrator/artel.py guard`, `…
-        plank-run` и `… suite-run` и не содержит «Права не сужены».
+        содержит `python3 <config.ROOT>/orchestrator/artel.py guard` и `…
+        plank-run`, не содержит «Права не сужены» и не содержит
+        `suite-run <id>` без ` --failed`/` --wait` (решение Оператора 23.10,
+        CR-2026-10-22-2, вариант А: полный набор ревьюверу запрещён).
 
         Ловит мутацию: строка ревьювера о правах не развилась по проекту
         задачи — «Права не сужены» остаётся; перечень команд пульта неполон
-        (нет `suite-run` или `guard`) либо назван без полного пути пульта —
-        одной из строк нет.
+        (нет `plank-run` или `guard`) либо назван без полного пути пульта —
+        одной из строк нет; перечень снова называет `suite-run <id>` —
+        полный прогон без флагов.
         """
         self.declare()
         for _ in range(2):
-            mission, _task_id = self.mission("reviewer")
+            mission, task_id = self.mission("reviewer")
             with self.subTest(seed=self.seed):
                 self.assertNotIn("Права не сужены", mission, self.note(mission))
-                for command in ("guard", "plank-run", "suite-run"):
+                for command in ("guard", "plank-run"):
                     self.assertIn(f"{self.pult()} {command}", mission,
                                   self.note(mission))
+                for name in (re.escape(task_id), re.escape("<id>")):
+                    self.assertIsNone(
+                        re.search(rf"suite-run {name}(?! --failed)(?! --wait)",
+                                  mission), self.note(mission))
 
 
 if __name__ == "__main__":
