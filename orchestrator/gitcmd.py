@@ -239,7 +239,7 @@ def commits_behind(branch: str, base: str | None = None,
     функции и не увидело бы подмену `config.MAIN_BRANCH` в тестах, тот же
     приём, что у остальных примитивов модуля). `res is None`/непустой,
     но нечисловой вывод — тот же вырожденный случай «git не ответил
-    осмысленно», что у `head_sha`/`is_clean`: заглушки `gitcmd.git` в
+    осмысленно», что у `head_sha`: заглушки `gitcmd.git` в
     тестах, не связанных с git (SPEC T051, требование 9), отвечают пустым
     выводом с кодом 0 на любую нераспознанную команду и не должны
     трактоваться как «ноль коммитов».
@@ -398,18 +398,6 @@ def head_sha(repo: Path | None = None) -> str:
     return res.stdout.strip() if res is not None and res.returncode == 0 else ""
 
 
-def is_clean(*paths: str, repo: Path | None = None) -> bool | None:
-    """Нет незакоммиченных изменений по путям; None — git не ответил.
-
-    Без путей — вся рабочая копия репозитория (`repo`, если задан).
-    """
-    args = ("status", "--porcelain") + (("--", *paths) if paths else ())
-    res = in_repo(repo, *args) if repo else git(*args)
-    if res is None or res.returncode != 0:
-        return None
-    return not res.stdout.strip()
-
-
 def check_ignore(paths, repo: Path | None = None) -> set[str] | None:
     """Пути из `paths`, которые `.gitignore` ПУЛЬТА (`config.ROOT`) считает
     игнорируемыми; `None` — git не ответил. Настоящий разбор `.gitignore`
@@ -508,7 +496,7 @@ def diff_paths(a: str, b: str, *paths: str,
     1 — расходятся), не выводом: достаточно для проверки лока
     acceptance_tests/ (orchestrator/fsm.py, tasks/T023, требование 5)
     без парсинга самого диффа. Тот же вырожденный случай «git не ответил»,
-    что у `is_clean`/`head_sha`: заглушка `gitcmd.git = lambda *a: None`
+    что у `head_sha`: заглушка `gitcmd.git = lambda *a: None`
     в тестах, не связанных с git, возвращает `None` тем же приёмом.
     """
     args = ("diff", "--quiet", a, b, "--", *paths)

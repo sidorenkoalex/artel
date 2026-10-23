@@ -495,11 +495,9 @@ def cmd_zones_extend(task_id: str, paths_arg: str,
     `matrix_path` — файл матрицы неослабления Оператора (SPEC
     01M4NZ5QRB7MNEYCWGXEWVWFP0, требование 5); без него — отказ здесь,
     а не только в разборе CLI: прямой вызов функции не обходит правило."""
-    conn = store.db()
-    task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_zones_extend(conn, task_id, paths_arg,
-                                                   matrix_path))
+    lease.run_task_command(
+        task_id, session_id,
+        lambda conn, tid: _cmd_zones_extend(conn, tid, paths_arg, matrix_path))
 
 
 def _zones_extend_matrix(conn, task_id: str, matrix_path: str | None,

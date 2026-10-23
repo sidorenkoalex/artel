@@ -52,16 +52,14 @@ def cmd_ci_rerun(task_id: str, reason: str | None,
     не запускает (требование 9): после зелёного повтора задачу уводит
     дальше очередной опрос `cmd_advance` в `verifying`.
 
-    Префикс -> полный id резолвится ЗДЕСЬ, до lease — тот же порядок, что
-    у `amend.cmd_amend_tests`/`answer.cmd_answer`. Lease берётся по тому
-    же основанию, что и у остальных мутирующих команд задачи: команда
-    пишет журнал и дёргает внешний CI — параллельная сессия не должна
-    делать это одновременно.
+    Префикс -> полный id резолвится в `lease.run_task_command`, до lease —
+    тот же порядок, что у `amend.cmd_amend_tests`/`answer.cmd_answer`.
+    Lease берётся по тому же основанию, что и у остальных мутирующих
+    команд задачи: команда пишет журнал и дёргает внешний CI —
+    параллельная сессия не должна делать это одновременно.
     """
-    conn = store.db()
-    task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_ci_rerun(conn, task_id, reason))
+    lease.run_task_command(task_id, session_id,
+                           lambda conn, tid: _cmd_ci_rerun(conn, tid, reason))
 
 
 def _ci_rerun_refuse(conn, task_id: str, text: str) -> None:

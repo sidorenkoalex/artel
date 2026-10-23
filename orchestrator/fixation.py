@@ -66,14 +66,6 @@ def _read_ref(task_id: str) -> tuple[str, bool]:
     return (sha, True) if sha else ("", False)
 
 
-def external_code_sha(target: str, task_id: str) -> str:
-    """sha головы кодовой ветки ЦЕЛЕВОГО (SPEC T094, требование 9, AC-10):
-    HEAD рабочей копии задачи `workspace.path(task_id, target)` (ADR-0021
-    п.1-2) — тот же worktree, в котором пишет код роль-разработчик.
-    Пустая строка — рабочей копии ещё нет или git не ответил."""
-    return gitcmd.head_sha(workspace.path(task_id, target))
-
-
 def external_artifact_sha(task_id: str) -> str:
     """sha головы ссылки документов задачи (SPEC T094, требование 9,
     AC-10) в её репозитории — для внешнего target это git проекта
@@ -92,7 +84,7 @@ def default_code_sha(conn, task_id: str) -> str:
 
     `gitcmd.branch_head_sha` — независимо от текущего чекаута. Пустая строка — задачи нет в БД (`store.task_branch`)
     либо ветки ещё нет физически (вырожденный случай, как и у
-    `external_code_sha`/`external_artifact_sha`)."""
+    `external_artifact_sha`)."""
     branch = store.task_branch(conn, task_id)
     return (gitcmd.branch_head_sha(branch, repo=workspace.task_repo(task_id))
            if branch else "")
