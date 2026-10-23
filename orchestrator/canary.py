@@ -152,11 +152,13 @@ import random
 import re
 import signal
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections import namedtuple
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
@@ -3421,6 +3423,11 @@ PARALLEL_CHILD_LIMIT = 2
 # `GROUP_TERMINATE_GRACE_SEC`) и пишет строку «оборвана сигналом» — срок
 # берётся с запасом больше двух таких.
 PARALLEL_STOP_GRACE_SEC = 60
+# Попытки записи строки «оборвана сигналом» дочерним. Попытка — до трёх
+# ожиданий блокировки по 5 с (миграция в `store.db()`, обновление таблиц
+# канарейки, вставка): все попытки и снятие группы ведения обязаны уложиться
+# в `PARALLEL_STOP_GRACE_SEC` (SPEC 01M5MVG2B1YGVPTZWKB18EVGHZ, AC-5).
+CHILD_ROW_WRITE_ATTEMPTS = 3
 _PARALLEL_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
@@ -3699,6 +3706,28 @@ def _mark_owned_by_parent(mark: Path) -> bool:
     return owner == str(os.getppid())
 
 
+def _insert_interrupted_row(run_stamp: str, title: str, note: str,
+                            target_sha: str, plan: CanarySetPlan) -> None:
+    """Строка «оборвана сигналом» дочернего (SPEC 01M5MVG2B1YGVPTZWKB18EVGHZ,
+    требование 2). Оба дочерних пишут её одновременно — `OperationalError`
+    («database is locked») повторяется без паузы: ожидание уже даёт таймаут
+    блокировки соединения, а все попытки обязаны уложиться в
+    `PARALLEL_STOP_GRACE_SEC`. Соединение — новое в каждой попытке: сбой
+    бывает и при его открытии (миграция). Иное исключение не повторяется."""
+    for attempt in range(1, CHILD_ROW_WRITE_ATTEMPTS + 1):
+        try:
+            store.insert_canary_run(
+                store.db(), run_stamp, title, None,
+                0, 0.0, 0, 0, note, None, False, False,
+                main_sha=target_sha, verdict="red",
+                set_name=plan.name,
+                models_summary=plan.summary or None)
+            return
+        except sqlite3.OperationalError:
+            if attempt == CHILD_ROW_WRITE_ATTEMPTS:
+                raise
+
+
 def cmd_canary_run_task(*, run_stamp: str, template_path: Path,
                         target_sha: str, set_name: str, summary: str) -> None:
     """`canary run-task` — одна задача прогона `run_stamp` в отдельном
@@ -3758,12 +3787,14 @@ def cmd_canary_run_task(*, run_stamp: str, template_path: Path,
                                   None, plan, None)
                 except CanaryInterrupted as exc:
                     note = f"оборвана сигналом {signal.Signals(exc.signum).name}"
-                    store.insert_canary_run(
-                        store.db(), run_stamp, title, None,
-                        0, 0.0, 0, 0, note, None, False, False,
-                        main_sha=target_sha, verdict="red",
-                        set_name=plan.name,
-                        models_summary=plan.summary or None)
+                    try:
+                        _insert_interrupted_row(run_stamp, title, note,
+                                                target_sha, plan)
+                    except Exception as write_exc:  # noqa: BLE001 — в журнал
+                        sys.stderr.write(
+                            f"[canary] {title}: строка прогона не записана: "
+                            f"{write_exc!r}\n{traceback.format_exc()}")
+                        sys.stderr.flush()
                     raise SystemExit(128 + exc.signum) from None
             finally:
                 record.unlink(missing_ok=True)
