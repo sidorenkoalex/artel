@@ -25,8 +25,10 @@ schema_version: 5
   повторить проверку: artel.py approve <id>`; затем прежний
   `models.suspend_on_autogate_refusal`.
 
-Отдельных тестов в `tests/` не добавлено: SPEC («Не входит») прямо не
-заказывает их сверх планки AC-1..AC-6.
+Итерация 2 (REVIEW R1-F1): вся планка задачи разовая, поэтому после мержа
+свойство без сторожа. Добавлен новый файл `tests/test_fsm_autogate_env_refusal.py`
+(существующие тесты не правятся): сверка классификатора с производителями
+текстов `acceptance.py` и вторая запись/строка только для класса «окружение».
 
 ## Шаги
 1. Константы, `autogate_refusal_class`, ветка отказа в
@@ -36,16 +38,22 @@ schema_version: 5
    tests/test_approve_acceptance_full_suite.py tests/test_model_sets.py …` —
    82 passed; `tests/test_acceptance.py tests/test_long_lived_transitions.py
    tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py` — 55 passed.
+2. Сторож в `tests/test_fsm_autogate_env_refusal.py` (4 метода, заявки
+   «Ловит мутацию»), регенерация карты. Проверка: `pytest
+   tests/test_fsm_autogate*.py` — 33 passed; временные мутации
+   (`_TIMEOUT_NOTE_START` без «tests/», сверка по одному
+   `FULL_SUITE_NOT_STARTED`, `if kind is not None or True`) красят тесты,
+   код возвращён; plank-run — 6 passed.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1 |
-| 2 | 1 |
-| 3 | 1 |
+| 1 | 1, 2 |
+| 2 | 1, 2 |
+| 3 | 1, 2 |
 | 4 | 1 |
-| 5 | 1 (планка test_author) |
+| 5 | 1 (планка test_author), 2 |
 | 6 | 1 |
 
 ## Влияние на систему
@@ -59,7 +67,8 @@ schema_version: 5
 
 ## Риски
 - Смена текста `_full_suite_timeout_note` в `acceptance.py` разошлась бы с
-  литералом начала; ловит AC-6 планки (разовый), долгоживущего сторожа нет.
+  литералом начала; теперь ловит сторож `tests/test_fsm_autogate_env_refusal.py`
+  (гоняется CI и после мержа), не только разовая планка AC-6.
 
 ## Предложения системе
 - Начало текста таймаута — литерал в `fsm_autogate.py`, потому что
