@@ -1,17 +1,17 @@
 # Записка spec_auditor — 01M5MVSP9YW0DYA4YQ1KSG0AHF
 
 ## Выяснено
-- sha SPEC = 536c0d71…; приложение 1 проходит `git apply --check` на d95b7d59; дерево tests/ даёт 61 находку = 61 запись `_EXCEPTIONS`.
-- Все места кода из SPEC подтверждены (guard 3599/3982/4081/4112, refusal_classes 116–117, fsm_advance 598, amend 256/280/642/556); класс линта — 1999–2563, а не 2565.
-- У артели правило планки по умолчанию (`project_profile.plank_rule`: 652–653), поэтому `_by_rule` ложно: в amend-tests файлы планки не проходят через `long_lived_errors_from_files` (amend.py:859, 957, 1207). Туда попадают только долгоживущие файлы (amend.py:642).
-- В `--from-branch` функция `_code_head_long_lived` (amend.py:1170) возвращает голову, которая уже несёт правку. Если взять её базой `lint_base`, гасятся все методы.
-- `acceptance_test_files` (guard.py:4124) отдаёт только `test_*.py`, а `_*.py` и `markers.py` в планке допустимы (guard.py:2721–2722). Помощники линт не проверяет.
+- Круг 2: проверен SPEC с sha 1cb5eb3e… на d95b7d59. Все пять решений Оператора с гейта №1 в SPEC перенесены.
+- Новые места подтверждены: `_group_line_errors` (amend.py:172), его вызовы 859/957/1207, from-branch — 1109/1170.
+- Ключи `_branch_tests_snapshot` — `tasks/<id>/acceptance_tests/…` (amend.py:1060). Метки `acceptance_test_files` — `acceptance_tests/…` (guard.py:4128). Для базы планки их нужно привести к одной форме.
+- AC-6 не проверяет базу для планки: нет случая «правка другого метода — отказа нет».
+- На `--from-branch` долгоживущие файлы проверяются только при `long_diverged` (amend.py:1228). Без базы этот путь отказывает за старый метод, который пропустил worktree-путь. Это тупик восстановления (amend.py:1002–1005).
 
 ## Не сработало
-- Составные команды Bash с `cd`, `awk` и `head` требуют подтверждения — пользуйся абсолютными путями и одной командой на вызов.
+- Составные Bash-команды (`;` с shasum, `ls`) требуют подтверждения. Для sha пользуйся `git hash-object`.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready.
+- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-- Дольше всего искал, через какие функции amend-tests проверяет планку артели: путь по умолчанию — `_group_line_errors`, а не `long_lived_errors_from_files`.
+- Пришлось искать, откуда берётся база планки и в какой форме у неё ключи: `_branch_tests_snapshot`, amend.py:1048.
