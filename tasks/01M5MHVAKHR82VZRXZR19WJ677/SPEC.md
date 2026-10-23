@@ -39,7 +39,7 @@ budget_usd: 25
 | 12 | `SHA_HEX` (константа) | `scripts/core_reference.py:66` |
 | 13 | `retro_rel_path` (функция) | `orchestrator/retro.py:254` |
 
-`_has_mandate_lines` (`merge_after.py`) и `_read_cache` (в тесте) — другие
+`_has_mandate_lines` (`orchestrator/answer.py:222`, вне зон задачи) и `_read_cache` (в тесте) — другие
 имена, они остаются. Константа `RETRO_DIR_REL` (`retro.py`) остаётся — её
 читает `budget.py:397`. Одноимённые локальные переменные `retro_path` в пяти
 тестах — не обращения к функции.
@@ -130,7 +130,8 @@ AC-5. Комментарий над `VERDICT_RETURN` в `orchestrator/models.py`
 и её значение `"return"` остаются.
 
 AC-6. `RETRO_DIR_REL` остаётся в `orchestrator/retro.py` с прежним значением,
-`_has_mandate_lines` остаётся в `orchestrator/merge_after.py`.
+`_has_mandate_lines` остаётся в `orchestrator/answer.py` (определение на
+main — `orchestrator/answer.py:222`).
 
 AC-7. Ветка не изменяет и не удаляет ни одного файла `tests/`, существующего
 в базе сравнения: в `tests/` ветка только добавляет новые файлы. База
