@@ -1,16 +1,15 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Адреса SPEC верны на HEAD: `_cmd_canary` artel.py:1547, `live` 1565, справка 185, `_k_arg` 1484; canary.py 2031/2067/2803/3129; store.py 1563/1710.
-- `store._ensure_canary_tables` (store.py:1605) делает UPDATE `set_name IS NULL` → набор по умолчанию и миграцию `canary_baseline` — `набор=—` недостижим через `all_canary_runs`.
-- `artel.main` не открывает БД до разбора `canary` — подмена `store.db` в AC-4 работает.
-- `docs/codebase-map.md` входит через `config.COMMON_ZONES` (config.py:814).
+- Круг 2 (spec_sha 48f0bed3): решения Оператора п.1–5 внесены в SPEC полностью; адреса SPEC верны на HEAD d7cbcc54 (artel.py 1547/1565/185/1484; canary.py 2031/2067/2803/2806/2930/3129/3295/3579; store.py 1563/1605/1607/1710).
+- `store.db()` (store.py:387) сам пишет: WAL, `migrate` → `seed_task_counters` (INSERT task_counters, store.py:478), на холодной БД — git через coldstart (store.py:474). AC-12 с подменой `subprocess.Popen` выполним только при прогретой БД.
+- `artel.main` до диспетчеризации БД не открывает и журнал не пишет.
 
 ## Не сработало
-- `cd ...; cmd` и переменные оболочки в Bash требуют подтверждения — звать команды по абсолютным путям без `cd`.
+- Переменные оболочки и `;`-цепочки в Bash требуют подтверждения — по одной команде с абсолютными путями.
 
 ## Где остановился
-SPEC-AUDIT.md: verdict concerns, status ready; guard — ок. Шаг завершён.
+SPEC-AUDIT.md: verdict concerns (Т-1 толкование «время старта = run_stamp», Ф-2, О-2, Т-2), status ready; guard — ок. Шаг завершён.
 
 ## Чего не хватило
-Нигде не описано, что `all_canary_runs` пишет в БД (докстринг store.py:1710 молчит) — нашёл чтением `_ensure_canary_tables`.
+Нигде не сказано, что `store.db()` пишет и может звать git на холодной БД — нашёл чтением `seed_task_counters`.
