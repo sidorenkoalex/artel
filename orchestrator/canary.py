@@ -3188,6 +3188,81 @@ def cmd_canary_live(drop: str | None = None, reason: str | None = None) -> None:
         print(f"canary live: {warning}")
 
 
+CANARY_RUNS_DEFAULT_COUNT = 10
+
+
+def _runs_value(value) -> str:
+    return "—" if value is None else str(value)
+
+
+def _runs_money(value) -> str:
+    return "—" if value is None else f"{value:.2f}"
+
+
+def _runs_header(stamp: str, rows: list) -> str:
+    first = rows[0]
+    sha = "—" if first["main_sha"] is None else first["main_sha"][:8]
+    green = sum(1 for row in rows if row["verdict"] == "green")
+    total = sum(row["cost_usd"] or 0 for row in rows)
+    return (f"{stamp}  набор={_runs_value(first['set_name'])}  sha={sha}  "
+            f"задач={len(rows)}  зелёных={green}  ${total:.2f}")
+
+
+def _runs_task_lines(stamp: str, row) -> list:
+    line = (f"  {row['title']}  {row['task_id']}  "
+            f"вердикт={_runs_value(row['verdict'])}  "
+            f"исход={_runs_value(row['outcome'])}  "
+            f"${_runs_money(row['cost_usd'])}  "
+            f"шагов={_runs_value(row['steps'])}  "
+            f"ревью-итераций={_runs_value(row['review_iterations'])}  "
+            f"эскалаций={_runs_value(row['escalations'])}")
+    if row["escalation_roles"]:
+        line += f" (роли: {row['escalation_roles']})"
+    if row["marker_mismatch"] == 1:
+        line += "  [расхождение маркера]"
+    lines = [line]
+    summary = _acceptance_summary(row["acceptance_route"],
+                                  row["autogate_refusal"], False).lstrip()
+    if summary:
+        lines.append(f"    {summary}")
+    if _diagnostics_dir(config.ROOT, stamp, row["task_id"]).is_dir():
+        lines.append(f"    диагностика: .artel/canary/{stamp}/{row['task_id']}")
+    return lines
+
+
+def cmd_canary_runs(since: str | None = None,
+                    run_stamp: str | None = None) -> None:
+    """`canary runs [--since <ГГГГ-ММ-ДД> | <run_stamp>]` — история
+    прошедших прогонов из `canary_runs` (SPEC 01M5KEYG8G1WXHSR4BDKBSH6JP).
+    Аргументы проверяет вызывающий (`artel._cmd_canary_runs`) до чтения БД.
+    Только чтение через `store`: реестр живых прогонов не читается — строка
+    `canary_runs` пишется по итогу прогона, живой прогон в ней не виден."""
+    groups: dict = {}
+    for row in store.all_canary_runs(store.db()):
+        groups.setdefault(row["run_stamp"], []).append(row)
+    # `run_stamp` — метка UTC старта: строковый порядок хронологический.
+    stamps = sorted(groups, reverse=True)
+    if run_stamp is not None:
+        if run_stamp not in groups:
+            sys.exit(f"canary runs: прогона {run_stamp} нет")
+        stamps = [run_stamp]
+    elif since is not None:
+        border = f"{since} 00:00:00Z"
+        stamps = [stamp for stamp in stamps
+                  if min(row["created_at"] or "" for row in groups[stamp]) >= border]
+    else:
+        stamps = stamps[:CANARY_RUNS_DEFAULT_COUNT]
+    if not stamps:
+        print("прогонов канарейки нет")
+        return
+    for stamp in stamps:
+        rows = groups[stamp]
+        print(_runs_header(stamp, rows))
+        for row in rows:
+            for line in _runs_task_lines(stamp, row):
+                print(line)
+
+
 def during_canary_reason_refusal(command: str) -> str:
     """Отказ флага без основания (требование 6) — общий у всех команд."""
     return (f"{DURING_CANARY_FLAG} требует основание следующим аргументом: "

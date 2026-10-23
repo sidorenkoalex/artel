@@ -44,6 +44,12 @@ class RoleLogPoolLeakCheckTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         store.create_schema(store.db())
         self.conn = store.db()
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        home_patcher = mock.patch.object(Path, "home",
+                                         return_value=Path(home.name))
+        home_patcher.start()
+        self.addCleanup(home_patcher.stop)
 
     def test_no_logs_directory_is_ok_and_raises_nothing(self):
         check = doctor.check_role_log_pool_leak(self.conn)

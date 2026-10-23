@@ -46,11 +46,12 @@ def check_role_log_pool_leak(conn) -> doctor.Check:
     механики `canary`, покрытой отдельно (AC-1..12), не этой проверки.
 
     Из трёх сигналов утечки, названных требованием 13б (каталог пула,
-    имя его репозитория, GUID шаблона), проверяется только каталог пула
-    (`config.CANARY_POOL_DIRNAME`) — единственный, зафиксированный кодом
-    самого SPEC (требование 1); имя репозитория пула и GUID шаблонов —
-    содержимое пула, ручная настройка Оператора («Не входит» SPEC), не
-    значение, которое код мог бы знать заранее.
+    имя его репозитория, GUID шаблона), проверяются каталог пула и GUID
+    шаблонов (SPEC 01M5KNXGEMBAC1QRNHY3KC14JR): голое имя каталога —
+    только в строке вызова инструмента, в прочем тексте — путь в пул
+    домашнего каталога; значения меток `canary-guid:` читаются из
+    открытого пула вне процесса роли. Имя репозитория пула не
+    проверяется.
 
     Не заводит `_auto_ack_gone`, в отличие от `check_orphans`: утечка
     контекста роли — инцидент, требующий разбора Оператором, а не
@@ -71,7 +72,9 @@ def check_role_log_pool_leak(conn) -> doctor.Check:
     if not doctor.config.LOGS.is_dir():
         return doctor.Check("canary-pool-leak", "ok", "логов ролей ещё нет")
     marker = doctor.config.CANARY_POOL_DIRNAME
-    leaking = []
+    guids, untagged, guid_note = _pool_template_guids()
+    home_sign = _home_path_sign_re()
+    leaking, guid_leaking = [], []
     for path in sorted(doctor.config.LOGS.glob("*.log")):
         if not _is_role_step_log(path.name):
             continue
@@ -79,19 +82,95 @@ def check_role_log_pool_leak(conn) -> doctor.Check:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if marker in text:
+        if home_sign.search(text) or _tool_call_sign(text):
             leaking.append(path.name)
-    if not leaking:
-        return doctor.Check("canary-pool-leak", "ok",
-                     "логи ролей не упоминают каталог пула канарейки")
+        if any(value in text for value in guids):
+            guid_leaking.append(path.name)
     for name in leaking:
         doctor.alerts.raise_alert(
             conn, None, "incident", "doctor.canary-pool-leak",
             f"лог роли {name} упоминает каталог пула канарейки ({marker}) "
             f"— утечка контекста роли (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, "
             f"требование 13б)")
-    return doctor.Check("canary-pool-leak", "fail",
-                f"логи ролей упоминают каталог пула: {', '.join(leaking)}")
+    for name in guid_leaking:
+        doctor.alerts.raise_alert(
+            conn, None, "incident", "doctor.canary-pool-leak",
+            f"лог роли {name} несёт GUID шаблона пула канарейки ({marker}) "
+            f"— утечка контекста роли (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, "
+            f"требование 13б)")
+    parts = []
+    if leaking:
+        parts.append(f"логи ролей упоминают каталог пула: {', '.join(leaking)}")
+    if guid_leaking:
+        parts.append(f"логи ролей несут GUID шаблона пула канарейки: "
+                     f"{', '.join(guid_leaking)}")
+    if not parts:
+        parts.append("логи ролей не упоминают каталог пула канарейки")
+    if untagged:
+        parts.append(f"шаблоны пула без метки canary-guid: "
+                     f"{', '.join(untagged)}")
+    if guid_note:
+        parts.append(guid_note)
+    status = ("fail" if leaking or guid_leaking
+              else "warn" if untagged else "ok")
+    return doctor.Check("canary-pool-leak", status, "; ".join(parts))
+
+
+# Признаки утечки по поправке Оператора к ADR-0017 от 23.10.2026 (SPEC
+# 01M5KNXGEMBAC1QRNHY3KC14JR, требование 1): голое имя каталога пула несут
+# код и документы пульта, поэтому вне строк вызовов инструментов признак —
+# только путь именно в пул домашнего каталога.
+
+_GUID_TAG = re.compile(r"canary-guid:[ \t]*(\S*)")
+_GUID_TAG_END = "-->"
+
+
+def _home_path_sign_re() -> re.Pattern:
+    """Признаки 1а и 1б одним выражением. Дом берётся в момент проверки:
+    `Path.home()` под процессом роли — дом роли (требование 2)."""
+    marker = re.escape(doctor.config.CANARY_POOL_DIRNAME)
+    home = re.escape(str(doctor.Path.home()))
+    pool = re.escape(str(doctor.Path.home() / doctor.config.CANARY_POOL_DIRNAME))
+    inside = rf"(?:~|\$HOME|\$\{{HOME\}}|{home})/{marker}/[A-Za-z0-9_]"
+    return re.compile(rf"{inside}|{pool}(?![A-Za-z0-9_.-])")
+
+
+def _tool_call_sign(text: str) -> bool:
+    """Признак 1г: имя каталога пула в строке вызова инструмента роли —
+    только в строке, НАЧИНАЮЩЕЙСЯ с префикса вызова провайдера."""
+    prefixes = tuple({doctor.providers.claude.TOOL_CALL_LINE_PREFIX,
+                      doctor.codex_provider.TOOL_CALL_LINE_PREFIX})
+    bare = re.compile(re.escape(doctor.config.CANARY_POOL_DIRNAME)
+                      + r"(?![A-Za-z0-9_-])")
+    return any(line.startswith(prefixes) and bare.search(line)
+               for line in text.splitlines())
+
+
+def _pool_template_guids() -> tuple[list[str], list[str], str]:
+    """(значения меток `canary-guid:` шаблонов открытого пула, имена
+    шаблонов без непустой метки, пояснение «GUID не сверялись» или "").
+
+    Под процессом роли пул не открывается вовсе — ветка стоит до любого
+    обращения к нему (требование 2). Значения наружу не выходят: ими
+    только сверяются логи (требование 3)."""
+    if doctor.runner.in_role_environment():
+        return [], [], "GUID шаблонов не сверялись: процесс роли"
+    pool = doctor.Path.home() / doctor.config.CANARY_POOL_DIRNAME
+    if not pool.is_dir():
+        return [], [], "GUID шаблонов не сверялись: открытый пул не развёрнут"
+    guids, untagged = set(), []
+    for path in sorted(pool.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        values = {m.group(1).split(_GUID_TAG_END, 1)[0]
+                  for m in _GUID_TAG.finditer(text)} - {""}
+        if values:
+            guids |= values
+        else:
+            untagged.append(path.name)
+    return sorted(guids), untagged, ""
 
 
 def check_canary_pool_drift() -> doctor.Check:
