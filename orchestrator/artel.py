@@ -69,8 +69,11 @@ ADR-0014). Значение, не разбираемое как число (му
 
 `prune [--execute]` (tasks/T073/SPEC.md) исполняет retention-политику
 `docs/retention.md` для `.artel/logs/` (90 дней И N=20 последних задач,
-`config.LOG_RETENTION_DAYS`/`LOG_RETENTION_KEEP_TASKS`) и `alerts`
-(архивация старше 90 дней в `alerts_archive`, не удаление). Без флага —
+`config.LOG_RETENTION_DAYS`/`LOG_RETENTION_KEEP_TASKS`: логи `*.log`,
+промпты `*.prompt.txt` и каталоги `suite-run/<id>/`), каталогов
+упразднённых механизмов (`.artel/notes-work` — только корень собственного
+репозитория без несохранённой работы; SPEC 01M5KBQGMZ051ENRVS8F42MA4V) и
+`alerts` (архивация старше 90 дней в `alerts_archive`, не удаление). Без флага —
 dry-run: план, ничего не трогает. С `--execute` — исполняет и печатает,
 что́ фактически убрано. Не привязана к переходу FSM ни одной задачи и
 не отменяет инвариант 16 (`.artel/logs/` уборка `kill`/`done` не
@@ -628,7 +631,9 @@ origin main или отставание ветки не определены; п
   canary    синтетический прогон конвейера в эфемерном клоне, метрики,
             per-task бейзлайн, изоляция пула от ролей (v2,
             01M1NEEWH5K1XPFRDGRMPYSBXJ; v1 — T065)
-  prune     retention-политика: .artel/logs/, архивация alerts (T073)
+  prune     retention-политика: .artel/logs/ (логи, промпты, каталоги
+            suite-run), каталоги упразднённых механизмов, архивация
+            alerts (T073, 01M5KBQGMZ051ENRVS8F42MA4V)
   dry_run   сухой прогон приёмки: read-only предпросмотр без исполнения
             (SPEC 01M1GJ3ZP1YGG5QRB6FQ44NN8D)
   plank_run команда `plank-run <id> [файл]`: локальный прогон планки в шаге
