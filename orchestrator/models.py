@@ -1577,9 +1577,9 @@ def resolve_task_role(role: str, task, catalog: Catalog = None,
 SET_TRIAL_TASKS = 3
 SET_TRIAL_PHRASE = "пробная задача набора"
 
-#: Вердикты ревью в `pair_verdicts`.
+#: Вердикты ревью в `pair_verdicts` — `return` и `approved`; константа есть
+#: только для `return`: её читает сверка пары.
 VERDICT_RETURN = "return"
-VERDICT_APPROVED = "approved"
 #: Виновная роль возврата ревью: возвращена работа developer.
 REVIEW_RETURN_ROLE = "developer"
 

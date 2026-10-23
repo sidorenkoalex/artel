@@ -101,11 +101,3 @@ def rebuild_cache() -> list[dict]:
     CACHE_PATH.write_text(json.dumps(rows, ensure_ascii=False, indent=2),
                           encoding="utf-8")
     return rows
-
-
-def read_cache() -> list[dict]:
-    """Содержимое кэша без пересборки; пустой список — файла ещё нет."""
-    try:
-        return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
