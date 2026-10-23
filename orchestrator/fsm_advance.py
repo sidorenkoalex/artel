@@ -53,6 +53,7 @@ from .advance_gates.tests_writing import (_freshness_refuses,
                                           _tests_writing_code_diff,
                                           _tests_writing_dry_collect_gate,
                                           _tests_writing_fail_to_pass_gate,
+                                          _tests_writing_foreign_plank_gate,
                                           _tests_writing_long_lived_gate,
                                           _tests_writing_manifest_gate,
                                           _tests_writing_stray_plank_files_gate,
@@ -315,7 +316,7 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
     # проекта — одна ветка логики для любого проекта, включая артель
     # (ADR-0021 п.1-2; SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, SPEC
     # 01M45FJVGQT1K0P8HDEXZX6HS7, требование 6).
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id, conn)
     if decision.refusal:
         # Задача уже в `acceptance`: без контекста или профиля артели
         # автогейт не проводится, решение остаётся Оператору.
@@ -516,7 +517,7 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Профиль тестов проекта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования
     # 3-5) — первым: без разрешённого контекста не читается и ссылка
     # документов, а отказ обязан назвать контекст, не её.
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id, conn)
     if _run_gates(conn, task_id,
                   [lambda: _project_profile_gate(task_id, decision)]):
         return False
@@ -595,8 +596,11 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # чужого проекта не проверяются, как и на рубеже `in_dev`
     # (`_network_address_gate`).
     network_addresses = repo_context.is_artel(target)
-    gates = [lambda: _tests_writing_test_groups_gate(
-        acc_tdir, task_id, profile, network_addresses=network_addresses)]
+    gates = [lambda: _tests_writing_foreign_plank_gate(
+                 task_id, acc_tdir, target, profile),
+             lambda: _tests_writing_test_groups_gate(
+                 acc_tdir, task_id, profile,
+                 network_addresses=network_addresses)]
     if code_diff is not None:
         gates.append(lambda: _tests_writing_long_lived_gate(
             task_id, t["branch"], code_diff, long_lived, profile,

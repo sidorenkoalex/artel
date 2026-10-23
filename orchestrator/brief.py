@@ -626,7 +626,8 @@ def _read_project_conventions(ctx) -> tuple[list, str | None, str]:
     return entries, sha, ""
 
 
-def _knowledge_of(target: str) -> tuple[str, list] | None:
+def _knowledge_of(target: str, conn=None,
+                  task_id: str | None = None) -> tuple[str, list] | None:
     """(имя компонента, элементы `knowledge`) — только у профиля из записи
     `components:`, единственный компонент которой несёт `knowledge` (SPEC
     01M5ENWB2XHZFRNQ3Q3PZSAH2T, требование 1); иначе `None` — прежний
@@ -640,15 +641,20 @@ def _knowledge_of(target: str) -> tuple[str, list] | None:
     `knowledge_cards` → `brief`."""
     from . import project_profile
     try:
-        profile = project_profile.decide(target).profile
+        decision = (project_profile.decide(target) if task_id is None else
+                    project_profile.for_task_target(target, task_id, conn))
+        profile = decision.profile
         if profile is None or not profile.from_components:
             return None
         comps = project_profile.components(target)
     except targets.TargetsError:
         return None
-    if len(comps) != 1 or not comps[0].fields.get("knowledge"):
+    # Компонент профиля: единственный у записи из одного компонента,
+    # компонент задачи (`for_task`) у записи из нескольких.
+    comp = next((c for c in comps if c.name == profile.component), None)
+    if comp is None or not comp.fields.get("knowledge"):
         return None
-    return comps[0].name, list(comps[0].fields["knowledge"])
+    return comp.name, list(comp.fields["knowledge"])
 
 
 def _unread_mark(conn, task_id: str, role: str, why: str, where: str) -> str:
@@ -787,7 +793,7 @@ def _project_conventions_parts(conn, task_id: str, role: str, run_id: str,
         entries, sha, reason = [], None, repo_context.unresolved_reason(target)
         where = f"проекта {target}"
     else:
-        knowledge = _knowledge_of(target)
+        knowledge = _knowledge_of(target, conn, task_id)
         entries, sha, reason = _read_project_conventions(ctx)
         where = f"корень ветки {ctx.base} проекта {target}"
     names = ", ".join([*PROJECT_CONVENTIONS,

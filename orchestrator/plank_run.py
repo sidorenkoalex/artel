@@ -100,7 +100,7 @@ def _long_lived_arg(arg: str | None, task_id: str, target: str) -> bool:
     прежний выбор только из планки."""
     if not arg:
         return False
-    profile = project_profile.decide(target).profile
+    profile = project_profile.for_task_target(target, task_id).profile
     return profile is not None and \
         profile.is_long_lived(task_id, arg.partition("::")[0])
 
@@ -206,7 +206,7 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
         rule = project_profile.plank_rule(target)
         if rule.refusal:
             sys.exit(f"{head}: отказ — {rule.refusal}; pytest не запускался")
-        profile = (project_profile.decide(target).profile
+        profile = (project_profile.for_task_target(target, task_id).profile
                    if not rule.is_default or (file_arg and "::" in file_arg)
                    else None)
         if rule.is_default:
@@ -288,7 +288,7 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
     # Итог компонента `pult-vitest` — по блоку Vitest (SPEC
     # 01M5ENWTDD8NP9SMPFX3JN08J9, требование 6), признак тот же, что у
     # насоса шага; у прочих, в том числе без профиля, — прежние строки.
-    task_profile = project_profile.decide(target).profile
+    task_profile = project_profile.for_task_target(target, task_id).profile
     if task_profile is not None and \
             task_profile.report == project_profile.REPORT_VITEST:
         runner_name = "vitest"

@@ -70,7 +70,7 @@ def long_lived_manifest(task_id: str, t, target: str
     перечня отказывает."""
     if not t["tests_locked_sha"]:
         return {}, ""
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id)
     if decision.refusal:
         return None, decision.refusal
     if decision.profile is None:
@@ -108,7 +108,7 @@ def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
     `True` — переход отклонён (журнал и печать уже сделаны)."""
     t = store.get_task(conn, task_id)
     target = store.task_target(conn, task_id)
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id, conn)
     if t["tests_locked_sha"] and not decision.refusal \
             and decision.profile is None:
         project_profile.journal_skip(conn, task_id,
@@ -558,7 +558,7 @@ def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
     # Профиль тестов проекта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования
     # 3-6): контекст не разрешён или у артели нет профиля — отказ; у
     # проекта без профиля — планка командой пульта, без долгоживущих.
-    decision = project_profile.decide(target)
+    decision = project_profile.for_task_target(target, task_id, conn)
     if decision.refusal:
         store.journal(conn, task_id, "fsm", project_profile.REFUSAL_ACTION,
                       decision.refusal)

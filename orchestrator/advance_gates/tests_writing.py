@@ -9,7 +9,8 @@ from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
                 cycle_hint, fixation, github_adapter, gitcmd, knowledge_cards,
-                project_profile, repo_context, store, workspace, yamlmini)
+                project_profile, repo_context, store, targets, workspace,
+                yamlmini)
 from ..reporters import outcome
 from ._base import GateRefusal
 from .acceptance import (blob_sha256, criterion_files, file_records,
@@ -1054,6 +1055,47 @@ def _task_plank_dir(acc_tdir) -> Path:
     `<рабочая копия>/tasks/<id>`, прямой вызов — сам каталог планки."""
     path = Path(acc_tdir)
     return path.parent if path.name == "acceptance_tests" else path
+
+
+def _tests_writing_foreign_plank_gate(task_id: str, acc_tdir, target: str,
+                                      profile) -> GateRefusal | None:
+    """Планка чужого компонента на выходе из `tests_writing` (SPEC
+    01M5JGSAANR1NZYQD4FCSVE48Y, требование 4): у записи из нескольких
+    компонентов файл планки, который правило планки относит к компоненту
+    X, отличному от компонента задачи, — отказ честного FAIL_TO_PASS, если
+    X в границе гейта (`in_outcome_bounds` профиля X), независимо от
+    границы компонента задачи; X вне границы — файл не проверяется, как
+    прежде. У прочих записей и при правиле по умолчанию — `None`."""
+    if profile is None or not project_profile.is_multi(target):
+        return None
+    rule = project_profile.plank_rule(target)
+    if rule.is_default or rule.refusal:
+        return None
+    try:
+        owners = {p.component: p
+                  for p in project_profile.component_profiles(target)}
+    except targets.TargetsError as exc:
+        return GateRefusal(project_profile.REFUSAL_ACTION, str(exc),
+                           project_profile.refusal_hint(task_id))
+    tests_dir = _task_plank_dir(acc_tdir) / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return None
+    foreign = []
+    for path in sorted(tests_dir.iterdir()):
+        if not path.is_file() or not rule.is_test(path.name):
+            continue
+        comp = rule.component_of(path.name)
+        if not comp or comp == profile.component:
+            continue
+        if in_outcome_bounds(owners.get(comp)):
+            foreign.append(f"файл планки {path.name} — компонента {comp}, "
+                           f"задача — компонента {profile.component}")
+    if not foreign:
+        return None
+    return GateRefusal(
+        FAIL_TO_PASS_REFUSAL_ACTION, "; ".join(foreign),
+        f"перенеси тест в файл планки компонента {profile.component} или "
+        f"раздели задачу по компонентам и повтори artel.py advance {task_id}")
 
 
 def _tests_writing_fail_to_pass_gate(conn, task_id: str, acc_tdir, run_cwd,
