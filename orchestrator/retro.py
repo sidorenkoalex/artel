@@ -251,19 +251,6 @@ def usd_text(usd: float | None) -> str:
     return DASH if usd is None else f"${usd:.2f}"
 
 
-def retro_rel_path(task_id: str) -> str:
-    return f"{RETRO_DIR_REL}/{task_id}.md"
-
-
-def retro_path(task_id: str, repo=None):
-    """Путь `docs/retro/<id>.md`; `repo` (A7, Stage0, AC-9) — корень, в
-    котором физически лежит файл, по умолчанию `config.ROOT`. Переход
-    `merge_gate -> done` пишет RETRO в scratch-worktree плотницкого
-    merge (`orchestrator/fsm_merge_gate.py`), не в `config.ROOT` —
-    единственный вызыватель, передающий `repo` явно."""
-    return (repo if repo is not None else config.ROOT) / retro_rel_path(task_id)
-
-
 def _artifact_branch_files(task_id: str) -> dict:
     """{путь: текст} всего `tasks/<id>/` АРТЕФАКТНОЙ ветки задачи — ОДНО
     чтение на оба источника ретроспективы (SPEC

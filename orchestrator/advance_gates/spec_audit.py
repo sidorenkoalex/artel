@@ -104,10 +104,6 @@ def _answer_texts(task_id: str, branch: str) -> list[tuple[str, str]]:
     return texts
 
 
-def answer_names(task_id: str, branch: str) -> list[str]:
-    return [name for name, _ in _answer_texts(task_id, branch)]
-
-
 def signals(spec_text: str, meta: dict, tz_text: str,
             answers: list[str]) -> list[str]:
     """Сработавшие сигналы глубины (требование 7) — строки с буквой

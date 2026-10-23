@@ -392,10 +392,6 @@ def mandate_value(conn, task_id: str, raw: str) -> list[str] | None:
     return check(conn, task_id, elements)[0]
 
 
-def has_mandate_line(raw: str) -> bool:
-    return bool(_mandate_items(raw))
-
-
 def _dependency_states(conn, t) -> list[tuple[str, str]]:
     """(id, текущее состояние) каждой зависимости задачи — из БД на каждый
     вызов, без кэша."""
