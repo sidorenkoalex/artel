@@ -1,19 +1,18 @@
 # Записка developer — 01M5MVSP9YW0DYA4YQ1KSG0AHF
 
 ## Выяснено
-- orchestrator/test_lint.py — дословный перенос; сравнение на дереве tests/ (658 файлов): 62 ключа и там и там, побайтно равны.
-- Приложение 1 из SPEC: git apply --check проходит; с ним DeterministicTestsLintTest 6 passed, 16 subtests. tests/test_invariants.py в worktree НЕ правлю (защищённый путь — применяет пульт).
-- guard: lint_errors_from_files(files, lint_base) + вызов в long_lived_errors_from_files до plank_file_group. amend.py: _plank_lint_errors (метки acceptance_tests/…), _locked_plank_lint_base, _locked_long_lived_texts/_text_with_digest (--from-branch). Три долгоживущих файла задачи зелёные (23 теста).
-- by_rule-пути amend не трогал: у артели правило планки всегда по умолчанию (project_profile.plank_rule), у чужого проекта линта нет.
-- Тесты затронутых модулей (19 файлов amend/long_lived/preflight/test_groups/network) — 283 passed. Карта регенерирована.
-- PLAN status: ready, guard ок. Приложение вставлено скриптом из SPEC (побайтно).
+- Шаг 2 (возврат с рубежа in_dev -> verifying): красный один тест — test_ac2_plan_appendix.py::test_ac2_lint_class_green_with_appendix, «git apply: patch failed: tests/test_invariants.py:39».
+- Причина — несовместимость залоченного теста с деревом пульта: appendix_tree.suite_tree накладывает приложения на файлы временного дерева БЕЗ коммита; тест решает «накладывать ли» через _pult.apply_check, а та проверяет HEAD (read-tree HEAD + apply --check --cached, plank_helper.py:139–147). HEAD без приложения → тест накладывает повторно на уже наложенные файлы → отказ.
+- Приложение PLAN == приложению SPEC побайтно; git apply --check на чистом дереве ветки проходит (после подтяжки main 5cbcc4bd тоже).
+- Код задачи (test_lint.py, guard.py, amend.py) в ветке, коммит 4f30324d; остальные 25 тестов планки/долгоживущих зелёные.
+- Сравнение на дереве tests/ (шаг 1): 658 файлов, 62 ключа, побайтно равны.
 
 ## Не сработало
-- plank-run: AC-2 красный только потому, что PLAN.md читается из ссылки документов, а туда он попадает автокоммитом после шага. Проверки AC-2 на тексте с диска (равенство блоков, «ключ»+число, test_lint.findings) прошли.
-- pytest -n 4 в рабочей копии — «node down»; гонял без -n.
+- Кодом не чинится: единственный обход — закоммитить приложение в защищённый tests/test_invariants.py, роли запрещено.
+- Bash с `$VAR` в команде отклоняется («simple_expansion») — писал пути целиком.
 
 ## Где остановился
-- Шаг завершён: код в worktree незакоммичен (коммитит пульт).
+- PLAN.md status: escalate, раздел «Эскалация» (дефолт — amend-tests теста: признак «уже в дереве» брать по диску копии, не по HEAD). guard ок. Кода в этом шаге не менял.
 
 ## Чего не хватило
-- Что plank-run читает PLAN из ссылки документов, а не с диска, — узнал по красному AC-2.
+- Что дерево прогона планки на рубеже несёт приложения незакоммиченными, а _pult.apply_check смотрит на HEAD — узнал из appendix_tree.py:272–288 и plank_helper.py:139.
