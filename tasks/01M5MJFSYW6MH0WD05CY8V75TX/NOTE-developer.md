@@ -1,19 +1,24 @@
 # Записка developer 01M5MJFSYW6MH0WD05CY8V75TX
 
 ## Выяснено
-- Реализация: `orchestrator/suite_durations.py` (`durations`, `Reader`,
-  `path_for`, `slowest_block`); `acceptance._durations_reader` — третий
-  контекст `with` в `_run_full_suite_to_log`, выходит после отметки конца
-  прогона; `suite_run._run` дописывает блок после `suite_load_line`.
-- Импорт `suite_durations` в acceptance/suite_run ленивый: модуль импортирует
-  `suite_run` ради `_PROGRESS`/`_REPORT_SECTION`.
-- Зелёные: долгоживущий файл (5), планка (3), 160 тестов соседних модулей.
+- Итерация 2 (возврат из verifying, ANSWER-1/2): блок «самые медленные»
+  пишет `suite_durations.write_slowest(log)` в `<лог>.slowest.txt`;
+  `suite_run._run` дописывает в report одну строку
+  «самые медленные тесты и файлы: <путь>».
+- test_ac5 долгоживущего файла правлен по мандату ANSWER-2 (проверки блока —
+  на файле `.slowest.txt`, к отчёту — одна строка-ссылка). Перечень сумм лока
+  теперь расходится — нужен `amend-tests` Оператора (amend.py:989 пересчитает
+  перечень по голове кодовой ветки).
+- Зелёные: 52 теста (свой, долгоживущий, оба файла suite_run), планка 3.
+  Мутация «блок целиком в report» — test_ac5 красный.
 
 ## Не сработало
-- `pytest -n 4 -p xdist` по файлам tests/ — conftest роняет узлы; гонять без -n.
+- Bash с `cp`/heredoc в конвейере требует подтверждения — мутацию делать
+  через Edit.
 
 ## Где остановился
 - Готово, PLAN status: ready.
 
 ## Чего не хватило
-- Нет.
+- Кто правит долгоживущий тест по мандату (роль или Оператор amend-tests) —
+  ANSWER не говорит; правил сам по описанию ANSWER-2.

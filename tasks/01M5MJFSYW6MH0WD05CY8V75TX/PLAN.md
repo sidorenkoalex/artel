@@ -30,6 +30,9 @@ schema_version: 5
 - `slowest_block(log)` — 30 тестов и 15 файлов по убыванию секунд (сумма
   строк одного id; файл — сумма его тестов), строки `  <секунды> с  <имя>`;
   нет файла/строк — пустая строка.
+- Итерация 2 (возврат из verifying, решение Оператора ANSWER-1/2):
+  `write_slowest(log)` пишет блок в `<лог без .log>.slowest.txt`
+  (`slowest_path`) и отдаёт путь; нет строк времени или сбой записи — `None`.
 
 `acceptance._run_full_suite_to_log`: третий контекст в том же `with` —
 `_durations_reader(log, profile)`; при `profile is None` он запускает
@@ -38,14 +41,33 @@ schema_version: 5
 argv, окружение, лог и вывод не меняются. Импорт `suite_durations` ленивый
 (цикл `suite_durations -> suite_run -> acceptance`).
 
-`suite_run._run`: после `render` и `suite_load_line` дописывается
-`suite_durations.slowest_block(log)` — только по логу ветки (база в блок не
-идёт), в лог и `output` блок не попадает.
+`suite_run._run`: после `render` и `suite_load_line` вызывается
+`suite_durations.write_slowest(log)` — только по логу ветки (база в блок не
+идёт); в `report` дописывается ровно одна строка
+`самые медленные тесты и файлы: <путь .slowest.txt>` без id тестов и имён
+файлов тестов (блок с id в `report` ломал
+`test_01m462qaceh29rprd2rzhghqfm_suite_run.py::ReportTest::test_ac17…` и
+проверки «отчёт не называет пробу упавшей» — CI 39987545237). В лог и
+`output` ни блок, ни строка не попадают.
+
+Правка долгоживущего теста — по мандату ANSWER-2 («Ослабление тестов
+разрешено: …::SuiteRunSlowestBlockTest::test_ac5_…»), ровно как описано в
+ответе: имя метода прежнее; проверки блока (30/15, убывание, суммы, повтор id,
+«самые медленные», нет строк базы) перенесены с хвоста `report` на содержимое
+`.slowest.txt`; к отчёту — прежний отчёт плюс ровно одна строка-ссылка, ни
+одного id теста и имени файла теста из файла времени; без файла и с пустым
+файлом — файла блока нет; у лога базы файла блока нет. Сценарии не менялись.
+Файл изменён против перечня сумм лока — сверка перечня на `in_dev ->
+verifying` откажет до `amend-tests` Оператора (он пересчитает перечень по
+голове кодовой ветки, `orchestrator/amend.py:989`).
 
 ## Шаги
 1. `orchestrator/suite_durations.py` + поток в `_run_full_suite_to_log` +
    блок в `suite_run._run`; новый тест `tests/test_suite_durations.py`
    (блок меньше среза); регенерация `docs/codebase-map.md`.
+2. (итерация 2) Блок в `.slowest.txt`, в отчёт — строка-ссылка
+   (`write_slowest`, `slowest_path`, `suite_run._run`); test_ac5 по ANSWER-2;
+   в `tests/test_suite_durations.py` — тест `write_slowest`; карта.
 
 ## Покрытие требований
 
@@ -55,33 +77,43 @@ argv, окружение, лог и вывод не меняются. Импор
 | 2 | 1 (`_Tracker`, `durations`) |
 | 3 | 1 (`_durations_reader`, `Reader.stop`, дочитывание хвоста) |
 | 4 | 1 (`path_for`, запись с `flush`) |
-| 5 | 1 (`slowest_block`, `suite_run._run`) |
+| 5 | 1, 2 (`slowest_block`, `write_slowest`, строка-ссылка в `suite_run._run` по ANSWER-2) |
 | 6 | 1 (поток только при `profile is None` и только в прогоне в файл) |
-| 7 | долгоживущий файл test_author + `tests/test_suite_durations.py` |
+| 7 | долгоживущий файл test_author (test_ac5 по ANSWER-2) + `tests/test_suite_durations.py` |
 
-Проверено: `tests/test_01m5mjfsyw6mh0wd05cy8v75tx_suite_durations.py` — 5
-passed; планка `plank-run` — 3 passed; tests/test_suite_run.py,
-pult_pytest_unchanged, launch_places, approve_acceptance_full_suite,
-fsm_merge_gate_remote_branch_cleanup, doc_commit_suite_gate, own_run_path,
-profile_callers, base_reuse, missing_command, subtest_failures,
-developer_suite_run, pytest_own_places, suite_observation, suite_near_limit —
-160 passed. Мутация нового теста (срез `[:len-1]`) — красный, код возвращён.
+Проверено (итерация 2): `tests/test_suite_durations.py`,
+`tests/test_01m5mjfsyw6mh0wd05cy8v75tx_suite_durations.py`,
+`tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py`, `tests/test_suite_run.py`
+— 52 passed, 27 subtests passed; планка `plank-run` — 3 passed. Мутация «блок
+целиком в `report`» (прежнее поведение) — test_ac5 красный в 4 сценариях из
+4, код возвращён.
 
 ## Влияние на систему
 Гейты (автогейт, мерж, `notes`) идут без лога — `_run_full_suite_now` до
 `_run_full_suite_to_log` не доходит, их прогон не меняется. Поток не зовёт
 `subprocess`, лог только читает; ожидание потока не входит в длительность
 под наблюдением (после отметки), без наблюдения добавляет ≤ 2 с. Новых ключей
-`result.json` нет, `parse`/`_progress`/`render` не тронуты. Имя `.tsv` не
-подпадает под `*.log` шаблоны номеров. Откат — revert merge-коммита.
+`result.json` нет, `parse`/`_progress`/`render` не тронуты. Имена `.tsv` и
+`.slowest.txt` не подпадают под `*.log` шаблоны номеров. В отчёт идёт только
+путь файла блока — проверки отчёта `suite-run` (счёт примеров, «не называет
+пробу упавшей») не задеты. Правка test_ac5 — перенос проверок на файл по
+мандату ANSWER-2 и матрице неослабления в нём; свойство «отчёт не называет
+тесты» усилено. Откат — revert merge-коммита.
 
 ## Риски
 - Время зависит от периода опроса (0,25 с) — точность порядка опроса; для
   поиска медленных тестов достаточно.
 - Если поток не уложился в 2 с (диск завис), он остаётся daemon и файл
   времени может быть неполон — прогон и итог от этого не зависят.
+- Перечень сумм долгоживущих файлов: до `amend-tests` Оператора переход
+  `in_dev -> verifying` откажет «изменён» по
+  `tests/test_01m5mjfsyw6mh0wd05cy8v75tx_suite_durations.py`.
 
 ## Предложения системе
 - Bash роли: `cd … && …` и `ls`/`sed` в конвейере требуют подтверждения —
   рабочий приём только абсолютные пути и одиночные команды (повтор наблюдения
   test_author этой же задачи).
+- Мандат «Ослабление тестов разрешено» на метод долгоживущего файла не
+  говорит, кто правит файл (роль или Оператор через `amend-tests`), а бриф
+  разработчика велит долгоживущие файлы не трогать — разработчику
+  приходится угадывать; строка ANSWER «правку вносит: …» сняла бы вопрос.
