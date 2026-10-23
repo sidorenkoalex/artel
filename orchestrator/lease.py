@@ -375,6 +375,22 @@ def run_locked(conn, task_id: str, session_id: str | None, body,
             release(conn, task_id, sid)
 
 
+def run_task_command(task_id: str, session_id: str | None, body):
+    """Обвязка команды задачи «префикс id + блокировка задачи» (SPEC
+    01M5MHVRS39CDP5V4HBWY4K7WK; CR-2026-10-22-16): прежде семь команд
+    повторяли её дословно.
+
+    Префикс -> полный id (SPEC T094, требование 3) резолвится ЗДЕСЬ, до
+    lease — иначе блокировка бралась бы под префиксом, а отказ и тело
+    видели бы неразвёрнутый id (REVIEW T094 итерация 1, замечание 1).
+    `body(conn, task_id)` получает соединение и полный id; возврат — то,
+    что вернул `run_locked`."""
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    return run_locked(conn, task_id, session_id,
+                      lambda sid: body(conn, task_id))
+
+
 def is_live(conn, task_id: str) -> bool:
     """Есть ли СЕЙЧАС живой (heartbeat не протухший) lease задачи —
     независимо от того, чья это сессия (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X,
