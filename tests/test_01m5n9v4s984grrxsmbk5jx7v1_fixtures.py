@@ -1,7 +1,7 @@
 """Фикстуры-песочницы `tests.fixtures` в стиле pytest (ADR-0027, часть А1).
 
 Группа: долгоживущий
-Красен до реализации: модуля tests/fixtures.py ещё нет — импорт фикстур на уровне модуля падает ImportError, весь файл не собирается.
+Красен до реализации: модуля tests/fixtures.py ещё нет — явный импорт фикстур падает ImportError, и каждый тест краснеет на автофикстуре require_fixtures_module с текстом этого сбоя (файл при этом собирается).
 
 Фикстуры импортированы из `tests.fixtures` явно — файл не полагается на
 подключение из корневого `conftest.py`. Свойства уборки (AC-2…AC-5)
@@ -25,9 +25,25 @@ from unittest import mock
 import pytest
 
 from orchestrator import config
-from tests import fixtures
-from tests.fixtures import (initialized_tmp_root, light_transition,  # noqa: F401
-                            origin_real_git, real_git, tmp_dir, tmp_root)
+
+# Явный импорт фикстур (не через корневой `conftest.py`). Сбой импорта не
+# роняет сбор файла: каждый тест краснеет сам, называя причину.
+try:
+    from tests import fixtures
+    from tests.fixtures import (initialized_tmp_root,  # noqa: F401
+                                light_transition, origin_real_git, real_git,
+                                tmp_dir, tmp_root)
+    FIXTURES_IMPORT_ERROR = None
+except ImportError as exc:
+    fixtures = None
+    FIXTURES_IMPORT_ERROR = exc
+
+
+@pytest.fixture(autouse=True)
+def require_fixtures_module():
+    """Без импортируемого `tests.fixtures` тест краснеет с текстом сбоя."""
+    if FIXTURES_IMPORT_ERROR is not None:
+        pytest.fail(f"tests.fixtures не импортируется: {FIXTURES_IMPORT_ERROR!r}")
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 
