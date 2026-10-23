@@ -2,7 +2,7 @@
 task: 01M5KJNE39PHV9EAWJCHK7QDFS
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -152,7 +152,92 @@ test_author, он залочен перечнем сумм); код `tests/direc
 правятся; эскалация снята, PLAN сдаётся `ready`. Сужение условия пропуска —
 строка бэклога Оператора, вне этой задачи.
 
+## Возврат из verifying (CI 39908727505) — исполнение
+Причина: зеркало пакета `tests` в
+`tests/test_fsm_advance_tests_writing_test_groups.py::CollectFromTestsDirTest::test_clean_long_lived_file_collects_from_tests_dir`
+(символьные ссылки только на `__init__.py` и `sandbox.py`) роняет импорт
+`tests.direct_git` из `tests/__init__.py`.
+
+Ограда по решению Оператора внесена в `tests/__init__.py` рабочей копии:
+
+```python
+import os
+
+try:
+    from .direct_git import prefer_direct_git
+except ModuleNotFoundError as exc:
+    # (комментарий: зеркала пакета tests без этого модуля)
+    if exc.name != "tests.direct_git":
+        raise
+    DIRECT_GIT_DIR = None
+else:
+    DIRECT_GIT_DIR = prefer_direct_git(os.environ)
+```
+
+Прогон 23.10.2026, по одному файлу,
+`python3 -m pytest <файл> -p no:xdist -p no:cacheprovider -q`, с оградой:
+
+| Файл | Итог |
+|---|---|
+| `tests/test_fsm_advance_tests_writing_test_groups.py` | 9 passed, 2 subtests |
+| `tests/test_01m42nbcadgsgtcbzb8nkbvdvh_guard_spec_paths.py` | 2 passed |
+| `tests/test_01m4nz5kt0px0rywtstn1xefs5_approve_behavior_literals.py` | 5 passed |
+| `tests/test_01m59kmpg2zmk10v556vzvqd65_plank_rule.py` | 15 passed, 94 subtests |
+| `tests/test_canary_drive.py` | 20 passed, 4 subtests |
+| `tests/test_checkpoint_stray_acceptance_files.py` | 5 passed, 19 subtests |
+| `tests/test_dry_run.py` | 9 passed |
+| `tests/test_guard_extraneous_acceptance_files.py` | 7 passed, 7 subtests |
+| `tests/test_long_lived_step_end_to_end.py` | 4 passed, 4 subtests |
+| `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py` (долгоживущий, `-rs`) | 11 passed, 43 subtests, пропусков нет |
+
+Планка `plank-run 01M5KJNE39PHV9EAWJCHK7QDFS`: **1 failed, 1 passed** —
+красный `Ac6InitOnlyWiringTest::test_ac6_init_has_no_other_change` (см.
+«Эскалация»).
+
+## Эскалация
+
+**Вопросы**
+
+1. Ограда противоречит AC-6 в форме залоченной планки. AC-6 SPEC: «другой
+   правки этого файла нет». Планка
+   `tasks/01M5KJNE39PHV9EAWJCHK7QDFS/acceptance_tests/test_oneoff_init_and_plan.py::Ac6InitOnlyWiringTest::test_ac6_init_has_no_other_change`
+   (`foreign_statements`, стр. 40–75) допускает на верхнем уровне
+   `tests/__init__.py` только `import os`/импорт `prefer_direct_git`,
+   одно присваивание `DIRECT_GIT_DIR = prefer_direct_git(os.environ)` и
+   `del`; узел `Try` она считает посторонним оператором — тест красный с
+   текстом «другая правка tests/__init__.py: try: from .direct_git import
+   prefer_direct_git except ModuleNotFoundError as exc: …» (стр. 99).
+   Варианты:
+   - (а) `amend-tests` планки: в `foreign_statements` допустить узел `Try`
+     ровно вида «тело — импорт `prefer_direct_git`; один обработчик
+     `ModuleNotFoundError`, проверяющий `exc.name != "tests.direct_git"` →
+     `raise`, затем `DIRECT_GIT_DIR = None`; `else` — то самое
+     присваивание», и считать присваивания в нём; плюс уточнение AC-6
+     SPEC (ограда — допустимая часть правки). Код в рабочей копии уже
+     такой, после правки планки шаг сдаётся `ready` без изменений кода.
+   - (б) ограду не ставить (вернуть три строки 73fc60c4), а CI чинить
+     иначе — правкой зеркала в `tests/test_fsm_advance_tests_writing_test_groups.py`
+     (стр. 212–214, добавить ссылку на `direct_git.py`) с мандатом
+     Оператора: это правка существующего тестового файла, требование 3
+     SPEC её запрещает.
+   - (в) ограда выражением без `try` (например, `importlib.util.find_spec`
+     внутри вызова) — проходит AST-фильтр планки формально, но обходит
+     смысл AC-6 и решения Оператора; не рекомендую.
+   **Дефолт при молчании:** (а).
+
+**Контекст.** Ограда внесена в `tests/__init__.py` рабочей копии (не
+откатывал); девять файлов с зеркалом и долгоживущий файл задачи
+зелёные (таблица выше); AC-7 не затронут — на машине с обёрткой модуль
+есть, вставка выполняется как прежде; долгоживущий AC-6 (подпроцесс с
+поддельным `tests.direct_git`) зелёный.
+
+**Блокирует.** Сдачу `ready`: с оградой красна планка AC-6, без неё
+красен CI ветки.
+
 ## Предложения системе
+- Решение по причине возврата стоит сверять с залоченной планкой задачи
+  до выдачи: здесь мандат на форму кода (try/except) разошёлся с
+  AST-проверкой планки той же задачи.
 - ANSWER, адресованный разработчику, но требующий правки залоченного
   долгоживущего файла test_author, разработчик исполнить не может —
   такие пункты стоит направлять сразу в `amend-tests` либо в шаг
