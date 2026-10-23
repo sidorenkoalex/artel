@@ -224,7 +224,7 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
         if file_arg and "::" in file_arg and profile is not None and \
                 not acceptance.is_pytest_command(profile.command):
             sys.exit(f"{head}: отказ — узел :: у компонента "
-                     f"{acceptance._component_name(profile)} не "
+                     f"{acceptance.component_name(profile)} не "
                      f"поддерживается; передай файл")
 
     selected = None
@@ -257,7 +257,7 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
 
     # Профиль `pytest-own` проекта задачи (SPEC 01M52EEHSRD93WMPHWB5VJYRKD);
     # иначе — раннер пульта, как прежде.
-    own = acceptance._task_own_profile(conn, task_id)
+    own = acceptance.task_own_profile(conn, task_id)
     if long_lived:
         # Файл уже в рабочей копии кода — выкладка планки не нужна, и
         # `tasks/<id>/` рабочей копии этот прогон не трогает.

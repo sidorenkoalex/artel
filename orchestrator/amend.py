@@ -762,7 +762,7 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
     extra = sorted(long_lived)
     # Профиль `pytest-own` проекта задачи — каналом `command` (SPEC
     # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — прежний вызов без него.
-    own = acceptance._task_own_profile(conn, task_id)
+    own = acceptance.task_own_profile(conn, task_id)
     kwargs = {"command": own} if own is not None else {}
     collected, tail = acceptance.collect(acc_tdir, cwd, extra=extra, **kwargs)
     if not collected:
@@ -954,7 +954,7 @@ def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
     # `pytest-own` — профилем и с `cwd` рабочей копии задачи: `workdir`
     # профиля отсчитывается от неё (SPEC 01M52EEHSRD93WMPHWB5VJYRKD); у
     # `pult-pytest` — прежний вызов от корня пульта.
-    own = acceptance._task_own_profile(conn, task_id)
+    own = acceptance.task_own_profile(conn, task_id)
     kwargs = {"cwd": wt_path, "command": own} if own is not None else {}
     collected, collect_tail = acceptance.collect(tdir, **kwargs)
     if not collected:
