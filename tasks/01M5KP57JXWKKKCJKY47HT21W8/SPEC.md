@@ -52,62 +52,94 @@ budget_usd: 25
    склейки `runner._build_prompt`. Для задачи артели и для задачи учебного
    внешнего проекта (запись `targets.yaml` песочницы — как в
    `test_ac7_external_reviewer_mission_keeps_suite_run`) такой промпт
-   удовлетворяет AC-4 – AC-7. Тесты детерминированные, без сети.
-6. Утверждения о тексте скила и образца (AC-5, AC-6) живут в тесте `tests/`, а не
-   сторожем внутри приложения: набор `tests/` с приложениями PLAN гоняют CI ветки
-   (`scripts/plan_appendix_ci.py`), рубеж `in_dev -> verifying`, автогейт
-   приёмки, `approve`, `suite-run` (`orchestrator/appendix_tree.py::suite_tree`) и
-   ворота мержа (`orchestrator/fsm_merge_gate.py`, `appendix_tree.apply_in_order`).
-   На дереве ветки без приложений эти утверждения красны по построению — это
-   ожидаемо; зелёными они обязаны быть на дереве «ветка плюс приложения PLAN».
+   удовлетворяет AC-4 – AC-6. Тесты детерминированные, без сети.
+6. Утверждения о тексте `skills/review-checklist.md` и `templates/REVIEW.md`
+   (приложение 1) — то есть утверждения о промпте ревьювера требования 5
+   (AC-4, AC-5, AC-6) — живут только в одноразовой планке задачи: она идёт на
+   дереве «ветка плюс приложения PLAN» (рубеж `in_dev -> verifying`,
+   `orchestrator/advance_gates/acceptance.py`, `appendix_tree.suite_tree`).
+   Долгоживущий тест `tests/` проверяет только миссию
+   (`orchestrator/role_prompt.py`: AC-2, AC-3, AC-7, AC-8) — без пропусков и
+   условных выходов, зависящих от наличия приложений.
 7. PLAN.md задачи несёт оба приложения из раздела ТЗ «Приложения PLAN»
    дословно: приложение 1 (`skills/review-checklist.md`, `templates/REVIEW.md`) и
    приложение 2 (`skills/code-revision.md`), каждое применимо к дереву базы ветки
    (`git apply --check` на чистом дереве, `skills/conventions-core.md`).
-8. Существующий тест
-   `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py::MissionTest::test_ac7_external_reviewer_mission_keeps_suite_run`
-   с решением варианта А несовместим. Его правка — только по мандату Оператора
-   (строка «Ослабление тестов разрешено:» с матрицей неослабления в ANSWER, канал
-   `answer` на эскалации роли; файл долгоживущий у задачи 01M5HDB1GS). Замена
-   утверждения при прежнем сценарии: миссия ревьювера внешнего проекта содержит
-   `role_prompt.REVIEWER_FULL_SUITE_RULE`, `` `<pult> plank-run <id>` `` и
-   `` `<pult> guard <id>` ``, и в ней нет `suite-run <id>` без ` --failed`/` --wait`
-   (форма проверки — `bare_full_run` того же файла). Без мандата — эскалация, не
-   правка. Остальные существующие тесты не правятся.
+8. С решением варианта А несовместимы два существующих теста, закрепляющих
+   `suite-run` в миссии ревьювера внешнего проекта (раздел «Меняемое
+   поведение»):
+   - `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py::MissionTest::test_ac7_external_reviewer_mission_keeps_suite_run`
+     (файл долгоживущий у задачи 01M5HDB1GS) — замена утверждения при прежнем
+     сценарии: миссия ревьювера внешнего проекта содержит
+     `role_prompt.REVIEWER_FULL_SUITE_RULE`, `` `<pult> plank-run <id>` `` и
+     `` `<pult> guard <id>` ``, и в ней нет `suite-run <id>` без
+     ` --failed`/` --wait` (форма проверки — `bare_full_run` того же файла);
+   - `tests/test_01m56g23zqdhv2bkevwwc22r96_external_missions.py::Ac8ReviewerChecksTest::test_ac8_external_reviewer_lists_pult_check_commands`
+     (строки 201–204 требуют `` `<pult> suite-run` `` в миссии; файл
+     долгоживущий у задачи 01M56G23ZQ) — замена утверждения при прежнем
+     сценарии: в перечне команд миссии — `guard` и `plank-run` с полным путём
+     пульта, «Права не сужены» нет, `suite-run <id>` без ` --failed`/` --wait`
+     нет.
+   Правка обоих — только по мандату Оператора: строка «Ослабление тестов
+   разрешено:» с матрицей неослабления в ANSWER, переданная разработчику каналом
+   `answer` на эскалации роли. Без мандата — эскалация, не правка. Все остальные
+   существующие тесты не правятся и остаются зелёными — за это отвечает задача.
 
 ## Критерии приёмки
 
 AC-1. `orchestrator/role_prompt.py` определяет на уровне модуля строковую константу `REVIEWER_FULL_SUITE_RULE`, побайтно равную тексту требования 1.
 
-AC-2. Миссия ревьювера из `role_prompt.mission_brief_package(..., "reviewer", ...)` содержит `REVIEWER_FULL_SUITE_RULE` ровно один раз, и он стоит сразу после фразы `_reviewer_checks_note` — и у задачи артели, и у задачи учебного внешнего проекта.
+AC-2. Миссия ревьювера из `role_prompt.mission_brief_package(..., "reviewer", ...)` содержит `REVIEWER_FULL_SUITE_RULE` ровно один раз, и он стоит сразу после фразы `_reviewer_checks_note`: между концом этой фразы и началом `REVIEWER_FULL_SUITE_RULE` — только пробельные символы (конкретный разделитель не задан) — и у задачи артели, и у задачи учебного внешнего проекта.
 
 AC-3. `_reviewer_checks_note` внешнего проекта называет `` `{pult} guard {task_id} [<файл>]` — структура артефактов `` и `` `{pult} plank-run {task_id} [<файл>]` — планка и долгоживущие файлы задачи ``, затем «запускай их, когда они доказывают или опровергают замечание.», и не содержит `suite-run`; фраза для артели побайтно равна прежней («Права не сужены: тесты, guard и другие исполняемые проверки запускай, когда они доказывают или опровергают замечание.»).
 
-AC-4. В промпте ревьювера (требование 5) текст `role_prompt.REVIEWER_FULL_SUITE_RULE` встречается ровно один раз — у задачи артели и у задачи учебного внешнего проекта.
+AC-4. В промпте ревьювера (требование 5) текст `role_prompt.REVIEWER_FULL_SUITE_RULE` встречается ровно один раз — у задачи артели и у задачи учебного внешнего проекта (только одноразовая планка, требование 6).
 
-AC-5. В промпте ревьювера (требование 5) нет `suite-run <id>` без ` --failed`/` --wait` (форма проверки — как `bare_full_run` в `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py`) — у задачи артели и у задачи учебного внешнего проекта.
+AC-5. В промпте ревьювера (требование 5) нет `suite-run <id>` без ` --failed`/` --wait` (форма проверки — как `bare_full_run` в `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py`) — у задачи артели и у задачи учебного внешнего проекта (только одноразовая планка, требование 6).
 
-AC-6. В промпте ревьювера (требование 5) нет подстрок `unittest discover`, `Прогон полного набора`, `— полный набор тестов` — у задачи артели и у задачи учебного внешнего проекта (на дереве «ветка плюс приложения PLAN», требование 6).
+AC-6. В промпте ревьювера (требование 5) нет подстрок `unittest discover`, `Прогон полного набора`, `— полный набор тестов` — у задачи артели и у задачи учебного внешнего проекта (только одноразовая планка на дереве «ветка плюс приложения PLAN», требование 6).
 
 AC-7. У задачи учебного внешнего проекта миссия ревьювера называет `` `<pult> plank-run <id>` `` и `` `<pult> guard <id>` `` полным путём пульта.
 
-AC-8. Миссии ролей analyst, spec_auditor, test_author, developer, собранные одними входами до и после правки, побайтно совпадают и текста `REVIEWER_FULL_SUITE_RULE` не содержат.
+AC-8. Миссии ролей analyst, spec_auditor, test_author, developer текста `REVIEWER_FULL_SUITE_RULE` не содержат (долгоживущий тест).
 
-AC-9. PLAN.md задачи несёт приложение 1 (`skills/review-checklist.md`, `templates/REVIEW.md`) и приложение 2 (`skills/code-revision.md`) с диффами из раздела ТЗ «Приложения PLAN» дословно, и каждое проходит `git apply --check` на дереве базы ветки.
+AC-9. Миссия каждой из ролей analyst, spec_auditor, test_author, developer, собранная кодом ветки, побайтно совпадает с миссией той же роли, собранной кодом базы ветки при одних входах (только одноразовая планка).
+
+AC-10. PLAN.md задачи несёт приложение 1 (`skills/review-checklist.md`, `templates/REVIEW.md`) и приложение 2 (`skills/code-revision.md`) с диффами из раздела ТЗ «Приложения PLAN» дословно, и каждое проходит `git apply --check` на дереве базы ветки.
+
+## Меняемое поведение
+
+Оба теста требования 8 меняют вид утверждения (`assertIn` для `suite-run`
+снимается, добавляются новые утверждения), поэтому пунктами формы «было →
+стало» этого раздела не оформляются; перечислены здесь решением Оператора
+(гейт SPEC 23.10, круг 1) и меняются только по мандату «Ослабление тестов
+разрешено:» с матрицей неослабления, переданному через `answer`:
+
+`tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py::MissionTest::test_ac7_external_reviewer_mission_keeps_suite_run`
+— сейчас требует `` `<pult> suite-run <id>` — полный набор тестов ``; станет:
+миссия содержит `role_prompt.REVIEWER_FULL_SUITE_RULE`, `` `<pult> plank-run <id>` ``,
+`` `<pult> guard <id>` `` и не содержит `suite-run <id>` без ` --failed`/` --wait`.
+
+`tests/test_01m56g23zqdhv2bkevwwc22r96_external_missions.py::Ac8ReviewerChecksTest::test_ac8_external_reviewer_lists_pult_check_commands`
+— сейчас (строки 202–204) требует `` `<pult> guard` ``, `` `<pult> plank-run` `` и
+`` `<pult> suite-run` ``; станет: в перечне команд `guard` и `plank-run` с полным
+путём пульта, «Права не сужены» нет, `suite-run <id>` без ` --failed`/` --wait` нет.
 
 ## Оценка объёма и деление
 
 Сработавшие сигналы: «число затрагиваемых модулей/файлов» (guard считает все
 упомянутые в тексте пути `orchestrator/*.py`/`scripts/*.py`, большинство из
-которых — «Только чтение» и «Не входит») и «прогноз диффа не дан».
+которых — «Только чтение» и «Не входит»), «число критериев приёмки ≥ 10»
+(AC-8 и AC-9 — одно требование 4, разведённое по месту проверки решением
+Оператора 23.10) и «прогноз диффа не дан».
 
 Прогноз диффа: 12 КиБ
 
 Обоснование монолита: изменяемый код — один файл `orchestrator/role_prompt.py`
 (константа и две функции), плюс тест в `tests/` и два приложения PLAN. Разрезать
 нельзя без нерабочего промежуточного состояния: правка `_reviewer_checks_note`
-(снятие `suite-run`) без правки существующего
-`test_ac7_external_reviewer_mission_keeps_suite_run` краснит набор, а
+(снятие `suite-run`) без правки двух существующих тестов требования 8
+краснит набор, а
 приложение 1 к скилу (абзац «правило — одно, в миссии шага») без самого правила
 в миссии оставило бы ревьювера вовсе без правила. Приложение 2
 (`skills/code-revision.md`) — та же защищённая область и тот же порядок
@@ -122,13 +154,11 @@ AC-9. PLAN.md задачи несёт приложение 1 (`skills/review-che
 - Правка `docs/operator-session.md`.
 - Правка в `orchestrator/role_prompt.py` сверх константы `REVIEWER_FULL_SUITE_RULE`, ветки ревьювера в `mission_brief_package` и `_reviewer_checks_note`; правка `orchestrator/runner.py`, `orchestrator/brief.py`, `orchestrator/review.py`, `roles.yaml` и прочих путей «Только чтение» ТЗ.
 - Правка `skills/`, `templates/` иначе как приложениями 1 и 2 PLAN (защищённые пути).
-- Только чтение: orchestrator/appendix_tree.py, orchestrator/fsm_merge_gate.py, scripts/plan_appendix_ci.py — механика наложения приложений PLAN не меняется.
-- Зелёный полный набор `tests/` («остальные существующие тесты остаются зелёными») — её держит пульт.
+- Только чтение: orchestrator/appendix_tree.py, orchestrator/advance_gates/acceptance.py, orchestrator/fsm_merge_gate.py, scripts/plan_appendix_ci.py — механика наложения приложений PLAN не меняется.
 
 ## Материалы
 
 - ТЗ: `tasks/01M5KP57JXWKKKCJKY47HT21W8/TZ.md`, разделы «Факты» и «Приложения PLAN» (диффы переносятся в PLAN.md дословно).
 - Находки: `docs/audits/code-revision-2026-10-22.md`, CR-2026-10-22-2 и CR-2026-10-22-1.
 - Образец подмен и формы проверки: `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py` (`bare_full_run`, `MissionTest.components_empty`, `test_ac7_external_reviewer_mission_keeps_suite_run`).
-- Требование 8 — смена вида утверждения (`assertIn` → `assertNotIn` плюс новые), поэтому раздел «Меняемое поведение» для него не годится; по ТЗ мандат Оператора 23.10 дан, строку с матрицей неослабления Оператор передаёт через `answer` на эскалации роли.
 - `budget_usd`: ТЗ называет $20, пол калибровки `config.BUDGET_CALIBRATION_FLOOR_USD` = $25 («планка не ниже $25 ни для одной задачи», `skills/spec-authoring.md`) — поставлен пол.
