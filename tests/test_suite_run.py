@@ -9,13 +9,14 @@ import contextlib
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from orchestrator import (acceptance, appendix_tree, config, project_profile,
-                          store, suite_run, targets)
-from tests.sandbox import RealGitSandbox, TmpRootTest
+                          stack, store, suite_run, targets)
+from tests.sandbox import RealGitSandbox, TmpRootTest, resilient_tmp_cleanup
 
 XDIST_PARTIAL = """\
 tests/test_a.py::test_a
@@ -333,17 +334,88 @@ class GateArgvTest(TmpRootTest):
     def test_gate_call_argv_unchanged(self):
         """Вызов гейта без новых параметров — прежняя команда pytest.
 
+        Интерпретатор подменён на весь метод: и прогон гейта, и ожидание
+        видят одно значение, а не `stack._main_copy_root`, чей вызов git
+        перехватывает подмена `acceptance.subprocess.run`.
+
         Ловит мутацию: флаги `suite-run` (`-vv`, вывод в файл) или иной
-        порядок путей попадают в прогон гейта по умолчанию.
+        порядок путей попадают в прогон гейта по умолчанию; правка общей
+        части команды `_pytest_command` (потерянный `-p timeout`, иной
+        порядок её флагов) — ожидание теперь литерал, а не та же функция.
         """
         (self.root / "tests").mkdir()
         done = subprocess.CompletedProcess([], 0, "1 passed in 0.1s", "")
-        with mock.patch.object(acceptance.subprocess, "run",
-                               return_value=done) as run:
+        with mock.patch.object(acceptance.stack, "pytest_python_executable",
+                               return_value="/fake/venv/bin/python3"):
+            with mock.patch.object(acceptance.subprocess, "run",
+                                   return_value=done) as run:
+                acceptance.run_full_suite(self.root)
+            argv = run.call_args.args[0]
+            expected = ["/fake/venv/bin/python3", "-m", "pytest", "tests", "-p",
+                        "no:cacheprovider", "-p", "timeout", "-o",
+                        f"timeout={stack.PER_TEST_TIMEOUT_SEC}", "-n",
+                        str(config.FULL_SUITE_WORKERS), "-p", "xdist"]
+            self.assertEqual(argv, expected)
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                    *args], cwd=cwd, check=True, capture_output=True)
+
+
+class GateArgvInterpreterIndependenceTest(unittest.TestCase):
+
+    def test_gate_argv_test_passes_in_worktree_without_venv(self):
+        """Метод argv гейта зелёный в рабочей копии `git worktree` без
+        `.artel/venv` при интерпретаторе процесса не из venv (условие
+        ревизии CR-2026-10-22-20).
+
+        Ловит мутацию: ожидание `test_gate_call_argv_unchanged` снова
+        собирается `_pytest_command` вне подмены интерпретатора — ожидание
+        получает venv временной главной копии, фактический argv —
+        `/fake/bin/python`, и вложенный прогон метода красный.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(resilient_tmp_cleanup, tmp)
+        main = Path(tmp.name) / "main"
+        copy = Path(tmp.name) / "copy"
+        venv_python = main / ".artel" / "venv" / "bin" / "python3"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("", encoding="utf-8")
+        _git(tmp.name, "init", "-q", str(main))
+        (main / "README").write_text("x\n", encoding="utf-8")
+        _git(main, "add", "README")
+        _git(main, "commit", "-q", "-m", "init")
+        _git(main, "worktree", "add", "-q", "--detach", str(copy))
+
+        result = unittest.TestResult()
+        with mock.patch.object(stack, "_MODULE_ROOT", copy), \
+                mock.patch.object(config, "VENV_DIR",
+                                  Path(tmp.name) / "no-venv"), \
+                mock.patch.object(stack.sys, "executable", "/fake/bin/python"):
+            GateArgvTest("test_gate_call_argv_unchanged").run(result)
+        self.assertTrue(result.wasSuccessful(),
+                        result.failures + result.errors)
+
+
+class GateArgvInterpreterSourceTest(TmpRootTest):
+
+    def test_first_argv_element_is_selected_interpreter(self):
+        """Первый элемент argv `run_full_suite` — значение
+        `stack.pytest_python_executable`.
+
+        Ловит мутацию: `run_full_suite`/`_pytest_command` ставит первым
+        элементом голый `python3` или `sys.executable` в обход функции
+        выбора интерпретатора.
+        """
+        (self.root / "tests").mkdir()
+        done = subprocess.CompletedProcess([], 0, "1 passed in 0.1s", "")
+        with mock.patch.object(acceptance.stack, "pytest_python_executable",
+                               return_value="/selected/bin/python3"), \
+                mock.patch.object(acceptance.subprocess, "run",
+                                  return_value=done) as run:
             acceptance.run_full_suite(self.root)
-        argv = run.call_args.args[0]
-        self.assertEqual(argv, acceptance._pytest_command("tests") + [
-            "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"])
+        self.assertEqual(run.call_args.args[0][0], "/selected/bin/python3")
 
 
 class SuiteRunJournalTest(TmpRootTest):
