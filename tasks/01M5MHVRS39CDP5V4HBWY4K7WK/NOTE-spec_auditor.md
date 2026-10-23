@@ -1,14 +1,13 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Семь команд и строки ТЗ подтверждены по коду (fsm.py:1678/1766, pull_main.py:35, workspace.py:255, ci_rerun.py:44, runner.py:153, answer.py:488, lease.py:334); auto.py:928 зовёт cmd_run(session_id=...).
-- «ЗДЕСЬ» есть только в докстрингах cmd_reject (fsm.py:1681), cmd_workspace (workspace.py:264), cmd_ci_rerun (ci_rerun.py:55), cmd_run (runner.py:160). У cmd_spec_audit утверждения о префиксе нет вовсе, у cmd_pull_main — без «ЗДЕСЬ», у cmd_zones_extend — «резолв префикса, что у cmd_answer». AC-7 требует утверждение у всех семи.
-- Текст отказа acquire содержит `heartbeat {int(age)} сек` (lease.py:~190) — сравнение в (б) зависит от времени.
-- Существующие моки run_locked позиционные (conn, task, sid, fn) — совместимы с run_task_command.
-- Префикс-регрессия покрывает reject и workspace, но не ci_rerun/zones_extend; замыкание по внешнему `task_id` вместо `tid` новые проверки не ловят.
+- Круг 2 (spec_sha e8c0b2ee…): все три решения Оператора круга 1 перенесены в SPEC (треб. 2/3/4(б)(в)(г), AC-3, AC-4, AC-7, AC-10).
+- Факты кода подтверждены заново: fsm.py:1678/1766, pull_main.py:35, workspace.py:255, ci_rerun.py:44, runner.py:153, answer.py:488, lease.py:334; текст отказа lease.py:189-191 с `int(age)` от liveness._age_seconds (liveness.py:54) — подмена фиксирует.
+- Существующие моки run_locked позиционные (conn, task, sid, fn[, **kwargs]) и патчат модуль `lease`/`store` — run_task_command с ними совместим (role_refusal:468/500, role_environment:53/138, autogate:74, canary_suite_skip:191).
+- test_01m4xv9xpjzd29py0ntnz98m02_commands.py:35 ищет force=True у acquire/run_locked — новая функция без kwargs не задевает.
 
 ## Где остановился
-Вердикт concerns, SPEC-AUDIT.md записан.
+Вердикт pass, SPEC-AUDIT.md записан.
 
 ## Чего не хватило
 —

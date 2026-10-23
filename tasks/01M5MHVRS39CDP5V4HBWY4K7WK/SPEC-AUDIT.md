@@ -3,71 +3,122 @@ task: 01M5MHVRS39CDP5V4HBWY4K7WK
 type: spec_audit
 author_role: spec_auditor
 status: ready
-verdict: concerns
+verdict: pass
 signals: "в) пути-признаки (тесты): tests/; в) пути-признаки (песочница ролей): orchestrator/runner.py"
-spec_sha: f63844bc278f7c408fa6b556b583d039a71571e9
+spec_sha: e8c0b2eeb58ce03706bccff89235e8bfd544529a
 schema_version: 5
 ---
 
 # SPEC-AUDIT: Обвязка «id задачи + блокировка задачи» команд — одна функция вместо семи копий
 
 ## ТЗ и SPEC
-Требования 1–2, 4 ТЗ перенесены в SPEC требования 1–2, 4 дословно; ограничение зон по смыслу — SPEC требование 6; «Не входит» и бюджет ($25) совпадают с ТЗ. ANSWER-n и решений Оператора на гейте SPEC нет.
-
-Расхождения:
-1. ТЗ требование 2 «Докстринги сохраняют утверждение «префикс разворачивается до взятия lease»; слово «ЗДЕСЬ» заменяется ссылкой» предполагает, что утверждение есть у всех семи. В коде оно есть с «ЗДЕСЬ» только у четырёх: `orchestrator/fsm.py:1681` (cmd_reject), `orchestrator/workspace.py:264`, `orchestrator/ci_rerun.py:55`, `orchestrator/runner.py:160`. У `cmd_pull_main` (`orchestrator/pull_main.py:39`) утверждение есть, но без «ЗДЕСЬ»; у `cmd_zones_extend` (`orchestrator/answer.py:492`) — только «резолв префикса, что у `cmd_answer`»; у `cmd_spec_audit` (`orchestrator/fsm.py:1767-1772`) утверждения нет. SPEC AC-7 (SPEC.md:90) толкует ТЗ как «утверждение и ссылка у каждой из семи», то есть для двух-трёх докстрингов утверждение нужно ДОБАВИТЬ, а не сохранить. Толкование разумное и в рамках зон (докстринги семи функций), но в SPEC это расхождение с фактом не названо — разработчик встретит его сам.
-2. ТЗ требование 4 «остаются зелёными» SPEC выносит в «Не входит» («её держит пульт», SPEC.md:102-110). Это не потеря: полный прогон держит гейт `in_dev -> verifying`; отмечено для полноты, не отклонение.
-
-Требований сверх ТЗ в SPEC нет (AC-5/AC-6/AC-9 раскрывают ТЗ требование 2 и ограничение зон).
+Требования ТЗ 1–4 и решения Оператора на гейте SPEC (23.10.2026, круг 1)
+отражены в SPEC полностью:
+- ТЗ 1 → SPEC треб. 1, AC-1, AC-2 (дословно, включая «без именованных
+  аргументов»).
+- ТЗ 2 → SPEC треб. 2, 3, AC-4..AC-7. Докстринги по решению Оператора п. 2:
+  «ЗДЕСЬ» заменяется ссылкой только у `cmd_reject`, `cmd_workspace`,
+  `cmd_ci_rerun`, `cmd_run`; у трёх остальных докстринг не меняется (SPEC
+  треб. 3, AC-7). Это сужение ТЗ («Докстринги сохраняют утверждение…»)
+  снято решением Оператора, не отклонение.
+- ТЗ 3 (а)(б)(в) → SPEC треб. 4, AC-1..AC-4, AC-8; решение Оператора п. 1
+  (поведенческая проверка (г) и условие на параметр лямбды) → треб. 2, 4(в),
+  4(г), AC-4, AC-10; п. 3 (фиксация возраста heartbeat, полное сравнение
+  текста с id) → треб. 4(б), AC-3.
+- ТЗ 4 → SPEC треб. 5, AC-9; часть «остаются зелёными» вынесена в «Не
+  входит» как держимая пультом — на круге 1 это не оспорено, решение
+  Оператора «остальное SPEC — без изменений».
+- Ограничение зон, «Только чтение», «Не входит» ТЗ перенесены (SPEC треб. 6,
+  раздел «Не входит»).
+Требований SPEC сверх ТЗ и решений Оператора нет.
 
 ## Факты против кода
-Подтвердилось:
-- Семь функций и их обвязка: `orchestrator/fsm.py:1678-1688` (cmd_reject), `orchestrator/fsm.py:1766-1776` (cmd_spec_audit), `orchestrator/pull_main.py:35-46`, `orchestrator/workspace.py:255-270`, `orchestrator/ci_rerun.py:44-64`, `orchestrator/runner.py:153-166` (`return lease.run_locked(...)`), `orchestrator/answer.py:488-502` — все три строки `store.db()` → `store.resolve_task_id` → `lease.run_locked(conn, task_id, session_id, lambda sid: _cmd_X(...))`, без именованных аргументов, `sid` не используется.
-- `lease.run_locked` — `orchestrator/lease.py:334`, сигнатура `(conn, task_id, session_id, body, *, on_refusal="exit", same_host_ok=False, force=False)`; `lease` импортирует `store` (`orchestrator/lease.py:24`).
-- `auto` передаёт `session_id` в `cmd_run`: `orchestrator/auto.py:928`.
-- Докстринги с «ЗДЕСЬ» вне таблицы, перечисленные в «Не входит»: `orchestrator/fsm.py:732` (cmd_advance), `orchestrator/fsm.py:921` (cmd_approve), `orchestrator/answer.py:309` (cmd_answer) — верно.
-- Существующие подмены `lease.run_locked` в тестах позиционные `(conn, task, sid, fn)` (`tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py:468`, `tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py:53`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py:74`) — совместимы с вызовом `run_locked(conn, task_id, session_id, lambda sid: ...)` из `run_task_command`, если тот обращается к имени модуля `run_locked` в момент вызова.
-- Линтер `force=True` (`tests/test_01m4xv9xpjzd29py0ntnz98m02_commands.py:35`) правкой не задевается.
-
-Не подтвердилось: утверждение SPEC требования 3 «докстринги семи команд сохраняют утверждение … слово «ЗДЕСЬ» в нём заменяется» — у трёх команд нет «ЗДЕСЬ», у одной нет утверждения (см. «ТЗ и SPEC», п. 1).
+Подтверждено по рабочему каталогу (HEAD = main aae1997b, `orchestrator/` и
+`tests/` не отличаются):
+- Семь копий обвязки: `orchestrator/fsm.py:1678-1688` (`cmd_reject`),
+  `orchestrator/fsm.py:1766-1777` (`cmd_spec_audit`),
+  `orchestrator/pull_main.py:35-47`, `orchestrator/workspace.py:255-271`,
+  `orchestrator/ci_rerun.py:44-64`, `orchestrator/runner.py:153-167`
+  (`return lease.run_locked(...)`), `orchestrator/answer.py:488-502`.
+  Ни одна не передаёт именованных аргументов `run_locked`; `sid` лямбд не
+  используется.
+- `lease.run_locked` — `orchestrator/lease.py:334-376`, kwargs `on_refusal`,
+  `same_host_ok`, `force` с умолчаниями; `lease` импортирует `store`
+  (`orchestrator/lease.py:24`).
+- «ЗДЕСЬ» в докстрингах таблицы — ровно четыре: `fsm.py:1681`,
+  `workspace.py:264`, `ci_rerun.py:55`, `runner.py:160`; вне таблицы —
+  `fsm.py:732`, `fsm.py:921`, `answer.py:309` (и модульный `answer.py:25`),
+  как и сказано в «Не входит».
+- Текст отказа для чужой живой сессии этой машины —
+  `orchestrator/lease.py:189-191`, содержит `heartbeat {int(age)} сек`,
+  `age` из `liveness._age_seconds` (`orchestrator/lease.py:165`,
+  `orchestrator/liveness.py:54`) — подмена `liveness._age_seconds`
+  делает эталон стабильным, как требует 4(б).
+- `auto.py:928` зовёт `runner.cmd_run(task_id, session_id=session_id)`.
+- Все семь тестовых файлов «Материалов» существуют.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да, (а) | тело зовётся с префиксом вместо полного id; `run_task_command` не возвращает результат `run_locked` |
-| AC-2 | да, (а)+(б) | `resolve_task_id` после `run_locked` (шпион видит префикс); `same_host_ok=True` (в (б) чужой lease своей машины не откажет, тело вызовется); `force=True` (строка lease перепишется); `on_refusal="print"` (нет `SystemExit`). Проверку отсутствия именованных аргументов шпионом (а) требование 4 не называет, но (б) ловит все три |
-| AC-3 | да, (б) | обход `acquire`; взятие lease по префиксу (отказ с другим id в тексте). Риск нестабильности: текст отказа содержит `heartbeat {int(age)} сек` (`orchestrator/lease.py:190`) — эталон из второго вызова `acquire` может разойтись на секунду |
-| AC-4 | да, (в) | возвращённая копия обвязки; `None`/литерал вместо `session_id`; `session_id=` именованным. НЕ ловит: замыкание по внешнему `task_id` (префиксу) вместо параметра `tid` — `lambda conn, tid: _cmd_ci_rerun(conn, task_id, reason)` |
-| AC-5 | частично, существующими тестами | потеря `reason`/`paths_arg`/`matrix_path` ловят `tests/test_01m4r4jdg8rh53znwm0xf90cfj_spec_gate_decisions.py:140`, `tests/test_01m3y75c9ty76083cg1pk00em4_stuck_check.py:466`, `tests/test_answer.py:385-432`; потеря `return` в `cmd_run` — `tests/test_01m446wevjxarr5cded8re9ccr_run_advances.py`. Новый файл AC-5 не проверяет |
-| AC-6 | частично, существующими вызовами | `answer.cmd_zones_extend(t.id, path, None, str(matrix))` (`tests/test_01m5edw6kd1escevrsv2wpnxap_file_level.py:899`) держит позицию `session_id`/`matrix_path`; позиционный `session_id` у `cmd_workspace` — `tests/test_workspace.py::CmdWorkspaceLeaseTest` |
-| AC-7 | нет | ни (а), ни (б), ни (в) докстринги не читают — только ревью |
-| AC-8 | да | наличие файла, строки докстринга и красноты до изменения — ревью/гейт планки |
-| AC-9 | да | правка существующего теста — гейт неослабления тестов; правка прочих функций `lease.py`/`answer.py` — ревью диффа |
+| AC-1 | да | `body` зовётся с префиксом / без `conn` / возврат `run_locked` теряется (`return` пропущен) |
+| AC-2 | да | `resolve_task_id` после `run_locked` или пропущен; добавлен `same_host_ok=True`/`force=True`/`on_refusal="print"` |
+| AC-3 | да | lease берётся по префиксу (вставляется новая строка, тело вызвано); отказ глотается; тело зовётся до `acquire` |
+| AC-4 | да | в команде оставлена своя копия обвязки; `session_id` потерян (передан `None`); лямбда замыкает внешний `task_id` |
+| AC-5 | да | `reason`/`paths_arg`/`matrix_path` не прокинуты; `cmd_run` не возвращает результат (`auto` теряет `True`) |
+| AC-6 | да | изменена сигнатура/позиция `session_id` — ловится сверкой `inspect.signature` и существующими вызовами (`auto.py:928`, `CmdWorkspaceLeaseTest`) |
+| AC-7 | да | «ЗДЕСЬ» оставлено; ссылки на `run_task_command` нет; переписан докстринг одной из трёх неизменяемых |
+| AC-8 | да | наличие файла и строки мутации в докстринге линтера — проверка структуры |
+| AC-9 | да (диф ветки) | правка существующего теста; правка `run_locked`/прочих функций `lease.py`/других функций `answer.py` |
+| AC-10 | да | замыкание по внешнему `task_id` (тело получает префикс) в любой из семи команд; тело не вызывается; вызывается дважды |
 
-Отклонение (проверяемость AC-4/AC-5): замыкание, использующее внешний `task_id` вместо `tid`, проходит линтер (в) и проверки (а)/(б), а для `cmd_ci_rerun` и `cmd_zones_extend` префикс не проверяет ни один существующий тест (`tests/test_task_id_prefix_regression.py` покрывает reject :214 и workspace :274, `pull_main` — ac1 :208). Мутация «команда с префиксом падает в `_cmd_*` с неразвёрнутым id» остаётся непойманной. Закрыть можно в (в): тело — имя `_cmd_*` либо `lambda` с двумя параметрами, во вызове которой вторым аргументом стоит второй параметр `lambda`.
+Существующие моки `run_locked` позиционные (`tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py:468,500`,
+`tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py:53,138`,
+`tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py:74`,
+`tests/test_01m4beg0003ch0qa1gy0pxat03_canary_suite_skip.py:191`) и патчат
+модули `lease`/`store` — `run_task_command`, зовущий `store.db`,
+`store.resolve_task_id` и `run_locked` как атрибуты модулей, с ними
+совместим; требование «существующие тесты не правятся» выполнимо.
+`tests/test_01m4xv9xpjzd29py0ntnz98m02_commands.py:35` ищет `force=True` у
+вызовов `acquire`/`run_locked` — новая функция без kwargs его не задевает.
 
 ## Зоны
-Зоны SPEC = зоны ТЗ: `orchestrator/lease.py`, шесть модулей команд, `docs/codebase-map.md`, `tests/`. Правки требований 1–4 ими покрыты. Защищённых путей (`skills/`, `templates/`, `gates.yaml`, `roles.yaml`, `.github/`) задача не трогает. Песочница ролей: в `orchestrator/runner.py` меняется только `cmd_run` (обвязка и докстринг) — `role_env`, `role_cmd`, `role_cwd` и прочее окружение роли не затрагиваются, расширения песочницы нет. Импорт `store` во всех шести модулях остаётся нужен прочему коду — «ставшие лишними импорты», скорее всего, пусты.
+Зоны SPEC совпадают с ТЗ и покрывают всё: `lease.py` (новая функция),
+шесть модулей команд, `docs/codebase-map.md` (регенерация), `tests/`
+(новый файл). Защищённых путей (`config.PROTECTED_PATHS`) задача не
+трогает. `orchestrator/runner.py` (сигнал «песочница ролей») меняется
+только в теле/докстринге `cmd_run` — окружение роли (`role_env`,
+`role_cmd`, `role_cwd`) не затрагивается, песочница не расширяется.
 
 ## Матрица неослабления
-Задача не меняет тестов, гейтов, лимитов и проверок; раздела «Меняемое поведение» в SPEC нет — и не нужно.
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| Обвязка семи команд → `lease.run_task_command` | Префикс разворачивается до lease: семь копий (`orchestrator/fsm.py:1685`, `:1774`, `orchestrator/pull_main.py:45`, `orchestrator/workspace.py:268`, `orchestrator/ci_rerun.py:62`, `orchestrator/runner.py:164`, `orchestrator/answer.py:499`); тесты `tests/test_task_id_prefix_regression.py:214`, `:274` | да | `tests/test_task_id_prefix_regression.py` + новый файл (а), (в); для ci_rerun/zones_extend на уровне команды — не покрыто (см. «Проверяемость») | концерн Оператору |
-| Отказ по чужому живому lease для семи команд | `lease.run_locked` дефолты `on_refusal="exit"`, `same_host_ok=False`, `force=False` (`orchestrator/lease.py:334-336`); `tests/test_01m4pmr5evfk4kqdpwb1kegm7v_pull_main.py` (ac3, без `same_host_ok`), `tests/test_workspace.py::CmdWorkspaceLeaseTest` | да | новый файл (б); существующие тесты без правки | — |
-| `session_id` команд | `tests/test_workspace.py::CmdWorkspaceLeaseTest` (позиционно), `orchestrator/auto.py:928` | да | новый файл (в) | — |
+| Обвязка семи команд | Префикс разворачивается до lease — `tests/test_task_id_prefix_regression.py` (reject, workspace) | да | тот же тест + новые AC-2, AC-10 (все семь команд) | усиливается |
+| Обвязка семи команд | Отказ чужого живого lease без захода в тело — `tests/test_workspace.py::CmdWorkspaceLeaseTest` | да | тот же тест + новый AC-3 | остаётся |
+| Обвязка семи команд | Отказ роли до lease — `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py` (подмена команд по имени) | да | тот же тест (имена команд не меняются, AC-6) | остаётся |
+| `cmd_pull_main` без `same_host_ok` | `tests/test_01m4pmr5evfk4kqdpwb1kegm7v_pull_main.py:315` | да | тот же тест + AC-2 (без именованных аргументов) | остаётся |
+
+Тесты не ослабляются и не правятся; раздела «Меняемое поведение» в SPEC нет
+и не нужно (смены ожиданий существующих тестов нет).
 
 ## Пути обхода гейтов
-1. Замыкание по внешнему `task_id` вместо `tid` (см. «Проверяемость критериев») — буквально выполняет AC-4 и требование 2 («добавочные аргументы передаются замыканием»), но для `cmd_ci_rerun`/`cmd_zones_extend` возвращает регрессию префикса, которую ни один тест не ловит.
-2. AC-7 не проверяется ни одним тестом: исполнитель может оставить у `cmd_spec_audit` докстринг без утверждения о префиксе — поймает только ревью.
-3. Эталон (б) «текст как у `lease.acquire`»: если тест получает эталон, вызвав `acquire` с теми же аргументами, а сравнение нестабильно из-за `int(age)` (`orchestrator/lease.py:190`), у тест-автора есть соблазн сравнивать по подстроке/без возраста — ослабленная проверка AC-3 пройдёт и при отказе с другим id в тексте, если подстрока выбрана без id. SPEC не требует ни фиксации времени, ни id в сравнении.
+- Передать тело через `functools.partial` вместо лямбды — условие AC-4 на
+  параметр лямбды не применяется, но `partial(_cmd_reject, reason=reason)`
+  получает id из вызова `body(conn, tid)`, а AC-10 проверяет полный id
+  поведенчески — обход смысла не даёт.
+- Импортировать `db`/`resolve_task_id` по имени (`from .store import db`) и
+  сохранить копию обвязки — линтер AC-4 ищет `store.db`, но AC-4 требует
+  ещё и вызов `lease.run_task_command` со `session_id`; одновременное
+  наличие копии и делегирования бессмысленно, правдоподобного обхода нет.
+Обходов, требующих отклонения, не найдено.
 
 ## Вердикт
-concerns — SPEC вести дальше можно, отклонения решаемы Оператором на гейте или уточнением тест-автору:
-
-1. Проверяемость AC-4/AC-5: линтер (в) не ловит замыкание по внешнему префиксу `task_id` вместо параметра тела; для `cmd_ci_rerun` (`orchestrator/ci_rerun.py:62-64`) и `cmd_zones_extend` (`orchestrator/answer.py:499-502`) префикс на уровне команды не держит ни один тест (`tests/test_task_id_prefix_regression.py:214`, `:274` — только reject и workspace). SPEC.md:54-68, :84.
-2. Факт SPEC требования 3 (SPEC.md:51-53) «сохраняют утверждение … «ЗДЕСЬ» заменяется» не совпадает с кодом: «ЗДЕСЬ» только у четырёх (`orchestrator/fsm.py:1681`, `orchestrator/workspace.py:264`, `orchestrator/ci_rerun.py:55`, `orchestrator/runner.py:160`), у `cmd_spec_audit` (`orchestrator/fsm.py:1767`) утверждения нет; AC-7 (SPEC.md:90) фактически требует добавить его — это толкование ТЗ, стоит подтвердить Оператору.
-3. AC-7 (SPEC.md:90) не проверяется ни одной проверкой требования 4 — только ревью.
-4. Риск нестабильности (б)/AC-3 (SPEC.md:82): текст отказа `acquire` несёт `heartbeat {int(age)} сек` (`orchestrator/lease.py:190`); SPEC не оговаривает, как получать эталон без гонки по секунде (фиксировать heartbeat/`liveness._age_seconds` или брать эталон тем же моментом).
+pass — отклонений нет. Все три пункта возврата круга 1 закрыты в SPEC
+(треб. 2, 3, 4(б)(в)(г); AC-3, AC-4, AC-7, AC-10), факты о коде
+подтверждены (`orchestrator/lease.py:189-191`, `orchestrator/fsm.py:1678`,
+`:1766`, `orchestrator/pull_main.py:35`, `orchestrator/workspace.py:255`,
+`orchestrator/ci_rerun.py:44`, `orchestrator/runner.py:153`,
+`orchestrator/answer.py:488`), каждый AC ловит правдоподобную мутацию.
+Решение о монолите при сработавших сигналах деления — за Оператором на
+гейте (обоснование в SPEC, раздел «Оценка объёма и деление»).
