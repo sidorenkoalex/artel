@@ -558,18 +558,25 @@ class Ac8RolePathTest(TmpRootTest):
         git, `gh`, `claude` по PATH роли не находятся, тест красен.
         """
         from orchestrator import runner, stack
+        refusal = None
         try:
             role_path = runner.role_env()["PATH"]
             tools = {name: runner.declared_tool_path(name)
                      for name in stack.DECLARED_TOOLS}
         except OSError as exc:
-            self.skipTest(f"сборка окружения роли отказала: {exc}")
+            refusal = str(exc)
+        if refusal is not None:
+            # Пропуск — только при отказе «инструмент не найден» (решение
+            # гейта SPEC); любой другой отказ сборки — красный тест.
+            self.assertIn("объявленный инструмент не найден в PATH", refusal)
+            self.skipTest("сборка окружения роли отказала: "
+                          "объявленный инструмент не найден в PATH")
         dirs = [os.path.normpath(d) for d in role_path.split(os.pathsep) if d]
         git = shutil.which("git", path=role_path)
         self.assertIsNotNone(git, f"git не найден по PATH роли: {role_path}")
         self.assertTrue(os.access(git, os.X_OK), git)
         if not os.path.isfile(USR_BIN_GIT):
-            self.skipTest(f"нет {USR_BIN_GIT} для сверки --version")
+            self.skipTest("нет /usr/bin/git для сверки --version")
         self.assertEqual(run_output([git, "--version"], None),
                          run_output([USR_BIN_GIT, "--version"], None))
         for name, tool in tools.items():
