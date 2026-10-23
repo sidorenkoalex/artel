@@ -1,17 +1,18 @@
 # Записка developer — 01M5KJNE39PHV9EAWJCHK7QDFS
 
 ## Выяснено
-- Реализовано и закоммичено (73fc60c4): tests/direct_git.py (prefer_direct_git), tests/__init__.py (import os; from .direct_git import prefer_direct_git; DIRECT_GIT_DIR = prefer_direct_git(os.environ)), карта регенерирована.
-- Долгоживущий файл: 11 passed, AC-7 не пропущен на этой машине; own_run_path и pult_pytest_unchanged зелёные.
-- Мутации платформа / exists без X_OK / без normpath — красные.
-- Планка: AC-6 зелёный только после коммита (branch_diff берёт закоммиченное); AC-9 красен, пока PLAN.md не перенесён автокоммитом в ссылку документов.
-- AC-10: 261 запуск git и в базе, и в ветке (хук аудита); в ветке +1 xcode-select.
+- Код (tests/direct_git.py, tests/__init__.py) закоммичен в 73fc60c4, карта регенерирована. Долгоживущий файл: 11 passed, 43 subtests, пропусков нет (23.10, повторно).
+- ANSWER-1 касается только залоченного файла тестов test_author:
+  - п. 2 (FakeWhich без path= → None) — выполнен (стр. 74–90);
+  - п. 1, песочница — выполнена (Ac8RolePathTest(TmpRootTest): isolate_keychain_and_role sandbox.py:1619, stub check_stack :1643);
+  - п. 1, условие пропуска — НЕ выполнено: стр. 565–566 пропускают на любом OSError, а не только на «объявленный инструмент не найден в PATH» (runner.py:924). Другой OSError (venv, runner.py:1017) в TmpRootTest недостижим.
+- Править файл разработчик не может → PLAN.md status: escalate, варианты (а) amend-tests / (б) принять, дефолт (б).
 
 ## Не сработало
-- Bash: нет cat/ls; `for` с `$t` и heredoc с `{'` отклоняются песочницей.
+- Bash: `$?`, `$t`, heredoc отклоняются песочницей («simple_expansion»); писать файлы — через Edit/Write.
 
 ## Где остановился
-- PLAN.md status: ready, замеры внесены. Шаг завершён.
+- PLAN.md: escalate, раздел «Ответ Оператора (ANSWER-1) — сверка» и «Эскалация». guard ок. После ответа: снять escalate → ready (код не меняется при (б); при (а) — amend-tests Оператора).
 
 ## Чего не хватило
-- Что plank-run AC-6 видит только закоммиченный дифф — узнал по красному прогону.
+- Что ANSWER на developer может требовать правки залоченного файла test_author — выход только эскалация.

@@ -2,7 +2,7 @@
 task: 01M5KJNE39PHV9EAWJCHK7QDFS
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -117,8 +117,62 @@ xdist, `python3 -m pytest <цель> -p no:cacheprovider -q`. «База» —
 - Если `xcode-select -p` указывает на Xcode.app, где `usr/bin/git` нет, —
   вставки нет, поведение как на базе.
 
+## Ответ Оператора (ANSWER-1) — сверка
+Оба пункта касаются только долгоживущего файла
+`tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py` (его написал
+test_author, он залочен перечнем сумм); код `tests/direct_git.py` и
+`tests/__init__.py` ни одного из них не касается. Повторный прогон
+`python3 -m pytest tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py -rs`
+23.10: 11 passed, 43 subtests, пропусков нет.
+
+- П. 2 (подмена `which` зависит от `path`) — **выполнен**: `FakeWhich`
+  (файл тестов, стр. 74–90) ищет git только по каталогам переданного
+  `path=`, без `path=` возвращает `None` — поиск git без `path=` даёт
+  красный AC-5 (мутация проверена test_author, записка test_author).
+- П. 1, песочница — **выполнено**: `Ac8RolePathTest(TmpRootTest)` (стр. 542);
+  `TmpRootTest.setUp` вызывает `isolate_keychain_and_role`
+  (`tests/sandbox.py:1619`) и подменяет `stack.check_stack` на
+  `_stub_check_stack` (`:1643`).
+- П. 1, условие пропуска — **не выполнено в залоченном файле**: стр. 565–566
+  пропускают тест на любом `OSError` из `runner.role_env()` /
+  `declared_tool_path`, а не только на «объявленный инструмент не найден в
+  PATH» (`orchestrator/runner.py:924–925`). Единственный другой `OSError`
+  этой цепочки — «venv не готов для роли» (`runner.py:1017`) — в
+  `TmpRootTest` недостижим (проверка `check_stack` заглушена), так что
+  на практике пропуск сейчас возможен только по отказу «не найден», но
+  формально условие шире. Исправить может только `amend-tests` — см.
+  «Эскалация».
+
 ## Предложения системе
+- ANSWER, адресованный разработчику, но требующий правки залоченного
+  долгоживущего файла test_author, разработчик исполнить не может —
+  такие пункты стоит направлять сразу в `amend-tests` либо в шаг
+  test_author.
 - Песочница Bash роли отклоняет `for`-цикл с `$t` («simple_expansion») и
   heredoc с `{'` — попеременные замеры пришлось расписывать одинаковыми
   командами вручную; команды пульта для попарного замера «база — ветка»
   нет (замеры требуют SPEC уже не первый раз).
+
+## Эскалация
+**Вопросы**
+1. (блокирующий) ANSWER-1 п. 1 требует пропускать AC-8 только при отказе
+   «объявленный инструмент не найден в PATH», а залоченный
+   `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py::Ac8RolePathTest::test_ac8_role_path_finds_git_and_declared_tools`
+   (стр. 565–566) пропускает его на любом `OSError`. Разработчик этот файл
+   не правит. Варианты:
+   - (а) `amend-tests`: сузить `except OSError` — перед `self.skipTest(...)`
+     добавить `if "объявленный инструмент не найден в PATH" not in str(exc): raise`;
+   - (б) принять как есть: в `TmpRootTest` другой `OSError` этой цепочки
+     (`runner.py:1017`, venv) недостижим, потому что `check_stack`
+     заглушен.
+   **Дефолт при молчании:** (б) — код задачи при этом не меняется, PLAN
+   сдаётся `ready`.
+
+**Контекст**
+Код задачи (`tests/direct_git.py`, `tests/__init__.py`) закоммичен в
+73fc60c4; по ANSWER-1 правок кода не потребовалось. Остальное — в разделе
+«Ответ Оператора (ANSWER-1) — сверка» выше.
+
+**Блокирует**
+Только сдачу `ready` с полностью исполненным ANSWER-1 п. 1; код и замеры
+готовы.
