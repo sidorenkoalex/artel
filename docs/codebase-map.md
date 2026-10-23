@@ -1,5 +1,5 @@
 ---
-built_at_sha: c827ffff23de42c3dd3323c0f136253003d70147
+built_at_sha: 0f85c177842fb957429ba9a3fe4793653bd25c1e
 ---
 
 # Codebase-map пульта
@@ -7750,6 +7750,18 @@ built_at_sha: c827ffff23de42c3dd3323c0f136253003d70147
 **Публичные функции:** (нет)
 
 **Импортирует:** `tests/fd_wait.py`
+
+**Импортируется:** —
+
+## tests/test_fixtures_plugin_conditional.py
+
+**Назначение:** Условное подключение `tests.fixtures` корневым `conftest.py` (ADR-0027,
+
+**Публичные функции:**
+- `mirror_conftest`
+- `test_mirror_collects_with_and_without_fixtures_module`
+
+**Импортирует:** —
 
 **Импортируется:** —
 
