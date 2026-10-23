@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Артель, Фаза 0 — FSM-оркестратор (CLI).
+"""Артель — FSM-оркестратор (CLI).
 
 Детерминированный конечный автомат; агенты думают внутри шага, между
-шагами не думает никто. Все гейты Фазы 0 — ручные (approve/reject из CLI).
+шагами не думает никто. Гейты `spec_gate` и `merge_gate` — ручные
+(approve/reject из CLI); `acceptance` проходит автогейтом по политике
+`gates.yaml` (`orchestrator/fsm_autogate.py`), а при невыполненном условии
+ждёт Оператора.
 
 Состояния:
   spec_writing [-> spec_audit] -> spec_gate -> tests_writing -> in_dev -> verifying -> review -> acceptance -> merge_gate -> done
@@ -178,6 +181,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
+  workspace <id> | report | acceptance-dry-run <id> |
+  plank-run <id> [<файл>] | suite-run <id> [--wait <минуты> | --failed] |
+  preflight <id> | guard <id> [<файл>] |
   admit [--revoke] [--set <имя>] <роль> <модель> [<роль> <модель> ...]
         --basis "<основание>" |
   pair-resume <роль> <модель> "<решение>" |
