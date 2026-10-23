@@ -43,7 +43,9 @@ budget_usd: 25
    - `artel.py::_observation_fresh` — проверка `state != "active"` остаётся,
      свежесть — `watch.observation_link_fresh(row)`;
    - `watch.py::observation_process_state` — `"unstarted"`, `"fresh"`,
-     `"stale"` при тех же условиях, что сейчас.
+     `"stale"` при тех же условиях, что сейчас; ветка `pid is None` решает
+     свежесть вызовом `observation_link_fresh(row)`, собственного сравнения
+     с порогом в ней нет.
    Пустая строка в `last_seen_at` в `artel.py` обрабатывается как `None`: при
    запуске — отказ «связи с watch ещё нет …», в `_observation_fresh` — `False`;
    прежнее падение `datetime.fromisoformat("")` с `ValueError` устраняется
@@ -98,7 +100,8 @@ AC-4. Выбор наблюдения при запуске (`artel.py::_launch_
 `mock.patch.object(watch, "datetime", <подкласс datetime>)`; настоящее время
 машины при этом от `last_seen_at` не дальше 1 с. При «сейчас» подменённого
 `watch.datetime`, равном `last_seen_at` плюс `config.OBSERVATION_STALE_SECONDS`
-плюс 1 с, запуск отказывает «связь устарела …»; при «сейчас», равном
+плюс 1 с, запуск отказывает «связь устарела …», и текст отказа содержит
+«устарела на 91 с» (при пороге 90 с); при «сейчас», равном
 `last_seen_at` плюс `config.OBSERVATION_STALE_SECONDS`, запуск проходит блок
 свежести (отказа «связь устарела …» нет). Подменённый `watch.datetime` считает
 вызовы `now`: за один вызов `_launch_observation` — ровно один вызов `now`.
@@ -117,9 +120,12 @@ datetime>)`; настоящее время машины при этом от `la
 плюс `config.OBSERVATION_STALE_SECONDS`, — `True`. Ловит мутацию: копия
 разбора `last_seen_at` на собственном `datetime.now` модуля `artel`.
 
-AC-6. `watch.observation_process_state(row)` при `row["pid"] is None` возвращает
-`"unstarted"` при пустом `last_seen_at`, `"fresh"` при возрасте не больше
-порога и `"stale"` при большем.
+AC-6. `watch.observation_process_state(row)` при `row["pid"] is None` и
+текущем времени, зафиксированном подменой `mock.patch.object(watch,
+"datetime", <подкласс datetime>)`, возвращает `"unstarted"` при `last_seen_at`
+`None` и `""`, `"fresh"` при возрасте связи ровно
+`config.OBSERVATION_STALE_SECONDS` и `"stale"` при возрасте
+`OBSERVATION_STALE_SECONDS + 1` с.
 
 AC-7. Формат записи `last_seen_at`, `started_at`, `created_at` в таблице
 `observations` и код записи в `orchestrator/store.py` не меняются; файлы
