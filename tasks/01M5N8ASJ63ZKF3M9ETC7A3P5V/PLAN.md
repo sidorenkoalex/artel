@@ -2,7 +2,7 @@
 task: 01M5N8ASJ63ZKF3M9ETC7A3P5V
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -156,11 +156,17 @@ test_task_component_places.py.
   test_task_component_places.py, test_01m4jd36367e5cg3gxdv429xte_amend_pult.py.
 
 Все эти файлы прогнаны одной командой: `python3 -m pytest <файлы>
--p no:cacheprovider -p timeout -o timeout=300`. Итог — в разделе «Результаты».
+-p no:cacheprovider -p timeout -o timeout=300 -n 0`. Итог — в разделе «Результаты».
 Долгоживущие файлы задачи прогнаны отдельно: 7 passed, 74 subtests passed.
 
 ## Результаты
-RESULT_PLACEHOLDER
+- Адресный прогон 59 файлов выше (последовательно, `-n 0`, код c401a42a):
+  `631 passed, 794 subtests passed in 681.75s`, код выхода 0.
+- Долгоживущие файлы задачи: `7 passed, 74 subtests passed`.
+- Планка (`artel.py plank-run 01M5N8ASJ63ZKF3M9ETC7A3P5V`): `4 passed`,
+  код выхода 0.
+- Карта: `python3 scripts/codebase_map.py` на c401a42a меняет только
+  `built_at_sha`, содержимое свежее.
 
 ## Покрытие требований
 
