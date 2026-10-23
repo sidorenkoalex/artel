@@ -862,7 +862,7 @@ def scan_acceptance_tests(tdir: Path, rule: "PlankRule | None" = None
     Статический разбор текстом, без импорта файлов — теста без разметки
     `test_ac<n>_` парсер не увидит, и это осознанно: содержательность
     (тест действительно проверяет то, что заявляет) — дело ревью и прогона
-    unittest на гейте (orchestrator/acceptance.py), не структурной проверки.
+    pytest на гейте (orchestrator/acceptance.py), не структурной проверки.
 
     Только `test_*.py` (SPEC T081) — тот же приём, что `scan_redness_markers`
     (T064): маркер или тест-метод во вспомогательном файле вроде
@@ -1736,13 +1736,15 @@ def _tests_import_bindings(tree: ast.Module, path) -> dict:
 class _Module(NamedTuple):
     """Разобранный модуль для поиска помощников: путь (`None` — свой файл
     без названного пути), текст, импортированные имена нормальной формы,
-    определения верхнего уровня и привязки импорта."""
+    определения верхнего уровня, привязки импорта и дерево (по нему ищутся
+    фикстуры модуля)."""
 
     path: str | None
     source: str
     imports: set
     defs: dict
     bindings: dict
+    tree: ast.Module | None = None
 
 
 def _tests_module_path(dotted: str) -> str | None:
@@ -1758,7 +1760,7 @@ def _module_entry(path, source: str, tree: ast.Module,
             if isinstance(node, (*_FUNCTION_NODES, ast.ClassDef))}
     package_path = modules.import_path(path) if modules and path else path
     return _Module(path, source, _module_imports(tree), defs,
-                   _tests_import_bindings(tree, package_path))
+                   _tests_import_bindings(tree, package_path), tree)
 
 
 class TestModules:
@@ -1946,6 +1948,301 @@ def _helper_calls(func: ast.AST, scope: _HelperScope, chain: list) -> list:
     return [helper for _line, _col, helper in helpers]
 
 
+# Фикстуры pytest (ADR-0027 пп. 3-5; SPEC 01M5N9WK9SGB7KDYJP736DP6CV,
+# требования 1-3): фикстура подставляется по имени параметра, а не
+# вызовом, и `_helper_calls` её не видит. Утверждений у фикстуры нет
+# (ADR-0027 п. 3) — тест получает от неё записи ДАННЫХ: литералы тела
+# фикстуры и её помощников первого уровня. Имена pytest распознаются и
+# через псевдонимы импорта (`import pytest as pt`, `from pytest import
+# fixture`).
+PYTEST_MODULE = "pytest"
+FIXTURE_DECORATOR = "pytest.fixture"
+USEFIXTURES_MARK = "pytest.mark.usefixtures"
+FIXTURES_MODULE_PATH = "tests/fixtures.py"
+FIXTURE_DATA_KIND = "данные фикстуры"
+# Параметры, которые фикстурой своего файла не разрешаются: получатель
+# метода и встроенная фикстура `request`.
+_NOT_FIXTURE_PARAMS = frozenset(("self", "cls", "request"))
+
+
+class _FixtureDatum(ast.AST):
+    """Узел записи данных фикстуры — свой вид записи `_assertion_records`,
+    не утверждение (требование 3): `value` — литерал (константа либо знак
+    над числовой константой, как у `_literal`). У него нет `func`, вид
+    ему даёт `_assertion_kind`, ролей строгости — нет (`_constant_roles`)."""
+
+    _fields = ("value",)
+
+
+def _pytest_aliases(tree: ast.Module) -> dict:
+    """{имя: точечное имя pytest, к которому оно привязано}: `import
+    pytest as pt` → `pt: pytest`, `from pytest import mark as m` → `m:
+    pytest.mark`. Само `pytest` видно всегда."""
+    names = {PYTEST_MODULE: PYTEST_MODULE}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname and alias.name.split(".", 1)[0] == PYTEST_MODULE:
+                    names[alias.asname] = alias.name
+        elif isinstance(node, ast.ImportFrom) and not node.level and \
+                node.module and \
+                node.module.split(".", 1)[0] == PYTEST_MODULE:
+            for alias in node.names:
+                if alias.name != "*":
+                    names[alias.asname or alias.name] = \
+                        f"{node.module}.{alias.name}"
+    return names
+
+
+def _pytest_name(node: ast.AST, aliases: dict) -> str:
+    """Каноническое имя pytest узла (`pt.mark.xfail` → `pytest.mark.xfail`,
+    `xfail` после `from pytest import xfail` → `pytest.xfail`); вызов
+    разворачивается. Пустая строка — не имя pytest."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    dotted = _dotted_name(node)
+    if not dotted:
+        return ""
+    first, sep, rest = dotted.partition(".")
+    bound = aliases.get(first)
+    return f"{bound}{sep}{rest}" if bound else ""
+
+
+def _fixture_decorator(node: ast.AST, aliases: dict) -> ast.AST | None:
+    """Декоратор `pytest.fixture` функции `node` (с вызовом или без);
+    `None` — функция не фикстура."""
+    for decorator in getattr(node, "decorator_list", []):
+        if _pytest_name(decorator, aliases) == FIXTURE_DECORATOR:
+            return decorator
+    return None
+
+
+def _decorator_keyword(decorator: ast.AST, name: str) -> ast.keyword | None:
+    if isinstance(decorator, ast.Call):
+        for kw in decorator.keywords:
+            if kw.arg == name:
+                return kw
+    return None
+
+
+def _fixture_name(node: ast.AST, aliases: dict) -> str | None:
+    """Имя, под которым pytest регистрирует фикстуру `node`: строка
+    `name=` декоратора либо имя функции; `None` — не фикстура."""
+    decorator = _fixture_decorator(node, aliases)
+    if decorator is None:
+        return None
+    kw = _decorator_keyword(decorator, "name")
+    if kw is not None and isinstance(kw.value, ast.Constant) and \
+            isinstance(kw.value.value, str):
+        return kw.value.value
+    return node.name
+
+
+def _is_autouse(node: ast.AST, aliases: dict) -> bool:
+    kw = _decorator_keyword(_fixture_decorator(node, aliases), "autouse")
+    return kw is not None and isinstance(kw.value, ast.Constant) and \
+        kw.value.value is True
+
+
+def _parameter_names(func: ast.AST) -> list:
+    a = func.args
+    return [arg.arg for arg in a.posonlyargs + a.args + a.kwonlyargs]
+
+
+class _Fixture(NamedTuple):
+    """Объявление фикстуры: модуль, узел функции, имя регистрации,
+    класс-владелец (`None` — фикстура уровня модуля)."""
+
+    module: _Module
+    node: ast.AST
+    name: str
+    owner: ast.ClassDef | None
+
+
+def _fixture_table(module: _Module | None, body=None,
+                   owner: ast.ClassDef | None = None) -> dict:
+    """{имя регистрации: _Fixture} фикстур тела `body` (по умолчанию —
+    верхний уровень модуля); последнее объявление имени побеждает."""
+    if module is None or module.tree is None:
+        return {}
+    aliases = _pytest_aliases(module.tree)
+    table: dict = {}
+    for node in module.tree.body if body is None else body:
+        if isinstance(node, _FUNCTION_NODES):
+            name = _fixture_name(node, aliases)
+            if name is not None:
+                table[name] = _Fixture(module, node, name, owner)
+    return table
+
+
+def _parametrize_argnames(call: ast.Call) -> list:
+    """Имена аргументов вызова `parametrize`: строка (через запятую) либо
+    список/кортеж строк, первым аргументом или `argnames=`."""
+    value = call.args[0] if call.args else next(
+        (kw.value for kw in call.keywords if kw.arg == "argnames"), None)
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return [n.strip() for n in value.value.split(",") if n.strip()]
+    if isinstance(value, (ast.List, ast.Tuple)):
+        return [e.value for e in value.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return []
+
+
+def _indirect_argnames(call: ast.Call, names: list) -> set:
+    """Имена `parametrize`, которые `indirect=` отдаёт фикстурам."""
+    kw = _decorator_keyword(call, "indirect")
+    if kw is None:
+        return set()
+    if isinstance(kw.value, ast.Constant):
+        return set(names) if kw.value.value is True else set()
+    if isinstance(kw.value, (ast.List, ast.Tuple)):
+        return {e.value for e in kw.value.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+    return set()
+
+
+def _data_literals(func: ast.AST) -> list:
+    """Литералы тела функции по порядку обхода (`_literal_positions`):
+    константы любых операторов, в том числе аргументы вызовов; знак над
+    числом входит в литерал. Докстринг — не данные."""
+    body = func.body
+    if body and isinstance(body[0], ast.Expr) and \
+            isinstance(body[0].value, ast.Constant) and \
+            isinstance(body[0].value.value, str):
+        body = body[1:]
+    return [node for statement in body
+            for node, _value in _literal_positions(statement)]
+
+
+class _FixtureScope:
+    """Фикстуры, видимые тестам файла `own` (требование 1): своего класса,
+    своего модуля, затем `tests/fixtures.py` той же стороны — его подключает
+    `pytest_plugins` без импорта (ADR-0027 п. 4). Общий модуль читается
+    только при промахе своего файла и только по правилу артели."""
+
+    def __init__(self, own: _Module, modules: TestModules | None):
+        self.own = own
+        self.modules = modules
+        self.table = _fixture_table(own)
+        self.aliases = _pytest_aliases(own.tree) if own.tree else {}
+        self._shared = None
+
+    def shared(self) -> dict:
+        if self._shared is None:
+            module = None
+            if self.modules is not None and not self.modules.external and \
+                    self.own.path != FIXTURES_MODULE_PATH:
+                module = self.modules.module(FIXTURES_MODULE_PATH)
+            self._shared = _fixture_table(module)
+        return self._shared
+
+    def resolve(self, name: str, classwide: dict, requester=None):
+        """Фикстура имени `name`; фикстура общего модуля видит только общий
+        модуль, одноимённая фикстура не разрешается в саму себя."""
+        if requester is not None and requester.module is not self.own:
+            levels = (self.shared,)
+        else:
+            levels = (lambda: classwide, lambda: self.table, self.shared)
+        for level in levels:
+            found = level().get(name)
+            if found is not None and \
+                    (requester is None or found.node is not requester.node):
+                return found
+        return None
+
+    def requested(self, func: ast.AST, cls: ast.ClassDef | None,
+                  classwide: dict) -> list:
+        """Имена фикстур теста по порядку: `autouse` своего файла, параметры
+        (кроме имён аргументов `parametrize`, не отданных `indirect=`),
+        `usefixtures` на тесте, на классе и в `pytestmark`."""
+        marks = list(func.decorator_list)
+        if cls is not None:
+            marks += cls.decorator_list + _pytestmark_marks(cls.body)
+        marks += _pytestmark_marks(self.own.tree.body)
+        parametrized, indirect, used = set(), set(), []
+        for mark in marks:
+            if not isinstance(mark, ast.Call):
+                continue
+            if _is_parametrize(mark):
+                names = _parametrize_argnames(mark)
+                parametrized |= set(names)
+                indirect |= _indirect_argnames(mark, names)
+            elif _pytest_name(mark, self.aliases) == USEFIXTURES_MARK:
+                used += [a.value for a in mark.args
+                         if isinstance(a, ast.Constant)
+                         and isinstance(a.value, str)]
+        autouse = [f.name for table in (self.table, classwide)
+                   for f in table.values() if _is_autouse(f.node, self.aliases)]
+        params = [p for p in _parameter_names(func)
+                  if p not in _NOT_FIXTURE_PARAMS
+                  and (p not in parametrized or p in indirect)]
+        return list(dict.fromkeys(autouse + params + used))
+
+    def records(self, func: ast.AST, cls: ast.ClassDef | None) -> list:
+        """Записи данных фикстур теста `func`: каждая фикстура — с
+        помощниками первого уровня, фикстура, запрошенная фикстурой, —
+        одним уровнем, без своих помощников."""
+        classwide = _fixture_table(self.own, cls.body, cls) \
+            if cls is not None else {}
+        found, seen = [], set()
+
+        def trace(fixture: _Fixture, nested: bool) -> None:
+            if id(fixture.node) in seen:
+                return
+            seen.add(id(fixture.node))
+            found.extend(self._data(fixture, helpers=not nested))
+            if nested:
+                return
+            for name in _parameter_names(fixture.node):
+                if name in _NOT_FIXTURE_PARAMS:
+                    continue
+                inner = self.resolve(
+                    name, classwide if fixture.owner is not None else {},
+                    fixture)
+                if inner is not None:
+                    trace(inner, True)
+
+        for name in self.requested(func, cls, classwide):
+            fixture = self.resolve(name, classwide)
+            if fixture is not None:
+                trace(fixture, False)
+        return found
+
+    def _data(self, fixture: _Fixture, helpers: bool) -> list:
+        module = fixture.module
+        path = module.path or ""
+        origin = None if module is self.own else \
+            (f"фикстура {fixture.name}", path)
+        parts = [(None, _data_literals(fixture.node))]
+        if helpers:
+            # Помощники — функции модуля фикстуры и методы её класса;
+            # функции чужих модулей и второй уровень в запись не идут
+            # (SPEC, «Не входит»).
+            scope = _HelperScope(module, None)
+            chain = scope.class_chain(fixture.owner) \
+                if fixture.owner is not None else []
+            aliases = _pytest_aliases(module.tree)
+            for _module, helper, _origin in _helper_calls(fixture.node, scope,
+                                                          chain):
+                if helper is not fixture.node and \
+                        _fixture_name(helper, aliases) is None:
+                    parts.append((helper.name, _data_literals(helper)))
+        records, index = [], 0
+        for helper, literals in parts:
+            where = fixture.name if helper is None else \
+                f"{fixture.name} → помощник {helper}"
+            for literal in literals:
+                text = f"{FIXTURE_DATA_KIND} {where} ({path}): " \
+                       f"{ast.unparse(literal)}"
+                if len(text) > ASSERTION_TEXT_LIMIT:
+                    text = text[:ASSERTION_TEXT_LIMIT - 1] + "…"
+                records.append(((path, fixture.name, index, ast.dump(literal)),
+                                text, _FixtureDatum(value=copy.deepcopy(literal)),
+                                origin))
+                index += 1
+        return records
+
+
 def test_assertions(source, path=None,
                     modules: TestModules | None = None) -> dict[str, list] | None:
     """Утверждения тестовых методов текста `source` по квалифицированному
@@ -1972,12 +2269,19 @@ def _assertion_records(source, path=None,
     оба вида ответа, чтобы различение смены ожидания не разошлось с
     наблюдением. Происхождение — `None` у утверждений самого метода,
     помощника своего класса и функции своего модуля, иначе (`Класс.метод`
-    либо имя функции, путь файла помощника)."""
+    либо имя функции, путь файла помощника).
+
+    За утверждениями метода идут записи данных фикстур, которые он
+    запрашивает (`_FixtureScope`, SPEC 01M5N9WK9SGB7KDYJP736DP6CV,
+    требование 3): ключ — (файл фикстуры, имя фикстуры, номер литерала,
+    `ast.dump` литерала), узел — `_FixtureDatum`, происхождение — `None` у
+    фикстуры своего файла, иначе (`фикстура <имя>`, путь её файла)."""
     tree = _parse_or_none(source)
     if tree is None:
         return None
     own = _module_entry(path, source, tree, modules)
     scope = _HelperScope(own, modules)
+    fixtures = _FixtureScope(own, modules)
 
     result: dict[str, list] = {}
     for name, func in _collect_qualified_test_functions(tree).items():
@@ -1992,6 +2296,8 @@ def _assertion_records(source, path=None,
             if helper is not func:
                 found += [(*item, origin) for item in _own_assertions(
                     helper, module.source, module.imports)]
+        found += fixtures.records(
+            func, cls if isinstance(cls, ast.ClassDef) else None)
         result[name] = found
     return result
 
@@ -2001,10 +2307,79 @@ def weakened_helpers(base_source, head_source) -> set:
     потеряли хоть одно своё утверждение (по нормальной форме) или исчезли
     вместе с ними: по ним гейт ищет вызывающих в файлах вне диффа (SPEC
     01M4G8N9KBTVNNT7YGZ59Q5WBF, требование 2). Неразбираемая сторона base —
-    пусто, head — как пустой файл."""
+    пусто, head — как пустой файл.
+
+    Утверждений у фикстуры нет, поэтому фикстура и помощник, которого она
+    зовёт, называются по смене тела (`_changed_fixture_names`, SPEC
+    01M5N9WK9SGB7KDYJP736DP6CV, требование 5)."""
     base, head = _helper_keys(base_source), _helper_keys(head_source)
     return {name for (_cls, name), keys in base.items()
-            if Counter(keys) - Counter(head.get((_cls, name), ()))}
+            if Counter(keys) - Counter(head.get((_cls, name), ()))} | \
+        _changed_fixture_names(base_source, head_source)
+
+
+def _function_dumps(tree: ast.Module) -> dict:
+    """{(класс либо `None`, имя): `ast.dump` узла} функций модуля и методов
+    классов верхнего уровня."""
+    found: dict = {}
+    for node in tree.body:
+        if isinstance(node, _FUNCTION_NODES):
+            found[(None, node.name)] = ast.dump(node)
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, _FUNCTION_NODES):
+                    found[(node.name, sub.name)] = ast.dump(sub)
+    return found
+
+
+def _changed_fixture_names(base_source, head_source) -> set:
+    """Имена фикстур текста base с иным телом в head (или исчезнувших),
+    помощников первого уровня этих фикстур с иным телом и фикстур своего
+    файла, которые зовут такого помощника или запрашивают такую фикстуру:
+    поиск вызывающих вне диффа идёт по словам, и тест, запросивший
+    фикстуру, найдётся только по её имени (требование 5)."""
+    base_tree = _parse_or_none(base_source)
+    if base_tree is None:
+        return set()
+    head_tree = _parse_or_none(head_source) or ast.Module(body=[],
+                                                          type_ignores=[])
+    before, after = _function_dumps(base_tree), _function_dumps(head_tree)
+    aliases = _pytest_aliases(base_tree)
+    functions = []
+    for node in base_tree.body:
+        if isinstance(node, _FUNCTION_NODES):
+            functions.append((None, node))
+        elif isinstance(node, ast.ClassDef):
+            functions += [(node.name, sub) for sub in node.body
+                          if isinstance(sub, _FUNCTION_NODES)]
+    fixtures = [(owner, func, _fixture_name(func, aliases))
+                for owner, func in functions
+                if _fixture_name(func, aliases) is not None]
+
+    def altered(key) -> bool:
+        return key in before and after.get(key) != before[key]
+
+    changed = {name for owner, func, name in fixtures
+               if altered((owner, func.name))}
+    names = set(changed)
+    for owner, func, name in fixtures:
+        for call in ast.walk(func):
+            if not isinstance(call, ast.Call):
+                continue
+            callee = call.func
+            if isinstance(callee, ast.Name):
+                key = (None, callee.id)
+            elif owner is not None and isinstance(callee, ast.Attribute) and \
+                    isinstance(callee.value, ast.Name) and \
+                    callee.value.id == "self":
+                key = (owner, callee.attr)
+            else:
+                continue
+            if key != (owner, func.name) and altered(key):
+                names |= {key[1], name}
+        if changed & set(_parameter_names(func)) - {name}:
+            names.add(name)
+    return names
 
 
 def changed_classes(base_source, head_source, path=None,
@@ -2214,9 +2589,12 @@ def _masked_form(node: ast.AST) -> str:
 
 
 def _assertion_kind(node: ast.AST) -> str:
-    """Вид утверждения: `assert` либо имя вызываемого (последний сегмент)."""
+    """Вид утверждения: `assert` либо имя вызываемого (последний сегмент);
+    у записи данных фикстуры — `FIXTURE_DATA_KIND`."""
     if isinstance(node, ast.Assert):
         return "assert"
+    if isinstance(node, _FixtureDatum):
+        return FIXTURE_DATA_KIND
     func = node.func
     if isinstance(func, ast.Attribute):
         return func.attr
@@ -2281,8 +2659,13 @@ def _constant_roles(node: ast.AST) -> dict:
     требования 9 умеет оценить строгость. Роль — кортеж: `("equality",)`,
     `("tolerance", имя, слабее_если_больше)`, `("regex",)`,
     `("regex_not",)`, `("membership", отрицание)`, `("order", граница)`;
-    константа без роли — «правило не умеет оценить строгость»."""
+    константа без роли — «правило не умеет оценить строгость».
+
+    У записи данных фикстуры ролей нет (SPEC 01M5N9WK9SGB7KDYJP736DP6CV,
+    требование 3): её правку объявление «Меняемого поведения» не снимает."""
     roles: dict = {}
+    if isinstance(node, _FixtureDatum):
+        return roles
 
     def equality(expr):
         if _literal(expr) is not None:
@@ -4011,7 +4394,10 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
     Линт детерминизма (`lint_errors_from_files`, SPEC
     01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 3) — до фильтра по группе:
     каждый `.py` любой группы, только при `network_addresses` (артель).
-    `lint_base` — {метка: залоченный текст}; см. `lint_errors_from_files`."""
+    `lint_base` — {метка: залоченный текст}; см. `lint_errors_from_files`.
+    Там же и при том же условии — стиль pytest
+    (`pytest_style_errors_from_files`, SPEC 01M5N9WK9SGB7KDYJP736DP6CV,
+    требования 6-7)."""
     errors: list[str] = []
     foreign_explanation = _foreign_import_explanation(project_imports)
     for label, source in files:
@@ -4023,6 +4409,8 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
         if network_addresses and label.endswith(".py"):
             errors += lint_errors_from_files([(label, source)],
                                              lint_base=lint_base)
+            errors += pytest_style_errors_from_files([(label, source)],
+                                                     lint_base=lint_base)
         group, _error = plank_file_group(source, labelled)
         if group != GROUP_LONG_LIVED:
             continue
@@ -4083,6 +4471,211 @@ def lint_errors_from_files(files: list[tuple[str, str]], *,
             if qualname in base and base[qualname] == current.get(qualname):
                 continue
             errors += [f"{key}: {hit}" for hit in hits]
+    return errors
+
+
+# Стиль pytest в файлах планки и долгоживущих файлах (ADR-0027 пп. 3-5;
+# SPEC 01M5N9WK9SGB7KDYJP736DP6CV, требования 6-7): фикстура готовит данные
+# и не утверждает, пропуск и варианты видны в сигнатуре и декораторах теста,
+# стили в одном файле не смешиваются.
+PYTEST_STYLE_MODULE_LABEL = "<модуль>"
+_TEST_BODY_SKIP_CALLS = frozenset(("pytest.xfail", "pytest.importorskip"))
+_FIXTURE_SKIP_CALLS = frozenset(("pytest.skip", "pytest.xfail",
+                                 "pytest.importorskip"))
+_PYTEST_ASSERTION_CALLS = ASSERTION_PYTEST_CALLS | {"pytest.fail"}
+GENERATE_TESTS_HOOK = "pytest_generate_tests"
+GETFIXTUREVALUE_NAME = "getfixturevalue"
+STYLE_ASSERTION_IN_FIXTURE = ("утверждение в фикстуре — фикстура готовит "
+                              "данные, утверждает тест (ADR-0027)")
+STYLE_HIDDEN_SKIP = "скрытый пропуск — пропуск ставится меткой теста с причиной"
+STYLE_HIDDEN_VARIANTS = ("скрытые варианты — варианты ставятся "
+                         "`parametrize` литералами на тесте")
+STYLE_GETFIXTUREVALUE = ("request.getfixturevalue( — фикстура запрашивается "
+                         "параметром теста")
+STYLE_FIXTURE_NAME = ("@pytest.fixture(name=…) — имя фикстуры расходится с "
+                      "именем функции")
+STYLE_MIXED = ("смешение стилей: тест-функции модуля и класс с тестовыми "
+               "методами в одном файле — выбери один стиль (ADR-0027)")
+
+
+class _StyleViolation(NamedTuple):
+    """Нарушение стиля: адрес («Класс::функция» либо «<модуль>»), строка,
+    текст и чем его прощает залоченная база: имена функций, чей `ast.dump`
+    обязан совпасть с базой, либо `ast.dump` оператора верхнего уровня."""
+
+    name: str
+    line: int
+    text: str
+    functions: tuple = ()
+    statement: str = ""
+
+
+def _style_assertion(node: ast.AST, aliases: dict) -> bool:
+    return _is_assertion(node) or (
+        isinstance(node, ast.Call)
+        and _pytest_name(node.func, aliases) in _PYTEST_ASSERTION_CALLS)
+
+
+def _calls_outside_defs(node: ast.AST):
+    """Вызовы оператора уровня модуля вне тел функций, классов и лямбд."""
+    if isinstance(node, (*_FUNCTION_NODES, ast.ClassDef, ast.Lambda)):
+        return
+    if isinstance(node, ast.Call):
+        yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _calls_outside_defs(child)
+
+
+def _indirect_marks(marks: list) -> list:
+    return [mark for mark in marks if _is_parametrize(mark)
+            and _decorator_keyword(mark, "indirect") is not None]
+
+
+def _style_violations(tree: ast.Module) -> list:
+    aliases = _pytest_aliases(tree)
+    functions = dict(test_lint.top_level_functions(tree))
+    tests = _collect_qualified_test_functions(tree)
+    found: list = []
+
+    def add(name, line, text, involved=None, statement=""):
+        found.append(_StyleViolation(name, line, text,
+                                     tuple(involved or (name,)), statement))
+
+    def calls(node):
+        return [sub for sub in ast.walk(node) if isinstance(sub, ast.Call)]
+
+    for qualname, node in functions.items():
+        owner = qualname.rpartition(TEST_NAME_SEP)[0]
+        decorator = _fixture_decorator(node, aliases)
+        if decorator is not None:
+            if _decorator_keyword(decorator, "params") is not None:
+                add(qualname, decorator.lineno,
+                    f"@pytest.fixture(params=…) — {STYLE_HIDDEN_VARIANTS}")
+            if _decorator_keyword(decorator, "name") is not None:
+                add(qualname, decorator.lineno, STYLE_FIXTURE_NAME)
+            for sub in ast.walk(node):
+                if _style_assertion(sub, aliases):
+                    add(qualname, sub.lineno, STYLE_ASSERTION_IN_FIXTURE)
+            for call in calls(node):
+                canonical = _pytest_name(call.func, aliases)
+                if canonical in _FIXTURE_SKIP_CALLS:
+                    add(qualname, call.lineno,
+                        f"{canonical}( в фикстуре — {STYLE_HIDDEN_SKIP}")
+                # Помощник первого уровня: функция модуля либо метод класса
+                # фикстуры — его утверждение тоже утверждение фикстуры.
+                callee = call.func
+                helper = None
+                if isinstance(callee, ast.Name):
+                    helper = callee.id
+                elif owner and isinstance(callee, ast.Attribute) and \
+                        isinstance(callee.value, ast.Name) and \
+                        callee.value.id == "self":
+                    helper = f"{owner}{TEST_NAME_SEP}{callee.attr}"
+                target = functions.get(helper)
+                if target is None or target is node or \
+                        _fixture_decorator(target, aliases) is not None:
+                    continue
+                for sub in ast.walk(target):
+                    if _style_assertion(sub, aliases):
+                        add(helper, sub.lineno,
+                            f"утверждение в помощнике фикстуры {qualname} — "
+                            f"{STYLE_ASSERTION_IN_FIXTURE}", (helper, qualname))
+        if qualname in tests:
+            for call in calls(node):
+                canonical = _pytest_name(call.func, aliases)
+                if canonical in _TEST_BODY_SKIP_CALLS:
+                    add(qualname, call.lineno,
+                        f"{canonical}( в теле теста — {STYLE_HIDDEN_SKIP}")
+            for mark in _indirect_marks(node.decorator_list):
+                add(qualname, mark.lineno,
+                    f"indirect= у parametrize — {STYLE_HIDDEN_VARIANTS}")
+        if node.name == GENERATE_TESTS_HOOK:
+            add(qualname, node.lineno,
+                f"хук {GENERATE_TESTS_HOOK} — {STYLE_HIDDEN_VARIANTS}")
+        for call in calls(node):
+            if isinstance(call.func, ast.Attribute) and \
+                    call.func.attr == GETFIXTUREVALUE_NAME:
+                add(qualname, call.lineno, STYLE_GETFIXTUREVALUE)
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            marks = node.decorator_list + _pytestmark_marks(node.body)
+            for mark in _indirect_marks(marks):
+                add(node.name, mark.lineno,
+                    f"indirect= у parametrize — {STYLE_HIDDEN_VARIANTS}")
+            continue
+        if isinstance(node, _FUNCTION_NODES):
+            continue
+        statement = ast.dump(node)
+        if _is_pytestmark_assign(node):
+            for mark in _indirect_marks(_pytestmark_marks([node])):
+                add(PYTEST_STYLE_MODULE_LABEL, mark.lineno,
+                    f"indirect= у parametrize — {STYLE_HIDDEN_VARIANTS}",
+                    (), statement)
+            continue
+        for call in _calls_outside_defs(node):
+            canonical = _pytest_name(call.func, aliases)
+            if canonical in _FIXTURE_SKIP_CALLS:
+                add(PYTEST_STYLE_MODULE_LABEL, call.lineno,
+                    f"{canonical}( на уровне модуля вне pytestmark — "
+                    f"{STYLE_HIDDEN_SKIP}", (), statement)
+    return found
+
+
+def _mixes_styles(tree: ast.Module) -> bool:
+    """В модуле есть и тест-функция верхнего уровня, и класс с тестовыми
+    методами (требование 7)."""
+    tests = _collect_qualified_test_functions(tree)
+    return any(TEST_NAME_SEP not in name for name in tests) and \
+        any(TEST_NAME_SEP in name for name in tests)
+
+
+def _class_and_function_dumps(tree: ast.Module) -> dict:
+    found = {name: ast.dump(node)
+             for name, node in test_lint.top_level_functions(tree)}
+    found.update({node.name: ast.dump(node) for node in tree.body
+                  if isinstance(node, ast.ClassDef)})
+    return found
+
+
+def pytest_style_errors_from_files(files: list[tuple[str, str]], *,
+                                   lint_base: dict[str, str] | None = None
+                                   ) -> list[str]:
+    """Нарушения стиля pytest (SPEC 01M5N9WK9SGB7KDYJP736DP6CV, требования
+    6-7) по (label, текст) парам: «<метка>::<функция>: строка N:
+    <нарушение>», у модульной формы — «<метка>::<модуль>: …»; смешение
+    стилей — «<метка>: <нарушение>». Файл с синтаксической ошибкой
+    пропускается — его называет сухой сбор.
+
+    `lint_base` — {метка: залоченный текст} (`amend-tests`), как у
+    `lint_errors_from_files`: нарушение не считается, если функции, на
+    которых оно стоит, в базе под тем же именем совпадают по `ast.dump`;
+    модульное — если среди операторов верхнего уровня базы есть оператор с
+    тем же `ast.dump`; смешение — если залоченный текст стили смешивал."""
+    errors: list[str] = []
+    for label, source in files:
+        tree = _parse_or_none(source)
+        if tree is None:
+            continue
+        base_tree = _parse_or_none(lint_base.get(label)) \
+            if lint_base is not None else None
+        base = _class_and_function_dumps(base_tree) if base_tree else {}
+        base_statements = {ast.dump(node) for node in base_tree.body} \
+            if base_tree else set()
+        current = _class_and_function_dumps(tree)
+        for violation in _style_violations(tree):
+            if violation.statement:
+                if violation.statement in base_statements:
+                    continue
+            elif all(name in base and base[name] == current.get(name)
+                     for name in violation.functions):
+                continue
+            line = f"{label}::{violation.name}: строка {violation.line}: " \
+                   f"{violation.text}"
+            if line not in errors:
+                errors.append(line)
+        if _mixes_styles(tree) and not (base_tree and _mixes_styles(base_tree)):
+            errors.append(f"{label}: {STYLE_MIXED}")
     return errors
 
 
