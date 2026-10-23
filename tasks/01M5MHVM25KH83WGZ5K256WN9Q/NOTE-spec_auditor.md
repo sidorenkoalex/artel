@@ -1,13 +1,14 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC подтверждены: artel.py:950–958, artel.py:1066–1071, watch.py:320–326, config.py:82–83; watch.py:27 импортирует `datetime` по имени.
-- Других `fromisoformat` с "last_seen_at" в orchestrator/ нет.
-- tests/test_01m446x1b7fb8jdmyfp5apwtve_watch_progress.py:157 уже подменяет watch.datetime; после правки это затронет и свежесть artel.py (там artel.main только для observe stop — безвредно).
-- Вердикт concerns: линтер AC-3 обходится промежуточной переменной; «время берётся один раз» в AC-4 без способа проверки.
+- Аудит, круг 2 (spec_sha 42d12fe1). Факты SPEC подтверждены: artel.py:949–958, artel.py:1066–1071, watch.py:320–326, config.py:82–83. watch.py:27 и artel.py:703 импортируют `datetime` каждый своим именем.
+- Решение Оператора №1 (п. 1–3) в AC-4/AC-5/AC-7 отражено полностью.
+- Вердикт concerns, два мелких пробела:
+  - AC-6 не фиксирует время и не проверяет «ровно порог»: мутация `<` в observation_process_state остаётся зелёной;
+  - AC-4 не фиксирует число в тексте «устарела на N с»: второй расчёт возраста для сообщения на artel.datetime проходит и линтер, и счётчик.
 
 ## Не сработало
-- sed/cat через cd в Bash отклоняется правилом — читать файлы через Read, grep работает.
+- В Bash отклоняются `$?` (simple_expansion) и сцепки с `ls`; guard запускать без echo.
 
 ## Где остановился
 - SPEC-AUDIT.md готов (status ready, verdict concerns), guard ок.
