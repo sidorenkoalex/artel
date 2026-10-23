@@ -27,7 +27,9 @@ verifying` это временное дерево ветки с наложенн
 import contextlib
 import random
 import re
+import shutil
 import subprocess
+import tempfile
 import sys
 import types
 import unittest
@@ -109,6 +111,40 @@ def tz_appendix_diffs(text: str) -> list[str]:
             re.findall(r"^```diff\n(.*?)\n```\s*$", section, re.M | re.S)]
 
 
+def appendix_tree() -> Path:
+    """Копия `skills/` и `templates/` дерева прогона с наложенными
+    приложениями PLAN задачи (правка через amend-tests 23.10: ворота мержа
+    гоняют планку после подтяжки main до наложения приложений, и промпт с
+    дерева прогона нёс бы прежний текст скилов). Приложение, уже
+    наложенное на дерево прогона (`git apply --reverse --check`), не
+    накладывается повторно; неприменимое ни в одну сторону — отказ теста."""
+    plan = artifact_text("PLAN.md")
+    if plan is None:
+        raise AssertionError("PLAN.md задачи нет — приложения не наложить")
+    appendices, errors = guard.plan_appendices(plan)
+    if errors:
+        raise AssertionError(f"приложения PLAN не разобраны: {errors}")
+    tmp = Path(tempfile.mkdtemp())
+    for name in ("skills", "templates"):
+        shutil.copytree(Path(CODE_ROOT) / name, tmp / name)
+    for number, appendix in enumerate(appendices, 1):
+        patch = tmp / f"appendix-{number}.diff"
+        patch.write_text(appendix.diff, encoding="utf-8")
+        forward = subprocess.run(["git", "apply", "--check", str(patch)],
+                                 cwd=tmp, capture_output=True, text=True)
+        if forward.returncode == 0:
+            subprocess.run(["git", "apply", str(patch)], cwd=tmp,
+                           capture_output=True, text=True, check=True)
+            continue
+        reverse = subprocess.run(
+            ["git", "apply", "--reverse", "--check", str(patch)],
+            cwd=tmp, capture_output=True, text=True)
+        if reverse.returncode != 0:
+            raise AssertionError(
+                f"приложение {number} неприменимо: {forward.stderr}")
+    return tmp
+
+
 class PromptStand(TmpRootTest):
     """Задачи артели и учебного внешнего проекта в БД песочницы, компоненты
     брифа и ревью-пакет пустые."""
@@ -156,7 +192,8 @@ class PromptStand(TmpRootTest):
         """(id задачи, промпт ревьювера требования 5)."""
         task_id = self.new_task(target, "review")
         mission = self.mission(role_prompt, task_id, target, "reviewer")
-        root = Path(CODE_ROOT)
+        root = appendix_tree()
+        self.addCleanup(shutil.rmtree, root, True)
         skills = "\n\n".join(
             (root / "skills" / f"{name}.md").read_text(encoding="utf-8")
             for name in roles.skills("reviewer"))
