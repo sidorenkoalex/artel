@@ -53,6 +53,14 @@ fetch+checkout свежего `origin/main` (`_fresh_main`), затем по п�
    `tests/test_01m5n8a5jbeq15dchdp95ebdzr_batch_flush.py` (16/16 зелёные,
    2 подтеста) и 19 файлов `tests/`, вызывающих `note`/`doc-commit`/
    `--flush` (257 passed, 267 subtests).
+4. Итерация 2 (REVIEW итерации 1): R1-F1 — `_flush_pending` при явном
+   флаше печатает `NO_BASE_WARNING` и правке конфигурации без `held_base`
+   (проверка базы — до разделения на пакет/конфигурацию; попутный пропуск
+   — прежней строкой, раньше проверки); R1-F2 — `except OSError` в
+   `_flush_batch` снимает правку пути записи с индекса и дерева (`reset` +
+   `_restore_tree`). Тесты `tests/test_notes_batch_flush_edges.py` (3
+   метода, оба сторожа проверены временной мутацией); прогон 8 файлов
+   note/doc-commit вместе с долгоживущим — 136 passed, 11 subtests.
 
 ## Покрытие требований
 
@@ -60,7 +68,7 @@ fetch+checkout свежего `origin/main` (`_fresh_main`), затем по п�
 |---|---|
 | 1 | 2 |
 | 2 | 1, 2 |
-| 3 | 2 |
+| 3 | 2, 4 |
 | 4 | 2 |
 | 5 | 2 |
 | 6 | 2 |

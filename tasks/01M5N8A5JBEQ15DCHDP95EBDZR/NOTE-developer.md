@@ -1,24 +1,24 @@
 # Записка developer — 01M5N8A5JBEQ15DCHDP95EBDZR
 
 ## Выяснено
-- Реализация: `_flush_batch` + помощники (`_fresh_main`, `_build_on_batch`,
-  `_commit_on_batch`, `_sent_line`, `_refused_print`) в `orchestrator/notes.py`;
-  `_flush_pending` делит записи на пакет и правки конфигурации (те — после
-  пакета прежним `_attempt`). Параметр `ref` добавлен в `_build_doc_commit`,
-  `_build_apply`, `_content_already_in_origin`, `_foreign_base_refusal`,
-  `_foreign_backlog_commits` (умолчание `FETCH_HEAD`).
-- `known`: первая вошедшая в пакет — `_known_origin_main` до fetch, k>1 — голова
-  пакета перед ней в первом построении (словарь `knowns` по пути файла).
-- Долгоживущий файл задачи 16/16 зелёный; 19 соседних файлов tests/ про note/
-  doc-commit — 257 passed. Мутация `known = head` краснит оба AC-11.
-- Карта `docs/codebase-map.md` перегенерирована.
+- Итерация 2 закрыла REVIEW итерации 1 (оба помечены fixed в реестре):
+  - R1-F1: `_flush_pending` — попутный пропуск правки конфигурации идёт раньше,
+    проверка `HELD_BASE_KEY`/`NO_BASE_WARNING` теперь ДО разделения на
+    пакет/конфигурацию, поэтому явный флаш снова предупреждает.
+  - R1-F2: `_flush_batch`, `except OSError` — `reset` + `_restore_tree` по
+    `_target_rel(request)`.
+- Новый тест `tests/test_notes_batch_flush_edges.py` (3 метода, на стенде
+  `SuiteGateSandbox`); обе мутации проверены — красные, код возвращён.
+- 8 файлов note/doc-commit + долгоживущий файл задачи: 136 passed, 11 subtests.
+- Карта перегенерирована.
 
 ## Не сработало
-- `pytest -n` запрещён сторожем conftest; `sed -i` и длинные heredoc в Bash
-  отказаны — правки через Edit.
+- Многооперационные Bash (cp; heredoc python) требуют подтверждения — мутации
+  делал через Edit.
 
 ## Где остановился
-- Шаг завершён: PLAN.md status: ready.
+- Шаг завершён, PLAN.md status: ready (шаг 4 в PLAN описывает итерацию 2).
 
 ## Чего не хватило
-- Ничего существенного; SPEC и записка test_author дали всё нужное.
+- `scripts/guard.py` на файле tests/ ругается на frontmatter — гонять его только
+  на артефактах; заявки мутации проверял `guard.test_functions_without_mutation_claim(None, src)`.
