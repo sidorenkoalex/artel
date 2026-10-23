@@ -40,6 +40,15 @@ schema_version: 5
 3. Новый `tests/test_canary_child_row_write.py` (5 тестов, у каждого
    «Ловит мутацию:»; без нагрузки и серий).
 4. `python3 scripts/codebase_map.py` — карта перегенерирована.
+5. Возврат из verifying (CI c82c1f84, прогон 39995616858): сторож
+   `tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py::SleepGuardTreeTest::test_ac1_tests_tree_has_no_global_sleep_patch`
+   засчитал подменой имя шпиона `mock.Mock(name="time.sleep")` в
+   `tests/test_canary_child_row_write.py:60`. Шпион переименован в
+   `name="canary_sleep"`; подмена паузы — по-прежнему
+   `patch_sleep(canary, …)`. Проверка: `python3 -m pytest
+   tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py
+   tests/test_canary_child_row_write.py -p no:xdist` — 9 passed,
+   45 subtests passed.
 
 Проверка: `python3 -m pytest tests/test_canary_child_row_write.py
 tests/test_01m5mvg2b1ygvptzwkb18evghz_row_write_deadline.py
@@ -105,3 +114,7 @@ tests/test_canary_parallel_protection.py tests/test_canary_parallel.py` —
   подменяют глобальный `time.sleep` и ловят паузы `subprocess` — класс уже
   описан в `tests/sandbox.py::TimeWithSleep`; стоит правило в
   skills/test-authoring.md: «шпион sleep — только `patch_sleep`».
+- Сторож `test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py` считает подменой
+  любую строку `time.sleep` в аргументах вызова, включая
+  `mock.Mock(name=…)`. Об этом узнаёшь только по красному CI — тому же
+  правилу в skills/test-authoring.md стоит назвать и этот случай.
