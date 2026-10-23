@@ -1,5 +1,5 @@
 ---
-built_at_sha: 9e993cb624dfad5d7da2a7ad5c997529a55a7152
+built_at_sha: 4797ff16135e42bcfd5e564511bd834c7bebeb90
 ---
 
 # Codebase-map пульта
@@ -2087,6 +2087,8 @@ built_at_sha: 9e993cb624dfad5d7da2a7ad5c997529a55a7152
 - `durations`
 - `path_for`
 - `slowest_block`
+- `slowest_path`
+- `write_slowest`
 
 **Импортирует:** `orchestrator/suite_run.py`
 
@@ -6337,6 +6339,7 @@ built_at_sha: 9e993cb624dfad5d7da2a7ad5c997529a55a7152
 **Публичные функции:**
 - `durations_path`
 - `read_durations`
+- `slowest_path`
 - `worker_name`
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/config.py`, `orchestrator/project_profile.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/suite_lock.py`, `orchestrator/suite_run.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `tests/sandbox.py`

@@ -95,9 +95,19 @@ def path_for(log: Path) -> Path:
     """Файл времени рядом с логом: `<имя лога без .log>.durations.tsv` — не
     под шаблонами номеров логов `*.log` (`suite_run._new_log`,
     `agent_log.new_agent_log`)."""
+    return _beside(log, "durations.tsv")
+
+
+def slowest_path(log: Path) -> Path:
+    """Файл блока «самые медленные» рядом с логом:
+    `<имя лога без .log>.slowest.txt` (ANSWER-1/2 задачи)."""
+    return _beside(log, "slowest.txt")
+
+
+def _beside(log: Path, suffix: str) -> Path:
     log = Path(log)
     stem = log.name[:-len(".log")] if log.name.endswith(".log") else log.name
-    return log.with_name(f"{stem}.durations.tsv")
+    return log.with_name(f"{stem}.{suffix}")
 
 
 class Reader:
@@ -204,3 +214,22 @@ def slowest_block(log: Path) -> str:
              f"самые медленные файлы ({min(len(files), SLOWEST_FILES)} из "
              f"{len(files)}):", *_top(files, SLOWEST_FILES)]
     return "\n".join(lines)
+
+
+def write_slowest(log: Path) -> Path | None:
+    """Пишет блок «самые медленные» по файлу времени лога `log` в
+    `slowest_path(log)`; путь файла — для строки-ссылки отчёта. `None` —
+    блока нет (файла времени нет или в нём нет строк) или файл не записан.
+
+    Блок с id тестов в самом `report` противоречит проверкам отчёта
+    `suite-run` (счёт примеров группы, «отчёт не называет пробу упавшей»),
+    поэтому в отчёт идёт только ссылка (ANSWER-1/2 задачи)."""
+    block = slowest_block(log)
+    if not block:
+        return None
+    path = slowest_path(log)
+    try:
+        path.write_text(block + "\n", encoding="utf-8")
+    except OSError:
+        return None
+    return path

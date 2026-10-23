@@ -696,9 +696,9 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
     if parsed.outcome == acceptance.FULL_SUITE_TIMEOUT and metrics is not None:
         report += "\n" + acceptance.suite_load_line(metrics)
     from . import suite_durations  # suite_durations -> suite_run
-    slowest = suite_durations.slowest_block(log)
-    if slowest:
-        report += "\n" + slowest
+    slowest = suite_durations.write_slowest(log)
+    if slowest is not None:
+        report += f"\nсамые медленные тесты и файлы: {slowest}"
     if tree.note or tree.warning:
         head, _, rest = report.partition("\n")
         report = "\n".join([head, tree.mark("прогон ветки"), rest])

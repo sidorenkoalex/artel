@@ -36,6 +36,28 @@ class SlowestBlockBelowCutTest(unittest.TestCase):
         ])
         self.assertNotIn("test_c", block)
 
+    def test_write_slowest_puts_block_beside_log_only_when_rows(self):
+        """Блок пишется в `<лог>.slowest.txt`; без файла времени и с пустым — файла блока нет.
+
+        Ловит мутацию: файл блока не пишется или пишется под другим именем
+        (под шаблоном `*.log`) — пути и содержимого нет; пустой файл времени
+        даёт файл с одним заголовком — функция отдаёт путь вместо `None`.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "t-suiterun-4.log"
+            self.assertIsNone(suite_durations.write_slowest(log))
+            suite_durations.path_for(log).write_text("", encoding="utf-8")
+            self.assertIsNone(suite_durations.write_slowest(log))
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
+                             ["t-suiterun-4.durations.tsv"])
+            suite_durations.path_for(log).write_text(
+                "tests/test_a.py::test_x\tgw0\tPASSED\t1.500\n",
+                encoding="utf-8")
+            path = suite_durations.write_slowest(log)
+            self.assertEqual(path, Path(tmp) / "t-suiterun-4.slowest.txt")
+            self.assertEqual(path.read_text(encoding="utf-8"),
+                             suite_durations.slowest_block(log) + "\n")
+
 
 if __name__ == "__main__":
     unittest.main()

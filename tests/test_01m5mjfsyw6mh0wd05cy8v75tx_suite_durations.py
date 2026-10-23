@@ -51,6 +51,12 @@ def durations_path(log: Path) -> Path:
     return log.with_name(log.name[:-len(".log")] + ".durations.tsv")
 
 
+def slowest_path(log: Path) -> Path:
+    """`<имя лога без .log>.slowest.txt` рядом с логом (ANSWER-2)."""
+    log = Path(log)
+    return log.with_name(log.name[:-len(".log")] + ".slowest.txt")
+
+
 def read_durations(path: Path) -> dict:
     """(id узла, процесс) -> [исход, секунды] по строкам файла времени:
     повтор id в том же процессе суммируется, исход — худший."""
@@ -482,7 +488,13 @@ class SuiteRunSlowestBlockTest(RealGitSandbox):
             for data in (json.loads(p.read_text(encoding="utf-8"))
                          for p in sorted(acceptance.suite_results_dir().glob(
                              "base-*.json")))]
+        slowest = {name: slowest_path(log) for name, log in calls.items()}
+        for name, path in slowest.items():
+            normal = normal.replace(str(path), f"<блок {name}>")
         return {"report": report, "normal": normal, "result_keys": set(result),
+                "slowest": {name: (path.read_text(encoding="utf-8")
+                                   if path.is_file() else None)
+                            for name, path in slowest.items()},
                 "failed": failed.get("failed"),
                 "log": calls["branch"].read_bytes(), "saved_base": saved_base,
                 "base_rows": base_rows}
@@ -504,7 +516,17 @@ class SuiteRunSlowestBlockTest(RealGitSandbox):
         self.assertTrue(report.startswith(plain["normal"]),
                         f"{where}: отчёт не продолжает прежний:\n{report}\n"
                         f"--- прежний:\n{plain['normal']}")
-        extra = report[len(plain["normal"]):]
+        self.assertEqual(report[len(plain["normal"]):],
+                         "\nсамые медленные тесты и файлы: <блок branch>",
+                         f"{where}: к отчёту не одна строка-ссылка:\n{report}")
+        for name in [*rows["tests"], *rows["files"]]:
+            self.assertNotIn(name, with_file["report"],
+                             f"{where}: имя теста или файла в отчёте")
+        self.assertIsNone(with_file["slowest"].get("base"),
+                          f"{where}: блок по прогону базы")
+        extra = with_file["slowest"]["branch"]
+        self.assertIsNotNone(extra, f"{where}: файла блока нет")
+        self.assertIn("самые медленные", extra, where)
         entries = [line for line in extra.splitlines() if line.startswith(" ")]
         test_entries, file_entries = [], []
         for line in entries:
@@ -548,20 +570,25 @@ class SuiteRunSlowestBlockTest(RealGitSandbox):
                 self.assertNotIn(node, plain["report"], where)
         for node, *_rest in plain["base_rows"]["rows"]:
             self.assertNotIn(node, plain["report"], where)
+        self.assertEqual(plain["slowest"], {name: None
+                                            for name in plain["slowest"]},
+                         f"{where}: файл блока без строк времени")
 
     def test_ac5_report_gets_slowest_block_and_nothing_else_changes(self):
-        """Отчёт `suite-run` дописывает «самые медленные» — 30 тестов и 15 файлов — и больше ничего не меняет.
+        """Блок «самые медленные» — 30 тестов и 15 файлов — в `<лог>.slowest.txt`, к отчёту одна строка-ссылка, больше ничего не меняется.
 
         По каждому прогону — зелёному, красному, оборванному по пределу и
         повтору `--failed` (после красного полного) — три прогона фонового
         процесса: без файла времени, с файлом больше среза (повтор id в том
         же процессе) и с пустым файлом. С файлом: отчёт — прежний отчёт и
-        блок, в блоке ровно 30 тестов и 15 файлов, каждый список по убыванию,
-        секунды теста — сумма его строк, файла — сумма его тестов, строки
-        блока начинаются с двух пробелов и числа. Без файла и с пустым —
-        отчёт прежний. Файл времени базы (рядом с логом базы) в отчёт не
-        попадает. Лог, `failed.json`, ключи `result.json` и сохранённый итог
-        базы — как без файла времени.
+        ровно одна строка-ссылка на файл блока, ни одного id теста и имени
+        файла теста в отчёте; в файле блока ровно 30 тестов и 15 файлов,
+        каждый список по убыванию, секунды теста — сумма его строк, файла —
+        сумма его тестов, строки блока начинаются с двух пробелов и числа.
+        Без файла и с пустым — отчёт прежний, файла блока нет. По прогону
+        базы файла блока нет, строки её файла времени в отчёт не попадают
+        (решение Оператора, ANSWER-2). Лог, `failed.json`, ключи
+        `result.json` и сохранённый итог базы — как без файла времени.
 
         Ловит мутацию: срез 30/15 перепутан или не применён — число строк
         иное; сортировка по возрастанию или по порядку файла — список не
@@ -569,9 +596,10 @@ class SuiteRunSlowestBlockTest(RealGitSandbox):
         у id время половины, и он не первый; время файла — максимум его
         тестов, а не сумма; блок пишется в лог прогона (через
         `_log_appendix`) или в `output` — лог отличается от лога без файла;
-        блок строится по файлу времени базы — в отчёте id базы; пустой файл
-        даёт заголовок блока без строк — отчёт отличается от прежнего;
-        в режиме `--failed` блок не печатается — строк блока нет.
+        блок строится по файлу времени базы — в отчёте id базы или файл
+        блока у лога базы; пустой файл даёт заголовок блока без строк —
+        отчёт отличается от прежнего; в режиме `--failed` блок не пишется —
+        файла блока нет; блок дописан в отчёт целиком — в отчёте id тестов.
         """
         cases = (("зелёный", suite_run.MODE_FULL, (True, self.GREEN)),
                  ("красный", suite_run.MODE_FULL, (False, self.RED)),
@@ -594,6 +622,8 @@ class SuiteRunSlowestBlockTest(RealGitSandbox):
                 self.check_no_block(plain, [rows], f"{label}, без файла")
                 self.assertEqual(runs["пустой файл"]["normal"], plain["normal"],
                                  self.where(f"{label}, пустой файл"))
+                self.assertIsNone(runs["пустой файл"]["slowest"]["branch"],
+                                  self.where(f"{label}, пустой файл"))
                 for variant in ("с файлом", "пустой файл"):
                     self.check_same(plain, runs[variant], f"{label}, {variant}")
                 self.check_block(plain, runs["с файлом"], rows,
