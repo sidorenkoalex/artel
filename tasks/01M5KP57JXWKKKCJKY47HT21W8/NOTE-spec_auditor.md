@@ -1,21 +1,20 @@
 # Записка spec_auditor — 01M5KP57JXWKKKCJKY47HT21W8
 
 ## Выяснено
-- Ссылки SPEC на код подтверждены: role_prompt.py:17/134/151/323/335/413, runner.py:749/759/778, roles.yaml:40, config.BUDGET_CALIBRATION_FLOOR_USD=25.0 (config.py:654).
-- Оба приложения ТЗ проходят `git apply --check` на голове ветки 9b498178.
-- Второй существующий тест закрепляет `suite-run` в миссии ревьювера внешнего проекта:
-  tests/test_01m56g23zqdhv2bkevwwc22r96_external_missions.py:185-205
-  (`test_ac8_external_reviewer_lists_pult_check_commands`, assertIn `{pult} suite-run`).
-  Требование 3 SPEC его краснит, SPEC (треб. 8) и ТЗ его не называют — нужен второй мандат.
-- Планка и долгоживущие на рубеже in_dev->verifying идут с приложениями (advance_gates/acceptance.py:598);
-  гейт неослабления по исходам — на выписках base/head без приложений (outcome_integrity.py:770-784);
-  новый красный тест там не находка (compare, :185-217), skip — находка.
+- Круг 2 (spec_sha 55a73ba7…): все 5 решений гейта №1 отражены в SPEC.
+- Ссылки на код подтверждены: role_prompt.py:140-164/151/173-185/323/335/413,
+  test_01m56g…external_missions.py:185-204 (assertIn :203-204),
+  test_01m5hdb1…:88 bare_full_run, :631 components_empty, :680 keeps_suite_run.
+- Рубеж in_dev->verifying гоняет планку с приложениями (advance_gates/acceptance.py:598);
+  локальный plank-run (orchestrator/plank_run.py:164) приложений НЕ накладывает —
+  AC-4..AC-6 там красны при правильной реализации. Это главное отклонение круга 2.
+- Guard: SPEC.md ок, SPEC-AUDIT.md ок.
 
 ## Не сработало
-- Составной Bash с `cd` требует подтверждения — команды без `cd`.
+- Bash с `$VAR`/`;`-цепочками с переменными отклоняется («simple_expansion») — писать пути целиком.
 
 ## Где остановился
 - SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Чего не хватило
-- Поиск тестов, закрепляющих текст миссии ревьювера, — grep по «suite-run»/«Права не сужены» в tests/.
+- Есть ли у plank-run наложение приложений — нашёл grep'ом по appendix в plank_run.py.
