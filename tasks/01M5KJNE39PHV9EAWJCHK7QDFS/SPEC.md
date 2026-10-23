@@ -55,11 +55,20 @@ budget_usd: 25
    `tests/sandbox.py`, `conftest.py`, `pyproject.toml`, `targets.yaml`, код
    `orchestrator/`, `scripts/`, `.github/`. В `tests/` — только новый модуль
    `tests/direct_git.py`, новый файл тестов задачи и правка
-   `tests/__init__.py`.
+   `tests/__init__.py`. Проверяемое условие: дифф ветки относительно базы в
+   `tests/` — ровно `tests/__init__.py`, `tests/direct_git.py`,
+   `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`.
 4. Новый долгоживущий файл тестов
    `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`, детерминированный,
    без сети; для подстановки — временный каталог разработчика с файлом
-   `usr/bin/git`, `environ` — словарь. Случаи:
+   `usr/bin/git`, `environ` — словарь. Модульные случаи (все, кроме двух
+   последних) не зависят от машины: первый `git` по PATH задаётся подменой
+   `shutil.which` в модуле `tests.direct_git` (сигнатура требования 1 не
+   меняется); пропуск модульных случаев по признакам машины запрещён — они
+   идут и в CI Linux. Каждый отрицательный случай отличается от
+   положительного (первый) ровно одним условием: платформа, отсутствие или
+   неисполняемость `usr/bin/git`, первый git не в `/usr/bin`, ошибка
+   `xcode-select`, нет `PATH` или `/usr/bin`. Случаи:
    - каталог вставлен ровно перед первым `/usr/bin`, элементы до и после на
      прежних местах (на текущем коде — красный: модуля нет);
    - повторный вызов — PATH тот же, возвращено `None`;
@@ -75,30 +84,42 @@ budget_usd: 25
    - `xcode-select` завершился с ошибкой или по таймауту — PATH тот же,
      исключения нет;
    - на машине с обёрткой. Пропуск — только если платформа не `darwin`, нет
-     `/usr/bin/git` или в каталоге из `xcode-select -p` нет исполняемого
-     `usr/bin/git`; значение `tests.DIRECT_GIT_DIR` условием пропуска не
+     `/usr/bin/git`, в каталоге из `xcode-select -p` нет исполняемого
+     `usr/bin/git`, либо git, найденный по PATH процесса без элемента
+     каталога разработчика, после `os.path.normpath` не равен `/usr/bin/git`
+     (git из Homebrew или иного каталога раньше `/usr/bin`); причина — в
+     тексте пропуска. Значение `tests.DIRECT_GIT_DIR` условием пропуска не
      служит (во вложенных прогонах pytest оно равно `None`, потому что
-     вставка уже сделана). Утверждения: (а) в `os.environ["PATH"]` процесса
-     теста каталог `<каталог разработчика>/usr/bin` стоит раньше первого
-     элемента, равного после `os.path.normpath` `/usr/bin`; (б) git,
-     найденный `shutil.which("git", path=os.environ["PATH"])`, и
-     `/usr/bin/git` — оба вызываются по абсолютному пути, не литералом
-     `"git"` (литерал в долгоживущем файле — признак git-вызова линта,
-     `scripts/guard.py:3849`, `_is_git_command`) — дают тот же вывод
+     вставка уже сделана). Утверждения: (а) проводка `tests/__init__.py`:
+     тест не меняет `os.environ["PATH"]` и не вызывает
+     `prefer_direct_git(os.environ)`; в `os.environ["PATH"]` процесса теста
+     каталог `<каталог разработчика>/usr/bin` стоит раньше первого элемента,
+     равного после `os.path.normpath` `/usr/bin`; `tests.DIRECT_GIT_DIR`
+     равен вставленному каталогу либо равен `None`, когда каталог уже стоял
+     раньше `/usr/bin` в окружении запуска pytest; (б) git, найденный
+     `shutil.which("git", path=os.environ["PATH"])`, и `/usr/bin/git` — оба
+     вызываются по абсолютному пути, не литералом `"git"` (литерал в
+     долгоживущем файле — признак git-вызова линта, `scripts/guard.py:3767`
+     `_is_git_command`, строка признака — `:3849`) — дают тот же вывод
      `--version`, `--exec-path` и `config --get init.defaultBranch`; (в) для
      команд `python3`, `bash`, `sh`, `node`, `gh`, `claude`, `codex`, `uv`
      поиск по текущему PATH и по PATH без элемента каталога разработчика
      даёт один и тот же файл либо пару «`/usr/bin/<имя>` —
      `<каталог разработчика>/usr/bin/<имя>`»;
    - PATH шага роли в процессе теста (тест-замена свойства «PATH роли
-     находит инструменты»): каталоги `orchestrator/runner.py:945`
-     (`_role_path_dirs`) от `orchestrator/runner.py:905`
-     (`_resolve_declared_tools`) содержат каталог каждого объявленного
-     инструмента, `shutil.which("git", path=<PATH роли>)` находит
-     исполняемый git, и он даёт тот же вывод `--version`, что `/usr/bin/git`
-     (по абсолютным путям). Пропуск — если `_resolve_declared_tools()`
-     отказывает (объявленный инструмент не установлен), с текстом отказа в
-     причине пропуска.
+     находит инструменты») — только через публичный интерфейс пульта: PATH
+     роли — `runner.role_env()["PATH"]` (`orchestrator/runner.py:1021`,
+     сборка PATH — `:1091`–`:1106`), пути инструментов —
+     `runner.declared_tool_path(<имя>)` (`orchestrator/runner.py:929`);
+     закрытые имена `_resolve_declared_tools` (`:907`) и `_role_path_dirs`
+     (`:945`) в долгоживущем файле не используются. Утверждения:
+     `shutil.which("git", path=<PATH роли>)` — исполняемый файл, дающий тот
+     же вывод `--version`, что `/usr/bin/git` (оба по абсолютным путям); для
+     каждого объявленного инструмента, кроме `python3`,
+     `shutil.which(<имя>, path=<PATH роли>)` находит файл; для `python3` —
+     каталог `sys.executable` стоит в PATH роли (сверка с ним, а не с
+     результатом поиска). Отказ сборки (`OSError`, объявленный инструмент не
+     установлен) — пропуск с текстом отказа в причине пропуска.
 5. Замеры в PLAN.md, на одной машине, с записью загрузки (`uptime`) у каждого
    прогона: попеременно «база — ветка — база — ветка» для
    `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py::Ac10EmptyPriorSetTest`,
@@ -139,16 +160,33 @@ AC-5. При исполняемом `<каталог разработчика>/u
 порядок не изменились; функция вернула вставленный каталог. Повторный вызов
 на том же `environ` не меняет PATH и возвращает `None` (требование 1).
 
+Общее для AC-1…AC-5 (требование 4): случаи не зависят от машины — первый
+`git` по PATH задаётся подменой `shutil.which` в модуле `tests.direct_git`,
+каталог разработчика — временный; пропуск этих случаев по признакам машины
+запрещён, они идут и в CI Linux. Каждый отрицательный случай AC-1…AC-4
+отличается от положительного случая AC-5 ровно одним условием (платформа,
+отсутствие или неисполняемость `usr/bin/git`, первый git не в `/usr/bin`,
+ошибка `xcode-select`, нет `PATH` или `/usr/bin`). Мутации
+`prefer_direct_git` «убрана проверка платформы», «проверка `exists` без
+`X_OK`», «сравнение с `/usr/bin` без `normpath`» дают красный тест.
+
 AC-6. `tests/__init__.py` при импорте пакета `tests` вызывает
 `prefer_direct_git(os.environ)` и сохраняет результат в атрибуте пакета
 `tests.DIRECT_GIT_DIR`; другой правки этого файла нет (требование 2).
 
 AC-7. На машине с обёрткой (платформа `darwin`, есть `/usr/bin/git`, в
-каталоге из `xcode-select -p` есть исполняемый `usr/bin/git`; иначе тест
-пропускается, `tests.DIRECT_GIT_DIR` условием пропуска не служит) в процессе
-теста: (а) в `os.environ["PATH"]` каталог `<каталог разработчика>/usr/bin`
-стоит раньше первого элемента, равного после `os.path.normpath` `/usr/bin`;
-(б) git, найденный `shutil.which("git", path=os.environ["PATH"])`, и
+каталоге из `xcode-select -p` есть исполняемый `usr/bin/git`, git, найденный
+по PATH процесса без элемента каталога разработчика, после
+`os.path.normpath` равен `/usr/bin/git`; иначе тест пропускается с причиной
+в тексте пропуска, `tests.DIRECT_GIT_DIR` условием пропуска не служит) в
+процессе теста: (а) проводка `tests/__init__.py` — тест не меняет
+`os.environ["PATH"]` и не вызывает `prefer_direct_git(os.environ)`; в
+`os.environ["PATH"]` каталог `<каталог разработчика>/usr/bin` стоит раньше
+первого элемента, равного после `os.path.normpath` `/usr/bin`;
+`tests.DIRECT_GIT_DIR` равен вставленному каталогу либо равен `None`, когда
+каталог уже стоял раньше `/usr/bin` в окружении запуска pytest; мутация
+«`DIRECT_GIT_DIR = None` без вызова» при запуске pytest из окружения без
+вставки даёт красный AC-7(а); (б) git, найденный `shutil.which("git", path=os.environ["PATH"])`, и
 `/usr/bin/git`, вызванные по абсолютным путям, дают тот же вывод
 `--version`, `--exec-path` и `config --get init.defaultBranch`; (в) для
 `python3`, `bash`, `sh`, `node`, `gh`, `claude`, `codex`, `uv` поиск по
@@ -156,12 +194,16 @@ AC-7. На машине с обёрткой (платформа `darwin`, ест
 же файл либо пару «`/usr/bin/<имя>` — `<каталог разработчика>/usr/bin/<имя>`»
 (требование 4).
 
-AC-8. В процессе теста каталоги PATH шага роли (`orchestrator/runner.py`
-`_role_path_dirs` от `_resolve_declared_tools`) содержат каталог каждого
-объявленного инструмента; `shutil.which("git", path=<PATH роли>)` находит
-исполняемый git, который даёт тот же вывод `--version`, что `/usr/bin/git`
-(оба по абсолютным путям); если `_resolve_declared_tools()` отказывает, тест
-пропускается с текстом отказа в причине пропуска (требование 4).
+AC-8. В процессе теста PATH шага роли берётся из `runner.role_env()["PATH"]`,
+пути инструментов — из `runner.declared_tool_path`; закрытые имена
+`_resolve_declared_tools`, `_role_path_dirs` в долгоживущем файле не
+используются. `shutil.which("git", path=<PATH роли>)` — исполняемый файл,
+дающий тот же вывод `--version`, что `/usr/bin/git` (оба по абсолютным
+путям); для каждого объявленного инструмента, кроме `python3`,
+`shutil.which(<имя>, path=<PATH роли>)` находит файл; для `python3` —
+сверка с каталогом `sys.executable` (он стоит в PATH роли), а не с
+результатом поиска. Отказ сборки (`OSError`, инструмент не установлен) —
+пропуск с текстом отказа в причине пропуска (требование 4).
 
 AC-9. PLAN.md содержит замеры на одной машине с загрузкой (`uptime`) у
 каждого прогона, попеременно «база — ветка — база — ветка», для
@@ -225,7 +267,7 @@ AC-9. PLAN.md содержит замеры на одной машине с за
 |---|---|---|---|---|
 | `tests/__init__.py`: вызов `prefer_direct_git(os.environ)` — git в процессах тестов запускается напрямую | тесты гоняют код пульта тем же git, что и боевой пульт (обёртка `/usr/bin/git` запускает `/Library/Developer/CommandLineTools/usr/bin/git`) — держит окружение запуска, `orchestrator/acceptance.py:71` | да: тот же файл, версия, `--exec-path`, конфигурация | `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`, тест на машине с обёрткой (требование 4, утверждения (а)–(б); AC-7) | ок |
 | то же: каталог разработчика стоит в PATH процесса теста перед `/usr/bin` | прочие команды (`python3`, `node`, `gh`, `claude`, `codex`, `uv`, `bash`) находятся теми же путями — держит PATH пульта; ожидания из PATH строят `tests/test_01m56kcvctw5bv9twth54tw9q9_own_run_path.py:160`, `tests/test_01m56kcvctw5bv9twth54tw9q9_pult_pytest_unchanged.py:156` | да; меняются только pydoc3 и scalar из /opt/homebrew/bin (их никто не вызывает) | `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`, сравнение поиска команд до и после вставки (требование 4, утверждение (в); AC-7); `tests/test_01m56kcvctw5bv9twth54tw9q9_own_run_path.py`, `tests/test_01m56kcvctw5bv9twth54tw9q9_pult_pytest_unchanged.py` — в полном наборе | ок |
-| то же: в тестах PATH шага роли получает каталог разработчика и теряет `/usr/bin` (системные `env`, `cat`, `sed`, `grep`, `date`, `uname`) | PATH роли находит объявленные инструменты и git — держит `orchestrator/runner.py:905` (отказ при ненайденном инструменте); совпадение PATH роли в тестах с боевым не держит ни один тест; тесты, запускающие подпроцессы с окружением роли, например `tests/test_multitarget.py:816` | да для объявленных инструментов и git (тот же файл git); системных команд `/usr/bin` в PATH роли в тестах нет — расхождение в сторону строгости: шаг роли в тестах, вызывающий их, упадёт, а не пройдёт ложно | `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`, тест PATH шага роли (требование 4; AC-8); `tests/test_multitarget.py` — в полном наборе; совпадение с боевым PATH — не покрыто | ок: расхождение строже боя, ложно-зелёного исхода не даёт |
+| то же: в тестах PATH шага роли получает каталог разработчика и теряет `/usr/bin` (системные `env`, `cat`, `sed`, `grep`, `date`, `uname`) | PATH роли находит объявленные инструменты и git — держит `orchestrator/runner.py:907` (отказ при ненайденном инструменте); совпадение PATH роли в тестах с боевым не держит ни один тест; тесты, запускающие подпроцессы с окружением роли, например `tests/test_multitarget.py:816` | да для объявленных инструментов и git (тот же файл git); системных команд `/usr/bin` в PATH роли в тестах нет — расхождение в сторону строгости: шаг роли в тестах, вызывающий их, упадёт, а не пройдёт ложно | `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`, тест PATH шага роли (требование 4; AC-8); `tests/test_multitarget.py` — в полном наборе; совпадение с боевым PATH — не покрыто | ок: расхождение строже боя, ложно-зелёного исхода не даёт |
 | то же: случайный PATH из каталога git и системных каталогов | `/usr/bin` всегда есть в собранном PATH — `tests/test_01m56kcvctw5bv9twth54tw9q9_own_run_path.py:229`–`235`, `tests/test_01m56kcvctw5bv9twth54tw9q9_pult_pytest_unchanged.py:176`–`182` | утверждения те же; при том же зерне состав PATH другой, `/usr/bin` может выпасть — охват шире | те же файлы — в полном наборе автогейта | ок |
 | то же, на Linux (CI GitHub) | поведение набора в CI — `.github/workflows/ci.yml:245`, git дистрибутива | да: без изменений | `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py`, тест `platform="linux"` (AC-1) | ок |
 | то же: тесты, строящие обёртки и PATH над `shutil.which("git")` | обёртки запускают настоящий git — `tests/test_01m4pmpmz7ppcn3jwx75rtjzqn_merge_base_choice.py:138`, `:457`, `tests/test_01m568xfym68eyhh0c16y7d7f0_project_kill_cleanup.py:67`, `tests/test_01m443hv9sjyvyqthjsq87qv68_plan_appendix_ci.py:422`, `tests/test_01m446wv7s94ftzgjcgmpj667f_clone_refs.py:222`, `tests/test_01m466zerxqkxtr5rqcdyvdzjq_plan_appendix_ci_pr.py:222`, `tests/test_01m46c776szemypbqgpnjn1txy_appendix_gates.py:214`, `tests/test_01m46c776szemypbqgpnjn1txy_suite_run_appendix.py:194` | да: обёртки запускают тот же git без обёртки xcrun | те же файлы — в полном наборе автогейта | ок |
@@ -243,10 +285,15 @@ AC-9. PLAN.md содержит замеры на одной машине с за
   тестового модуля; `conftest.py` защищён (`orchestrator/config.py:769`–`775`).
 - Почему не символьная ссылка: git вычисляет `--exec-path` от пути запуска —
   вставляется сам каталог `<каталог разработчика>/usr/bin`.
-- PATH роли: `orchestrator/runner.py:905` (`_resolve_declared_tools`), `:945`
-  (`_role_path_dirs`), `:1106` — код не меняется.
+- PATH роли: `orchestrator/runner.py:907` (`_resolve_declared_tools`), `:929`
+  (`declared_tool_path`, публичный), `:945` (`_role_path_dirs`), `:1021`
+  (`role_env`, публичный; PATH — `:1091`–`:1106`) — код не меняется.
+- Решения Оператора на гейте SPEC 23.10.2026 (круг 1, по SPEC-AUDIT.md):
+  AC-8 только через публичный интерфейс пульта; изоляция и
+  машинонезависимость отрицательных случаев AC-1…AC-4; дополнительное
+  условие пропуска AC-7; проводка `tests/__init__.py` в AC-7(а); адреса
+  `runner.py:907`, `guard.py:3767`/`:3849`; проверяемое условие требования 3.
+  Существующие тесты не правятся, мандат не нужен.
 - Бюджет: ТЗ называет $20; поставлено $25 — пол калибровки
-  (`orchestrator/config.py::BUDGET_CALIBRATION_FLOOR_USD`, скил
-  spec-authoring: «планка не ниже $25 ни для одной задачи»). Класс по таблице
-  для 9 критериев и 3 элементов зоны — $40; Оператор вправе снизить потолок
-  командой `budget`.
+  (`orchestrator/config.py::BUDGET_CALIBRATION_FLOOR_USD`); принят Оператором
+  на гейте SPEC 23.10.2026.
