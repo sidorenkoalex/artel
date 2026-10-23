@@ -1,18 +1,16 @@
-# Записка spec_auditor — 01M5N9WK9SGB7KDYJP736DP6CV
+# Записка spec_auditor — 01M5N9WK9SGB7KDYJP736DP6CV (круг 2)
 
 ## Выяснено
-- Все адреса SPEC сверены с guard.py на 2b187a3d: :865, :1040, :1082, :1089, :1155, :1312, :1395, :1492, :1828, :1949, :1968, :1999, :3982; `_helper_callers` test_integrity.py:788 — совпадают.
-- `_assertion_records` питает не только наблюдение: `assertion_changes` (guard.py:2476 → MethodChange → двусторонний прогон), храповик `_counts` (test_integrity.py:1160-1168), `method_literal_keys` (guard.py:5263, approve «Меняемое поведение»). SPEC эти последствия не называет; у записи фикстуры роль строгости None → `_strictness_sign` даёт «не оценена» (guard.py:2391).
-- Распознавание вызовов `_called_dotted_name` без разрешения псевдонимов (guard.py:1092, :1128): `from pytest import xfail` обходит форму (б).
-- `_is_assertion` (guard.py:1565-1574) шире перечня формы (а): любой `<x>.assert*`/`<x>.fail`.
-- Зона `tests/` пересекается с зоной А1 `tests/fixtures.py` по `zone_lock._paths_overlap` (zone_lock.py:243-252) — вопреки «зоны не пересекаются».
-- tests/fixtures.py в worktree нет.
+- Решения Оператора круга 1 (пп. 1–5) в SPEC 6c39fad перенесены полностью; адреса guard.py сверены на 2b187a3d.
+- Главное: литерал фикстуры не имеет роли в `_constant_roles` (guard.py:2279) → `_strictness_sign` даёт SIGN_UNRATED (:2391) → `_change_reason` относит к ослаблению (test_integrity.py:1132), объявление не снимает. Противоречит AC-10 «та же оценка строгости» и решению п. 1; роль equality — обход для границ.
+- Форма (в) уровня модуля: нет функции для адреса и ключа lint_base.
+- Мой Г1 круга 1 ошибочен: `tests/` в COMMON_ZONES (config.py:814), zone_lock._own_paths их выкидывает. Маски в zones гейт зон не понимает (zones.py:29 — префикс).
 
 ## Не сработало
-- Составные bash-команды с cd/переменными требуют подтверждения — только одиночные grep с абсолютными путями.
+- Составные bash с cd — работают в этом шаге, `ls` нет в окружении.
 
 ## Где остановился
-- Вердикт concerns, SPEC-AUDIT.md записан, guard прогнан.
+- SPEC-AUDIT.md записан, вердикт concerns; guard: ок.
 
 ## Чего не хватило
-- Перечня потребителей `_assertion_records` в SPEC — искал grep'ом по orchestrator/ и scripts/.
+- Связи `signs` → `_change_reason` (test_integrity.py:1126) в SPEC — искал grep'ом `.signs`.
