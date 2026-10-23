@@ -1,0 +1,18 @@
+# Записка test_author
+
+## Выяснено
+- AC-1…AC-8 — долгоживущий `tests/test_01m5n9v4s984grrxsmbk5jx7v1_fixtures.py` в стиле pytest (функции, parametrize): по AC-9 тесты задачи — новый pytest-файл `tests/`, этот файл им и является. Фикстуры импортированы из `tests.fixtures` явно.
+- AC-9 — разовый `acceptance_tests/test_ac9_task_tests_file.py` (unittest, `_pult.changed_paths`, `git cat-file -e <база>:<путь>`): существующие файлы tests/ не тронуты; tests/fixtures.py — новый; есть новый pytest-файл с test_ac2…test_ac8.
+- Уборку фикстуры тест гоняет вручную: `tests.fixtures.<имя>.__wrapped__()` — генератор без аргументов (pytest 9.1.1 даёт `__wrapped__`). Фикстура с параметром `request` этот приём сломает.
+- Сбой `setUp` (AC-5) — `mock.patch.object(<класс>, "setUp", …)` поверх исходного `setUp`.
+- Валидация стабом (переходник: `cls()`, `setUp`, `obj._cleanups.pop()` до опустошения, RuntimeError / add_note): 43/43 зелёные, планка 2/2; мутации «прямой порядок», «импорт sandbox на уровне модуля», «нет уборки при сбое setUp» пойманы. Стаб удалён.
+- Без реализации: долгоживущий файл красен ImportError на сборе; preflight — все проверки пройдены.
+
+## Не сработало
+- Bash: `ls`/`cat`/`rm` не проходят, составные команды и `cd` требуют подтверждения. pytest — только по относительному пути из рабочего каталога (сторож conftest).
+
+## Где остановился
+- Готово.
+
+## Чего не хватило
+- —
