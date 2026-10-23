@@ -81,9 +81,7 @@ def _open_db_readonly() -> sqlite3.Connection | None:
     """Соединение с БД пульта только на чтение; `None` — файла БД нет."""
     if not config.DB.is_file():
         return None
-    conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return store.db_readonly()
 
 
 def _task_row(arg: str):

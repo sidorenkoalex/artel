@@ -322,6 +322,22 @@ def tree_db_files(root) -> list[str]:
     return [rel for rel in TREE_DB_FILES if (Path(root) / rel).is_file()]
 
 
+def db_readonly(path: Path | None = None, *,
+                rows: bool = True) -> sqlite3.Connection:
+    """Соединение с БД `path` только на чтение (`mode=ro`); `None` —
+    `config.DB` на момент вызова (SPEC 01M5MHVFQ9SC6EDRH34F8THNQ3).
+
+    Единственное место такого открытия: файл не создаётся, `db()` не
+    зовётся, режим журнала не меняется. Существование файла и исключения
+    `sqlite3` — забота вызывающего: тексты отказов у читателей разные."""
+    if path is None:
+        path = config.DB
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    if rows:
+        conn.row_factory = sqlite3.Row
+    return conn
+
+
 def db_usable() -> bool:
     """БД пульта пригодна для чтения: файл `config.DB` есть и несёт таблицу
     `tasks` (SPEC 01M4FYTB8QWJNHYCP35K8QC4E3, требование 1).
@@ -334,8 +350,7 @@ def db_usable() -> bool:
     if not config.DB.is_file():
         return False
     try:
-        conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro",
-                               uri=True)
+        conn = db_readonly(rows=False)
     except sqlite3.Error:
         return False
     try:

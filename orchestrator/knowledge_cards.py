@@ -764,8 +764,7 @@ def _open_db_readonly(arg: str):
     from . import store
     if not config.DB.is_file():
         sys.exit(f"knowledge: БД пульта {config.DB} не найдена")
-    conn = sqlite3.connect(f"{config.DB.resolve().as_uri()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = store.db_readonly()
     try:
         return conn, store.get_task(conn, arg)
     except BaseException:
