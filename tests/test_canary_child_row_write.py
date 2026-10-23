@@ -57,7 +57,7 @@ class _RunTaskSandbox(InitializedTmpRootTest):
     def run_task(self, insert=None, db=None):
         """(исключение выхода, stderr, шпион sleep, шпион записи, шпион db)."""
         plan = canary.CanarySetPlan(SET_NAME, {}, None, SUMMARY, ())
-        sleep = mock.Mock(name="time.sleep")
+        sleep = mock.Mock(name="canary_sleep")
         insert_spy = mock.Mock(side_effect=insert or self.real_insert)
         db_spy = mock.Mock(side_effect=db or self.real_db)
         stderr = io.StringIO()
