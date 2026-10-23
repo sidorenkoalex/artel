@@ -286,25 +286,25 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
 
     Профиль с итогом из отчёта (SPEC 01M590GJAF0EDV4NBC4C99MFVH,
     требование 8) — `_run_side_report`."""
-    reported = acceptance._reported(profile)
+    reported = acceptance.reported(profile)
     if reported is not None:
         return _run_side_report(tree, nodes, reported, timeout)
-    own = acceptance._own(profile)
+    own = acceptance.own(profile)
     cwd = tree
     if own is not None:
-        cwd, refusal = acceptance._own_cwd(own, tree)
+        cwd, refusal = acceptance.own_cwd(own, tree)
         if refusal:
             return [], refusal
-        nodes = [acceptance._own_target(own, n, node=True) for n in nodes]
-    cmd = acceptance._place_command(profile, *nodes, f"--rootdir={tree}",
+        nodes = [acceptance.own_target(own, n, node=True) for n in nodes]
+    cmd = acceptance.place_command(profile, *nodes, f"--rootdir={tree}",
                                     "-p", PLUGIN_MODULE)
-    with acceptance._place_env(profile) as env:
+    with acceptance.place_env(profile) as env:
         env["PYTHONPATH"] = os.pathsep.join(
             p for p in (str(plugin_dir), env.get("PYTHONPATH", "")) if p)
         env[REPORT_ENV] = str(report)
         try:
             if own is not None:
-                res = acceptance._run_in_session(cmd, cwd, env, timeout)
+                res = acceptance.run_in_session(cmd, cwd, env, timeout)
             else:
                 res = subprocess.run(cmd, cwd=cwd, env=env,
                                      capture_output=True, text=True,
@@ -356,7 +356,7 @@ def _run_side_report(tree: Path, nodes: list, profile,
     from .tests_writing import _check_failure_kind
     strict = in_outcome_bounds(profile)
     files = sorted({node.partition("::")[0] for node in nodes})
-    run = acceptance._report_run(profile, tree, files, timeout)
+    run = acceptance.report_run(profile, tree, files, timeout)
     if run.refusal:
         return [], run.refusal
     if run.timed_out:

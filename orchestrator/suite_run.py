@@ -106,7 +106,7 @@ _SUMMARY_COUNT = re.compile(
 def _extra_flags(command) -> tuple:
     """Флаги pytest пульта к команде прогона; команде компонента с отчётом
     — никаких: она не обязана быть pytest (требование 9)."""
-    return () if acceptance._reported(command) is not None else _PYTEST_FLAGS
+    return () if acceptance.reported(command) is not None else _PYTEST_FLAGS
 
 
 # ------------------------------------------------------------- состояние
@@ -345,7 +345,7 @@ def _profile_command(target: str) -> tuple:
         except (KeyError, TypeError, ValueError, TargetsError) as exc:
             return None, (f"профиль тестов проекта «{target}» не прочитан "
                           f"(test_profile в targets.yaml): {exc}")
-        if acceptance._reported(profile) is not None:
+        if acceptance.reported(profile) is not None:
             return profile, ""
     command = [str(part) for part in answer.values.get("command") or ()]
     if not _is_pytest(command):
@@ -414,7 +414,7 @@ def parse(green: bool, output: str, *, reported: bool = False) -> Parsed:
     (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требование 18): упавшие и числа —
     только из сводки отчёта в конце вывода; строки хода сырого вывода
     раннера (id от `workdir`, иной формы) не читаются."""
-    outcome = acceptance._full_suite_outcome(green, output)
+    outcome = acceptance.full_suite_outcome(green, output)
     summary = acceptance.run_summary_line(output)
     finished = (outcome in (acceptance.FULL_SUITE_GREEN,
                             acceptance.FULL_SUITE_RED) and bool(summary))
@@ -608,7 +608,7 @@ def _base(task_id: str, target: str, branch: str, command,
             copy, command=command, targets=("tests",),
             extra=_extra_flags(command), log=base_log, limit=limit)
     parsed = parse(green, output,
-                   reported=acceptance._reported(command) is not None)
+                   reported=acceptance.reported(command) is not None)
     if not parsed.finished:
         return None, (f"прогон базы {sha[:12]} не завершён "
                       f"({parsed.outcome}); лог базы: {base_log}")
@@ -629,7 +629,7 @@ def _component_command(conn, task_id: str, target: str) -> tuple:
     if profile is None:
         return None, None, decision.refusal
     limit = project_profile.component_limit(profile)
-    if acceptance._reported(profile) is not None:
+    if acceptance.reported(profile) is not None:
         return profile, limit, ""
     command = [str(part) for part in profile.command]
     if not _is_pytest(command):
@@ -662,8 +662,8 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
         if not targets:
             return (f"[{task_id}] suite-run №{run_no}: отказ — перечня "
                     f"упавших прошлого прогона нет"), False
-        if acceptance._own(command) is not None and \
-                acceptance._reported(command) is None:
+        if acceptance.own(command) is not None and \
+                acceptance.reported(command) is None:
             # id упавших `pytest-own` напечатаны из `workdir` — идут как
             # есть каналом `test_ids`, без перевода путей целей.
             targets, test_ids = (), targets
@@ -683,7 +683,7 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
                 **({"test_ids": test_ids} if test_ids else {}))
     metrics = acceptance._last_full_suite_metrics
     parsed = parse(green, output,
-                   reported=acceptance._reported(command) is not None)
+                   reported=acceptance.reported(command) is not None)
     # Повтор — по id тестов: единицу подтеста `<id> <метка>` pytest не найдёт.
     _write_json(_failed_path(task_id),
                 {"run": run_no, "failed": list(parsed.rerun)})

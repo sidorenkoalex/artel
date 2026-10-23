@@ -664,7 +664,7 @@ def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
         # 01M52EEHSRD93WMPHWB5VJYRKD); иначе — прежний вызов без него.
         from . import project_profile, targets
         try:
-            own = acceptance._task_own_profile(conn, task_id)
+            own = acceptance.task_own_profile(conn, task_id)
         except targets.ComponentsPending as exc:
             # Компонент задачи не выбран — отказ, не прогон прежним
             # раннером пульта (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
