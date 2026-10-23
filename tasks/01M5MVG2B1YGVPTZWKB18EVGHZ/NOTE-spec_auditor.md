@@ -1,16 +1,15 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Круг 2: SPEC sha cfe072cc… совпадает с `git hash-object`. Все 7 решений Оператора круга 1 перенесены (AC-8, AC-9, строка матрицы, требование 4, имя константы, AC-2, SigintTest в «Не входит»).
-- Факты о коде подтверждены (canary.py:3423, 3461, 3505, 3702, 3759-3767; liveness.py:50; protection :260, :281, :335-340, :499-501, :652; parallel :382-384; pyproject timeout=120).
-- Вердикт concerns: AC-8 не ловит «store.db() в цикле, но вне try» — шпион store.db в AC-3 не бросает; предложено: первый вызов store.db бросает OperationalError.
-- Тестов на код выхода 1 нет (test_canary_run_task.py:328, :361 — 128+signum).
+- Круг 3: sha SPEC 9a6fc791… совпадает с миссией. Во втором сценарии AC-8 (шпион store.db: на первом вызове OperationalError) отклонение круга 2 закрыто.
+- Ссылки на код по-прежнему верны (canary.py:3423, 3461, 3505, 3702, 3759-3767; liveness.py:50; protection :260, :281, :501-502, :652; parallel :383-384).
+- Вердикт: pass.
 
 ## Не сработало
-- Bash с `; echo rc=$?` отклоняется (simple_expansion) — запускать guard одиночной командой.
+- Команда `ls` в Bash недоступна (command not found).
 
 ## Где остановился
-- SPEC-AUDIT.md написан (status: ready, verdict: concerns), guard ок.
+- SPEC-AUDIT.md написан (status: ready, verdict: pass), проверка guard.
 
 ## Чего не хватило
-- Ничего существенного.
+- Ничего.
