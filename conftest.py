@@ -17,12 +17,21 @@ tests/test_x.py tests` (целевой путь рядом с нецелевым
 `bash_guard._pytest_verdict`; сфера здесь уже — только СВОЙ процесс
 pytest, не произвольная Bash-команда, поэтому формы `python3 -m
 unittest` вне зоны действия этого гейта)."""
+import importlib.util
 import os
 import sys
 
 import pytest
 
 from orchestrator.config import ARTEL_ROLE_ENV
+
+# Общие фикстуры-песочницы в стиле pytest (ADR-0027): видны тестам
+# `tests/` и планке `tasks/<id>/acceptance_tests/`. Подключаются, только
+# если модуль есть в дереве прогона: зеркала репозитория в тестах берут
+# этот файл без `tests/fixtures.py`. Тест, запросивший фикстуру при
+# отсутствии модуля, падает с «fixture not found» — громко.
+pytest_plugins = (["tests.fixtures"]
+                  if importlib.util.find_spec("tests.fixtures") else [])
 
 # Флаги pytest, за которыми следует отдельное значение — не позиционный
 # аргумент-путь (тот же список, что нёс `bash_guard._PYTEST_VALUE_FLAGS`).
