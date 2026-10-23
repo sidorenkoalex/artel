@@ -2851,6 +2851,27 @@ def _kill_group(pgid: int) -> None:
         pass
 
 
+@contextlib.contextmanager
+def _durations_reader(log: Path, profile) -> Iterator[None]:
+    """Поток времени тестов на время тела: начало прогона — вход сюда, до
+    запуска pytest; остановка и ожидание потока — на выходе из тела, то
+    есть после отметки конца прогона. Сбой потока прогон не меняет."""
+    if profile is not None:
+        yield
+        return
+    from . import suite_durations  # suite_durations -> suite_run -> acceptance
+    reader = None
+    try:
+        reader = suite_durations.Reader(log, time.monotonic()).start()
+    except Exception:  # noqa: BLE001 — файл времени не условие прогона
+        pass
+    try:
+        yield
+    finally:
+        if reader is not None:
+            reader.stop()
+
+
 def _run_full_suite_to_log(argv: list[str], root: Path,
                            log: Path,
                            limit: tuple[int, str],
@@ -2861,9 +2882,15 @@ def _run_full_suite_to_log(argv: list[str], root: Path,
     печатать что угодно, а разбор не имеет права уронить фоновый прогон.
     `PYTHONUNBUFFERED` — иначе на пределе времени SIGKILL съел бы
     неслитый буфер, и числа успевшей части пропали бы (требование 6).
-    `root`/`profile` — тот же контракт, что у `_run_full_suite_now`."""
+    `root`/`profile` — тот же контракт, что у `_run_full_suite_now`.
+
+    Раннер `pult-pytest` (`profile is None`) — поток чтения лога пишет
+    время каждого теста в файл рядом с логом (`_durations_reader`, SPEC
+    01M5MJFSYW6MH0WD05CY8V75TX); его останавливают и ждут после отметки
+    `_last_run_completed_at`."""
     timed_out = False
-    with _place_env(profile, root) as env, open(log, "wb") as fh:
+    with _place_env(profile, root) as env, open(log, "wb") as fh, \
+            _durations_reader(log, profile):
         env["PYTHONUNBUFFERED"] = "1"
         proc = _launch(argv, root, profile is not None, env=env, stdout=fh,
                        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
