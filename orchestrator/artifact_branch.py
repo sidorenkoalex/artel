@@ -22,11 +22,15 @@
 пересобирает коммит поверх новой головы.
 
 Каждый коммит ссылки сразу отправляется в `origin` репозитория задачи; отказ —
-запись журнала, повтор — на следующем переходе (`send_pending` из
-`store.set_state`). Гейт мержа и закрытие сверяют ссылку с `origin`
-(`origin_sync_refusal`).
+запись журнала, повтор — на следующем переходе: коммит паспорта
+(`store.set_state` → `append_passport_line` → `commit_files`) отправляет
+ссылку целиком, вместе с недосланным коммитом. Ответ сервера (5xx)
+повторяется сразу, в той же отправке (`PUSH_SERVER_RETRY_ATTEMPTS`). Гейт
+мержа и закрытие сверяют ссылку с `origin` (`origin_sync_refusal`).
 """
 import os
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +59,29 @@ _CAS_ATTEMPTS = 5
 PUSH_REASON_NO_ORIGIN = "нет origin"
 PUSH_REASON_NETWORK = "сеть"
 PUSH_REASON_NON_FAST_FORWARD = "non-fast-forward"
+# Ответ сервера (5xx, сбой записи ссылок на стороне хостинга; SPEC
+# 01M5K11D3284ZZGRHN39FGQVF2): история не расходилась и сеть дошла —
+# совет «свести merge-коммитом» здесь ложный, а повтор через паузу обычно
+# проходит.
+PUSH_REASON_SERVER = "сервер"
+
+# Повтор отправки при ответе сервера: попыток всего и пауза между ними.
+PUSH_SERVER_RETRY_ATTEMPTS = 3
+PUSH_SERVER_RETRY_PAUSE_SEC = 5
+
+_LOCAL_REJECT_MARKERS = ("[rejected]", "fetch first", "non-fast-forward")
+_SERVER_MARKERS = ("internal server error", "fatal error in commit_refs")
+_SERVER_PATTERNS = (
+    re.compile(r"http 5\d\d"),
+    re.compile(r"returned error: 5\d\d"),
+    # `(failed)` — одним словом в конце строки отказа; `(failed to update
+    # ref)` и `(failure)` — не ответ сервера (решение Оператора на гейте
+    # SPEC 23.10.2026).
+    re.compile(r"\[remote rejected\][^\n]*\(failed\)[ \t]*$", re.MULTILINE),
+)
+
+_PUSH_OK_ACTION = "push артефактной ветки"
+_PUSH_FAILED_ACTION = "push артефактной ветки FAILED"
 
 
 def branch_name(task_id: str) -> str:
@@ -312,46 +339,62 @@ def _write(task_id: str, files: dict, message: str, author_name: str,
         if upd_ref is None:
             return "", ""
         if upd_ref.returncode == 0:
-            _send(task_id, repo, journal_success=False)
+            _send(task_id, repo)
             return commit_sha, ""
     return "", ""
 
 
 def _classify_push_failure(stderr: str) -> str:
-    """Три причины отказа push, различаемые по подстроке `stderr` git
-    (SPEC требование 1). Non-fast-forward различён вживую (бэйр-репозиторий,
-    два клона, второй push после первого) — реальный git не несёт литерала
-    «non-fast-forward» в этой версии, а несёт `[rejected] ... (fetch
-    first)` — обе подстроки и проверяются. «Нет origin» здесь не нужен
-    (перехватывается раньше `_attempt_push`, до попытки реального push) —
-    остаток, не подошедший под non-fast-forward, классифицируется как
-    «сеть» (единственная оставшаяся причина требования 1)."""
+    """Причина отказа push по `stderr` git; признаки проверяются строго по
+    порядку (SPEC 01M5K11D3284ZZGRHN39FGQVF2, требование 1): локальный
+    отказ git (`[rejected]`, `fetch first`, `non-fast-forward`) —
+    non-fast-forward; признаки ответа сервера — «сервер»; прочий `rejected`
+    (`[remote rejected]` хука и т.п.) — non-fast-forward, как прежде;
+    остальное — «сеть». Реальный git не несёт литерала «non-fast-forward»
+    в этой версии, а несёт `[rejected] ... (fetch first)`. «Нет origin»
+    здесь не нужен — перехватывается раньше `_attempt_push`."""
     lowered = stderr.lower()
-    if ("rejected" in lowered or "fetch first" in lowered
-            or "non-fast-forward" in lowered):
+    if any(marker in lowered for marker in _LOCAL_REJECT_MARKERS):
+        return PUSH_REASON_NON_FAST_FORWARD
+    if (any(marker in lowered for marker in _SERVER_MARKERS)
+            or any(p.search(lowered) for p in _SERVER_PATTERNS)):
+        return PUSH_REASON_SERVER
+    if "rejected" in lowered:
         return PUSH_REASON_NON_FAST_FORWARD
     return PUSH_REASON_NETWORK
 
 
-def _attempt_push(branch: str, repo: Path) -> tuple[bool, str, str]:
-    """(успех, причина отказа, stderr git) — причина/stderr пустые при
-    успехе. Отсутствие origin проверяется ДО попытки реального push
-    (`gitcmd.has_no_remote`) — не по тексту stderr: `git push` без
-    настроенного origin отвечает по-разному в зависимости от версии git,
-    а отсутствие remote проверяется напрямую и надёжно. `repo` —
-    репозиторий задачи (`task_repo`), отправка — в его `origin`."""
+def _attempt_push(branch: str, repo: Path) -> tuple[bool, str, str, int]:
+    """(успех, причина отказа, stderr git, сделано вызовов `git push`) —
+    причина/stderr пустые при успехе. Отсутствие origin проверяется ДО
+    попытки реального push (`gitcmd.has_no_remote`) — не по тексту stderr:
+    `git push` без настроенного origin отвечает по-разному в зависимости от
+    версии git, а отсутствие remote проверяется напрямую и надёжно. `repo` —
+    репозиторий задачи (`task_repo`), отправка — в его `origin`.
+
+    Ответ сервера повторяется той же командой, без силы, до
+    `PUSH_SERVER_RETRY_ATTEMPTS` раз всего, с паузой только между
+    попытками; иные причины не повторяются."""
     if repo == _NO_REPO or gitcmd.has_no_remote(repo):
-        return False, PUSH_REASON_NO_ORIGIN, ""
+        return False, PUSH_REASON_NO_ORIGIN, "", 0
     ref = gitcmd.qualified_ref(branch)
-    res = _git(repo, "push", "-q", "origin", f"{ref}:{ref}")
-    if res is not None and res.returncode == 0:
-        return True, "", ""
-    stderr = (res.stderr or "").strip() if res is not None else "git не ответил"
-    return False, _classify_push_failure(stderr), stderr
+    attempts = 0
+    while True:
+        attempts += 1
+        res = _git(repo, "push", "-q", "origin", f"{ref}:{ref}")
+        if res is not None and res.returncode == 0:
+            return True, "", "", attempts
+        stderr = ((res.stderr or "").strip() if res is not None
+                  else "git не ответил")
+        reason = _classify_push_failure(stderr)
+        if (reason != PUSH_REASON_SERVER
+                or attempts >= PUSH_SERVER_RETRY_ATTEMPTS):
+            return False, reason, stderr, attempts
+        time.sleep(PUSH_SERVER_RETRY_PAUSE_SEC)
 
 
 def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
-                          stderr: str, repo: Path) -> None:
+                          stderr: str, repo: Path, attempts: int = 1) -> None:
     """Запись журнала задачи об исходе push — успех и отказ ОБА (AC-3:
     повторная попытка на следующем автокоммите обязана оставить СВОЮ
     запись про исход, успешный или нет, не молчать так же, как молчал бы
@@ -362,8 +405,13 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
     внутри функции (`store.record_fixation`), не на уровне модуля."""
     conn = store.db()
     if ok:
-        store.journal(conn, task_id, "orchestrator", "push артефактной ветки",
-                      f"push артефактной ветки {branch} — успех")
+        retried = f" (попыток {attempts})" if attempts > 1 else ""
+        store.journal(conn, task_id, "orchestrator", _PUSH_OK_ACTION,
+                      f"push артефактной ветки {branch} — успех{retried}")
+        return
+    if reason == PUSH_REASON_SERVER:
+        store.journal(conn, task_id, "orchestrator", _PUSH_FAILED_ACTION,
+                      f"{reason} (попыток {attempts}): {stderr[:300]}")
         return
     detail = reason + (f": {stderr[:300]}" if stderr else "")
     if reason == PUSH_REASON_NON_FAST_FORWARD:
@@ -371,8 +419,7 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
         origin_sha = gitcmd.remote_branch_sha(branch, repo=repo)
         detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
                   f"— свести merge-коммитом")
-    store.journal(conn, task_id, "orchestrator",
-                  "push артефактной ветки FAILED", detail)
+    store.journal(conn, task_id, "orchestrator", _PUSH_FAILED_ACTION, detail)
 
 
 def push(task_id: str) -> bool:
@@ -387,8 +434,8 @@ def push(task_id: str) -> bool:
     в команде push буквальный, без условных путей."""
     branch = branch_name(task_id)
     repo = task_repo(task_id)
-    ok, reason, stderr = _attempt_push(branch, repo)
-    _journal_push_outcome(task_id, branch, ok, reason, stderr, repo)
+    ok, reason, stderr, attempts = _attempt_push(branch, repo)
+    _journal_push_outcome(task_id, branch, ok, reason, stderr, repo, attempts)
     return ok
 
 
@@ -401,28 +448,30 @@ def _origin_configured(repo: Path) -> bool:
     return res is not None and res.returncode == 0 and bool(res.stdout.strip())
 
 
-def _send(task_id: str, repo: Path, journal_success: bool) -> bool:
+def _send(task_id: str, repo: Path) -> bool:
     """Отправка ссылки документов в `origin` репозитория задачи после
-    коммита и на переходе. Отказ журналируется всегда; успех — по просьбе
-    вызывающего: запись об успехе на каждой строке паспорта засорила бы
-    журнал."""
+    коммита и перед сверкой с `origin`. Отказ журналируется всегда; успех —
+    только когда он что-то сообщает: пришёл после повтора в этом же вызове
+    либо досылает после записанного раньше отказа (последний исход
+    отправки задачи в журнале — отказ). Запись об успехе на каждой строке
+    паспорта засорила бы журнал."""
     if not _origin_configured(repo):
         return False
     ref = branch_name(task_id)
-    ok, reason, stderr = _attempt_push(ref, repo)
-    if not ok or journal_success:
-        _journal_push_outcome(task_id, ref, ok, reason, stderr, repo)
+    ok, reason, stderr, attempts = _attempt_push(ref, repo)
+    if not ok or attempts > 1 or _last_send_failed(task_id):
+        _journal_push_outcome(task_id, ref, ok, reason, stderr, repo, attempts)
     return ok
 
 
-def send_pending(task_id: str) -> None:
-    """Повторная отправка ссылки на переходе FSM (`store.set_state`):
-    коммит, чья отправка раньше отказала, досылается здесь. Ссылки нет
-    локально — отправлять нечего. Совпадающую с `origin` ссылку `git push`
-    не меняет."""
-    repo = task_repo(task_id)
-    if _head(task_id, repo):
-        _send(task_id, repo, journal_success=False)
+def _last_send_failed(task_id: str) -> bool:
+    # Успешная отправка БД раньше не трогала: непригодную БД ради чтения
+    # не заводим (как `task_repo`).
+    if not store.db_usable():
+        return False
+    last = store.last_task_step_of(store.db(), task_id,
+                                   (_PUSH_OK_ACTION, _PUSH_FAILED_ACTION))
+    return last is not None and last["action"] == _PUSH_FAILED_ACTION
 
 
 def origin_sync_refusal(task_id: str) -> str | None:
@@ -441,7 +490,7 @@ def origin_sync_refusal(task_id: str) -> str | None:
         return None
     local = _head(task_id, repo)
     if local:
-        _send(task_id, repo, journal_success=False)
+        _send(task_id, repo)
     remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
                                              repo=repo)
     if reason:
