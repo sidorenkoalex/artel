@@ -5,7 +5,7 @@ author_role: analyst
 status: ready
 schema_version: 5
 zones: orchestrator/pin.py, orchestrator/artel.py, tests/
-budget_usd: 25
+budget_usd: 40
 ---
 
 # SPEC: pin-update --wait-ci — ожидание CI головы main командой пульта
@@ -43,11 +43,14 @@ budget_usd: 25
    - `MAIN_RED` — тот же отказ, что сейчас («CI коммита … красный — …; пин
      не сдвинут, сначала почини main»), без дальнейших опросов;
    - `MAIN_RUNNING` и `MAIN_UNKNOWN` — в порядке `_wait_for_branch_ci_green`:
-     сначала строка вывода `[pin-update] <note> (ожидание N сек)`, затем
+     сначала строка вывода `[pin-update] <note> (ожидание N сек)` (N —
+     прошедшее с первого опроса время, целые секунды), затем
      проверка потолка — если `time.monotonic() - start >=
      config.MERGE_GATE_CI_WAIT_CEILING_SEC` (`start` — момент первого
      опроса), отказ «pin-update: потолок ожидания CI main истёк (N сек) —
-     <последний note>; пин не сдвинут»; иначе пауза
+     <последний note>; пин не сдвинут», где N — значение константы
+     `config.MERGE_GATE_CI_WAIT_CEILING_SEC` в секундах (не прошедшее
+     время); иначе пауза
      `time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)` и новый опрос. После
      последнего незелёного опроса перед отказом паузы нет.
    Неизвестный цвет зелёным не считается ни на одном опросе (инвариант 19).
@@ -65,7 +68,12 @@ budget_usd: 25
     `config.MERGE_GATE_CI_WAIT_POLL_SEC` и `config.MERGE_GATE_CI_WAIT_CEILING_SEC`;
     песочницы — по образцу `tests/test_pin.py`. Подмена `pin.time.sleep`
     (тот же объект модуля `time` на весь процесс) снимается в конце каждого
-    теста — контекстным менеджером или декоратором.
+    теста — контекстным менеджером или декоратором. Тесты не привязываются
+    к числу вызовов `time.monotonic`: `sleep` и `monotonic` подменяются как
+    единые подменённые часы — подменённый `sleep(x)` продвигает подменённое
+    время на `x`, подменённый `monotonic` возвращает текущее подменённое
+    время (без счётчика вызовов и без заранее заданной последовательности
+    значений).
 
 ## Критерии приёмки
 AC-1. `artel.main` с `pin-update <sha> --wait-ci`: первый опрос
@@ -73,17 +81,23 @@ AC-1. `artel.main` с `pin-update <sha> --wait-ci`: первый опрос
 `sleep` вызван один раз с `MERGE_GATE_CI_WAIT_POLL_SEC`, в выводе строка
 «(ожидание … сек)». (На текущем коде — красный: отказ на первом опросе.)
 
-AC-2. С `--wait-ci`: `MAIN_UNKNOWN`, затем `MAIN_GREEN` — пин сдвинут.
+AC-2. С `--wait-ci`: первый опрос `MAIN_UNKNOWN`, второй `MAIN_GREEN` —
+опросов ровно два, `sleep` вызван ровно один раз, пин сдвинут только после
+второго опроса (после первого, `MAIN_UNKNOWN`, пин на прежнем месте):
+неизвестный цвет зелёным не считается — этим критерием закреплён
+инвариант 19 (`docs/invariants.md:49`) на пути `--wait-ci`.
 
 AC-3. С `--wait-ci`: `MAIN_RUNNING`, затем `MAIN_RED` — отказ с текстом
 красного CI («CI коммита … красный — …; пин не сдвинут, сначала почини
 main»), пин на месте, третьего опроса нет.
 
 AC-4. С `--wait-ci`: всё время `MAIN_RUNNING` до потолка — отказ с текстом
-«потолок ожидания CI main истёк», пин на месте.
+«потолок ожидания CI main истёк (N сек)», где N — значение
+`MERGE_GATE_CI_WAIT_CEILING_SEC` в секундах, пин на месте.
 
-AC-5. С `--wait-ci`, потолок: `monotonic` после второго незелёного опроса
-даёт значение не меньше `MERGE_GATE_CI_WAIT_CEILING_SEC` — отказ, `sleep`
+AC-5. С `--wait-ci`, потолок, единые подменённые часы требования 10:
+`MERGE_GATE_CI_WAIT_CEILING_SEC` равен `MERGE_GATE_CI_WAIT_POLL_SEC`, все
+опросы `MAIN_RUNNING` — отказ по потолку после второго опроса, `sleep`
 вызван ровно один раз, строка «(ожидание … сек)» напечатана дважды.
 
 AC-6. Без `--wait-ci` и `MAIN_RUNNING` — прежний отказ «повтори, когда CI
@@ -101,8 +115,9 @@ AC-9. `pin-update <sha> --wait` и `pin-update <sha> --wait-ci --force` —
 [--wait-ci]», `fetch` не вызван, журнал не изменился.
 
 ## Оценка объёма и деление
-Сработавшие сигналы: «число затрагиваемых модулей/файлов» и, вслед за ним,
-«прогноз диффа не дан». Первый guard считает по всем путям
+Сработавшие сигналы: «число затрагиваемых модулей/файлов», `budget_usd` ≥ $30
+(потолок $40 — по калибровке, решение Оператора на гейте SPEC) и, вслед за
+ними, «прогноз диффа не дан». Первый guard считает по всем путям
 `orchestrator/*.py`, упомянутым в тексте SPEC, и здесь его поднимает перечень
 файлов только для чтения из ТЗ (раздел «Не входит»). Меняются три зоны:
 `orchestrator/pin.py`, `orchestrator/artel.py` (только разбор аргументов
@@ -130,7 +145,8 @@ AC-9. `pin-update <sha> --wait` и `pin-update <sha> --wait-ci --force` —
   `orchestrator/canary.py`, `orchestrator/doctor/*` (в том числе
   `doctor/main_ci.py` — вызывающий `main_line_status`), `orchestrator/merge_queue.py`,
   `orchestrator/merge_lock.py`, `orchestrator/fsm.py`, `orchestrator/watch.py`,
-  `orchestrator/gitcmd.py`, `orchestrator/store.py`, `docs/operator-session.md`.
+  `orchestrator/gitcmd.py`, `orchestrator/store.py`, `docs/operator-session.md`,
+  `docs/invariants.md`.
 - Правка памяти сессии `check-main-ci-after-merge.md` — делает сессия Оператора.
 - Две фразы контракта сессии `docs/operator-session.md` о `pin-update <sha>
   --wait-ci` — вносит Оператор через `doc-commit` после мержа.
@@ -140,4 +156,5 @@ AC-9. `pin-update <sha> --wait` и `pin-update <sha> --wait-ci --force` —
 ## Материалы
 - `docs/audits/code-revision-2026-10-22.md` (копия ревизии), находка CR-2026-10-22-4.
 - Образец ожидания: `orchestrator/fsm_merge_gate.py::_wait_for_branch_ci_green`.
-- ТЗ: бюджет Оператора $15–20; поставлен минимум планки $25 (skills/spec-authoring.md).
+- Бюджет: $40 — по калибровке (до 10 критериев и до 4 файлов зоны), решение
+  Оператора на гейте SPEC 23.10.2026 (круг 1, D-4).
