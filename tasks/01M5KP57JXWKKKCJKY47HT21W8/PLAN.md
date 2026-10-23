@@ -2,7 +2,7 @@
 task: 01M5KP57JXWKKKCJKY47HT21W8
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -21,8 +21,9 @@ schema_version: 5
 защищённые пути, едут приложениями 1 и 2 ниже (диффы ТЗ дословно).
 
 Два существующих теста требования 8 с этим несовместимы и правятся только по
-мандату Оператора — его в каналe `answer` ещё нет, поэтому шаг сдаётся
-эскалацией (раздел «Эскалация»). Бюджет SPEC ($25) не пересматривается.
+мандату Оператора — мандат дан в ANSWER-2 (строки «Ослабление тестов
+разрешено:» по обоим методам с матрицей неослабления); утверждения заменены
+ровно по нему. Бюджет SPEC ($25) не пересматривается.
 
 ## Шаги
 1. `orchestrator/role_prompt.py`: константа `REVIEWER_FULL_SUITE_RULE`; вставка
@@ -31,7 +32,7 @@ schema_version: 5
    — СДЕЛАНО.
 2. Приложения 1 и 2 в PLAN.md (ниже); `git apply --check` каждого на чистом
    дереве ветки (база 9b498178) — код выхода 0 у обоих. — СДЕЛАНО.
-3. После мандата (ANSWER): замена утверждений двух тестов требования 8 по
+3. По мандату ANSWER-2: замена утверждений двух тестов требования 8 по
    разделу SPEC «Меняемое поведение», сценарии прежние, имена методов прежние:
    - `test_ac7_external_reviewer_mission_keeps_suite_run`: `assertIn`
      `REVIEWER_FULL_SUITE_RULE`, `` `<pult> plank-run <id>` ``,
@@ -39,8 +40,12 @@ schema_version: 5
    - `test_ac8_external_reviewer_lists_pult_check_commands`: цикл по
      `("guard", "plank-run")` с полным путём пульта, `assertNotIn("Права не
      сужены")` остаётся, плюс отсутствие `suite-run <id>` без ` --failed`/
-     ` --wait` (та же регулярка, что `bare_full_run`).
-   — ЖДЁТ МАНДАТА.
+     ` --wait` (та же регулярка, что `bare_full_run`; в файл добавлен
+     `import re`).
+   Докстринги и «Ловит мутацию» — под новое ожидание. Сторож проверен
+   временной мутацией: возврат `` `{pult} suite-run {task_id}` — полный набор
+   тестов `` в перечень `_reviewer_checks_note` краснит оба метода; код
+   возвращён. — СДЕЛАНО.
 
 ## Покрытие требований
 
@@ -53,7 +58,7 @@ schema_version: 5
 | 5 | планка test_author (AC-4..AC-6) — на дереве с приложениями |
 | 6 | долгоживущий `tests/test_01m5kp57jxwkkkcjky47ht21w8_reviewer_full_suite_rule.py` (test_author) |
 | 7 | 2 |
-| 8 | 3 (после мандата) |
+| 8 | 3 (мандат ANSWER-2) |
 
 ## Влияние на систему
 - Меняется только текст миссии ревьювера: у артели добавлено предложение
@@ -64,11 +69,10 @@ schema_version: 5
   — «Не входит».
 - Тесты: прогнаны `tests/test_01m5kp57jxwkkkcjky47ht21w8_reviewer_full_suite_rule.py`
   (5/5 зелёные), `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py`,
-  `tests/test_01m56g23zqdhv2bkevwwc22r96_external_missions.py`: красны ровно два
-  метода требования 8 (`MissionTest::test_ac7_external_reviewer_mission_keeps_suite_run`,
-  `Ac8ReviewerChecksTest::test_ac8_external_reviewer_lists_pult_check_commands`)
-  — до мандата их не правлю. Прочие тесты, собирающие миссии ролей, прогнаны
-  по файлам (см. NOTE-developer.md).
+  `tests/test_01m56g23zqdhv2bkevwwc22r96_external_missions.py` после правки
+  двух методов требования 8 — 16 passed, 58 subtests passed. Прочие тесты,
+  собирающие миссии ролей, прогнаны по файлам в прошлом шаге (см.
+  NOTE-developer.md).
 - Ослабления нет: снимается утверждение о присутствии `suite-run` (оно и есть
   меняемое поведение варианта А), взамен — более строгие утверждения об
   отсутствии полного прогона и наличии правила.
@@ -184,34 +188,3 @@ index aecc00c4..d013bf71 100644
   но канал требует отдельного круга эскалации developer ради заведомо
   известного ответа; передача мандата `answer` до первого шага developer
   сэкономила бы круг (механика `answer`/ANSWER-n.md).
-
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. Мандат на правку двух существующих тестов требования 8 SPEC. Нужна строка
-   «Ослабление тестов разрешено:» с матрицей неослабления в ANSWER по методам:
-   - `tests/test_01m5hdb1gsfdkfm7qb9jzmccwj_developer_suite_run.py::MissionTest::test_ac7_external_reviewer_mission_keeps_suite_run`
-     — было: `assertIn("`<pult> suite-run <id>` — полный набор тестов", mission)`;
-     станет: `assertIn(role_prompt.REVIEWER_FULL_SUITE_RULE, mission)`,
-     `assertIn("`<pult> plank-run <id>", mission)`,
-     `assertIn("`<pult> guard <id>", mission)`,
-     `assertEqual(bare_full_run(mission, task_id), [])`. Сценарий и имя метода
-     прежние (докстринг и «Ловит мутацию» — под новое ожидание).
-   - `tests/test_01m56g23zqdhv2bkevwwc22r96_external_missions.py::Ac8ReviewerChecksTest::test_ac8_external_reviewer_lists_pult_check_commands`
-     — было: `assertIn("<pult> <cmd>")` для `guard`, `plank-run`, `suite-run`
-     (строки 202–204); станет: то же для `guard`, `plank-run`;
-     `assertNotIn("Права не сужены")` сохраняется; добавлено отсутствие
-     `suite-run <id>` без ` --failed`/` --wait` (регулярка как `bare_full_run`).
-   Варианты: (а) мандат по обоим методам как выше; (б) правка через
-   `amend-tests`/иное решение Оператора. Дефолт при молчании: задача стоит в
-   эскалации, тесты не правлю.
-
-**Контекст:** код `orchestrator/role_prompt.py` (константа, миссия ревьювера,
-перечень внешнего проекта) готов и в worktree; карта кода регенерирована;
-долгоживущий тест задачи зелёный 5/5; приложения 1 и 2 проходят
-`git apply --check`. Красны ровно два метода выше — с прежним утверждением
-`suite-run` в миссии.
-
-**Блокирует:** шаг 3 PLAN (правка двух тестов) и сдачу `ready` — без неё
-набор `tests/` красный на рубеже `in_dev -> verifying`.
