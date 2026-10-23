@@ -1004,4 +1004,7 @@ CORE_REFERENCE_GIT_TIMEOUT_SEC = 60
 # Предел справочника в брифе developer/test_author (SPEC
 # 01M4S24EBVB72B8WYJ3JY96Y0E, К-3б, требование 7) — байты UTF-8 текста
 # кэша: справочник крупнее в бриф не идёт, решение за Оператором.
-CORE_REFERENCE_MAX_BYTES = 32_768
+# Решение Оператора 23.10 (находка CR-2026-10-22-11, SPEC
+# 01M5M6YQR587QNPCTG3T93TZ9J): предел снижен с 32 768 до 16 384 —
+# справочник в среднем занимал 25,8 КиБ промпта test_author.
+CORE_REFERENCE_MAX_BYTES = 16_384
