@@ -49,6 +49,7 @@ ADR-0013 ч.3). Каждый вызов — ровно одна запись ж�
 (`doctor/stale_cycles.py`), сигналов процессам команда не шлёт.
 """
 import sys
+import time
 from datetime import datetime, timezone
 
 from . import canary, ci, config, doctor, gitcmd, store
@@ -93,7 +94,33 @@ def _refuse_unless_main_ci_green(sha: str) -> None:
              f"пин не сдвинут, повтори, когда CI завершится")
 
 
-def cmd_pin_update(sha: str) -> None:
+def _wait_for_main_ci_green(sha: str) -> None:
+    """`pin-update <sha> --wait-ci` (SPEC 01M5K9M5DGPDRXG2M5B4KKGQ54,
+    требование 6): ожидание CI коммита `sha` на месте
+    `_refuse_unless_main_ci_green`, в порядке цикла гейта мержа
+    (`fsm_merge_gate._wait_for_branch_ci_green`) и с его константами —
+    вместо цикла оболочки сессии Оператора. Строка ожидания печатается до
+    проверки потолка, после последнего незелёного опроса паузы нет.
+    Неизвестный цвет ждётся, как незавершённый, и зелёным не считается
+    (инвариант 19); красный отказывает прежним текстом без новых опросов."""
+    start = time.monotonic()
+    while True:
+        status = ci.main_line_status(sha, repo=config.ROOT)
+        if status.kind == ci.MAIN_GREEN:
+            return
+        if status.kind == ci.MAIN_RED:
+            sys.exit(f"pin-update: CI коммита {sha[:8]} красный — "
+                     f"{status.note}; пин не сдвинут, сначала почини main")
+        elapsed = int(time.monotonic() - start)
+        print(f"[pin-update] {status.note} (ожидание {elapsed} сек)")
+        if time.monotonic() - start >= config.MERGE_GATE_CI_WAIT_CEILING_SEC:
+            sys.exit(f"pin-update: потолок ожидания CI main истёк "
+                     f"({config.MERGE_GATE_CI_WAIT_CEILING_SEC} сек) — "
+                     f"{status.note}; пин не сдвинут")
+        time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
+
+
+def cmd_pin_update(sha: str, wait_ci: bool = False) -> None:
     conn = store.db()
     old_sha = gitcmd.head_sha()
 
@@ -110,7 +137,10 @@ def cmd_pin_update(sha: str) -> None:
             f"{sha[:7]} (ADR-0013) — прогони канарейку на этом sha: "
             f"python3 orchestrator/artel.py canary --k 1 --sha {sha}")
 
-    _refuse_unless_main_ci_green(sha)
+    if wait_ci:
+        _wait_for_main_ci_green(sha)
+    else:
+        _refuse_unless_main_ci_green(sha)
 
     merge = gitcmd.git("merge", "--ff-only", sha)
     if merge is None or merge.returncode != 0:
