@@ -131,7 +131,14 @@ budget_usd: 30
        конструктора `Reader`) бросает `RuntimeError`. «Ловит мутацию:» —
        убран перехват исключения при запуске потока.
      - Сбой импорта `suite_durations`: на время прогона
-       `sys.modules["orchestrator.suite_durations"] = None`. «Ловит
+       одновременно `sys.modules["orchestrator.suite_durations"] = None`
+       и снят атрибут `suite_durations` у пакета `orchestrator`
+       (`mock.patch.dict(orchestrator.__dict__)` с удалением ключа либо
+       `monkeypatch.delattr(orchestrator, "suite_durations",
+       raising=False)`), после прогона оба восстанавливаются. Подмена
+       атрибута значением `None` не допускается. Перед прогоном тест
+       убеждается, что `from orchestrator import suite_durations` в этих
+       условиях бросает `ImportError` (иначе сценарий холостой). «Ловит
        мутацию:» — импорт снова вне `try`.
 
      В обоих сценариях: тот же итог (код возврата и разобранная сводка),
@@ -212,8 +219,15 @@ AC-7. Прогон маленького проекта песочницы ран
 условии файл времени появляется. Сценарий 1: подмена
 `suite_durations.Reader.start` (или конструктора `Reader`) бросает
 `RuntimeError`. Сценарий 2: на время прогона
-`sys.modules["orchestrator.suite_durations"] = None` (сбой импорта
-`suite_durations`); «Ловит мутацию: импорт снова вне try». В каждом
+одновременно `sys.modules["orchestrator.suite_durations"] = None` и
+удаление атрибута `suite_durations` у пакета `orchestrator`
+(`mock.patch.dict(orchestrator.__dict__)` с удалением ключа либо
+`monkeypatch.delattr(orchestrator, "suite_durations", raising=False)`),
+с восстановлением обоих после прогона (сбой импорта `suite_durations`);
+подмена атрибута значением `None` не допускается. Перед прогоном тест
+убеждается, что `from orchestrator import suite_durations` в этих
+условиях бросает `ImportError`; «Ловит мутацию: импорт снова вне try».
+В каждом
 сценарии прогон по сравнению с прогоном без сбоя даёт тот же итог (код
 возврата и разобранная сводка) и те же строки результатов тестов
 (`PASSED/FAILED <id>`) без длительностей; в логе нет строк трассировки
@@ -292,3 +306,7 @@ AC-8. PLAN задачи содержит две вещи:
   вердикт concerns): приняты все пять предложений аудита — формы импорта
   в 8(г)/AC-6, второй сценарий и условие запуска потока в 8(д)/AC-7,
   сравнение прогонов без длительностей в AC-7, проверка `__module__` в AC-4.
+- Решение Оператора на гейте SPEC 24.10.2026 (круг 2, по `SPEC-AUDIT.md`,
+  вердикт concerns): в сценарии 2 AC-7 вместе с
+  `sys.modules[...] = None` снимается атрибут пакета `orchestrator`
+  (не подменяется `None`), тест проверяет `ImportError` перед прогоном.
