@@ -37,6 +37,20 @@ def is_environ(node) -> bool:
     return isinstance(node, ast.Name) and node.id == "environ"
 
 
+# Ограда импорта — решение Оператора 23.10 (возврат из verifying: зеркала
+# пакета tests в тестах пульта не несут direct_git.py). Допустима ровно эта
+# форма: другой обработчик, другое имя модуля, иное тело — посторонний код.
+GUARDED_IMPORT = ast.unparse(ast.parse(
+    "try:\n"
+    "    from .direct_git import prefer_direct_git\n"
+    "except ModuleNotFoundError as exc:\n"
+    "    if exc.name != 'tests.direct_git':\n"
+    "        raise\n"
+    "    DIRECT_GIT_DIR = None\n"
+    "else:\n"
+    "    DIRECT_GIT_DIR = prefer_direct_git(os.environ)\n"))
+
+
 def foreign_statements(tree: ast.Module) -> list[str]:
     """Операторы модуля, не относящиеся к вызову `prefer_direct_git`."""
     body = list(tree.body)
@@ -66,6 +80,9 @@ def foreign_statements(tree: ast.Module) -> list[str]:
                     and ast.unparse(value.func).split(".")[-1] == "prefer_direct_git"
                     and len(value.args) == 1 and not value.keywords
                     and is_environ(value.args[0])):
+                continue
+        elif isinstance(node, ast.Try):
+            if text == GUARDED_IMPORT:
                 continue
         elif isinstance(node, ast.Delete):
             if all(isinstance(t, ast.Name) and t.id in ALLOWED_IMPORT_NAMES | {"os"}
@@ -99,7 +116,9 @@ class Ac6InitOnlyWiringTest(unittest.TestCase):
         self.assertEqual(foreign_statements(tree), [],
                          f"другая правка {INIT}:\n{source}")
         assigns = [n for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign))]
-        self.assertEqual(len(assigns), 1, source)
+        guarded = [n for n in tree.body
+                   if isinstance(n, ast.Try) and ast.unparse(n) == GUARDED_IMPORT]
+        self.assertEqual(len(assigns) + len(guarded), 1, source)
 
 
 class Ac9PlanMeasurementsTest(unittest.TestCase):
