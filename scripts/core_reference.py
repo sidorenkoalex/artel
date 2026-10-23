@@ -50,8 +50,6 @@ ROLE_LINE = ("Для роли: справочник описывает код к
              "рабочем каталоге.")
 NO_NOTE = "без пояснения"
 NOT_IN_COMMIT = "нет в коммите"
-SETTING_KEYS = ("modules", "constants_module", "constants",
-                "CORE_REFERENCE_MIN_USES")
 
 # Исключения разбора, не роняющие сборку (требование 2): `ValueError`
 # покрывает и нулевой байт, и `UnicodeEncodeError` одиночного суррогата.
@@ -63,7 +61,6 @@ EXCLUDED_DIRS = ("__pycache__", "node_modules", "venv")
 # Концы строк — как у разбора `ast`: смещения узлов считаются по ним.
 LINE_END = re.compile(r"\r\n|\r|\n")
 SENTENCE_END = re.compile(r"[.:;](?=\s)")
-SHA_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class DeadlineExceeded(Exception):

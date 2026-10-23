@@ -1044,19 +1044,6 @@ def _covering_source(finding: Finding, mandate: dict):
                  if e in mandate), None)
 
 
-def assertion_observation(task_id: str, code_branch: str,
-                          artifact_branch: str, scope=None) -> tuple:
-    """(строки находок об изменённых утверждениях с отметкой мандата,
-    причины невыполненного наблюдения по файлам, текст сбоя git).
-    Ничего не журналирует: запись пишут рубежи через `uncovered`."""
-    repo = workspace.task_repo(task_id)
-    cmp = _compare(code_branch, repo=repo, scope=scope)
-    if cmp.observed is None:
-        return [], [], cmp.git_detail
-    mandate = _answer_mandate(artifact_branch, task_id) if cmp.observed else {}
-    return _observation_lines(cmp.observed, mandate), cmp.unobserved, ""
-
-
 def _journal_observation(conn, task_id: str, lines: list,
                          unobserved: list) -> None:
     """Записи наблюдения рубежа (требование 5, AC-6/AC-8/AC-9): одна —
