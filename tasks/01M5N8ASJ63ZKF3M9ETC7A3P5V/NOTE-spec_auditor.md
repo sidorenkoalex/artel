@@ -1,17 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- HEAD ветки 2b187a3d; diff 84c784aa..HEAD по orchestrator/scripts/tests пуст — номера строк ТЗ/SPEC верны.
-- Перечень 13 закрытых имён подтверждён (grep `acceptance\._`); прочие совпадения (`_pytest_command` two_sided:279, `_own_target` plank_run:110, `_acceptance_run_body` plank_run:41, fsm_autogate:48, models:1019, plank_helper:34, project_profile:424, outcome_integrity:12) — комментарии/докстринги.
-- Подмен тестами имён из списка нет (разбор ast вызовов patch.object/setattr + строки "orchestrator.acceptance.").
-- Главная находка: advance_gates/{two_sided,outcome_integrity,tests_writing}.py импортируют `from .. import acceptance` — формы нет в перечне AC-6/8(г).
-- AC-7: reader только при profile None и log=; `try` вокруг Reader уже есть (acceptance.py:2865-2868) — мутация «импорт вне try» тестом AC-7 не ловится; «тот же лог» побайтно недостижим (время в итоге pytest).
+- Круг 2 (spec_sha 7607c201). HEAD 2b187a3d; diff 84c784aa..HEAD по orchestrator/scripts/tests пуст — номера строк верны.
+- Все пять решений Оператора круга 1 в SPEC перенесены (8(г)/AC-6 формы импорта, AC-7 два сценария, условие потока, сравнение без длительностей, AC-4 `__module__`).
+- Новая находка: сценарий 2 AC-7 (`sys.modules["orchestrator.suite_durations"] = None`) не ломает `from . import suite_durations`, если у пакета `orchestrator` уже есть атрибут `suite_durations` (он появляется при любом импорте модуля — в том числе в сценарии 1 для подмены `Reader.start` и в базовом прогоне). Проверено на python 3.13: warm → «import OK», cold → ImportError. По букве SPEC тест красный на правильном коде. Нужно ещё снять атрибут пакета (удалить, не None: None даёт AttributeError внутри try, мутацию не ловит).
+- Мелкое: формы AC-6 не включают `from .acceptance import _x` / `from orchestrator.acceptance import _x` в модулях верхнего пакета (сейчас такая форма только для публичного `is_pytest_command`, project_profile.py:461, :651).
 
 ## Не сработало
-- sed/awk в цепочках Bash требуют подтверждения — по одной команде.
+- В Bash нет `ls`/`cat`/`rm` в PATH; `VAR=… cmd` требует подтверждения — запускал `python3 - arg < file` из рабочего каталога.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict concerns (5 отклонений), guard ок.
+- SPEC-AUDIT.md сдан: status ready, verdict concerns.
 
 ## Чего не хватило
-- Формы импорта acceptance подпакетами — искал grep'ом `from .. import`.
+- Поведение `from . import X` при `sys.modules[X] = None` и наличии атрибута пакета — проверял пробой.
