@@ -47,7 +47,7 @@ AUTOGATE_ENV_REFUSAL_ACTION = "автогейт acceptance: отказ окру�
 
 # Начало текста `acceptance._full_suite_timeout_note` до числа секунд —
 # число и источник предела меняются, начало нет; сверку с производителем
-# держит приёмочный тест AC-6.
+# держит tests/test_fsm_autogate_env_refusal.py.
 _TIMEOUT_NOTE_START = "прогон полного набора tests/ превысил "
 
 
