@@ -1,16 +1,17 @@
 # Записка developer
 
 ## Выяснено
-- `tests/fixtures.py`: общий генератор `_sandbox(cls)` (cls(), setUp, yield, уборка через `obj._cleanups.pop()` до опустошения; RuntimeError / add_note), шесть фикстур без аргументов с импортом класса внутри тела. Долгоживущий файл задачи 43/43, планка 2/2.
-- Адресный прогон существующих тестов по классам (5 файлов, перечень в PLAN) — 73 passed.
-- Приложение 1 (conftest.py) применяется: проверено `guard.plan_appendices` + `git apply --check -` из python (rc 0).
-- Карта регенерирована (`docs/codebase-map.md`).
+- `tests/fixtures.py`: переходник `_sandbox(cls)`, шесть фикстур; долгоживущий файл 43/43, планка 2/2.
+- Возврат из verifying (CI 40028534489): безусловное `pytest_plugins` роняло ImportError в зеркале `CollectFromTestsDirTest::test_clean_long_lived_file_collects_from_tests_dir`. Приложение 1 PLAN заменено условным текстом Оператора (`importlib.util.find_spec`), `git apply --check` rc 0.
+- Новый тест разработчика `tests/test_fixtures_plugin_conditional.py` (не в форме `test_<id>_*`, т.е. не долгоживущий): зеркало из настоящего conftest.py (+строки приложения, если не наложено) без/с `tests/fixtures.py`.
+- С временно наложенным приложением: 54 passed (вкл. упавший в CI тест); мутация «безусловное подключение» — оба теста красные; conftest.py возвращён `git checkout`.
+- Карта регенерирована.
 
 ## Не сработало
-- Bash шага: `sed -i`, heredoc с `{`/кавычками, `$?`/`$var` требуют подтверждения — временную мутацию руками не сделал (test_author проверял мутации стабом той же формы).
+- Bash: `$?` в команде требует подтверждения — используй `&& echo OK`.
 
 ## Где остановился
-- Готово: PLAN.md status: ready, guard ок.
+- Готово: PLAN.md status: ready, guard ок, планка 2/2.
 
 ## Чего не хватило
-- Команды пульта для `git apply --check` приложений PLAN.
+- Команды пульта для `git apply --check` приложений PLAN (делал через `guard.plan_appendices` + `git apply -`).

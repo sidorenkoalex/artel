@@ -49,21 +49,38 @@ _sandbox(<класс>)` с импортом класса `tests.sandbox` вну�
   `set_state`, `write_plan_ready`, `write_acceptance_plank`,
   `advance_from_in_dev`.
 
-Подключение для `tests/` и планки — `pytest_plugins = ["tests.fixtures"]`
-в корневом `conftest.py` (защищённый путь) — Приложением 1 ниже, без
-изменений против SPEC. В ветке `conftest.py` не правится.
+Подключение для `tests/` и планки — `pytest_plugins` в корневом
+`conftest.py` (защищённый путь) — Приложением 1 ниже. Возврат из
+`verifying` (24.10.2026, CI 40028534489): безусловное
+`pytest_plugins = ["tests.fixtures"]` роняло ImportError в зеркале
+репозитория `tests/test_fsm_advance_tests_writing_test_groups.py::
+CollectFromTestsDirTest::test_clean_long_lived_file_collects_from_tests_dir`
+(симлинки `conftest.py`, `tests/__init__.py`, `tests/sandbox.py` без
+`tests/fixtures.py`). Приложение 1 заменено текстом решения Оператора —
+условное подключение через `importlib.util.find_spec("tests.fixtures")`.
+Существующий тест не правится. В ветке `conftest.py` не правится.
 
 Тесты задачи (AC-2…AC-8) — долгоживущий файл
 `tests/test_01m5n9v4s984grrxsmbk5jx7v1_fixtures.py` (test_author, в стиле
-pytest, явный импорт `tests.fixtures`); AC-9 — планка. Свойств сверх
-покрытых этими файлами реализация не вводит, своих тестов не добавляю.
+pytest, явный импорт `tests.fixtures`); AC-9 — планка. Условное
+подключение долгоживущий файл не покрывает (его AC-7 — временный проект
+со своим `conftest.py`), а правка его — `amend-tests`; поэтому сценарий
+решения Оператора — тест разработчика в новом файле
+`tests/test_fixtures_plugin_conditional.py` (pytest, `parametrize`):
+зеркало из настоящего корневого `conftest.py` (если приложение ещё не
+наложено — с дописанными строками приложения) без `tests/fixtures.py` —
+сбор проходит, запрос фикстуры даёт «fixture 'tmp_dir' not found»; с
+модулем — фикстура видна. Имя файла намеренно не в форме
+`tests/test_<id>_*.py` — это не долгоживущий файл test_author.
 
 ## Шаги
 1. `tests/fixtures.py` — переходник `_sandbox`, `_run_cleanups`,
    `_cleanup_message` и шесть фикстур; регенерация
    `docs/codebase-map.md` (`python3 scripts/codebase_map.py`).
-2. Приложение 1 (корневой `conftest.py`) — переносится в PLAN без
-   изменений; `git apply --check` на чистом дереве ветки — применяется.
+2. Приложение 1 (корневой `conftest.py`, условное подключение по решению
+   Оператора 24.10.2026) — переносится в PLAN без изменений; `git apply
+   --check` на чистом дереве ветки — применяется; тест
+   `tests/test_fixtures_plugin_conditional.py` на оба зеркала.
 3. Проверка: долгоживущий файл задачи, планка (`plank-run`), адресный
    прогон существующих тестов по классам песочниц.
 
@@ -93,9 +110,30 @@ pytest, явный импорт `tests.fixtures`); AC-9 — планка. Сво
   вместе с файлом задачи — 73 passed, 49 subtests passed.
 - `git apply --check` Приложения 1 на чистом дереве ветки — применяется (см. «Влияние на систему»).
 
+Прогоны после возврата из `verifying` (24.10.2026):
+- `git apply --check` нового Приложения 1 (текст через
+  `guard.plan_appendices`) на чистом дереве ветки — rc 0.
+- С временно наложенным приложением: `python3 -m pytest
+  tests/test_fsm_advance_tests_writing_test_groups.py
+  tests/test_fixtures_plugin_conditional.py
+  tests/test_01m5n9v4s984grrxsmbk5jx7v1_fixtures.py -p no:cacheprovider
+  -p timeout -o timeout=120` — 54 passed (в том числе упавший в CI
+  `test_clean_long_lived_file_collects_from_tests_dir`).
+- Мутация: в наложенном приложении подключение сделано безусловным —
+  красные `test_mirror_collects_with_and_without_fixtures_module[False]`
+  и `test_clean_long_lived_file_collects_from_tests_dir`; `conftest.py`
+  возвращён `git checkout`.
+- Без приложения: `tests/test_fixtures_plugin_conditional.py` — 2 passed.
+
 ## Влияние на систему
 - `tests/sandbox.py` и существующие файлы `tests/` не меняются; в ветке
-  новые файлы — только `tests/fixtures.py` (+ карта кодовой базы).
+  новые файлы — только `tests/fixtures.py`,
+  `tests/test_fixtures_plugin_conditional.py` (+ карта кодовой базы).
+- Условное подключение: дерево без `tests/fixtures.py` (зеркала в тестах)
+  собирается как до задачи; тест, запросивший фикстуру там, падает
+  громко «fixture not found». `find_spec` импортирует пакет `tests`
+  (смена `PATH` в `tests/__init__.py` — принята Оператором на гейте SPEC
+  как безвредная, B-2 аудита).
 - До применения Приложения 1 модуль никем не подключён — поведение
   существующих прогонов не меняется. После применения корневой
   `conftest.py` импортирует `tests.fixtures` в каждом прогоне; модуль на
@@ -126,22 +164,34 @@ pytest, явный импорт `tests.fixtures`); AC-9 — планка. Сво
 ## Приложение 1: подключение фикстур в корневом conftest.py
 
 Защищённый путь (маска `**/conftest.py`); решение Оператора 23.10.2026,
-ADR-0027 п. 2; текст — из SPEC без изменений.
+ADR-0027 п. 2; форма уточнена решением Оператора 24.10.2026 (возврат из
+`verifying`, CI 40028534489) — условное подключение, текст из причины
+возврата без изменений.
 
 ```diff
 diff --git a/conftest.py b/conftest.py
-index ada960f..4f0de0b 100644
+index ada960f..2aecfdc 100644
 --- a/conftest.py
 +++ b/conftest.py
-@@ -24,6 +24,12 @@ import pytest
+@@ -17,6 +17,7 @@ tests/test_x.py tests` (целевой путь рядом с нецелевым
+ `bash_guard._pytest_verdict`; сфера здесь уже — только СВОЙ процесс
+ pytest, не произвольная Bash-команда, поэтому формы `python3 -m
+ unittest` вне зоны действия этого гейта)."""
++import importlib.util
+ import os
+ import sys
+ 
+@@ -24,6 +25,14 @@ import pytest
  
  from orchestrator.config import ARTEL_ROLE_ENV
  
 +# Общие фикстуры-песочницы в стиле pytest (ADR-0027): видны тестам
-+# `tests/` и планке `tasks/<id>/acceptance_tests/`. Модуль импортирует
-+# `tests.sandbox` только внутри фикстур — подключение не меняет состояние
-+# процесса для прогонов, которые песочницу не берут.
-+pytest_plugins = ["tests.fixtures"]
++# `tests/` и планке `tasks/<id>/acceptance_tests/`. Подключаются, только
++# если модуль есть в дереве прогона: зеркала репозитория в тестах берут
++# этот файл без `tests/fixtures.py`. Тест, запросивший фикстуру при
++# отсутствии модуля, падает с «fixture not found» — громко.
++pytest_plugins = (["tests.fixtures"]
++                  if importlib.util.find_spec("tests.fixtures") else [])
 +
  # Флаги pytest, за которыми следует отдельное значение — не позиционный
  # аргумент-путь (тот же список, что нёс `bash_guard._PYTEST_VALUE_FLAGS`).
