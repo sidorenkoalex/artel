@@ -381,7 +381,7 @@ class StopTest(_ParallelSandbox):
                          ["alfa", "beta"])
         self.assertEqual(sorted((r["title"], r["outcome"]) for r in self.rows()),
                          [("alfa", "оборвана сигналом SIGTERM"),
-                          ("beta", "оборвана сигналом SIGTERM")])
+                          ("beta", "оборвана сигналом SIGTERM")], out)
         self.assertNotRegex(out, r"прогон [0-9]{8}T[0-9]{6}Z завершён")
         drives = [c for c in self.calls() if c["kind"] == "drive"]
         self.assertEqual(sorted((c["template"], c["record"], c["mark"])
