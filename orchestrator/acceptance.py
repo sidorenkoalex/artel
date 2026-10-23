@@ -3356,6 +3356,17 @@ def full_suite(root: Path, task_id: str,
         # Узел по компонентам записи из нескольких компонентов: предел —
         # свой у каждого (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требование 10).
         limit = project_profile.component_limit(reported)
+    elif recordable and project_profile.is_multi(target):
+        # Контекст задачи на записи из нескольких компонентов: предел —
+        # компонента задачи (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
+        decision = project_profile.for_task_target(target, task_id,
+                                                   store.db())
+        if decision.profile is None:
+            note = f"предел полного набора не определён: {decision.refusal}"
+            return FullSuiteRun(False, FULL_SUITE_NOT_STARTED, "", None,
+                                _full_suite_detail(FULL_SUITE_NOT_STARTED,
+                                                   "", None, note))
+        limit = project_profile.component_limit(decision.profile)
     else:
         limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
@@ -3487,16 +3498,21 @@ def acceptance_suite(conn, root: Path, task_id: str, branch: str, repo: Path,
     """
     run = _acceptance_suite_run(conn, root, task_id, branch, repo,
                                 actor=actor, fresh=fresh)
+    from . import store
     try:
         profile = _task_profile(conn, task_id)
-    except targets.ComponentsPending:
-        # Путь CI запись из нескольких компонентов отказом не встречает —
-        # её держат входы гейтов; проверок компонента тут нет.
-        profile = None
+    except targets.ComponentsPending as exc:
+        # Компонент задачи не выбран — `checks_local` не определены: отказ
+        # с причиной, не зелёный итог без них (SPEC
+        # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
+        text = f"checks_local компонента задачи не определены: {exc}"
+        if isinstance(conn, sqlite3.Connection):
+            store.journal(conn, task_id, actor, CHECKS_LOCAL_ACTION, text)
+        return FullSuiteRun(False, FULL_SUITE_NOT_STARTED, text, run.log_path,
+                            f"{text}\n{run.detail}", run.tests)
     ok, text = run_checks_local(profile, root)
     if not text:
         return run
-    from . import store
     if isinstance(conn, sqlite3.Connection):
         store.journal(conn, task_id, actor, CHECKS_LOCAL_ACTION, text)
     if ok:
@@ -3568,9 +3584,11 @@ def _task_own_profile(conn, task_id: str):
     места зовутся прежней формой. Строка задачи не прочитана — проект
     артели, тот же откат, что у `store.task_target` для строки без проекта.
 
-    Запись с несколькими компонентами — `targets.ComponentsPending` с
-    причиной `profile_of`: прежняя форма пульта на ней была бы обходом
-    отказа до G1б (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требование 10)."""
+    Запись с несколькими компонентами — профиль компонента задачи
+    (`project_profile.for_task`), при отказе выбора —
+    `targets.ComponentsPending` с его причиной: прежняя форма пульта на ней
+    была бы обходом отказа (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование
+    2)."""
     profile = _task_profile(conn, task_id)
     return _reported(profile) or _own(profile)
 
@@ -3588,7 +3606,13 @@ def _task_profile(conn, task_id: str):
             pass
     answer = repo_context.profile_of(target)
     if answer.outcome == repo_context.PROFILE_UNREAD and answer.multi:
-        raise targets.ComponentsPending(answer.reason)
+        # Компонент задачи — по зонам её строки (SPEC
+        # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2); `conn=None` сюда не
+        # доходит — у него проект артели.
+        decision = project_profile.for_task_target(target, task_id, conn)
+        if decision.profile is None:
+            raise targets.ComponentsPending(decision.refusal)
+        return decision.profile
     if answer.outcome != repo_context.PROFILE_PRESENT:
         return None
     try:

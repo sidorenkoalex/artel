@@ -135,11 +135,18 @@ def _test_integrity_diff_gate(conn, task_id: str, state: str, branch: str,
 
     `True` — эскалировано, вызывающий код обязан остановиться.
     """
-    decision = project_profile.decide(ctx.target)
+    decision = project_profile.for_task_target(ctx.target, task_id, conn)
     if decision.profile is None:
         if not decision.refusal:
             project_profile.journal_skip(
                 conn, task_id, project_profile.CHECK_WEAKENING, decision)
+        elif project_profile.is_multi(ctx.target):
+            # Компонент задачи не выбран — отказ, не пропуск гейта текста
+            # (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).
+            store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,
+                          decision.refusal)
+            print(f"[{task_id}] merge отклонён: {decision.refusal}")
+            return True
         return False
     artifact_branch_name, _foreign = artifact_source.resolve(conn, task_id)
     return merge_gate_escalates(conn, task_id, state, branch,
@@ -1414,8 +1421,9 @@ def _profile_refusal_exit(conn, task_id: str, target: str) -> None:
     """Профиль тестов артели не задан или не прочитан — `approve` гейта
     мержа отказывает до первого шага тела, не дойдя до ожидания CI (SPEC
     01M45FJVGQT1K0P8HDEXZX6HS7, требование 4): гейты целостности тестов
-    пульта не отключаются и на мерже. Состояние не трогается."""
-    decision = project_profile.decide(target)
+    пульта не отключаются и на мерже. Состояние не трогается. У записи из
+    нескольких компонентов — решение по компоненту задачи (`for_task`)."""
+    decision = project_profile.for_task_target(target, task_id, conn)
     if not decision.refusal:
         return
     store.journal(conn, task_id, "fsm", MERGE_PROFILE_REFUSAL_ACTION,

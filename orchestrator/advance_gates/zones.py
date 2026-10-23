@@ -284,7 +284,7 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     # текст отказа; проект без профиля — без расширения и без фолбэка.
     profile_refusal = ""
     if out_of_zone and not repo_context.is_artel(ctx):
-        decision = project_profile.decide(target)
+        decision = project_profile.for_task_target(target, task_id, conn)
         if decision.profile is not None:
             out_of_zone = [f for f in out_of_zone
                            if not decision.profile.is_long_lived(task_id, f)]

@@ -117,6 +117,10 @@ class Profile:
     test_support: tuple = field(default=(), compare=False)
     layers: tuple = field(default=(), compare=False)
     paths: tuple = field(default=(), compare=False)
+    # Поле `layers` компонента задано, пусть и пустым (SPEC
+    # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 7): `layers: []` у pytest —
+    # строгий режим, а не `python-ast` по умолчанию.
+    layers_declared: bool = field(default=False, compare=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -215,6 +219,12 @@ def decide(target: str) -> Decision:
                                   f"targets.yaml"))
 
 
+def is_multi(target: str) -> bool:
+    """Запись проекта несёт несколько компонентов — профиль задачи
+    выбирается по её зонам (`for_task`)."""
+    return repo_context.profile_of(target).multi
+
+
 def long_lived_imports(target: str, profile: Profile | None):
     """Правило импортов долгоживущих файлов проекта для
     `guard.long_lived_errors_from_files(project_imports=…)` (SPEC
@@ -226,7 +236,144 @@ def long_lived_imports(target: str, profile: Profile | None):
 
 
 def for_task(conn, task_id: str) -> Decision:
-    return decide(store.task_target(conn, task_id))
+    """Решение по задаче: `decide_task(<проект>, <зоны строки задачи>)`
+    (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 1). Колонки зон строки
+    читаются только у записи из нескольких компонентов — у прочих
+    решение `decide` как есть."""
+    return for_task_target(store.task_target(conn, task_id), task_id, conn)
+
+
+def for_task_target(target: str, task_id: str, conn=None) -> Decision:
+    """`for_task` для места, которому проект задачи уже известен: решение
+    `decide(target)`, а у записи из нескольких компонентов — компонент по
+    зонам строки задачи из `conn` (не передан — БД пульта)."""
+    def zones():
+        db = conn if conn is not None else store.db()
+        # `get_task` при отсутствии строки завершает процесс — пропавшая
+        # строка здесь даёт пустые зоны, т. е. отказ «зоны не заданы».
+        if not store.task_exists(db, task_id):
+            return set()
+        return _row_zones(store.get_task(db, task_id))
+    return _by_zones(target, decide(target), zones)
+
+
+def for_row(row) -> Decision:
+    """`for_task` по строке задачи (колонки `target`, а у записи из
+    нескольких компонентов — `zones`/`zones_extension`)."""
+    target = row["target"] or config.DEFAULT_TARGET
+    return _by_zones(target, decide(target), lambda: _row_zones(row))
+
+
+def _row_zones(row) -> set:
+    # store -> ... -> project_profile; zone_lock -> lease -> runner ->
+    # project_profile: цикл импорта.
+    from .zone_lock import task_zone_paths
+    return task_zone_paths(row)
+
+
+# Отказы выбора компонента задачи на записи из нескольких компонентов
+# (требование 1): к каждому дописывается причина `decide` дословно.
+ZONES_NOT_SET = ("зоны задачи не заданы — компонент задачи на записи из "
+                 "нескольких компонентов не выбран")
+ZONES_NOT_TOUCHING = "зоны задачи не задевают ни одного компонента записи"
+SEVERAL_COMPONENTS = ("задача затрагивает несколько компонентов ({names}) — "
+                      "дели задачу по компонентам (решение Оператора 20.10)")
+
+
+class ZoneListingError(Exception):
+    """Перечень файлов базы под зоной-каталогом не получен — выбор
+    компонента задачи невозможен (fail-closed, не пустой выбор)."""
+
+
+def _base_files(target: str, directory: str) -> list:
+    """Файлы репозитория проекта на базе под префиксом `directory`."""
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        raise ZoneListingError(repo_context.unresolved_reason(target))
+    remote_ref = f"refs/remotes/origin/{ctx.base}"
+    probe = repo_context.git(ctx, "rev-parse", "--verify", "-q", remote_ref)
+    ref = remote_ref if probe is not None and probe.returncode == 0 \
+        else ctx.base
+    res = repo_context.git(ctx, "ls-tree", "-r", "--name-only", ref, "--",
+                           directory)
+    if res is None or res.returncode != 0:
+        detail = (res.stderr or "").strip() if res is not None else ""
+        raise ZoneListingError(
+            f"перечень файлов базы {ref} под зоной-каталогом {directory} не "
+            f"получен в клоне {ctx.path}: {detail or 'git не ответил'}")
+    return [p for p in res.stdout.splitlines() if p]
+
+
+def _own_touch(component: "Component", path: str) -> bool:
+    """Путь задевает компонент сам — его `paths` или маски `test_support`,
+    без `depends_on` (потребитель компонентом задачи не становится)."""
+    fields = component.fields
+    if any(re.search(regex, path) for regex in _regexes(fields.get("paths"))):
+        return True
+    return any(mask_matches(mask, path)
+               for mask in fields.get("test_support") or ())
+
+
+def task_components(target: str, zones) -> tuple[str, ...]:
+    """Компоненты записи `target`, которые задевают зоны задачи `zones`,
+    в порядке записи (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 1).
+    Зона-файл сопоставляется сама; зона-каталог (оканчивается на «/») —
+    файлами репозитория на базе под ней. Пути вне компонентов выбор не
+    расширяют. ZoneListingError — перечень файлов не получен."""
+    comps = components(target)
+    paths = set()
+    for zone in zones or ():
+        if zone.endswith("/"):
+            paths.update(_base_files(target, zone))
+        else:
+            paths.add(zone)
+    return tuple(c.name for c in comps
+                 if any(_own_touch(c, path) for path in paths))
+
+
+def decide_task(target: str, zones) -> Decision:
+    """Решение по проекту `target` для задачи с зонами `zones` (требование
+    1): у записи из нескольких компонентов — профиль компонента задачи
+    либо отказ выбора; у прочих — `decide(target)` как есть."""
+    return _by_zones(target, decide(target), lambda: zones)
+
+
+def _by_zones(target: str, decision: Decision, zones) -> Decision:
+    """Компонент по зонам (`zones()` зовётся лениво) — только если
+    `decision` — отказ записи из нескольких компонентов."""
+    if not decision.refusal or decision.unresolved or not is_multi(target):
+        return decision
+    reason = decision.refusal
+
+    def refuse(text: str) -> Decision:
+        return Decision(target, refusal=f"{text}; {reason}")
+    chosen_zones = set(zones() or ())
+    if not chosen_zones:
+        return refuse(ZONES_NOT_SET)
+    try:
+        chosen = task_components(target, chosen_zones)
+    except (ZoneListingError, targets.TargetsError) as exc:
+        return refuse(f"компонент задачи не выбран: {exc}")
+    if not chosen:
+        return refuse(ZONES_NOT_TOUCHING)
+    if len(chosen) > 1:
+        return refuse(SEVERAL_COMPONENTS.format(names=", ".join(chosen)))
+    (comp,) = [c for c in components(target) if c.name == chosen[0]]
+    fields = comp.fields
+    # Та же проверка обязательных подполей, что у `repo_context.
+    # profile_of` записи из одного компонента.
+    for sub in targets.PROFILE_FIELDS:
+        if sub not in targets.PROFILE_OPTIONAL and sub not in fields:
+            return refuse(
+                f"профиль тестов проекта «{target}» не прочитан (поле "
+                f"{targets.COMPONENTS_FIELD} записи в targets.yaml): "
+                f"{config.TARGETS}: target '{target}': компонент "
+                f"'{comp.name}': нет подполя '{sub}', обязательного у "
+                f"профиля тестов")
+    values = {sub: fields[sub] for sub in targets.PROFILE_FIELDS
+              if sub in fields}
+    return Decision(target, profile=_with_component_fields(
+        replace(Profile.from_values(values), project=target), comp))
 
 
 def full_suite_limit(target: str) -> tuple[int, str]:
@@ -298,6 +445,7 @@ def _with_component_fields(profile: Profile, comp: Component) -> Profile:
         long_lived_template=fields.get("long_lived") or "",
         test_support=tuple(fields.get("test_support") or ()),
         layers=tuple(fields.get("layers") or ()),
+        layers_declared=fields.get("layers") is not None,
         paths=tuple(_regexes(fields.get("paths"))))
 
 
@@ -305,8 +453,9 @@ def layers_of(profile) -> tuple:
     """Действующие слои компонента (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J,
     требование 1): явное поле `layers`, без него — `python-ast` у команды
     pytest и ничего у прочих; без `python-ast` гейт исходов судит правки
-    тестов строгим режимом."""
-    if profile.layers:
+    тестов строгим режимом. Явное пустое `layers: []` — ничего (SPEC
+    01M5JGSAANR1NZYQD4FCSVE48Y, требование 7)."""
+    if profile.layers or getattr(profile, "layers_declared", False):
         return tuple(profile.layers)
     # acceptance -> ... -> store -> ... -> project_profile: цикл импорта.
     from .acceptance import is_pytest_command

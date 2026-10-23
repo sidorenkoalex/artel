@@ -622,16 +622,42 @@ def _base(task_id: str, target: str, branch: str, command,
     return set(failed), f"база {sha[:12]} — прогон базы, лог базы: {base_log}"
 
 
+def _component_command(conn, task_id: str, target: str) -> tuple:
+    """(команда, предел, причина отказа) задачи на записи из нескольких
+    компонентов — по профилю компонента задачи (`project_profile.
+    for_task`; SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2): тот же
+    выбор канала, что у `_profile_command`, и `component_limit`."""
+    decision = project_profile.for_task_target(target, task_id, conn)
+    profile = decision.profile
+    if profile is None:
+        return None, None, decision.refusal
+    limit = project_profile.component_limit(profile)
+    if acceptance._reported(profile) is not None:
+        return profile, limit, ""
+    command = [str(part) for part in profile.command]
+    if not _is_pytest(command):
+        return None, None, (
+            f"команда компонента {profile.component} проекта «{target}» "
+            f"({' '.join(command) or 'пусто'}) — не запуск pytest: флаги "
+            f"параллели pytest (-n) к ней неприменимы")
+    if profile.runner != PROFILE_RUNNER_OWN:
+        return command, limit, ""
+    return profile, limit, ""
+
+
 # ------------------------------------------------------ фоновый процесс
 
 def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
     conn = _db()
     task = store.get_task(conn, task_id)
     target = store.task_target(conn, task_id)
-    command, refusal = _profile_command(target)
+    if project_profile.is_multi(target):
+        command, limit, refusal = _component_command(conn, task_id, target)
+    else:
+        command, refusal = _profile_command(target)
+        limit = None if refusal else project_profile.full_suite_limit(target)
     if refusal:
         return f"[{task_id}] suite-run №{run_no}: отказ — {refusal}", False
-    limit = project_profile.full_suite_limit(target)
     targets = ("tests",)
     test_ids: tuple = ()
     if mode == MODE_FAILED:
@@ -845,7 +871,10 @@ def cmd_suite_run(rest: list) -> None:
         return
     head = f"[{task_id}] suite-run"
     target = store.task_target(conn, task_id)
-    command, refusal = _profile_command(target)
+    if project_profile.is_multi(target):
+        _command, _limit, refusal = _component_command(conn, task_id, target)
+    else:
+        _command, refusal = _profile_command(target)
     if refusal:
         sys.exit(f"{head}: отказ — {refusal}; прогон не запускался")
     wt = workspace.path(task_id, target)
