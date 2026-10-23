@@ -195,6 +195,43 @@ def _group_line_errors(t, rel_tests_dir: str,
     return guard.group_line_errors_from_files(files)
 
 
+def _plank_label(rel: str, task_id: str) -> str:
+    """Метка файла планки в форме `guard.acceptance_test_files`
+    (`acceptance_tests/…`): снимок ссылки документов ключует файлы путём
+    от корня (`tasks/<id>/acceptance_tests/…`)."""
+    prefix = f"tasks/{task_id}/"
+    return rel[len(prefix):] if rel.startswith(prefix) else rel
+
+
+def _plank_lint_base(task_id: str,
+                     locked: dict[str, str] | None) -> dict[str, str]:
+    """База линта файлов планки — снимок на `tests_locked_sha` с метками
+    проверяемых файлов (SPEC 01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 4):
+    иначе база не находится и гашение не срабатывает."""
+    return {_plank_label(rel, task_id): text
+            for rel, text in (locked or {}).items()}
+
+
+def _locked_plank_lint_base(t, task_id: str) -> dict[str, str]:
+    """`_plank_lint_base` по снимку `tests_locked_sha` (путь рабочей
+    копии); git не ответил — базы нет, проверяются все методы."""
+    return _plank_lint_base(task_id, _branch_tests_snapshot(
+        t["tests_locked_sha"], f"tasks/{task_id}/acceptance_tests", task_id))
+
+
+def _plank_lint_errors(task_id: str, files: list[tuple[str, str]],
+                       lint_base: dict[str, str]) -> list[str]:
+    """Линт детерминизма файлов планки артели (SPEC
+    01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 4) — помимо
+    `long_lived_errors_from_files` и независимо от раннего выхода
+    `_group_line_errors`. Метод, неизменный против лока, не проверяется."""
+    if not repo_context.is_artel(workspace.task_target(task_id)):
+        return []
+    return guard.lint_errors_from_files(
+        [(_plank_label(rel, task_id), text) for rel, text in files],
+        lint_base=lint_base)
+
+
 def _task_profile(task_id: str):
     """Профиль тестов проекта задачи для узлов долгоживущих файлов, когда
     вызывающий его не передал: они работают только при непустом перечне
@@ -596,6 +633,48 @@ def _head_digests(head: str, task_id: str,
     return digests
 
 
+def _locked_long_lived_texts(task_id: str, code_head: str,
+                             head_files: dict[str, str],
+                             head_digests: dict[str, str],
+                             manifest: dict[str, str]) -> dict[str, str]:
+    """База линта долгоживущих файлов для `--from-branch` (SPEC
+    01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 4, круг 3): залоченное состояние
+    файла — его текст на ревизии кодовой ветки, где sha256 blob равен
+    значению перечня лока (перечень несёт только суммы). Файл, чья сумма на
+    голове совпадает с перечнем, — база сам себе: линт его не проверяет.
+    Ревизии с такой суммой нет — базы у файла нет, проверяются все методы;
+    иная ревизия (родитель головы) базой не служит: правка из нескольких
+    коммитов спрятала бы метод первого из них."""
+    repo = workspace.task_repo(task_id)
+    base: dict[str, str] = {}
+    for rel, text in head_files.items():
+        digest = manifest.get(rel)
+        if digest is None:
+            continue
+        if head_digests.get(rel) == digest:
+            base[rel] = text
+            continue
+        locked = _text_with_digest(code_head, rel, digest, repo)
+        if locked is not None:
+            base[rel] = locked
+    return base
+
+
+def _text_with_digest(code_head: str, rel: str, digest: str,
+                      repo: Path) -> str | None:
+    """Текст `rel` на ближайшей к `code_head` ревизии истории файла, где
+    sha256 его blob равен `digest`; `None` — такой ревизии нет или git не
+    ответил."""
+    res = gitcmd.in_repo(repo, "log", "--format=%H", code_head, "--", rel)
+    if res is None or res.returncode != 0:
+        return None
+    for sha in res.stdout.split():
+        if acceptance_gates.blob_sha256(sha, rel, repo) == digest:
+            text, _reason = gitcmd.show(sha, rel, repo=repo)
+            return text
+    return None
+
+
 def _deleted_file_text(code_head: str, rel: str, repo: Path) -> str | None:
     """Текст удаляемого файла перечня: с головы кодовой ветки, а если там
     его уже нет — с родителя коммита, который его удалил. `repo` — клон
@@ -621,13 +700,17 @@ def _method_names(source: str) -> set[str]:
 
 def _long_lived_errors(task_id: str, files: dict[str, str],
                        deleted: dict[str, str | None],
-                       plank_sources: list[str], profile=None) -> list[str]:
+                       plank_sources: list[str], profile=None, *,
+                       lint_base: dict[str, str] | None = None) -> list[str]:
     """Проверки итогового состояния долгоживущих файлов (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): в `tests/` — только
     «Группа: долгоживущий»; признаки и «Ловит мутацию» — узлом выхода из
     `tests_writing`; удаление файла перечня — только переносом, без потери
     метода (ADR-0020, пункт 8). Файл, который не разбирается, строкой
-    группы не проверяется — его точнее назовёт сухой сбор."""
+    группы не проверяется — его точнее назовёт сухой сбор.
+
+    `lint_base` — залоченные тексты файлов для линта детерминизма (SPEC
+    01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 4)."""
     profile = profile or _task_profile(task_id)
     errors: list[str] = []
     for rel, text in sorted(files.items()):
@@ -642,7 +725,8 @@ def _long_lived_errors(task_id: str, files: dict[str, str],
     errors += guard.long_lived_errors_from_files(
         sorted(files.items()), task_id,
         network_addresses=repo_context.is_artel(target),
-        project_imports=project_profile.long_lived_imports(target, profile))
+        project_imports=project_profile.long_lived_imports(target, profile),
+        lint_base=lint_base)
     kept: set[str] = set()
     for source in [*plank_sources, *files.values()]:
         kept |= _method_names(source)
@@ -856,8 +940,10 @@ def _amend_plank_only(conn, t, task_id: str, reason: str, wt_path: Path,
         group_errors = _rule_plank_errors(
             task_id, guard.acceptance_test_files(tdir, rule), rule, profile)
     else:
-        group_errors = _group_line_errors(t, rel_tests_dir,
-                                          guard.acceptance_test_files(tdir))
+        plank_files = guard.acceptance_test_files(tdir)
+        group_errors = (_group_line_errors(t, rel_tests_dir, plank_files)
+                        + _plank_lint_errors(task_id, plank_files,
+                                             _locked_plank_lint_base(t, task_id)))
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
 
@@ -957,7 +1043,9 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
         group_errors = (_group_line_errors(t, rel_tests_dir, plank_files)
                         + guard.long_lived_plank_errors(plank_files, task_id,
                                                         profile.long_lived_dir,
-                                                        profile.long_lived_name))
+                                                        profile.long_lived_name)
+                        + _plank_lint_errors(task_id, plank_files,
+                                             _locked_plank_lint_base(t, task_id)))
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
     long_rule = (project_profile.long_lived_rule(workspace.task_target(task_id),
@@ -968,9 +1056,13 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
             task_id, files, deleted, guard.acceptance_test_files(tdir, rule),
             long_rule, profile)
     else:
+        # База линта — голова кодовой ветки до правки: правка ещё не
+        # закоммичена, её несёт только рабочая копия.
+        code = _code_head_long_lived(t["branch"], task_id, profile)
         errors = _long_lived_errors(task_id, files, deleted,
                                     [text for _rel, text in plank_files],
-                                    profile)
+                                    profile,
+                                    lint_base=code[1] if code else None)
     if errors:
         _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files,
@@ -1209,6 +1301,8 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
             group_errors += guard.long_lived_plank_errors(
                 plank_files, task_id, profile.long_lived_dir,
                 profile.long_lived_name)
+        group_errors += _plank_lint_errors(
+            task_id, plank_files, _plank_lint_base(task_id, old_snapshot))
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
     long_rule = (project_profile.long_lived_rule(workspace.task_target(task_id),
@@ -1226,9 +1320,11 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
         if errors:
             _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     if long_diverged:
-        _check_code_head_long_lived(conn, t, task_id, branch, code_head,
-                                    head_files, manifest, plank_files, profile,
-                                    rule, static=long_rule is None)
+        _check_code_head_long_lived(
+            conn, t, task_id, branch, code_head, head_files, manifest,
+            plank_files, profile, rule, static=long_rule is None,
+            lint_base=_locked_long_lived_texts(task_id, code_head, head_files,
+                                               head_digests, manifest))
         _push_code_head(conn, t, task_id)
 
     if manifest:
@@ -1261,7 +1357,9 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                                 manifest: dict[str, str],
                                 plank_files: list[tuple[str, str]],
                                 profile=None, rule=None,
-                                static: bool = True) -> None:
+                                static: bool = True,
+                                lint_base: dict[str, str] | None = None
+                                ) -> None:
     """Проверки требования 1 по долгоживущим файлам головы кодовой ветки
     для `--from-branch` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
     статические — по текстам из git; сухой сбор и прогон — в worktree
@@ -1271,7 +1369,8 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
 
     `static=False` — статические проверки файлов с меткой вызывающий уже
     выполнил (`_labelled_long_lived_errors`), здесь — только сбор и
-    прогон."""
+    прогон. `lint_base` — залоченные тексты долгоживущих файлов для линта
+    детерминизма (`_locked_long_lived_texts`)."""
     profile = profile or _task_profile(task_id)
     if static:
         deleted = {rel: _deleted_file_text(code_head, rel,
@@ -1279,7 +1378,7 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                    for rel in manifest if rel not in head_files}
         errors = _long_lived_errors(task_id, head_files, deleted,
                                     [text for _rel, text in plank_files],
-                                    profile)
+                                    profile, lint_base=lint_base)
         if errors:
             _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     wt_path, error = workspace.ensure(task_id, t["branch"])

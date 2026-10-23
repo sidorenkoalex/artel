@@ -34,8 +34,8 @@ from typing import NamedTuple
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (config, idgen, spend, stack, yamlmini,  # noqa: E402
-                          zone_lock)
+from orchestrator import (config, idgen, spend, stack, test_lint,  # noqa: E402
+                          yamlmini, zone_lock)
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -3983,7 +3983,9 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
                                  task_id: str, *,
                                  network_addresses: bool = True,
                                  project_imports=None,
-                                 rule: "PlankRule | None" = None) -> list[str]:
+                                 rule: "PlankRule | None" = None,
+                                 lint_base: dict[str, str] | None = None
+                                 ) -> list[str]:
     """Ошибки долгоживущих файлов планки (требования 3, 4) по (label,
     текст) парам `test_*.py`: файлы иной группы (и без распознанной
     группы — это ошибка строки группы, не этой проверки) пропускаются.
@@ -4004,7 +4006,12 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
     `rule` — правило планки проекта (SPEC 01M5AA5TS90RDJ2AFXB882WTPD,
     требования 5-6): файл с меткой `AC-<n>: ` — строка группы в первом
     комментарии и статика `_labelled_long_lived_errors`; признаки импорта,
-    закрытых имён и git у него не проверяются."""
+    закрытых имён и git у него не проверяются.
+
+    Линт детерминизма (`lint_errors_from_files`, SPEC
+    01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 3) — до фильтра по группе:
+    каждый `.py` любой группы, только при `network_addresses` (артель).
+    `lint_base` — {метка: залоченный текст}; см. `lint_errors_from_files`."""
     errors: list[str] = []
     foreign_explanation = _foreign_import_explanation(project_imports)
     for label, source in files:
@@ -4013,6 +4020,9 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
             # Не файл с меткой и не Python — отказ даёт
             # `long_lived_group_errors`, статика не проверяема.
             continue
+        if network_addresses and label.endswith(".py"):
+            errors += lint_errors_from_files([(label, source)],
+                                             lint_base=lint_base)
         group, _error = plank_file_group(source, labelled)
         if group != GROUP_LONG_LIVED:
             continue
@@ -4032,6 +4042,47 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
                           f"рождения» её не заменяет)")
         if network_addresses:
             errors += network_address_errors_from_files([(label, source)])
+    return errors
+
+
+def _method_dumps(source: str) -> dict[str, str]:
+    """{«Класс::метод» или «функция»: `ast.dump` узла}; сломанный
+    исходник — пустой словарь (базы у файла нет)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    return {name: ast.dump(node)
+            for name, node in test_lint.top_level_functions(tree)}
+
+
+def lint_errors_from_files(files: list[tuple[str, str]], *,
+                           lint_base: dict[str, str] | None = None
+                           ) -> list[str]:
+    """Нарушения линта детерминизма (`orchestrator/test_lint.py`) по
+    (label, текст) парам: «<метка>::<метод>: строка N: <нарушение>».
+    Файл с синтаксической ошибкой пропускается — его называет сухой сбор.
+
+    `lint_base` — {метка: текст залоченного состояния} (`amend-tests`,
+    SPEC 01M5MVSP9YW0DYA4YQ1KSG0AHF, требование 4): метод, чей узел в
+    базе под тем же «Класс::метод» совпадает по `ast.dump` (без номеров
+    строк), нарушения не даёт — задачи, залоченные до правила, не получают
+    отказа за старые методы. `None` — проверяются все методы. Перечень
+    `_EXCEPTIONS` инварианта дерева `tests/` здесь не читается."""
+    errors: list[str] = []
+    for label, source in files:
+        try:
+            found = test_lint.findings(source, label)
+        except SyntaxError:
+            continue
+        base = (_method_dumps(lint_base[label])
+                if lint_base is not None and label in lint_base else {})
+        current = _method_dumps(source) if base else {}
+        for key, hits in found.items():
+            qualname = key[len(label) + 2:]
+            if qualname in base and base[qualname] == current.get(qualname):
+                continue
+            errors += [f"{key}: {hit}" for hit in hits]
     return errors
 
 

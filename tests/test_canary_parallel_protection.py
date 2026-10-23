@@ -265,6 +265,9 @@ class _ProtectionSandbox(InitializedTmpRootTest):
                 data += chunk
         finally:
             os.close(fd)
+        if not data:
+            # Канал закрыт без pid: внук не запустился или вышел, не записав.
+            raise AssertionError("внук не появился")
         return int(data)
 
     def assert_red_row(self, row: dict, stamp: str, template: str) -> None:
@@ -332,9 +335,11 @@ class _ProtectionSandbox(InitializedTmpRootTest):
             # нет, — отпустить открытием FIFO с другой стороны.
             unblock = [os.open(self.fifo(key), os.O_RDONLY | os.O_NONBLOCK)
                        for key in fifos]
+            # Канал внука на запись закрывается сразу: открытый до `join`, он
+            # не дал бы читающему потоку дойти до конца данных.
             with contextlib.suppress(OSError):
-                unblock.append(os.open(self.grandchild_fifo,
-                                       os.O_WRONLY | os.O_NONBLOCK))
+                os.close(os.open(self.grandchild_fifo,
+                                 os.O_WRONLY | os.O_NONBLOCK))
             thread.join()
             for fd in list(held.values()) + unblock:
                 os.close(fd)
@@ -499,7 +504,7 @@ class BaselineTest(_ProtectionSandbox):
         self.assertEqual([name for name, _argv in self.argvs], ["alfa", "beta"])
         self.assertEqual(sorted((r["title"], r["outcome"]) for r in self.rows()),
                          [("alfa", "оборвана сигналом SIGTERM"),
-                          ("beta", "оборвана сигналом SIGTERM")])
+                          ("beta", "оборвана сигналом SIGTERM")], run.out)
         self.assertNotIn(f"[canary] прогон {run.stamp} завершён", run.out)
         self.assertEqual(self.listing(), [])
         self.assertEqual(self.baseline_rows(), baseline)
