@@ -317,13 +317,29 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
     return next_step, next_alert
 
 
+def observation_age(row) -> float | None:
+    """Возраст связи наблюдения в секундах; None — связи ещё не было.
+
+    Единственный разбор `last_seen_at` в пульте (SPEC
+    01M5MHVM25KH83WGZ5K256WN9Q): пустая строка — та же «связи нет», что и
+    None, а не `ValueError` из `fromisoformat`.
+    """
+    if not row["last_seen_at"]:
+        return None
+    return (datetime.now(timezone.utc) -
+            datetime.fromisoformat(row["last_seen_at"])).total_seconds()
+
+
+def observation_link_fresh(row) -> bool:
+    age = observation_age(row)
+    return age is not None and age <= config.OBSERVATION_STALE_SECONDS
+
+
 def observation_process_state(row) -> str:
     if row["pid"] is None:
         if not row["last_seen_at"]:
             return "unstarted"
-        age = (datetime.now(timezone.utc) -
-               datetime.fromisoformat(row["last_seen_at"])).total_seconds()
-        return "fresh" if age <= config.OBSERVATION_STALE_SECONDS else "stale"
+        return "fresh" if observation_link_fresh(row) else "stale"
     if row["hostname"] != socket.gethostname():
         return "remote"
     try:

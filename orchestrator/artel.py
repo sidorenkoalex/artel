@@ -947,11 +947,10 @@ def _launch_observation(conn, task_id: str, target: str,
                      f"`artel.py watch --observation {observation_id}`, "
                      "если ещё не идёт")
     chosen = observer["id"]
-    if observer["last_seen_at"] is None:
+    age = watch.observation_age(observer)
+    if age is None:
         sys.exit(f"[{task_id}] наблюдение {chosen}: связи с watch ещё нет — "
                  f"запусти `artel.py watch --observation {chosen}`")
-    age = (datetime.now(timezone.utc) -
-           datetime.fromisoformat(observer["last_seen_at"])).total_seconds()
     if age > config.OBSERVATION_STALE_SECONDS:
         sys.exit(f"[{task_id}] наблюдение {chosen}: связь устарела на "
                  f"{age:.0f} с (порог {config.OBSERVATION_STALE_SECONDS} с) — "
@@ -1064,11 +1063,9 @@ def _observation_or_exit(conn, observation_id: str):
 
 
 def _observation_fresh(row) -> bool:
-    if row["state"] != "active" or row["last_seen_at"] is None:
+    if row["state"] != "active":
         return False
-    age = (datetime.now(timezone.utc) -
-           datetime.fromisoformat(row["last_seen_at"])).total_seconds()
-    return age <= config.OBSERVATION_STALE_SECONDS
+    return watch.observation_link_fresh(row)
 
 
 def _observation_pair(raw: str, flag: str) -> tuple[int, int]:
