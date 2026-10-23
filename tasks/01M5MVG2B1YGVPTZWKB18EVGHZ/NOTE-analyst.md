@@ -4,14 +4,16 @@
 - ТЗ достаточно, пишется SPEC (без QUESTIONS).
 - Запись строки «оборвана сигналом» — orchestrator/canary.py:3759-3767 (`cmd_canary_run_task`); сейчас исключение записи → выход с кодом 1 без строки.
 - PARALLEL_STOP_GRACE_SEC = 60 (canary.py:3423), GROUP_TERMINATE_GRACE_SEC = 3.0 (liveness.py:50): 3×3×5+3 = 48 < 60.
-- Помощники: `read_grandchild_pid` tests/test_canary_parallel_protection.py:260, `run_cli` :281; тесты гонки — там же :475 (утверждение :500) и tests/test_canary_parallel.py:361 (утверждение :382). `_GRANDCHILD` — :55.
-- tests/ и docs/codebase-map.md — общие зоны (config.COMMON_ZONES), сигнал деления по файлам не срабатывает; budget 30 < SPLIT_SIGNAL_BUDGET_USD 60.
+- canary.py импортирует `time` модулем (:159) — шпион `orchestrator.canary.time.sleep` возможен.
+- Круг 2 (возврат с spec_gate, 7 решений Оператора) внесён: AC-8 (шпион store.db, 3 вызова), AC-9 (шпион time.sleep, 0 вызовов), строка матрицы о PARALLEL_STOP_GRACE_SEC, требование 4 — исход нормы без воспроизведения + допущение модели в PLAN (store.py:409, :431, :1620–1623, schema.py:291–400), имя константы CHILD_ROW_WRITE_ATTEMPTS = 3, AC-2 — причина красного «всплывшее OperationalError», SigintTest — в «Не входит».
+- Новые AC добавлены в конец (AC-8, AC-9), чтобы не сдвигать номера, на которые ссылаются решения Оператора.
 
 ## Не сработало
-- Bash `ls`/`cat` в каталоге документов недоступны в шаге — читать через Read.
+- Bash `;` + `echo $?` в одной команде отклоняется песочницей — запускать guard одиночной командой.
+- guard требует классифицировать упомянутый `orchestrator/schema.py` — добавлен в «Не входит» (только чтение).
 
 ## Где остановился
-- SPEC.md написан (7 AC, матрица неослабления по 2 тестам и помощникам `run_cli`/`read_grandchild_pid` класса `_ProtectionSandbox`), status: ready, guard: ок.
+- SPEC.md обновлён (9 AC), status: ready, guard: ок.
 
 ## Чего не хватило
-- Формат «Матрицы неослабления» искал в docs/operator-gates.md:53-96.
+- Ничего существенного: решения Оператора в причине возврата были полными.
