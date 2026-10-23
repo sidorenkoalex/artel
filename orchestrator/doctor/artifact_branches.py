@@ -179,7 +179,8 @@ def _fix_unsent_closed_ref(task_id: str, target: str | None, repo,
 
 def _fix_unsent_closed_refs(conn) -> None:
     """`doctor --fix`: досылает в `origin` коммит закрытия, который `origin`
-    не получил: у закрытой задачи переходов (`send_pending`) больше нет.
+    не получил: досылка идёт коммитом паспорта на переходе (`store.set_state`
+    → `append_passport_line`), а у закрытой задачи переходов больше нет.
     Изменённую после закрытия ссылку не досылает; `push` без force.
     `origin` — репозитория задачи; правило по задаче —
     `_fix_unsent_closed_ref`."""
