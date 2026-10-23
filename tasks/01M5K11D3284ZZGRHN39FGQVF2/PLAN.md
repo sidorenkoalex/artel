@@ -38,6 +38,14 @@ schema_version: 5
    попыток и чтение потолка в момент вызова, прекращение повтора при смене
    причины). Мутации проверены вручную: `\(failed` без привязки к концу строки
    и потолок `3` вместо константы — оба красят свой тест.
+3. Итерация 2 (R1-F1, R1-F2): планка целиком разовая, поэтому свойства
+   требований 1–4 перенесены сторожами в `tests/test_artifact_branch_server_retry.py`:
+   `ClassifyServerSignsTest` (5xx, `fatal error in commit_refs`, (а) старше (б)),
+   `test_pause_uses_module_constant` (аргумент паузы), `SendJournalTest`
+   (песочница БД `SchemaSeededTmpRootTest`: деталь отказа «сервер», успех
+   после повтора с `попыток 2`, успех после записанного FAILED, тишина двух
+   успехов). Восемь мутаций по одной — каждая красит ровно один тест.
+   Пробел `last = store.…` поправлен.
 
 ## Покрытие требований
 
@@ -45,8 +53,8 @@ schema_version: 5
 |---|---|
 | 1 | 1, 2 |
 | 2 | 1, 2 |
-| 3 | 1 |
-| 4 | 1 |
+| 3 | 1, 3 |
+| 4 | 1, 3 |
 | 5 | 1 |
 | 6 | 2 (планка AC-1..AC-14 — test_author) |
 
@@ -59,6 +67,8 @@ schema_version: 5
   `tests/test_artifact_ref_sync.py` (включая AC-9 тест досылки на переходе),
   `tests/test_01m409…_project_docs_ref.py`, `tests/test_01m484…_artel_docs_ref.py`,
   `tests/test_merge_gate_ci_wait.py` — 64 passed. Планка `plank-run` — 15 passed.
+  Итерация 2: server_retry + artifact_branch_push + artifact_ref_sync — 37 passed;
+  server_retry + sleep_guard — 18 passed; планка — 15 passed.
 - Откат — revert merge-коммита.
 
 ## Риски
