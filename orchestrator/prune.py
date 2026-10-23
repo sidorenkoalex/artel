@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config, gitcmd, idgen, liveness, store, suite_lock
+from . import config, gitcmd, idgen, liveness, store, suite_lock, workspace
 
 
 _CLOSE_ACTIONS = ("state -> done", "state -> killed")
@@ -206,6 +206,65 @@ def _unsaved_work_reason(path: Path) -> str | None:
     return None
 
 
+_CLOSED_STATES = ("done", "killed")
+
+
+def _worktree_dir_candidates(conn) -> list:
+    """Каталоги `config.WORKTREES` (не символические ссылки), чьё имя — не
+    id незакрытой задачи пульта (SPEC 01M5M675F6K2TE7TTJN3AET4PP,
+    требование 2); имя закрытой задачи защиты не даёт (ANSWER-2 п.5)."""
+    root = config.WORKTREES
+    if not root.is_dir():
+        return []
+    open_ids = {row["id"] for row in store.all_tasks(conn)
+                if row["state"] not in _CLOSED_STATES}
+    return [path for path in sorted(root.iterdir())
+            if not path.is_symlink() and path.is_dir()
+            and path.name not in open_ids]
+
+
+def _worktree_list(repo: Path) -> set | None:
+    """Разрешённые пути рабочих копий `repo` по `git worktree list`, разбор
+    тот же, что у `workspace.registered_paths`; `None` — перечень не
+    получен (там сбой неотличим от пустого перечня, ANSWER-2 п.6)."""
+    res = gitcmd.in_repo(repo, "worktree", "list", "--porcelain")
+    if res is None or res.returncode != 0:
+        return None
+    return {Path(line.split(" ", 1)[1]).resolve()
+            for line in res.stdout.splitlines() if line.startswith("worktree ")}
+
+
+def _orphan_worktrees(conn) -> tuple[list, list, bool]:
+    """(удаляемые пары (каталог, число файлов), оставленные пары (каталог,
+    причина), пропущен ли вид). Перечни рабочих копий главной копии и клона
+    артели запрашиваются, только когда есть кандидат по имени и типу; не
+    получен любой из них — вид пропущен целиком. Незарегистрированный
+    каталог с `.git` оставляется (ANSWER-2 п.4): без `.git` несохранённой
+    работы в нём нет."""
+    candidates = _worktree_dir_candidates(conn)
+    if not candidates:
+        return [], [], False
+    registered = set()
+    for repo in (config.ROOT, workspace.repo(config.DEFAULT_TARGET)):
+        paths = _worktree_list(repo)
+        if paths is None:
+            return [], [], True
+        registered |= paths
+    remove, left = [], []
+    for path in candidates:
+        if path.resolve() in registered:
+            continue
+        if os.path.lexists(path / ".git"):
+            left.append((path, "есть .git"))
+        else:
+            remove.append((path, len(_tree_files(path))))
+    return remove, left, False
+
+
+def _worktree_label(path: Path) -> str:
+    return f"каталог .artel/worktrees/{path.name}"
+
+
 def _canary_diag_candidates() -> list:
     """Файлы `.artel/canary/**` старше `config.LOG_RETENTION_DAYS` (SPEC
     01M1TKP269W9JN3NBJCR5Q6C3B, требование 4/AC-9) — тот же порог
@@ -239,15 +298,19 @@ def _abolished_rel(path: Path) -> str:
 
 def _print_report(mode: str, logs: list, alert_rows: list,
                   diag_files: list = (), suite_dirs: list = (),
-                  abolished: list = (), abolished_left: list = ()) -> None:
-    """`suite_dirs`/`abolished` — пары (каталог, число файлов),
-    `abolished_left` — пары (каталог, причина «оставлено»)."""
+                  abolished: list = (), abolished_left: list = (),
+                  worktrees: list = (), worktrees_left: list = (),
+                  worktrees_skipped: bool = False) -> None:
+    """`suite_dirs`/`abolished`/`worktrees` — пары (каталог, число файлов),
+    `abolished_left`/`worktrees_left` — пары (каталог, причина «оставлено»),
+    `worktrees_skipped` — перечень рабочих копий не получен."""
     log_verb = "удалён" if mode == "исполнено" else "будет удалён"
     diag_verb = "убрана" if mode == "исполнено" else "будет убрана"
     alert_verb = "заархивирован" if mode == "исполнено" else "будет заархивирован"
     print(f"prune ({mode}):")
     if not (logs or alert_rows or diag_files or suite_dirs or abolished
-            or abolished_left):
+            or abolished_left or worktrees or worktrees_left
+            or worktrees_skipped):
         print("  нечего убирать")
         return
     for path in logs:
@@ -260,6 +323,13 @@ def _print_report(mode: str, logs: list, alert_rows: list,
     for path, reason in abolished_left:
         print(f"  каталог упразднённого механизма {_abolished_rel(path)} "
               f"оставлено: {reason}")
+    if worktrees_skipped:
+        print("  каталоги .artel/worktrees: пропущено — git worktree list "
+              "не ответил")
+    for path, count in worktrees:
+        print(f"  {_worktree_label(path)} ({count} файлов) {log_verb}")
+    for path, reason in worktrees_left:
+        print(f"  {_worktree_label(path)}: оставлен — {reason}")
     for path in diag_files:
         rel = path.relative_to(config.ROOT / ".artel" / "canary")
         print(f"  диагностика канарейки {rel} {diag_verb}")
@@ -289,7 +359,8 @@ def cmd_prune(execute: bool = False) -> None:
     о фактически убранном (AC-7); AC-9 (01M1TKP269W9JN3NBJCR5Q6C3B) —
     та же политика давности для диагностики канарейки `.artel/canary/`;
     SPEC 01M5KBQGMZ051ENRVS8F42MA4V — промпты, каталоги `suite-run` и
-    каталоги упразднённых механизмов."""
+    каталоги упразднённых механизмов; SPEC 01M5M675F6K2TE7TTJN3AET4PP —
+    бесхозные каталоги `.artel/worktrees`."""
     conn = store.db()
     logs = _log_candidates(conn)
     suite_dirs = [(path, len(_tree_files(path)))
@@ -302,12 +373,14 @@ def cmd_prune(execute: bool = False) -> None:
             abolished.append((path, len(_tree_files(path))))
         else:
             abolished_left.append((path, reason))
+    worktrees, worktrees_left, worktrees_skipped = _orphan_worktrees(conn)
     diag_files = _canary_diag_candidates()
     alert_rows = _alert_candidates(conn)
 
     if not execute:
         _print_report("план", logs, alert_rows, diag_files, suite_dirs,
-                      abolished, abolished_left)
+                      abolished, abolished_left, worktrees, worktrees_left,
+                      worktrees_skipped)
         return
 
     removed: list[Path] = []
@@ -324,6 +397,7 @@ def cmd_prune(execute: bool = False) -> None:
     removed_abolished = _remove_dirs(
         abolished,
         lambda path: f"каталог упразднённого механизма {_abolished_rel(path)}")
+    removed_worktrees = _remove_dirs(worktrees, _worktree_label)
 
     removed_diag: list[Path] = []
     for path in diag_files:
@@ -340,4 +414,5 @@ def cmd_prune(execute: bool = False) -> None:
         archived.append(row)
 
     _print_report("исполнено", removed, archived, removed_diag, removed_suite,
-                  removed_abolished, abolished_left)
+                  removed_abolished, abolished_left, removed_worktrees,
+                  worktrees_left, worktrees_skipped)

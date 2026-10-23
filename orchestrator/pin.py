@@ -47,6 +47,10 @@ ADR-0013 ч.3). Каждый вызов — ровно одна запись ж�
 циклы `auto`/`run` этой машины, стартовавшие до сдвига, с готовыми
 командами перезапуска — отбор общий с проверкой `doctor`
 (`doctor/stale_cycles.py`), сигналов процессам команда не шлёт.
+
+Последнее действие успешного `cmd_pin_update` — `git remote prune
+origin` главной копии (SPEC 01M5M675F6K2TE7TTJN3AET4PP, требование 1):
+отказ команды до сдвига пина уборку не вызывает.
 """
 import sys
 import time
@@ -154,6 +158,49 @@ def cmd_pin_update(sha: str, wait_ci: bool = False) -> None:
                   "pin обновлён", detail)
     print(f"[pin-update] {detail}")
     _report_stale_cycles(conn, pin_moment)
+    _prune_origin_refs()
+
+
+def _git_failure(res) -> str:
+    """Причина сбоя вызова git: `None` — git не ответил, иначе текст ошибки
+    либо код возврата."""
+    if res is None:
+        return "git не ответил"
+    return (res.stderr or res.stdout or "").strip()[:300] or f"код {res.returncode}"
+
+
+def _origin_tracking_refs() -> tuple[set | None, str]:
+    res = gitcmd.git("for-each-ref", "--format=%(refname)", "refs/remotes/origin/")
+    if res is None or res.returncode != 0:
+        return None, _git_failure(res)
+    return {line for line in res.stdout.splitlines() if line}, ""
+
+
+def _prune_origin_refs() -> None:
+    """Снимает в главной копии ссылки отслеживания `origin`, чьих веток в
+    `origin` больше нет (SPEC 01M5M675F6K2TE7TTJN3AET4PP, требование 1):
+    ветку задачи после мержа удаляет пуш из клона проекта, и в главной
+    копии её ссылка иначе копится. Зовётся только после сдвига пина —
+    git главной копии меняет только `pin-update` (инвариант 40). Сбой —
+    предупреждение: пин уже сдвинут, код выхода прежний. Число снятых —
+    разница перечней ссылок до и после (ANSWER-2 п.3): текст вывода `git
+    remote prune` зависит от языка git."""
+    before, reason = _origin_tracking_refs()
+    if before is None:
+        print(f"[pin-update] уборка ссылок origin не выполнена: {reason}")
+        return
+    res = gitcmd.git("remote", "prune", "origin")
+    if res is None or res.returncode != 0:
+        print(f"[pin-update] уборка ссылок origin не выполнена: "
+              f"{_git_failure(res)}")
+        return
+    after, reason = _origin_tracking_refs()
+    if after is None:
+        print(f"[pin-update] уборка ссылок origin не выполнена: перечень "
+              f"ссылок после уборки не получен — {reason}")
+        return
+    print(f"[pin-update] ссылки origin без ветки на origin сняты: "
+          f"{len(before - after)}")
 
 
 def _already_at_run_sha(head_sha: str, main_sha: str | None) -> bool:
