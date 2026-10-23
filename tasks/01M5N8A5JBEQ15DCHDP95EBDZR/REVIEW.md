@@ -2,94 +2,74 @@
 task: 01M5N8A5JBEQ15DCHDP95EBDZR
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Сброс удержанных записей копилки, бэклога и doc-commit — одним пушем
 
 ## Фаза A — план
-- Таблица покрытия PLAN полна (требования 1–10), шаги размера MR, подход
-  (параметр `ref` у сверок с умолчанием `FETCH_HEAD`, перестройка через
-  `_build_*`, правки конфигурации после пакета прежним `_attempt`) не
-  конфликтует с архитектурой и требованием 9 SPEC.
-- «Влияние на систему» соответствует диффу (меняется только
-  `orchestrator/notes.py` + карта). Одно расхождение: PLAN утверждает «правила
-  правок конфигурации не меняются», а предупреждение `NO_BASE_WARNING` у них
-  пропало — см. R1-F1.
+- Таблица покрытия PLAN полна (требования 1–10). Шаг 4 добавлен под
+  замечания итерации 1. Шаги — единицы размера MR.
+- «Влияние на систему» совпадает с инкрементальным диффом df307e57..4c4b5bc6:
+  `orchestrator/notes.py` (`_flush_batch`, ветка `except OSError`;
+  `_flush_pending`, порядок проверки базы) и новый
+  `tests/test_notes_batch_flush_edges.py`. Существующие тесты и долгоживущий
+  файл задачи не тронуты. Карта кодовой базы свежая:
+  `python3 scripts/codebase_map.py` меняет только `built_at_sha`.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `_flush_batch`: коммиты по порядку `_pending_paths()`, `_commit_message` прежний, один `push` (AC-1 зелёный). |
-| 2 | OK | `ref=head` пакета; `known` первой — `_known_origin_main` до `_fresh_main`, k>1 — голова пакета, `knowns.setdefault` держит значение первого построения; `base_blob` живёт в `request`. Временная мутация `ref→FETCH_HEAD` краснит AC-8 и все AC-9 (6 тестов). |
-| 3 | реализовано не так | Порядок/гейт/попутный пропуск — OK (AC-4), но при явном флаше правка конфигурации без `held_base` больше не печатает `NO_BASE_WARNING` (R1-F1). |
-| 4 | OK | `SystemExit` построения → `_refused_print`, запись выбывает (AC-2, AC-6). |
-| 5 | OK | перестройка от `_fresh_main` через `_build_*`, не больше `MAX_PUSH_ATTEMPTS` (AC-3, AC-7, AC-10). |
-| 6 | OK | `unlink` только после успешного push, только у `batch`. |
-| 7 | OK | `_sent_line` — три вида строк (AC-6). |
-| 8 | OK | `_journal_commit` со sha своей записи после push (AC-6, AC-7). |
-| 9 | OK | `_run`/`_fetch_and_build`/`_commit_and_push`/`_attempt` не тронуты, умолчания `ref="FETCH_HEAD"`. |
-| 10 | OK | долгоживущий `tests/test_01m5n8a5jbeq15dchdp95ebdzr_batch_flush.py`, push считает `post-receive` origin, заявки «Ловит мутацию» есть и наблюдаемы. |
+| 1 | OK | без изменений с итерации 1: коммиты по порядку `_pending_paths()`, один `push` (AC-1). |
+| 2 | OK | без изменений с итерации 1: `ref=head` пакета, `known_first` до `_fresh_main`, `knowns.setdefault`. |
+| 3 | OK | R1-F1 исправлено. Попутный сброс пропускает правку конфигурации прежней строкой (`notes.py:1469–1474`). При явном флаше `NO_BASE_WARNING` печатается до разделения на пакет и конфигурацию (:1475–1481), затем запись уходит в `config_records` → `_attempt`. Поведение такое же, как в базе 2b187a3d. |
+| 4 | OK | `SystemExit` → `_refused_print`, запись выбывает. Ветка `OSError` снимает правку с дерева (R1-F2). |
+| 5 | OK | перестройка через `_build_*` от `_fresh_main`, не больше `MAX_PUSH_ATTEMPTS`. |
+| 6 | OK | `unlink` только после успешного push и только у `batch`. |
+| 7 | OK | `_sent_line`, три вида строк (AC-6). |
+| 8 | OK | `_journal_commit` после push, со sha своей записи. |
+| 9 | OK | `_run`, `_fetch_and_build`, `_commit_and_push`, `_attempt` не тронуты. |
+| 10 | OK | долгоживущий файл задачи. Новые тесты `tests/test_notes_batch_flush_edges.py` не повторяют его: предупреждение о базе и `OSError` записи пакета в нём не проверяются. Заявки «Ловит мутацию» у всех трёх методов наблюдаемы и подтверждены мутацией (см. ниже). |
 
 ## Замечания
-- major — `orchestrator/notes.py:1462-1470` — при явном флаше (`note --flush`,
-  `doc-commit --flush`) удержанная правка конфигурации старого формата / после
-  сетевого отказа (`doc-commit gates.yaml` без `held_base`) больше не получает
-  строку `<путь>: NO_BASE_WARNING`: ветка `_suite_gate_applies` делает
-  `continue` раньше проверки `HELD_BASE_KEY` (:1471–1476). В базе 2b187a3d
-  ветка была `if not explicit and _suite_gate_applies(...): print; continue`,
-  и явный флаш доходил до предупреждения. Требование 3 SPEC: «Их правила не
-  меняются»; PLAN «Влияние на систему» обещает то же. Сценарий: Оператор
-  флашит `gates.yaml`, удержанный без базы, — правка уходит по одной пиновой
-  сверке, а предупреждение об отсутствии защиты сценария 02.10 молча пропало
-  (проверено исполнением, см. ниже). Предложение: печатать `NO_BASE_WARNING`
-  до разделения на пакет/конфигурацию (или и в ветке `explicit` для
-  `config_records`) и закрыть тестом в `tests/` (такого теста нет ни в базе,
-  ни в долгоживущем файле задачи — не повтор).
-- minor — `orchestrator/notes.py` `_flush_batch`, ветка `except OSError:
-  continue` (вокруг `_commit_on_batch`) — если `_write_doc`/`_write_backlog`
-  упал `OSError` после частичной записи, правка не снимается с дерева
-  (`_restore_tree` зовётся только при отказе `commit`). Прежний путь
-  (`_attempt` на запись) делал `checkout -f` перед КАЖДОЙ записью; теперь
-  checkout только раз на попытку, и следующая запись пакета того же пути
-  (`docs/backlog.md`) прочтёт `_read_backlog` из грязного дерева, а не из
-  головы пакета. Предложение: в `except OSError` снимать правку так же, как
-  при отказе коммита (`reset` + `_restore_tree` по `_target_rel(request)`).
+Нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/notes.py:1462-1470 | явный флаш правки конфигурации без `held_base` не печатает `NO_BASE_WARNING` — `continue` раньше проверки | нарушено требование 3 SPEC («правила не меняются»); Оператор не видит, что правка `gates.yaml`/`roles.yaml` идёт без защиты сценария 02.10 | печатать предупреждение и для `config_records` при `explicit`; тест в `tests/` — developer: `_flush_pending` пропускает попутно правку конфигурации до проверки базы, а при явном флаше проверка `HELD_BASE_KEY` идёт до разделения на пакет/конфигурацию; тест `tests/test_notes_batch_flush_edges.py::ConfigRecordNoBaseWarningTest` (оба входа `--flush` + попутный сброс без предупреждения), мутация «continue до проверки» краснит оба подтеста |
-| R1-F2 | fixed | orchestrator/notes.py `_flush_batch` (`except OSError: continue`) | `OSError` при записи файла записи пакета оставляет правку в дереве | следующая запись пакета того же пути строится от грязного дерева, а не от головы пакета | в `except OSError` — `reset` + `_restore_tree(work_dir, _target_rel(request))` — developer: сделано ровно так; тест `tests/test_notes_batch_flush_edges.py::BatchWriteFailureTest` (первая запись пишет мусор и падает `OSError`, вторая заметка уходит без мусора), мутация «голый continue» его краснит |
+| R1-F1 | accepted | orchestrator/notes.py:1468-1485 | явный флаш правки конфигурации без `held_base` не печатал `NO_BASE_WARNING` | нарушено требование 3 SPEC | Принято. Проверка `HELD_BASE_KEY` теперь идёт до разделения на пакет и конфигурацию, попутный пропуск остаётся раньше неё. Тест `ConfigRecordNoBaseWarningTest` покрывает оба входа `--flush` и попутный сброс. Мутация «`continue` для конфигурации до проверки базы» краснит оба подтеста. Мутация «предупреждение и при попутном пропуске» краснит тест попутного сброса. |
+| R1-F2 | accepted | orchestrator/notes.py:1402-1408 | `OSError` записи пакета оставлял правку в дереве | следующая запись того же пути строилась от грязного дерева | Принято. В ветке стоят `reset` и `_restore_tree(work_dir, _target_rel(request))`. Тест `BatchWriteFailureTest` краснеет на мутации «голый `continue`». |
 
 ## Вердикт
-changes_requested: исправить R1-F1 (вернуть `NO_BASE_WARNING` правкам
-конфигурации при явном флаше, с тестом в `tests/`); R1-F2 — minor, желательно
-в той же итерации.
+approved. Оба замечания итерации 1 исправлены по сути и закрыты тестами в
+`tests/`. Сторожа проверены временной мутацией. Новых дефектов в
+инкрементальном диффе нет.
 
 ## Проверено исполнением
-- `artel.py plank-run 01M5N8A5JBEQ15DCHDP95EBDZR` — отказ «планки нет: … нет
-  файлов test_*.py» (все тесты задачи долгоживущие, в `tests/`).
-- `python3 -m pytest -p no:cacheprovider -q
+- `python3 -m pytest -p no:cacheprovider -q tests/test_notes_batch_flush_edges.py
   tests/test_01m5n8a5jbeq15dchdp95ebdzr_batch_flush.py tests/test_notes.py
   tests/test_doc_commit.py tests/test_doc_commit_suite_gate.py
   tests/test_notes_apply.py tests/test_01m3y75x6k2zmd85971tcwv41e_held_base.py
-  tests/test_01m5fa4nr91pcf47szt6v0q9hs_window.py` — 133 passed, 9 subtests.
-- Временная мутация `_flush_batch`: `ref` построения `head → "FETCH_HEAD"` —
-  `-k "ac8 or ac9"`: 6 failed (AC-8 и все пять AC-9); код возвращён,
-  `git status` чист.
-- R1-F1: инлайн-тест на `BatchFlushSandbox` (файл удержания `doc-commit
-  gates.yaml` без `held_base`, `run_full_suite` подменён зелёным, `note
-  --flush`) — вывод `полный набор tests/: предел 900 с (источник: config)`,
-  `NO_BASE_WARNING` в нём нет, запись отправлена (`pending: []`).
-- `git diff 2b187a3d --stat -- tests/` — только новый долгоживущий файл задачи,
-  существующие тесты не тронуты.
+  tests/test_01m5fa4nr91pcf47szt6v0q9hs_window.py`: 136 passed, 11 subtests.
+- Временная мутация R1-F2: из `except OSError` в `_flush_batch` убраны
+  `reset`/`_restore_tree`. Результат: `BatchWriteFailureTest` FAILED (1
+  failed, 2 passed). Код возвращён.
+- Временная мутация R1-F1: `config_records.append` + `continue` перед
+  проверкой `HELD_BASE_KEY`. Результат: оба подтеста `entry=note` и
+  `entry=doc-commit` SUBFAILED. Код возвращён.
+- Временная мутация: печать `NO_BASE_WARNING` при попутном пропуске.
+  Результат: `test_opportunistic_flush_still_skips_config_record_silently_on_base`
+  FAILED. Код возвращён, `git status` чист.
+- `python3 scripts/codebase_map.py`: дифф карты без строки `built_at_sha`
+  пуст. Изменение откачено.
+- Планки нет: тесты задачи долгоживущие, лежат в `tests/` (см. итерацию 1).
 
 ## Предложения системе
-- `orchestrator/notes.py::_flush_pending`: печать `NO_BASE_WARNING` не держит
-  ни один тест `tests/` — поведение, видимое Оператору, ушло молча при первой
-  же перестройке цикла.
+- Пакет ревью итерации 2 не нёс полного diff `_flush_pending` вокруг правки,
+  только хунк. Для проверки порядка «попутный пропуск → предупреждение →
+  разделение» понадобилось читать `notes.py:1460–1500`. Контекст хунка в
+  пакете стоит расширять до тела изменённой функции.
