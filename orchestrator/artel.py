@@ -186,6 +186,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
            --parallel: задачи отдельными процессами, не более двух сразу |
   canary pool-seal [--during-canary "<основание>"] |
   canary live [--drop <run_stamp> "<основание>"] |
+  canary runs [--since <ГГГГ-ММ-ДД> | <run_stamp>] |
   prune [--execute] | explore-stats [--days N] [--role <роль>] |
   docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   artifact-history-snapshots [--dry-run] |
@@ -1573,6 +1574,9 @@ def _cmd_canary(rest: list) -> None:
     if rest and rest[0] == "run-task":
         _cmd_canary_run_task(rest[1:])
         return
+    if rest and rest[0] == "runs":
+        _cmd_canary_runs(rest[1:])
+        return
     # `--parallel` (SPEC 01M5H24PZXZTBM03SF6V576S5P, требование 1) — до
     # ветки `--detach`: отвязанный процесс получает флаг в своём argv, и
     # повтор должен отказать здесь, а не в нём.
@@ -1683,6 +1687,47 @@ def _cmd_canary_live(rest: list) -> None:
     if len(rest) > 3:
         sys.exit(f"canary live: лишние аргументы {rest[3:]!r} — {usage}")
     canary.cmd_canary_live(drop=stamp, reason=reason.strip())
+
+
+_CANARY_RUNS_USAGE = "canary runs [--since <ГГГГ-ММ-ДД> | <run_stamp>]"
+
+
+def _cmd_canary_runs(rest: list) -> None:
+    """`canary runs [--since <ГГГГ-ММ-ДД> | <run_stamp>]` (SPEC
+    01M5KEYG8G1WXHSR4BDKBSH6JP, требование 2): все отказы — здесь, до
+    чтения БД."""
+    usage = f"использование: {_CANARY_RUNS_USAGE}"
+    since = stamp = None
+    seen_since = False
+    index = 0
+    while index < len(rest):
+        arg = rest[index]
+        if arg == "--since":
+            if seen_since or index + 1 >= len(rest) \
+                    or rest[index + 1].startswith("--"):
+                sys.exit(usage)
+            seen_since = True
+            since = rest[index + 1]
+            index += 2
+            continue
+        if arg.startswith("-") or stamp is not None:
+            sys.exit(usage)
+        stamp = arg
+        index += 1
+    if since is not None:
+        try:
+            valid = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", since)) \
+                and bool(datetime.strptime(since, "%Y-%m-%d"))
+        except ValueError:
+            valid = False
+        if not valid:
+            sys.exit("canary runs: --since ждёт дату ГГГГ-ММ-ДД")
+    if stamp is not None and not canary.RUN_STAMP_RE.fullmatch(stamp):
+        sys.exit(f"canary runs: run_stamp {stamp} не по шаблону "
+                 f"ГГГГММДДTЧЧММССZ")
+    if since is not None and stamp is not None:
+        sys.exit(f"canary runs: --since и {stamp} несовместимы")
+    canary.cmd_canary_runs(since=since, run_stamp=stamp)
 
 
 def _detach_canary(rest: list) -> None:
