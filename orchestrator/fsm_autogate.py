@@ -38,6 +38,34 @@ _ACCEPTANCE_AUTOPASS_NOTE = "автогейт пройдёт сам"
 # входа в acceptance — здесь только констатация для Оператора.
 _ZONES_ALREADY_CHECKED_FACT = "дифф сверен с зонами — уже сделано гейтом"
 
+# Класс отказа автогейта «окружение» (SPEC 01M5KBGF184B07SVXMD4R1NXXC):
+# таймаут прогона и занятая машина — вина пульта, качество задачи ими не
+# оценено. Отказ этого класса получает вторую запись журнала и строку
+# подсказки; первая запись и поведение гейта остаются прежними.
+ENV_REFUSAL_CLASS = "окружение"
+AUTOGATE_ENV_REFUSAL_ACTION = "автогейт acceptance: отказ окружения"
+
+# Начало текста `acceptance._full_suite_timeout_note` до числа секунд —
+# число и источник предела меняются, начало нет; сверку с производителем
+# держит tests/test_fsm_autogate_env_refusal.py.
+_TIMEOUT_NOTE_START = "прогон полного набора tests/ превысил "
+
+
+def autogate_refusal_class(reason: str) -> str | None:
+    """Вид отказа класса «окружение» (`acceptance.FULL_SUITE_TIMEOUT` —
+    «таймаут прогона», «машина занята») по причине отказа автогейта;
+    `None` — отказ другого класса. «прогон не начат» без «: машина
+    занята» (файлы БД пульта в дереве прогона) — не окружение: там
+    чинится дерево, а не ожидается машина."""
+    if reason.startswith(models.AUTOGATE_REFUSAL_PREFIX):
+        reason = reason[len(models.AUTOGATE_REFUSAL_PREFIX):]
+    reason = " ".join(reason.split())
+    if reason.startswith(_TIMEOUT_NOTE_START):
+        return acceptance.FULL_SUITE_TIMEOUT
+    if reason.startswith(f"{acceptance.FULL_SUITE_NOT_STARTED}: машина занята"):
+        return "машина занята"
+    return None
+
 
 def acceptance_checklist_measurement(reports: list[str]) -> str:
     """Последний замер для записи о приёмке."""
@@ -450,6 +478,13 @@ def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
         store.journal(conn, task_id, "fsm", "автогейт acceptance не пройден",
                       reason)
         print(f"[{task_id}] {reason} — жду Оператора")
+        kind = autogate_refusal_class(reason)
+        if kind is not None:
+            hint = (f"{ENV_REFUSAL_CLASS} ({kind}) — качество задачи не оценено; "
+                    f"повторить проверку: artel.py approve {task_id}")
+            store.journal(conn, task_id, "fsm", AUTOGATE_ENV_REFUSAL_ACTION,
+                          f"класс: {hint}")
+            print(f"[{task_id}] класс отказа: {hint}")
         # Отказ по вине роли приостанавливает пару набора виновной роли
         # (SPEC 01M3YCHVVEK14SK8GT4R0H7M2C, требование 4).
         models.suspend_on_autogate_refusal(conn, t, reason)
