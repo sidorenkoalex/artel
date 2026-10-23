@@ -99,13 +99,26 @@ class PlanAppendixTest(unittest.TestCase):
                         ignore=shutil.ignore_patterns("__pycache__"))
         env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
         env["GIT_CEILING_DIRECTORIES"] = str(tmp.parent)
-        if apply_check(diff) == "":
-            patch = tmp / "appendix.diff"
-            patch.write_text(diff, encoding="utf-8")
+        # «Уже в дереве» решается по скопированным файлам, а не по HEAD:
+        # пульт накладывает приложения PLAN на дерево прогона без коммита
+        # (`appendix_tree.suite_tree`), и HEAD приложения не несёт.
+        patch = tmp / "appendix.diff"
+        patch.write_text(diff, encoding="utf-8")
+        forward = subprocess.run(["git", "apply", "--check", str(patch)],
+                                 cwd=tmp, env=env, capture_output=True,
+                                 text=True, timeout=60)
+        if forward.returncode == 0:
             res = subprocess.run(["git", "apply", str(patch)], cwd=tmp, env=env,
                                  capture_output=True, text=True, timeout=60)
             self.assertEqual(res.returncode, 0, f"git apply: {res.stderr}")
-            patch.unlink()
+        else:
+            reverse = subprocess.run(
+                ["git", "apply", "--check", "--reverse", str(patch)],
+                cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(reverse.returncode, 0,
+                             "приложение не накладывается и не наложено: "
+                             f"{forward.stderr}{reverse.stderr}")
+        patch.unlink()
         run = subprocess.run(
             [sys.executable, "-m", "pytest", TARGET, "-k", LINT_CLASS,
              "-p", "no:cacheprovider", "-q", "-rA"],
