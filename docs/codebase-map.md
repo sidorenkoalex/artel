@@ -1,5 +1,5 @@
 ---
-built_at_sha: 28415fa16d317afb98ea4823b2d5ad359088c6ee
+built_at_sha: 1521d8f249fa0f96e460771c3b17145968171eed
 ---
 
 # Codebase-map пульта
@@ -1168,6 +1168,7 @@ built_at_sha: 28415fa16d317afb98ea4823b2d5ad359088c6ee
 
 **Публичные функции:**
 - `acceptance_checklist_measurement`
+- `autogate_refusal_class`
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/outcome_integrity.py`, `orchestrator/appendix_tree.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gates.py`, `orchestrator/gitcmd.py`, `orchestrator/models.py`, `orchestrator/project_profile.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
