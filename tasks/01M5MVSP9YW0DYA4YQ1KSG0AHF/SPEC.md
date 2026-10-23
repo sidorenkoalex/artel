@@ -2,166 +2,442 @@
 task: 01M5MVSP9YW0DYA4YQ1KSG0AHF
 type: spec
 author_role: analyst
-status: draft        # draft | ready | approved
-schema_version: 5    # версия формата артефакта, см. scripts/guard.py
-# Зоны задачи (01M1NKVPD2A79PQ6K0JVV1B2Q1) — список путей/масок (файлы/
-# каталоги), которые задача трогает: заполни из ТЗ, через запятую. guard
-# требует поле для schema_version >= 4. Общие зоны (пути, которые трогают
-# все задачи — orchestrator/config.py::COMMON_ZONES) не в счёт.
-# zones: orchestrator/store.py, orchestrator/config.py
-# Зависимости мержа (SPEC 01M44EP0D47F498TEE08MNGBYT) — необязательное
-# поле: id задач (полные или префиксы) через запятую, которые обязаны попасть
-# в main (done) раньше этой. Заполни ТОЛЬКО из ТЗ — строки «Порядок: после
-# …»; без основания поля нет. guard проверяет форму, approve на spec_gate —
-# что задачи есть, не killed, того же target и не замыкают цикл; approve на
-# merge_gate не пустит задачу в main, пока зависимости не в done.
-# Заявленные Оператором строкой ТЗ «Порядок: после …» — в поле все без
-# исключения (approve на spec_gate отказывает при потере); заявленную
-# снять может только Оператор (эскалация с вопросом); своя добавка — только с
-# обоснованием в разделе «## Обоснование зависимостей мержа».
-# merge_after: <id1>, <id2>
-# Потолок задачи, $ — ОБЯЗАТЕЛЬНОЕ поле (ADR-0014): guard отказывает
-# SPEC без него. Класс задачи и ориентир по нему — калибровка
-# orchestrator/config.py::BUDGET_CALIBRATION_TABLE (её уровни и правило
-# выбора разобраны прозой в skills/spec-authoring.md, раздел про
-# budget_usd); числа здесь намеренно не повторяются — повторённые, они
-# остаются от прежней таблицы и калибруют аналитика по устаревшему
-# ориентиру (так и вышло при пересчёте 21.09.2026). Значение применяется
-# потолком задачи в ОБЕ стороны (и выше, и ниже дефолта оркестратора) в
-# пределах потолка ролей (ROLE_BUDGET_CAP, $100 сегодня) — выше потолка
-# ролей guard отказывает, поднять его вправе только Оператор командой
-# budget.
-budget_usd: 25
-# Стадия tests_writing (приёмочные тесты до кода, роль test_author,
-# refs/artifacts/T023) пропускается только с явной причиной — без поля SPEC
-# проходит spec_gate -> tests_writing -> in_dev, и раздел «Критерии
-# приёмки» ниже обязан нести AC-разметку.
-# skip_tests: <причина>
+status: ready
+schema_version: 5
+zones: orchestrator/test_lint.py, scripts/guard.py, orchestrator/amend.py, docs/codebase-map.md, tests/
+budget_usd: 40
 ---
 
 # SPEC: Тесты планки и долгоживущие тесты проверяются на ожидание по часам и чтение живых файлов до лока
 
 ## Контекст
-<Зачем это нужно. Что сейчас не так. 2–5 предложений.>
+Линт детерминизма тестов — `tests/test_invariants.py::DeterministicTestsLintTest`
+(строки 1999–2565 на `origin/main` d95b7d59): правило «ожидание по часам»
+(`time.sleep` с ненулевой паузой, цикл до срока по `time.monotonic()`/`time.time()`)
+и правило «чтение живых файлов репозитория» (`targets.yaml`, `roles.yaml`,
+`model_sets.yaml`, `docs/…`, `config.MODEL_SETS_REL` от `__file__`). Он проверяет
+только дерево `tests/**/*.py` и только в CI ветки — уже после лока тестов на выходе
+`tests_writing`; каталоги `acceptance_tests/` не проверяются вовсе. Канарейка
+20261022T213109Z на 6e19ccb8 покраснела именно так: test_author залочил
+долгоживущий `tests/test_01m5jrd1471qk23aw4y5t5vz6r_log_filters.py` с методом
+`LogSinceRelativeTest::run_relative` (цикл по `int(time.time())`), а разработчик
+не вправе править ни тест, ни линт — эскалация.
+
+Решение Оператора 23.10.2026 (вариант А): разбор линта выносится в модуль пульта
+`orchestrator/test_lint.py`; `tests/test_invariants.py` зовёт его (правка
+защищённого файла — приложением PLAN, текст ниже в «Материалах»); guard
+подключает тот же разбор к ошибкам долгоживущих файлов и файлов планки, так что
+нарушение ловится гейтами выхода `tests_writing` до лока, а также в `preflight`
+и `amend-tests`. Образец такого переноса правила в пульт — сетевые адреса
+(`guard.network_address_hits`, `scripts/guard.py:4081`, через
+`guard.long_lived_errors_from_files`, `scripts/guard.py:3982`).
 
 ## Требования
-<Нумерованный список. Каждое требование — проверяемое утверждение.>
 
-1. ...
+1. Новый модуль `orchestrator/test_lint.py` — только стандартная библиотека, без
+   импорта модулей `orchestrator` (его импортирует guard, а модули
+   `orchestrator` импортируют guard). Функции `findings(source: str, rel: str) -> dict`
+   («файл::метод» → список нарушений) и `top_level_functions(tree)` с поведением,
+   побайтно равным нынешним классовым методам `DeterministicTestsLintTest.findings`
+   и `_top_level_functions` на `origin/main`: оба правила (ожидание по часам и
+   чтение живых файлов), тексты нарушений «строка N: …» прежние. Константы правил
+   `CLOCK_CALLS`, `LIVE_FILES`, `LIVE_FILE_CONFIG_ATTRS` живут в модуле.
+   `findings` пробрасывает `SyntaxError`, как прежде (пропуск синтаксически
+   сломанного файла — только в guard).
+2. Приложение PLAN к `tests/test_invariants.py` (раздел «Приложение 1» в
+   «Материалах» ниже) исполняется без изменений: класс зовёт `test_lint`; его
+   перечень `_EXCEPTIONS`, `_SANDBOX_HELPERS`, обход дерева и все прежние
+   тесты-образцы не меняются; добавляется тест `test_rule_corpus_is_frozen`,
+   которому `orchestrator/test_lint.py` обязан соответствовать.
+3. Ядро `scripts/guard.py`: линт вызывается внутри `long_lived_errors_from_files`
+   в цикле по файлам сразу после пропуска не-`.py` без метки и до
+   `plank_file_group` и фильтра по группе — для каждого файла с окончанием `.py`
+   и только при признаке проекта артели (`network_addresses=True`). Так проверку
+   получают и долгоживущие файлы, и файлы планки обычных групп, а через ту же
+   функцию — `preflight` и `amend-tests`. Файл с синтаксической ошибкой линтом
+   пропускается (`SyntaxError` гейт не роняет — его называет сухой сбор). Строка
+   ошибки: «<файл>::<метод>: строка N: <нарушение>»; для файлов `acceptance_tests/`
+   имя — путь, как его даёт `guard.acceptance_test_files`.
+4. Пути `amend-tests` (`orchestrator/amend.py`) передают в
+   `long_lived_errors_from_files` новый именованный параметр
+   `lint_base: dict[str, str] | None` (метка файла → текст залоченного состояния:
+   для планки — артефактная ветка на `tests_locked_sha`, для долгоживущих —
+   голова кодовой ветки до правки, как в `_code_head_long_lived`). Нарушение
+   метода не считается, если у метода с тем же «Класс::метод» в базе одинаковый
+   `ast.dump` узла (задачи, залоченные до этой правки, не получают отказа за
+   старые методы). По умолчанию `None` — проверяются все методы. Перечень
+   `_EXCEPTIONS` гейтом не читается.
+5. Гейт срабатывает до лока: нарушение — отказ выхода `tests_writing` тем же
+   классом «чинит роль» (`orchestrator/advance_gates/refusal_classes.py:116–117`:
+   «переход отклонён: группы приёмочных тестов» / «переход отклонён: долгоживущие
+   файлы tests/»), состояние остаётся `tests_writing`, `tests_locked_sha` не
+   выставлен.
+6. Для чужого проекта (`repo_context.is_artel` ложно) проверки нет.
+7. Тесты — новый файл в `tests/`, у каждого теста строка «Ловит мутацию:»;
+   набор тестов — критерии AC-3…AC-7 ниже.
+8. Эквивалентность переноса на дереве `tests/` — однократная проверка
+   разработчика: результат `test_lint.findings` на всём дереве ветки равен
+   прежнему разбору (число ключей и побайтное равенство); вывод сравнения
+   приложен к PLAN. Постоянную защиту правила держит закреплённый набор образцов
+   `test_rule_corpus_is_frozen` в приложении PLAN.
+9. Существующие тесты, кроме приложения PLAN к `tests/test_invariants.py`, не
+   правятся и остаются зелёными.
 
 ## Критерии приёмки
-<Каждый критерий размечен `AC-<n>.` — из этой разметки роль test_author
-пишет приёмочный тест до кода (refs/artifacts/T023). Нумерация сквозная с 1, без
-пропусков. Каждый пункт — проверяемое утверждение: «система работает
-корректно» — нельзя, это не тест.>
 
-AC-1. ...
+AC-1. `orchestrator/test_lint.py` существует, импортирует только стандартную библиотеку (ни одного импорта `orchestrator`/`scripts`), несёт константы `CLOCK_CALLS`, `LIVE_FILES`, `LIVE_FILE_CONFIG_ATTRS` и функции `findings(source, rel)` и `top_level_functions(tree)`; `findings("def (", rel)` поднимает `SyntaxError`; на каждом образце `_RULE_CORPUS` приложения PLAN `findings(source, "tests/test_probe.py")` возвращает ровно закреплённый словарь находок.
 
-## Меняемое поведение
-<Необязательный раздел: нужен, только когда требования меняют ожидание
-существующего тестового метода `tests/` (было «не блокирует» — стало
-«блокирует», другой текст отказа, другое число). Каждый такой метод —
-строкой списка с конкретными значениями «было → стало» в обратных
-кавычках и номером пункта «Требования»; пар через `; ` может быть
-несколько:
+AC-2. Приложение 1 PLAN к `tests/test_invariants.py` из «Материалов» применяется к базе ветки без изменений (`git apply --check` проходит), и с ним `DeterministicTestsLintTest` целиком (включая `test_rule_corpus_is_frozen` и проверку перечня `_EXCEPTIONS` на дереве `tests/`) зелёный; к PLAN приложен вывод однократного сравнения `test_lint.findings` с прежним разбором на всём дереве `tests/` ветки — число ключей и побайтное равенство.
 
-  - `tests/<файл>.py::<Класс>::<метод>`: `<было>` → `<стало>` (требование <N>)
+AC-3. Проект артели: долгоживущий файл ветки `tests/test_<id>_*.py` с методом, где цикл `while time.time() < deadline`, — выход `tests_writing` отклонён «переход отклонён: долгоживущие файлы tests/» с текстом, содержащим «<файл>::<Класс>::<метод>: строка N»; состояние задачи остаётся `tests_writing`, `tests_locked_sha` не выставлен.
 
-Строка, начинающаяся с `- `, — пункт раздела (guard проверяет форму),
-прочие строки — свободный текст. Перечень сверяет с main `approve` гейта
-SPEC, рубежи `in_dev -> verifying` и мержа пропускают только смену,
-совпавшую с ним, со строгостью не ниже прежней и с двусторонним
-прогоном. Ослабление (утверждение удалено или заменено слабее,
-допуск шире, якорь регулярного выражения снят) этим разделом не
-оформляется — только вопросом Оператору.
+AC-4. Проект артели: обычный файл `acceptance_tests/` с `time.sleep(1)` в методе и (отдельно) файл с путём `Path(__file__).parent.parent / "targets.yaml"` — выход `tests_writing` отклонён «переход отклонён: группы приёмочных тестов» с адресом «<путь>::<метод>: строка N: …», лока нет (Ловит мутацию: линт перенесён после фильтра по группе).
 
-Раздел — только смена значения при том же виде утверждения. Смена
-вида (`assertIn` ↔ `assertNotIn`, `assertTrue` ↔ `assertFalse`,
-`assertEqual` → `assertIn` и т.п.), удаление, переименование, пропуск и
-смягчение сюда не входят: это вопрос Оператору в батче с матрицей
-последствий, мандат «Ослабление тестов разрешено» даёт Оператор.
-«было» и «стало» — скалярные литералы Python (`1`, `-1`, `'текст'`,
-`True`, `None`), не слова, не выражения, не имена и не контейнеры;
-«было» — литерал, который стоит в утверждении названного метода или его
-помощника первого уровня на main. `approve` гейта SPEC отказывает
-строке, нарушающей это правило. Раздел не нужен — удали его.>
+AC-5. Проект артели: чистые файлы планки и долгоживущие файлы, а также файл планки с синтаксической ошибкой — линт отказа не даёт (синтаксическая ошибка не роняет гейт `SyntaxError`-исключением).
 
-## Заменяемые тесты
-<Необязательный раздел: нужен, только когда требование заменяет
-существующий тест компонента с отчётом (запись `components:` с полем
-`report`) тестом критерия, а не меняет его ожидание. «Меняемое
-поведение» — только Python-тесты артели. Каждый заменяемый тест —
-строкой списка с идентификатором целиком в обратных кавычках, номером
-критерия из «Критерии приёмки» и причиной:
+AC-6. `amend-tests`: долгоживущий файл задачи залочен с методом, содержащим `time.sleep(1)` (лок до правки); правка другого метода того же файла — отказа линта нет; добавленный правкой новый метод с `time.sleep(1)` — отказ с адресом этого метода.
 
-  - `<компонент>:<путь>::<полное имя>[#<n>]` → AC-<n>: <причина>
+AC-7. Проект не артель (`is_artel` ложно): те же нарушения, что в AC-3 и AC-4, не дают отказа выхода `tests_writing` (тест зелёный и до, и после правки).
 
-Только смена поведения по требованию; ослабление сюда не входит. Каждая
-непустая строка раздела — пункт (guard проверяет форму). На каждый
-идентификатор SPEC несёт строку раздела «## Матрица неослабления»
-(таблица пяти столбцов docs/operator-gates.md): «Что меняется» называет
-идентификатор целиком между одинарными обратными кавычками. `approve`
-гейта SPEC сверяет компонент, маски `tests`, файл в main и матрицу и
-записывает перечень решением Оператора. Раздел не нужен — удали его.>
+AC-8. `long_lived_errors_from_files` принимает именованный параметр `lint_base` (по умолчанию `None`); при `None` нарушения отдаются для всех методов, при переданной базе метод с тем же «Класс::метод» и одинаковым `ast.dump` узла в базе нарушения не даёт; перечень `_EXCEPTIONS` из `tests/test_invariants.py` гейтом не читается.
 
 ## Оценка объёма и деление
-<Заполняется, если сработал хотя бы один сигнал «подозрения на большой
-объём» (пороги — именованные константы в orchestrator/config.py; guard
-называет сработавший сигнал в отказе): число затрагиваемых модулей/
-файлов зоны ≥ 5; число критериев приёмки ≥ 10; в тексте встречаются
-«ориентировочно», «весь оркестратор» или «по факту затронутых мест»;
-`budget_usd` ≥ $30; прогноз диффа (`diff_forecast_kib` во frontmatter
-либо строка «Прогноз диффа: N КиБ» здесь) выше половины потолка гейта
-ёмкости; зона задевает механизм, на который опирается запись в
-`docs/invariants.md`. Без единого сигнала секция может быть пустой или
-отсутствовать — guard её не потребует.
-
-При срабатывании перечисли сработавшие сигналы и дай ОДНО из двух:
-- **нарезка** на 2–4 подзадачи: границы каждой части — по границам зон,
-  порядок — по зависимостям (первой идёт часть с механикой, на которую
-  опираются остальные), обоснование, что каждая часть самостоятельно
-  мержима с зелёной планкой (skills/spec-authoring.md);
-- **обоснование монолита**: что именно нельзя разрезать (атомарная смена
-  механики) и почему промежуточное состояние неработоспособно.
-
-Решение утверждает Оператор на гейте SPEC (docs/operator-gates.md).>
-
-## Деление
-<Заполняется ТОЛЬКО при решении «нарезка» секции выше — заявка на
-деление, не команда: роль не вправе звать команды пульта из своего
-worktree (T056), заводит подзадачи сам пульт при `approve` на этом же
-гейте (docs/operator-gates.md, гейт SPEC). 2–4 подраздела `### <название
-подзадачи>`, один на каждую часть нарезки. Каждый подраздел несёт:
-
-- `Зоны:` — список путей/масок через запятую; каждая зона обязана
-  входить либо в зоны родителя (frontmatter zones: этого SPEC), либо в
-  общие зоны (orchestrator/config.py::COMMON_ZONES) — guard отказывает
-  подразделу, режущему зону родителя поперёк;
-- `Порядок:` — для первой части буквально «первая, без зависимостей»;
-  для остальных — «после части N»;
-- `Рамка: $N` — необязательно, рамка бюджета будущей подзадачи;
-- текст ТЗ подзадачи — свободный текст после полей, до следующего
-  `###` или конца секции; станет TZ.md подзадачи с добавленной первой
-  строкой-ссылкой на эту задачу.
-
-### <название первой подзадачи>
-
-Зоны: ...
-Порядок: первая, без зависимостей
-
-<текст ТЗ первой подзадачи>
-
-### <название второй подзадачи>
-
-Зоны: ...
-Порядок: после части 1
-
-<текст ТЗ второй подзадачи>>
+Сигналов нет: файлов зоны вне общих зон (`orchestrator/config.py::COMMON_ZONES`) — 3
+(`orchestrator/test_lint.py`, `scripts/guard.py`, `orchestrator/amend.py`);
+критериев приёмки — 8; `budget_usd` — 40 (порог $60). Бюджет — $40 из ТЗ, в
+пределах калибровки уровня «до 10 критериев, до 4 файлов».
 
 ## Не входит
-<Явные границы: что НЕ делаем в этой задаче.>
-
-- ...
+- Изменение перечня `_EXCEPTIONS` и тестов-образцов `DeterministicTestsLintTest`.
+- Правка `skills/test-authoring.md` (правило там есть в общем виде; уточнение примером — отдельной правкой Оператора).
+- Новый класс отказа: используются существующие классы `refusal_classes.py:116–117`.
+- В `scripts/guard.py` — прочие проверки guard, кроме подключения линта к ошибкам долгоживущих файлов и файлов планки и параметра `lint_base`; в `orchestrator/amend.py` — всё, кроме передачи `lint_base` (требование 4).
+- Только чтение: `docs/` (имя каталога — элемент правила живых файлов, сам каталог не меняется), `orchestrator/fsm_advance.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/refusal_classes.py`, `orchestrator/repo_context.py`, `orchestrator/preflight.py`.
+- Полный зелёный набор `tests/` (требование 9 в части «остаются зелёными») — её держит пульт.
 
 ## Материалы
-<Ссылки, примеры, обсуждения. Опционально.>
+- ТЗ: `tasks/01M5MVSP9YW0DYA4YQ1KSG0AHF/TZ.md`; строка бэклога «Проверка детерминизма тестов планки на выходе tests_writing, до лока».
+- Выход `tests_writing`: `orchestrator/fsm_advance.py` около строк 570–643, гейты `_tests_writing_test_groups_gate`, `_tests_writing_long_lived_gate` (`orchestrator/advance_gates/tests_writing.py`), признак артели — `network_addresses = repo_context.is_artel(target)` (`fsm_advance.py:598`).
+- Перебор файлов планки — `guard.acceptance_test_files` (`scripts/guard.py:4112`); группа файла — `guard.plank_file_group` (`scripts/guard.py:3599`).
+- `amend-tests`: вызовы `guard.long_lived_errors_from_files` в `orchestrator/amend.py` (строки 256, 280, 642), `_code_head_long_lived` (строка 556).
+- Приложение PLAN к защищённому пути — текст Оператора ниже, переносится в PLAN без изменений (решение Оператора 23.10.2026, вариант А).
+
+
+#### Приложение 1 (вынос разбора линта детерминизма): tests/test_invariants.py
+
+Защищённый путь; решение Оператора 23.10.2026 (вариант А). Кроме переноса разбора, приложение добавляет тест `test_rule_corpus_is_frozen` — закреплённый набор образцов с точными находками (снят прогоном нынешней реализации 23.10): ослабление правила в незащищённом модуле краснит защищённый файл.
+
+```diff
+diff --git a/tests/test_invariants.py b/tests/test_invariants.py
+--- a/tests/test_invariants.py
++++ b/tests/test_invariants.py
+@@ -39,6 +39,7 @@
+                           ci, cleanup, config, fsm, fsm_advance, gitcmd,
+                           runner, stack, store)
+ from orchestrator.advance_gates import test_integrity  # noqa: E402
++from orchestrator import test_lint  # noqa: E402
+ from scripts import guard  # noqa: E402
+ from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
+                            capture, capture_new_task_id,
+@@ -2019,11 +2020,6 @@
+     файла (защищённый путь, на виду у Оператора).
+     """
+ 
+-    _CLOCK_CALLS = ("monotonic", "time", "monotonic_ns", "time_ns")
+-    _LIVE_FILES = ("targets.yaml", "roles.yaml", "model_sets.yaml")
+-    # Имена `config`, равные имени живого файла (относительный путь от
+-    # корня, а не путь песочницы).
+-    _LIVE_FILE_CONFIG_ATTRS = ("MODEL_SETS_REL",)
+     _SANDBOX_HELPERS = "tests/sandbox.py"
+ 
+     # «файл::метод» -> обоснование (SPEC 01M4G8MNEPECNX1TCEDW4T4RPX,
+@@ -2210,202 +2206,19 @@
+     }
+ 
+     # --- разбор -----------------------------------------------------------
+-
+-    @classmethod
+-    def _is_time_module(cls, node) -> bool:
+-        return ((isinstance(node, ast.Name) and node.id == "time")
+-                or (isinstance(node, ast.Attribute) and node.attr == "time"))
+-
+-    @classmethod
+-    def _is_clock_call(cls, node, from_time: set) -> bool:
+-        if not isinstance(node, ast.Call):
+-            return False
+-        func = node.func
+-        if isinstance(func, ast.Attribute):
+-            return (func.attr in cls._CLOCK_CALLS
+-                    and cls._is_time_module(func.value))
+-        return isinstance(func, ast.Name) and func.id in from_time & set(
+-            cls._CLOCK_CALLS)
+-
+-    @classmethod
+-    def _is_sleep_call(cls, node, from_time: set) -> bool:
+-        if not isinstance(node, ast.Call):
+-            return False
+-        func = node.func
+-        if isinstance(func, ast.Attribute):
+-            return func.attr == "sleep" and cls._is_time_module(func.value)
+-        return isinstance(func, ast.Name) and func.id == "sleep" and (
+-            "sleep" in from_time)
+-
+-    @staticmethod
+-    def _zero_pause(call: ast.Call) -> bool:
+-        args = list(call.args) + [k.value for k in call.keywords]
+-        return (len(args) == 1 and isinstance(args[0], ast.Constant)
+-                and not isinstance(args[0].value, bool)
+-                and args[0].value == 0)
+-
+-    @staticmethod
+-    def _walk_own(node):
+-        """Узлы `node` без тел вложенных функций и классов — у вложенной
+-        функции свой обход (её нарушение адресуется той же функцией
+-        верхнего уровня)."""
+-        stack = [node]
+-        while stack:
+-            current = stack.pop()
+-            yield current
+-            for child in ast.iter_child_nodes(current):
+-                if current is not node and isinstance(
+-                        current, (ast.FunctionDef, ast.AsyncFunctionDef,
+-                                  ast.Lambda, ast.ClassDef)):
+-                    continue
+-                stack.append(child)
+-
+-    @staticmethod
+-    def _from_time_names(tree) -> set:
+-        return {alias.asname or alias.name for node in ast.walk(tree)
+-                if isinstance(node, ast.ImportFrom) and node.module == "time"
+-                for alias in node.names}
+-
+-    @classmethod
+-    def _wall_clock_waits(cls, func, from_time: set) -> list:
+-        """Строки ожидания по часам внутри функции `func` (вместе с
+-        вложенными функциями)."""
+-        found = []
+-        for node in ast.walk(func):
+-            if cls._is_sleep_call(node, from_time) and not cls._zero_pause(node):
+-                found.append(f"строка {node.lineno}: time.sleep с ненулевой "
+-                             f"паузой")
+-            elif isinstance(node, (ast.While, ast.For, ast.AsyncFor)):
+-                # Условие цикла и условия `if` в его теле: срок проверяется
+-                # там; сравнение меток времени в утверждении — не ожидание.
+-                checks = [node.test] if isinstance(node, ast.While) else []
+-                checks += [sub.test for stmt in node.body
+-                           for sub in cls._walk_own(stmt)
+-                           if isinstance(sub, ast.If)]
+-                if any(cls._is_clock_call(sub, from_time)
+-                       for check in checks for sub in ast.walk(check)):
+-                    found.append(f"строка {node.lineno}: цикл до срока по "
+-                                 f"time.monotonic()/time.time()")
+-        return found
+-
+-    @classmethod
+-    def _mentions_file(cls, node) -> bool:
+-        return any(isinstance(sub, ast.Name) and sub.id == "__file__"
+-                   or isinstance(sub, ast.Attribute) and sub.attr == "__file__"
+-                   for sub in ast.walk(node))
+-
+-    @classmethod
+-    def _is_live_name(cls, node) -> bool:
+-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+-            value = node.value.strip("/")
+-            return (value in cls._LIVE_FILES or value == "docs"
+-                    or value.startswith("docs/"))
+-        return (isinstance(node, ast.Attribute)
+-                and node.attr in cls._LIVE_FILE_CONFIG_ATTRS)
+-
+-    @classmethod
+-    def _rooted(cls, node, roots: set) -> bool:
+-        """Выражение — путь от настоящего корня: несёт `__file__` или имя,
+-        связанное с таким путём."""
+-        return cls._mentions_file(node) or any(
+-            isinstance(sub, ast.Name) and sub.id in roots
+-            for sub in ast.walk(node))
+-
+-    @classmethod
+-    def _path_parts(cls, node) -> list | None:
+-        """Части выражения-пути: операнды цепочки `/`, получатель и
+-        аргументы `joinpath`/`os.path.join`; `None` — не путь."""
+-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+-            return [*(cls._path_parts(node.left) or [node.left]),
+-                    *(cls._path_parts(node.right) or [node.right])]
+-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+-            if node.func.attr == "joinpath":
+-                return [node.func.value, *node.args]
+-            if node.func.attr == "join" and ast.unparse(node.func.value) in (
+-                    "os.path", "path"):
+-                return list(node.args)
+-        return None
+-
+-    @classmethod
+-    def _live_path(cls, node, roots: set) -> bool:
+-        parts = cls._path_parts(node)
+-        return bool(parts) and any(cls._rooted(p, roots) for p in parts) and any(
+-            cls._is_live_name(p) for p in parts)
+-
+-    @classmethod
+-    def _bound_names(cls, statements, test) -> set:
+-        """Имена, связанные присваиванием в `statements` со значением,
+-        удовлетворяющим `test` (до неподвижной точки: имя от имени)."""
+-        names: set = set()
+-        assigns = [node for stmt in statements for node in ast.walk(stmt)
+-                   if isinstance(node, (ast.Assign, ast.AnnAssign))
+-                   and node.value is not None]
+-        changed = True
+-        while changed:
+-            changed = False
+-            for node in assigns:
+-                targets = node.targets if isinstance(node, ast.Assign) else [
+-                    node.target]
+-                new = {t.id for t in targets if isinstance(t, ast.Name)} - names
+-                if new and test(node.value, names):
+-                    names |= new
+-                    changed = True
+-        return names
++    # Правила разбора (часы и живые файлы) — модуль пульта
++    # `orchestrator/test_lint.py`: тот же разбор зовёт гейт выхода
++    # `tests_writing` до лока планки (решение Оператора 23.10.2026).
++    # Перечень `_EXCEPTIONS` и обход дерева `tests/` остаются здесь.
+ 
+     @classmethod
+-    def _live_reads(cls, func, module_roots: set, module_live: set) -> list:
+-        local_roots = cls._bound_names(
+-            func.body, lambda value, names: cls._rooted(
+-                value, module_roots | names))
+-        roots = module_roots | local_roots
+-        found = []
+-        for node in ast.walk(func):
+-            if cls._live_path(node, roots):
+-                found.append(f"строка {node.lineno}: путь к живому файлу "
+-                             f"репозитория {ast.unparse(node)}")
+-            elif (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+-                  and node.id in module_live):
+-                found.append(f"строка {node.lineno}: имя модуля {node.id} — "
+-                             f"путь к живому файлу репозитория")
+-        return found
+-
+-    @classmethod
+     def _top_level_functions(cls, tree):
+-        """(«Класс::метод» или «функция», узел) — функции верхнего уровня
+-        модуля и методы его классов."""
+-        for node in tree.body:
+-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+-                yield node.name, node
+-            elif isinstance(node, ast.ClassDef):
+-                for item in node.body:
+-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+-                        yield f"{node.name}::{item.name}", item
++        return test_lint.top_level_functions(tree)
+ 
+     @classmethod
+     def findings(cls, source: str, rel: str) -> dict:
+-        """{«файл::метод»: [нарушения]} исходника `source` файла `rel`.
++        return test_lint.findings(source, rel)
+ 
+-        Код модуля вне функций (кроме определений имён) не исполняет
+-        ожиданий — его присваивания лишь связывают имена корня."""
+-        tree = ast.parse(source)
+-        from_time = cls._from_time_names(tree)
+-        module_stmts = [node for node in tree.body
+-                        if isinstance(node, (ast.Assign, ast.AnnAssign))]
+-        module_roots = cls._bound_names(
+-            module_stmts, lambda value, names: cls._rooted(value, names))
+-        module_live = cls._bound_names(
+-            module_stmts, lambda value, names: (
+-                cls._live_path(value, module_roots)
+-                or any(isinstance(sub, ast.Name) and sub.id in names
+-                       for sub in ast.walk(value))))
+-        result = {}
+-        for qualname, func in cls._top_level_functions(tree):
+-            hits = (cls._wall_clock_waits(func, from_time)
+-                    + cls._live_reads(func, module_roots, module_live))
+-            if hits:
+-                result[f"{rel}::{qualname}"] = hits
+-        return result
+-
+     @classmethod
+     def tree_findings(cls, tests_dir: Path) -> dict:
+         found = {}
+@@ -2458,7 +2271,79 @@
+             if qualname not in names:
+                 problems.append(f"{key}: метода нет в файле")
+         self.assertEqual([], problems, "\n".join(problems))
++
++    # Закреплённый набор правил (решение Оператора 23.10.2026): разбор живёт
++    # в незащищённом `orchestrator/test_lint.py`; точные находки образцов
++    # держат правило здесь, на виду у Оператора.
++    _RULE_CORPUS = {
++        'sleep_attr': (
++            'import time\n\nclass T:\n    def test_a(self):\n        time.sleep(1)\n',
++            {'tests/test_probe.py::T::test_a': ['строка 5: time.sleep с ненулевой паузой']}),
++        'sleep_from': (
++            'from time import sleep\n\ndef helper():\n    sleep(0.5)\n',
++            {'tests/test_probe.py::helper': ['строка 4: time.sleep с ненулевой паузой']}),
++        'sleep_zero_clean': (
++            'import time\n\nclass T:\n    def test_a(self):\n        time.sleep(0)\n',
++            {}),
++        'while_monotonic': (
++            'import time\n\nclass T:\n    def test_a(self):\n        deadline = time.monotonic() + 5\n        while time.monotonic() < deadline:\n            pass\n',
++            {'tests/test_probe.py::T::test_a': ['строка 6: цикл до срока по time.monotonic()/time.time()']}),
++        'for_if_time': (
++            'import time\n\nclass T:\n    def test_a(self):\n        for _ in range(10):\n            if time.time() > 3:\n                break\n',
++            {'tests/test_probe.py::T::test_a': ['строка 5: цикл до срока по time.monotonic()/time.time()']}),
++        'from_monotonic': (
++            'from time import monotonic\n\nclass T:\n    def test_a(self):\n        while monotonic() < 9:\n            pass\n',
++            {'tests/test_probe.py::T::test_a': ['строка 5: цикл до срока по time.monotonic()/time.time()']}),
++        'targets_file': (
++            'from pathlib import Path\n\nclass T:\n    def test_a(self):\n        Path(__file__).parent.parent / "targets.yaml"\n',
++            {'tests/test_probe.py::T::test_a': ["строка 5: путь к живому файлу репозитория Path(__file__).parent.parent / 'targets.yaml'"]}),
++        'roles_joinpath': (
++            'from pathlib import Path\n\nclass T:\n    def test_a(self):\n        Path(__file__).resolve().parent.joinpath("roles.yaml")\n',
++            {'tests/test_probe.py::T::test_a': ["строка 5: путь к живому файлу репозитория Path(__file__).resolve().parent.joinpath('roles.yaml')"]}),
++        'model_sets_osjoin': (
++            'import os\n\nclass T:\n    def test_a(self):\n        os.path.join(os.path.dirname(__file__), "model_sets.yaml")\n',
++            {'tests/test_probe.py::T::test_a': ["строка 5: путь к живому файлу репозитория os.path.join(os.path.dirname(__file__), 'model_sets.yaml')"]}),
++        'docs_dir': (
++            'from pathlib import Path\nROOT = Path(__file__).parent.parent\n\nclass T:\n    def test_a(self):\n        ROOT / "docs" / "backlog.md"\n',
++            {'tests/test_probe.py::T::test_a': ["строка 6: путь к живому файлу репозитория ROOT / 'docs' / 'backlog.md'", "строка 6: путь к живому файлу репозитория ROOT / 'docs'"]}),
++        'module_live_name': (
++            'from pathlib import Path\nTARGETS = Path(__file__).parent.parent / "targets.yaml"\n\nclass T:\n    def test_a(self):\n        TARGETS.read_text()\n',
++            {'tests/test_probe.py::T::test_a': ['строка 6: имя модуля TARGETS — путь к живому файлу репозитория']}),
++        'model_sets_rel': (
++            'from pathlib import Path\nfrom orchestrator import config\n\nclass T:\n    def test_a(self):\n        Path(__file__).parent.parent / config.MODEL_SETS_REL\n',
++            {'tests/test_probe.py::T::test_a': ['строка 6: путь к живому файлу репозитория Path(__file__).parent.parent / config.MODEL_SETS_REL']}),
++        'sandbox_root_clean': (
++            'from orchestrator import config\n\nclass T:\n    def test_a(self):\n        config.ROOT / "targets.yaml"\n',
++            {}),
++        'ns_clocks': (
++            'import time\n\nclass T:\n    def test_a(self):\n        while time.monotonic_ns() < 9:\n            pass\n\n    def test_b(self):\n        while time.time_ns() < 9:\n            pass\n',
++            {'tests/test_probe.py::T::test_a': ['строка 5: цикл до срока по time.monotonic()/time.time()'], 'tests/test_probe.py::T::test_b': ['строка 9: цикл до срока по time.monotonic()/time.time()']}),
++        'async_for': (
++            'import time\n\nclass T:\n    async def test_a(self):\n        async for _ in g():\n            if time.time() > 3:\n                break\n',
++            {'tests/test_probe.py::T::test_a': ['строка 5: цикл до срока по time.monotonic()/time.time()']}),
++        'sleep_false_kw': (
++            'import time\n\nclass T:\n    def test_a(self):\n        time.sleep(False)\n\n    def test_b(self):\n        time.sleep(secs=0)\n',
++            {'tests/test_probe.py::T::test_a': ['строка 5: time.sleep с ненулевой паузой']}),
++    }
+ 
++    def test_rule_corpus_is_frozen(self):
++        """Каждый образец набора даёт ровно закреплённые находки с точными
++        текстами «строка N: …»; чистые образцы — ни одной; исходник с
++        синтаксической ошибкой — `SyntaxError`, как прежде.
++
++        Ловит мутацию: из `orchestrator/test_lint.py` убрано имя живого
++        файла, вид цикла (`for`, `async for`, условие `if` в теле), часы
++        `*_ns`, форма пути (`joinpath`, `os.path.join`), `from time import …`,
++        имя модуля от `__file__` или `MODEL_SETS_REL`; пауза `sleep(0)` или
++        `sleep(secs=0)` стала нарушением, а `sleep(False)` — нет; либо
++        `findings` глотает `SyntaxError`.
++        """
++        for name, (source, expected) in self._RULE_CORPUS.items():
++            with self.subTest(образец=name):
++                self.assertEqual(expected, self.findings(source, "tests/test_probe.py"))
++        with self.assertRaises(SyntaxError):
++            self.findings("def (", "tests/test_probe.py")
++
+     # --- образцы ------------------------------------------------------------
+ 
+     def assert_caught(self, source: str) -> None:
+```
