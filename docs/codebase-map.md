@@ -1,5 +1,5 @@
 ---
-built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
+built_at_sha: c82c1f847b4b4b79cb5af14f3e5d0f98af4e531b
 ---
 
 # Codebase-map пульта
@@ -196,7 +196,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 **Назначение:** Аудит SPEC — шаг роли `spec_auditor` между сдачей SPEC и гейтом SPEC
 
 **Публичные функции:**
-- `answer_names`
 - `autocommit_prefix`
 - `binding_refusal`
 - `blob_sha`
@@ -220,7 +219,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 **Назначение:** Гейт неослабления тестов — узел сравнения `tests/` ветки с базой: ослабление и смена ожидания, сверка с объявленным в SPEC, строгость нового ожидания, храповик (SPEC 01M3FQ2V77QNK95Z599DM124QN, 01M45FJD46BX45VHC36S4VS9QN).
 
 **Публичные функции:**
-- `assertion_observation`
 - `declared_changes`
 - `findings`
 - `merge_gate_escalates`
@@ -1114,7 +1112,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 - `check_integrity`
 - `default_code_sha`
 - `external_artifact_sha`
-- `external_code_sha`
 - `fix`
 - `incident_refusal`
 - `journal_drift`
@@ -1234,7 +1231,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 - `hosting_token`
 - `in_repo`
 - `is_ancestor`
-- `is_clean`
 - `list_branches`
 - `ls_tree_files`
 - `merges_between`
@@ -1348,7 +1344,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 - `check`
 - `column`
 - `declared_from_tz`
-- `has_mandate_line`
 - `lines_refusal`
 - `mandate_value`
 - `merge_gate_refuses`
@@ -1522,7 +1517,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 
 **Публичные функции:**
 - `cmd_pool_seal`
-- `guids_path`
 - `pool_drift_warning`
 - `restore_pool_if_missing`
 - `sealed_path`
@@ -1773,8 +1767,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 - `build_done`
 - `build_killed`
 - `parse_total_cost`
-- `retro_path`
-- `retro_rel_path`
 - `task_token_breakdown`
 - `task_token_total`
 - `token_breakdown_by_actor`
@@ -1793,7 +1785,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 **Назначение:** Локальный кэш ретро-корпуса из локальных refs/artifacts/* (наполнить — `docs --fetch-all`)
 
 **Публичные функции:**
-- `read_cache`
 - `rebuild_cache`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/repo_context.py`, `orchestrator/targets.py`, `orchestrator/yamlmini.py`
@@ -1860,7 +1851,6 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 - `count`
 - `over_threshold`
 - `raise_once`
-- `task_rounds`
 
 **Импортирует:** `orchestrator/advance_gates/spec_audit.py`, `orchestrator/alerts.py`, `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/store.py`
 
@@ -6267,6 +6257,17 @@ built_at_sha: 15ed3bf92a49c307ae2f6cf3ac3255c3442ab97c
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/projects.py`, `orchestrator/reference_cache.py`, `orchestrator/role_prompt.py`, `orchestrator/store.py`, `tests/sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_01m5mhvakhr82vzrxzr19wj677_dead_definitions.py
+
+**Назначение:** Тринадцать определений пульта без обращений удалены и не возвращаются.
+
+**Публичные функции:**
+- `references`
+
+**Импортирует:** —
 
 **Импортируется:** —
 

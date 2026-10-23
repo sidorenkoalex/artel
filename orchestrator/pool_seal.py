@@ -72,10 +72,6 @@ def sealed_path() -> Path:
     return config.ROOT.joinpath(*SEALED_REL)
 
 
-def guids_path() -> Path:
-    return config.ROOT.joinpath(*GUIDS_REL)
-
-
 def _mac_key(pool_key: str) -> str:
     """Ключ HMAC, детерминированно выведенный из ключа пула (ANSWER-1
     п.1) — один слот keychain несёт материал для обоих назначений."""

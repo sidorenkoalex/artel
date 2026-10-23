@@ -69,11 +69,6 @@ def count(steps, review_iters: int | None) -> Rounds:
                   review_iters or 0, before, total)
 
 
-def task_rounds(conn, task_id: str) -> Rounds:
-    return count(store.task_steps(conn, task_id),
-                 store.get_task(conn, task_id)["review_iters"])
-
-
 def over_threshold(rounds: Rounds) -> bool:
     return (rounds.audits >= config.ROUNDS_ALERT_SPEC_AUDITS
             or rounds.escalations >= config.ROUNDS_ALERT_ESCALATIONS)
