@@ -35,6 +35,14 @@ schema_version: 5
    (pytest, фикстура `origin_real_git`, шпион на `subprocess.run`). В нём
    10 функций на AC-1–AC-10, у каждой есть «Ловит мутацию:».
 3. Замер AC-11 (раздел ниже).
+4. Возврат из verifying (CI красный) по мандату ANSWER-1: в
+   `tests/test_review_package.py::CmdRunReviewPackageTest::test_developer_step_has_no_package`
+   из ожидаемого списка вызовов git удалён ровно элемент
+   `["-C", clone, "remote"]` — вторая проверка remote перед отправкой,
+   которую убирает требование 1. Остальные элементы, порядок и строгое
+   `assertEqual` не тронуты (`git diff --stat`: 1 файл, 1 удалённая строка).
+   Прогон `tests/test_review_package.py` и нового файла задачи — 155 passed.
+   Карта `docs/codebase-map.md` регенерирована.
 
 ## Покрытие требований
 
@@ -44,7 +52,7 @@ schema_version: 5
 | 2 | 1, 2 (AC-4–AC-10) |
 | 3 | 2 |
 | 4 | 3 |
-| 5 | 1 (существующие файлы tests/ не правились; прогоны ниже) |
+| 5 | 1, 4 (существующие файлы tests/ не правились, кроме одной строки по ANSWER-1; прогоны ниже) |
 
 ## Счёт вызовов git на Ac5ProofMismatchTest (AC-11)
 Замер сделан на `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py::Ac5ProofMismatchTest`.
