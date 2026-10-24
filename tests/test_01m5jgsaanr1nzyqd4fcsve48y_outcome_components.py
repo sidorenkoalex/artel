@@ -41,7 +41,7 @@ from tests.outcome_gate_sandbox import (
     ENTRY_HEAD, LONG_TEMPLATE, MATRIX_HEADERS, PLANK_DIR, TASKS_DIR,
     VITEST_REPORT_ARGS, RunnerProc, flow, js_source, py_source, spec_text,
     ulid)
-from tests.test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate import (
+from tests.merge_outcome_sandbox import (
     MergeOutcomeSandbox)
 
 PASSED_ACTION = "гейт неослабления по исходам пройден"
