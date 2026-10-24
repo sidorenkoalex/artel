@@ -2,7 +2,7 @@
 task: 01M5PHK9K0YQCTPA6CK94BBZ33
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -275,9 +275,27 @@ schema_version: 5
 
 Часть 3 (`--patches 31-35`). `git status --porcelain -- orchestrator/` перед стартом: пустой вывод.
 
+# mutation-run №8 задачи 01M5PHK9K0YQCTPA6CK94BBZ33
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 071800d4e679d80648f4b06c21df4542de2e689b
+# тесты: tests/test_outcome_gate_module.py
+# патч 31 mutation-031.diff sha256 75606e4fd1d20ae1c398271645e628b3aec69e12785458bf408e77b9e398ae6e
+# патч 32 mutation-032.diff sha256 31d28986cd1cfc82d311237c2f535d214f4297e0a7b6cfe86879a2d3155b9dfd
+# патч 33 mutation-033.diff sha256 eccd871aab688e2a9ab9e0b722ba73dd8e1858b69a21374571dcb55e13fe08b0
+# патч 34 mutation-034.diff sha256 a8d21ebcd326420b9c52ace5528f64fb584a7f22de81e20113fa9a4c49a069b2
+# патч 35 mutation-035.diff sha256 27fc5d96ee096cb31284164298964d38fffc5f7bb3681bce446c631ffa2eecbd
+номер	исход	узлы
+31	убита	tests/test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not
+32	убита	tests/test_outcome_gate_module.py::test_ac13_refusal_hint_names_both_markers
+33	убита	tests/test_outcome_gate_module.py::test_skip_growth_line
+34	убита	tests/test_outcome_gate_module.py::test_covered_ids_round_trip_every_finding_kind
+35	убита	tests/test_outcome_gate_module.py::test_fingerprint_sorted_unique_or_none
+
+Шапки «до» и «после» согласованы: `git diff --quiet ed38d9879e02d12dc982d1979077b2c3c445382a 071800d4e679d80648f4b06c21df4542de2e689b -- orchestrator/` — код 0 (дерево `orchestrator/` не менялось и после подтяжки main dd9adb48); sha256 каждого из 35 патчей в шапках «после» №6–8 равен sha256 в шапках «до» (для 11 и 27 — шапкам перепрогонов №4 и №5).
+
 ## Доказательство: убившие узлы и упавшие утверждения
 
-По логам прогонов патчей `mutation-run` (`.artel/logs/suite-run/01M5PHK9K0YQCTPA6CK94BBZ33/…-mutation-run-<n>-p<nnn>.log`): для каждой мутации доказательства — убивший узел и самая глубокая строка его трассы в тестовом файле, лежащая в утверждении вне `setUp` и методов песочницы, готовящих задачу. Узлов, убитых только падением этих методов, в прогонах «до» №1 и №2 нет.
+По логам прогонов патчей `mutation-run` (`.artel/logs/suite-run/01M5PHK9K0YQCTPA6CK94BBZ33/…-mutation-run-<n>-p<nnn>.log`): для каждой мутации доказательства — убивший узел и самая глубокая строка его трассы в тестовом файле, лежащая в утверждении вне `setUp` и методов песочницы, готовящих задачу. Узлов, убитых только падением этих методов, нет ни в одном прогоне — ни «до» (№1–5), ни «после» (№6–8): у каждого упавшего узла всех 72 логов прогонов патчей есть строка трассы в утверждении вне них; строк `ERROR at setup` и `ERROR collecting` в логах нет.
 
 - mutation-001 до: убивший узел `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate`, упавшее утверждение `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:907`.
 - mutation-002 до: убивший узел `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate`, упавшее утверждение `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:907`.
@@ -316,6 +334,44 @@ schema_version: 5
 - mutation-034 до: убивший узел `RecordLevelTest::test_covered_ids_round_trip_every_finding_kind`, упавшее утверждение `tests/test_outcome_integrity.py:143`.
 - mutation-035 до: убивший узел `RecordLevelTest::test_fingerprint_sorted_unique_or_none`, упавшее утверждение `tests/test_outcome_integrity.py:155`.
 
+- mutation-001 после: убивший узел `tests/test_outcome_gate_module.py::test_ac1_artel_and_test_profile_no_gate`, упавшее утверждение `tests/test_outcome_gate_module.py:474`.
+- mutation-002 после: убивший узел `tests/test_outcome_gate_module.py::test_ac1_decide_skip_refusal_and_canary_no_gate`, упавшее утверждение `tests/test_outcome_gate_module.py:474`.
+- mutation-003 после: убивший узел `tests/test_outcome_gate_module.py::test_ac2_text_gate_refusal_first_no_outcome_runs`, упавшее утверждение `tests/test_outcome_gate_module.py:662`.
+- mutation-004 после: убивший узел `tests/test_outcome_gate_module.py::test_ac2_outcome_refusal_stops_before_review_rework_gate`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-005 после: убивший узел `tests/test_outcome_gate_module.py::test_ac3_full_suite_on_base_and_head_checkouts_fresh`, упавшее утверждение `tests/test_outcome_gate_module.py:738`.
+- mutation-006 после: убивший узел `tests/test_outcome_gate_module.py::test_ac4_git_head_not_read_refuses`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-007 после: убивший узел `tests/test_outcome_gate_module.py::test_ac4_git_head_checkout_failure_refuses`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-008 после: убивший узел `tests/test_outcome_gate_module.py::test_ac4_side_not_started_or_timeout_refuses_naming_side`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-009 после: убивший узел `tests/test_outcome_gate_module.py::test_ac4_side_head_timeout_refuses_naming_head`, упавшее утверждение `tests/test_outcome_gate_module.py:500`.
+- mutation-010 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_branch_rerun_retried_is_red`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-011 после: убивший узел `tests/test_outcome_gate_module.py::test_ac5_no_tests_on_base_empty_pass_to_pass`, упавшее утверждение `tests/test_outcome_gate_module.py:469`.
+- mutation-012 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_rerun_base_skipped_refuses`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-013 после: убивший узел `tests/test_outcome_gate_module.py::test_red_on_branch_kinds[case2-True]`, упавшее утверждение `tests/test_outcome_gate_module.py:2179`.
+- mutation-014 после: убивший узел `tests/test_outcome_gate_module.py::test_ac6_skipped_on_branch_not_rerun`, упавшее утверждение `tests/test_outcome_gate_module.py:1176`.
+- mutation-015 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_rerun_unknown_outcome_refuses`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-016 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_rerun_base_skipped_refuses`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-017 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_branch_rerun_retried_is_red`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-018 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_branch_rerun_skipped_is_red`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-019 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_branch_rerun_skipped_is_red`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-020 после: убивший узел `tests/test_outcome_gate_module.py::test_ac8_unstable_after_change_general_refusal`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-021 после: убивший узел `tests/test_outcome_gate_module.py::test_ac8_flaky_on_base_no_refusal`, упавшее утверждение `tests/test_outcome_gate_module.py:469`.
+- mutation-022 после: убивший узел `tests/test_outcome_gate_module.py::test_ac7_branch_rerun_skipped_is_red`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-023 после: убивший узел `tests/test_outcome_gate_module.py::test_ac9_vitest_records_findings_and_non_findings`, упавшее утверждение `tests/test_outcome_gate_module.py:1718`.
+- mutation-024 после: убивший узел `tests/test_outcome_gate_module.py::test_ac9_one_finding_per_id_senior_kind`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-025 после: убивший узел `tests/test_outcome_gate_module.py::test_ac10_findings_order_and_one_line_each`, упавшее утверждение `tests/test_outcome_gate_module.py:1839`.
+- mutation-026 после: убивший узел `tests/test_outcome_gate_module.py::test_mandate_prefix_needs_separator`, упавшее утверждение `tests/test_outcome_gate_module.py:2247`.
+- mutation-027 после: убивший узел `tests/test_outcome_gate_module.py::test_mandate_prefix_needs_separator`, упавшее утверждение `tests/test_outcome_gate_module.py:2252`.
+- mutation-028 после: убивший узел `tests/test_outcome_gate_module.py::test_mandate_prefix_needs_separator`, упавшее утверждение `tests/test_outcome_gate_module.py:2251`.
+- mutation-029 после: убивший узел `tests/test_outcome_gate_module.py::test_ac11_role_autocommitted_answer_does_not_cover`, упавшее утверждение `tests/test_outcome_gate_module.py:459`.
+- mutation-030 после: убивший узел `tests/test_outcome_gate_module.py::test_ac13_passed_gate_journal_counts`, упавшее утверждение `tests/test_outcome_gate_module.py:2059`.
+- mutation-031 после: убивший узел `tests/test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not`, упавшее утверждение `tests/test_outcome_gate_module.py:529`.
+- mutation-032 после: убивший узел `tests/test_outcome_gate_module.py::test_ac13_refusal_hint_names_both_markers`, упавшее утверждение `tests/test_outcome_gate_module.py:2146`.
+- mutation-033 после: убивший узел `tests/test_outcome_gate_module.py::test_skip_growth_line`, упавшее утверждение `tests/test_outcome_gate_module.py:2230`.
+- mutation-034 после: убивший узел `tests/test_outcome_gate_module.py::test_covered_ids_round_trip_every_finding_kind`, упавшее утверждение `tests/test_outcome_gate_module.py:2274`.
+- mutation-035 после: убивший узел `tests/test_outcome_gate_module.py::test_fingerprint_sorted_unique_or_none`, упавшее утверждение `tests/test_outcome_gate_module.py:2286`.
+
+Находок нет: каждую из 35 мутаций убил хотя бы один узел и «до», и «после»; исходов «оборвана по пределу»/«не прогнана (предел)» нет. Удалённых дублей нет: все 53 теста перенесены функциями модуля.
+
 ## Перенос песочниц
 
 - Сверка `ast.dump` переноса `tests/outcome_gate_sandbox.py`: 60 утверждений верхнего уровня строк 47–899 исходного файла A против 60 утверждений модуля после докстринга — набор, порядок и `ast.dump` каждого совпадают (скрипт `ast.parse` + попарное `ast.dump`, итог `60 60 True`); докстринг модуля — одна строка назначения.
@@ -328,6 +384,7 @@ schema_version: 5
 
 - До: 53 теста в трёх файлах, 3262 строки (2493 + 609 + 160); адресный прогон по SPEC — около 671 с (657 с + 14 с + 0,3 с).
 - После: 53 тестовые функции (58 узлов сбора), 2287 строк `tests/test_outcome_gate_module.py` и 854 строки `tests/outcome_gate_sandbox.py`; адресный прогон `python3 -m pytest tests/test_outcome_gate_module.py -p no:cacheprovider -p timeout -o timeout=120` под ролью (коммит 071800d4) — `58 passed in 230.43s`, то есть 230 с.
+- Зелень трёх импортёров по CI кодовой ветки (`tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py`, `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py`, `tests/test_01m5jgsaanr1nzyqd4fcsve48y_outcome_components.py`): на момент сдачи шага ветка задачи в origin не выложена (`git ls-remote origin "refs/heads/task/01m5phk9k0yqctpa6ck94bbz33*"` — пусто), CI кодовой ветки ещё не запускался; итог даст CI после выкладки ветки пультом на `verifying`. Под ролью импортёры адресно не гонялись (требование 14 — один файл за шаг, им был `tests/test_outcome_gate_module.py`); смоделированный в SPEC перенос с заменой строки импорта — 80 тестов без потерь.
 
 ## Шаги
 
