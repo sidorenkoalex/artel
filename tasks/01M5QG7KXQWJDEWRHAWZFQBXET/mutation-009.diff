@@ -1,0 +1,12 @@
+diff --git a/orchestrator/fsm_merge_gate.py b/orchestrator/fsm_merge_gate.py
+--- a/orchestrator/fsm_merge_gate.py
++++ b/orchestrator/fsm_merge_gate.py
+@@ -901,7 +901,7 @@
+     if changed is None:
+         return project_profile.component_profiles(ctx.target)
+     names = project_profile.select_components(ctx.target,
+-                                              [*changed, *paths])
++                                              changed)
+     return project_profile.component_profiles(ctx.target, names)
+ 
+ 

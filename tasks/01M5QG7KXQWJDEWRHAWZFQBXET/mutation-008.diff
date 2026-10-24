@@ -1,0 +1,12 @@
+diff --git a/orchestrator/suite_run.py b/orchestrator/suite_run.py
+--- a/orchestrator/suite_run.py
++++ b/orchestrator/suite_run.py
+@@ -418,7 +418,7 @@
+     summary = acceptance.run_summary_line(output)
+     finished = (outcome in (acceptance.FULL_SUITE_GREEN,
+                             acceptance.FULL_SUITE_RED) and bool(summary))
+-    statuses = {} if reported else _progress(output)
++    statuses = _progress(output)
+     parents = {} if reported else _subtest_progress(output)
+     failures = dict.fromkeys(
+         (node for node, status in statuses.items()

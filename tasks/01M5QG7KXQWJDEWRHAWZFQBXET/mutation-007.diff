@@ -1,0 +1,11 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -507,7 +507,6 @@
+         return None, [], (f"замок установки {guard} не заведён ({exc}) — "
+                           f"прогон не запускался")
+     with fh:
+-        fcntl.flock(fh, fcntl.LOCK_EX)
+         try:
+             links = _install_mark(home, digest)
+             if links is not None:

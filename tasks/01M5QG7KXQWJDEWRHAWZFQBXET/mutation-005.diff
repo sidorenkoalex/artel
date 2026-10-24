@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -767,7 +767,7 @@
+     # Цель `long_lived_dir`, `--ignore` выкладки и `-p no:cacheprovider` —
+     # аргументы pytest: к иной команде компонента (Vitest, свой раннер) их
+     # не добавляет и `runner: pytest-own` (требования 4, 7).
+-    own = _own(profile) if not vitest and is_pytest_command(head) else None
++    own = _own(profile) if not vitest else None
+     if subset is not None:
+         extra, refusal = _subset_args(profile, subset)
+         if refusal:

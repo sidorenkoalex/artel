@@ -1,0 +1,12 @@
+diff --git a/orchestrator/fsm_merge_gate.py b/orchestrator/fsm_merge_gate.py
+--- a/orchestrator/fsm_merge_gate.py
++++ b/orchestrator/fsm_merge_gate.py
+@@ -899,7 +899,7 @@
+     changed = (gitcmd.diff_names(base, branch, repo=ctx.path)
+                if base else None)
+     if changed is None:
+-        return project_profile.component_profiles(ctx.target)
++        return project_profile.component_profiles(ctx.target)[:1]
+     names = project_profile.select_components(ctx.target,
+                                               [*changed, *paths])
+     return project_profile.component_profiles(ctx.target, names)

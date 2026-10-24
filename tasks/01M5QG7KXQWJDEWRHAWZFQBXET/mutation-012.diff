@@ -1,0 +1,13 @@
+diff --git a/orchestrator/suite_run.py b/orchestrator/suite_run.py
+--- a/orchestrator/suite_run.py
++++ b/orchestrator/suite_run.py
+@@ -340,8 +340,7 @@
+     if answer.values.get("report") or \
+             answer.values.get("runner") == PROFILE_RUNNER_OWN:
+         try:
+-            profile = project_profile.with_tools(
+-                target, project_profile.Profile.from_values(answer.values))
++            profile = project_profile.Profile.from_values(answer.values)
+         except (KeyError, TypeError, ValueError, TargetsError) as exc:
+             return None, (f"профиль тестов проекта «{target}» не прочитан "
+                           f"(test_profile в targets.yaml): {exc}")

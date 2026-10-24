@@ -1,0 +1,15 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -3393,11 +3393,6 @@
+         store.journal(conn, task_id, actor, CHECKS_LOCAL_ACTION, text)
+     if ok:
+         return run
+-    if not run.green:
+-        # Проверка только добавляет красноту: незелёный исход («неизвестно»,
+-        # «не начат», таймаут) остаётся прежним — иначе `--accept-red`
+-        # принял бы его как красный (требование 3, инвариант 41).
+-        return run._replace(detail=f"{run.detail}\n{text}")
+     return FullSuiteRun(False, FULL_SUITE_RED, text, run.log_path,
+                         f"{text}\n{run.detail}", run.tests)
+ 

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -477,7 +477,7 @@
+     `.artel/projects/<проект>/deps/<компонент>/<сумма>` с копией файлов
+     верхнего уровня `workdir`; после установки каталог — только для
+     чтения. Без `install` — ничего не делается."""
+-    if not profile.install:
++    if profile.install is None:
+         return None, [], ""
+     name, command = _component_name(profile), " ".join(profile.install)
+     lock = _lock_file(cwd)

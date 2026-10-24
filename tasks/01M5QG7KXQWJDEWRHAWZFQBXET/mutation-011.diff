@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -3231,7 +3231,7 @@
+             len(project_profile.components(reported.project or target)) > 1:
+         # Узел по компонентам записи из нескольких компонентов: предел —
+         # свой у каждого (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требование 10).
+-        limit = project_profile.component_limit(reported)
++        limit = config.FULL_SUITE_TIMEOUT_SEC, "config"
+     elif recordable and project_profile.is_multi(target):
+         # Контекст задачи на записи из нескольких компонентов: предел —
+         # компонента задачи (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2).

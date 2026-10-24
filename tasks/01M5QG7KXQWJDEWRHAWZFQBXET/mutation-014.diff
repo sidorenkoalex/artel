@@ -1,0 +1,12 @@
+diff --git a/orchestrator/fsm_merge_gate.py b/orchestrator/fsm_merge_gate.py
+--- a/orchestrator/fsm_merge_gate.py
++++ b/orchestrator/fsm_merge_gate.py
+@@ -1526,7 +1526,7 @@
+         fresh_suite or _fresh_suite_for_cycle.get())
+     if appendix_kind != "ok":
+         return ("stopped",)
+-    if _checks_local_refuse(conn, task_id, applied, scratch, ctx):
++    if applied and _checks_local_refuse(conn, task_id, applied, scratch, ctx):
+         return ("stopped",)
+     # Коммит мержа задачи — merge кодовой ветки плюс приложения, без карты:
+     # на него адресуется «Итог: done» RETRO закрытия.

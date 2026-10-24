@@ -1,0 +1,12 @@
+diff --git a/orchestrator/project_profile.py b/orchestrator/project_profile.py
+--- a/orchestrator/project_profile.py
++++ b/orchestrator/project_profile.py
+@@ -439,7 +439,7 @@
+         report_args=tuple(fields.get("report_args") or ()),
+         select=tuple(fields.get("select") or ()),
+         failure_errors=tuple(fields.get("failure_errors") or ()),
+-        checks_local=tuple(fields.get("checks_local") or ()),
++        checks_local=(),
+         tests=tuple(fields.get("tests") or ()),
+         plank_layout=fields.get("plank_layout") or "",
+         long_lived_template=fields.get("long_lived") or "",
