@@ -17,11 +17,13 @@ diff_forecast_kib: 40
 `acceptance.suite_tree_hash` делает два `rev-parse`, хотя оба значения выдаёт один вызов.
 Задача сокращает число вызовов, а наблюдаемый результат обеих функций сохраняет прежним.
 
+Редакция после возврата с гейта SPEC 25.10 (решения Оператора, сессия при Операторе, права волны G): AC-3 доказывает сдвиг ссылки и проход `cat-file` через `gitcmd.carpentry`; в гонке «голова → `ls-tree`» ожидается дерево коммита, прочитанного головой; AC-5 считает все процессы git; карта — только вывод генератора; «остаются зелёными» — требование; пол стека git 2.30 учтён запасным путём `suite_tree_hash`.
+
 ## Требования
 
 1. `read_tree(task_id)` читает документы задачи из одного коммита с прежним результатом:
    а) Голова ссылки разрешается один раз (`_head`). При пустой строке (ссылки нет, git не ответил, заглушка отказала) работает прежний путь целиком: `gitcmd.ls_tree_files(branch, …)` и `gitcmd.show(branch, rel)` по файлам, как сейчас. Так лёгкие песочницы с подменой этой пары по-прежнему читают диск.
-   б) Если голова есть, выполняется один `git ls-tree -r <sha> -- tasks/<id>` без `-z`, `-l` и `--name-only` (через `gitcmd.in_repo`/`_git`). Каждая строка разбирается как `<режим> SP <тип> SP <oid> TAB <путь>`. Затем выполняется один `git cat-file --batch` по oid всех записей-blob. Он идёт через `gitcmd.carpentry` с `input` из байтов `"<oid>\n"` на каждую запись, `text=False` и `env=dict(os.environ)`. Прямой `subprocess` в `artifact_branch.py` не добавляется. Если записей-blob нет, `cat-file` не запускается.
+   б) Если голова есть, выполняется один `git ls-tree -r <sha> -- tasks/<id>` — по sha, разрешённому в 1а, а не по имени ссылки, — без `-z`, `-l` и `--name-only` (через `gitcmd.in_repo`/`_git`). Каждая строка разбирается как `<режим> SP <тип> SP <oid> TAB <путь>`. Затем выполняется один `git cat-file --batch` по oid всех записей-blob. Он идёт через `gitcmd.carpentry` с `input` из байтов `"<oid>\n"` на каждую запись, `text=False` и `env=dict(os.environ)`. Прямой `subprocess` в `artifact_branch.py` не добавляется, и `cat-file` не запускается в обход `gitcmd.carpentry` (в том числе через чужие помощники вроде `reference_cache._cat_blobs`). Если записей-blob нет, `cat-file` не запускается.
    в) Если `ls-tree` на sha отказал, вернул `None` или дал хотя бы одну строку, не разобранную по формату 1б, работает прежний путь целиком (как в 1а).
    г) Для затронутых путей используется чтение `gitcmd.show(<sha>, rel)` по одному, как раньше, в таких случаях: запись не-blob (подмодуль), путь в кавычках, oid с ответом `missing`, оборванный или неразобранный ответ, ненулевой код или `OSError` у `cat-file`. Путь в кавычках при этом даёт прежний отказ и выпадает из словаря.
    д) Байты blob переводятся в текст так: `data.decode(io.TextIOWrapper(io.BytesIO()).encoding)` в строгом режиме, затем `.replace("\r\n", "\n").replace("\r", "\n")`. BOM не снимается. При ошибке декодирования файл выпадает, остальные остаются.
@@ -32,8 +34,8 @@ diff_forecast_kib: 40
       - при отсутствующей ссылке — два вызова вместо прежнего одного (это принято).
 2. `suite_tree_hash`: первый вызов — один `git rev-parse --show-toplevel --path-format=absolute --git-path index`.
    - Первая строка ответа — корень для прежней сверки с `root`. Вторая — путь индекса для копии при `worktree=True`. Второго `rev-parse` нет.
-   - Ответ считается правильным, только если при коде 0 в `stdout.splitlines()` ровно две строки; каждая берётся с `.strip()`. Иначе выполняются прежние два вызова.
-   - Ненулевой код или `None` дают `None`, как раньше.
+   - Ответ считается правильным, только если код 0 и в `stdout.splitlines()` ровно две строки; каждая берётся с `.strip()`.
+   - При любом отказе объединённого вызова — ненулевой код или не ровно две строки — выполняются прежние два вызова, и их исходы (включая `None`) прежние. Это запасной путь для пола стека git 2.30 (`orchestrator/stack.py:149`): `--path-format` появился только в git 2.31. `None` от самого вызова (git не запустился) даёт `None`, как раньше.
    - Возвращаемые значения при `worktree=True/False`, `base`, `ref` и все исходы `None` прежние.
    - Остальной код функции и `_with_tree_db_files` не меняются.
 3. Долгоживущий приёмочный тест задачи — новый файл `tests/test_01m5r45m0fqb2wvrhybrf81jm6_batched_reads.py` в стиле pytest (ADR-0027):
@@ -41,9 +43,10 @@ diff_forecast_kib: 40
    - песочница — настоящий git (`tests/sandbox.py`, `tests/fixtures.py`);
    - эталон — прежняя реализация `read_tree` и прежнее начало `suite_tree_hash`, перенесённые в файл теста дословно.
 
-   Состав проверок — критерии AC-1…AC-6. Свойства, которые держит этот файл, в `tests/` повторно не заказываются.
+   Состав проверок — критерии AC-1…AC-7. Свойства, которые держит этот файл, в `tests/` повторно не заказываются.
 4. В PLAN.md приводится счёт вызовов git до и после: всего и по подкомандам `show`, `ls-tree`, `cat-file`, `rev-parse`. Счёт снимается на тесте `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py::Ac5ProofMismatchTest` (или его наследнике после сведения) шпионом процессов во временной копии; файл тестов при этом не меняется.
-5. Существующие тесты не правятся. Перечень правок по мандату пуст. Если существующий тест покраснел, это эскалация с его именем и причиной, а не правка.
+5. Существующие тесты не правятся и остаются зелёными. Перечень правок по мандату пуст. Если существующий тест покраснел, это эскалация с его именем и причиной, а не правка.
+6. `docs/codebase-map.md` меняется только выводом генератора `python3 scripts/codebase_map.py`; ручных правок карты нет.
 
 ## Критерии приёмки
 
@@ -70,11 +73,15 @@ AC-2. На неподвижной ссылке результат `read_tree` р
 
 При `core.quotePath=false` и пути не в UTF-8 обе версии одинаково бросают `UnicodeDecodeError` из текстового `ls-tree`.
 
-AC-3. Если ссылка сдвигается на другой коммит между `ls-tree` и `cat-file` или между разрешением головы и `ls-tree` (подмена `gitcmd.carpentry`/`gitcmd.in_repo`, которая делает `update-ref` перед настоящим вызовом), результат `read_tree` на основном пути равен полному дереву одного коммита и никогда не смеси двух.
+AC-3. Гонка на основном пути `read_tree` (подмена `gitcmd.carpentry`/`gitcmd.in_repo`, которая делает `update-ref` ссылки на коммит B перед настоящим вызовом; голова до сдвига — коммит A):
+- сдвиг между `ls-tree` и `cat-file`: тест убеждается, что к моменту `cat-file` ссылка действительно указывает на B (сдвиг произошёл), и результат равен полному дереву A;
+- `cat-file --batch` прошёл через `gitcmd.carpentry`: шпион на `gitcmd.carpentry` зафиксировал вызов `cat-file`; реализация, запускающая `cat-file` мимо `gitcmd.carpentry`, даёт красный тест;
+- сдвиг между разрешением головы и `ls-tree`: тест убеждается, что к моменту `ls-tree` ссылка указывает на B, и результат равен полному дереву A — коммита, прочитанного головой первым; реализация с `ls-tree` по имени ссылки вместо sha даёт красный тест;
+- ни в одном случае результат не смесь двух коммитов.
 
 AC-4. Отказы `cat-file` — ненулевой код, `OSError`, оборванный ответ, ответ `missing` — дают результат `read_tree`, равный эталону. Если подмена отказывает всем `ls-tree`, результат равен эталону (пустой словарь) и вызван прежний `gitcmd.ls_tree_files` по имени ссылки.
 
-AC-5. `suite_tree_hash` делает ровно один `rev-parse` и при `worktree=True`, и при `worktree=False`.
+AC-5. `suite_tree_hash` делает ровно один `rev-parse` и при `worktree=True`, и при `worktree=False` в репозитории с git ≥ 2.31. Счёт ведётся по всем процессам git — и `subprocess.run`, и `subprocess.Popen` (подмена на уровне `subprocess.Popen._execute_child` либо равнозначная, видящая оба пути); `rev-parse`, перенесённый в вызов через `Popen`, даёт красный тест.
 
 AC-6. `suite_tree_hash` возвращает то же, что эталон (дословная копия прежнего начала функции), в каждом случае:
 - корень репозитория;
@@ -83,11 +90,13 @@ AC-6. `suite_tree_hash` возвращает то же, что эталон (д�
 - `worktree=False` с `ref`;
 - `base=True`;
 - неотслеживаемый файл вне `tasks/`;
-- заглушка `in_repo`, отвечающая на `rev-parse` одной строкой (срабатывают прежние два вызова).
+- заглушка `in_repo`, отвечающая на объединённый `rev-parse` одной строкой (срабатывают прежние два вызова).
 
-AC-7. Имя, сигнатура и строка документации о возвращаемом значении `read_tree` не изменились. В `orchestrator/artifact_branch.py` нет нового прямого вызова `subprocess`. Дифф ветки не трогает `orchestrator/amend.py`, `orchestrator/retro.py`, `orchestrator/gitcmd.py` и существующие файлы `tests/`; в `tests/` только добавлены новые файлы.
+AC-7. Запасной путь пола git 2.30: заглушка, отвечающая на объединённый `rev-parse … --path-format=absolute …` ненулевым кодом (как git без `--path-format`), а прежние вызовы пропускающая к настоящему git, — `suite_tree_hash` выполняет прежние два вызова и возвращает то же, что эталон, при `worktree=True` и при `worktree=False`; реализация, отвечающая в этом случае `None`, даёт красный тест.
 
-AC-8. В PLAN.md есть счёт вызовов git на `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py::Ac5ProofMismatchTest` (или его наследнике) до и после: всего и по подкомандам `show`, `ls-tree`, `cat-file`, `rev-parse`.
+AC-8. Имя, сигнатура и строка документации о возвращаемом значении `read_tree` не изменились. В `orchestrator/artifact_branch.py` нет нового прямого вызова `subprocess`. Дифф ветки не трогает `orchestrator/amend.py`, `orchestrator/retro.py`, `orchestrator/gitcmd.py` и существующие файлы `tests/`; в `tests/` только добавлены новые файлы. `docs/codebase-map.md` в ветке совпадает с выводом `python3 scripts/codebase_map.py`.
+
+AC-9. В PLAN.md есть счёт вызовов git на `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py::Ac5ProofMismatchTest` (или его наследнике) до и после: всего и по подкомандам `show`, `ls-tree`, `cat-file`, `rev-parse`.
 
 ## Оценка объёма и деление
 Сработавшие сигналы проверяет guard; возможный сигнал — «затронут инвариантный механизм». `docs/invariants.md`, запись 33: вся запись в `refs/artifacts/<id>` идёт через единую точку подмены `gitcmd`.
@@ -97,13 +106,13 @@ AC-8. В PLAN.md есть счёт вызовов git на `tests/test_01m5ddtvz
 - Две правки независимы друг от друга, но каждая мала: одна функция с закрытыми помощниками в `artifact_branch.py` и начало одной функции в `acceptance.py`.
 - Обе правки проверяет один файл приёмочного теста с общим подсчётом вызовов git.
 - Деление на две задачи удвоило бы шаги analyst/test_author/review, хотя объём не уменьшился бы.
-- Механизм записи 33 задача не меняет: `read_tree` только читает, и новый `cat-file` идёт через `gitcmd.carpentry`, то есть через ту же точку подмены (требование 1б).
+- Механизм записи 33 задача не меняет: `read_tree` только читает, и новый `cat-file` идёт через `gitcmd.carpentry`, то есть через ту же точку подмены (требование 1б, AC-3).
 
 ## Не входит
-- Прочий код `orchestrator/` вне зон. В `orchestrator/artifact_branch.py` меняются только `read_tree` и новые закрытые помощники рядом с ней. В `orchestrator/acceptance.py` — только начало `suite_tree_hash` (вызовы `rev-parse`). В `docs/codebase-map.md` — только строки, отражающие новые помощники. В `tests/` — только новые файлы.
+- Прочий код `orchestrator/` вне зон. В `orchestrator/artifact_branch.py` меняются только `read_tree` и новые закрытые помощники рядом с ней. В `orchestrator/acceptance.py` — только начало `suite_tree_hash` (вызовы `rev-parse`). В `tests/` — только новые файлы.
 - Документы `tasks/` задач.
 - `materialize_task_dir` и `acceptance.materialize_from_branch`: тот же приём «`ls-tree` и `show` по файлам», отдельная задача.
-- `gitcmd.show`, `gitcmd.ls_tree_files` и прочие примитивы `gitcmd`. Только для чтения: `orchestrator/gitcmd.py`, `amend.py`, `retro.py`, `snapshot.py`, `suite_run.py`, `reference_cache.py`, `tests/sandbox.py`, `tests/fixtures.py`, `tests/test_retro.py`, `tests/test_retro_artifact_branch_reads.py`, `tests/test_kill_cleanup.py`, `scripts/guard.py`.
+- `gitcmd.show`, `gitcmd.ls_tree_files` и прочие примитивы `gitcmd`. Только для чтения: `orchestrator/gitcmd.py`, `amend.py`, `retro.py`, `snapshot.py`, `suite_run.py`, `reference_cache.py`, `tests/sandbox.py`, `tests/fixtures.py`, `tests/test_retro.py`, `tests/test_retro_artifact_branch_reads.py`, `tests/test_kill_cleanup.py`, `scripts/guard.py`, `scripts/codebase_map.py` (генератор карты только запускается).
 - Лёгкие песочницы `tests/sandbox.py`.
 - Гонка в запасных путях 1а/1в/1г остаётся прежней. Тест гонки проверяет только основной путь.
 - Соседние задачи набора:
@@ -112,16 +121,18 @@ AC-8. В PLAN.md есть счёт вызовов git на `tests/test_01m5ddtvz
   - перевод прямых вызовов git в `gitcmd` (git 3);
   - память чтений в контексте команды (git 4).
 - Изменение `doctor`.
-- Зелёный полный набор `tests/` — его держит пульт. Повтор таблицы мутаций «до» в параллельных волнах сведения тестов, вызванный изменением `orchestrator/`, — забота их ТЗ, не этой задачи.
+- Повтор таблицы мутаций «до» в параллельных волнах сведения тестов, вызванный изменением `orchestrator/`, — забота их ТЗ, не этой задачи.
 
 ## Материалы
 - Образец пакетного чтения: `orchestrator/reference_cache.py::_cat_blobs`.
 - Запуск процесса с входом: `gitcmd.carpentry(repo, args, env, *, input=None, text=True)` (`orchestrator/gitcmd.py:339`).
-- Образец `env=dict(os.environ)` для `carpentry`: `update-ref --stdin` в `_sync_local_ref` (`orchestrator/artifact_branch.py`).
+- Образец `carpentry` с `env=dict(os.environ)`: `update-ref --stdin` в `_drop_fetch_refs` (`orchestrator/artifact_branch.py:559`, вызов :564).
+- Пол стека git: `orchestrator/stack.py:149` (git ≥ 2.30.0); `--path-format` — с git 2.31.
 - Тесты с настоящим git, сторожащие строки RETRO «Суть»/«Приёмочные тесты»:
   - `tests/test_retro_artifact_branch_reads.py`;
   - `tests/test_snapshot_closing_outcome.py`;
   - `tests/test_01m4m67sgneymn9f1c7xvx24xe_merge_closing.py:536`;
   - `tests/test_01m5aqh8m2dkbv30nby86j34a7_fail_to_pass.py:2545`.
 - Лёгкие песочницы: `tests/sandbox.py` (`disk_backed_show` :821, `disk_backed_ls_tree_files` :850, `_ABSENT_REF_PREFIXES` :1268, `SpyRun` :1284, `def fake_git` :1418).
+- Внутренний `git()` в `suite_tree_hash` идёт через `subprocess.Popen` (`orchestrator/acceptance.py:2932`).
 - Моделирование 25.10 (по ТЗ): 11 файлов тестов, вызывающих `read_tree`, зелёные; 31 из 31 вызова совпали с прежней версией.
