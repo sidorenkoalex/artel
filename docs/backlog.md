@@ -43,6 +43,7 @@
 
 | П | Дата | Наблюдение | Где | Состояние |
 |---|---|---|---|---|
+| 3 | 24.10 | В /var/folders/*/*/T/ остались 16 каталогов artel-fake-* от прогонов 22–23.10: уборка addCleanup песочниц в части прогонов не дошла до конца, уборка сирот их не знает (каталоги не удалялись) | tests/sandbox.py, orchestrator/doctor/orphans.py | новое: разобрать источник |
 | 3 | 24.10 | Тесты гейта исходов (merge_outcome_gate и соседние) запускают настоящий claude --version, установленный на машине: песочница подменяет doctor.preflight_checks, но вызов идёт мимо подмены (найдено исследованием волны сведения outcome) | orchestrator/doctor/preflight.py:25, orchestrator/version.py:14, orchestrator/providers/claude.py | новое: закрыть подменой в песочнице при сведении outcome либо задачей |
 | 3 | 24.10 | mutation-run --wait не дольше 9 минут: для независимой проверки волны (два прогона по 36 патчей) сессия завела сценарий-обёртку scratchpad/wave1a-verify/bin/waitrun.sh (до 6 вызовов --wait 9 подряд). Не хватает режима «ждать до конца прогона» или команды проверки волны целиком (до/после, сверка таблиц) | orchestrator/mutation_run.py | новое: предложить задачу verify-wave |
 | 2 | 24.10 | Четвёртый случай: планка после подтяжки main прогнана без приложений PLAN — 01M5NHXJA3 (ADR-0027 Б) ушла в escalated (ImportError класса из Приложения 4), хотя на verifying и автогейте зелёная «с приложениями PLAN» | orchestrator/pull.py | задача заведена: 01M5NPVRRK9R6S6SD40CBJZYPT; 01M5NHXJA3 ждёт её мержа и повторного approve |
