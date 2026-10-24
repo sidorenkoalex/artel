@@ -183,6 +183,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   version | models |
   workspace <id> | report | acceptance-dry-run <id> |
   plank-run <id> [<файл>] | suite-run <id> [--wait <минуты> | --failed] |
+  mutation-run <id> --ref <base|head|worktree> --tests <путь>[,<путь>…]
+        [--patches <a>-<b>] [--wait <минуты>] |
   preflight <id> | guard <id> [<файл>] |
   admit [--revoke] [--set <имя>] <роль> <модель> [<роль> <модель> ...]
         --basis "<основание>" |
@@ -650,6 +652,9 @@ origin main или отставание ветки не определены; п
   suite_run команда `suite-run <id> [--wait <минуты> | --failed]`: полный
             прогон тестов проекта задачи фоном у пульта, сравнение с базой
             ветки, повтор упавших (SPEC 01M462QACEH29RPRD2RZHGHQFM)
+  mutation_run команда `mutation-run`: патчи мутаций задачи против
+            названных тестовых файлов во временной копии фоном у пульта,
+            таблица «мутация → исход» (SPEC 01M5NPKPWFEWTYMBYWVR797AM6)
   guard     команда `guard <id> [файл]`: `scripts/guard.py` по файлам
             каталога документов задачи; только чтение, доступна роли и
             внешнего проекта (SPEC 01M56G23ZQDHV2BKEVWWC22R96)
@@ -791,7 +796,7 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           artifact_cleanup, auto,
                           budget, canary, catalog, ci_rerun, cleanup, doctor,
                           docs_fetch, dry_run, explore_metric, fsm,
-                          knowledge_cards, lease, liveness, models, notes, pause, pin, plank_run,
+                          knowledge_cards, lease, liveness, models, mutation_run, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
@@ -2177,11 +2182,14 @@ def _cmd_guard(rest: list) -> None:
 #: запись обращения постоянным автором `knowledge_cards.JOURNAL_ACTOR`,
 #: которому не доверяет ни один читатель журнала. `guard` только читает
 #: каталог документов задачи и строку задачи (SPEC
-#: 01M56G23ZQDHV2BKEVWWC22R96, требование 3).
+#: 01M56G23ZQDHV2BKEVWWC22R96, требование 3). `mutation-run` пишет только
+#: в каталог хозяйства `suite-run` (лог, таблица исходов, свои файлы
+#: состояния и замок) и временную копию клона; документы, ветку и рабочую
+#: копию задачи не меняет (SPEC 01M5NPKPWFEWTYMBYWVR797AM6, требование 10).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
-     "acceptance-dry-run", "plank-run", "suite-run", "preflight",
-     "knowledge", "guard"))
+     "acceptance-dry-run", "plank-run", "suite-run", "mutation-run",
+     "preflight", "knowledge", "guard"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -2310,6 +2318,7 @@ def main() -> None:
         "plank-run": lambda: plank_run.cmd_plank_run(
             rest[0], rest[1] if len(rest) > 1 else None),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
+        "mutation-run": lambda: mutation_run.cmd_mutation_run(rest),
         "preflight": lambda: preflight.cmd_preflight(rest[0]),
         "guard": lambda: _cmd_guard(rest),
         "knowledge": lambda: knowledge_cards.cmd_knowledge(rest),
