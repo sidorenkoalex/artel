@@ -79,29 +79,29 @@ C — `tests/test_outcome_integrity.py`; все патчи меняют толь
 «;» или перечисление) — своя мутация; одна мутация на две заявки — только
 003 и 017, где альтернативы двух заявок C совпадают по смыслу.
 
-- mutation-001 (2а-1: 010): заявка RecordLevelTest::test_retried_pass_on_base_not_in_pass_to_pass (C) «`in_pass_to_pass` без сверки `retries == 0`»; патч: `in_pass_to_pass` возвращает `case.outcome == outcome.PASSED` без `retries == 0`.
-- mutation-002 (2а-1: 013): заявка RecordLevelTest::test_red_on_branch_kinds (C), альтернатива 1 «`passed` с повтором не считается красным»; патч: `red_on_branch` без ветки «`passed` с повтором».
-- mutation-003 (2а-1: 023): заявки RecordLevelTest::test_compare_vitest_findings_and_non_findings, альтернатива 2 «"стал пропуском" только у `passed`», и RecordLevelTest::test_compare_junit_became_skipped_from_each_outcome, альтернатива 1 «"стал пропуском" только у `passed` базы» (C) — одна по смыслу; патч: в `compare` условие «стал пропуском» — `b.outcome == outcome.PASSED` вместо `!= SKIPPED`.
-- mutation-004 (2а-1: 028): заявка RecordLevelTest::test_mandate_prefix_needs_separator (C) «покрытие `startswith` без сверки следующего символа»; патч: `_covering_element` не сверяет хвост после префикса (`if True`).
-- mutation-005 (2а-1: 029): заявка RoleAutocommitTest::test_ac11_role_autocommitted_id_mandate_does_not_cover (B) «сбор мандата без отбраковки автокоммита роли»; патч: `_answer_mandates` не отбрасывает ANSWER автокоммита шага роли.
-- mutation-006 (2а-1: 031): заявка ExactIdTest::test_ac12_exact_id_with_n_covers_other_variant_does_not (B), альтернатива (а) «элементы нового маркера в гейте не собираются — (а) отказ»; патч: `_covering_pair` не смотрит мандат по идентификатору.
-- mutation-007 (2а-1: 032): заявка HintTest::test_ac13_refusal_hint_names_both_markers (B), альтернатива 2 «своя подсказка называет только новый маркер»; патч: `_mandate_hint` без прежнего маркера.
-- mutation-008 (2а-1: 033): заявка RecordLevelTest::test_skip_growth_line (C), альтернатива 1 «строка пишется и без роста»; патч: `skip_growth` пишет строку при равенстве чисел (`after < before`).
-- mutation-009 (2а-1: 034): заявка RecordLevelTest::test_covered_ids_round_trip_every_finding_kind (C), альтернатива 1 «разбор строки по первому « — »»; патч: `_finding_of` делит строку по первому « — ».
-- mutation-010 (2а-1: 035, переписан): заявка RecordLevelTest::test_fingerprint_sorted_unique_or_none (C), альтернатива 1 «отпечаток без сортировки»; патч: `fingerprint` — `list(dict.fromkeys(elements_used))` (уникальные, порядок входа) вместо `sorted(set(...))`.
-- mutation-011: та же заявка (C), альтернатива 2 «с повтором элемента»; патч: `fingerprint` — `sorted(elements_used)` (сортировка без устранения повторов).
-- mutation-012: заявка RecordLevelTest::test_red_on_branch_kinds (C), альтернатива 2 «`skipped` считается красным»; патч: `red_on_branch` — `outcome.SKIPPED` добавлен к `(FAILED, ERROR)`.
-- mutation-013: заявка RecordLevelTest::test_compare_vitest_findings_and_non_findings (C), альтернатива 1а «`todo` — находка без сверки с базой»; патч: в `compare` ветка «появилось todo» — `h.mode == _TODO_MODE` без `b.mode != _TODO_MODE`.
-- mutation-014: та же заявка, альтернатива 1б «`fails` — находка без сверки с базой»; патч: ветка «появилось fails» — `h.fails` без `not b.fails`.
-- mutation-015: та же заявка, альтернатива 3 «новый идентификатор не проверяется»; патч: во втором цикле `compare` — `if True: continue` вместо `if cid in base_map: continue`.
-- mutation-016: та же заявка, альтернатива 4 «у `to_todo` две находки»; патч: ветка «появилось todo» дописывает вторую находку `BECAME_SKIPPED`.
-- mutation-017: заявка RecordLevelTest::test_compare_junit_became_skipped_from_each_outcome (C), альтернатива 2 «пропуск, бывший пропуском и на базе, даёт находку»; патч: условие «стал пропуском» — `h.outcome == outcome.SKIPPED` без сверки базы. (Ту же мутацию в заявке vitest не называет; её убивает и vitest-тест — `keep_todo`.)
-- mutation-018: заявка RecordLevelTest::test_skip_growth_line (C), альтернатива 2 «несёт идентификатор теста»; патч: строка `skip_growth` дописывает через «, » идентификаторы пропусков ветки.
-- mutation-019: заявка RecordLevelTest::test_covered_ids_round_trip_every_finding_kind (C), альтернатива 2 «маркер исходов «база: » у «сломан правкой»»; патч: `_runs_marker` — « — ветка: » только у `UNSTABLE`, `BROKEN` получает « — база: ».
-- mutation-020: та же заявка, альтернатива 3 «строки без пометки мандата дают идентификаторы»; патч: `_covered_findings` без фильтра `if COVERED_MARK in line`.
-- mutation-021: заявка ExactIdTest::test_ac12_exact_id_with_n_covers_other_variant_does_not (B), альтернатива (в) «к ним применено префиксное правило прежнего мандата (`путь::имя`, за которым `#`)»; патч: `_covering_pair` после точного равенства покрывает `cid` элементом нового маркера-префиксом, за которым `::`, `[` или `#`.
-- mutation-022: та же заявка, альтернатива (б) «сверка по идентификатору без номера (`parse_test_id` без `#n`)»; патч: `_covering_pair` покрывает `cid` элементом нового маркера с равными `parse_test_id(...)[:3]` (компонент, путь, имя без `#n`).
-- mutation-023: заявка HintTest::test_ac13_refusal_hint_names_both_markers (B), альтернатива 1 «гейт исходов по-прежнему зовёт подсказку гейта по тексту (`test_integrity._mandate_hint`)»; патч: отказ гейта исходов несёт `test_integrity._mandate_hint(task_id)` вместо своей `_mandate_hint`.
+- mutation-001 (2а-1: 010): заявка RecordLevelTest::test_retried_pass_on_base_not_in_pass_to_pass (C) «`in_pass_to_pass` без сверки `retries == 0`»; патч в orchestrator/advance_gates/outcome_integrity.py: `in_pass_to_pass` возвращает `case.outcome == outcome.PASSED` без `retries == 0`.
+- mutation-002 (2а-1: 013): заявка RecordLevelTest::test_red_on_branch_kinds (C), альтернатива 1 «`passed` с повтором не считается красным»; патч в orchestrator/advance_gates/outcome_integrity.py: `red_on_branch` без ветки «`passed` с повтором».
+- mutation-003 (2а-1: 023): заявки RecordLevelTest::test_compare_vitest_findings_and_non_findings, альтернатива 2 «"стал пропуском" только у `passed`», и RecordLevelTest::test_compare_junit_became_skipped_from_each_outcome, альтернатива 1 «"стал пропуском" только у `passed` базы» (C) — одна по смыслу; патч в orchestrator/advance_gates/outcome_integrity.py: в `compare` условие «стал пропуском» — `b.outcome == outcome.PASSED` вместо `!= SKIPPED`.
+- mutation-004 (2а-1: 028): заявка RecordLevelTest::test_mandate_prefix_needs_separator (C) «покрытие `startswith` без сверки следующего символа»; патч в orchestrator/advance_gates/outcome_integrity.py: `_covering_element` не сверяет хвост после префикса (`if True`).
+- mutation-005 (2а-1: 029): заявка RoleAutocommitTest::test_ac11_role_autocommitted_id_mandate_does_not_cover (B) «сбор мандата без отбраковки автокоммита роли»; патч в orchestrator/advance_gates/outcome_integrity.py: `_answer_mandates` не отбрасывает ANSWER автокоммита шага роли.
+- mutation-006 (2а-1: 031): заявка ExactIdTest::test_ac12_exact_id_with_n_covers_other_variant_does_not (B), альтернатива (а) «элементы нового маркера в гейте не собираются — (а) отказ»; патч в orchestrator/advance_gates/outcome_integrity.py: `_covering_pair` не смотрит мандат по идентификатору.
+- mutation-007 (2а-1: 032): заявка HintTest::test_ac13_refusal_hint_names_both_markers (B), альтернатива 2 «своя подсказка называет только новый маркер»; патч в orchestrator/advance_gates/outcome_integrity.py: `_mandate_hint` без прежнего маркера.
+- mutation-008 (2а-1: 033): заявка RecordLevelTest::test_skip_growth_line (C), альтернатива 1 «строка пишется и без роста»; патч в orchestrator/advance_gates/outcome_integrity.py: `skip_growth` пишет строку при равенстве чисел (`after < before`).
+- mutation-009 (2а-1: 034): заявка RecordLevelTest::test_covered_ids_round_trip_every_finding_kind (C), альтернатива 1 «разбор строки по первому « — »»; патч в orchestrator/advance_gates/outcome_integrity.py: `_finding_of` делит строку по первому « — ».
+- mutation-010 (2а-1: 035, переписан): заявка RecordLevelTest::test_fingerprint_sorted_unique_or_none (C), альтернатива 1 «отпечаток без сортировки»; патч в orchestrator/advance_gates/outcome_integrity.py: `fingerprint` — `list(dict.fromkeys(elements_used))` (уникальные, порядок входа) вместо `sorted(set(...))`.
+- mutation-011: та же заявка RecordLevelTest::test_fingerprint_sorted_unique_or_none (C), альтернатива 2 «с повтором элемента»; патч в orchestrator/advance_gates/outcome_integrity.py: `fingerprint` — `sorted(elements_used)` (сортировка без устранения повторов).
+- mutation-012: заявка RecordLevelTest::test_red_on_branch_kinds (C), альтернатива 2 «`skipped` считается красным»; патч в orchestrator/advance_gates/outcome_integrity.py: `red_on_branch` — `outcome.SKIPPED` добавлен к `(FAILED, ERROR)`.
+- mutation-013: заявка RecordLevelTest::test_compare_vitest_findings_and_non_findings (C), альтернатива 1а «`todo` — находка без сверки с базой»; патч в orchestrator/advance_gates/outcome_integrity.py: в `compare` ветка «появилось todo» — `h.mode == _TODO_MODE` без `b.mode != _TODO_MODE`.
+- mutation-014: та же заявка RecordLevelTest::test_compare_vitest_findings_and_non_findings, альтернатива 1б «`fails` — находка без сверки с базой»; патч в orchestrator/advance_gates/outcome_integrity.py: ветка «появилось fails» — `h.fails` без `not b.fails`.
+- mutation-015: та же заявка RecordLevelTest::test_compare_vitest_findings_and_non_findings, альтернатива 3 «новый идентификатор не проверяется»; патч в orchestrator/advance_gates/outcome_integrity.py: во втором цикле `compare` — `if True: continue` вместо `if cid in base_map: continue`.
+- mutation-016: та же заявка RecordLevelTest::test_compare_vitest_findings_and_non_findings, альтернатива 4 «у `to_todo` две находки»; патч в orchestrator/advance_gates/outcome_integrity.py: ветка «появилось todo» дописывает вторую находку `BECAME_SKIPPED`.
+- mutation-017: заявка RecordLevelTest::test_compare_junit_became_skipped_from_each_outcome (C), альтернатива 2 «пропуск, бывший пропуском и на базе, даёт находку»; патч в orchestrator/advance_gates/outcome_integrity.py: условие «стал пропуском» — `h.outcome == outcome.SKIPPED` без сверки базы. (Ту же мутацию в заявке vitest не называет; её убивает и vitest-тест — `keep_todo`.)
+- mutation-018: заявка RecordLevelTest::test_skip_growth_line (C), альтернатива 2 «несёт идентификатор теста»; патч в orchestrator/advance_gates/outcome_integrity.py: строка `skip_growth` дописывает через «, » идентификаторы пропусков ветки.
+- mutation-019: заявка RecordLevelTest::test_covered_ids_round_trip_every_finding_kind (C), альтернатива 2 «маркер исходов «база: » у «сломан правкой»»; патч в orchestrator/advance_gates/outcome_integrity.py: `_runs_marker` — « — ветка: » только у `UNSTABLE`, `BROKEN` получает « — база: ».
+- mutation-020: та же заявка RecordLevelTest::test_covered_ids_round_trip_every_finding_kind, альтернатива 3 «строки без пометки мандата дают идентификаторы»; патч в orchestrator/advance_gates/outcome_integrity.py: `_covered_findings` без фильтра `if COVERED_MARK in line`.
+- mutation-021: заявка ExactIdTest::test_ac12_exact_id_with_n_covers_other_variant_does_not (B), альтернатива (в) «к ним применено префиксное правило прежнего мандата (`путь::имя`, за которым `#`)»; патч в orchestrator/advance_gates/outcome_integrity.py: `_covering_pair` после точного равенства покрывает `cid` элементом нового маркера-префиксом, за которым `::`, `[` или `#`.
+- mutation-022: та же заявка ExactIdTest::test_ac12_exact_id_with_n_covers_other_variant_does_not, альтернатива (б) «сверка по идентификатору без номера (`parse_test_id` без `#n`)»; патч в orchestrator/advance_gates/outcome_integrity.py: `_covering_pair` покрывает `cid` элементом нового маркера с равными `parse_test_id(...)[:3]` (компонент, путь, имя без `#n`).
+- mutation-023: заявка HintTest::test_ac13_refusal_hint_names_both_markers (B), альтернатива 1 «гейт исходов по-прежнему зовёт подсказку гейта по тексту (`test_integrity._mandate_hint`)»; патч в orchestrator/advance_gates/outcome_integrity.py: отказ гейта исходов несёт `test_integrity._mandate_hint(task_id)` вместо своей `_mandate_hint`.
 
 Сводка заявка → мутации: C `in_pass_to_pass` — 001; C `red_on_branch` — 002,
 012; C vitest `compare` — 013, 003, 015, 016 (альтернатива «todo/fails» — две
@@ -263,29 +263,29 @@ git status --porcelain -- orchestrator/
 
 Строки падения «после» (лог `…-mutation-run-4-p<nnn>.log`):
 
-- mutation-001: test_retried_pass_on_base_not_in_pass_to_pass — tests/test_outcome_gate_module.py:653
-- mutation-002: test_red_on_branch_kinds — tests/test_outcome_gate_module.py:673
-- mutation-003: test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696; test_compare_junit_became_skipped_from_each_outcome — tests/test_outcome_gate_module.py:714
-- mutation-004: test_mandate_prefix_needs_separator — tests/test_outcome_gate_module.py:745
-- mutation-005: test_ac11_role_autocommitted_id_mandate_does_not_cover — tests/test_outcome_gate_module.py:541 (функция модуля `gate_refusal`)
-- mutation-006: test_ac12_exact_id_with_n_covers_other_variant_does_not — tests/test_outcome_gate_module.py:550 (функция модуля `id_no_gate_refusal`)
-- mutation-007: test_ac13_refusal_hint_names_both_markers — tests/test_outcome_gate_module.py:641
-- mutation-008: test_skip_growth_line — tests/test_outcome_gate_module.py:724
-- mutation-009: test_covered_ids_round_trip_every_finding_kind — tests/test_outcome_gate_module.py:768
-- mutation-010: test_fingerprint_sorted_unique_or_none — tests/test_outcome_gate_module.py:780
-- mutation-011: test_fingerprint_sorted_unique_or_none — tests/test_outcome_gate_module.py:780
-- mutation-012: test_red_on_branch_kinds — tests/test_outcome_gate_module.py:673; попутно ac11/ac12/ac13 — tests/test_outcome_gate_module.py:541 (`gate_refusal`)
-- mutation-013: test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
-- mutation-014: test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
-- mutation-015: test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
-- mutation-016: test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
-- mutation-017: test_compare_junit_became_skipped_from_each_outcome — tests/test_outcome_gate_module.py:714; test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
-- mutation-018: test_skip_growth_line — tests/test_outcome_gate_module.py:728 (`assert "::" not in line`)
-- mutation-019: test_covered_ids_round_trip_every_finding_kind — tests/test_outcome_gate_module.py:768
-- mutation-020: test_covered_ids_round_trip_every_finding_kind — tests/test_outcome_gate_module.py:768
-- mutation-021: test_ac12_exact_id_with_n_covers_other_variant_does_not — tests/test_outcome_gate_module.py:541 (`gate_refusal`)
-- mutation-022: test_ac12_exact_id_with_n_covers_other_variant_does_not — tests/test_outcome_gate_module.py:541 (`gate_refusal`)
-- mutation-023: test_ac13_refusal_hint_names_both_markers — tests/test_outcome_gate_module.py:641
+- mutation-001: tests/test_outcome_gate_module.py::test_retried_pass_on_base_not_in_pass_to_pass — tests/test_outcome_gate_module.py:653
+- mutation-002: tests/test_outcome_gate_module.py::test_red_on_branch_kinds — tests/test_outcome_gate_module.py:673
+- mutation-003: tests/test_outcome_gate_module.py::test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696; tests/test_outcome_gate_module.py::test_compare_junit_became_skipped_from_each_outcome — tests/test_outcome_gate_module.py:714
+- mutation-004: tests/test_outcome_gate_module.py::test_mandate_prefix_needs_separator — tests/test_outcome_gate_module.py:745
+- mutation-005: tests/test_outcome_gate_module.py::test_ac11_role_autocommitted_id_mandate_does_not_cover — tests/test_outcome_gate_module.py:541 (функция модуля `gate_refusal`)
+- mutation-006: tests/test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not — tests/test_outcome_gate_module.py:550 (функция модуля `id_no_gate_refusal`)
+- mutation-007: tests/test_outcome_gate_module.py::test_ac13_refusal_hint_names_both_markers — tests/test_outcome_gate_module.py:641
+- mutation-008: tests/test_outcome_gate_module.py::test_skip_growth_line — tests/test_outcome_gate_module.py:724
+- mutation-009: tests/test_outcome_gate_module.py::test_covered_ids_round_trip_every_finding_kind — tests/test_outcome_gate_module.py:768
+- mutation-010: tests/test_outcome_gate_module.py::test_fingerprint_sorted_unique_or_none — tests/test_outcome_gate_module.py:780
+- mutation-011: tests/test_outcome_gate_module.py::test_fingerprint_sorted_unique_or_none — tests/test_outcome_gate_module.py:780
+- mutation-012: tests/test_outcome_gate_module.py::test_red_on_branch_kinds — tests/test_outcome_gate_module.py:673; попутно ac11/ac12/ac13 — tests/test_outcome_gate_module.py:541 (`gate_refusal`)
+- mutation-013: tests/test_outcome_gate_module.py::test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
+- mutation-014: tests/test_outcome_gate_module.py::test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
+- mutation-015: tests/test_outcome_gate_module.py::test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
+- mutation-016: tests/test_outcome_gate_module.py::test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
+- mutation-017: tests/test_outcome_gate_module.py::test_compare_junit_became_skipped_from_each_outcome — tests/test_outcome_gate_module.py:714; tests/test_outcome_gate_module.py::test_compare_vitest_findings_and_non_findings — tests/test_outcome_gate_module.py:696
+- mutation-018: tests/test_outcome_gate_module.py::test_skip_growth_line — tests/test_outcome_gate_module.py:728 (`assert "::" not in line`)
+- mutation-019: tests/test_outcome_gate_module.py::test_covered_ids_round_trip_every_finding_kind — tests/test_outcome_gate_module.py:768
+- mutation-020: tests/test_outcome_gate_module.py::test_covered_ids_round_trip_every_finding_kind — tests/test_outcome_gate_module.py:768
+- mutation-021: tests/test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not — tests/test_outcome_gate_module.py:541 (`gate_refusal`)
+- mutation-022: tests/test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not — tests/test_outcome_gate_module.py:541 (`gate_refusal`)
+- mutation-023: tests/test_outcome_gate_module.py::test_ac13_refusal_hint_names_both_markers — tests/test_outcome_gate_module.py:641
 
 Множество убивающих тестов каждой мутации «после» равно множеству «до» по
 соответствию имён ниже (в том числе 012 — четыре теста, 003 и 017 — по два).
@@ -405,3 +405,9 @@ git status --porcelain -- orchestrator/
 - `mutation-run --wait` показывает только последний прогон; дословный вывод
   прежнего прогона берётся из `.artel/logs/suite-run/<id>/…-mutation-run-<n>.mutations.tsv`
   — команды показа таблицы по номеру прогона не хватает.
+- `plank-run` читает PLAN.md из закоммиченной ссылки документов
+  (`plank_helper.artifact_text`, ревизия выкладки), а не с диска: правку PLAN
+  в шаге им не проверить — отказ гейта приёмки 2-й итерации (нет пути
+  `orchestrator/…` в строках мутаций и ссылок `test_outcome_gate_module.py::`
+  в строках падения «после») пришёл только после сдачи. Нужен режим
+  `plank-run` по каталогу документов на диске.
