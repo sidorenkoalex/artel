@@ -11,8 +11,18 @@
 Помощники бывших тестовых классов — функции модуля с первым параметром
 стенда: `assert_unknown`, `key_case`, `main_head`, `vitest_reporter_full_vitest`,
 `install_and_deps_full_vitest`, `artel_unchanged_channels`.
+
+Сюда же сведены сторожа гейтов итога из отчёта компонента бывшего
+`tests/test_component_report_gates.py` (волна 2б-4): `checks_local` в узле
+приёмки и на гейте мержа, argv компонента с отчётом, замок установки,
+разбор `suite-run` по отчёту, выбор и пределы компонентов гейта мержа,
+ключ итога `suite-run`, пустой `install`. Их помощники — `suite`,
+`approve` (стенд — фикстура `checks_stand`), `two_components`,
+`selected`, `check_script`, `checked_case`, `journal`, `merge` (стенд —
+`box`).
 """
 import contextlib
+import dataclasses
 import hashlib
 import importlib.metadata
 import inspect
@@ -24,20 +34,24 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import types
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from orchestrator import (acceptance, config, doctor, project_profile, stack,
-                          store, suite_run)
+from orchestrator import (acceptance, config, doctor, fsm, fsm_merge_gate,
+                          project_profile, stack, store, suite_run)
 from orchestrator.advance_gates import two_sided
+from orchestrator.reporters import outcome
 from tests.fd_wait import high_fd, select_limited, wait_readable
 from tests.fixtures import _sandbox
 from tests.report_outcome_sandbox import (
     CHILD_GUARD_SEC, ENTRY_HEAD, INSTALL_WITHOUT_LOCK, REAL_POPEN, REAL_RUN,
-    REQUIRE_ASSERTIONS, UNKNOWN_PREFIX, VITEST_BASE, Fake, ReportSandbox, entry,
-    fld, flipped, junit, report_arg, under, vitest_report, vitest_test, writable)
+    REQUIRE_ASSERTIONS, UNKNOWN_PREFIX, VITEST_BASE, VITEST_REPORT_ARGS, Fake,
+    ReportSandbox, block, entry, fld, flipped, junit, report_arg, under,
+    vitest_report, vitest_test, writable)
 from tests.sandbox import make_project_repo
 
 
@@ -138,12 +152,12 @@ def box():
     yield from _sandbox(ReportSandbox)
 
 
-def assert_unknown(box, run, context: str) -> None:
-    box.assertFalse(run.green, box.note(f"{context}: {run}"))
+def assert_unknown(box, run, context: str, case: str = "") -> None:
+    box.assertFalse(run.green, box.note(f"{context}: {run}") + case)
     box.assertEqual(run.outcome, acceptance.FULL_SUITE_NOT_STARTED,
-                     box.note(f"{context}: {run}"))
+                     box.note(f"{context}: {run}") + case)
     box.assertTrue(run.detail.startswith(UNKNOWN_PREFIX),
-                    box.note(f"{context}: {run.detail}"))
+                    box.note(f"{context}: {run.detail}") + case)
 
 
 def key_case(box, tools: str, lock: str, extra_arg: str = "",
@@ -257,7 +271,8 @@ def test_ac1_outcome_follows_report_not_runner_output(box):
                 assert bad in run.detail, (
                     box.note(run.detail) + "; " + f"stdout={stdout!r}; report={label!r}")
             else:
-                assert_unknown(box, run, context)
+                assert_unknown(box, run, context,
+                               "; " + f"stdout={stdout!r}; report={label!r}")
         assert len(set(seen.values())) == 3, (
             box.note(
             f"вывод {stdout!r}: исходы не различаются отчётом: {seen}"))
@@ -287,7 +302,8 @@ def test_ac2_empty_or_unreadable_report_is_unknown(box):
         case["fake"].scenario(stdout="1 passed in 0.1s\n",
                               report=report, code=rc)
         run, out = box.full(case["clone"], case["task"], case["profile"])
-        assert_unknown(box, run, f"отчёт {label}: {out}")
+        assert_unknown(box, run, f"отчёт {label}: {out}",
+                       "; " + f"report={label!r}")
 
 
 def test_ac2_per_test_record_id_from_repo_root_outcome_kind_reason_time(box):
@@ -439,7 +455,7 @@ def test_ac4_ac6_sled_record_default_report_args_outcome_from_report(box):
             assert run.outcome == acceptance.FULL_SUITE_RED, (
                 box.note(f"{run}\n{out}") + "; " + f"report={label!r}")
         else:
-            assert_unknown(box, run, out)
+            assert_unknown(box, run, out, "; " + f"report={label!r}")
         args = fake.runs()[-1]["args"]
         path = report_arg(args, "--junitxml")
         assert path is not None, (
@@ -1058,6 +1074,7 @@ def test_ac16_node_modules_read_only_shared_and_substitution_refused(box):
         box.note(f"node_modules — каталог дерева: {pult_dir}"))
     with pytest.raises(OSError):
         (nm / f"probe-{box.word()}.txt").write_text("x", encoding="utf-8")
+        pytest.fail(box.note("запись в node_modules"))
     with contextlib.redirect_stdout(io.StringIO()):
         acceptance.run(box.plank_dir(), cwd=case["clone"],
                        command=case["profile"])
@@ -1342,3 +1359,469 @@ def test_ac20_parsing_digest_journal_and_suite_run_lines_as_main(box):
                                 f"красный прогон")
     assert report[1] == "прошло: 1, упало: 2, пропущено: 0"
     assert report[-1] == f"полный лог: {log}"
+
+
+# ------------------- гейты итога из отчёта компонента (бывший crg, волна 2б-4)
+
+def profile(**extra) -> project_profile.Profile:
+    fields = dict(command=("./run",), long_lived_dir="", long_lived_name="",
+                  weakening_scope=(), mutation_claim_scope=(),
+                  report="junit-xml", component="web", project="p",
+                  from_components=True)
+    fields.update(extra)
+    return project_profile.Profile(**fields)
+
+
+def check(code: int, text: str, marker: Path | None = None) -> tuple:
+    """`checks_local`: печатает `text`, отмечает запуск файлом `marker`,
+    выходит с кодом `code`."""
+    touch = f"open({str(marker)!r}, 'w').close();" if marker else ""
+    return (sys.executable, "-c", f"{touch}print({text!r}); raise SystemExit({code})")
+
+
+UNKNOWN = acceptance.FullSuiteRun(
+    False, acceptance.FULL_SUITE_NOT_STARTED, "", Path("/tmp/l.log"),
+    acceptance.unknown_line("отчёт не создан") + " (лог прогона: /tmp/l.log)")
+GREEN = acceptance.FullSuiteRun(True, acceptance.FULL_SUITE_GREEN,
+                                "1 passed", Path("/tmp/l.log"), "зелёный")
+
+
+@pytest.fixture
+def checks_stand(tmp_dir):
+    """Стенд бывшего `AcceptanceSuiteChecksLocalTest`: дерево `tree` —
+    временный каталог без песочницы `config`."""
+    return types.SimpleNamespace(tree=tmp_dir.tdir.resolve())
+
+
+def suite(stand, run, checks: tuple, actor: str = "operator"):
+    with mock.patch.object(acceptance, "_acceptance_suite_run",
+                           return_value=run), \
+            mock.patch.object(acceptance, "_task_profile",
+                              return_value=profile(checks_local=checks)):
+        return acceptance.acceptance_suite(None, stand.tree, "T1", "b",
+                                           stand.tree, actor=actor)
+
+
+@pytest.mark.parametrize("actor", ("operator", "fsm"))
+def test_failing_check_keeps_unknown_outcome_on_both_paths(checks_stand, actor):
+    """Провал `checks_local` не перекрашивает исход «неизвестно» в «красный прогон» ни на пути `approve`, ни на пути автогейта; вывод проверки — в детали.
+
+    Ловит мутацию: непрошедшая проверка возвращает `FULL_SUITE_RED`
+    при любом исходном итоге — исход «неизвестно» становится красным,
+    и `approve --accept-red` его принимает.
+    """
+    run = suite(checks_stand, UNKNOWN, check(1, "линтер упал"), actor)
+    assert not run.green
+    assert run.outcome == acceptance.FULL_SUITE_NOT_STARTED
+    assert acceptance.is_unknown(run), run.detail
+    assert "линтер упал" in run.detail
+
+
+@pytest.mark.parametrize("actor", ("operator", "fsm"))
+def test_check_runs_after_any_source_and_reddens_only_green(checks_stand, actor):
+    """`checks_local` исполняется после итога любого источника: прошла — итог прежний, не прошла — зелёный итог становится красным с выводом проверки.
+
+    Ловит мутацию: `acceptance_suite` не зовёт `checks_local` (маркер
+    запуска не появляется, зелёный итог при упавшей проверке остаётся
+    зелёным) либо проверка зовётся только при свежем прогоне.
+    """
+    marker = checks_stand.tree / f"ran-{actor}"
+    run = suite(checks_stand, GREEN, check(0, "чисто", marker), actor)
+    assert marker.exists(), "проверка не исполнялась"
+    assert run == GREEN
+    run = suite(checks_stand, GREEN, check(2, "тип не сошёлся"), actor)
+    assert not run.green
+    assert run.outcome == acceptance.FULL_SUITE_RED
+    assert "тип не сошёлся" in run.detail
+
+
+def approve(stand, run, checks: tuple, accept_red: str | None) -> bool:
+    @contextlib.contextmanager
+    def tree(*_args, **_kwargs):
+        yield types.SimpleNamespace(root=stand.tree, refusal="",
+                                    mark=lambda text: text)
+    with mock.patch.object(fsm.workspace, "on_task_branch",
+                           return_value=True), \
+            mock.patch.object(fsm.workspace, "path", return_value=stand.tree), \
+            mock.patch.object(fsm.workspace, "task_repo",
+                              return_value=stand.tree), \
+            mock.patch.object(fsm.appendix_tree, "suite_tree", tree), \
+            mock.patch.object(fsm.store, "journal"), \
+            mock.patch.object(acceptance, "_acceptance_suite_run",
+                              return_value=run), \
+            mock.patch.object(acceptance, "_task_profile",
+                              return_value=profile(checks_local=checks)), \
+            contextlib.redirect_stdout(io.StringIO()):
+        return fsm._acceptance_full_suite_ok(None, "T1", {"branch": "b"},
+                                             accept_red)
+
+
+def test_accept_red_refuses_unknown_even_with_failing_check(checks_stand):
+    """`approve --accept-red` отказывает исходу «неизвестно» и тогда, когда `checks_local` не прошла; красноту зелёного набора от проверки он принимает.
+
+    Ловит мутацию: `checks_local` перекрывает «неизвестно» красным
+    исходом — `_acceptance_full_suite_ok` с `accept_red` возвращает
+    `True` на неизвестном итоге.
+    """
+    assert not approve(checks_stand, UNKNOWN, check(1, "линтер"), "основание")
+    assert approve(checks_stand, GREEN, check(1, "линтер"), "основание")
+    assert not approve(checks_stand, GREEN, check(1, "линтер"), None)
+
+
+def test_vitest_component_with_workdir_gets_exact_pult_argv(box):
+    """Компонент `pult-vitest` с `workdir` (`runner: pytest-own`) запускается ровно с базовым argv, флагами пульта и `report_args` — без цели `long_lived_dir`, `--ignore` выкладки и `-p no:cacheprovider`.
+
+    Ловит мутацию: к команде компонента с отчётом и `runner:
+    pytest-own` добавляются pytest-аргументы (`src`,
+    `--ignore=src/.artel-plank`, `-p no:cacheprovider`).
+    """
+    case = box.vitest_component(workdir=True)
+    case["fake"].scenario(
+        version_out=f"vitest/{case['version']} linux-x64 node-v22.11.0",
+        report=vitest_report([vitest_test("src/a.test.js", "ok")]))
+    run, out = box.full(case["clone"], case["task"], case["profile"])
+    assert run.green, box.note(f"{run}\n{out}")
+    args = case["fake"].runs()[-1]["args"]
+    head = [*VITEST_BASE[1:], REQUIRE_ASSERTIONS]
+    assert args[:len(head)] == head, box.note(str(args))
+    assert args[len(head)].startswith("--cacheDir="), box.note(str(args))
+    tail = args[len(head) + 1:]
+    assert len(tail) == len(VITEST_REPORT_ARGS), box.note(str(args))
+    assert [a.split("=", 1)[0] for a in tail] == \
+        [a.split("=", 1)[0] for a in VITEST_REPORT_ARGS], box.note(str(args))
+
+
+def test_pytest_args_only_for_pytest_command(box):
+    """`junit-xml` с `runner: pytest-own`: pytest-аргументы `pytest-own` идут только к команде pytest, к своей команде раннера — нет.
+
+    Ловит мутацию: pytest-аргументы добавляются к любой команде
+    `pytest-own` с отчётом (свой раннер получает `-p
+    no:cacheprovider` и цель `long_lived_dir`) либо пропадают и у
+    pytest.
+    """
+    tree = Path(tempfile.mkdtemp()).resolve()
+    box.addCleanup(lambda: __import__("shutil").rmtree(tree, True))
+    (tree / "be" / "tests").mkdir(parents=True)
+    report = tree / "r.xml"
+    for command, expected in (((sys.executable, "-m", "pytest"), True),
+                              (("./run-tests",), False)):
+        prof = profile(command=command, runner="pytest-own",
+                       workdir="be", long_lived_dir="be/tests",
+                       from_components=False, component="default")
+        argv, refusal = acceptance._report_argv(
+            prof, tree, tree / "be", None, report)
+        assert refusal == "", box.note() + "; " + f"command={command!r}"
+        assert ("no:cacheprovider" in argv) == expected, (
+            str(argv) + "; " + f"command={command!r}")
+        assert ("tests" in argv) == expected, (
+            str(argv) + "; " + f"command={command!r}")
+        assert argv[-2:] == ["--junitxml", str(report)], (
+            str(argv) + "; " + f"command={command!r}")
+
+
+def test_parallel_first_installs_run_once_without_refusal(tmp_dir):
+    """Две параллельные первые установки одного файла блокировки: установка исполняется один раз, обе получают один каталог без отказа.
+
+    Ловит мутацию: установка в общий каталог `deps/<компонент>/<сумма>`
+    идёт без замка — вторая сносит дерево первой посреди установки
+    (отказ «установка … не удалась» либо двойная установка).
+    """
+    tmp = Path(tempfile.mkdtemp()).resolve()
+    tmp_dir.addCleanup(lambda: (acceptance._chmod_tree(tmp, False),
+                                __import__("shutil").rmtree(tmp, True)))
+    cwd = tmp / "wd"
+    cwd.mkdir()
+    (cwd / "package-lock.json").write_text('{"v": 1}\n', encoding="utf-8")
+    log = tmp / "installs.log"
+    script = (f"import os, time; open({str(log)!r}, 'a').write('x\\n');"
+              f"time.sleep(0.5); os.makedirs('node_modules/pkg');"
+              f"open('node_modules/pkg/i.js', 'w').write('1')")
+    prof = profile(install=(sys.executable, "-c", script))
+    results = []
+    with mock.patch.object(config, "PROJECTS", tmp / "projects"):
+        threads = [threading.Thread(
+            target=lambda: results.append(acceptance._install(prof, cwd)))
+            for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(60)
+    assert [r[2] for r in results] == ["", ""], results
+    assert results[0][:2] == results[1][:2]
+    assert results[0][1] == ["node_modules"]
+    assert log.read_text(encoding="utf-8").count("x") == 1
+
+
+def test_failures_of_reported_output_come_only_from_report():
+    """`suite_run.parse` вывода профиля с отчётом: упавшие и повтор — только id из сводки отчёта, строки хода раннера (`-v`, id от `workdir`) не читаются; прежний разбор без отчёта их читает.
+
+    Ловит мутацию: `parse` профиля с отчётом читает строки хода сырого
+    вывода — в `failures`/`rerun` попадает id от `workdir` рядом с id
+    из отчёта.
+    """
+    records = [outcome.CaseResult("be:be/tests/test_x.py::T::test_a",
+                                  outcome.PASSED),
+               outcome.CaseResult("be:be/tests/test_x.py::T::test_b",
+                                  outcome.FAILED, "AssertionError")]
+    raw = ("tests/test_x.py::T::test_a PASSED\n"
+           "tests/test_x.py::T::test_b FAILED\n")
+    output = f"{raw}{outcome.summary_block(records)}\n"
+    parsed = suite_run.parse(False, output, reported=True)
+    assert [n for n, _ in parsed.failures] == \
+        ["be:be/tests/test_x.py::T::test_b"]
+    assert parsed.rerun == ("be:be/tests/test_x.py::T::test_b",)
+    assert (parsed.passed, parsed.failed) == (1, 1)
+    plain = suite_run.parse(False, output)
+    assert "tests/test_x.py::T::test_b" in [n for n, _ in plain.failures]
+
+
+def two_components(box, limits: tuple = (None, None)) -> str:
+    name = f"p{box.word()}"
+    text = ENTRY_HEAD.format(name=name) + "    components:\n"
+    for comp, area, limit in (("api", "api", limits[0]),
+                              ("web", "web", limits[1])):
+        fields = {"command": [sys.executable, "-m", "pytest"],
+                  "weakening_scope": [f"{area}/**"],
+                  "mutation_claim_scope": [f"{area}/**"],
+                  "paths": [f"{area}/.*"], "report": "junit-xml"}
+        if limit is not None:
+            fields["full_suite_timeout_sec"] = limit
+        text += f"      {comp}:\n" + block(fields, "        ")
+    box.entries.append(text)
+    box.write_targets()
+    return name
+
+
+def selected(box, name: str, changed, paths: list) -> list:
+    ctx = types.SimpleNamespace(target=name, path=box.root)
+    with mock.patch.object(fsm_merge_gate.store, "task_branch",
+                           return_value="task/x"), \
+            mock.patch.object(fsm_merge_gate.gitcmd, "diff_base",
+                              return_value="base"), \
+            mock.patch.object(fsm_merge_gate.gitcmd, "diff_names",
+                              return_value=changed):
+        chosen = fsm_merge_gate._selected_components(None, "T1", paths, ctx)
+    return [p.component for p in chosen]
+
+
+def test_components_chosen_by_branch_diff_and_appendix_paths(box):
+    """Гейт мержа выбирает компоненты по диффу ветки вместе с путями приложений: компонент, затронутый только приложением, тоже идёт; дифф не прочитан — все.
+
+    Ловит мутацию: выбор компонентов не учитывает пути приложений
+    (компонент `web`, затронутый только приложением, не прогоняется)
+    либо при непрочитанном диффе выбор молча сужается.
+    """
+    name = two_components(box)
+    assert selected(box, name, ["api/a.py"], []) == ["api"]
+    assert selected(box, name, ["api/a.py"], ["web/x.py"]) == ["api", "web"]
+    assert selected(box, name, None, []) == ["api", "web"]
+
+
+def test_each_component_runs_with_its_own_limit(box):
+    """Узел по компонентам гоняет каждый компонент записи из двух со своим `full_suite_timeout_sec`.
+
+    Ловит мутацию: предел полного набора берётся по проекту
+    (`full_suite_limit`), а не по компоненту — оба прогона идут с одним
+    пределом.
+    """
+    name = two_components(box, (box.rng.randint(100, 400),
+                                box.rng.randint(500, 900)))
+    task = box.task(name)
+    profiles = project_profile.component_profiles(name)
+    seen = []
+
+    def fake(root, command=None, **kwargs):
+        seen.append((command.component, kwargs.get("limit", (None,))[0]))
+        return True, "1 passed in 0.01s\n"
+    with mock.patch.object(acceptance, "run_full_suite", fake), \
+            contextlib.redirect_stdout(io.StringIO()):
+        acceptance.components_full_suite(box.root, task, profiles,
+                                         fresh=True)
+    assert seen == [(p.component, p.full_suite_timeout_sec)
+                    for p in profiles], box.note()
+
+
+def test_merge_gate_and_suite_run_keys_match_with_tools(box):
+    """Профиль `suite-run` компонента с отчётом несёт `tools`, и ключ итога у него тот же, что у профиля гейта мержа (`decide`); без `tools` ключ другой.
+
+    Ловит мутацию: `suite_run._profile_command` строит профиль без
+    `with_tools` — `tools` пусты, ключ `suite-run` расходится с ключом
+    гейта мержа.
+    """
+    version = f"22.{box.rng.randint(0, 20)}.0"
+    case = box.junit_component(tools={"node": version})
+    gate = box.profile(case["name"])
+    run_profile, refusal = suite_run._profile_command(case["name"])
+    assert refusal == ""
+    assert dict(run_profile.tools) == {"node": version}
+    tree = acceptance.suite_tree_hash(case["clone"])
+    for base in (False, True):
+        key = acceptance.suite_result_key(tree, gate, base=base,
+                                          root=case["clone"])
+        assert key is not None, box.note() + "; " + f"base={base!r}"
+        assert acceptance.suite_result_key(
+            tree, run_profile, base=base, root=case["clone"]) == key, (
+            box.note() + "; " + f"base={base!r}")
+        bare = dataclasses.replace(run_profile, tools={})
+        assert acceptance.suite_result_key(
+            tree, bare, base=base, root=case["clone"]) != key, (
+            box.note() + "; " + f"base={base!r}")
+
+
+class Reached(Exception):
+    """Гейт мержа дошёл до публикации мержа — дальше тесту идти незачем."""
+
+
+def check_script(box) -> tuple:
+    """(исполняемая проверка вне дерева, маркер запуска, файл кода
+    выхода): печатает строку с текстом проверки и выходит с кодом из
+    файла."""
+    folder = Path(tempfile.mkdtemp(prefix="artel-check-")).resolve()
+    box.addCleanup(__import__("shutil").rmtree, folder, True)
+    marker, code = folder / "ran", folder / "code"
+    script = folder / "check"
+    script.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        f"open({str(marker)!r}, 'a').write('x\\n')\n"
+        f"print('проверка компонента: код', open({str(code)!r}).read())\n"
+        f"sys.exit(int(open({str(code)!r}).read()))\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script, marker, code
+
+
+def checked_case(box, code: int) -> dict:
+    script, marker, code_file = check_script(box)
+    code_file.write_text(str(code), encoding="utf-8")
+    case = box.junit_component(checks_local=[str(script)])
+    case["fake"].scenario(stdout="1 passed in 0.01s\n", report=junit(
+        [("src/x.test.jsx", "test_ok", "passed", "", "", "0.1")]))
+    case.update(marker=marker, code_file=code_file)
+    return case
+
+
+def journal(box, task_id: str, action: str) -> list:
+    return [r["detail"] for r in store.task_steps(store.db(), task_id)
+            if r["action"] == action]
+
+
+def test_record_checks_local_runs_in_acceptance_suite(box):
+    """Запись с одним компонентом и `checks_local`: `decide(...).profile.checks_local` непуст, узел `acceptance.acceptance_suite` на обоих путях (`operator`, `fsm`) исполняет проверку из записи; прошла — итог зелёный, не прошла — красный с её выводом.
+
+    Ловит мутацию: `project_profile.with_tools` (или
+    `_with_component_fields`) теряет поле `checks_local` — профиль
+    задачи приходит без проверок, маркер запуска не появляется, и
+    зелёный набор при упавшей проверке остаётся зелёным.
+    """
+    case = checked_case(box, 0)
+    assert project_profile.decide(case["name"]).profile.checks_local == \
+        (str(Path(case["marker"]).parent / "check"),)
+    branch = store.task_branch(store.db(), case["task"])
+    for actor in ("operator", "fsm"):
+        case["code_file"].write_text("0", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            run = acceptance.acceptance_suite(
+                store.db(), case["clone"], case["task"], branch,
+                case["clone"], actor=actor, fresh=True)
+        assert run.green, box.note(str(run)) + "; " + f"actor={actor!r}"
+        case["code_file"].write_text("3", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            run = acceptance.acceptance_suite(
+                store.db(), case["clone"], case["task"], branch,
+                case["clone"], actor=actor, fresh=True)
+        assert not run.green, box.note(str(run)) + "; " + f"actor={actor!r}"
+        assert run.outcome == acceptance.FULL_SUITE_RED, (
+            box.note(str(run)) + "; " + f"actor={actor!r}")
+        assert "проверка компонента: код 3" in run.detail, (
+            box.note(run.detail) + "; " + f"actor={actor!r}")
+    assert case["marker"].read_text().count("x") == 4, (
+        box.note("проверка из записи исполнялась не каждый раз"))
+    assert len(journal(box, case["task"],
+                       acceptance.CHECKS_LOCAL_ACTION)) == 4
+
+
+def merge(box, case: dict):
+    """Тело гейта мержа `_cmd_approve_merge_gate` на дереве клона
+    проекта: шаги до плотницкого мержа — исход «ок», приложений PLAN
+    нет (узел `_apply_plan_appendices` настоящий), публикация мержа —
+    `Reached`."""
+    ok = lambda *a, **k: False  # noqa: E731
+    patches = [
+        mock.patch.object(fsm_merge_gate, "_docs_ref_unsynced", ok),
+        mock.patch.object(fsm_merge_gate, "_protected_path_diff_gate", ok),
+        mock.patch.object(fsm_merge_gate, "_test_integrity_diff_gate", ok),
+        mock.patch.object(fsm_merge_gate, "_ensure_branch_head_published",
+                          lambda *a, **k: "ok"),
+        mock.patch.object(fsm_merge_gate, "_sync_main_or_wait",
+                          lambda *a, **k: "fresh"),
+        mock.patch.object(fsm_merge_gate, "_outcome_integrity_merge_gate",
+                          ok),
+        mock.patch.object(fsm_merge_gate, "_acceptance_locks_refuse", ok),
+        mock.patch.object(fsm_merge_gate, "_ci_ready_or_wait",
+                          lambda *a, **k: "ok"),
+        mock.patch.object(fsm_merge_gate, "_refuse_if_main_red",
+                          lambda *a, **k: None),
+        mock.patch.object(fsm_merge_gate, "_perform_carpentry_merge",
+                          lambda *a, **k: ("ok", case["clone"])),
+        mock.patch.object(fsm_merge_gate, "_plan_appendices_or_refuse",
+                          lambda *a, **k: []),
+        mock.patch.object(fsm_merge_gate, "_drop_scratch_worktree",
+                          lambda *a, **k: None),
+        mock.patch.object(fsm_merge_gate, "_publish_merge_artifacts",
+                          mock.Mock(side_effect=Reached)),
+    ]
+    conn = store.db()
+    t = store.get_task(conn, case["task"])
+    with contextlib.ExitStack() as stack:
+        for patcher in patches:
+            stack.enter_context(patcher)
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        return fsm_merge_gate._cmd_approve_merge_gate(
+            conn, case["task"], "merge_gate", t)
+
+
+def test_merge_gate_without_appendices_runs_record_checks_local(box):
+    """Гейт мержа без приложений PLAN: упавшая `checks_local` записи отказывает мерж (задача на гейте, вывод проверки в журнале `merge FAILED`), прошедшая пишется в журнал и мерж идёт дальше.
+
+    Ловит мутацию: вызов `_checks_local_refuse` перенесён внутрь
+    `_full_suite_or_refuse` (или в ветку с применёнными приложениями) —
+    без приложений проверка не исполняется, упавшая не отказывает, и
+    гейт доходит до публикации мержа.
+    """
+    case = checked_case(box, 5)
+    assert merge(box, case) == ("stopped",), box.note()
+    refusals = journal(box, case["task"],
+                       fsm_merge_gate.CHECKS_LOCAL_REFUSAL_ACTION)
+    assert any("проверка компонента: код 5" in r for r in refusals), (
+        box.note(str(refusals)))
+    assert store.task_state(store.db(), case["task"]) == "in_dev"
+    case["code_file"].write_text("0", encoding="utf-8")
+    with pytest.raises(Reached):
+        merge(box, case)
+    records = journal(box, case["task"], acceptance.CHECKS_LOCAL_ACTION)
+    assert len(records) == 2, box.note(str(records))
+    assert "— код 0" in records[-1]
+    assert case["marker"].read_text().count("x") == 2
+
+
+def test_empty_install_neither_installs_nor_refuses(box):
+    """Запись `test_profile` с итогом из отчёта (`runner: pytest-own`, `report: junit-xml`) и `install: []` без файла блокировки: прогон зелёный по отчёту, отказа «install без файла блокировки» нет, каталог установок пульта не заводится.
+
+    Ловит мутацию: пустой `install` считается объявленной установкой
+    (`if profile.install is None` вместо `if not profile.install`) —
+    прогон отказывает «install без файла блокировки не исполняется»
+    либо заводит каталог `deps/` пульта.
+    """
+    fake = Fake(box, "junit")
+    workdir = f"be{box.word(5)}"
+    name, clone = box.project(
+        box.junit_fields(fake, workdir, install=[]),
+        {f"{workdir}/src/x.test.py": "# тест\n"})
+    prof = box.profile(name)
+    assert prof.install == ()
+    fake.scenario(stdout="1 passed in 0.01s\n", report=junit(
+        [("src/x.test.py", "test_ok", "passed", "", "", "0.1")]))
+    run, out = box.full(clone, box.task(name), prof)
+    assert run.green, box.note(f"{run}\n{out}")
+    assert acceptance.INSTALL_WITHOUT_LOCK not in f"{run.detail}\n{out}"
+    assert not (config.PROJECTS / name / "deps").exists()
+    assert acceptance._install(prof, clone / workdir) == (None, [], "")
