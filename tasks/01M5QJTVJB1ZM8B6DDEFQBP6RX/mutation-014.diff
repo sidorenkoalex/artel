@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..11d0158 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -134,7 +134,7 @@ def _own_rows(conn, task_id: str | None, session_id: str | None) -> list:
+     """Строки, которые продлевает `touch_heartbeat` вызывающего."""
+     rows = store.merge_lock_rows(conn)
+     if task_id is None:
+-        if len(rows) <= 1:
++        if len(rows) >= 1:
+             return rows
+         sid = session.resolve_session_id(session_id)
+         return [row for row in rows if row["session_id"] == sid]

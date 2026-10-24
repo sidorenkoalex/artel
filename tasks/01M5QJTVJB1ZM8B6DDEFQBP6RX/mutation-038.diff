@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..df6018e 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -151,7 +151,7 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
+         while True:
+             store.touch_merge_queue_heartbeat(conn, sid, pid, store.now())
+             _prune_dead_entries(conn)
+-            if _head_task_id(conn, target) == task_id:
++            if _head_task_id(conn) == task_id:
+                 refusal = merge_lock.acquire(conn, task_id, sid)
+                 if refusal is None:
+                     return

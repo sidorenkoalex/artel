@@ -1,0 +1,15 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+index f182f48..25cdf3f 100644
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -1384,8 +1384,8 @@ def release_merge_lock(conn, session_id: str, pid: int) -> None:
+     4): все процессы одной рабочей копии пульта несут один session_id
+     (`session.resolve_session_id`), и снятие по нему одному отпускало бы
+     окно из-под живого держателя-соседа."""
+-    conn.execute("DELETE FROM merge_locks WHERE session_id=? AND pid=?",
+-                 (session_id, pid))
++    conn.execute("DELETE FROM merge_locks WHERE session_id=?",
++                 (session_id,))
+     conn.commit()
+ 
+ 

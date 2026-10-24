@@ -1,0 +1,11 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..a2bd05c 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -163,4 +163,5 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
+                     f"artel.py approve {task_id}")
+             time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
+     finally:
+-        store.dequeue_merge_wait(conn, sid, pid)
++        if sys.exc_info()[0] is None:
++            store.dequeue_merge_wait(conn, sid, pid)

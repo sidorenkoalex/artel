@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..8242e1a 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -104,7 +104,7 @@ def wait_suffix(conn, t) -> str:
+     minutes = queue_wait_minutes(conn, t["id"])
+     if minutes is None:
+         return ""
+-    holder = _current_holder_label(conn, store.task_target(conn, t["id"]))
++    holder = _current_holder_id(conn, store.task_target(conn, t["id"]))
+     return f"  [ждёт merge-окна: занято {holder}, {minutes} мин]"
+ 
+ 

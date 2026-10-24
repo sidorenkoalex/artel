@@ -1,0 +1,16 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..2fa2582 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -72,8 +72,9 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
+                                            store.task_target(conn, task_id))
+         pid, hostname = os.getpid(), socket.gethostname()
+         if row is None or _is_own_process(row, session_id, pid):
+-            store.set_merge_lock(conn, task_id, session_id, pid, hostname,
+-                                 store.now())
++            if row is None:
++                store.set_merge_lock(conn, task_id, session_id, pid, hostname,
++                                     store.now())
+             return None
+         if not _holder_is_dead(row):
+             age = liveness._age_seconds(row["heartbeat_ts"])

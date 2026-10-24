@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..fa89108 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -139,7 +139,7 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
+     target = store.task_target(conn, task_id)
+     ts = store.now()
+     store.enqueue_merge_wait(conn, task_id, sid, pid, hostname, ts)
+-    holder = _current_holder_label(conn, target)
++    holder = _current_holder_id(conn, target)
+     store.journal(
+         conn, task_id, "orchestrator",
+         f"ждёт merge-окна: держит {holder}",

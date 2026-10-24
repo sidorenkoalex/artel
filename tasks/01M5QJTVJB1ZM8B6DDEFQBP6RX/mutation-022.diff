@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..9352e77 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -71,7 +71,7 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
+         row = store.project_merge_lock_row(conn,
+                                            store.task_target(conn, task_id))
+         pid, hostname = os.getpid(), socket.gethostname()
+-        if row is None or _is_own_process(row, session_id, pid):
++        if row is None:
+             store.set_merge_lock(conn, task_id, session_id, pid, hostname,
+                                  store.now())
+             return None

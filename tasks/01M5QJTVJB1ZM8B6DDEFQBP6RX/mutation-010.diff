@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..216c5c0 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -79,7 +79,7 @@ def _current_holder_label(conn, target: str | None = None) -> str:
+     row = _holder_row(conn, target)
+     if row is None:
+         return "?"
+-    return f"{row['task_id']} (pid {row['pid']})"
++    return f"{row['task_id']}"
+ 
+ 
+ def queue_wait_minutes(conn, task_id: str) -> int | None:

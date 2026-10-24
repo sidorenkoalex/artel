@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..a3603a1 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -89,7 +89,7 @@ def queue_wait_minutes(conn, task_id: str) -> int | None:
+     row = next((r for r in store.merge_queue_rows(conn)
+                if r["task_id"] == task_id), None)
+     if row is None:
+-        return None
++        return 0
+     started = datetime.strptime(row["enqueued_ts"], "%Y-%m-%d %H:%M:%SZ")
+     now = datetime.strptime(store.now(), "%Y-%m-%d %H:%M:%SZ")
+     return max(0, int((now - started).total_seconds() // 60))

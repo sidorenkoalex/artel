@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..44548ad 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -75,7 +75,7 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
+             store.set_merge_lock(conn, task_id, session_id, pid, hostname,
+                                  store.now())
+             return None
+-        if not _holder_is_dead(row):
++        if row["session_id"] == session_id or not _holder_is_dead(row):
+             age = liveness._age_seconds(row["heartbeat_ts"])
+             return (f"[{task_id}] merge-окно занято сессией "
+                    f"{row['session_id']} (pid {row['pid']}, задача "

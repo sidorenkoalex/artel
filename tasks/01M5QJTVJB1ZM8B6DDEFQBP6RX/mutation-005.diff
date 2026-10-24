@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+index b8a7b3a..c54c758 100644
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -66,7 +66,7 @@ def _current_holder_id(conn, target: str | None = None) -> str:
+     `target` — проект ждущей задачи (держатели других проектов не в
+     счёт)."""
+     row = _holder_row(conn, target)
+-    return row["task_id"] if row is not None else "?"
++    return row["session_id"] if row is not None else "?"
+ 
+ 
+ def _current_holder_label(conn, target: str | None = None) -> str:

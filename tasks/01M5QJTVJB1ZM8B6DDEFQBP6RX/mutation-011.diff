@@ -1,0 +1,12 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+index f182f48..516c84b 100644
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -1415,6 +1415,7 @@ def project_merge_queue_rows(conn, target: str) -> list:
+ def enqueue_merge_wait(conn, task_id: str, session_id: str, pid: int,
+                        hostname: str, ts: str) -> None:
+     """Регистрирует ожидающего мьютекса merge-окна (требование 2)."""
++    conn.execute("DELETE FROM merge_queue WHERE session_id=?", (session_id,))
+     conn.execute(
+         "INSERT INTO merge_queue (task_id, session_id, pid, hostname,"
+         " enqueued_ts, heartbeat_ts) VALUES (?,?,?,?,?,?)",

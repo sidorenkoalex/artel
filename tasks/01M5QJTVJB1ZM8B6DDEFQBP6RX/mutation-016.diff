@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..d6b2759 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -53,7 +53,7 @@ def _is_own_process(row, session_id: str, pid: int) -> bool:
+     держатель, дальше решает `_holder_is_dead`, как и для чужой сессии
+     (требование 3: мёртвый процесс своей сессии перехватывается той же
+     веткой, не отказывает)."""
+-    return row["session_id"] == session_id and row["pid"] == pid
++    return row["session_id"] == session_id
+ 
+ 
+ def acquire(conn, task_id: str, session_id: str) -> str | None:

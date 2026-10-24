@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..2686d7e 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -168,6 +168,7 @@ def run_window(conn, task_id: str, session_id: str, body):
+     """
+     refusal = acquire(conn, task_id, session_id)
+     if refusal is not None:
++        body()
+         sys.exit(refusal)
+     try:
+         return body()

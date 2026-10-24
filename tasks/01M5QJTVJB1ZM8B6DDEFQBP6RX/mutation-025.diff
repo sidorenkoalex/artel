@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..3a0017e 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -40,8 +40,6 @@ def _holder_is_dead(row) -> bool:
+     один синхронный вызов, и pid-проверку делает только `doctor`). Чужой
+     host — судить о pid нечем, решает только heartbeat (тот же приём, что
+     `doctor.check_leases`/`check_merge_lock`)."""
+-    if liveness._age_seconds(row["heartbeat_ts"]) > config.LEASE_STALE_AFTER_SEC:
+-        return True
+     return (row["hostname"] == socket.gethostname()
+            and not liveness._pid_alive(row["pid"]))
+ 

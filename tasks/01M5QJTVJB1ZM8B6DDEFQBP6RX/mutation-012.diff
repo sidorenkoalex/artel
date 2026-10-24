@@ -1,0 +1,15 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+index f182f48..108c151 100644
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -1432,8 +1432,8 @@ def touch_merge_queue_heartbeat(conn, session_id: str, pid: int,
+     процесса одной рабочей копии стоят в очереди двумя записями, и опрос
+     одного не имеет права «оживлять» запись другого."""
+     conn.execute(
+-        "UPDATE merge_queue SET heartbeat_ts=? WHERE session_id=? AND pid=?",
+-        (ts, session_id, pid))
++        "UPDATE merge_queue SET heartbeat_ts=? WHERE session_id=?",
++        (ts, session_id))
+     conn.commit()
+ 
+ 

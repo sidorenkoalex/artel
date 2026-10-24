@@ -1,0 +1,20 @@
+# mutation-run №8 задачи 01M5QJTVJB1ZM8B6DDEFQBP6RX
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 7c0bc906b70814114a1de34c1415033e1fd62d26
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py
+# рабочих процессов: auto
+# патч 32 mutation-032.diff sha256 6c433e6274df9a904e5782c1b8e0186e4ea86c23dc906fb592be25373ee514b3
+# патч 33 mutation-033.diff sha256 daa30f94b4dbf38e691079dcd3cafbc811140c2ae7ffdcb516f1d0ba930404f9
+# патч 34 mutation-034.diff sha256 85cfd972375e547857ce958d5b0778d2d9555906d2c923b5bcac00c3ad24c17b
+# патч 35 mutation-035.diff sha256 d5fef11c7ef7ea0db7820b436176ef4b43a5ebfd4a7cbb3fe45f5db0302cbee1
+# патч 36 mutation-036.diff sha256 fe760e67a3e59283e119aa4e42a455a27375b68ccb38dc40668037f11b861622
+# патч 37 mutation-037.diff sha256 a934d3065c05678ff7c280deeeb24faa8c19bddb164239724ce9b809d8e6a739
+# патч 38 mutation-038.diff sha256 270f7a87ecdd4b3e51382366b7ea2c7152eac4b3f05cb07dae37889bd89bd6cd
+номер	исход	узлы
+32	убита	tests/test_merge_queue.py::test_empty_queue_has_no_head
+33	убита	tests/test_merge_queue.py::test_head_is_earliest_by_enqueued_ts,tests/test_merge_queue.py::test_two_processes_of_one_session_live_as_two_rows_in_fifo_order,tests/test_merge_queue.py::test_non_head_process_of_the_same_session_does_not_take_the_window
+34	убита	tests/test_merge_queue.py::test_earlier_entry_of_other_project_does_not_delay_entry,tests/test_merge_queue.py::test_free_mutex_registers_then_immediately_takes_the_window
+35	убита	tests/test_merge_queue.py::test_non_head_process_of_the_same_session_does_not_take_the_window,tests/test_merge_queue.py::test_ceiling_expiry_dequeues_and_exits_without_touching_state
+36	убита	tests/test_merge_queue.py::test_queue_entry_journal_names_the_holder_pid,tests/test_merge_queue.py::test_texts_name_own_project_holder_in_every_insertion_order
+37	убита	tests/test_merge_queue.py::test_non_head_process_of_the_same_session_does_not_take_the_window
+38	убита	tests/test_merge_queue.py::test_earlier_entry_of_other_project_does_not_delay_entry

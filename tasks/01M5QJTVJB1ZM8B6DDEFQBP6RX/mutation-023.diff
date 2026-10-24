@@ -1,0 +1,15 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+index 9cce9dc..ff822f2 100644
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -77,8 +77,8 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
+             return None
+         if not _holder_is_dead(row):
+             age = liveness._age_seconds(row["heartbeat_ts"])
+-            return (f"[{task_id}] merge-окно занято сессией "
+-                   f"{row['session_id']} (pid {row['pid']}, задача "
++            return (f"[{task_id}] merge-окно занято "
++                   f"(pid {row['pid']}, задача "
+                    f"{row['task_id']}), heartbeat {int(age)} сек назад — "
+                    f"дождись освобождения и повтори approve")
+         detail = (f"держатель мьютекса merge мёртв (сессия "

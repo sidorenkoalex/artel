@@ -1,0 +1,22 @@
+# mutation-run №2 задачи 01M5QJTVJB1ZM8B6DDEFQBP6RX
+# источник патчей: каталог на диске
+# ревизия прогона: base ec948ea430e262436fbedcd59c35c6f472764af9
+# тесты: tests/test_merge_lock.py, tests/test_merge_queue.py, tests/test_merge_lock_by_project.py
+# рабочих процессов: auto
+# патч 16 mutation-016.diff sha256 90bec572bf5be50462370a2b29fe56507fb2c0620ef99f17e721a2aad6afd50a
+# патч 17 mutation-017.diff sha256 f8a325305e2b5a5871501843e5bdde9ad96bd27258b3436af0ff54510db88aa0
+# патч 18 mutation-018.diff sha256 84a1043d815cde02b26b0bcc630179a2943d6f1173c5ef47530e2c22fdaa220c
+# патч 19 mutation-019.diff sha256 6a31ec1633f3e01b66a7cea061f672a7b73c88aad39cd64f0fd32f2a368036e7
+# патч 20 mutation-020.diff sha256 3e0e2c06df2a47efe68dc15fc3e72307f02f57900e53a96bc2a810bf4b5e3a90
+# патч 21 mutation-021.diff sha256 0ce10c2fcb54c44662fce3267226cd25a4c4ad8283023799940f7e3e94d7ed55
+# патч 22 mutation-022.diff sha256 2e878a79b2f450d5a7b1c8db2094536831f8fc6370c5c74600cc1822011b6574
+# патч 23 mutation-023.diff sha256 80df3f76882c0d0244f6690b9fc4ea49d04c30a18691c3f2a147c02d5b35ae97
+номер	исход	узлы
+16	убита	tests/test_merge_lock.py::ProcessOwnershipTest::test_refusal_text_for_own_session_equals_foreign_session_text,tests/test_merge_lock.py::ProcessOwnershipTest::test_live_other_process_of_same_session_is_refused_with_holder_pid,tests/test_merge_lock.py::ProcessOwnershipTest::test_dead_process_of_own_session_is_intercepted_and_journalled
+17	убита	tests/test_merge_lock.py::ProcessOwnershipTest::test_refusal_text_for_own_session_equals_foreign_session_text,tests/test_merge_lock.py::ProcessOwnershipTest::test_live_other_process_of_same_session_is_refused_with_holder_pid
+18	убита	tests/test_merge_lock.py::ProcessOwnershipTest::test_own_process_re_enters_and_refreshes_the_row
+19	убита	tests/test_merge_lock.py::ProcessOwnershipTest::test_dead_process_of_own_session_is_intercepted_and_journalled
+20	убита	tests/test_merge_lock.py::AcquireReleaseTest::test_foreign_stale_heartbeat_lock_is_taken_over_and_journalled,tests/test_merge_lock.py::ProcessOwnershipTest::test_dead_process_of_own_session_is_intercepted_and_journalled
+21	убита	tests/test_merge_lock.py::AcquireReleaseTest::test_fresh_acquire_on_empty_table_takes_the_lock
+22	убита	tests/test_merge_lock.py::AcquireReleaseTest::test_own_session_re_enters_without_refusal,tests/test_merge_lock.py::ProcessOwnershipTest::test_own_process_re_enters_and_refreshes_the_row
+23	убита	tests/test_merge_lock.py::AcquireReleaseTest::test_foreign_fresh_lock_refuses_and_names_holder_and_task,tests/test_merge_lock.py::RunWindowTest::test_refusal_exits_without_running_the_body
