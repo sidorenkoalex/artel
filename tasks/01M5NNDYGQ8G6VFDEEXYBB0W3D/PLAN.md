@@ -22,8 +22,13 @@ schema_version: 5
   `silence_box` (бывший `NoteSilenceSandbox`), `apply_box` (бывший
   `ApplySandbox`), `window_box` (бывший `NoteWindowProjectTest.setUp`);
   все три стенда git — поверх `real_git`. В фикстурах нет утверждений;
-  помощники с утверждениями (`origin_backlog`, `refusal`, `inserted_row`,
-  `assert_pushed`, `held_reason`) — функции модуля.
+  помощники с утверждениями (`origin_backlog`, `silence_origin_backlog`,
+  `refusal`, `inserted_row`, `assert_pushed`, `held_reason`) — функции
+  модуля. Путь документа в помощниках чтения origin — как в исходниках:
+  `silence_origin_backlog` (стенд окна тишины, бывший
+  `NoteSilenceSandbox.origin_backlog`) — литерал `docs/backlog.md`;
+  `origin_backlog` (стенд `--apply`, бывший `ApplySandbox.origin_backlog`)
+  — константа `notes.BACKLOG_REL`; `window_origin_backlog` — литерал.
 - `assertRaises(E) as cm` + `assertIn(X, str(cm.exception))` →
   `pytest.raises(E, match=re.escape(X))` (8 мест из 9 мест проверки
   текста в исходных; девятое — помощник `ApplySandbox.refusal` — стал
@@ -269,7 +274,7 @@ mutation-006 (ноль совпадений ключа), mutation-007 (неск�
 | | Тестов | Строк | Адресный прогон |
 |---|---|---|---|
 | До (четыре исходных файла) | 80 (55 subTest) | 1728 | 12.58 с |
-| После (`tests/test_notes_module.py`) | 80 функций / 99 узлов | 1792 | 11.63 с |
+| После (`tests/test_notes_module.py`) | 80 функций / 99 узлов | 1798 | 11.63 с |
 
 Время — `python3 -m pytest <файлы> -q -p no:cacheprovider -p timeout -o timeout=120` в рабочей копии шага.
 
@@ -289,6 +294,26 @@ mutation-006 (ноль совпадений ключа), mutation-007 (неск�
   зоны) и строковом литерале пути `tests/test_doc_commit.py:94` (путь
   как пример отказа `doc-commit`, существование файла не требуется).
 - Откат — revert коммита свода в ветке задачи.
+
+## Возврат из merge_gate (24.10)
+
+- Причина: помощник `origin_backlog` стенда окна тишины брал путь из
+  `notes.BACKLOG_REL`, а исходный `NoteSilenceSandbox.origin_backlog`
+  (`tests/test_notes.py:309-312` базы) — литерал
+  `f"{config.MAIN_BRANCH}:docs/backlog.md"`.
+- Правка: помощник разделён на два. Новый `silence_origin_backlog`
+  (литерал `docs/backlog.md`, как в исходнике) зовут тесты стенда
+  `silence_box`: `test_window_ac5_…`, `test_window_ac6_…`,
+  `test_window_ac7_…`, `test_window_ac8_closed_…`. `origin_backlog`
+  остаётся с `notes.BACKLOG_REL` для стенда `apply_box` — так в исходном
+  `ApplySandbox.origin_backlog` (`tests/test_notes_apply.py:145-147`
+  базы). Утверждения тестов не менялись; больше ничего не правилось
+  (кроме регенерации `docs/codebase-map.md` — новое имя функции).
+- `python3 -m pytest tests/test_notes_module.py -q -p no:cacheprovider
+  -p timeout -o timeout=120` — 99 passed. Таблицы «Мутации после» выше —
+  прогоны №4/№5 на 7ea8ae48 (до этой правки); `orchestrator/` правка не
+  трогает, перепроверку таблицы «после» на новой голове ведёт сессия при
+  Операторе (требование 11).
 
 ## Риски
 
