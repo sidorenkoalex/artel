@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..8f173bed 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -253,7 +253,7 @@ def _covering_element(cid: str, mandate: dict):
+         if "::" not in element or not rest.startswith(element):
+             continue
+         tail = rest[len(element):]
+-        if not tail or tail.startswith(("::", "[", "#")):
++        if True:
+             return element, source
+     return None
+ 

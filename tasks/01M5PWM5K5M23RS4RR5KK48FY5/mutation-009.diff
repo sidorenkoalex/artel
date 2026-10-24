@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..dabeb0f8 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -865,7 +865,7 @@ def _finding_of(line: str):
+         prefix = f"{kind}: "
+         if not line.startswith(prefix):
+             continue
+-        cid, sep, _runs = line[len(prefix):].partition(_runs_marker(kind))
++        cid, sep, _runs = line[len(prefix):].partition(" — ")
+         return Finding(kind, cid, "") if sep else None
+     return None
+ 

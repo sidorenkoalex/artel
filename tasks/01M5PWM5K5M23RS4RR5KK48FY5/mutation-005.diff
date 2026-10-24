@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..61f4d8c7 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -346,8 +346,6 @@ def _answer_mandates(artifact_branch: str, task_id: str) -> tuple:
+         name = p.rsplit("/", 1)[-1]
+         if not (name.startswith("ANSWER-") and name.endswith(".md")):
+             continue
+-        if _answer_commit_is_role_step_autocommit(artifact_branch, task_id, p):
+-            continue
+         text, _reason = docs_ref.show(task_id, artifact_branch, p)
+         if text is None:
+             continue

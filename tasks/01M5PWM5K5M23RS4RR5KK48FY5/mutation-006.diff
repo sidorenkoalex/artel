@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..f4124723 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -269,9 +269,6 @@ def _covering(cid: str, mandate: dict, id_mandate: dict):
+ def _covering_pair(cid: str, mandate: dict, id_mandate: dict):
+     """(элемент мандата, ANSWER-n) по правилу `_covering`; `None` — не
+     покрыт."""
+-    source = id_mandate.get(cid)
+-    if source is not None:
+-        return cid, source
+     return _covering_element(cid, mandate)
+ 
+ 
