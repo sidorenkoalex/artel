@@ -1,31 +1,29 @@
 # Записка developer
 
 ## Выяснено
-- Сделано и зелёно: патчи mutation-001…026 (каждый проверен одиночным прогоном
-  в копии $TMPDIR; строки падения «до» — в PLAN, раздел «Мутации»);
-  tests/report_outcome_sandbox.py (ast.dump 50/50); tests/test_report_outcome_module.py
-  (26 функций, 1344 строки, «26 passed in 23.58s»); переходной модуль;
-  импорт test_component_report_gates.py; карта перегенерирована.
-- Модуль собирается заново: из корня worktree
-  `python3 <docs>/assemble_report_outcome.py <docs>/module_head.txt > tests/test_report_outcome_module.py`
-  (сборка читает исходник через `git show HEAD:` — после коммита сведения
-  HEAD уже переходной модуль! тогда брать базу: поправить ревизию в assemble).
-- Планке нужны в PLAN строки «mutation-NNN + Класс::метод + tests/<файл>.py:<строка>»
-  и для «после» — `test_report_outcome_module.py::<функция>` + строка нового файла.
-- `ls`/`cat`/`ps` в Bash нет; heredoc с `{`+кавычкой Bash отклоняет —
-  скрипты файлом в каталог документов.
+- Прогоны по ANSWER-2 сделаны (`--workers 4 --copy-table --wait-lock 4`):
+  «до» №4 (1-13), №5 (14-26) на base 579a3819; «после» №6, №7 на worktree
+  db7fa348. Контроль зелёный во всех, 26/26 убиты «до» и «после», наборы
+  узлов совпадают, sha патчей совпадают, orchestrator/ 579a3819 == db7fa348.
+- Таблицы вставлены в PLAN в ```-ограждении сценарием
+  `<docs>/fill_plan_tables.py <имя.tsv>` (заменяет маркер `<!-- table:<имя> -->`).
+  Места упавших утверждений по логам патчей — `<docs>/failed_sites.py <№…>`.
+- Копии `mutation-run-<n>.tsv` от `--copy-table` удалены: AC-5 планки
+  запрещает файлы `mutation-*` в каталоге документов, кроме патчей.
+- plank-run читает PLAN из refs/artifacts (версию прошлого шага), не с диска;
+  дисковый PLAN проверял импортом `acceptance_tests/_plan.py` в python3.
+- Адресный прогон шага: tests/test_component_report_gates.py — 13 passed.
+- Код ветки не менялся; карта — только built_at_sha (генератор).
 
 ## Не сработало
-- mutation-run --ref base 1-13: три раза (№1–№3) отказ «контроль красный» —
-  VitestReporterTest::test_ac9_timeout_kills_group_not_green :1249 «раннер не
-  запускался» (предел компонента 1 с под xdist). PLAN — status: escalate.
+- Планка `_plan.py::tables` не знает строку шапки `# рабочих процессов: 4`
+  (появилась с --workers) → 11 красных в test_mutation_tables.py. Без этой
+  строки всё разбирается. PLAN — status: escalate (вариант а: amend-tests).
 
 ## Где остановился
-- Ждём ответа Оператора на эскалацию. Дальше: «до» частями 1-13, 14-26 →
-  «после» (`--ref worktree --tests tests/test_report_outcome_module.py`, перед
-  каждой частью вывод `git status --porcelain -- orchestrator/`) → строки
-  «после» в PLAN → итог CI → status: ready.
-- Адресный прогон этого шага уже потрачен на tests/test_report_outcome_module.py.
+- Ждём ответа Оператора. При amend-tests: PLAN не трогать, снять escalate →
+  ready, прогнать plank-run (после автокоммита PLAN в ref).
+- При мандате (б): удалить строки `# рабочих процессов: 4` из 4 таблиц PLAN.
 
 ## Чего не хватило
-- Способа прогнать контроль mutation-run без xdist / с повтором красного теста.
+- gh для CI ветки требует подтверждения — итог CI роли не виден.
