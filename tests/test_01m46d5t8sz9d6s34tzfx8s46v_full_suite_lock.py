@@ -354,7 +354,7 @@ class LockSandbox(RealGitSandbox):
 
     def stop_everything(self) -> None:
         for path in self.probe.glob("tree-*"):
-            self.release(path.name)
+            self.release(path.name.removeprefix("tree-"))
         for child in self.children:
             child.linger.write_text("go", encoding="utf-8")
         deadline = time.monotonic() + 10
