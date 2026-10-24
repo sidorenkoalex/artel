@@ -781,10 +781,12 @@ def _content_blob_sha(work_dir: Path, content: str) -> str | None:
     return res.stdout.decode("utf-8", "replace").strip() or None
 
 
-def _content_already_in_origin(work_dir: Path, rel: str,
-                               content: str) -> bool:
+def _content_already_in_origin(work_dir: Path, rel: str, content: str,
+                               ref: str = "FETCH_HEAD") -> bool:
     """Содержимое уже лежит в свежем `origin/<MAIN_BRANCH>` по пути `rel` —
-    сравнением blob-sha `FETCH_HEAD:<rel>` с blob-sha самого содержимого.
+    сравнением blob-sha `<ref>:<rel>` с blob-sha самого содержимого. `ref` —
+    точка отсчёта сверки: `FETCH_HEAD` у одной записи, голова пакета перед
+    записью у пакетного сброса (`_flush_batch`).
 
     Не файлом рабочего дерева, как было до итерации 2 ревью: общий рабочий
     репозиторий `.artel/notes-work` мог остаться грязным от прошлого
@@ -792,7 +794,7 @@ def _content_already_in_origin(work_dir: Path, rel: str,
     вместо содержимого origin — правка конфигурации после отказа гейта
     набора не проходила уже никогда (R1-F1).
     """
-    origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{rel}")
+    origin_sha = _blob_sha(work_dir, f"{ref}:{rel}")
     if origin_sha is None:
         return False
     return _content_blob_sha(work_dir, content) == origin_sha
@@ -813,8 +815,8 @@ def _restore_tree(work_dir: Path, rel: str) -> None:
     gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", rel)
 
 
-def _build_doc_commit(work_dir: Path, request: dict,
-                      known: str = "") -> tuple[str, str, str | None]:
+def _build_doc_commit(work_dir: Path, request: dict, known: str = "",
+                      ref: str = "FETCH_HEAD") -> tuple[str, str, str | None]:
     """Валидация записи `doc-commit` от свежего `FETCH_HEAD` (требование
     5, AC-4): blob-sha пути в `origin/<MAIN_BRANCH>` должен совпадать с
     blob-sha того же пути в `origin/<MAIN_BRANCH>` клона до fetch этой
@@ -838,9 +840,13 @@ def _build_doc_commit(work_dir: Path, request: dict,
     с базой, на которой собрано содержимое: пин к флашу мог уйти вперёд
     вместе с чужой правкой (сценарий 02.10), и пиновая сверка тогда
     проходит, затирая её.
+
+    `ref` — точка отсчёта сверки вместо `FETCH_HEAD`: пакетный сброс
+    (`_flush_batch`) сверяет запись с головой пакета перед ней, иначе
+    вторая запись того же пути затёрла бы первую.
     """
     rel = request["path"]
-    origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{rel}")
+    origin_sha = _blob_sha(work_dir, f"{ref}:{rel}")
     if HELD_BASE_KEY in request:
         base_sha = request[HELD_BASE_KEY]
         if origin_sha != base_sha:
@@ -853,7 +859,7 @@ def _build_doc_commit(work_dir: Path, request: dict,
         if origin_sha != pin_sha:
             sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
     content = request["content"]
-    if _content_already_in_origin(work_dir, rel, content):
+    if _content_already_in_origin(work_dir, rel, content, ref):
         sys.exit(f"{rel}: содержимое уже совпадает с "
                  f"origin/{config.MAIN_BRANCH} — коммитить нечего")
     return content, rel, None
@@ -903,8 +909,8 @@ def _apply_journal_detail(rows: list[str]) -> str:
     return "; ".join([f"удалено строк: {len(rows)}", *rows])
 
 
-def _foreign_backlog_commits(work_dir: Path,
-                             pin_commit: str) -> list[str] | None:
+def _foreign_backlog_commits(work_dir: Path, pin_commit: str,
+                             ref: str = "FETCH_HEAD") -> list[str] | None:
     """Коммиты origin, тронувшие `BACKLOG_REL` после базы главной копии и
     сделанные НЕ самим пультом.
 
@@ -919,7 +925,7 @@ def _foreign_backlog_commits(work_dir: Path,
     отказал): вызывающий код закрывает сверку, а не считает список пустым.
     """
     res = gitcmd.in_repo(work_dir, "log", "--format=%H%x00%ae%x00%s",
-                         f"{pin_commit}..FETCH_HEAD", "--", BACKLOG_REL)
+                         f"{pin_commit}..{ref}", "--", BACKLOG_REL)
     if res is None or res.returncode != 0:
         return None
     foreign = []
@@ -936,7 +942,8 @@ def _foreign_backlog_commits(work_dir: Path,
 
 
 def _foreign_base_refusal(work_dir: Path, origin_sha: str | None,
-                          known: str = "") -> str | None:
+                          known: str = "",
+                          ref: str = "FETCH_HEAD") -> str | None:
     """Текст отказа сверки базы `--apply` при ПЕРВОМ построении правки,
     либо `None` — база годна (требование 10).
 
@@ -963,7 +970,7 @@ def _foreign_base_refusal(work_dir: Path, origin_sha: str | None,
             work_dir, known, BACKLOG_REL):
         return None
     pin_commit = known
-    foreign = (_foreign_backlog_commits(work_dir, pin_commit)
+    foreign = (_foreign_backlog_commits(work_dir, pin_commit, ref)
                if pin_commit else None)
     if foreign is None:
         return APPLY_UNKNOWN_BASE_REFUSAL
@@ -972,8 +979,9 @@ def _foreign_base_refusal(work_dir: Path, origin_sha: str | None,
     return None
 
 
-def _build_apply(work_dir: Path, request: dict,
-                 original: str, known: str = "") -> tuple[str, str, str | None]:
+def _build_apply(work_dir: Path, request: dict, original: str,
+                 known: str = "",
+                 ref: str = "FETCH_HEAD") -> tuple[str, str, str | None]:
     """Валидация и построение правки `note --apply` (требования 9-12).
 
     Сверка базы — двумя шагами (требование 10: «если `docs/backlog.md` в
@@ -1000,18 +1008,21 @@ def _build_apply(work_dir: Path, request: dict,
     `None`) несёт здесь готовую колонку detail записи журнала: перечень
     удалённых строк считается ЗДЕСЬ, пока прежнее содержимое под рукой, —
     `_commit_and_push` его уже не увидит.
+
+    `ref` — точка отсчёта сверки вместо `FETCH_HEAD` (голова пакета перед
+    записью у `_flush_batch`), как у `_build_doc_commit`.
     """
-    origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{BACKLOG_REL}")
+    origin_sha = _blob_sha(work_dir, f"{ref}:{BACKLOG_REL}")
     recorded = request.get("base_blob")
     if recorded is None:
-        refusal = _foreign_base_refusal(work_dir, origin_sha, known)
+        refusal = _foreign_base_refusal(work_dir, origin_sha, known, ref)
         if refusal is not None:
             sys.exit(f"{BACKLOG_REL}: {refusal}")
         request["base_blob"] = origin_sha
     elif recorded != origin_sha:
         sys.exit(f"{BACKLOG_REL}: {APPLY_STALE_BASE_REFUSAL}")
     draft = request["content"]
-    if _content_already_in_origin(work_dir, BACKLOG_REL, draft):
+    if _content_already_in_origin(work_dir, BACKLOG_REL, draft, ref):
         sys.exit(f"{BACKLOG_REL}: заготовка совпадает с содержимым в "
                  f"origin/{config.MAIN_BRANCH} — коммитить нечего")
     refusal = _apply_shape_refusal(draft, original)
@@ -1267,6 +1278,160 @@ def _attempt(request: dict) -> str | None:
     return None
 
 
+def _refused_print(exc: SystemExit) -> None:
+    """Причина отказа удержанной записи — прежней строкой флаша."""
+    detail = str(exc)
+    if detail:
+        print(f"удержанная запись не отправлена: {detail}")
+
+
+def _fresh_main(work_dir: Path) -> str | None:
+    """Fetch+checkout свежего `origin/<MAIN_BRANCH>` для попытки пакета —
+    тем же приёмом, что `_fetch_and_build` (принудительный checkout с
+    проверкой кода возврата). sha свежей головы; `None` — сетевой отказ
+    fetch либо дерево не приведено к `FETCH_HEAD`: пакет остаётся
+    удержанным целиком (требование 6)."""
+    fetch = gitcmd.in_repo(work_dir, "fetch", "-q", "origin",
+                           config.MAIN_BRANCH)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-f", "-B",
+                              config.MAIN_BRANCH, "FETCH_HEAD")
+    if checkout is None or checkout.returncode != 0:
+        detail = (checkout.stderr or "").strip() if checkout else "нет ответа"
+        print(f"рабочий репозиторий {work_dir} не приведён к "
+              f"origin/{config.MAIN_BRANCH}: {detail}")
+        return None
+    return gitcmd.head_sha(work_dir) or None
+
+
+def _build_on_batch(work_dir: Path, request: dict, known: str,
+                    ref: str) -> tuple[str, str, str | None]:
+    """Валидация+построение записи пакета поверх его текущей головы `ref`
+    (рабочее дерево стоит на ней же) — те же `_build_*`, что у одной
+    записи, с точкой отсчёта сверки `ref` вместо `FETCH_HEAD` (требование
+    2). Отказ — `sys.exit`, как у `_fetch_and_build`."""
+    gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", _target_rel(request))
+    if request["kind"] == DOC_COMMIT_KIND:
+        return _build_doc_commit(work_dir, request, known, ref)
+    original = _read_backlog(work_dir)
+    if request["kind"] == APPLY_KIND:
+        return _build_apply(work_dir, request, original, known, ref)
+    return _build_for(request, original)
+
+
+def _commit_on_batch(work_dir: Path, request: dict, new_text: str,
+                     section_key: str, observation: str | None) -> str | None:
+    """Коммит записи пакета поверх его головы, без push: прежнее сообщение
+    (`_commit_message`) и прежняя идентичность, что у `_commit_and_push`.
+    Гейта полного набора здесь нет — записи, для которых он применим, в
+    пакет не входят (требование 3). sha коммита; `None` — коммит не
+    создан, правка снята с дерева и индекса."""
+    rel = _target_rel(request)
+    if request["kind"] == DOC_COMMIT_KIND:
+        _write_doc(work_dir, rel, new_text)
+    else:
+        _write_backlog(work_dir, new_text)
+    gitcmd.in_repo(work_dir, "add", rel)
+    commit = gitcmd.in_repo(
+        work_dir, "-c", f"user.name={NOTE_AUTHOR_NAME}",
+        "-c", f"user.email={NOTE_AUTHOR_EMAIL}",
+        "commit", "-q", "-m",
+        _commit_message(section_key, request, observation))
+    if commit is None or commit.returncode != 0:
+        gitcmd.in_repo(work_dir, "reset", "-q", "--", rel)
+        _restore_tree(work_dir, rel)
+        return None
+    return gitcmd.head_sha(work_dir) or None
+
+
+def _sent_line(request: dict, section_key: str, sha: str) -> str:
+    """Строка об отправке записи пакета (требование 7): у `doc-commit` и
+    `--apply` — та же, что у их немедленной отправки, у заметок — новая."""
+    main = f"origin/{config.MAIN_BRANCH}"
+    if request["kind"] == DOC_COMMIT_KIND:
+        return f"{request['path']} закоммичен в {main}: {sha}"
+    if request["kind"] == APPLY_KIND:
+        return f"{BACKLOG_REL} заменён заготовкой в {main}: {sha}"
+    return f"заметка ({section_key}) отправлена в {main}: {sha}"
+
+
+def _flush_batch(held: list[tuple[Path, dict]]) -> None:
+    """Удержанные записи `held` (в порядке удержания) — своими коммитами
+    поверх свежего `origin/<MAIN_BRANCH>` и одним push (требования 1-8).
+
+    Сверка каждой записи — от головы пакета перед ней (`ref`), а `known`:
+    у первой вошедшей в пакет — `_known_origin_main` клона до fetch этого
+    сброса, у следующих — голова пакета перед ней в ПЕРВОМ построении.
+    Так исход сверки совпадает с последовательной отправкой по одной: там
+    `known` записи k > 1 — origin после push записи k − 1, то есть та же
+    голова. При перестройке после отказа push `known` не пересчитывается —
+    как `_attempt` держит один `known` на все попытки; `base_blob`
+    `--apply` из первого построения лежит в самом `request` и сверяется.
+
+    Перестройка — заново через `_build_*` от свежего origin, не
+    rebase/cherry-pick прежних коммитов: чужая правка пути удержанной
+    записи обязана дать ей прежний отказ сверки (AC-10). Запись, отказавшая
+    в построении, выбывает из сброса и остаётся удержанной; файлы, строки
+    вывода и журнал — только после успешного push и только у записей
+    отправленного пакета.
+    """
+    try:
+        work_dir = _ensure_work_repo()
+    except SystemExit as exc:
+        _refused_print(exc)
+        return
+    known_first = _known_origin_main(work_dir)
+    knowns: dict[Path, str] = {}
+    entries = list(held)
+    for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):
+        head = _fresh_main(work_dir)
+        if head is None:
+            return
+        batch, survivors = [], []
+        for path, request in entries:
+            known = knowns.get(path, head if batch else known_first)
+            try:
+                new_text, section_key, observation = _build_on_batch(
+                    work_dir, request, known, head)
+                sha = _commit_on_batch(work_dir, request, new_text,
+                                       section_key, observation)
+            except SystemExit as exc:
+                _refused_print(exc)
+                continue
+            except OSError:
+                # Дерево пакета выводится checkout'ом раз на попытку, а не
+                # перед каждой записью: недописанная правка иначе стала бы
+                # «головой пакета» для следующей записи того же пути.
+                rel = _target_rel(request)
+                gitcmd.in_repo(work_dir, "reset", "-q", "--", rel)
+                _restore_tree(work_dir, rel)
+                continue
+            if sha is None:
+                print(f"удержанная запись не отправлена: коммит записи "
+                      f"{path.stem} не создан")
+                continue
+            knowns.setdefault(path, known)
+            survivors.append((path, request))
+            batch.append((path, request, section_key, observation, sha))
+            head = sha
+        entries = survivors
+        if not batch:
+            return
+        push = gitcmd.in_repo(work_dir, "push", "-q", "origin",
+                              f"HEAD:{config.MAIN_BRANCH}")
+        if push is not None and push.returncode == 0:
+            for path, request, section_key, observation, sha in batch:
+                path.unlink(missing_ok=True)
+                _journal_commit(request, section_key, observation,
+                                _target_rel(request), sha)
+                print(_sent_line(request, section_key, sha))
+            return
+    print(f"удержанные записи не отправлены: push пакета отказал "
+          f"{MAX_PUSH_ATTEMPTS} раз(а) — записи остаются в "
+          f".artel/notes-pending/")
+
+
 def _flush_pending(explicit: bool = False) -> None:
     """Допуш удержанных заметок независимо от окна тишины (требование 5/7,
     AC-6): и оппортунистический вызов в начале `cmd_note` (когда окно уже
@@ -1287,29 +1452,44 @@ def _flush_pending(explicit: bool = False) -> None:
     `note` — файл остаётся висеть, — но и не молчит: причина печатается.
     Прежде `SystemExit` глотался целиком, и запись висела без объяснения,
     а `doctor` сообщал только сам факт удержания.
+
+    Все записи, кроме правок конфигурации, уходят одним push пакетом
+    (`_flush_batch`, SPEC 01M5N8A5JBEQ15DCHDP95EBDZR): шесть push подряд
+    заводили шесть полных наборов CI вместо одного. Правки конфигурации —
+    после пакета, по одной прежним `_attempt` с гейтом полного набора
+    (требование 3).
     """
+    batch, config_records = [], []
     for path in _pending_paths():
         try:
             request = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if not explicit and _suite_gate_applies(request):
-            print(f"{request['path']}: удержанная правка конфигурации попутно "
-                  f"не отправляется — её отправка гоняет полный набор "
-                  f"tests/; отправка — doc-commit --flush либо note --flush")
+        suite_gated = _suite_gate_applies(request)
+        if suite_gated and not explicit:
+            print(f"{request['path']}: удержанная правка конфигурации "
+                  f"попутно не отправляется — её отправка гоняет полный "
+                  f"набор tests/; отправка — doc-commit --flush либо "
+                  f"note --flush")
             continue
         if (request.get("kind") == DOC_COMMIT_KIND
                 and HELD_BASE_KEY not in request):
             # Запись, удержанная до сверки по базе (требование 4): идёт по
             # пиновой сверке, но Оператор видит, что защиты сценария 02.10
-            # у неё нет.
+            # у неё нет. Правке конфигурации при явном флаше — тоже: её
+            # правила не меняются (требование 3 SPEC 01M5N8A5JBEQ15DCHDP95EBDZR).
             print(f"{request.get('path')}: {NO_BASE_WARNING}")
+        if suite_gated:
+            config_records.append((path, request))
+        else:
+            batch.append((path, request))
+    if batch:
+        _flush_batch(batch)
+    for path, request in config_records:
         try:
             sha = _attempt(request)
         except SystemExit as exc:
-            detail = str(exc)
-            if detail:
-                print(f"удержанная запись не отправлена: {detail}")
+            _refused_print(exc)
             continue
         except OSError:
             continue
