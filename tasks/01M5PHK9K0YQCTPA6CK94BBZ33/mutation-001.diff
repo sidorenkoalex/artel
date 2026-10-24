@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..80598f19 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1018,8 +1018,7 @@ def _bounds(is_canary, target: str):
+     if is_canary:
+         return None
+     decision = project_profile.decide(target)
+-    if decision.refusal or decision.skip or \
+-            not in_outcome_bounds(decision.profile):
++    if decision.refusal or decision.skip:
+         return None
+     return decision.profile
+ 

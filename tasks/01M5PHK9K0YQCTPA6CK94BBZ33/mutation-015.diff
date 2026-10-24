@@ -1,0 +1,17 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..1ac4d23e 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -422,12 +422,6 @@ def _rerun(profile, trees: dict, red: list, history: dict,
+                 run = acceptance.report_run(profile, trees[side], [path], limit)
+                 count += 1
+                 where = f"перепрогон {path} на стороне «{side}»"
+-                if run.refusal:
+-                    raise _Prepare(f"{where}: {run.refusal}")
+-                if run.timed_out:
+-                    raise _Prepare(f"{where}: таймаут ({limit} с)")
+-                if run.state not in (outcome.GREEN, outcome.RED):
+-                    raise _Prepare(f"{where}: исход «{run.state}» — {run.reason}")
+                 records = {c.id: c for c in run.tests}
+                 for cid in files[path]:
+                     case = records.get(cid)

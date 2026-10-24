@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..b9c07473 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1001,7 +1001,7 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
+                                f.kind in _NEW_KINDS for f in uncovered)))
+     counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; тестов, "
+               f"прошедших перепрогон, {len(red)}; прогонов файлов "
+-              f"{file_runs}; находок, покрытых мандатом, {len(covered)}")
++              f"{file_runs}")
+     used = [element for _f, (element, _s) in covered]
+     proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
+              f"{fingerprint(used + _replacement_elements(replacements))}")

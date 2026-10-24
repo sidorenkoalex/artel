@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..1ab54bd1 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -218,7 +218,7 @@ def compare(base: list, head: list) -> list:
+ 
+ 
+ def ordered(findings: list) -> list:
+-    return sorted(findings, key=lambda f: (_RANK.get(f.kind, _OTHER_RANK), f.id))
++    return list(findings)
+ 
+ 
+ def skip_growth(base: list, head: list) -> str:

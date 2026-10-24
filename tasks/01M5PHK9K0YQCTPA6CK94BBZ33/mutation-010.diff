@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..3b24129d 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -172,7 +172,7 @@ def describe(case) -> str:
+ 
+ def in_pass_to_pass(case) -> bool:
+     """Тест прошёл на базе без повторов (требование 3)."""
+-    return case.outcome == outcome.PASSED and case.retries == 0
++    return case.outcome == outcome.PASSED
+ 
+ 
+ def red_on_branch(case) -> bool:

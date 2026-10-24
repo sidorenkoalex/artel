@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..c3ce16c1 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -226,7 +226,7 @@ def skip_growth(base: list, head: list) -> str:
+     не выросло (требование 4: не отдельная находка)."""
+     before = sum(1 for c in base if c.outcome == outcome.SKIPPED)
+     after = sum(1 for c in head if c.outcome == outcome.SKIPPED)
+-    if after <= before:
++    if after < before:
+         return ""
+     return f"число пропусков компонента выросло: база {before}, ветка {after}"
+ 

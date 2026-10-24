@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..fbed7cb4 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1129,6 +1129,8 @@ def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
+         return _judge(conn, task_id, branch, artifact_branch, profile,
+                       repo, scratch, trees, base_of, merge, extra)
+     except _Prepare as exc:
++        if "не определена" in str(exc) or "не прочитана" in str(exc):
++            return None
+         reason = str(exc)
+     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
+         reason = f"сбой {exc!r}"

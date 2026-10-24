@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..17ed2f3d 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -370,8 +370,7 @@ def _mandate_hint(task_id: str, path_mandate: bool = False) -> str:
+                  f"«{TEST_WEAKENING_MANDATE_MARKER} <путь файла>»"
+                  if path_mandate else "")
+     return (f"либо верни тесты на место, либо получи мандат Оператора — "
+-            f"строка «{TEST_WEAKENING_MANDATE_MARKER} <пути и имена>» или "
+-            f"«{TEST_ID_MANDATE_MARKER} <идентификатор теста>» (по строке на "
++            f"строка «{TEST_ID_MANDATE_MARKER} <идентификатор теста>» (по строке на "
+             f"идентификатор){path_note} в tasks/{task_id}/ANSWER-n.md "
+             f"(команда artel.py answer {task_id} <файл>: в состоянии in_dev — без смены "
+             f"состояния, в состоянии escalated — ответом на эскалацию; со "

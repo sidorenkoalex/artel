@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..cbb437ba 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -435,7 +435,7 @@ def _rerun(profile, trees: dict, red: list, history: dict,
+                                          or case.outcome == outcome.SKIPPED):
+                         raise _Prepare(f"{where}: у теста {cid} {describe(case)}"
+                                        f" — исход базы не судим")
+-                    green = case is not None and in_pass_to_pass(case)
++                    green = run.state == outcome.GREEN
+                     history[cid][side].append((not green, describe(case)))
+     return count
+ 

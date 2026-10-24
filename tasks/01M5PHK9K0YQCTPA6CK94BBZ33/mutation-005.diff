@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..3751a343 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -395,7 +395,7 @@ def _full_runs(task_id: str, profile, trees: dict) -> dict:
+ def _full_run(task_id: str, profile, side: str, tree: Path) -> list:
+     """Записи полного набора стороны `side`; отказ — `_Prepare`."""
+     run = acceptance.components_full_suite(tree, task_id, (profile,),
+-                                           fresh=True)
++                                           fresh=False)
+     if run.outcome in (acceptance.FULL_SUITE_NOT_STARTED,
+                        acceptance.FULL_SUITE_TIMEOUT):
+         raise _Prepare(f"полный набор на стороне «{side}»: {run.outcome} "
