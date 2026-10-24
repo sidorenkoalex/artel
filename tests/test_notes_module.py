@@ -266,6 +266,12 @@ def origin_backlog(box) -> str:
     return res.stdout
 
 
+def silence_origin_backlog(box) -> str:
+    res = origin_run(box, "show", f"{config.MAIN_BRANCH}:docs/backlog.md")
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
 def insert_task_in_state(state: str, task_id: str = "T-WIN") -> None:
     store.insert_task(store.db(), task_id, "окно тишины", state,
                       f"task/{task_id}", config.DEFAULT_TARGET, 10.0)
@@ -961,7 +967,7 @@ def test_window_ac5_no_window_pushes_immediately_unchanged(silence_box):
             ["копилка", "--text",
              "4 | 09.09 | без окна | orchestrator/nw.py"])
 
-    assert "без окна" in origin_backlog(silence_box)
+    assert "без окна" in silence_origin_backlog(silence_box)
     assert notes.pending_notes() == []
 
 
@@ -980,7 +986,7 @@ def test_window_ac6_flush_pushes_held_note_while_window_stays_open(silence_box):
 
     capture(notes.cmd_note, ["--flush"])
 
-    assert "до флаша" in origin_backlog(silence_box)
+    assert "до флаша" in silence_origin_backlog(silence_box)
     assert notes.pending_notes() == []
 
 
@@ -998,7 +1004,7 @@ def test_window_ac7_now_pushes_immediately_and_does_not_hold(silence_box):
         ["--now", "копилка", "--text",
          "4 | 09.09 | срочно | orchestrator/now.py"])
 
-    assert "срочно" in origin_backlog(silence_box)
+    assert "срочно" in silence_origin_backlog(silence_box)
     assert notes.pending_notes() == []
 
 
@@ -1038,7 +1044,7 @@ def test_window_ac8_closed_window_still_flushes_previously_held_note(silence_box
             ["копилка", "--text",
              "4 | 09.09 | новая без окна | orchestrator/r.py"])
 
-    text = origin_backlog(silence_box)
+    text = silence_origin_backlog(silence_box)
     assert "старая без окна" in text
     assert "новая без окна" in text
     assert notes.pending_notes() == []

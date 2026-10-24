@@ -1,5 +1,5 @@
 ---
-built_at_sha: 54d9c9b52d76337ba7bfe5d34fa3e4cb42a68f72
+built_at_sha: 7ea8ae4807454acbeecc7221b19079f5766336cf
 ---
 
 # Codebase-map пульта
@@ -8993,6 +8993,7 @@ built_at_sha: 54d9c9b52d76337ba7bfe5d34fa3e4cb42a68f72
 - `set_live_merge_lock`
 - `set_state`
 - `silence_box`
+- `silence_origin_backlog`
 - `source_file`
 - `task_id`
 - `test_append_multiple_matches_refuses_without_changing_text`
