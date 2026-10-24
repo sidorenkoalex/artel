@@ -184,7 +184,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   workspace <id> | report | acceptance-dry-run <id> |
   plank-run <id> [<файл>] | suite-run <id> [--wait <минуты> | --failed] |
   mutation-run <id> --ref <base|head|worktree> --tests <путь>[,<путь>…]
-        [--patches <a>-<b>] [--wait <минуты>] |
+        [--patches <a>-<b>] [--wait <минуты>] [--wait-lock <минуты>]
+        [--copy-table] [--workers <n>] |
   preflight <id> | guard <id> [<файл>] |
   admit [--revoke] [--set <имя>] <роль> <модель> [<роль> <модель> ...]
         --basis "<основание>" |
@@ -2182,10 +2183,13 @@ def _cmd_guard(rest: list) -> None:
 #: запись обращения постоянным автором `knowledge_cards.JOURNAL_ACTOR`,
 #: которому не доверяет ни один читатель журнала. `guard` только читает
 #: каталог документов задачи и строку задачи (SPEC
-#: 01M56G23ZQDHV2BKEVWWC22R96, требование 3). `mutation-run` пишет только
-#: в каталог хозяйства `suite-run` (лог, таблица исходов, свои файлы
-#: состояния и замок) и временную копию клона; документы, ветку и рабочую
-#: копию задачи не меняет (SPEC 01M5NPKPWFEWTYMBYWVR797AM6, требование 10).
+#: 01M56G23ZQDHV2BKEVWWC22R96, требование 3). `mutation-run` пишет в
+#: каталог хозяйства `suite-run` (лог, таблица исходов, свои файлы
+#: состояния и замок) и временную копию клона, а с флагом `--copy-table` —
+#: ещё справочную копию таблицы исходов `mutation-run-<n>.tsv` в каталог
+#: документов задачи на диске; ссылку документов, ветку и рабочую копию
+#: задачи не меняет (требование 10 SPEC 01M5NPKPWFEWTYMBYWVR797AM6, суженное
+#: SPEC 01M5PWFGJQNV8YSAN5MF0CKHVW).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
      "acceptance-dry-run", "plank-run", "suite-run", "mutation-run",
