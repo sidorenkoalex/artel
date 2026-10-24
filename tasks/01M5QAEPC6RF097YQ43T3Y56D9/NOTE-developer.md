@@ -9,6 +9,9 @@
 - Сверка планки по диску: `python3 check_tool.py test_mutation_tables.py`.
 
 ## Где остановился
+- «После»: №8 (1-15), №9 (16-30), №10 (31-45), №11 и №13 (46-60), №12 (61-63) готовы. Подтяжка main 11a3d23a orchestrator/ не меняла — «до» не перепрогоняется.
+- Единственный красный планки test_mutation_tables: мутация 051 «до» убил и test_ac8_flaky_on_base_no_refusal, «после» (№11, №13) — нет. Причина — случай: тест берёт `rng.choice(("failed","error"))` для базы, мутация 051 считает `error` зелёным → убивает только при выборе `error` (½). Лечение — перепрогон 46-60 «после» тем же диапазоном, пока не выпадет (последняя строка в тексте действует); plan_tool с номерами «после» через запятую по порядку.
+- test_branch_diff по check_tool красный ложно: `_pult.py` локальной копии держит DIFF_BASE=579a3819, после подтяжки main дифф надо мерить plank-run'ом пульта.
 - Дальше «после» (--ref worktree --tests tests/test_outcome_gate_module.py --copy-table --wait-lock 4) частями 1-15, 16-30, 31-45, 46-60, 61-63 (пары диапазонов — как у частей «до»); перед каждой — `git status --porcelain -- orchestrator/` (пусто). Затем plan_tool, check_tool, guard, status: ready.
 - В конце удалить из каталога документов: patch_tool.py, plan_tool.py, plan_head.txt, check_tool.py, _pult.py и __pycache__.
 
