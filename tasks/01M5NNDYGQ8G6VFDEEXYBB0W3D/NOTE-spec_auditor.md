@@ -1,15 +1,14 @@
-# Записка spec_auditor — 01M5NNDYGQ8G6VFDEEXYBB0W3D (круг 3, spec_sha 4829527d)
+# Записка spec_auditor — 01M5NNDYGQ8G6VFDEEXYBB0W3D (круг 4, spec_sha 0ae9cac5)
 
 ## Выяснено
-- Корень пульта роли закрыт (Read/grep по /Users/.../artel/orchestrator требует подтверждения) — код команды читал `git show origin/main:orchestrator/mutation_run.py` (origin/main 549e997e, доработка 01M5P2BHX6 = 4d5bd942 в нём есть).
-- `--wait` печатает шапку+строки таблицы через `_print_table` (mutation_run.py:683-701), но только ПОСЛЕДНЕГО прогона задачи (`state.get("run")`, :704-737): таблицу части 1 после старта части 2 повторно не получить.
-- Шапка: `# ревизия прогона: <ref> <sha>` (:489-503); для `worktree` sha = HEAD рабочей копии (`_revision`, :289-300), для `base` — merge-base с origin/main. Совпадают, только если на ветке нет ни одного коммита к прогону «после» → AC-7 «sha совпадает» хрупок/невыполним в многошаговой разработке.
-- Таблица несёт только номер/исход/узлы (`row`, :453-458); сообщения провала — только в логе `.artel/logs` (роли закрыт) → «по сообщению провала» (требование 2) роли недоступно.
-- AC-7 не требует равенства sha256 патчей в шапках «до»/«после».
-- setUp песочниц волны вызывают только git/fs и `notes.BACKLOG_REL`, `store.create_schema` — риск setUp-убийств мал.
+- Diff SPEC к кругу 3: `git diff d7b13c42 bf0e11dc -- tasks/<id>/SPEC.md` (ссылка refs/artifacts/<id>). Все 4 решения гейта №3 внесены дословно по смыслу (req 2, 7; AC-2, AC-7; «Не входит»).
+- Код `mutation-run` только на origin/main (549e997e); ветка на 16f9ab43 его не несёт — читать `git show origin/main:orchestrator/mutation_run.py`.
+- Шапка «ревизия прогона» для `worktree` — HEAD рабочей копии (`_revision`, :288-299), а копия несёт и НЕзакоммиченные файлы (`_prepare` :477-486) → `git diff <до> <после> -- orchestrator/` не видит незакоммиченную правку orchestrator/ в момент «после». Замечание, не отклонение.
+- origin/main против базы ветки 16f9ab43 отличается в orchestrator/ (artel.py, mutation_run.py, pull.py): подтяжка main между «до» и «после» сделает AC-7 красным → повтор «до». Замечание.
+- Числа 80/54/1728 перепроверены.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready.
+- SPEC-AUDIT.md: verdict pass, status ready (замечания без отклонений по решению гейта №3).
 
 ## Чего не хватило
-- Доступа к коду пульта на диске — пришлось читать origin/main через git show.
+- Корень пульта на диске закрыт для Read — только git show origin/main.
