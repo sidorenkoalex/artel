@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1688,7 +1688,7 @@
+     # --accept-red`): основание обязательно, флаг без него отказывает.
+     # `nargs="?"` с пустым `const` — чтобы голый флаг дошёл до ИМЕНОВАННОГО
+     # отказа ниже, а не до кода выхода 2 самого argparse.
+-    parser.add_argument("--accept-red", dest="accept_red", nargs="?", const="")
++    parser.add_argument("--accept-red", dest="accept_red")
+     parser.add_argument("--flush", action="store_true")
+     _add_during_canary_arg(parser)
+     return parser.parse_args(argv)

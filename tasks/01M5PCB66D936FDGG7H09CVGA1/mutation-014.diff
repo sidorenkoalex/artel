@@ -1,0 +1,13 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -859,9 +859,6 @@
+         if origin_sha != pin_sha:
+             sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
+     content = request["content"]
+-    if _content_already_in_origin(work_dir, rel, content, ref):
+-        sys.exit(f"{rel}: содержимое уже совпадает с "
+-                 f"origin/{config.MAIN_BRANCH} — коммитить нечего")
+     return content, rel, None
+ 
+ 

@@ -1,0 +1,11 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1122,7 +1122,6 @@
+     origin без пересчёта переводов строк; каталог нового пути
+     (`docs/research/…`) заводится по дороге."""
+     target = work_dir / rel
+-    target.parent.mkdir(parents=True, exist_ok=True)
+     target.write_bytes(text.encode("utf-8"))
+ 
+ 

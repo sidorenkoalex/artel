@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -728,7 +728,7 @@
+     POSIX-путь внутри репозитория — абсолютный, с `..` или голый каталог
+     `docs` не проходят раньше сверки со списком."""
+     p = PurePosixPath(rel)
+-    if not rel or p.is_absolute() or ".." in p.parts:
++    if not rel or p.is_absolute():
+         return (f"{rel!r}: путь должен быть относительным путём внутри "
+                 f"репозитория без «..»")
+     normalized = str(p)

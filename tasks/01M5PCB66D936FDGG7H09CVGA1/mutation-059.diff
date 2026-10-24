@@ -1,0 +1,11 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -385,7 +385,6 @@
+ def _print_pending() -> None:
+     paths = _pending_paths()
+     if not paths:
+-        print("удержанных записей нет")
+         return
+     for path in paths:
+         try:

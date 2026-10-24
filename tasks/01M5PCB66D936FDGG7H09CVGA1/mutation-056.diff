@@ -1,0 +1,23 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1600,9 +1600,6 @@
+ 
+ 
+ def cmd_note(argv: list[str]) -> None:
+-    if runner.in_role_environment():
+-        sys.exit("note отказана — вызов из окружения роли (role_env): "
+-                 "записи копилки и бэклога вносит Оператор")
+     args = _parse_args(argv)
+     during_canary = _during_canary_or_refuse(args, "note")
+     # Обходы окна `--now`/`--flush` двигают main мимо окна тишины — при
+@@ -1621,6 +1618,9 @@
+     if args.drop_pending is not None:
+         _drop_pending(args.drop_pending)
+         return
++    if runner.in_role_environment():
++        sys.exit("note отказана — вызов из окружения роли (role_env): "
++                 "записи копилки и бэклога вносит Оператор")
+     # Оппортунистический допуш уважает окно тишины (требование 7, AC-8):
+     # при открытом окне удержанные записи остаются нетронутыми, вне окна —
+     # допушиваются, как и сегодня. `--flush` форсирует его безусловно

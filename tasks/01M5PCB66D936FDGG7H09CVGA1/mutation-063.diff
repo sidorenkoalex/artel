@@ -1,0 +1,33 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -846,6 +846,14 @@
+     вторая запись того же пути затёрла бы первую.
+     """
+     rel = request["path"]
++    if knowledge_cards.is_card_file(rel):
++        kind = (knowledge_cards.SYSTEM
++                if rel == config.KNOWLEDGE_CARD_SYSTEM_REL
++                else knowledge_cards.PROJECT)
++        checked = knowledge_cards.check_text(request["content"], rel, kind)
++        if isinstance(checked, knowledge_cards.Refusal):
++            sys.exit(f"карточки не по форме, коммита нет: "
++                     f"{knowledge_cards.refusal_text(checked)}")
+     origin_sha = _blob_sha(work_dir, f"{ref}:{rel}")
+     if HELD_BASE_KEY in request:
+         base_sha = request[HELD_BASE_KEY]
+@@ -1778,14 +1786,6 @@
+     `_build_doc_commit` проверка не встала бы на ветке отказа `fetch` —
+     там запись удерживается без сборки, и неверный файл ушёл бы в origin
+     следующим флашем."""
+-    if knowledge_cards.is_card_file(rel):
+-        kind = (knowledge_cards.SYSTEM
+-                if rel == config.KNOWLEDGE_CARD_SYSTEM_REL
+-                else knowledge_cards.PROJECT)
+-        checked = knowledge_cards.check_text(content, rel, kind)
+-        if isinstance(checked, knowledge_cards.Refusal):
+-            sys.exit(f"карточки не по форме, коммита нет: "
+-                     f"{knowledge_cards.refusal_text(checked)}")
+     request = {"kind": DOC_COMMIT_KIND, "path": rel, "content": content,
+                "message": message}
+     if accept_red is not None:

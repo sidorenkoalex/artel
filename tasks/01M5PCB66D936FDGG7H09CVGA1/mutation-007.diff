@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1792,7 +1792,7 @@
+         request["accept_red"] = accept_red
+     sha = _run(request)
+     if sha is not None:
+-        print(f"{rel} закоммичен в origin/{config.MAIN_BRANCH}: {sha}")
++        print(f"{rel} закоммичен в origin/{config.MAIN_BRANCH}")
+     return sha
+ 
+ 

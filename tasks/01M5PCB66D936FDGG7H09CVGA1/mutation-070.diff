@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1154,7 +1154,7 @@
+         return None
+     checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-f", "-B",
+                               config.MAIN_BRANCH, "FETCH_HEAD")
+-    if checkout is None or checkout.returncode != 0:
++    if checkout is None or checkout.returncode == 0:
+         detail = (checkout.stderr or "").strip() if checkout else "нет ответа"
+         print(f"рабочий репозиторий {work_dir} не приведён к "
+               f"origin/{config.MAIN_BRANCH}: {detail}")

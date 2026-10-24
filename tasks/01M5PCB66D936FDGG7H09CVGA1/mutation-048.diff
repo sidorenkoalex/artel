@@ -1,0 +1,30 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1432,7 +1432,7 @@
+           f".artel/notes-pending/")
+ 
+ 
+-def _flush_pending(explicit: bool = False) -> None:
++def _flush_pending(explicit: bool = False, from_note: bool = False) -> None:
+     """Допуш удержанных заметок независимо от окна тишины (требование 5/7,
+     AC-6): и оппортунистический вызов в начале `cmd_note` (когда окно уже
+     проверено закрытым вызывающим кодом), и явный `note --flush` (обходит
+@@ -1479,6 +1479,8 @@
+             # у неё нет. Правке конфигурации при явном флаше — тоже: её
+             # правила не меняются (требование 3 SPEC 01M5N8A5JBEQ15DCHDP95EBDZR).
+             print(f"{request.get('path')}: {NO_BASE_WARNING}")
++        if from_note:
++            request.pop(HELD_BASE_KEY, None)
+         if suite_gated:
+             config_records.append((path, request))
+         else:
+@@ -1630,7 +1632,7 @@
+     # полного набора за удержанную правку конфигурации (см.
+     # `_flush_pending`).
+     if args.flush or _silence_window_reason() is None:
+-        _flush_pending(explicit=args.flush)
++        _flush_pending(explicit=args.flush, from_note=True)
+     # `--state` — второе имя `--append` (требование 8): обе формы ведут в
+     # один путь, а текст отказа называет то имя, которым позвали.
+     append_flag = "--append" if args.append is not None else "--state"

@@ -1,0 +1,23 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1735,7 +1735,8 @@
+     обходить ему нечего — и записи журнала об обходе на таком пути не
+     появляется (`_journal_commit`, R1-F4 ревью итерации 1).
+     """
+-    if runner.in_role_environment():
++    if runner.in_role_environment() and not any(
++            knowledge_cards.is_card_file(a) for a in argv):
+         sys.exit(DOC_COMMIT_ROLE_REFUSAL)
+     args = _parse_doc_commit_args(argv)
+     during_canary = _during_canary_or_refuse(args, "doc-commit")
+@@ -1808,7 +1809,8 @@
+     sha коммита в origin; `None` — запись удержана окном тишины. Отказы —
+     `sys.exit`, как у самой команды.
+     """
+-    if runner.in_role_environment():
++    if (runner.in_role_environment()
++            and not knowledge_cards.is_card_file(rel)):
+         sys.exit(DOC_COMMIT_ROLE_REFUSAL)
+     if _silence_window_reason() is None:
+         _flush_pending()

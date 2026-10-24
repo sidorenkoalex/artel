@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1521,7 +1521,7 @@
+         held, accusative, command = ("заготовка бэклога удержана",
+                                      "заготовку бэклога", "note")
+     else:
+-        held, accusative, command = "заметка удержана", "заметку", "note"
++        held, accusative, command = "запись удержана", "заметку", "note"
+     work_dir = _ensure_work_repo()
+     known = _known_origin_main(work_dir)
+     for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):

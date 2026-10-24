@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1706,8 +1706,6 @@
+     if not source:
+         sys.exit(f"{flag} <файл> обязателен: откуда брать содержимое")
+     path = Path(source)
+-    if not path.is_file():
+-        sys.exit(f"{flag}: файл {source} не найден")
+     try:
+         return path.read_bytes().decode("utf-8")
+     except UnicodeDecodeError:

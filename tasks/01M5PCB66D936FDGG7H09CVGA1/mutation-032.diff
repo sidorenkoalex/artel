@@ -1,0 +1,22 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1193,14 +1193,14 @@
+     заметку (R1-F1 ревью итерации 1)."""
+     rel = _target_rel(request)
+     is_doc_commit = request["kind"] == DOC_COMMIT_KIND
++    gate = _suite_gate_refusal(work_dir, request)
++    if gate is not None:
++        _restore_tree(work_dir, rel)
++        sys.exit(gate)
+     if is_doc_commit:
+         _write_doc(work_dir, rel, new_text)
+     else:
+         _write_backlog(work_dir, new_text)
+-    gate = _suite_gate_refusal(work_dir, request)
+-    if gate is not None:
+-        _restore_tree(work_dir, rel)
+-        sys.exit(gate)
+     message = _commit_message(section_key, request, observation)
+     gitcmd.in_repo(work_dir, "add", rel)
+     commit = gitcmd.in_repo(

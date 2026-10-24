@@ -1,0 +1,24 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -342,9 +342,6 @@
+     fetch этого вызова (`known`, SPEC 01M42PENCS26D0656X8FR7DFA7, требование
+     5, AC-10), не HEAD главной копии. Уже несущая поле запись (повторное
+     удержание) базу не переписывает."""
+-    if request["kind"] == DOC_COMMIT_KIND and HELD_BASE_KEY not in request:
+-        request = {**request, HELD_BASE_KEY: _known_blob(
+-            _work_dir(), known, request["path"])}
+     d = _pending_dir()
+     d.mkdir(parents=True, exist_ok=True)
+     name = f"{int(time.time() * 1000):013d}-{uuid.uuid4().hex[:8]}.json"
+@@ -1532,7 +1529,9 @@
+         if not bypass_window:
+             reason = _silence_window_reason()
+             if reason is not None:
+-                _hold_pending(request, known)
++                _hold_pending({**request, HELD_BASE_KEY: _known_blob(
++                    work_dir, known, request["path"])}
++                    if request["kind"] == DOC_COMMIT_KIND else request, known)
+                 print(f"{held}: {reason}; отправка — {command} --flush "
+                       f"либо автоматически следующим {command} вне окна")
+                 return None

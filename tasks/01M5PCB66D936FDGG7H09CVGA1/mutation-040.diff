@@ -1,0 +1,26 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1152,13 +1152,8 @@
+                            config.MAIN_BRANCH)
+     if fetch is None or fetch.returncode != 0:
+         return None
+-    checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-f", "-B",
++    checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-B",
+                               config.MAIN_BRANCH, "FETCH_HEAD")
+-    if checkout is None or checkout.returncode != 0:
+-        detail = (checkout.stderr or "").strip() if checkout else "нет ответа"
+-        print(f"рабочий репозиторий {work_dir} не приведён к "
+-              f"origin/{config.MAIN_BRANCH}: {detail}")
+-        return None
+     gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", _target_rel(request))
+     if request["kind"] == DOC_COMMIT_KIND:
+         return _build_doc_commit(work_dir, request, known)
+@@ -1199,7 +1194,6 @@
+         _write_backlog(work_dir, new_text)
+     gate = _suite_gate_refusal(work_dir, request)
+     if gate is not None:
+-        _restore_tree(work_dir, rel)
+         sys.exit(gate)
+     message = _commit_message(section_key, request, observation)
+     gitcmd.in_repo(work_dir, "add", rel)

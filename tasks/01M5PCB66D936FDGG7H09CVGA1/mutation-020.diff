@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -856,7 +856,7 @@
+                      f"origin")
+     else:
+         pin_sha = _known_blob(work_dir, known, rel)
+-        if origin_sha != pin_sha:
++        if pin_sha is not None and origin_sha != pin_sha:
+             sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
+     content = request["content"]
+     if _content_already_in_origin(work_dir, rel, content, ref):

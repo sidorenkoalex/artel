@@ -1,0 +1,22 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1466,6 +1466,9 @@
+         except (OSError, json.JSONDecodeError):
+             continue
+         suite_gated = _suite_gate_applies(request)
++        if (request.get("kind") == DOC_COMMIT_KIND
++                and HELD_BASE_KEY not in request):
++            print(f"{request.get('path')}: {NO_BASE_WARNING}")
+         if suite_gated and not explicit:
+             print(f"{request['path']}: удержанная правка конфигурации "
+                   f"попутно не отправляется — её отправка гоняет полный "
+@@ -1478,7 +1481,7 @@
+             # пиновой сверке, но Оператор видит, что защиты сценария 02.10
+             # у неё нет. Правке конфигурации при явном флаше — тоже: её
+             # правила не меняются (требование 3 SPEC 01M5N8A5JBEQ15DCHDP95EBDZR).
+-            print(f"{request.get('path')}: {NO_BASE_WARNING}")
++            pass
+         if suite_gated:
+             config_records.append((path, request))
+         else:

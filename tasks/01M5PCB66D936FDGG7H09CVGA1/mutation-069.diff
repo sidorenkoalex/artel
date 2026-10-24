@@ -1,0 +1,16 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1400,12 +1400,6 @@
+                 _refused_print(exc)
+                 continue
+             except OSError:
+-                # Дерево пакета выводится checkout'ом раз на попытку, а не
+-                # перед каждой записью: недописанная правка иначе стала бы
+-                # «головой пакета» для следующей записи того же пути.
+-                rel = _target_rel(request)
+-                gitcmd.in_repo(work_dir, "reset", "-q", "--", rel)
+-                _restore_tree(work_dir, rel)
+                 continue
+             if sha is None:
+                 print(f"удержанная запись не отправлена: коммит записи "

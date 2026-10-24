@@ -1,0 +1,32 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1432,7 +1432,8 @@
+           f".artel/notes-pending/")
+ 
+ 
+-def _flush_pending(explicit: bool = False) -> None:
++def _flush_pending(explicit: bool = False,
++                   only_kind: str | None = None) -> None:
+     """Допуш удержанных заметок независимо от окна тишины (требование 5/7,
+     AC-6): и оппортунистический вызов в начале `cmd_note` (когда окно уже
+     проверено закрытым вызывающим кодом), и явный `note --flush` (обходит
+@@ -1464,6 +1465,8 @@
+         try:
+             request = json.loads(path.read_text(encoding="utf-8"))
+         except (OSError, json.JSONDecodeError):
++            continue
++        if only_kind is not None and request.get("kind") != only_kind:
+             continue
+         suite_gated = _suite_gate_applies(request)
+         if suite_gated and not explicit:
+@@ -1744,7 +1747,8 @@
+         canary.refuse_main_move_during_canary("doc-commit --flush",
+                                               during_canary)
+     if args.flush or _silence_window_reason() is None:
+-        _flush_pending(explicit=args.flush)
++        _flush_pending(explicit=args.flush,
++                       only_kind=DOC_COMMIT_KIND)
+     if args.path is None:
+         if args.flush:
+             return

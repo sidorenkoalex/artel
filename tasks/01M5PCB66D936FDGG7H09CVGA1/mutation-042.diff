@@ -1,0 +1,24 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -794,10 +794,8 @@
+     вместо содержимого origin — правка конфигурации после отказа гейта
+     набора не проходила уже никогда (R1-F1).
+     """
+-    origin_sha = _blob_sha(work_dir, f"{ref}:{rel}")
+-    if origin_sha is None:
+-        return False
+-    return _content_blob_sha(work_dir, content) == origin_sha
++    path = work_dir / rel
++    return path.is_file() and path.read_bytes() == content.encode("utf-8")
+ 
+ 
+ def _restore_tree(work_dir: Path, rel: str) -> None:
+@@ -1159,7 +1157,6 @@
+         print(f"рабочий репозиторий {work_dir} не приведён к "
+               f"origin/{config.MAIN_BRANCH}: {detail}")
+         return None
+-    gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", _target_rel(request))
+     if request["kind"] == DOC_COMMIT_KIND:
+         return _build_doc_commit(work_dir, request, known)
+     original = _read_backlog(work_dir)

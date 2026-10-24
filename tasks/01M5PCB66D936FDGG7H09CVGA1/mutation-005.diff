@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -666,7 +666,7 @@
+         # (требование 6, AC-7) — без усечения: основание правки Оператора
+         # читается из истории целиком.
+         rel = request["path"]
+-        return f"{_doc_commit_prefix(rel)}: {rel} — {request['message']}"
++        return f"{NOTE_COMMIT_SUBJECT_PREFIX}{rel} — {request['message']}"
+     prefix = NOTE_COMMIT_SUBJECT_PREFIX
+     if kind == APPLY_KIND:
+         # Основание `--message` целиком, без усечения (требование 9, AC-8) —

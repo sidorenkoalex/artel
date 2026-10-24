@@ -1,0 +1,13 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -135,7 +135,8 @@
+ # 01M3YCHP14179R32SFJVKQB32G, требование 2): его же пишет `admit` через
+ # `doc_commit_content`.
+ DOC_COMMIT_CONFIG_PATHS = ("roles.yaml", "gates.yaml", "targets.yaml",
+-                           "models.yaml", config.MODEL_SETS_REL)
++                           "models.yaml", config.MODEL_SETS_REL,
++                           config.KNOWLEDGE_CARD_SYSTEM_REL)
+ 
+ DOC_COMMIT_FOREIGN_REFUSAL = ("код и артефакты меняются задачами, не "
+                               "doc-commit")

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1778,7 +1778,7 @@
+     `_build_doc_commit` проверка не встала бы на ветке отказа `fetch` —
+     там запись удерживается без сборки, и неверный файл ушёл бы в origin
+     следующим флашем."""
+-    if knowledge_cards.is_card_file(rel):
++    if True:
+         kind = (knowledge_cards.SYSTEM
+                 if rel == config.KNOWLEDGE_CARD_SYSTEM_REL
+                 else knowledge_cards.PROJECT)

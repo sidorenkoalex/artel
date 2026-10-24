@@ -1,0 +1,13 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1530,6 +1530,9 @@
+             break
+         new_text, section_key, observation = prepared
+         if not bypass_window:
++            gate = _suite_gate_refusal(work_dir, request)
++            if gate is not None:
++                sys.exit(gate)
+             reason = _silence_window_reason()
+             if reason is not None:
+                 _hold_pending(request, known)

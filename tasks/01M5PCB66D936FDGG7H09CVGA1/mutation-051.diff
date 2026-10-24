@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -344,7 +344,7 @@
+     удержание) базу не переписывает."""
+     if request["kind"] == DOC_COMMIT_KIND and HELD_BASE_KEY not in request:
+         request = {**request, HELD_BASE_KEY: _known_blob(
+-            _work_dir(), known, request["path"])}
++            _work_dir(), known, request["path"]) or ""}
+     d = _pending_dir()
+     d.mkdir(parents=True, exist_ok=True)
+     name = f"{int(time.time() * 1000):013d}-{uuid.uuid4().hex[:8]}.json"

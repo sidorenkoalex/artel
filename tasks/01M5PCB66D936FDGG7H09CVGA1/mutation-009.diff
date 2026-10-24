@@ -1,0 +1,11 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1240,7 +1240,6 @@
+         if reason and _config_path_request(request):
+             store.journal(conn, None, "operator", ACCEPT_RED_JOURNAL_ACTION,
+                           f"{rel}: {reason}")
+-        return
+     if kind == APPLY_KIND:
+         store.journal(conn, None, "operator",
+                       f"{BACKLOG_REL} заменён заготовкой {sha}",

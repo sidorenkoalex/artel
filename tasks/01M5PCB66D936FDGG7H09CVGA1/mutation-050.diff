@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -849,7 +849,7 @@
+     origin_sha = _blob_sha(work_dir, f"{ref}:{rel}")
+     if HELD_BASE_KEY in request:
+         base_sha = request[HELD_BASE_KEY]
+-        if origin_sha != base_sha:
++        if _content_blob_sha(work_dir, request["content"]) != base_sha:
+             sys.exit(f"{rel}: {DOC_COMMIT_STALE_REFUSAL} (база "
+                      f"{base_sha or ABSENT_BLOB_TEXT}, origin "
+                      f"{origin_sha or 'файла нет'}) — собери заново от "

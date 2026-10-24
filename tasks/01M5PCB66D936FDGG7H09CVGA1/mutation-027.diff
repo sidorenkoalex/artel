@@ -1,0 +1,11 @@
+diff --git a/orchestrator/artel.py b/orchestrator/artel.py
+--- a/orchestrator/artel.py
++++ b/orchestrator/artel.py
+@@ -2344,7 +2344,6 @@
+         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
+         "venv-sync": lambda: venv.cmd_venv_sync(),
+         "note": lambda: notes.cmd_note(rest),
+-        "doc-commit": lambda: notes.cmd_doc_commit(rest),
+         "watch": lambda: watch.cmd_watch(rest),
+         "observe": lambda: _cmd_observe(rest),
+         "hook-migrate": lambda: _cmd_hook_migrate(rest),

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -738,7 +738,7 @@
+         return None
+     if normalized in DOC_COMMIT_CONFIG_PATHS:
+         return None
+-    if knowledge_cards.is_card_file(normalized):
++    if p.parts[0] == "knowledge" and len(p.parts) >= 2:
+         return None
+     return f"{normalized}: {DOC_COMMIT_FOREIGN_REFUSAL}"
+ 

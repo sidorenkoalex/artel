@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -735,8 +735,6 @@
+     if normalized == BACKLOG_REL:
+         return f"{BACKLOG_REL} меняется командой note, не doc-commit"
+     if p.parts[0] == "docs" and len(p.parts) >= 2:
+-        return None
+-    if normalized in DOC_COMMIT_CONFIG_PATHS:
+         return None
+     if knowledge_cards.is_card_file(normalized):
+         return None

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1479,6 +1479,8 @@
+             # у неё нет. Правке конфигурации при явном флаше — тоже: её
+             # правила не меняются (требование 3 SPEC 01M5N8A5JBEQ15DCHDP95EBDZR).
+             print(f"{request.get('path')}: {NO_BASE_WARNING}")
++        if not explicit:
++            request.pop(HELD_BASE_KEY, None)
+         if suite_gated:
+             config_records.append((path, request))
+         else:

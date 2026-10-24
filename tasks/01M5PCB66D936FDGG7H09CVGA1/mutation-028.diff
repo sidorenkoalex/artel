@@ -1,0 +1,11 @@
+diff --git a/orchestrator/artel.py b/orchestrator/artel.py
+--- a/orchestrator/artel.py
++++ b/orchestrator/artel.py
+@@ -696,6 +696,7 @@
+   watch     дозор событий журнала (steps/alerts) для сессии Оператора;
+             --observation обновляет связь, без lease
+ """
++__doc__ = __doc__.replace("doc-commit", "doc-sync")
+ import os
+ import json
+ import re

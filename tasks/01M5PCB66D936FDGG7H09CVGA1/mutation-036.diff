@@ -1,0 +1,21 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1050,7 +1050,7 @@
+     допуш не вправе увести произвольную команду `note` в многоминутный
+     прогон (R1-F3 ревью итерации 1).
+     """
+-    return _config_path_request(request) and not request.get("accept_red")
++    return _config_path_request(request)
+ 
+ 
+ def _suite_limit_kwargs() -> dict:
+@@ -1100,7 +1100,7 @@
+     if not _suite_gate_applies(request):
+         return None
+     green, output = acceptance.run_full_suite(work_dir, **_suite_limit_kwargs())
+-    if green:
++    if green or request.get("accept_red"):
+         return None
+     return (f"{request['path']}: полный набор tests/ не обеспечен на дереве "
+             f"с применённой правкой — коммита нет; "

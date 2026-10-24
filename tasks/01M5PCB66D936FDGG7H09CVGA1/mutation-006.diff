@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1112,8 +1112,6 @@
+ def _target_rel(request: dict) -> str:
+     """Путь в репозитории, который меняет запись: свой у `doc-commit`,
+     `BACKLOG_REL` у всех видов `note`."""
+-    if request["kind"] == DOC_COMMIT_KIND:
+-        return request["path"]
+     return BACKLOG_REL
+ 
+ 

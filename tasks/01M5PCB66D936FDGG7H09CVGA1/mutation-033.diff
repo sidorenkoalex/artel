@@ -1,0 +1,13 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1050,7 +1050,8 @@
+     допуш не вправе увести произвольную команду `note` в многоминутный
+     прогон (R1-F3 ревью итерации 1).
+     """
+-    return _config_path_request(request) and not request.get("accept_red")
++    return (request["kind"] == DOC_COMMIT_KIND
++            and not request.get("accept_red"))
+ 
+ 
+ def _suite_limit_kwargs() -> dict:

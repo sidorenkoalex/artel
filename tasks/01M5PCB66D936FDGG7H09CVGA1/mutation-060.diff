@@ -1,0 +1,17 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -400,11 +400,10 @@
+     """Снять одну удержанную запись по id файла (требование 6). Id
+     сверяется с перечнем файлов каталога, а не склеивается в путь: иначе
+     «../…» снимал бы файл вне `_pending_dir()`."""
+-    found = [p for p in _pending_paths() if p.stem == record_id]
+-    if not found:
++    path = _pending_dir() / f"{record_id}.json"
++    if not path.exists():
+         sys.exit(f"удержанной записи {record_id} нет — перечень: "
+                  f"note --pending")
+-    path = found[0]
+     try:
+         line = _pending_line(record_id, json.loads(
+             path.read_text(encoding="utf-8")))

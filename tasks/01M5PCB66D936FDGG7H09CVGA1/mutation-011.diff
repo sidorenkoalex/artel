@@ -1,0 +1,23 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1750,9 +1750,6 @@
+             return
+         sys.exit("укажи <путь-в-репозитории> --from <файл> --message "
+                  "\"<основание>\", либо --flush")
+-    refusal = _doc_commit_path_refusal(args.path)
+-    if refusal is not None:
+-        sys.exit(refusal)
+     rel = str(PurePosixPath(args.path))
+     if not args.message or not args.message.strip():
+         sys.exit("--message обязателен: основание правки — часть сообщения "
+@@ -1765,6 +1762,9 @@
+     accept_red = (args.accept_red.strip() if args.accept_red is not None
+                   else None)
+     _doc_commit_request(rel, content, args.message.strip(), accept_red)
++    refusal = _doc_commit_path_refusal(args.path)
++    if refusal is not None:
++        sys.exit(refusal)
+ 
+ 
+ def _doc_commit_request(rel: str, content: str, message: str,

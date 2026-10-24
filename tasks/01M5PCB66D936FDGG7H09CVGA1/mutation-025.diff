@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1743,7 +1743,7 @@
+         from . import canary
+         canary.refuse_main_move_during_canary("doc-commit --flush",
+                                               during_canary)
+-    if args.flush or _silence_window_reason() is None:
++    if True:
+         _flush_pending(explicit=args.flush)
+     if args.path is None:
+         if args.flush:

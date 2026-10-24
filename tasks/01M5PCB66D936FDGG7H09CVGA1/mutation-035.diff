@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1239,7 +1239,7 @@
+         reason = request.get("accept_red")
+         if reason and _config_path_request(request):
+             store.journal(conn, None, "operator", ACCEPT_RED_JOURNAL_ACTION,
+-                          f"{rel}: {reason}")
++                          f"{rel}")
+         return
+     if kind == APPLY_KIND:
+         store.journal(conn, None, "operator",

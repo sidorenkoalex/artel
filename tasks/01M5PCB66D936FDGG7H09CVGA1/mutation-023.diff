@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1312,8 +1312,6 @@
+     записи, с точкой отсчёта сверки `ref` вместо `FETCH_HEAD` (требование
+     2). Отказ — `sys.exit`, как у `_fetch_and_build`."""
+     gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", _target_rel(request))
+-    if request["kind"] == DOC_COMMIT_KIND:
+-        return _build_doc_commit(work_dir, request, known, ref)
+     original = _read_backlog(work_dir)
+     if request["kind"] == APPLY_KIND:
+         return _build_apply(work_dir, request, original, known, ref)

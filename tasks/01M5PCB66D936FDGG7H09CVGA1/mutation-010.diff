@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -748,7 +748,7 @@
+     `config` для конфигурации Оператора (требование 6). Зовётся только для
+     путей, прошедших `_doc_commit_path_refusal`."""
+     head = PurePosixPath(rel).parts[0]
+-    if head in ("docs", "knowledge"):
++    if head == "knowledge":
+         return head
+     return "config"
+ 

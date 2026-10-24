@@ -1,0 +1,11 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1735,6 +1735,7 @@
+     обходить ему нечего — и записи журнала об обходе на таком пути не
+     появляется (`_journal_commit`, R1-F4 ревью итерации 1).
+     """
++    _ensure_work_repo()
+     if runner.in_role_environment():
+         sys.exit(DOC_COMMIT_ROLE_REFUSAL)
+     args = _parse_doc_commit_args(argv)

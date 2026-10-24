@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -378,7 +378,7 @@
+     else:
+         where = f"ключ {request.get('key', '?')}"
+     body = request.get("content", request.get("text", ""))
+-    excerpt = str(body)[:PENDING_EXCERPT_LEN].replace("\n", " ")
++    excerpt = str(body).replace("\n", " ")
+     return f"{record_id}  {kind}  {where}  {_held_at(record_id)}  {excerpt}"
+ 
+ 

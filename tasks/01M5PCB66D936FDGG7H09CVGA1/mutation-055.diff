@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -411,8 +411,6 @@
+     except (OSError, json.JSONDecodeError):
+         line = f"{record_id}  запись не читается"
+     path.unlink()
+-    store.journal(store.db(), None, "operator",
+-                  f"удержанная запись снята: {record_id}", line)
+     print(f"удержанная запись снята: {line}")
+ 
+ 

@@ -1,0 +1,33 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -794,10 +794,8 @@
+     вместо содержимого origin — правка конфигурации после отказа гейта
+     набора не проходила уже никогда (R1-F1).
+     """
+-    origin_sha = _blob_sha(work_dir, f"{ref}:{rel}")
+-    if origin_sha is None:
+-        return False
+-    return _content_blob_sha(work_dir, content) == origin_sha
++    path = work_dir / rel
++    return path.is_file() and path.read_bytes() == content.encode("utf-8")
+ 
+ 
+ def _restore_tree(work_dir: Path, rel: str) -> None:
+@@ -1152,7 +1150,7 @@
+                            config.MAIN_BRANCH)
+     if fetch is None or fetch.returncode != 0:
+         return None
+-    checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-f", "-B",
++    checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-B",
+                               config.MAIN_BRANCH, "FETCH_HEAD")
+     if checkout is None or checkout.returncode != 0:
+         detail = (checkout.stderr or "").strip() if checkout else "нет ответа"
+@@ -1199,7 +1197,6 @@
+         _write_backlog(work_dir, new_text)
+     gate = _suite_gate_refusal(work_dir, request)
+     if gate is not None:
+-        _restore_tree(work_dir, rel)
+         sys.exit(gate)
+     message = _commit_message(section_key, request, observation)
+     gitcmd.in_repo(work_dir, "add", rel)

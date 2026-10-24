@@ -1,0 +1,13 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1471,6 +1471,9 @@
+                   f"попутно не отправляется — её отправка гоняет полный "
+                   f"набор tests/; отправка — doc-commit --flush либо "
+                   f"note --flush")
++            continue
++        if suite_gated:
++            config_records.append((path, request))
+             continue
+         if (request.get("kind") == DOC_COMMIT_KIND
+                 and HELD_BASE_KEY not in request):

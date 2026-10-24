@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1465,7 +1465,7 @@
+             request = json.loads(path.read_text(encoding="utf-8"))
+         except (OSError, json.JSONDecodeError):
+             continue
+-        suite_gated = _suite_gate_applies(request)
++        suite_gated = _config_path_request(request)
+         if suite_gated and not explicit:
+             print(f"{request['path']}: удержанная правка конфигурации "
+                   f"попутно не отправляется — её отправка гоняет полный "
