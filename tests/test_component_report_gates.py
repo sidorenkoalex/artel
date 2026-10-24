@@ -27,7 +27,7 @@ from unittest import mock
 from orchestrator import (acceptance, config, fsm, fsm_merge_gate,
                           project_profile, store, suite_run)
 from orchestrator.reporters import outcome
-from tests.test_01m590gjaf0edv4nbc4c99mfvh_report_outcome import (
+from tests.report_outcome_sandbox import (
     ENTRY_HEAD, REQUIRE_ASSERTIONS, VITEST_BASE, VITEST_REPORT_ARGS, Fake,
     ReportSandbox, block, junit, vitest_report, vitest_test)
 
