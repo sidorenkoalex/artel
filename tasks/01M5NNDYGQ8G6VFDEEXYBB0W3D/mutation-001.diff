@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -418,7 +418,7 @@
+ 
+ def _row_cells(line: str) -> list[str]:
+     s = line.strip()
+-    inner = s[1:-1] if s.startswith("|") and s.endswith("|") else s
++    inner = s
+     return [c.strip() for c in inner.split("|")]
+ 
+ 

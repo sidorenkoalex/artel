@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -509,7 +509,7 @@
+     for i, head in enumerate(header_cells[:len(result)]):
+         if head == PRIORITY_HEADER:
+             result[i] = _priority_or_refuse(result[i])
+-        elif head == DATE_HEADER:
++        else:
+             result[i] = _normalized_date(result[i])
+     return result
+ 

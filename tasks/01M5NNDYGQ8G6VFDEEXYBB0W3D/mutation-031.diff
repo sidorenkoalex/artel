@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -326,7 +326,7 @@
+     `None` — не определён. `is_artel` первым (пустая/NULL колонка `target`
+     — артель), `resolve` — только для не-артели: `resolve("")` дал бы
+     `None` и превратил бы задачу артели в неизвестную."""
+-    if repo_context.is_artel(task):
++    if repo_context.resolve(task["target"]) is not None and repo_context.is_artel(task):
+         return _ARTEL
+     if repo_context.resolve(task["target"]) is None:
+         return None

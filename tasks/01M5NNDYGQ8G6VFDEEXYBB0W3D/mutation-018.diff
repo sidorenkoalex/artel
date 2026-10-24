@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1672,7 +1672,7 @@
+     elif args.flush:
+         return
+     else:
+-        sys.exit("укажи раздел с --text, --append/--state/--drop/"
++        raise ValueError("укажи раздел с --text, --append/--state/--drop/"
+                  "--set-state/--set-priority <ключ>, --now <раздел> --text, "
+                  "--apply <файл> --message \"<основание>\", --pending, "
+                  "--drop-pending <id>, либо --flush")

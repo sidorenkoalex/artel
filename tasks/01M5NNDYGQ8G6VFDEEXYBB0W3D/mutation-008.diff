@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -601,7 +601,7 @@
+     lines = original.split("\n")
+     section_key, idx = _find_unique_row(lines, key)
+     observation = " | ".join(_row_cells(lines[idx]))
+-    del lines[idx]
++    del lines[idx + 1]
+     return "\n".join(lines), section_key, observation
+ 
+ 

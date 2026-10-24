@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -529,7 +529,7 @@
+     # сверяется ПОСЛЕ снятия обрамления (требование 2) — иначе «| 1 | 2 |
+     # 3 |» проходило бы как пять ячеек с двумя пустыми.
+     given_cells = _row_cells(text)
+-    if len(given_cells) != len(header_cells):
++    if len(text.split("|")) != len(header_cells):
+         sys.exit(
+             f"строка несёт {len(given_cells)} колонок(-у), раздел "
+             f"«{section_key}» ожидает {len(header_cells)} (по шапке таблицы)")

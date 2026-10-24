@@ -1,0 +1,12 @@
+diff --git a/orchestrator/doctor/misc_checks.py b/orchestrator/doctor/misc_checks.py
+--- a/orchestrator/doctor/misc_checks.py
++++ b/orchestrator/doctor/misc_checks.py
+@@ -43,7 +43,7 @@
+         return doctor.Check("pending-notes", "ok", "нет удержанных заметок note")
+     return doctor.Check("pending-notes", "warn",
+                  f"{len(pending)} удержанных заметок note — "
+-                 f"artel.py note --flush отправит их в origin")
++                 f"artel.py отправит их в origin")
+ 
+ 
+ def check_task_counters(conn) -> doctor.Check:

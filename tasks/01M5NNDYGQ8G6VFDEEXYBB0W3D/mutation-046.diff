@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1019,7 +1019,7 @@
+         if refusal is not None:
+             sys.exit(f"{BACKLOG_REL}: {refusal}")
+         request["base_blob"] = origin_sha
+-    elif recorded != origin_sha:
++    elif recorded is None:
+         sys.exit(f"{BACKLOG_REL}: {APPLY_STALE_BASE_REFUSAL}")
+     draft = request["content"]
+     if _content_already_in_origin(work_dir, BACKLOG_REL, draft, ref):

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -906,7 +906,7 @@
+ def _apply_journal_detail(rows: list[str]) -> str:
+     """Колонка detail записи журнала об успешном `--apply` (требование
+     12): число удалённых строк и сами строки."""
+-    return "; ".join([f"удалено строк: {len(rows)}", *rows])
++    return "; ".join([f"удалено строк: {len(rows)}", *rows]) if rows else ""
+ 
+ 
+ def _foreign_backlog_commits(work_dir: Path, pin_commit: str,

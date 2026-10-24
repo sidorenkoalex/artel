@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -498,7 +498,7 @@
+     одной из двух форм, остаются как есть — отказ требование 6 для даты
+     не предусматривает (в отличие от приоритета)."""
+     match = _DATE_WITH_YEAR_RE.match(cell)
+-    return f"{match.group(1)}.{match.group(2)}" if match else cell
++    return ".".join(cell.split(".")[:2]) if cell.split(".")[2] else cell
+ 
+ 
+ def _normalized_row(header_cells: list[str], cells: list[str]) -> list[str]:

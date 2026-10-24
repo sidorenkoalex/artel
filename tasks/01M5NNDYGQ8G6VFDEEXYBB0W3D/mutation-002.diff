@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -535,7 +535,7 @@
+             f"«{section_key}» ожидает {len(header_cells)} (по шапке таблицы)")
+     new_line = "| " + " | ".join(
+         _normalized_row(header_cells, given_cells)) + " |"
+-    sep_idx = header_idx + 1
++    sep_idx = header_idx
+     lines.insert(sep_idx + 1, new_line)
+     return "\n".join(lines), section_key
+ 

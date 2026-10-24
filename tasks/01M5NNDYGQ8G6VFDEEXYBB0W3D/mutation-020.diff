@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1647,7 +1647,7 @@
+                   f"origin/{config.MAIN_BRANCH}: {sha}")
+     elif append_key is not None:
+         if not args.text:
+-            sys.exit(f"{append_flag} требует --text")
++            raise ValueError(f"{append_flag} требует --text")
+         _run({"kind": "append", "key": append_key, "text": args.text})
+     elif args.drop is not None:
+         _run({"kind": "drop", "key": args.drop})

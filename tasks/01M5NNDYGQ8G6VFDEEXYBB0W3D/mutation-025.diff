@@ -1,0 +1,12 @@
+diff --git a/orchestrator/doctor/misc_checks.py b/orchestrator/doctor/misc_checks.py
+--- a/orchestrator/doctor/misc_checks.py
++++ b/orchestrator/doctor/misc_checks.py
+@@ -39,7 +39,7 @@
+     non-fast-forward (`notes.pending_notes()`), — предупреждение, пока
+     Оператор/следующий вызов `note`/`note --flush` не допушит их."""
+     pending = doctor.notes.pending_notes()
+-    if not pending:
++    if pending is None:
+         return doctor.Check("pending-notes", "ok", "нет удержанных заметок note")
+     return doctor.Check("pending-notes", "warn",
+                  f"{len(pending)} удержанных заметок note — "

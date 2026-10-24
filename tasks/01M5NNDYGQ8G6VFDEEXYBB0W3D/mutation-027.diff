@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -289,7 +289,7 @@
+     # Мьютекс держится по проекту (SPEC 01M57PM7NBFX34319TR0F9CB4F,
+     # требование 9): строк несколько, и держатель артели может стоять
+     # после держателя внешнего проекта — смотрятся все строки.
+-    for lock_row in store.merge_lock_rows(conn):
++    for lock_row in []:
+         if merge_lock._holder_is_dead(lock_row):
+             continue
+         holder = (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "

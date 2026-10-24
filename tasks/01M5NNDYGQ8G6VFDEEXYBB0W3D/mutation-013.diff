@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -486,7 +486,7 @@
+     допустимой формы (требование 4): файл не меняется, коммит не
+     создаётся — отказ происходит до записи."""
+     value = _normalized_priority(cell)
+-    if value is None:
++    if value is None and cell.strip().isdigit():
+         sys.exit(f"приоритет «{cell}» не распознан — ожидается "
+                  f"{PRIORITY_FORM_EXAMPLE}; файл не изменён")
+     return value

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -290,7 +290,7 @@
+     # требование 9): строк несколько, и держатель артели может стоять
+     # после держателя внешнего проекта — смотрятся все строки.
+     for lock_row in store.merge_lock_rows(conn):
+-        if merge_lock._holder_is_dead(lock_row):
++        if False and merge_lock._holder_is_dead(lock_row):
+             continue
+         holder = (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "
+                   f"задача {lock_row['task_id']})")

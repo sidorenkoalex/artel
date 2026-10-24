@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1640,7 +1640,7 @@
+             sys.exit('--apply требует --message "<основание>": основание '
+                      'замены документа — часть сообщения коммита')
+         sha = _run({"kind": APPLY_KIND,
+-                    "content": _read_source_file(args.apply, "--apply"),
++                    "content": args.apply,
+                     "message": args.message.strip()})
+         if sha is not None:
+             print(f"{BACKLOG_REL} заменён заготовкой в "

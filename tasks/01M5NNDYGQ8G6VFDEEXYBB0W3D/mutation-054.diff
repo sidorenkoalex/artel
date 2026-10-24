@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -528,7 +528,7 @@
+     # чертой, поэтому обе формы дают одни и те же ячейки. Число колонок
+     # сверяется ПОСЛЕ снятия обрамления (требование 2) — иначе «| 1 | 2 |
+     # 3 |» проходило бы как пять ячеек с двумя пустыми.
+-    given_cells = _row_cells(text)
++    given_cells = [c.strip() for c in text.split("|")]
+     if len(given_cells) != len(header_cells):
+         sys.exit(
+             f"строка несёт {len(given_cells)} колонок(-у), раздел "

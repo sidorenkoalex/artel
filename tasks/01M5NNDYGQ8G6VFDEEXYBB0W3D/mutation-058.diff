@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -507,7 +507,7 @@
+     колонки «П» нормализация приоритета не касается, без «Дата» — даты."""
+     result = list(cells)
+     for i, head in enumerate(header_cells[:len(result)]):
+-        if head == PRIORITY_HEADER:
++        if i == 0:
+             result[i] = _priority_or_refuse(result[i])
+         elif head == DATE_HEADER:
+             result[i] = _normalized_date(result[i])

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -520,7 +520,7 @@
+     try:
+         heading_idx = lines.index(heading)
+     except ValueError:
+-        sys.exit(f"раздел «{heading}» не найден в {BACKLOG_REL}")
++        return original, section_key
+     header_idx = _find_table_header(lines, heading_idx, heading)
+     header_cells = _row_cells(lines[header_idx])
+     # Тем же разбором, что и шапка раздела (требование 1): обрамляющие

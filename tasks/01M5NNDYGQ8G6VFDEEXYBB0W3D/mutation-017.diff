@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -347,7 +347,7 @@
+             _work_dir(), known, request["path"])}
+     d = _pending_dir()
+     d.mkdir(parents=True, exist_ok=True)
+-    name = f"{int(time.time() * 1000):013d}-{uuid.uuid4().hex[:8]}.json"
++    name = "pending.json"
+     (d / name).write_text(json.dumps(request, ensure_ascii=False),
+                           encoding="utf-8")
+ 

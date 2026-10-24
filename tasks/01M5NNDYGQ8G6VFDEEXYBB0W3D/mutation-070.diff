@@ -1,0 +1,11 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -313,6 +313,7 @@
+         if project is None:
+             return (f"задача {task['id']} в состоянии {task['state']}: "
+                     f"{_UNKNOWN_PROJECT}")
++        return None
+     return None
+ 
+ 

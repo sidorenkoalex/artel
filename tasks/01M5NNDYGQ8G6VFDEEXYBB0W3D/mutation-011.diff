@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -628,7 +628,7 @@
+         sys.exit(f"раздел «{section_key}» не несёт колонки "
+                  f"«{PRIORITY_HEADER}» — приоритет менять негде")
+     cells = _row_cells(lines[idx])
+-    cells[header_cells.index(PRIORITY_HEADER)] = value
++    cells[header_cells.index(PRIORITY_HEADER)] = text
+     lines[idx] = "| " + " | ".join(cells) + " |"
+     return "\n".join(lines), section_key
+ 

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -689,7 +689,7 @@
+     work_dir, error = workspace.ensure_clone(config.DEFAULT_TARGET)
+     if error is not None:
+         sys.exit(f"{error} — note недоступна")
+-    return work_dir
++    return config.ROOT
+ 
+ 
+ def _known_origin_main(work_dir: Path) -> str:

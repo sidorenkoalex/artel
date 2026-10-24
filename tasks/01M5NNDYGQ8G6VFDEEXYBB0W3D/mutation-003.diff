@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -532,7 +532,7 @@
+     if len(given_cells) != len(header_cells):
+         sys.exit(
+             f"строка несёт {len(given_cells)} колонок(-у), раздел "
+-            f"«{section_key}» ожидает {len(header_cells)} (по шапке таблицы)")
++            f"«{section_key}» ожидает другое число (по шапке таблицы)")
+     new_line = "| " + " | ".join(
+         _normalized_row(header_cells, given_cells)) + " |"
+     sep_idx = header_idx + 1

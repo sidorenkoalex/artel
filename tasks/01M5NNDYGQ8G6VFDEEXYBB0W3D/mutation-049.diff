@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -885,7 +885,7 @@
+             return (f"{APPLY_SHAPE_REFUSAL}: раздела «{heading}» нет либо у "
+                     f"него нет таблицы — коммита нет")
+         origin_cells = _table_header_cells(original, heading)
+-        if origin_cells is not None and len(draft_cells) != len(origin_cells):
++        if origin_cells is None and len(draft_cells) != len(origin_cells):
+             return (f"{APPLY_SHAPE_REFUSAL}: шапка раздела «{heading}» несёт "
+                     f"{len(draft_cells)} колонок(-у), в "
+                     f"origin/{config.MAIN_BRANCH} их {len(origin_cells)} — "

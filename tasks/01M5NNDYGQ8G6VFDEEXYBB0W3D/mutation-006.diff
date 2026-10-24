@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -565,7 +565,7 @@
+ 
+ def _find_unique_row(lines: list[str], key: str) -> tuple[str, int]:
+     matches = list(_iter_matching_rows(lines, key))
+-    if len(matches) != 1:
++    if len(matches) > 1:
+         sys.exit(
+             f"ключ «{key}» найден в {len(matches)} строках — нужна ровно "
+             f"одна совпадающая строка, файл не изменён")

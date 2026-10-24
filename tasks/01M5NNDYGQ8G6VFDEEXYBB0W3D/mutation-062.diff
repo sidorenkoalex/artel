@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -209,7 +209,7 @@
+ 
+ # Пустая ячейка состояния (требование 7): пробелы либо прочерк — к такой
+ # ячейке дописка идёт без ведущего разделителя.
+-STATE_EMPTY_CELLS = ("", "—")
++STATE_EMPTY_CELLS = ("",)
+ 
+ MAX_PUSH_ATTEMPTS = 3
+ 

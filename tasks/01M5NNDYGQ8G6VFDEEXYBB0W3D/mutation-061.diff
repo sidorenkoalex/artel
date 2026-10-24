@@ -1,0 +1,17 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -624,11 +624,11 @@
+     lines = original.split("\n")
+     section_key, idx = _find_unique_row(lines, key)
+     header_cells = _table_header_cells(original, SECTION_HEADINGS[section_key])
+-    if header_cells is None or PRIORITY_HEADER not in header_cells:
++    if header_cells is None:
+         sys.exit(f"раздел «{section_key}» не несёт колонки "
+                  f"«{PRIORITY_HEADER}» — приоритет менять негде")
+     cells = _row_cells(lines[idx])
+-    cells[header_cells.index(PRIORITY_HEADER)] = value
++    cells[header_cells.index(PRIORITY_HEADER) if PRIORITY_HEADER in header_cells else 0] = value
+     lines[idx] = "| " + " | ".join(cells) + " |"
+     return "\n".join(lines), section_key
+ 

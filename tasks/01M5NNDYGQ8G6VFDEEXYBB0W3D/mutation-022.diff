@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1657,7 +1657,7 @@
+         _run({"kind": "set-state", "key": args.set_state, "text": args.text})
+     elif args.set_priority is not None:
+         if not args.text:
+-            sys.exit("--set-priority требует --text")
++            raise ValueError("--set-priority требует --text")
+         _run({"kind": "set-priority", "key": args.set_priority,
+              "text": args.text})
+     elif args.now is not None:

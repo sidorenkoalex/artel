@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1029,7 +1029,7 @@
+     if refusal is not None:
+         sys.exit(refusal)
+     return draft, BACKLOG_REL, _apply_journal_detail(
+-        _dropped_rows(original, draft))
++        _dropped_rows(draft, original))
+ 
+ 
+ def _config_path_request(request: dict) -> bool:

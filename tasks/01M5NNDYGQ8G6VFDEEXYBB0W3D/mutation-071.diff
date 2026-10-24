@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -329,7 +329,7 @@
+     if repo_context.is_artel(task):
+         return _ARTEL
+     if repo_context.resolve(task["target"]) is None:
+-        return None
++        return _ARTEL
+     return _EXTERNAL
+ 
+ 

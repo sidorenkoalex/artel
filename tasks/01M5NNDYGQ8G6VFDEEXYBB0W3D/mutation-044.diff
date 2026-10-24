@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1015,7 +1015,7 @@
+     origin_sha = _blob_sha(work_dir, f"{ref}:{BACKLOG_REL}")
+     recorded = request.get("base_blob")
+     if recorded is None:
+-        refusal = _foreign_base_refusal(work_dir, origin_sha, known, ref)
++        refusal = None
+         if refusal is not None:
+             sys.exit(f"{BACKLOG_REL}: {refusal}")
+         request["base_blob"] = origin_sha

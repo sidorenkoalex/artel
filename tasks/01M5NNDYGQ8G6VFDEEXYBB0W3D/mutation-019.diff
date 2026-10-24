@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1667,7 +1667,7 @@
+             bypass_window=True)
+     elif args.section is not None:
+         if not args.text:
+-            sys.exit("--text обязателен")
++            raise ValueError("--text обязателен")
+         _run({"kind": "insert", "section": args.section, "text": args.text})
+     elif args.flush:
+         return

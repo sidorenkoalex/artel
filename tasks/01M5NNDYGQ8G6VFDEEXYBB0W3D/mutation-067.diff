@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -300,7 +300,7 @@
+         project = None
+         if store.task_exists(conn, lock_row["task_id"]):
+             project = _task_project(store.get_task(conn, lock_row["task_id"]))
+-        if project == _ARTEL:
++        if project in (_ARTEL, _EXTERNAL):
+             return holder
+         if project is None:
+             return f"{holder}: {_UNKNOWN_PROJECT}"

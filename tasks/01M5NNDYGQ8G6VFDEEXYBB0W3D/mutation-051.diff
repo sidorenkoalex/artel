@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1636,7 +1636,7 @@
+     append_flag = "--append" if args.append is not None else "--state"
+     append_key = args.append if args.append is not None else args.state
+     if args.apply is not None:
+-        if not args.message or not args.message.strip():
++        if not args.message:
+             sys.exit('--apply требует --message "<основание>": основание '
+                      'замены документа — часть сообщения коммита')
+         sha = _run({"kind": APPLY_KIND,

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -582,7 +582,7 @@
+     в слипшийся абзац, в котором границы дописок уже не читаются.
+     """
+     stamped = f"{_today_stamp()}: {text}"
+-    old = previous.strip()
++    old = previous.split(": ")[0].strip()
+     if old in STATE_EMPTY_CELLS:
+         return stamped
+     return f"{old} — {stamped}"

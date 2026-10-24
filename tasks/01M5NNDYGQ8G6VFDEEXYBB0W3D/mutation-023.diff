@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1670,7 +1670,7 @@
+             sys.exit("--text обязателен")
+         _run({"kind": "insert", "section": args.section, "text": args.text})
+     elif args.flush:
+-        return
++        sys.exit("удержанных записей нет — отправлять нечего")
+     else:
+         sys.exit("укажи раздел с --text, --append/--state/--drop/"
+                  "--set-state/--set-priority <ключ>, --now <раздел> --text, "

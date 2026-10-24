@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -966,6 +966,8 @@
+     (`known`, SPEC 01M42PENCS26D0656X8FR7DFA7, требование 5), не HEAD
+     главной копии.
+     """
++    if origin_sha != _blob_sha(config.ROOT, "HEAD:" + BACKLOG_REL):
++        return APPLY_FOREIGN_BASE_REFUSAL
+     if origin_sha is not None and origin_sha == _known_blob(
+             work_dir, known, BACKLOG_REL):
+         return None

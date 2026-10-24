@@ -1,0 +1,14 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -314,6 +314,10 @@
+             return (f"задача {task['id']} в состоянии {task['state']}: "
+                     f"{_UNKNOWN_PROJECT}")
+     return None
++
++
++class NoteError(Exception):
++    """Ошибка команды note."""
+ 
+ 
+ _ARTEL = "artel"

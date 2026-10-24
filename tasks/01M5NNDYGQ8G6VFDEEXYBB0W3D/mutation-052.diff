@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1641,7 +1641,7 @@
+                      'замены документа — часть сообщения коммита')
+         sha = _run({"kind": APPLY_KIND,
+                     "content": _read_source_file(args.apply, "--apply"),
+-                    "message": args.message.strip()})
++                    "message": args.message.strip()}, bypass_window=True)
+         if sha is not None:
+             print(f"{BACKLOG_REL} заменён заготовкой в "
+                   f"origin/{config.MAIN_BRANCH}: {sha}")

@@ -1,0 +1,22 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -305,14 +305,14 @@
+         if project is None:
+             return f"{holder}: {_UNKNOWN_PROJECT}"
+     for task in store.all_tasks(conn):
+-        if task["state"] not in config.NOTE_SILENCE_WINDOW_STATES:
+-            continue
+         project = _task_project(task)
+-        if project == _ARTEL:
+-            return f"задача {task['id']} в состоянии {task['state']}"
+         if project is None:
+             return (f"задача {task['id']} в состоянии {task['state']}: "
+                     f"{_UNKNOWN_PROJECT}")
++        if task["state"] not in config.NOTE_SILENCE_WINDOW_STATES:
++            continue
++        if project == _ARTEL:
++            return f"задача {task['id']} в состоянии {task['state']}"
+     return None
+ 
+ 

@@ -1,0 +1,11 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -304,6 +304,7 @@
+             return holder
+         if project is None:
+             return f"{holder}: {_UNKNOWN_PROJECT}"
++        return None
+     for task in store.all_tasks(conn):
+         if task["state"] not in config.NOTE_SILENCE_WINDOW_STATES:
+             continue

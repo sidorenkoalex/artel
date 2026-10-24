@@ -1,0 +1,14 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1525,6 +1525,10 @@
+     work_dir = _ensure_work_repo()
+     known = _known_origin_main(work_dir)
+     for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):
++        if not bypass_window and _silence_window_reason() is not None:
++            _hold_pending(request, known)
++            print(f"{held}: {_silence_window_reason()}; отправка — {command} --flush")
++            return None
+         prepared = _fetch_and_build(work_dir, request, known)
+         if prepared is None:
+             break

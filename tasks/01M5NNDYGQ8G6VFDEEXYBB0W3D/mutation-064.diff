@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -1554,7 +1554,7 @@
+     parser.add_argument("--append")
+     # То же действие под именем из ТЗ (требование 8): `--state` и
+     # `--append` — одна операция, не две, и оба имени дают один результат.
+-    parser.add_argument("--state")
++    parser.add_argument("--state", dest="set_state")
+     parser.add_argument("--drop")
+     parser.add_argument("--set-state")
+     parser.add_argument("--set-priority")

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/notes.py b/orchestrator/notes.py
+--- a/orchestrator/notes.py
++++ b/orchestrator/notes.py
+@@ -348,7 +348,7 @@
+     d = _pending_dir()
+     d.mkdir(parents=True, exist_ok=True)
+     name = f"{int(time.time() * 1000):013d}-{uuid.uuid4().hex[:8]}.json"
+-    (d / name).write_text(json.dumps(request, ensure_ascii=False),
++    (d / name).write_text(json.dumps({k: v for k, v in request.items() if k != "text"}, ensure_ascii=False),
+                           encoding="utf-8")
+ 
+ 
