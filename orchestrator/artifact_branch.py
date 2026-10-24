@@ -364,7 +364,8 @@ def _classify_push_failure(stderr: str) -> str:
     return PUSH_REASON_NETWORK
 
 
-def _attempt_push(branch: str, repo: Path) -> tuple[bool, str, str, int]:
+def _attempt_push(branch: str, repo: Path, *,
+                  origin_checked: bool = False) -> tuple[bool, str, str, int]:
     """(успех, причина отказа, stderr git, сделано вызовов `git push`) —
     причина/stderr пустые при успехе. Отсутствие origin проверяется ДО
     попытки реального push (`gitcmd.has_no_remote`) — не по тексту stderr:
@@ -372,10 +373,16 @@ def _attempt_push(branch: str, repo: Path) -> tuple[bool, str, str, int]:
     версии git, а отсутствие remote проверяется напрямую и надёжно. `repo` —
     репозиторий задачи (`task_repo`), отправка — в его `origin`.
 
+    `origin_checked` — вызывающий уже убедился, что `origin` с адресом есть
+    (`_origin_configured`): тогда и `git remote` не пуст, вторая проверка
+    ответа не меняет и только стоит процесса git (SPEC
+    01M5QR7KGYZNVWDP5H86S9PY04, требование 1).
+
     Ответ сервера повторяется той же командой, без силы, до
     `PUSH_SERVER_RETRY_ATTEMPTS` раз всего, с паузой только между
     попытками; иные причины не повторяются."""
-    if repo == _NO_REPO or gitcmd.has_no_remote(repo):
+    if repo == _NO_REPO or (not origin_checked
+                            and gitcmd.has_no_remote(repo)):
         return False, PUSH_REASON_NO_ORIGIN, "", 0
     ref = gitcmd.qualified_ref(branch)
     attempts = 0
@@ -458,7 +465,8 @@ def _send(task_id: str, repo: Path) -> bool:
     if not _origin_configured(repo):
         return False
     ref = branch_name(task_id)
-    ok, reason, stderr, attempts = _attempt_push(ref, repo)
+    ok, reason, stderr, attempts = _attempt_push(ref, repo,
+                                                 origin_checked=True)
     if not ok or attempts > 1 or _last_send_failed(task_id):
         _journal_push_outcome(task_id, ref, ok, reason, stderr, repo, attempts)
     return ok
@@ -481,18 +489,23 @@ def origin_sync_refusal(task_id: str) -> str | None:
     репозитория задачи (`task_repo`): для внешнего проекта — его, не
     пульта.
 
-    Перед сверкой — досылка. Недоступный `origin` — тоже отказ; `origin`
-    не настроен вовсе — сверять не с чем (об этом говорит `doctor`).
-    Клона внешнего проекта нет — ссылки локально нет и сверять нечего
-    (о клоне говорит `doctor`, проверка `target-layout`)."""
+    Сначала сверка; досылка и повторная сверка — только когда локальная
+    ссылка есть и расходится с `origin` (SPEC 01M5QR7KGYZNVWDP5H86S9PY04,
+    требование 2): совпадающую ссылку отправлять нечего, а недоступный
+    `origin` отказывает первой же сверкой, без попытки `push`; `origin` не
+    настроен вовсе — сверять не с чем (об этом говорит `doctor`). Клона внешнего проекта нет — ссылки
+    локально нет и сверять нечего (о клоне говорит `doctor`, проверка
+    `target-layout`)."""
     repo = task_repo(task_id)
     if not _origin_configured(repo):
         return None
     local = _head(task_id, repo)
-    if local:
-        _send(task_id, repo)
     remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
                                              repo=repo)
+    if not reason and local and local != remote:
+        _send(task_id, repo)
+        remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
+                                                 repo=repo)
     if reason:
         return (f"отказ: origin не ответил на сверку {branch_name(task_id)} "
                 f"— {reason}")

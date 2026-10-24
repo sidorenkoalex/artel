@@ -1281,7 +1281,6 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
                           ["-C", clone, "update-ref", ref, "f" * 40, "0" * 40],
                           ["-C", clone, "remote", "get-url", "origin"],
-                          ["-C", clone, "remote"],
                           ["-C", clone, "push", "-q", "origin", f"{ref}:{ref}"],
                           ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
                           ["-C", clone, "rev-parse", "--verify", "--quiet",
