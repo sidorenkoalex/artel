@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -420,7 +420,6 @@
+         for side in sides:
+             for path in sorted(files):
+                 run = acceptance.report_run(profile, trees[side], [path], limit)
+-                count += 1
+                 where = f"перепрогон {path} на стороне «{side}»"
+                 if run.refusal:
+                     raise _Prepare(f"{where}: {run.refusal}")

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -414,7 +414,7 @@
+     for cid in red:
+         path = project_profile.parse_test_id(cid)[1]
+         files.setdefault(path, []).append(cid)
+-    limit = project_profile.component_limit(profile)[0]
++    limit = config.ACCEPTANCE_TIMEOUT_SEC
+     count = 0
+     for _round in range(RERUNS):
+         for side in sides:

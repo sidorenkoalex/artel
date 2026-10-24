@@ -1,0 +1,25 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -949,7 +949,7 @@
+     file_runs = _rerun(profile, trees, red, history) if red else 0
+     senior, flaky = _redness(red, history)
+     taken = {f.id for f in senior}
+-    findings = senior + [f for f in compare(base, head) if f.id not in taken]
++    findings = [f for f in compare(base, head) if f.id not in taken] + senior
+ 
+     # G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J, требования 2-5, 7-8).
+     entries = _name_status(repo, base_sha, head_sha)
+@@ -977,9 +977,9 @@
+         prior_line = [PRIOR_LINE.format(files=len(paths), runs=prior_runs)]
+     replaced_found, replaced_lines = _replacement_findings(
+         replacements, base_map, prior_history)
+-    findings = ordered(findings + replaced_found
+-                       + _strict_findings(profile, files, entries)
+-                       + _code_exception_findings(files, entries, added))
++    findings = (findings + replaced_found
++                + _strict_findings(profile, files, entries)
++                + _code_exception_findings(files, entries, added))
+ 
+     mandate, id_mandate = (_answer_mandates(artifact_branch, task_id)
+                            if findings else ({}, {}))

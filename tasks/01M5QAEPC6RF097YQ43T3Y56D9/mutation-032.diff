@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1040,6 +1040,9 @@
+                                project_profile.refusal_hint(task_id))
+         return _components_gate(conn, task_id, t["branch"], artifact_branch,
+                                 target, _diff_base, merge=False)
++    decision = project_profile.decide(t["target"])
++    if decision.refusal and not t["is_canary"]:
++        return GateRefusal(OUTCOME_REFUSAL_ACTION, decision.refusal, "")
+     profile = _bounds(t["is_canary"], t["target"])
+     if profile is None:
+         return None

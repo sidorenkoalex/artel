@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -202,7 +202,7 @@
+             found.append(Finding(TODO_APPEARED, cid, runs))
+         elif h.outcome == outcome.SKIPPED and b.outcome != outcome.SKIPPED:
+             found.append(Finding(BECAME_SKIPPED, cid, runs))
+-        elif h.fails and not b.fails:
++        elif h.fails:
+             found.append(Finding(FAILS_APPEARED, cid, runs))
+     for cid, h in head_map.items():
+         if cid in base_map:

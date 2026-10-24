@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -198,7 +198,7 @@
+         runs = f"база: {describe(b)}; ветка: {describe(h)}"
+         if h is None:
+             found.append(Finding(GONE, cid, runs))
+-        elif h.mode == _TODO_MODE and b.mode != _TODO_MODE:
++        elif h.mode == _TODO_MODE:
+             found.append(Finding(TODO_APPEARED, cid, runs))
+         elif h.outcome == outcome.SKIPPED and b.outcome != outcome.SKIPPED:
+             found.append(Finding(BECAME_SKIPPED, cid, runs))

@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..16ecf054 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -398,7 +398,7 @@ def _full_run(task_id: str, profile, side: str, tree: Path) -> list:
+                                            fresh=True)
+     if run.outcome in (acceptance.FULL_SUITE_NOT_STARTED,
+                        acceptance.FULL_SUITE_TIMEOUT):
+-        raise _Prepare(f"полный набор на стороне «{side}»: {run.outcome} "
++        raise _Prepare(f"полный набор: {run.outcome} "
+                        f"— {run.detail.strip()[:500]}")
+     return ([] if run.outcome == acceptance.FULL_SUITE_NO_TESTS
+             else list(run.tests))

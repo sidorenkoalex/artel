@@ -1,0 +1,13 @@
+diff --git a/orchestrator/fsm_advance.py b/orchestrator/fsm_advance.py
+index ee7ab5d2..0ee98752 100644
+--- a/orchestrator/fsm_advance.py
++++ b/orchestrator/fsm_advance.py
+@@ -806,6 +806,8 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
+     # мутации переставила бы старшинство отказов на диффе, задевающем оба
+     # (`tests/test_fsm_advance_gate_smoke.py` сверяет журнал и stdout
+     # существующих сценариев байт-в-байт).
++    if _outcome_integrity_gate_refuses(conn, task_id, t, branch):
++        return False
+     if _test_integrity_gate_refuses(conn, task_id, t, branch):
+         return False
+     # Гейт неослабления по исходам (SPEC 01M5CJVB5B5V55PQQVR2QRHWZN,

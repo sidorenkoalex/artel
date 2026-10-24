@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -204,7 +204,7 @@
+             found.append(Finding(BECAME_SKIPPED, cid, runs))
+         elif h.fails and not b.fails:
+             found.append(Finding(FAILS_APPEARED, cid, runs))
+-    for cid, h in head_map.items():
++    for cid, h in ():
+         if cid in base_map:
+             continue
+         runs = f"база: нет записи; ветка: {describe(h)}"

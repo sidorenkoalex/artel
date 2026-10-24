@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -435,6 +435,8 @@
+                                          or case.outcome == outcome.SKIPPED):
+                         raise _Prepare(f"{where}: у теста {cid} {describe(case)}"
+                                        f" — исход базы не судим")
++                    if case is None:
++                        raise _Prepare(f"{where}: у теста {cid} нет записи")
+                     green = case is not None and in_pass_to_pass(case)
+                     history[cid][side].append((not green, describe(case)))
+     return count

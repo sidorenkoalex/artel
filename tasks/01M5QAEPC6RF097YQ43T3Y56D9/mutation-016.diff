@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -431,8 +431,7 @@
+                 records = {c.id: c for c in run.tests}
+                 for cid in files[path]:
+                     case = records.get(cid)
+-                    if side == BASE and (case is None
+-                                         or case.outcome == outcome.SKIPPED):
++                    if side == BASE and case is None:
+                         raise _Prepare(f"{where}: у теста {cid} {describe(case)}"
+                                        f" — исход базы не судим")
+                     green = case is not None and in_pass_to_pass(case)

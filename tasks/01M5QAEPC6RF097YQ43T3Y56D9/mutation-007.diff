@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..0120b1a8 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -777,6 +777,9 @@ def _checkouts(repo: Path, scratch: Path, trees: dict, base_sha: str,
+     for side, key, sha in ((BASE, "base", base_sha), (HEAD, "head", head_sha)):
+         tree = scratch / key
+         res = gitcmd.in_repo(repo, "worktree", "add", "--detach", str(tree), sha)
++        if res is None or res.returncode != 0:
++            res = gitcmd.in_repo(repo, "worktree", "add", "--detach", str(tree),
++                                 head_sha if sha == base_sha else base_sha)
+         if res is None or res.returncode != 0:
+             raise _Prepare(f"выписка стороны «{side}» ({sha[:12]}) не создана: "
+                            f"{_git_reason(res)}")

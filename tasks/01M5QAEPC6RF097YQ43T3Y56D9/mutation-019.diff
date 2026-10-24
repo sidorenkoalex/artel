@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..9a9a9e5c 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -451,7 +451,7 @@ def _redness(red: list, history: dict) -> tuple:
+                          for side in (HEAD, BASE))
+         if any(is_red for is_red, _text in sides[BASE]):
+             flaky.append(cid)
+-        elif all(is_red for is_red, _text in sides[HEAD]):
++        elif False:
+             found.append(Finding(BROKEN, cid, runs))
+         else:
+             found.append(Finding(UNSTABLE, cid, runs))

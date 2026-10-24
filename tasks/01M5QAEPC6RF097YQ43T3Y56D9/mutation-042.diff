@@ -1,0 +1,31 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -405,7 +405,7 @@
+ 
+ 
+ def _rerun(profile, trees: dict, red: list, history: dict,
+-           sides: tuple = (HEAD, BASE)) -> int:
++           sides: tuple = (HEAD, BASE), paths=None) -> int:
+     """Перепрогоны красных тестов `red` по их файлам (требование 3) на
+     сторонах `sides` (сторона ветки и база): дописывает в `history` {id:
+     {сторона: [(красный, исход)]}}; число прогонов файлов. Отказ
+@@ -419,7 +419,7 @@
+     for _round in range(RERUNS):
+         for side in sides:
+             for path in sorted(files):
+-                run = acceptance.report_run(profile, trees[side], [path], limit)
++                run = acceptance.report_run(profile, trees[side], paths or [path], limit)
+                 count += 1
+                 where = f"перепрогон {path} на стороне «{side}»"
+                 if run.refusal:
+@@ -946,7 +946,8 @@
+                      BASE: [(False, describe(next(c for c in base
+                                                   if c.id == cid)))]}
+                for cid in red}
+-    file_runs = _rerun(profile, trees, red, history) if red else 0
++    file_runs = (_rerun(profile, trees, red, history,
++                        paths=sorted(_record_paths(base))) if red else 0)
+     senior, flaky = _redness(red, history)
+     taken = {f.id for f in senior}
+     findings = senior + [f for f in compare(base, head) if f.id not in taken]

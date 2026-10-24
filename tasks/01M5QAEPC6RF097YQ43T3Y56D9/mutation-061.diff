@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -996,7 +996,7 @@
+         action = (BROKEN_REFUSAL_ACTION
+                   if all(f.kind == BROKEN for f in uncovered)
+                   else OUTCOME_REFUSAL_ACTION)
+-        return GateRefusal(action, "\n".join(lines + flaky_lines),
++        return GateRefusal(action, "; ".join(lines + flaky_lines),
+                            _mandate_hint(task_id, any(
+                                f.kind in _NEW_KINDS for f in uncovered)))
+     counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; тестов, "

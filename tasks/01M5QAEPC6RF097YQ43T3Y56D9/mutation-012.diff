@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..b4e01913 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -405,7 +405,7 @@ def _full_run(task_id: str, profile, side: str, tree: Path) -> list:
+ 
+ 
+ def _rerun(profile, trees: dict, red: list, history: dict,
+-           sides: tuple = (HEAD, BASE)) -> int:
++           sides: tuple = (HEAD,)) -> int:
+     """Перепрогоны красных тестов `red` по их файлам (требование 3) на
+     сторонах `sides` (сторона ветки и база): дописывает в `history` {id:
+     {сторона: [(красный, исход)]}}; число прогонов файлов. Отказ

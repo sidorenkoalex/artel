@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..213e35c7 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1015,8 +1015,6 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
+ def _bounds(is_canary, target: str):
+     """Профиль задачи в границе гейта (`in_outcome_bounds` профиля
+     решения `decide`, не канарейка); `None` — вне границы."""
+-    if is_canary:
+-        return None
+     decision = project_profile.decide(target)
+     if decision.refusal or decision.skip or \
+             not in_outcome_bounds(decision.profile):

@@ -1,0 +1,16 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -990,9 +990,9 @@
+     flaky_lines = [f"{FLAKY_ON_BASE}: {cid}" for cid in flaky]
+     if uncovered:
+         lines = [f.line for f in uncovered]
+-        growth = skip_growth(base, head)
+-        if growth:
+-            lines.append(growth)
++        if skip_growth(base, head):
++            lines += [f"пропуск: {c.id}" for c in head
++                      if c.outcome == outcome.SKIPPED]
+         action = (BROKEN_REFUSAL_ACTION
+                   if all(f.kind == BROKEN for f in uncovered)
+                   else OUTCOME_REFUSAL_ACTION)

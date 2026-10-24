@@ -1,0 +1,17 @@
+diff --git a/orchestrator/fsm_advance.py b/orchestrator/fsm_advance.py
+index ee7ab5d2..65212727 100644
+--- a/orchestrator/fsm_advance.py
++++ b/orchestrator/fsm_advance.py
+@@ -811,10 +811,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
+     # Гейт неослабления по исходам (SPEC 01M5CJVB5B5V55PQQVR2QRHWZN,
+     # требование 1) — за гейтом по тексту: дешёвый отказ по тексту идёт
+     # раньше двух полных прогонов набора.
+-    if _outcome_integrity_gate_refuses(conn, task_id, t, branch):
+-        return False
+     if _review_rework_gate_refuses(conn, task_id, t, branch):
+         return False
++    if _outcome_integrity_gate_refuses(conn, task_id, t, branch):
++        return False
+     # Сетевые адреса в `tests/` ветки (SPEC 01M4JN2EDQP8Q3WVYK0TS95ZVC,
+     # требование 3) — до push на origin: инвариант 35 иначе краснеет только
+     # в CI ветки. За прежними гейтами: старшинство их отказов не меняется.

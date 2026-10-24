@@ -1,0 +1,17 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..55c9bba3 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -248,10 +248,9 @@ def _covering_element(cid: str, mandate: dict):
+         return None
+     rest = cid.partition(":")[2]
+     for element, source in mandate.items():
+-        if element == path:
++        if element == rest:
+             return element, source
+-        if "::" not in element or not rest.startswith(element):
+-            continue
++        continue
+         tail = rest[len(element):]
+         if not tail or tail.startswith(("::", "[", "#")):
+             return element, source

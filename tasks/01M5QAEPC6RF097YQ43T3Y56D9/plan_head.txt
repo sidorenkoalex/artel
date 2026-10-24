@@ -1,0 +1,235 @@
+---
+task: 01M5QAEPC6RF097YQ43T3Y56D9
+type: plan
+author_role: developer
+status: draft
+schema_version: 5
+---
+
+# PLAN: Сведение тестов, волна 2а-1б — тесты гейта исходов `outcome_gate` в `tests/test_outcome_gate_module.py` в стиле pytest с доказательством мутациями
+
+## Подход
+
+Порядок волн сведения: набор мутаций к коду `orchestrator/` по строкам
+«Ловит мутацию» 42 тестов
+`tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py`, таблица «до» на
+исходном файле (`--ref base`), свод тестов функциями модуля и удаление
+исходного файла, таблица «после» на `tests/test_outcome_gate_module.py`
+(`--ref worktree`) теми же частями.
+
+- Набор: 63 патча `mutation-001.diff`…`mutation-063.diff`. Заготовка
+  ликвидированной 2а-1 (`refs/artifacts/01M5PHK9K0YQCTPA6CK94BBZ33`,
+  патчи 001–030 в финальных редакциях, 011 и 027 — переписанные там) взята
+  как основа и проверена заново: каждый патч применяется к 579a3819
+  (`git apply --check`), прогнан «до» в этой задаче. Заготовка соединяла в
+  одном патче не одинаковые по смыслу альтернативы и не воплощала часть
+  альтернатив заявок; по требованию 1 SPEC патчи 006, 008, 015, 016, 018
+  сужены до одной альтернативы (006, 008, 015 перепрогнаны «до» частью 6-15; 016, 018 сужены ещё до прогона части 16-30), а
+  недостающие альтернативы — патчи 031–063.
+- Свод механический (разбор синтаксического дерева исходника):
+  `self.assert*` → `assert` с сообщением вторым операндом, `self.` →
+  `box.`, вызовы методов-помощников → функции модуля голым именем со
+  стендом первым аргументом; бывший `subTest` — строка
+  `case = f"{<ярлык>}, зерно {box.seed}"` и тело на уровень выше в той же
+  функции (цикл сохранён), каждое прямое утверждение подслучая несёт
+  `case + <сообщение>`, каждый вызов помощника исхода — `case=case`.
+- Помощники `refusal`, `no_gate_refusal` (из песочницы), `assert_no_gate`,
+  `assert_prepare` — функции модуля с последним параметром
+  `case: str = ""`, `case` спереди к каждому тексту сообщения;
+  `assert_prepare` пробрасывает `case=case` в `refusal` (ANSWER-1, п. 1);
+  `prepared`, `broken_task` — функции модуля без `case`. Методы песочницы
+  не тронуты.
+- Локальные переменные, совпадающие с функциями модуля, переименованы:
+  `vitest` → `is_vitest` (все одиннадцать мест), `refusal` → `decide_refusal`.
+- Импорт: из `tests.outcome_gate_sandbox` — только имена, которых в модуле
+  нет (`OutcomeGateSandbox`, `GATE_ACTIONS`, `py_source`, `re` и константы
+  действий); `OUTCOME_ACTION`, `ulid`, `js_source`, стандартные модули —
+  прежние имена модуля.
+- Удалённых дублей нет: все 42 теста перенесены под прежними именами.
+
+## Шаги
+
+1. Набор патчей и таблица «до» (`mutation-run --ref base --tests
+   tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py --copy-table
+   --wait-lock 4`) частями 1-15, 16-30, 31-45, 46-60, 61-63 и
+   перепрогон переписанных патчей 006, 008, 015 частью 6-15.
+2. Свод 42 тестов в `tests/test_outcome_gate_module.py`, удаление исходного
+   файла, карта `python3 scripts/codebase_map.py`.
+3. Таблица «после» (`mutation-run --ref worktree --tests
+   tests/test_outcome_gate_module.py --copy-table --wait-lock 4`) частями
+   1-15, 16-30, 31-45, 46-60, 61-63 при том же числе рабочих процессов
+   (`auto`), перед каждой частью — `git status --porcelain -- orchestrator/`.
+4. Строки падений «до»/«после», соответствие имён, числа, guard.
+
+## Покрытие требований
+
+| Требование | Шаг |
+|---|---|
+| 1 | 1 (раздел «Мутации и заявки») |
+| 2 | 1 (раздел «Мутации до») |
+| 3 | 4 (раздел «Строки падений») |
+| 4 | 1, 3 (убийцы вне методов подготовки; находок нет) |
+| 5 | 1, 3 (только `--wait-lock 4`) |
+| 6 | 1–4 (временные файлы — только первым уровнем каталога документов, не `.md`) |
+| 7 | 2 |
+| 8 | 2 (фикстура `box`) |
+| 9 | 2 (помощники — функции модуля) |
+| 10 | 2 |
+| 11 | 2 |
+| 12 | 2 (дублей не удалено) |
+| 13 | 3 (раздел «Мутации после») |
+| 14 | 3, 4 (раздел «Числа и время») |
+| 15 | 2 |
+| 16 | 2 |
+| 17 | вне ролей (сессия при Операторе) |
+
+## Мутации и заявки
+
+Строка = мутация, заявившие её тесты исходного файла (одинаковые по смыслу
+заявки — одной мутацией) и что меняет патч. Патчи меняют
+`orchestrator/advance_gates/outcome_integrity.py`, кроме 003 и 004
+(`orchestrator/fsm_advance.py`) и 031
+(`orchestrator/advance_gates/acceptance.py`).
+
+- mutation-001: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («гейт создаётся у любого профиля»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` не сверяет `in_outcome_bounds`.
+- mutation-002: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («условие `t["is_canary"]` пропущено»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` не возвращает `None` для канарейки.
+- mutation-003: `Ac2PlaceTest::test_ac2_text_gate_refusal_first_no_outcome_runs` («гейт исходов поставлен до гейта по тексту»); патч `orchestrator/fsm_advance.py`: в `in_dev` вызов `_outcome_integrity_gate_refuses` перед `_test_integrity_gate_refuses`.
+- mutation-004: `Ac2PlaceTest::test_ac2_outcome_refusal_stops_before_review_rework_gate` («гейт исходов поставлен после гейта переделки ревью»); патч `orchestrator/fsm_advance.py`: `_review_rework_gate_refuses` перед гейтом исходов.
+- mutation-005: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` («`fresh` не передан — `False` в вызове»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` зовёт `components_full_suite(..., fresh=False)`.
+- mutation-006: `Ac4PrepareTest::test_ac4_git_preparation_failures_refuse` («`None` от `diff_base` — гейт пропущен»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_gate` при отказе «… (diff_base) не определена» возвращает `None` (сужен до одной альтернативы).
+- mutation-007: `Ac4PrepareTest::test_ac4_git_preparation_failures_refuse`, `Ac4PrepareTest::test_ac4_git_base_checkout_failure_refuses`, `Ac4PrepareTest::test_ac4_git_head_checkout_failure_refuses` («сбой выписки проглочен — сравнение по одной стороне»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_checkouts` при сбое выписки выписывает sha другой стороны.
+- mutation-008: `Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side` («"неизвестно" на базе принят за пустой отчёт»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` на стороне базы при «прогон не начат» возвращает пустой список (сужен до одной альтернативы).
+- mutation-009: `Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side`, `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head`, `Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base`, `Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head` («сторона в отказе не названа»); патч `orchestrator/advance_gates/outcome_integrity.py`: текст отказа `_full_run` без названия стороны.
+- mutation-010: `Ac5PassToPassTest::test_ac5_retried_on_base_not_in_pass_to_pass` («в набор берётся любой `passed` базы без сверки `retries == 0`»); патч `orchestrator/advance_gates/outcome_integrity.py`: `in_pass_to_pass` без `retries == 0`.
+- mutation-011: `Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass` («"нет тестов" базы принят за отказ»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` отказывает при пустом списке записей стороны.
+- mutation-012: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` («перепрогон базы пропущен»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` по умолчанию только на стороне ветки.
+- mutation-013: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` («`passed` с повтором не считается красным»); патч `orchestrator/advance_gates/outcome_integrity.py`: `red_on_branch` без ветки `passed` с повтором.
+- mutation-014: `Ac6RerunTest::test_ac6_skipped_on_branch_not_rerun` («`skipped` на ветке считается красным»); патч `orchestrator/advance_gates/outcome_integrity.py`: `red_on_branch` считает `skipped` красным.
+- mutation-015: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals`, `Ac7RerunPrepareTest::test_ac7_rerun_unknown_outcome_refuses` («"неизвестно" перепрогона принят за красный»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` не отказывает при исходе перепрогона не «зелёный»/«красный» (сужен до одной альтернативы).
+- mutation-016: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals`, `Ac7RerunPrepareTest::test_ac7_rerun_base_skipped_refuses` («пропуск на базе принят за красный базы»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` на базе отказывает только при отсутствии записи, `skipped` идёт красным (сужен до одной альтернативы).
+- mutation-017: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red` («`passed` с повтором — зелёный»); патч `orchestrator/advance_gates/outcome_integrity.py`: зелёный перепрогона — любой `passed`.
+- mutation-018: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red` («`skipped` на перепрогоне ветки — зелёный»); патч `orchestrator/advance_gates/outcome_integrity.py`: зелёный перепрогона — и `skipped` (сужен до одной альтернативы).
+- mutation-019: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_error_is_red`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red` («итог — "нестабилен после правки" вместо "сломан правкой"»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_redness` всегда даёт «нестабилен после правки».
+- mutation-020: `Ac8VerdictByRecordTest::test_ac8_broken_unstable_and_flaky_on_base`, `Ac8VerdictByRecordTest::test_ac8_unstable_after_change_general_refusal` («"нестабилен" не отличается от "сломан" — действие "… — сломан правкой"»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_redness` всегда даёт «сломан правкой».
+- mutation-021: `Ac8VerdictByRecordTest::test_ac8_broken_unstable_and_flaky_on_base`, `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` («красная база перепрогона не читается»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_redness` не смотрит на красноту базы.
+- mutation-022: `Ac8VerdictByRecordTest::test_ac8_neighbour_red_in_same_file_does_not_redden_rerun` («итог перепрогона по вердикту прогона»); патч `orchestrator/advance_gates/outcome_integrity.py`: зелёный перепрогона — `run.state == GREEN`.
+- mutation-023: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings`, `Ac9CompareTest::test_ac9_junit_records_findings` («"стал пропуском" только у `passed` базы»); патч `orchestrator/advance_gates/outcome_integrity.py`: `compare` — «стал пропуском» только при `passed` базы.
+- mutation-024: `Ac9CompareTest::test_ac9_one_finding_per_id_senior_kind` («находка сравнения добавляется к "сломан правкой"»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_judge` не отбрасывает записи `compare` по уже взятым идентификаторам.
+- mutation-025: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` («в порядке отчёта»); патч `orchestrator/advance_gates/outcome_integrity.py`: `ordered` возвращает список без сортировки.
+- mutation-026: `Ac11MandateTest::test_ac11_file_and_prefix_mandate_cover_findings`, `Ac11MandateTest::test_ac11_class_prefix_mandate_covers`, `Ac11MandateTest::test_ac11_method_prefix_mandate_covers_variants` («мандат сверяется точным равенством с идентификатором»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_covering_element` — только равенство элемента идентификатору.
+- mutation-027: `Ac11MandateTest::test_ac11_file_and_prefix_mandate_cover_findings`, `Ac11MandateTest::test_ac11_other_file_mandate_does_not_cover` («покрытие по имени файла без пути»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_covering_element` считает покрывающим любой элемент без `::`, не сверяя путь.
+- mutation-028: `Ac11MandateTest::test_ac11_prefix_needs_separator_after_it` («`startswith` без сверки следующего символа»); патч `orchestrator/advance_gates/outcome_integrity.py`: хвост после префикса не сверяется.
+- mutation-029: `Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover` («мандат собран без отбраковки автокоммита роли»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_answer_mandates` не отбрасывает автокоммит шага роли.
+- mutation-030: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` («число покрытых мандатом не указано»); патч `orchestrator/advance_gates/outcome_integrity.py`: из строки чисел записи пройденного гейта убрано число покрытых мандатом.
+- mutation-031: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («граница по `reported(profile)` без `from_components`»); патч `orchestrator/advance_gates/acceptance.py`: `in_outcome_bounds` не сверяет `from_components`.
+- mutation-032: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («отказ решения `decide` у гейта исходов — отказ перехода»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_outcome_integrity_gate` при отказе `decide` возвращает отказ «переход отклонён: гейт неослабления по исходам».
+- mutation-033: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («прогон по профилю записи в обход решения»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` при отказе `decide` берёт первый профиль `component_profiles` записи.
+- mutation-034: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` («голова гоняется в рабочей копии задачи»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_runs` гоняет голову в `workspace.path(task_id)`.
+- mutation-035: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` («база гоняется на дереве головы»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_runs` гоняет обе стороны на выписке головы.
+- mutation-036: `Ac4PrepareTest::test_ac4_git_preparation_failures_refuse`, `Ac4PrepareTest::test_ac4_git_head_not_read_refuses` («пустая голова — гейт пропущен»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_gate` при отказе «голова … не прочитана» возвращает `None`.
+- mutation-037: `Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base` («таймаут базы принят за пустой отчёт»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` на стороне базы при таймауте возвращает пустой список.
+- mutation-038: `Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side`, `Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head` («таймаут головы принят за красный прогон»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` на стороне головы при таймауте отдаёт записи прогона, как у красного.
+- mutation-039: `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head` («"неизвестно" на голове принят за красный прогон»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` на стороне головы при «прогон не начат» отдаёт записи прогона.
+- mutation-040: `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head` («"неизвестно" на голове принят за пустой отчёт»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_run` на стороне головы при «прогон не начат» возвращает пустой список.
+- mutation-041: `Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass` («"нет тестов" базы принят за "все тесты исчезли"»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_judge` при пустой базе пишет «исчез» по каждому тесту головы.
+- mutation-042: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` («перепрогон по всем файлам набора»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` передаёт раннеру все файлы отчёта базы.
+- mutation-043: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` («предел — `config.FULL_SUITE_TIMEOUT_SEC`»); патч `orchestrator/advance_gates/outcome_integrity.py`: предел `_rerun` — `config.FULL_SUITE_TIMEOUT_SEC`.
+- mutation-044: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` («предел приёмки»); патч `orchestrator/advance_gates/outcome_integrity.py`: предел `_rerun` — `config.ACCEPTANCE_TIMEOUT_SEC`.
+- mutation-045: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals` («без `select` перепрогон идёт полным набором»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` при отказе запуска (`run.refusal`) гоняет полный набор (`report_run(..., None, ...)`).
+- mutation-046: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals`, `Ac7RerunPrepareTest::test_ac7_rerun_timeout_refuses` («предел перепрогона принят за красный»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` не отказывает при таймауте перепрогона.
+- mutation-047: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals`, `Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses` («отсутствие записи на базе принято за красный базы»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` на базе отказывает только при `skipped`, отсутствие записи идёт красным.
+- mutation-048: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red` («отсутствие записи на перепрогоне ветки — зелёный»); патч `orchestrator/advance_gates/outcome_integrity.py`: зелёный перепрогона — и отсутствие записи.
+- mutation-049: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red` («`skipped` на перепрогоне ветки — отказ»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` отказывает (`_Prepare`) при `skipped` на перепрогоне ветки.
+- mutation-050: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds`, `Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red` («отсутствие записи на перепрогоне ветки — отказ»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` отказывает (`_Prepare`) при отсутствии записи на перепрогоне ветки.
+- mutation-051: `Ac7RerunPrepareTest::test_ac7_branch_rerun_error_is_red` («`error` перепрогона не считается красным — зелёный»); патч `orchestrator/advance_gates/outcome_integrity.py`: зелёный перепрогона — и `error`.
+- mutation-052: `Ac8VerdictByRecordTest::test_ac8_broken_unstable_and_flaky_on_base`, `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` («строка о базе не пишется»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_judge` не пишет строк «нестабилен и на базе».
+- mutation-053: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` («`todo` — без сверки с базой»); патч `orchestrator/advance_gates/outcome_integrity.py`: `compare` — «появилось todo» при `todo` ветки независимо от базы.
+- mutation-054: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` («`fails` — без сверки с базой»); патч `orchestrator/advance_gates/outcome_integrity.py`: `compare` — «появилось fails» при `fails` ветки независимо от базы.
+- mutation-055: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` («новый идентификатор не проверяется»); патч `orchestrator/advance_gates/outcome_integrity.py`: `compare` не обходит идентификаторы, которых нет на базе.
+- mutation-056: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` («у `to_todo` две записи сравнения — пропуск и `todo`»); патч `orchestrator/advance_gates/outcome_integrity.py`: `compare` к «появилось todo» с пропуском добавляет «стал пропуском».
+- mutation-057: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` («рост пропусков — отдельные строки по тестам без итоговой»); патч `orchestrator/advance_gates/outcome_integrity.py`: при росте пропусков `_judge` пишет строку на каждый пропуск вместо итоговой.
+- mutation-058: `Ac9CompareTest::test_ac9_junit_records_findings` («исчезновение ищется не по отчёту»); патч `orchestrator/advance_gates/outcome_integrity.py`: `compare` не пишет «исчез» по отчёту.
+- mutation-059: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` («в порядке сравнения — прочие раньше красных»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_judge` ставит записи `compare` перед «сломан правкой» и не пересортировывает итог.
+- mutation-060: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` («внутри вида без сортировки»); патч `orchestrator/advance_gates/outcome_integrity.py`: `ordered` сортирует только по виду.
+- mutation-061: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` («все одной строкой»); патч `orchestrator/advance_gates/outcome_integrity.py`: строки отказа соединены «; » вместо перевода строки.
+- mutation-062: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` («запись пройденного гейта не пишется»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_judge` не зовёт `store.journal` для «гейт неослабления по исходам пройден».
+- mutation-063: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` («прогоны файлов не посчитаны»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_rerun` не считает прогоны файлов.
+
+## Мутации до
+
+Вывод `mutation-run --wait` каждой части дословно (шапка и все строки),
+`--ref base`, тесты — исходный файл, рабочих процессов — `auto` (умолчание
+узла прогона) во всех частях. Части 1-15, 16-30, 31-45, 46-60, 61-63;
+перепрогон переписанных патчей 006, 008, 015 — частью 6-15 (у
+мутации действует последняя строка в порядке текста).
+
+@@BEFORE@@
+## Мутации после
+
+Вывод `mutation-run --wait` каждой части дословно (шапка и все строки),
+`--ref worktree`, тесты — `tests/test_outcome_gate_module.py`, рабочих
+процессов — `auto`, те же части 1-15, 16-30, 31-45, 46-60, 61-63.
+
+@@AFTER@@
+## Строки падений
+
+Строка падения — файл:строка упавшего утверждения из лога прогона патча
+(`<id>-mutation-run-<n>-p<nnn>.log`, раздел FAILURES, нижний кадр
+`tests/…`). «До» — по исходному файлу и песочнице на базе, «после» — по
+`tests/test_outcome_gate_module.py`: утверждение функции, в которую
+перенесён убивший «до» тест, или помощника исхода.
+
+@@FAILS@@
+## Соответствие имён «до → после»
+
+Каждый тест исходного файла перенесён в функцию модуля с тем же именем.
+
+@@MAP@@
+## Находки
+
+Мутаций, не убитых «до», нет; исходов «ошибка сбора, импорта или setup» и
+предела в последних строках нет.
+
+## Удалённые дубли
+
+Нет: все 42 теста перенесены.
+
+## Числа и время
+
+- Тестов «до»: @@SRC_TESTS@@ в исходном файле (строк @@SRC_LINES@@) и @@MOD_BASE_TESTS@@ в модуле на базе (строк @@MOD_BASE_LINES@@).
+- Тестов «после»: @@NEW_TESTS@@ в `tests/test_outcome_gate_module.py` (строк @@NEW_LINES@@).
+@@TIMES@@
+
+## Влияние на систему
+
+- Код пульта не меняется: `orchestrator/` не тронут, мутации живут только
+  во временной копии `mutation-run`. Ветка меняет
+  `tests/test_outcome_gate_module.py` (добавлены фикстура `box`, шесть
+  функций-помощников, 42 теста, импорт из песочницы, абзац докстринга),
+  удаляет `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py` (мандат —
+  ANSWER-1) и обновляет `docs/codebase-map.md` выводом генератора.
+- Неослабление: ожидания перенесены дословно (литерал — литералом,
+  константа — константой), сравнения не ослаблены, `skip`/`xfail` и
+  пределов нет; доказательство — таблицы «до»/«после»: каждую мутацию,
+  убитую «до» тестом T, «после» убивает функция T.
+- Песочница, три импортёра, `tests/fixtures.py`, `tests/sandbox.py`,
+  файлы волны 2б-3 не тронуты; 11 тестов волны 2а-1а и имена `id_`/`ID_`
+  не изменены.
+- Откат — revert одного merge-коммита: исходный файл вернётся, функции
+  модуля уйдут.
+
+## Риски
+
+- Сообщения подслучаев склеены как `case + <текст>` без разделителя (так
+  требует правило сверки помощников по AST): текст провала читается как
+  «<ярлык>, зерно <n>зерно: <n>; …» — неудобно, но ярлык и зерно на месте.
+- Планка читает PLAN и таблицы из ссылки документов: локальный
+  `plank-run` видит их только после автокоммита шага.
+
+## Предложения системе
+
+- `orchestrator/mutation_run.py`: нет флага прогона одного патча по номеру
+  вне диапазона «до» — перепрогон переписанных патчей частью 6-15
+  гоняет и неизменённые соседние; заготовка 2а-1 при этом соединяла
+  альтернативы заявок в одном патче — правило «по патчу на альтернативу»
+  стоит проверять при переносе заготовки, а не только при написании.

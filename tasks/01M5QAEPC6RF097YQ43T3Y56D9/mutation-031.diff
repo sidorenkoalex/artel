@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/acceptance.py b/orchestrator/advance_gates/acceptance.py
+--- a/orchestrator/advance_gates/acceptance.py
++++ b/orchestrator/advance_gates/acceptance.py
+@@ -214,8 +214,7 @@
+     """Профиль в границе проверок исхода тестов критериев (требование 2):
+     компонент записи `components:` с `report`. Артель, `test_profile` (в
+     том числе `pytest-own` с `report`) и компоненты без `report` — вне."""
+-    return (profile is not None and project_profile.reported(profile)
+-            and bool(getattr(profile, "from_components", False)))
++    return profile is not None and project_profile.reported(profile)
+ 
+ 
+ @dataclass(frozen=True)

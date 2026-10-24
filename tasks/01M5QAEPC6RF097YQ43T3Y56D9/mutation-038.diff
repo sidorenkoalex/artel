@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -398,6 +398,8 @@
+                                            fresh=True)
+     if run.outcome in (acceptance.FULL_SUITE_NOT_STARTED,
+                        acceptance.FULL_SUITE_TIMEOUT):
++        if side == HEAD and run.outcome == acceptance.FULL_SUITE_TIMEOUT:
++            return list(run.tests)
+         raise _Prepare(f"полный набор на стороне «{side}»: {run.outcome} "
+                        f"— {run.detail.strip()[:500]}")
+     return ([] if run.outcome == acceptance.FULL_SUITE_NO_TESTS

@@ -1,0 +1,15 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -424,9 +424,8 @@
+                 where = f"перепрогон {path} на стороне «{side}»"
+                 if run.refusal:
+                     raise _Prepare(f"{where}: {run.refusal}")
+-                if run.timed_out:
+-                    raise _Prepare(f"{where}: таймаут ({limit} с)")
+-                if run.state not in (outcome.GREEN, outcome.RED):
++                if run.state not in (outcome.GREEN, outcome.RED) \
++                        and not run.timed_out:
+                     raise _Prepare(f"{where}: исход «{run.state}» — {run.reason}")
+                 records = {c.id: c for c in run.tests}
+                 for cid in files[path]:

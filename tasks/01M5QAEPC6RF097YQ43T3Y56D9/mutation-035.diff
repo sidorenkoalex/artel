@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -388,7 +388,7 @@
+ def _full_runs(task_id: str, profile, trees: dict) -> dict:
+     """{сторона: записи полного набора}; исход «не начат»/«неизвестно» или
+     таймаут — `_Prepare` с названной стороной."""
+-    return {side: _full_run(task_id, profile, side, tree)
++    return {side: _full_run(task_id, profile, side, trees[HEAD])
+             for side, tree in trees.items()}
+ 
+ 

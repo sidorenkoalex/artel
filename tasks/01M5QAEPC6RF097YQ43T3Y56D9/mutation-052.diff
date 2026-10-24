@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -987,7 +987,7 @@
+                for f in findings]
+     uncovered = [f for f, pair in covered if pair is None]
+     covered = [(f, pair) for f, pair in covered if pair is not None]
+-    flaky_lines = [f"{FLAKY_ON_BASE}: {cid}" for cid in flaky]
++    flaky_lines = []
+     if uncovered:
+         lines = [f.line for f in uncovered]
+         growth = skip_growth(base, head)
