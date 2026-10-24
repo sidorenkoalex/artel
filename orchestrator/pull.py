@@ -28,6 +28,7 @@ SPEC.md — документа другой роли — с ветки, имен
 (`tests/test_fsm_merge_conflict_note.py`, не мок, чистая функция) —
 `fsm.py` реэкспортирует его отсюда (AC-5).
 """
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -675,11 +676,40 @@ def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
             print(f"[{task_id}] переход отклонён: {detail}")
             return Refused(detail)
         kwargs = {"command": own} if own is not None else {}
-        if long_lived:
-            green, tail = acceptance.run(tdir, cwd=wt_path, extra=long_lived,
-                                         **kwargs)
-        else:
-            green, tail = acceptance.run(tdir, cwd=wt_path, **kwargs)
+        # Дерево прогона — то же, что на рубеже `in_dev -> verifying` и на
+        # автогейте: HEAD рабочей копии после слияния плюс приложения PLAN
+        # (SPEC 01M5NPVRRK9R6S6SD40CBJZYPT). Без него планка, проверяющая
+        # результат приложения, краснела после подтяжки при зелёном рубеже.
+        from . import appendix_tree
+        from .advance_gates import plan_appendix
+        with contextlib.ExitStack() as stack:
+            tree = stack.enter_context(appendix_tree.suite_tree(
+                conn, task_id, wt_path,
+                not_run=f"планка после подтяжки {source_branch} не прогнана"))
+            if tree.root is None:
+                # Тем же действием, что на рубеже verifying: отказ по
+                # содержимому PLAN чинит роль, сбой git — нет.
+                if tree.fixable:
+                    action = plan_appendix.PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION
+                else:
+                    action = plan_appendix.PLAN_APPENDIX_GATE_FAILURE_ACTION
+                store.journal(conn, task_id, "fsm", action, tree.refusal)
+                print(f"[{task_id}] переход отклонён: {tree.refusal}")
+                return Refused(tree.refusal)
+            run_cwd, run_tdir = wt_path, tdir
+            if tree.root != wt_path:
+                # Во временном дереве планки нет: выкладка — тем же узлом,
+                # что на рубеже verifying, уборка — его же `finally`.
+                # Выкладка в рабочей копии выше остаётся под прежним учётом
+                # `preexisting`.
+                run_cwd = tree.root
+                run_tdir = stack.enter_context(acceptance.plank_in_code_copy(
+                    task_id, artifact_branch_name, run_cwd))
+            if long_lived:
+                green, tail = acceptance.run(run_tdir, cwd=run_cwd,
+                                             extra=long_lived, **kwargs)
+            else:
+                green, tail = acceptance.run(run_tdir, cwd=run_cwd, **kwargs)
         if not green:
             detail = (f"приёмочные тесты красные после подтяжки {source_branch} "
                       f"(слияние сохранено, откат не выполняется):\n{tail}")
