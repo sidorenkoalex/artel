@@ -1,0 +1,11 @@
+--- a/orchestrator/doctor/suite_duration.py
++++ b/orchestrator/doctor/suite_duration.py
+@@ -37,7 +37,7 @@ def _series(conn, target: str, rows: list, task_targets: dict) -> list[dict]:
+     start = len(values) - 1
+     while start and values[start - 1]["xdist_workers"] == workers:
+         start -= 1
+-    return values[start:]
++    return values[start + 1:]
+
+
+ def check_suite_duration(conn) -> list[doctor.Check]:

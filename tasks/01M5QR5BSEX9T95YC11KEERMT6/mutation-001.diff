@@ -1,0 +1,11 @@
+--- a/orchestrator/doctor/suite_duration.py
++++ b/orchestrator/doctor/suite_duration.py
+@@ -18,7 +18,7 @@ def _reference(conn, target: str) -> str | None:
+
+
+ def _series(conn, target: str, rows: list, task_targets: dict) -> list[dict]:
+-    reference = _reference(conn, target)
++    reference = None
+     values = []
+     for row in rows:
+         if task_targets.get(row["task_id"]) != target:
