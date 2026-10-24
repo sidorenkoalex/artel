@@ -1,12 +1,9 @@
 ## Выяснено
-- Числа SPEC подтвердились: 2493/609/160 строк, 42+3+8 тестов, 43/4/8 строк «Ловит мутацию» (литералы CLAIM :91 и :69). Песочница — строки 47–899, OutcomeGateSandbox :296–899; IdOutcomeGateSandbox кончается на :516, а не на :520.
-- AC-8 («нет наследников unittest.TestCase») противоречит треб. 7/AC-7: IdOutcomeGateSandbox → GitignoreCommittedRealGitSandbox → RealGitSandbox → TmpRootTest(unittest.TestCase) (tests/sandbox.py:1581,1897,2047), а лежать она должна в самом test_outcome_gate_module.py.
-- Список совпадающих имён в SPEC неверен: на верхнем уровне при другом содержимом совпадают только GATE_ACTIONS, VITEST_KIND, spec_text. OLD/NEW/HINT/js_names/VITEST_IT/PLANK_JS_PREFIX в outcome_gate нет вовсе; answer_proc/runner_files — методы, в пространстве имён модуля они не сталкиваются. GATE_ACTIONS в списке пропущен.
-- AC-18 «docs/codebase-map.md не изменён» строже ТЗ («руками не правится») и расходится с conventions-core (регенерировать карту при правке tests/*.py) и с волной 1а (7ea8ae48 менял карту в ветке).
-- Под pytest падение setUp у наследника TestCase — FAILED (до), а у фикстуры — ERROR at setup (после); в AC-3 описан только второй случай.
+- Визит 2 (spec_sha 608c1aa5). Все 5 отклонений визита 1 (fail) в SPEC закрыты: AC-8 переформулирован, перечень имён верен (3 разных: GATE_ACTIONS/VITEST_KIND/spec_text; 17 дословных — подтверждено ast.dump), AC-18 разрешает регенерацию карты, AC-3 покрывает setUp «до» и требует файл:строку из лога (-vv, длинный traceback есть), :516, prepared/broken_task, refusal голым именем.
+- Остаточные мелочи: тело id_no_gate_refusal читает GATE_ACTIONS (дословно) против ID_GATE_ACTIONS (переименование употреблений); AC-18 «совпадает с выводом генератора» — строка built_at_sha всегда разная (CI сверяет без неё); шапка --ref worktree печатает HEAD рабочей копии (mutation_run.py:298), незакоммиченные правки orchestrator/ в «после» git diff по шапкам не видит.
 ## Не сработало
-- В песочнице Bash нельзя ls/cat/awk и `cd &&` — читать через python3 heredoc, относительные пути.
+- Bash: читать через python3 heredoc / sed, относительные пути.
 ## Где остановился
-- SPEC-AUDIT.md написан, вердикт fail; guard прогнан.
+- SPEC-AUDIT.md: verdict concerns, status ready; guard прогнан.
 ## Чего не хватило
-- Как guard видит вызов `box.method()` (не видит) — `_HelperScope.function` в scripts/guard.py:1902.
+- Какой sha печатает шапка mutation-run для worktree — mutation_run.py:292–298.
