@@ -30,8 +30,17 @@ from orchestrator.config import ARTEL_ROLE_ENV
 # если модуль есть в дереве прогона: зеркала репозитория в тестах берут
 # этот файл без `tests/fixtures.py`. Тест, запросивший фикстуру при
 # отсутствии модуля, падает с «fixture not found» — громко.
-pytest_plugins = (["tests.fixtures"]
-                  if importlib.util.find_spec("tests.fixtures") else [])
+def _fixtures_plugins() -> list:
+    """`["tests.fixtures"]`, если модуль находится; `find_spec` бросает
+    `ModuleNotFoundError`, когда нет самого пакета `tests` — тогда `[]`."""
+    try:
+        found = importlib.util.find_spec("tests.fixtures")
+    except ModuleNotFoundError:
+        return []
+    return ["tests.fixtures"] if found else []
+
+
+pytest_plugins = _fixtures_plugins()
 
 # Флаги pytest, за которыми следует отдельное значение — не позиционный
 # аргумент-путь (тот же список, что нёс `bash_guard._PYTEST_VALUE_FLAGS`).

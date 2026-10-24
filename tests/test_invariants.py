@@ -3165,3 +3165,83 @@ class ReportedOutcomeNotGreenInvariantTest(unittest.TestCase):
                                  vitest["profile"])
             self.assertEqual(run.green, expected, flow.note(
                 f"повторов {retries}: {run}\n{out}"))
+
+
+class SharedFixturesWrapSandboxClassesInvariantTest(unittest.TestCase):
+    """Инвариант 42 (docs/invariants.md; ADR-0027, часть Б): общие фикстуры
+    `tests/fixtures.py` — переходники над классами песочниц
+    `tests/sandbox.py`, своей подготовки и подмен в модуле нет:
+    (1) верхний уровень модуля — только строка документации, импорты и
+    определения функций; (2) у фикстуры единственный декоратор
+    `pytest.fixture`, тело — ровно импорт класса из `tests.sandbox` и
+    `yield from _sandbox(<класс>)`, класс — наследник `TmpDirTest` или
+    `TmpRootTest`; (3) ни одна функция модуля (в том числе `_sandbox` и
+    помощники уборки) не обращается к `config`, `mock`, `patch`,
+    `monkeypatch`, `setattr`, `environ`. Так изоляция фикстуры совпадает
+    с изоляцией класса и держится инвариантом 37.
+
+    Ловит мутацию: фикстура или `_sandbox` подменяет `config` сама,
+    фикстура задана присваиванием или дополнительным декоратором, фикстура
+    отдаёт не песочницу."""
+
+    PATH = REPO_ROOT / "tests" / "fixtures.py"
+    FORBIDDEN = {"config", "mock", "patch", "monkeypatch", "setattr", "environ"}
+
+    def _tree(self):
+        return ast.parse(self.PATH.read_text(encoding="utf-8"))
+
+    def test_module_top_level_is_imports_and_functions(self):
+        for index, node in enumerate(self._tree().body):
+            docstring = (index == 0 and isinstance(node, ast.Expr)
+                         and isinstance(node.value, ast.Constant)
+                         and isinstance(node.value.value, str))
+            with self.subTest(line=node.lineno):
+                self.assertTrue(
+                    docstring or isinstance(
+                        node, (ast.Import, ast.ImportFrom, ast.FunctionDef)),
+                    f"строка {node.lineno}: {ast.unparse(node)[:80]}")
+
+    def test_no_function_touches_config_or_patching(self):
+        for node in ast.walk(self._tree()):
+            if isinstance(node, ast.Name):
+                names = {node.id}
+            elif isinstance(node, ast.Attribute):
+                names = {node.attr}
+            elif isinstance(node, ast.alias):
+                names = set(node.name.split(".")) | {node.asname}
+            else:
+                continue
+            line = getattr(node, "lineno", 0)
+            with self.subTest(line=line):
+                self.assertFalse(names & self.FORBIDDEN,
+                                 f"строка {line}: {sorted(names & self.FORBIDDEN)}")
+
+    def test_every_shared_fixture_wraps_a_sandbox_class(self):
+        from tests import sandbox
+        fixtures = []
+        for node in self._tree().body:
+            if not isinstance(node, ast.FunctionDef) or not node.decorator_list:
+                continue
+            fixtures.append(node)
+            with self.subTest(fixture=node.name):
+                self.assertEqual(
+                    [ast.unparse(d) for d in node.decorator_list],
+                    ["pytest.fixture"], node.name)
+                body = [st for st in node.body
+                        if not (isinstance(st, ast.Expr)
+                                and isinstance(st.value, ast.Constant)
+                                and isinstance(st.value.value, str))]
+                self.assertEqual(len(body), 2,
+                                 f"{node.name}: тело — не переходник")
+                imp, ret = body
+                self.assertIsInstance(imp, ast.ImportFrom, node.name)
+                self.assertEqual(imp.module, "tests.sandbox", node.name)
+                self.assertEqual(len(imp.names), 1, node.name)
+                name = imp.names[0].name
+                self.assertEqual(ast.unparse(ret),
+                                 f"yield from _sandbox({name})", node.name)
+                cls = getattr(sandbox, name)
+                self.assertTrue(
+                    issubclass(cls, (sandbox.TmpDirTest, sandbox.TmpRootTest)),
+                    f"{node.name}: {cls.__name__} — не песочница")
+        self.assertTrue(fixtures, "в tests/fixtures.py нет фикстур")
