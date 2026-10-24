@@ -1,17 +1,17 @@
-# Записка spec_auditor — 01M5NNDYGQ8G6VFDEEXYBB0W3D
+# Записка spec_auditor — 01M5NNDYGQ8G6VFDEEXYBB0W3D (круг 2, spec_sha 76b102eb)
 
 ## Выяснено
-- Счёт подтверждён: 43/13/16/8 тестов, 17/13/16/8 строк «Ловит мутацию», 1728 строк; импортов файлов волны нет (только докстринги tests/sandbox.py:1815, tests/test_doc_commit.py:6 и литерал-путь tests/test_doc_commit.py:94).
-- Под ролью `-n auto -p xdist` невозможен: conftest.py:80-86 роняет воркеры xdist (у воркера нет позиционных путей) — воспроизведено: «node down», «no tests ran». Последовательно 4 файла: 80 passed, 55 subtests, 12.7 с.
-- Запись вне worktree и каталога документов шагу недоступна (mktemp -d требует подтверждения); подкаталог каталога документов — посторонний (guard.py:3027-3048); копия под tests/ уйдёт в ветку WIP-чекпоинтом (checkpoint.py:1843, `add -A`, путь в зоне).
-- Голые `assertRaises(SystemExit)` (tests/test_notes.py:91 и др., test_notes_apply.py:125) против AC-3 «pytest.raises(..., match=…)»; subTest по вычисляемым наборам (config.NOTE_SILENCE_WINDOW_STATES, OUTSIDE_WINDOW, rng) против «parametrize литералами».
-- Мандат по пути снимает находки и test_integrity (:1061), и outcome_integrity (:278-300).
-
-## Не сработало
-- Bash с `$VAR`, `cd &&`, `cat` вне каталогов — отказ песочницы; работают простые команды из worktree.
+- `orchestrator/mutation_run.py` есть на origin/main 4e1c8a18 и в пине пульта (корень пульта на 4e1c8a18), но НЕТ в базе ветки 16f9ab43 — не мешает: команда исполняется кодом пульта (config.ROOT), не рабочей копией.
+- `mutation-run` разрешён роли: origin/main orchestrator/artel.py:2189-2192 `_ROLE_ALLOWED_COMMANDS`.
+- Таблица пишется в `config.LOGS/suite-run/<id>/<id>-mutation-run-<n>.mutations.tsv` (mutation_run.py:122-123, suite_lock.py:40-44). Шаг на Claude её НЕ читает: Read `.artel/logs/suite-run/lock.json` — «requested permissions… haven't granted»; `--add-dir` суiте-каталога есть только у Codex (suite_lock.py:41-43). `--wait` печатает только сводку (mutation_run.py:691-696).
+- Узлы: junit → `path::Class::method` (reporters/outcome.py:106-133) — форма требования 8 подтверждена.
+- classify (mutation_run.py:379-397): любой FAILED → «убита». Ошибка в unittest setUp под pytest — FAILED; в pytest-фикстуре — ERROR → «ошибка сбора, импорта или setup». SchemaTmpRootTest.setUp зовёт store.create_schema (tests/sandbox.py:1819-1821).
+- Тесты импортируют orchestrator на уровне модуля → ломка импорта = COLLECTION, не «убита».
+- guard: скрытые файлы (`.`-префикс) в каталоге задачи — посторонние (guard.py:3040-3041).
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready; guard прогнан.
+- SPEC-AUDIT.md готов: verdict concerns, status ready; guard (artel.py guard) — ок.
+- Отклонения: (1) роль на Claude не может прочитать/приложить таблицы mutation-run; (2) падение unittest setUp = «убита», а в фикстуре = «ошибка setup».
 
 ## Чего не хватило
-- Знания, что xdist под ARTEL_ROLE отключён сторожем conftest.py — нашёл только прогоном.
+- Знания, где роль берёт таблицу mutation-run: в коде канала нет, нашёл проверкой прав чтения.
