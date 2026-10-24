@@ -1,3 +1,4 @@
 # Паспорт живой задачи
 
 2026-10-24 23:35:18Z  spec_audit  actor=fsm
+2026-10-24 23:41:12Z  spec_gate  actor=fsm
