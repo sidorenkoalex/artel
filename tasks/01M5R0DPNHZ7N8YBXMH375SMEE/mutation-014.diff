@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1193,7 +1193,7 @@
+                  f"  задача осталась на гейте merge; разберись с подготовкой "
+                  f"прогона и повтори artel.py approve {task_id}")
+     store.journal(conn, task_id, "fsm", MERGE_REFUSAL_ACTION, refusal.detail)
+-    store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
++    store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
+                     detail=refusal.detail)
+     print(f"[{task_id}] {MERGE_REFUSAL_ACTION}: задача эскалирована\n"
+           f"{refusal.detail}\n  дальше: находку снимает мандат Оператора — "

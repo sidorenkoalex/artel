@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -330,7 +330,7 @@
+     used = sorted(set(elements_used))
+     if not used:
+         return MANDATE_NONE
+-    return hashlib.sha256("\n".join(used).encode("utf-8")).hexdigest()
++    return hashlib.sha256(",".join(used).encode("utf-8")).hexdigest()
+ 
+ 
+ def _answer_mandates(artifact_branch: str, task_id: str) -> tuple:

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -799,6 +799,8 @@
+     def base_of(repo: Path, _branch: str, head_sha: str) -> str:
+         main_sha = main_sha_of()
+         if not main_sha:
++            main_sha = gitcmd.diff_base(_branch, repo=repo)
++        if not main_sha:
+             raise _Prepare("sha main не получен повторным фетчем после сверки "
+                            "свежести — база гейта на мерже не определена")
+         res = gitcmd.in_repo(repo, "merge-base", head_sha, main_sha)

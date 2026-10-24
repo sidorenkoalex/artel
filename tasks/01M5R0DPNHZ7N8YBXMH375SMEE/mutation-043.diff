@@ -1,0 +1,12 @@
+diff --git a/orchestrator/review.py b/orchestrator/review.py
+--- a/orchestrator/review.py
++++ b/orchestrator/review.py
+@@ -659,7 +659,7 @@
+     # гейта по тексту нет, а строки гейта исходов для головы есть всегда.
+     outcome_lines = _outcome_gate_lines(conn, task_id, branch,
+                                         decision.profile)
+-    if not lines and not unobserved and outcome_lines is None:
++    if not lines and not unobserved:
+         return None
+     body = "\n".join(lines + [f"{test_integrity.ASSERTION_UNOBSERVED_PREFIX}: "
+                               f"{reason}" for reason in unobserved]

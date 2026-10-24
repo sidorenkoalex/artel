@@ -1,0 +1,13 @@
+diff --git a/orchestrator/review.py b/orchestrator/review.py
+--- a/orchestrator/review.py
++++ b/orchestrator/review.py
+@@ -703,6 +703,9 @@
+     counted = dict.fromkeys(
+         row["detail"] or "" for row in store.task_steps(conn, task_id)
+         if row["action"] == tests_writing.FILE_LEVEL_COUNTED_ACTION)
++    shown = outcome_integrity.review_lines(conn, task_id, head)
++    if any("не исполнялся" in line for line in shown):
++        return None
+     return (outcome_integrity.review_lines(conn, task_id, head)
+             + [f"{tests_writing.FILE_LEVEL_COUNTED_ACTION}: {detail}"
+                for detail in counted])

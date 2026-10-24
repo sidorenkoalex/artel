@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1187,6 +1187,7 @@
+     if refusal is None:
+         return False
+     if refusal.action == PREPARE_REFUSAL_ACTION:
++        return False
+         store.journal(conn, task_id, "fsm", MERGE_PREPARE_ACTION,
+                       refusal.detail)
+         sys.exit(f"[{task_id}] {MERGE_PREPARE_ACTION}: {refusal.detail}\n"

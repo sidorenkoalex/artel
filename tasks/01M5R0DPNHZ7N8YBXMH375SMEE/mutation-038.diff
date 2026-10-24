@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1230,7 +1230,7 @@
+         return _components_review_lines(conn, task_id, head_sha)
+     for detail in reversed(_passed_details(conn, task_id) if head_sha else []):
+         fields = proof_fields(detail)
+-        if fields is None or fields[0] != head_sha:
++        if fields is None or fields[1] != head_sha:
+             continue
+         lines = [line for line in detail.splitlines()
+                  if line.strip() and not PROOF_LINE.match(line.strip())]

@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -609,6 +609,7 @@
+             target = _unquote(line[4:])
+             if target == "/dev/null":
+                 path = None
++                added.setdefault(target, [])
+             elif target.startswith("b/"):
+                 path = target[2:]
+             else:

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1003,7 +1003,7 @@
+               f"прошедших перепрогон, {len(red)}; прогонов файлов "
+               f"{file_runs}; находок, покрытых мандатом, {len(covered)}")
+     used = [element for _f, (element, _s) in covered]
+-    proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
++    proof = (f"голова {base_sha}; база {head_sha}; ключ {key}; мандат "
+              f"{fingerprint(used + _replacement_elements(replacements))}")
+     store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(
+         [counts, proof, *prior_line, *flaky_lines, *replaced_lines,

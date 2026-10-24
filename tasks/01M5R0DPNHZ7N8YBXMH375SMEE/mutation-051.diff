@@ -1,0 +1,23 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -575,7 +575,7 @@
+     молчаливый пропуск строк файла."""
+     argv = ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff",
+             "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative",
+-            "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U0",
++            "-M", "-U0",
+             base_sha, head_sha]
+     try:
+         res = subprocess.run(argv, capture_output=True, env=gitcmd.pult_env())
+@@ -612,9 +612,7 @@
+             elif target.startswith("b/"):
+                 path = target[2:]
+             else:
+-                raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+-                               f"{head_sha[:12]}: заголовок {line[:200]!r} "
+-                               f"без префикса b/")
++                path = None
+         else:
+             m = _HUNK_RE.match(line)
+             if m:

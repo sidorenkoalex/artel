@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -785,7 +785,8 @@
+ 
+ def _diff_base(repo: Path, branch: str, _head_sha: str) -> str:
+     """База выхода из `in_dev` — `gitcmd.diff_base`, как до задачи."""
+-    base_sha = gitcmd.diff_base(branch, repo=repo)
++    res = gitcmd.in_repo(repo, "rev-parse", f"refs/remotes/origin/{config.MAIN_BRANCH}")
++    base_sha = res.stdout.strip() if res is not None and res.returncode == 0 else ""
+     if not base_sha:
+         raise _Prepare(f"база сравнения ветки {branch} (diff_base) не определена")
+     return base_sha

@@ -1,0 +1,15 @@
+diff --git a/orchestrator/fsm_merge_gate.py b/orchestrator/fsm_merge_gate.py
+--- a/orchestrator/fsm_merge_gate.py
++++ b/orchestrator/fsm_merge_gate.py
+@@ -1509,9 +1509,9 @@
+     sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch, ctx)
+     if sync_outcome != "fresh":
+         return sync_outcome
++    if _acceptance_locks_refuse(conn, task_id):
++        return ("stopped",)
+     if _outcome_integrity_merge_gate(conn, task_id, state, ctx):
+-        return ("stopped",)
+-    if _acceptance_locks_refuse(conn, task_id):
+         return ("stopped",)
+     ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)
+     if ci_outcome != "ok":

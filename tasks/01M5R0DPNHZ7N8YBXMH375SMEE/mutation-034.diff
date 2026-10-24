@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1179,8 +1179,6 @@
+         if profile is None:
+             return False
+         t = store.get_task(conn, task_id)
+-        if t["is_canary"]:
+-            return False
+         artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+         refusal = _gate(conn, task_id, t["branch"], artifact_branch, profile,
+                         _merge_base_of(main_sha_of), merge=True)

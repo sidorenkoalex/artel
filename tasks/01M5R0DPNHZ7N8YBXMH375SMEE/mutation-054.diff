@@ -1,0 +1,19 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -649,12 +649,14 @@
+     записями в отчёте головы. Вид файла — по пути головы: файл,
+     переименованный из тестового пути в путь кода, — файл кода."""
+     origin = {(new or path): status for status, path, new in entries}
++    old_of = {(new or path): path for status, path, new in entries}
+     found = []
+     for path in sorted(added):
+         status = origin.get(path, "M")
+         if not files.in_component(path):
+             continue
+-        if files.is_test(path) or files.is_support(path):
++        if any(files.is_test(p) or files.is_support(p)
++               for p in (path, old_of.get(path, path))):
+             continue
+         # Путь головы, новый на ветке (`A`, новый путь `R`/`C`), у
+         # компонента без `tests` — тестовый по тому же правилу, что `A`.

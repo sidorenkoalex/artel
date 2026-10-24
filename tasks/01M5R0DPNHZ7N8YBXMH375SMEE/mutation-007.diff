@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1002,7 +1002,7 @@
+     counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; тестов, "
+               f"прошедших перепрогон, {len(red)}; прогонов файлов "
+               f"{file_runs}; находок, покрытых мандатом, {len(covered)}")
+-    used = [element for _f, (element, _s) in covered]
++    used = [element for _f, (element, _s) in covered] + list(mandate)
+     proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
+              f"{fingerprint(used + _replacement_elements(replacements))}")
+     store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(

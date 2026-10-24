@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/refusal_classes.py b/orchestrator/advance_gates/refusal_classes.py
+--- a/orchestrator/advance_gates/refusal_classes.py
++++ b/orchestrator/advance_gates/refusal_classes.py
+@@ -132,7 +132,6 @@
+     LONG_LIVED_GIT_REFUSAL_ACTION: OPERATOR_FIXES,
+     OUTCOME_INTEGRITY_REFUSAL_ACTION: OPERATOR_FIXES,
+     OUTCOME_PREPARE_REFUSAL_ACTION: OPERATOR_FIXES,
+-    OUTCOME_MERGE_REFUSAL_ACTION: OPERATOR_FIXES,
+     OUTCOME_MERGE_PREPARE_ACTION: OPERATOR_FIXES,
+     SPEC_AUDIT_SPEC_CHANGED_REFUSAL_ACTION: OPERATOR_FIXES,
+     "переход отклонён: результат шага не закоммичен": OPERATOR_FIXES,

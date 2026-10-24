@@ -1,0 +1,13 @@
+diff --git a/orchestrator/review.py b/orchestrator/review.py
+--- a/orchestrator/review.py
++++ b/orchestrator/review.py
+@@ -632,8 +632,7 @@
+     `test_integrity` импортируется здесь: он тянет `advance_gates.zones` и
+     дальше `fsm`-соседей, а `fsm` импортирует этот модуль на верхнем
+     уровне."""
+-    if not store.task_exists(conn, task_id) \
+-            or store.get_task(conn, task_id)["is_canary"]:
++    if not store.task_exists(conn, task_id):
+         return None
+     decision = project_profile.for_task_target(target, task_id, conn)
+     if decision.refusal:

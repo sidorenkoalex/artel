@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -907,7 +907,7 @@
+     replacements = _replacements(conn, task_id, profile)
+     for detail in reversed(_passed_details(conn, task_id)):
+         fields = proof_fields(detail)
+-        if fields is None or fields[:3] != (head_sha, base_sha, key):
++        if fields is None or fields[:2] != (head_sha, base_sha):
+             continue
+         covered = _covered_findings(detail)
+         if covered and mandates is None:

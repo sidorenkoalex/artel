@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -935,7 +935,7 @@
+     if merge and _proven(conn, task_id, artifact_branch, head_sha, base_sha,
+                          key, profile):
+         store.journal(conn, task_id, "fsm", PROVEN_ACTION,
+-                      f"для головы {head_sha[:7]} и базы {base_sha[:7]}")
++                      f"для головы {head_sha[:7]}")
+         return None
+     runs = _full_runs(task_id, profile, trees)
+     base, head = runs[BASE], runs[HEAD]

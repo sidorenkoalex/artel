@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -804,7 +804,7 @@
+         res = gitcmd.in_repo(repo, "merge-base", head_sha, main_sha)
+         base_sha = (res.stdout.strip()
+                     if res is not None and res.returncode == 0 else "")
+-        if not base_sha:
++        if not base_sha or base_sha != main_sha:
+             raise _Prepare(f"merge-base головы {head_sha[:12]} и main "
+                            f"{main_sha[:12]} не определён: {_git_reason(res)}")
+         return base_sha

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/two_sided.py b/orchestrator/advance_gates/two_sided.py
+--- a/orchestrator/advance_gates/two_sided.py
++++ b/orchestrator/advance_gates/two_sided.py
+@@ -375,7 +375,7 @@
+                   else "failed"}
+         if strict and (case.outcome in (outcome.FAILED, outcome.ERROR)
+                        or (case.outcome == outcome.PASSED and case.retries)):
+-            kind = _check_failure_kind(case, profile)
++            kind = "не проверка"
+             record["outcome"] = "failed"
+             record["exception"] = (case.failure.partition(":")[0]
+                                    or case.outcome)

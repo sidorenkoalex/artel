@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -818,7 +818,7 @@
+     ни записи."""
+     res = gitcmd.in_repo(repo, "rev-parse", f"{head_sha}^{{tree}}")
+     tree = res.stdout.strip() if res is not None and res.returncode == 0 else ""
+-    key = (acceptance.report_suite_result_key(tree, profile, False,
++    key = (acceptance.report_suite_result_key(head_sha, profile, False,
+                                                root=head_tree)
+            if tree else None)
+     if key is None:

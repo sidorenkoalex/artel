@@ -1,0 +1,26 @@
+# mutation-run №9 задачи 01M5R0DPNHZ7N8YBXMH375SMEE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 98398b908b51c83a667dff18ba2bea4babab4416
+# тесты: tests/test_merge_outcome_module.py
+# рабочих процессов: auto
+# патч 21 mutation-021.diff sha256 7880f06f8fe97ac72adf35a34145741ed664ba577998036dc817b5252cb3b930
+# патч 22 mutation-022.diff sha256 a04460424dc3e72bd63d536f1694587d686c35ac974e0f5ff532ce5604e1e0d7
+# патч 23 mutation-023.diff sha256 40c384680bac5d1f130870d0f9229d66f790cd2723bdddccbbb3b06672af192b
+# патч 24 mutation-024.diff sha256 a7401a896d9df6b9d234332f7cea98ab9f4a6e7d7ebdd243b12b432c0bee50c0
+# патч 25 mutation-025.diff sha256 626db19b5e094df829cd02c08d0dbb42c2f92ac82afdd349a20fe9f686f8e57b
+# патч 26 mutation-026.diff sha256 804fd02518fa634d33bd35291cfd1543fa8e7090668fba969efe159309727481
+# патч 27 mutation-027.diff sha256 e95d52fef406fb249c204c12b9d5e6c6b0e768068aabdd6c93b2aa7912848a44
+# патч 28 mutation-028.diff sha256 d89171aa69548abd829d201749b1c64b470f98b875742a2eb060a9dfd5487909
+# патч 29 mutation-029.diff sha256 fb5be695a2a2fd558e1f49fb13ae1e292cf51f116c0739c52cadded2942949ad
+# патч 30 mutation-030.diff sha256 23edc0593e98baf2ba0843b6cec6520173991761705976f013807485dabc5fb4
+номер	исход	узлы
+21	убита	tests/test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks,tests/test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run
+22	убита	tests/test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run
+23	убита	tests/test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks,tests/test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run
+24	убита	tests/test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks,tests/test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run
+25	убита	tests/test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate
+26	убита	tests/test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate
+27	убита	tests/test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate
+28	убита	tests/test_merge_outcome_module.py::test_ac6_record_without_proof_line_runs_gate
+29	убита	tests/test_merge_outcome_module.py::test_ac7_base_is_merge_base_with_fetched_main_not_diff_base
+30	убита	tests/test_merge_outcome_module.py::test_ac7_doc_only_lag_runs_gate_with_merge_base

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -615,6 +615,8 @@
+                 raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+                                f"{head_sha[:12]}: заголовок {line[:200]!r} "
+                                f"без префикса b/")
++        elif line.startswith("\\") and path is not None:
++            added.setdefault(path, []).append((number, line[1:]))
+         else:
+             m = _HUNK_RE.match(line)
+             if m:

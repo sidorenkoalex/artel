@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1236,7 +1236,7 @@
+                  if line.strip() and not PROOF_LINE.match(line.strip())]
+         return [f"гейт исходов для головы {head_sha[:7]} и базы "
+                 f"{fields[1][:7]}: {lines[0] if lines else ''}",
+-                *(f"гейт исходов: {line}" for line in lines[1:])]
++                *(f"гейт исходов: {line.partition(COVERED_MARK)[0]}" for line in lines[1:])]
+     return [NOT_RUN_LINE.format(head=head_sha[:7] or "(не прочитана)")]
+ 
+ 

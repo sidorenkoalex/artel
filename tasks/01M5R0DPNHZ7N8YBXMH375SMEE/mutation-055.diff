@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -658,7 +658,7 @@
+             continue
+         # Путь головы, новый на ветке (`A`, новый путь `R`/`C`), у
+         # компонента без `tests` — тестовый по тому же правилу, что `A`.
+-        if (not files.profile.tests and status.startswith(("A", "R", "C"))
++        if (not files.profile.tests and status.startswith(("A", "C"))
+                 and files.profile.in_weakening_scope(path)
+                 and path in files.head_paths):
+             continue

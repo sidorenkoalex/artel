@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -916,7 +916,7 @@
+                  for f in covered]
+         if any(pair is None for pair in pairs):
+             continue
+-        used = [element for element, _source in pairs]
++        used = [source for _element, source in pairs]
+         if fingerprint(used + _replacement_elements(replacements)) == \
+                 fields[3]:
+             return True

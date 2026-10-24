@@ -1,0 +1,15 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -801,9 +801,8 @@
+         if not main_sha:
+             raise _Prepare("sha main не получен повторным фетчем после сверки "
+                            "свежести — база гейта на мерже не определена")
+-        res = gitcmd.in_repo(repo, "merge-base", head_sha, main_sha)
+-        base_sha = (res.stdout.strip()
+-                    if res is not None and res.returncode == 0 else "")
++        res = None
++        base_sha = gitcmd.diff_base(_branch, repo=repo) or ""
+         if not base_sha:
+             raise _Prepare(f"merge-base головы {head_sha[:12]} и main "
+                            f"{main_sha[:12]} не определён: {_git_reason(res)}")

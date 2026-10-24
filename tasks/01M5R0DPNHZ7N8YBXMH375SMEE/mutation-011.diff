@@ -1,0 +1,21 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -821,7 +821,7 @@
+     key = (acceptance.report_suite_result_key(tree, profile, False,
+                                                root=head_tree)
+            if tree else None)
+-    if key is None:
++    if key is None and False:
+         raise _Prepare(f"ключ компонента для головы {head_sha[:12]} не снят "
+                        f"(дерево или суммы файлов блокировки не прочитаны)")
+     return key
+@@ -1006,7 +1006,7 @@
+     proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
+              f"{fingerprint(used + _replacement_elements(replacements))}")
+     store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(
+-        [counts, proof, *prior_line, *flaky_lines, *replaced_lines,
++        [counts, *([proof] if key else []), *prior_line, *flaky_lines, *replaced_lines,
+          *(f"{f.line}{COVERED_MARK}{source}" for f, (_e, source) in covered),
+          *extra]))
+     return None
