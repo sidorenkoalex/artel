@@ -1,0 +1,12 @@
+diff --git a/orchestrator/reporters/outcome.py b/orchestrator/reporters/outcome.py
+--- a/orchestrator/reporters/outcome.py
++++ b/orchestrator/reporters/outcome.py
+@@ -168,7 +168,7 @@
+         if level is not None:
+             detail = (level.text or "")[:DETAIL_LIMIT]
+         if "error" in found:
+-            outcome, failure = ERROR, _junit_failure(found["error"])
++            outcome, failure = FAILED, _junit_failure(found["error"])
+         elif "failure" in found:
+             outcome, failure = FAILED, _junit_failure(found["failure"])
+         elif "skipped" in found:

@@ -1,0 +1,22 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..1aaa249 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -491,7 +491,7 @@ def _install(profile, cwd: Path) -> tuple[Path | None, list, str]:
+     except OSError as exc:
+         return None, [], (f"файл блокировки {lock} не прочитан ({exc}) — "
+                           f"прогон не запускался")
+-    home = _pult_dir(profile, "deps") / digest
++    home = _pult_dir(profile, "deps") / "current"
+     links = _install_mark(home, digest)
+     if links is not None:
+         return home, links, ""
+@@ -522,7 +522,7 @@ def _install_mark(home: Path, digest: str) -> list | None:
+     `None` — установки нет или она не завершена."""
+     try:
+         mark = json.loads((home / _INSTALL_MARK).read_text(encoding="utf-8"))
+-        if mark.get("lock") == digest and isinstance(mark.get("links"), list):
++        if isinstance(mark.get("links"), list):
+             return [str(n) for n in mark["links"]]
+     except (OSError, ValueError, AttributeError):
+         pass

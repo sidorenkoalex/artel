@@ -1,0 +1,13 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..9259f86 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -682,7 +682,7 @@ def _vitest_head(profile, cwd: Path) -> tuple[list | None, str]:
+         cache.mkdir(parents=True, exist_ok=True)
+     except OSError as exc:
+         return None, f"каталог кэша {cache} не заведён ({exc})"
+-    return [*base, flag, f"{flags.cache_flag}={cache}"], ""
++    return [*base, f"{flags.cache_flag}={cache}"], ""
+ 
+ 
+ def _subset_args(profile, subset: list) -> tuple[list | None, str]:

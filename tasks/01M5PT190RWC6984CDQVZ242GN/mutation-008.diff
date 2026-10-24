@@ -1,0 +1,15 @@
+diff --git a/orchestrator/project_profile.py b/orchestrator/project_profile.py
+--- a/orchestrator/project_profile.py
++++ b/orchestrator/project_profile.py
+@@ -507,10 +507,7 @@
+     `test_profile` с `runner: pytest-own`. Запись артели (`pult-pytest`) и
+     записи без `report` — прежний разбор по коду возврата и тексту
+     pytest."""
+-    if not getattr(profile, "report", ""):
+-        return False
+-    return bool(getattr(profile, "from_components", False)) or \
+-        getattr(profile, "runner", "") == targets.PROFILE_RUNNER_OWN
++    return bool(getattr(profile, "report", ""))
+
+
+ def report_args_of(profile) -> tuple:

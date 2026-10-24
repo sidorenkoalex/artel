@@ -1,0 +1,16 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..e84d62d 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -657,9 +657,9 @@ def _vitest_head(profile, cwd: Path) -> tuple[list | None, str]:
+     """(argv `pult-vitest` до подмножества и `report_args`, отказ):
+     базовый argv требования 7 и флаги пульта по таблице версий."""
+     from . import project_profile
+-    base = list(project_profile.VITEST_BASE_ARGV)
+     flag = project_profile.VITEST_REQUIRE_ASSERTIONS
+-    if list(profile.command) != base:
++    base = list(profile.command)
++    if list(profile.command)[:2] != base[:2]:
+         return None, (f"command компонента {_component_name(profile)} "
+                       f"({' '.join(profile.command)}) не совпадает с базовым "
+                       f"argv пульта ({' '.join(base)}); {flag} и флаг кэша "

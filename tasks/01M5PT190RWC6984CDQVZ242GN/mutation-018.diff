@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..7cccae9 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -694,6 +694,7 @@ def _subset_args(profile, subset: list) -> tuple[list | None, str]:
+     if profile.report != project_profile.REPORT_VITEST:
+         return paths, ""
+     if not profile.select:
++        return [], ""
+         return None, (f"у компонента {_component_name(profile)} нет select — "
+                       f"подмножество тестов ({', '.join(subset)}) передать "
+                       f"раннеру нечем; прогон не запускался")

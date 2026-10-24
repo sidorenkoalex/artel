@@ -1,0 +1,13 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..2e8ef60 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -3322,7 +3322,7 @@ def full_suite(root: Path, task_id: str,
+         headers = list(_SHORT_SUMMARY_HEADER.finditer(digest_output))
+         if headers:
+             digest_output = digest_output[headers[-1].start():]
+-    digest = run_digest(digest_output)
++    digest = "\n".join(failed_test_lines(digest_output)) or digest_output
+     detail = _full_suite_detail(outcome, digest, log_path,
+                                 output.splitlines()[0] if output else "")
+     if outcome == FULL_SUITE_TIMEOUT and _last_full_suite_metrics is not None:

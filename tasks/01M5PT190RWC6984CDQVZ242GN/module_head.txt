@@ -1,0 +1,41 @@
+"""Итог тестов компонента из отчёта: `junit-xml`, отчётчик пульта `pult-vitest`, окружение и установка пультом, сторож зависших тестов; прежний разбор у артели.
+
+Свод долгоживущего файла задачи 01M590GJAF0EDV4NBC4C99MFVH в стиле pytest
+(волна сведения тестов 2б-3, ADR-0027). Песочница — `ReportSandbox` модуля
+`tests/report_outcome_sandbox.py`: фикстура `box` создаёт её через
+`tests.fixtures._sandbox`, тест берёт атрибуты и методы стенда так же, как
+наследник песочницы брал `self`. Имена проектов, компонентов, файлов и
+значения — из `random`, зерно печатается и входит в текст каждого провала
+(`box.note(...)`).
+
+Помощники бывших тестовых классов — функции модуля с первым параметром
+стенда: `assert_unknown`, `key_case`, `main_head`, `vitest_reporter_full_vitest`,
+`install_and_deps_full_vitest`, `artel_unchanged_channels`.
+"""
+import contextlib
+import hashlib
+import importlib.metadata
+import inspect
+import io
+import json
+import os
+import random
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+from orchestrator import (acceptance, config, doctor, project_profile, stack,
+                          store, suite_run)
+from orchestrator.advance_gates import two_sided
+from tests.fd_wait import high_fd, select_limited, wait_readable
+from tests.fixtures import _sandbox
+from tests.report_outcome_sandbox import (
+    CHILD_GUARD_SEC, ENTRY_HEAD, INSTALL_WITHOUT_LOCK, REAL_POPEN, REAL_RUN,
+    REQUIRE_ASSERTIONS, UNKNOWN_PREFIX, VITEST_BASE, Fake, ReportSandbox, entry,
+    fld, flipped, junit, report_arg, under, vitest_report, vitest_test, writable)
+from tests.sandbox import make_project_repo

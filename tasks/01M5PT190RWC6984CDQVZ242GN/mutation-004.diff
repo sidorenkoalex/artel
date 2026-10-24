@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -828,7 +828,7 @@
+     holder = Path(tempfile.mkdtemp(prefix="artel-report-"))
+     try:
+         vitest = profile.report == project_profile.REPORT_VITEST
+-        report = holder / ("report.json" if vitest else "report.xml")
++        report = cwd / ("report.json" if vitest else "report.xml")
+         argv, refusal = _report_argv(profile, Path(tree), cwd, subset, report,
+                                      continue_on_collection_errors)
+         if refusal:

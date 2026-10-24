@@ -1,0 +1,14 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..5f325e1 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -3079,9 +3079,7 @@ def _report_suite_result_key(tree: str, profile, base: bool,
+         data = {"tree": tree, "base": base, "locks": locks,
+                 "tools": dict(profile.tools or {}),
+                 "command": list(profile.command), "report": profile.report,
+-                "report_args": list(project_profile.report_args_of(profile)),
+                 "select": list(profile.select),
+-                "component": _component_name(profile),
+                 "runner": profile.runner, "workdir": profile.workdir,
+                 "env": dict(profile.env)}
+         # Итог, посчитанный до запрета повторов, переиспользоваться не должен.

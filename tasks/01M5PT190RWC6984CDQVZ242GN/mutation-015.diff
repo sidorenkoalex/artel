@@ -1,0 +1,22 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..a5b7f38 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -278,7 +278,7 @@ def _run_in_session(argv: list[str], cwd: Path, env: dict,
+     try:
+         stdout, stderr = proc.communicate(timeout=timeout)
+     except subprocess.TimeoutExpired:
+-        _kill_group(proc.pid)
++        proc.kill()
+         try:
+             stdout, stderr = proc.communicate(timeout=_OWN_DRAIN_SEC)
+         except (subprocess.TimeoutExpired, ValueError, OSError):
+@@ -799,7 +799,7 @@ def _session_to_log(argv: list, cwd: Path, env: dict, timeout: float,
+             code = proc.wait(timeout=timeout)
+         except subprocess.TimeoutExpired:
+             code = None
+-            _kill_group(proc.pid)
++            proc.kill()
+             proc.wait()
+         except BaseException:
+             _kill_group(proc.pid)

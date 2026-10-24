@@ -1,0 +1,15 @@
+diff --git a/orchestrator/reporters/outcome.py b/orchestrator/reporters/outcome.py
+--- a/orchestrator/reporters/outcome.py
++++ b/orchestrator/reporters/outcome.py
+@@ -256,10 +256,8 @@
+     код при отчёте без падений — «неизвестно»: что-то сломалось вне
+     тестов отчёта."""
+     if records is None:
+-        return UNKNOWN, reason or "отчёта нет"
++        return (RED if returncode else GREEN), reason or "отчёта нет"
+     if not records:
+-        if returncode:
+-            return UNKNOWN, f"отчёт без тестов, код возврата {returncode}"
+         return GREEN, ""
+     bad = [r for r in records if r.outcome in (FAILED, ERROR)]
+     if bad:

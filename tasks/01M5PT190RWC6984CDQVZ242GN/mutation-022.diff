@@ -1,0 +1,13 @@
+diff --git a/orchestrator/doctor/hung_test_watchdog.py b/orchestrator/doctor/hung_test_watchdog.py
+index c566df3..65a2508 100644
+--- a/orchestrator/doctor/hung_test_watchdog.py
++++ b/orchestrator/doctor/hung_test_watchdog.py
+@@ -167,7 +167,7 @@ def _find_hung_test_runs(conn) -> list[dict]:
+         if not doctor._HUNG_TEST_CMD_RE.search(command):
+             if commands is None:
+                 commands = _component_commands()
+-            if not _runs_component_command(command, commands):
++            if True:
+                 continue
+         cwd = doctor._process_cwd(pid)
+         if cwd is None:

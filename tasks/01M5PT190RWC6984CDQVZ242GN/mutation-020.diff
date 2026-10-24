@@ -1,0 +1,13 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..a5df76e 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -481,6 +481,8 @@ def _install(profile, cwd: Path) -> tuple[Path | None, list, str]:
+         return None, [], ""
+     name, command = _component_name(profile), " ".join(profile.install)
+     lock = _lock_file(cwd)
++    if lock is None:
++        return None, [], ""
+     if lock is None:
+         return None, [], (f"{INSTALL_WITHOUT_LOCK}: в {cwd} нет файла "
+                           f"блокировки ({', '.join(LOCK_FILE_NAMES)}) — "

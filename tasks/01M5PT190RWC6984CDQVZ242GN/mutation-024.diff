@@ -1,0 +1,13 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..0dd25c9 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -2177,7 +2177,7 @@ FULL_SUITE_NO_TESTS = "tests/ нет в worktree"
+ # требование 2) — ни красный прогон, ни таймаут прогона. Константа —
+ # одновременно начало текста исхода (`_not_started_note`), по которому его
+ # различает `_full_suite_outcome`.
+-FULL_SUITE_NOT_STARTED = "прогон не начат"
++FULL_SUITE_NOT_STARTED = "итог неизвестен"
+ 
+ # Запись журнала задачи об ожидании замка прогоном гейта (требование 2).
+ FULL_SUITE_LOCK_WAIT_ACTION = "полный прогон ждёт замок"

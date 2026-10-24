@@ -1,0 +1,42 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -893,6 +893,8 @@
+         note = f"прогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с"
+         return [RedTest(rel, (), note) for rel in files]
+     if run.state == outcome.UNKNOWN:
++        if run.code == 0:
++            return []
+         return [RedTest(rel, (), unknown_line(run.reason)) for rel in files]
+     return [RedTest(r.id, tuple(dict.fromkeys(_SEED_LINE.findall(r.failure))),
+                     r.failure or f"{outcome.RETRY_NOTE}: {r.retries}")
+@@ -1466,7 +1468,7 @@
+     if file_times is not None:
+         file_times.update(_report_file_times(run.tests, list(extra)))
+     text = _report_timeout_text(run) if run.timed_out else run.text(tail=2000)
+-    return run.green, f"{location_note}\n{text}"
++    return run.code == 0, f"{location_note}\n{text}"
+
+
+ def _run_now(command, targets: list[str], run_cwd: Path, location_note: str,
+@@ -1627,8 +1629,10 @@
+                       config.ACCEPTANCE_TIMEOUT_SEC)
+     if run.timed_out:
+         return False, f"{location_note}\n{_report_timeout_text(run, 'сбор')}"
+-    if run.refusal or run.state == outcome.UNKNOWN:
++    if run.refusal:
+         return False, f"{location_note}\n{run.text(tail=2000)}"
++    if run.code == 0:
++        return True, run.text(tail=2000)
+     if not run.tests:
+         return False, "планка не содержит ни одного теста"
+     return True, run.text(tail=2000)
+@@ -2112,7 +2116,7 @@
+         return None, (f"{run.raw}\nпрогон превысил "
+                       f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
+                       f"сетевой ответ")
+-    if run.green:
++    if run.green or run.code == 0:
+         return 0, run.text()
+     return run.code or 1, run.text()
+

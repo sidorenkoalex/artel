@@ -1,0 +1,15 @@
+diff --git a/orchestrator/reporters/outcome.py b/orchestrator/reporters/outcome.py
+index af7bfff..c526115 100644
+--- a/orchestrator/reporters/outcome.py
++++ b/orchestrator/reporters/outcome.py
+@@ -201,9 +201,7 @@ def _vitest_case(item: dict, failure_errors) -> tuple[str, str, str]:
+                        f"{error_name or 'ошибка без имени'}"), ""
+     if item.get("timeout"):
+         return ERROR, f"timeout: {error_name or 'превышено время теста'}", ""
+-    if error_name and error_name in failure_errors:
+-        return FAILED, error_name, ""
+-    return ERROR, error_name or "ошибка без имени", ""
++    return FAILED, error_name or "ошибка без имени", ""
+ 
+ 
+ def parse_vitest(report: Path, component: str, workdir: str,

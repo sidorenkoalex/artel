@@ -1,0 +1,13 @@
+diff --git a/orchestrator/suite_run.py b/orchestrator/suite_run.py
+index 3208db3..aca7208 100644
+--- a/orchestrator/suite_run.py
++++ b/orchestrator/suite_run.py
+@@ -348,7 +348,7 @@ def _profile_command(target: str) -> tuple:
+         if acceptance.reported(profile) is not None:
+             return profile, ""
+     command = [str(part) for part in answer.values.get("command") or ()]
+-    if not _is_pytest(command):
++    if not _is_pytest(command) and answer.values.get("report"):
+         return None, (f"команда профиля тестов проекта «{target}» "
+                       f"({' '.join(command) or 'пусто'}) — не запуск pytest: "
+                       f"флаги параллели pytest (-n) к ней неприменимы")

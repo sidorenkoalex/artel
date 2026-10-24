@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..d5f3e3f 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -592,6 +592,7 @@ def _link_deps(profile, tree: Path, cwd: Path, home: Path,
+     for name in links:
+         target, link = home / name, Path(cwd) / name
+         if os.path.lexists(link):
++            continue
+             real = os.path.realpath(link)
+             if os.path.islink(link) and real == os.path.realpath(target):
+                 continue

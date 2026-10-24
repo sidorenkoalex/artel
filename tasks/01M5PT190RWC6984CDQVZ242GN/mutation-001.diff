@@ -1,0 +1,13 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -858,6 +858,9 @@
+             records, reason = outcome.parse_junit(
+                 report, _component_name(profile), profile.workdir, cwd)
+         state, reason = outcome.verdict(records, code, reason)
++        # мутация: итог — по коду возврата и итоговой строке pytest
++        state = (outcome.GREEN if code == 0 and " failed" not in raw
++                 else outcome.RED)
+         block = outcome.summary_block(records) if records is not None else ""
+         return ReportRun(state=state, reason=reason, raw=raw, block=block,
+                          tests=tuple(records or ()), code=code)

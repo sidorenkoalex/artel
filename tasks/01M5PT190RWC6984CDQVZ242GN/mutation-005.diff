@@ -1,0 +1,16 @@
+diff --git a/orchestrator/project_profile.py b/orchestrator/project_profile.py
+--- a/orchestrator/project_profile.py
++++ b/orchestrator/project_profile.py
+@@ -517,10 +517,10 @@
+     """Действующие `report_args` профиля с отчётом: явные — как есть, у
+     `junit-xml` без них — умолчание `JUNIT_DEFAULT_REPORT_ARGS`
+     (требование 2)."""
++    if profile.report == REPORT_JUNIT:
++        return JUNIT_DEFAULT_REPORT_ARGS + tuple(profile.report_args or ())
+     if profile.report_args:
+         return tuple(profile.report_args)
+-    if profile.report == REPORT_JUNIT:
+-        return JUNIT_DEFAULT_REPORT_ARGS
+     return ()
+
+

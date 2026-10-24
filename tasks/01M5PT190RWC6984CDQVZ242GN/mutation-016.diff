@@ -1,0 +1,13 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 9217aea..012ffab 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -668,7 +668,7 @@ def _vitest_head(profile, cwd: Path) -> tuple[list | None, str]:
+     if refusal:
+         return None, refusal
+     major = version.split(".", 1)[0]
+-    flags = project_profile.vitest_flags(int(major)) if major.isdigit() else None
++    flags = project_profile.VitestFlags("--cacheDir", True, "умолчание")
+     if flags is None:
+         return None, (f"Vitest {version}: флаг кэша для главной версии "
+                       f"{major} не подтверждён (её нет в "

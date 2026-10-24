@@ -1,0 +1,12 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -3287,7 +3287,7 @@
+     tests = _last_report_tests if reported is not None else ()
+     outcome = _full_suite_outcome(green, output)
+     unknown = output.startswith(UNKNOWN_PREFIX)
+-    if outcome == FULL_SUITE_NOT_STARTED and not unknown:
++    if outcome == FULL_SUITE_NOT_STARTED:
+         # Прогона не было: ни лога, ни выжимки, ни итога по sha.
+         return FullSuiteRun(green, outcome, "", None,
+                             _full_suite_detail(outcome, "", None, output))

@@ -1,0 +1,31 @@
+diff --git a/orchestrator/reporters/outcome.py b/orchestrator/reporters/outcome.py
+index af7bfff..e9bb92d 100644
+--- a/orchestrator/reporters/outcome.py
++++ b/orchestrator/reporters/outcome.py
+@@ -264,7 +264,7 @@ def verdict(records: list | None, returncode: int | None,
+     bad = [r for r in records if r.outcome in (FAILED, ERROR)]
+     if bad:
+         return RED, f"{bad[0].id} — {bad[0].outcome}: {bad[0].failure}"
+-    retried = [r for r in records if r.retries > 0]
++    retried = []
+     if retried:
+         return RED, (f"{retried[0].id} — {RETRY_NOTE}: "
+                      f"{retried[0].retries} внутри прогона")
+@@ -277,7 +277,7 @@ def verdict(records: list | None, returncode: int | None,
+ def summary_line(records: list) -> str:
+     """Итоговая строка в форме pytest по записям отчёта: тест с повтором
+     считается упавшим — он красит прогон."""
+-    retried = sum(1 for r in records if r.outcome == PASSED and r.retries > 0)
++    retried = 0
+     counts = (("failed", sum(1 for r in records if r.outcome == FAILED)
+                + retried),
+               ("passed", sum(1 for r in records if r.outcome == PASSED)
+@@ -297,7 +297,7 @@ def summary_block(records: list) -> str:
+             head = "FAILED" if r.outcome == FAILED else "ERROR"
+             lines.append(f"{head} {r.id} - {r.failure}" if r.failure
+                          else f"{head} {r.id}")
+-        elif r.retries > 0:
++        elif False:
+             lines.append(f"FAILED {r.id} - {RETRY_NOTE}: {r.retries} "
+                          f"внутри прогона (тест прошёл не с первого раза)")
+     lines.append(f"{'=' * 20} {summary_line(records)} {'=' * 20}")
