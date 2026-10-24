@@ -682,8 +682,7 @@ def wait_texts(stand, caller: str, sid: str, case: str = "") -> tuple:
     return refusal, actions, suffix
 
 
-# --- QueueByProjectTest (бывший
-# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+# --- QueueByProjectTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
 
 def test_ac2_other_project_holder_does_not_delay_wait_for_window(
         project_mutex_stand):
@@ -826,8 +825,7 @@ def test_ac9_dead_entry_of_project_does_not_hold_its_head(project_mutex_stand):
                 f"other={q_target!r}, project={p_target!r}, dead={kind!r}")
 
 
-# --- WaitTextsByProjectTest (бывший
-# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+# --- WaitTextsByProjectTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
 
 def test_ac10_wait_texts_name_holder_of_waiting_task_project(
         project_mutex_stand):

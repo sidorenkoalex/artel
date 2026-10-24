@@ -662,8 +662,7 @@ def project_pairs(stand) -> tuple:
     return ((stand.ext, stand.artel), (stand.artel, stand.ext))
 
 
-# --- AcquireByProjectTest (бывший
-# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+# --- AcquireByProjectTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
 
 def test_ac1_other_project_holder_does_not_block_acquire(project_mutex_stand):
     """Живой держатель проекта Q; `acquire` задачи проекта P другим
@@ -842,8 +841,7 @@ def test_ac16_empty_or_null_target_holder_excludes_artel_task(
             ctx + "; " + f"holder_target={target!r}")
 
 
-# --- ReleaseAndHeartbeatTest (бывший
-# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+# --- ReleaseAndHeartbeatTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
 
 def test_ac5_release_removes_only_own_process_row(project_mutex_stand):
     """Три проекта: строка этого процесса (взята `acquire`), строка
@@ -994,8 +992,7 @@ def test_ac17_touch_heartbeat_without_args_keeps_old_behaviour(
                                                  "пустая таблица")
 
 
-# --- StoreMergeLockTest (бывший
-# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+# --- StoreMergeLockTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
 
 def test_ac11_set_merge_lock_keeps_other_project_row(project_mutex_stand):
     """Строки держателей двух проектов; прежние `set_merge_lock`,
