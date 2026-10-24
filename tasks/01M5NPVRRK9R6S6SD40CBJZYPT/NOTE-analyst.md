@@ -1,13 +1,14 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ достаточно; SPEC.md написан, status: ready, guard ок. 7 AC, зоны из ТЗ, budget_usd 30 (из ТЗ).
-- Образец целевой механики — orchestrator/advance_gates/acceptance.py:596-620 (suite_tree → tree.fixable → plank_in_code_copy). PLANK_NOT_RUN — там же :34.
-- Константы действий отказа — orchestrator/advance_gates/plan_appendix.py:28, :40 (в ТЗ путь указан как orchestrator/plan_appendix.py — неточность).
-- Сигнал объёма сработал только по budget ≥ $30 — в SPEC обоснование монолита для решения Оператора.
+- Круг 2 (возврат из spec_gate 24.10): решения Оператора пп. 1–4 и мелочи внесены в SPEC; status: ready, guard ок; 7 AC, budget 30.
+- П.1 → требование 1: plank_in_code_copy (ветка документов) только при tree.root ≠ wt_path; иначе прежний materialize_from_branch + preexisting (tests/test_pull.py:240). Причина — plank_in_code_copy (acceptance.py:2027) в finally сносит tasks/<id>/ целиком.
+- П.2/п.4 → требование 2 и AC-3: AC-3 только без operator_pull; добавлен сценарий fixable=False → PLAN_APPENDIX_GATE_FAILURE_ACTION. pull.py:833–839 вне зоны — в «Не входит».
+- П.3 → требование 3: suite_tree непосредственно перед acceptance.run, прежние проверки раньше.
+- AC-6: «<имя главной ветки>» (source_branch).
 
 ## Не сработало
-- Ничего.
+- Bash с `cd … &&` и относительным путём отклонён правилом deny — только абсолютные пути.
 
 ## Где остановился
 - SPEC сдан, шаг завершён.
