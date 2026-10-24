@@ -257,9 +257,12 @@ class DoctorDurationTest(TmpRootTest):
         и сразу повторно открывает тот же suite.duration без нового окна.
         """
         k = config.SUITE_DURATION_CALIBRATION_RUNS
-        for _ in range(k):
-            self.measured_run(0.01)
-        self.measured_run(4.0)
+        # Один настоящий прогон держит запись замера полным прогоном; его
+        # время на тест одно из восьми и медиану окна 0.28 с не сдвигает.
+        self.measured_run(0.01)
+        for _ in range(k - 1):
+            self.journal_measurement(1.12)  # 0.28 с на тест
+        self.journal_measurement(1.92)  # 0.48 с на тест
         self.doctor_checks()
         found = self.triggers()
         self.assertEqual(len(found), 1)
@@ -267,6 +270,6 @@ class DoctorDurationTest(TmpRootTest):
         self.doctor_checks()
         self.assertFalse(self.triggers())
         for _ in range(k):
-            self.measured_run(0.01)
+            self.journal_measurement(1.12)
         self.doctor_checks()
         self.assertFalse(self.triggers())
