@@ -52,7 +52,8 @@ schema_version: 5
 1. Набор патчей и таблица «до» (`mutation-run --ref base --tests
    tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py --copy-table
    --wait-lock 4`) частями 1-15, 16-30, 31-45, 46-60, 61-63 и
-   перепрогон переписанных патчей 006, 008, 015 частью 6-15.
+   перепрогон переписанных патчей 006, 008, 015 частью 6-15 и патча 031
+   частью 31-31.
 2. Свод 42 тестов в `tests/test_outcome_gate_module.py`, удаление исходного
    файла, карта `python3 scripts/codebase_map.py`.
 3. Таблица «после» (`mutation-run --ref worktree --tests
@@ -68,7 +69,7 @@ schema_version: 5
 | 1 | 1 (раздел «Мутации и заявки») |
 | 2 | 1 (раздел «Мутации до») |
 | 3 | 4 (раздел «Строки падений») |
-| 4 | 1, 3 (убийцы вне методов подготовки; находок нет) |
+| 4 | 1, 3 (убийцы вне методов подготовки; патч 031 переписан; раздел «Находки») |
 | 5 | 1, 3 (только `--wait-lock 4`) |
 | 6 | 1–4 (временные файлы — только первым уровнем каталога документов, не `.md`) |
 | 7 | 2 |
@@ -88,8 +89,7 @@ schema_version: 5
 Строка = мутация, заявившие её тесты исходного файла (одинаковые по смыслу
 заявки — одной мутацией) и что меняет патч. Патчи меняют
 `orchestrator/advance_gates/outcome_integrity.py`, кроме 003 и 004
-(`orchestrator/fsm_advance.py`) и 031
-(`orchestrator/advance_gates/acceptance.py`).
+(`orchestrator/fsm_advance.py`).
 
 - mutation-001: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («гейт создаётся у любого профиля»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` не сверяет `in_outcome_bounds`.
 - mutation-002: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («условие `t["is_canary"]` пропущено»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` не возвращает `None` для канарейки.
@@ -121,7 +121,7 @@ schema_version: 5
 - mutation-028: `Ac11MandateTest::test_ac11_prefix_needs_separator_after_it` («`startswith` без сверки следующего символа»); патч `orchestrator/advance_gates/outcome_integrity.py`: хвост после префикса не сверяется.
 - mutation-029: `Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover` («мандат собран без отбраковки автокоммита роли»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_answer_mandates` не отбрасывает автокоммит шага роли.
 - mutation-030: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` («число покрытых мандатом не указано»); патч `orchestrator/advance_gates/outcome_integrity.py`: из строки чисел записи пройденного гейта убрано число покрытых мандатом.
-- mutation-031: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («граница по `reported(profile)` без `from_components`»); патч `orchestrator/advance_gates/acceptance.py`: `in_outcome_bounds` не сверяет `from_components`.
+- mutation-031: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («граница по `reported(profile)` без `from_components`»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` сверяет границу по `project_profile.reported(profile)` вместо `in_outcome_bounds` (без `from_components`). Первая редакция меняла общую `in_outcome_bounds` в `acceptance.py`, и её «убивало» только утверждение `in_dev_task` (выход из `tests_writing` отклонён) — переписана и перепрогнана частью 31-31.
 - mutation-032: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («отказ решения `decide` у гейта исходов — отказ перехода»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_outcome_integrity_gate` при отказе `decide` возвращает отказ «переход отклонён: гейт неослабления по исходам».
 - mutation-033: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («прогон по профилю записи в обход решения»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` при отказе `decide` берёт первый профиль `component_profiles` записи.
 - mutation-034: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` («голова гоняется в рабочей копии задачи»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_runs` гоняет голову в `workspace.path(task_id)`.
@@ -160,8 +160,8 @@ schema_version: 5
 Вывод `mutation-run --wait` каждой части дословно (шапка и все строки),
 `--ref base`, тесты — исходный файл, рабочих процессов — `auto` (умолчание
 узла прогона) во всех частях. Части 1-15, 16-30, 31-45, 46-60, 61-63;
-перепрогон переписанных патчей 006, 008, 015 — частью 6-15 (у
-мутации действует последняя строка в порядке текста).
+перепрогон переписанных патчей 006, 008, 015 — частью 6-15, патча 031 —
+частью 31-31 (у мутации действует последняя строка в порядке текста).
 
 @@BEFORE@@
 ## Мутации после
@@ -187,8 +187,8 @@ schema_version: 5
 @@MAP@@
 ## Находки
 
-Мутаций, не убитых «до», нет; исходов «ошибка сбора, импорта или setup» и
-предела в последних строках нет.
+- Находка mutation-060 (заявка `Ac10OrderTest::test_ac10_findings_order_and_one_line_each`, «внутри вида без сортировки — пары идут в порядке файлов»): «до» не убита никем. Патч убирает сортировку по идентификатору из `ordered` (`outcome_integrity.py:221`), но вход `ordered` уже упорядочен по идентификатору внутри вида: красные идут из `red = sorted(...)` (`outcome_integrity.py:943`), а записи `compare` — в порядке отчёта базы, где идентификатор начинается с пути файла, так что «порядок файлов» совпадает с порядком идентификаторов. Тест эту альтернативу не различает; тест не удалён, перенесён в `test_ac10_findings_order_and_one_line_each`.
+- Иных мутаций, не убитых «до», нет; исходов «ошибка сбора, импорта или setup» и предела в последних строках нет.
 
 ## Удалённые дубли
 

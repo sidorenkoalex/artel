@@ -59,9 +59,10 @@ PATCHES = {
 ''')],
     18: [(OI, GREEN, "                    green = case is not None and (\n"
                      "                        case.outcome == outcome.SKIPPED or in_pass_to_pass(case))\n")],
-    31: [(ACC, '''    return (profile is not None and project_profile.reported(profile)
-            and bool(getattr(profile, "from_components", False)))''',
-          '''    return profile is not None and project_profile.reported(profile)''')],
+    31: [(OI, '''    if decision.refusal or decision.skip or \\
+            not in_outcome_bounds(decision.profile):''',
+          '''    if decision.refusal or decision.skip or \\
+            not project_profile.reported(decision.profile):''')],
     32: [(OI, '''    profile = _bounds(t["is_canary"], t["target"])
     if profile is None:
         return None

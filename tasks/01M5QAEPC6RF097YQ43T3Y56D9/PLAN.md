@@ -52,7 +52,8 @@ schema_version: 5
 1. Набор патчей и таблица «до» (`mutation-run --ref base --tests
    tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py --copy-table
    --wait-lock 4`) частями 1-15, 16-30, 31-45, 46-60, 61-63 и
-   перепрогон переписанных патчей 006, 008, 015 частью 6-15.
+   перепрогон переписанных патчей 006, 008, 015 частью 6-15 и патча 031
+   частью 31-31.
 2. Свод 42 тестов в `tests/test_outcome_gate_module.py`, удаление исходного
    файла, карта `python3 scripts/codebase_map.py`.
 3. Таблица «после» (`mutation-run --ref worktree --tests
@@ -68,7 +69,7 @@ schema_version: 5
 | 1 | 1 (раздел «Мутации и заявки») |
 | 2 | 1 (раздел «Мутации до») |
 | 3 | 4 (раздел «Строки падений») |
-| 4 | 1, 3 (убийцы вне методов подготовки; находок нет) |
+| 4 | 1, 3 (убийцы вне методов подготовки; патч 031 переписан; раздел «Находки») |
 | 5 | 1, 3 (только `--wait-lock 4`) |
 | 6 | 1–4 (временные файлы — только первым уровнем каталога документов, не `.md`) |
 | 7 | 2 |
@@ -88,8 +89,7 @@ schema_version: 5
 Строка = мутация, заявившие её тесты исходного файла (одинаковые по смыслу
 заявки — одной мутацией) и что меняет патч. Патчи меняют
 `orchestrator/advance_gates/outcome_integrity.py`, кроме 003 и 004
-(`orchestrator/fsm_advance.py`) и 031
-(`orchestrator/advance_gates/acceptance.py`).
+(`orchestrator/fsm_advance.py`).
 
 - mutation-001: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («гейт создаётся у любого профиля»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` не сверяет `in_outcome_bounds`.
 - mutation-002: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («условие `t["is_canary"]` пропущено»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` не возвращает `None` для канарейки.
@@ -121,7 +121,7 @@ schema_version: 5
 - mutation-028: `Ac11MandateTest::test_ac11_prefix_needs_separator_after_it` («`startswith` без сверки следующего символа»); патч `orchestrator/advance_gates/outcome_integrity.py`: хвост после префикса не сверяется.
 - mutation-029: `Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover` («мандат собран без отбраковки автокоммита роли»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_answer_mandates` не отбрасывает автокоммит шага роли.
 - mutation-030: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` («число покрытых мандатом не указано»); патч `orchestrator/advance_gates/outcome_integrity.py`: из строки чисел записи пройденного гейта убрано число покрытых мандатом.
-- mutation-031: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («граница по `reported(profile)` без `from_components`»); патч `orchestrator/advance_gates/acceptance.py`: `in_outcome_bounds` не сверяет `from_components`.
+- mutation-031: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` («граница по `reported(profile)` без `from_components`»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` сверяет границу по `project_profile.reported(profile)` вместо `in_outcome_bounds` (без `from_components`). Первая редакция меняла общую `in_outcome_bounds` в `acceptance.py`, и её «убивало» только утверждение `in_dev_task` (выход из `tests_writing` отклонён) — переписана и перепрогнана частью 31-31.
 - mutation-032: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («отказ решения `decide` у гейта исходов — отказ перехода»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_outcome_integrity_gate` при отказе `decide` возвращает отказ «переход отклонён: гейт неослабления по исходам».
 - mutation-033: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` («прогон по профилю записи в обход решения»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_bounds` при отказе `decide` берёт первый профиль `component_profiles` записи.
 - mutation-034: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` («голова гоняется в рабочей копии задачи»); патч `orchestrator/advance_gates/outcome_integrity.py`: `_full_runs` гоняет голову в `workspace.path(task_id)`.
@@ -160,8 +160,8 @@ schema_version: 5
 Вывод `mutation-run --wait` каждой части дословно (шапка и все строки),
 `--ref base`, тесты — исходный файл, рабочих процессов — `auto` (умолчание
 узла прогона) во всех частях. Части 1-15, 16-30, 31-45, 46-60, 61-63;
-перепрогон переписанных патчей 006, 008, 015 — частью 6-15 (у
-мутации действует последняя строка в порядке текста).
+перепрогон переписанных патчей 006, 008, 015 — частью 6-15, патча 031 —
+частью 31-31 (у мутации действует последняя строка в порядке текста).
 
 Прогон №1 (`--patches 1-15`, рабочих процессов auto):
 
@@ -241,13 +241,183 @@ schema_version: 5
 29	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover
 30	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
 
+Прогон №3 (`--patches 31-45`, рабочих процессов auto):
+
+# mutation-run №3 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: base 579a38199ce682917b9d5e40f15ac95cde4aaddc
+# тесты: tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
+# рабочих процессов: auto
+# патч 31 mutation-031.diff sha256 4e6ad59f035e93bf21c24ab74aa01c3aed56a30a2cdc8860ec2ff510fa1674dd
+# патч 32 mutation-032.diff sha256 074d90d53613956c7216709cdeed22f273faee69899e22af51be9eca7f8a408e
+# патч 33 mutation-033.diff sha256 949ec6c774d1203cd2f8619e317c779dc84effbcab774e7873e9a47c1eaed763
+# патч 34 mutation-034.diff sha256 a88617df8a8e1e38af797c3e8858d7854045c4a650d97d96d27f9612dcd106b2
+# патч 35 mutation-035.diff sha256 aaa2f21a7ee88800f7ca4e9397e2991461203ce2d61e0b29926fcfdc46651dbe
+# патч 36 mutation-036.diff sha256 ce30df1d9896a128f04f2e647f08090d3c68516407ba3f24b28c48adceb58757
+# патч 37 mutation-037.diff sha256 b49eaebf3b1ec8a43fde70dfb9e733284c2e62ad5028c157c0f8c486460af454
+# патч 38 mutation-038.diff sha256 1090bd7ed92e428fca217e400a1269b29860aebde1ce58957067c40a4a2b4e7e
+# патч 39 mutation-039.diff sha256 270f3f16ddf3a4fdf91c3c6615a13d6d61c02f519b665e7124270feb40883493
+# патч 40 mutation-040.diff sha256 cd3653aa5d498fe5ff93d328c9b2e6c254bca5e52b370a06f3152d691543d4dc
+# патч 41 mutation-041.diff sha256 4a3f157ba8f210129dc460995bcc46834a7fdf7ccf9b07346b983d9789d23591
+# патч 42 mutation-042.diff sha256 00ccb54acf38b92ee53344e6ba70093fdb7e6d6070657ddbaf3144f067f761fd
+# патч 43 mutation-043.diff sha256 4c937d5a592ce65224b7b05f80e9c58a6fd1e204e13290dea889b035daa197ab
+# патч 44 mutation-044.diff sha256 d0bacb44043caf5aacfe4e5c3a099d61a234d2e83d8104846eb7789e888b361c
+# патч 45 mutation-045.diff sha256 e512c9cfbf0b016cddf335c8132cbc08a8884e784cec27ef1329a2035abf3f9c
+номер	исход	узлы
+31	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate
+32	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate
+33	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate
+34	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh
+35	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac5PassToPassTest::test_ac5_retried_on_base_not_in_pass_to_pass,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_unknown_outcome_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac2PlaceTest::test_ac2_outcome_refusal_stops_before_review_rework_gate,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_timeout_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_error_is_red,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_broken_unstable_and_flaky_on_base,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_base_skipped_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_unstable_after_change_general_refusal,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_neighbour_red_in_same_file_does_not_redden_rerun,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_junit_records_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_one_finding_per_id_senior_kind,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac11MandateTest::test_ac11_other_file_mandate_does_not_cover,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac11MandateTest::test_ac11_prefix_needs_separator_after_it,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover
+36	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_git_head_not_read_refuses
+37	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base
+38	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head
+39	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head
+40	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head
+41	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass
+42	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit
+43	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit
+44	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit
+45	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals
+
+Прогон №4 (`--patches 46-60`, рабочих процессов auto):
+
+# mutation-run №4 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: base 579a38199ce682917b9d5e40f15ac95cde4aaddc
+# тесты: tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
+# рабочих процессов: auto
+# патч 46 mutation-046.diff sha256 ef6a09407aa6eea8606fb04a89ca7af83d054e88f86db131a280b3e5d4252d89
+# патч 47 mutation-047.diff sha256 fd3a2349e718d875480aec4617513b582e69034ffffdac02d3ca05dbda5e88d9
+# патч 48 mutation-048.diff sha256 970acb7df072ef316195675d6bbae5adb1a0490cf76bc231fcb78da958611879
+# патч 49 mutation-049.diff sha256 20713c53bad305498233df209f7099ae14e73bf97d29f5f6d7539cd57e754b02
+# патч 50 mutation-050.diff sha256 536cd913c4e92a0bb66319669778bf8ef47f7083633be01bc4a6cf4d6fde6873
+# патч 51 mutation-051.diff sha256 ffca80b782b6de317e0552d66479ba7ead26ef85d06b9c10cc055ee2bdc73748
+# патч 52 mutation-052.diff sha256 66833e578e68110200ba787be58dca22e3165f99ab4d1679c93fa79e9c99ea87
+# патч 53 mutation-053.diff sha256 26c10a3041eb5958359d0b5b705a48c331ea3b92162828d871bf2e351590af0d
+# патч 54 mutation-054.diff sha256 09a75ab3f0deb05b064b6e19aba747bcc0178724132a81f951e28097552543ce
+# патч 55 mutation-055.diff sha256 0b5ad56645de10b2e1c6e931045d072ce23d2ded064dc408baca88944bea0c1e
+# патч 56 mutation-056.diff sha256 4260a992e3cb8978058880199ecfa77cd6a36527f1c4c51018ee7b193efd4562
+# патч 57 mutation-057.diff sha256 bb3fbb2fb0d3ab07721ac9d4682c62f2658cb6084779ccd817e8d9492d2ef267
+# патч 58 mutation-058.diff sha256 3d0dfaf8334cee31ca17effc62b2c728bff12668d0b43d699ebfa1d716a2665f
+# патч 59 mutation-059.diff sha256 2035f613642a4244d7407fb5be4b27a9921341f119156e797111ebb7f1ac3895
+# патч 60 mutation-060.diff sha256 fc20fa847878674c7866baf11f0c4b15fceba47f9700a6eb3613d218f4f9e614
+номер	исход	узлы
+46	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_timeout_refuses
+47	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses
+48	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red
+49	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+50	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red
+51	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_error_is_red,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal
+52	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal
+53	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+54	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+55	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_junit_records_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+56	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+57	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_junit_records_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each
+58	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_junit_records_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
+59	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each
+60	не убита	
+
+Прогон №5 (`--patches 61-63`, рабочих процессов auto):
+
+# mutation-run №5 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: base 579a38199ce682917b9d5e40f15ac95cde4aaddc
+# тесты: tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
+# рабочих процессов: auto
+# патч 61 mutation-061.diff sha256 bddfcdd66fe43489dbd5a92ae124ae39f60d175eebf5e045b9e5ddc1e525bfa4
+# патч 62 mutation-062.diff sha256 f608e8c1f74ebae512dc445b0b31ef5ba79e387a1c4ca2dbb59d9510264f20f7
+# патч 63 mutation-063.diff sha256 56ba94d659816cd2c23443d735ff75290093cf43ce724dfde59545bcc27ccbf4
+номер	исход	узлы
+61	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+62	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
+63	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
+
+Прогон №6 (`--patches 6-15`, рабочих процессов auto):
+
+# mutation-run №6 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: base 579a38199ce682917b9d5e40f15ac95cde4aaddc
+# тесты: tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
+# рабочих процессов: auto
+# патч 6 mutation-006.diff sha256 ecddcca1e529f5422c1a3be8e91b5f1b62b1f16943a359fe70d07509f2ec7fd1
+# патч 7 mutation-007.diff sha256 cf260f676e9892d12f043184fd79ffd86e4fb786ebc39f3ffe955b72f8276e52
+# патч 8 mutation-008.diff sha256 8034c4c11922820ec78b3465631012eeb3bb3ccd3842cff65cecea85794092c5
+# патч 9 mutation-009.diff sha256 2cd39c6d46590a94aa7122a105e849d833c2fcda7e2caff54c486483164019a4
+# патч 10 mutation-010.diff sha256 a037e744c087fde4046a7a4332ca28a028502150d6d5a9e54dad642e389040ac
+# патч 11 mutation-011.diff sha256 7015d4d8dfcf958801c643fe866b1cf608cc6f6cfba90d6db613c772536f37f6
+# патч 12 mutation-012.diff sha256 cfed6f7cf3f12fede296705dc923db40c524d93179aa672881e6df1d8153da95
+# патч 13 mutation-013.diff sha256 e608442ca012377afd586dab356cf456f27c6a1478bae8f2f4fa81d40b2ecfc4
+# патч 14 mutation-014.diff sha256 48978860d259c827829b351e91839d513d6b1d7541fa8ea044e3869c23de52be
+# патч 15 mutation-015.diff sha256 ba5684145e17c7f0aa540c39fb344cd7a464c5d38811e9178a1559f9e5474d06
+номер	исход	узлы
+6	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_git_preparation_failures_refuse
+7	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_git_head_checkout_failure_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_git_base_checkout_failure_refuses
+8	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side
+9	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head
+10	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac5PassToPassTest::test_ac5_retried_on_base_not_in_pass_to_pass,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red
+11	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass
+12	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_base_skipped_refuses,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
+13	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit
+14	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac6RerunTest::test_ac6_skipped_on_branch_not_rerun,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each
+15	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac7RerunPrepareTest::test_ac7_rerun_unknown_outcome_refuses
+
+Прогон №7 (`--patches 31-31`, рабочих процессов auto):
+
+# mutation-run №7 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: base 579a38199ce682917b9d5e40f15ac95cde4aaddc
+# тесты: tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
+# рабочих процессов: auto
+# патч 31 mutation-031.diff sha256 e5b643ac1e5d0a4d8f9767da17847ff5433f9bc153b3407d585e98e5afd5b9ae
+номер	исход	узлы
+31	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate
+
 ## Мутации после
 
 Вывод `mutation-run --wait` каждой части дословно (шапка и все строки),
 `--ref worktree`, тесты — `tests/test_outcome_gate_module.py`, рабочих
 процессов — `auto`, те же части 1-15, 16-30, 31-45, 46-60, 61-63.
 
-Прогонов «после» ещё нет.
+Прогон №8 (`--patches 1-15`, рабочих процессов auto). Перед стартом части `git status --porcelain -- orchestrator/` рабочей копии — пустой вывод.
+
+# mutation-run №8 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 9b29a735590fcc4ab2799ae3a0678dca7831ef2c
+# тесты: tests/test_outcome_gate_module.py
+# рабочих процессов: auto
+# патч 1 mutation-001.diff sha256 7e8c5ff9839d64211fe5742a4533275e2b8e4e2b4b10d76879a80c7e57718173
+# патч 2 mutation-002.diff sha256 45762ddbf2cac2eedaaf53c9c0e54c2edb6abb34735216bb77b8e8a2d9207fc3
+# патч 3 mutation-003.diff sha256 1781b115337f29162e78febd5ab4736f32240d768424d259c78aafc0afa0934c
+# патч 4 mutation-004.diff sha256 2a59d597363167fdc681eb55aff45908093d9c587437646c74f609a33499cc14
+# патч 5 mutation-005.diff sha256 8dcd99b2aabe2cd5b6bd68e228977608a3eec991461de0e5f6e65ef02b5bd4a4
+# патч 6 mutation-006.diff sha256 ecddcca1e529f5422c1a3be8e91b5f1b62b1f16943a359fe70d07509f2ec7fd1
+# патч 7 mutation-007.diff sha256 cf260f676e9892d12f043184fd79ffd86e4fb786ebc39f3ffe955b72f8276e52
+# патч 8 mutation-008.diff sha256 8034c4c11922820ec78b3465631012eeb3bb3ccd3842cff65cecea85794092c5
+# патч 9 mutation-009.diff sha256 2cd39c6d46590a94aa7122a105e849d833c2fcda7e2caff54c486483164019a4
+# патч 10 mutation-010.diff sha256 a037e744c087fde4046a7a4332ca28a028502150d6d5a9e54dad642e389040ac
+# патч 11 mutation-011.diff sha256 7015d4d8dfcf958801c643fe866b1cf608cc6f6cfba90d6db613c772536f37f6
+# патч 12 mutation-012.diff sha256 cfed6f7cf3f12fede296705dc923db40c524d93179aa672881e6df1d8153da95
+# патч 13 mutation-013.diff sha256 e608442ca012377afd586dab356cf456f27c6a1478bae8f2f4fa81d40b2ecfc4
+# патч 14 mutation-014.diff sha256 48978860d259c827829b351e91839d513d6b1d7541fa8ea044e3869c23de52be
+# патч 15 mutation-015.diff sha256 ba5684145e17c7f0aa540c39fb344cd7a464c5d38811e9178a1559f9e5474d06
+номер	исход	узлы
+1	убита	tests/test_outcome_gate_module.py::test_ac1_artel_and_test_profile_no_gate
+2	убита	tests/test_outcome_gate_module.py::test_ac1_decide_skip_refusal_and_canary_no_gate
+3	убита	tests/test_outcome_gate_module.py::test_ac5_retried_on_base_not_in_pass_to_pass,tests/test_outcome_gate_module.py::test_ac5_no_tests_on_base_empty_pass_to_pass,tests/test_outcome_gate_module.py::test_ac2_text_gate_refusal_first_no_outcome_runs,tests/test_outcome_gate_module.py::test_ac3_full_suite_on_base_and_head_checkouts_fresh,tests/test_outcome_gate_module.py::test_ac13_passed_gate_journal_counts
+4	убита	tests/test_outcome_gate_module.py::test_ac2_outcome_refusal_stops_before_review_rework_gate
+5	убита	tests/test_outcome_gate_module.py::test_ac3_full_suite_on_base_and_head_checkouts_fresh
+6	убита	tests/test_outcome_gate_module.py::test_ac4_git_preparation_failures_refuse
+7	убита	tests/test_outcome_gate_module.py::test_ac4_git_base_checkout_failure_refuses,tests/test_outcome_gate_module.py::test_ac4_git_head_checkout_failure_refuses
+8	убита	tests/test_outcome_gate_module.py::test_ac4_side_not_started_or_timeout_refuses_naming_side
+9	убита	tests/test_outcome_gate_module.py::test_ac4_side_base_timeout_refuses_naming_base,tests/test_outcome_gate_module.py::test_ac4_side_not_started_or_timeout_refuses_naming_side,tests/test_outcome_gate_module.py::test_ac4_side_head_timeout_refuses_naming_head,tests/test_outcome_gate_module.py::test_ac4_side_head_unknown_refuses_naming_head
+10	убита	tests/test_outcome_gate_module.py::test_ac5_retried_on_base_not_in_pass_to_pass,tests/test_outcome_gate_module.py::test_retried_pass_on_base_not_in_pass_to_pass,tests/test_outcome_gate_module.py::test_ac7_branch_rerun_retried_is_red
+11	убита	tests/test_outcome_gate_module.py::test_ac5_no_tests_on_base_empty_pass_to_pass
+12	убита	tests/test_outcome_gate_module.py::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit,tests/test_outcome_gate_module.py::test_ac7_rerun_base_skipped_refuses,tests/test_outcome_gate_module.py::test_ac7_rerun_base_record_missing_refuses,tests/test_outcome_gate_module.py::test_ac8_flaky_on_base_no_refusal,tests/test_outcome_gate_module.py::test_ac13_passed_gate_journal_counts
+13	убита	tests/test_outcome_gate_module.py::test_red_on_branch_kinds,tests/test_outcome_gate_module.py::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit
+14	убита	tests/test_outcome_gate_module.py::test_red_on_branch_kinds,tests/test_outcome_gate_module.py::test_ac11_role_autocommitted_id_mandate_does_not_cover,tests/test_outcome_gate_module.py::test_ac13_refusal_hint_names_both_markers,tests/test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not,tests/test_outcome_gate_module.py::test_ac10_findings_order_and_one_line_each,tests/test_outcome_gate_module.py::test_ac6_skipped_on_branch_not_rerun
+15	убита	tests/test_outcome_gate_module.py::test_ac7_rerun_unknown_outcome_refuses
 
 ## Строки падений
 
@@ -258,37 +428,69 @@ schema_version: 5
 перенесён убивший «до» тест, или помощника исхода.
 
 - mutation-001 «до»: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:60`
+- mutation-001 «после»: `test_outcome_gate_module.py::test_ac1_artel_and_test_profile_no_gate` — `tests/test_outcome_gate_module.py:833`
 - mutation-002 «до»: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:60`
+- mutation-002 «после»: `test_outcome_gate_module.py::test_ac1_decide_skip_refusal_and_canary_no_gate` — `tests/test_outcome_gate_module.py:833`
 - mutation-003 «до»: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:256`
 - mutation-003 «до»: `Ac5PassToPassTest::test_ac5_retried_on_base_not_in_pass_to_pass` — `tests/outcome_gate_sandbox.py:837`
 - mutation-003 «до»: `Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:665`
 - mutation-003 «до»: `Ac2PlaceTest::test_ac2_text_gate_refusal_first_no_outcome_runs` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:178`
 - mutation-003 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/outcome_gate_sandbox.py:837`
+- mutation-003 «после»: `test_outcome_gate_module.py::test_ac5_retried_on_base_not_in_pass_to_pass` — `tests/test_outcome_gate_module.py:828`
+- mutation-003 «после»: `test_outcome_gate_module.py::test_ac5_no_tests_on_base_empty_pass_to_pass` — `tests/test_outcome_gate_module.py:1455`
+- mutation-003 «после»: `test_outcome_gate_module.py::test_ac2_text_gate_refusal_first_no_outcome_runs` — `tests/test_outcome_gate_module.py:991`
+- mutation-003 «после»: `test_outcome_gate_module.py::test_ac3_full_suite_on_base_and_head_checkouts_fresh` — `tests/test_outcome_gate_module.py:1067`
+- mutation-003 «после»: `test_outcome_gate_module.py::test_ac13_passed_gate_journal_counts` — `tests/test_outcome_gate_module.py:828`
 - mutation-004 «до»: `Ac2PlaceTest::test_ac2_outcome_refusal_stops_before_review_rework_gate` — `tests/outcome_gate_sandbox.py:824`
+- mutation-004 «после»: `test_outcome_gate_module.py::test_ac2_outcome_refusal_stops_before_review_rework_gate` — `tests/test_outcome_gate_module.py:818`
 - mutation-005 «до»: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:257`
+- mutation-005 «после»: `test_outcome_gate_module.py::test_ac3_full_suite_on_base_and_head_checkouts_fresh` — `tests/test_outcome_gate_module.py:1068`
 - mutation-006 «до»: `Ac4PrepareTest::test_ac4_git_preparation_failures_refuse` — `tests/outcome_gate_sandbox.py:824`
-- mutation-006 «до»: `Ac4PrepareTest::test_ac4_git_head_not_read_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-006 «после»: `test_outcome_gate_module.py::test_ac4_git_preparation_failures_refuse` — `tests/test_outcome_gate_module.py:818`
 - mutation-007 «до»: `Ac4PrepareTest::test_ac4_git_head_checkout_failure_refuses` — `tests/outcome_gate_sandbox.py:824`
 - mutation-007 «до»: `Ac4PrepareTest::test_ac4_git_base_checkout_failure_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-007 «после»: `test_outcome_gate_module.py::test_ac4_git_base_checkout_failure_refuses` — `tests/test_outcome_gate_module.py:818`
+- mutation-007 «после»: `test_outcome_gate_module.py::test_ac4_git_head_checkout_failure_refuses` — `tests/test_outcome_gate_module.py:818`
 - mutation-008 «до»: `Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side` — `tests/outcome_gate_sandbox.py:824`
-- mutation-008 «до»: `Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base` — `tests/outcome_gate_sandbox.py:824`
+- mutation-008 «после»: `test_outcome_gate_module.py::test_ac4_side_not_started_or_timeout_refuses_naming_side` — `tests/test_outcome_gate_module.py:818`
 - mutation-009 «до»: `Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:294`
 - mutation-009 «до»: `Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:294`
 - mutation-009 «до»: `Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:294`
 - mutation-009 «до»: `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:294`
+- mutation-009 «после»: `test_outcome_gate_module.py::test_ac4_side_base_timeout_refuses_naming_base` — `tests/test_outcome_gate_module.py:859`
+- mutation-009 «после»: `test_outcome_gate_module.py::test_ac4_side_not_started_or_timeout_refuses_naming_side` — `tests/test_outcome_gate_module.py:859`
+- mutation-009 «после»: `test_outcome_gate_module.py::test_ac4_side_head_timeout_refuses_naming_head` — `tests/test_outcome_gate_module.py:859`
+- mutation-009 «после»: `test_outcome_gate_module.py::test_ac4_side_head_unknown_refuses_naming_head` — `tests/test_outcome_gate_module.py:859`
 - mutation-010 «до»: `Ac5PassToPassTest::test_ac5_retried_on_base_not_in_pass_to_pass` — `tests/outcome_gate_sandbox.py:837`
 - mutation-010 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-010 «после»: `test_outcome_gate_module.py::test_ac5_retried_on_base_not_in_pass_to_pass` — `tests/test_outcome_gate_module.py:828`
+- mutation-010 «после»: `test_outcome_gate_module.py::test_retried_pass_on_base_not_in_pass_to_pass` — `tests/test_outcome_gate_module.py:672`
+- mutation-010 «после»: `test_outcome_gate_module.py::test_ac7_branch_rerun_retried_is_red` — `tests/test_outcome_gate_module.py:818`
 - mutation-011 «до»: `Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass` — `tests/outcome_gate_sandbox.py:837`
+- mutation-011 «после»: `test_outcome_gate_module.py::test_ac5_no_tests_on_base_empty_pass_to_pass` — `tests/test_outcome_gate_module.py:828`
 - mutation-012 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses` — `tests/outcome_gate_sandbox.py:824`
 - mutation-012 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_base_skipped_refuses` — `tests/outcome_gate_sandbox.py:824`
 - mutation-012 «до»: `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` — `tests/outcome_gate_sandbox.py:837`
 - mutation-012 «до»: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:706`
 - mutation-012 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/outcome_gate_sandbox.py:837`
+- mutation-012 «после»: `test_outcome_gate_module.py::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_outcome_gate_module.py:1495`
+- mutation-012 «после»: `test_outcome_gate_module.py::test_ac7_rerun_base_skipped_refuses` — `tests/test_outcome_gate_module.py:818`
+- mutation-012 «после»: `test_outcome_gate_module.py::test_ac7_rerun_base_record_missing_refuses` — `tests/test_outcome_gate_module.py:818`
+- mutation-012 «после»: `test_outcome_gate_module.py::test_ac8_flaky_on_base_no_refusal` — `tests/test_outcome_gate_module.py:828`
+- mutation-012 «после»: `test_outcome_gate_module.py::test_ac13_passed_gate_journal_counts` — `tests/test_outcome_gate_module.py:828`
 - mutation-013 «до»: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:706`
+- mutation-013 «после»: `test_outcome_gate_module.py::test_red_on_branch_kinds` — `tests/test_outcome_gate_module.py:692`
+- mutation-013 «после»: `test_outcome_gate_module.py::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_outcome_gate_module.py:1495`
 - mutation-014 «до»: `Ac6RerunTest::test_ac6_skipped_on_branch_not_rerun` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:726`
 - mutation-014 «до»: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1409`
+- mutation-014 «после»: `test_outcome_gate_module.py::test_red_on_branch_kinds` — `tests/test_outcome_gate_module.py:692`
+- mutation-014 «после»: `test_outcome_gate_module.py::test_ac11_role_autocommitted_id_mandate_does_not_cover` — `tests/test_outcome_gate_module.py:560`
+- mutation-014 «после»: `test_outcome_gate_module.py::test_ac13_refusal_hint_names_both_markers` — `tests/test_outcome_gate_module.py:560`
+- mutation-014 «после»: `test_outcome_gate_module.py::test_ac12_exact_id_with_n_covers_other_variant_does_not` — `tests/test_outcome_gate_module.py:560`
+- mutation-014 «после»: `test_outcome_gate_module.py::test_ac10_findings_order_and_one_line_each` — `tests/test_outcome_gate_module.py:2189`
+- mutation-014 «после»: `test_outcome_gate_module.py::test_ac6_skipped_on_branch_not_rerun` — `tests/test_outcome_gate_module.py:1516`
 - mutation-015 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_unknown_outcome_refuses` — `tests/outcome_gate_sandbox.py:824`
-- mutation-015 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_timeout_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-015 «после»: `test_outcome_gate_module.py::test_ac7_rerun_unknown_outcome_refuses` — `tests/test_outcome_gate_module.py:818`
 - mutation-016 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_base_skipped_refuses` — `tests/outcome_gate_sandbox.py:824`
 - mutation-017 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red` — `tests/outcome_gate_sandbox.py:824`
 - mutation-018 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red` — `tests/outcome_gate_sandbox.py:824`
@@ -325,6 +527,77 @@ schema_version: 5
 - mutation-028 «до»: `Ac11MandateTest::test_ac11_prefix_needs_separator_after_it` — `tests/outcome_gate_sandbox.py:824`
 - mutation-029 «до»: `Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover` — `tests/outcome_gate_sandbox.py:824`
 - mutation-030 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1641`
+- mutation-031 «до»: `Ac1OutOfBoundsTest::test_ac1_artel_and_test_profile_no_gate` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:60`
+- mutation-032 «до»: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:61`
+- mutation-033 «до»: `Ac1OutOfBoundsTest::test_ac1_decide_skip_refusal_and_canary_no_gate` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:60`
+- mutation-034 «до»: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:262`
+- mutation-035 «до»: `Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:294`
+- mutation-035 «до»: `Ac4PrepareTest::test_ac4_side_not_started_or_timeout_refuses_naming_side` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac3RunsTest::test_ac3_full_suite_on_base_and_head_checkouts_fresh` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:258`
+- mutation-035 «до»: `Ac5PassToPassTest::test_ac5_retried_on_base_not_in_pass_to_pass` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_retried_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_unknown_outcome_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac2PlaceTest::test_ac2_outcome_refusal_stops_before_review_rework_gate` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:294`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_red_kinds` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_timeout_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_error_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac8VerdictByRecordTest::test_ac8_broken_unstable_and_flaky_on_base` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_base_skipped_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1206`
+- mutation-035 «до»: `Ac8VerdictByRecordTest::test_ac8_unstable_after_change_general_refusal` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac8VerdictByRecordTest::test_ac8_neighbour_red_in_same_file_does_not_redden_rerun` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac9CompareTest::test_ac9_junit_records_findings` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac9CompareTest::test_ac9_one_finding_per_id_senior_kind` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:706`
+- mutation-035 «до»: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac11MandateTest::test_ac11_other_file_mandate_does_not_cover` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac11MandateTest::test_ac11_prefix_needs_separator_after_it` — `tests/outcome_gate_sandbox.py:824`
+- mutation-035 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1641`
+- mutation-035 «до»: `Ac11MandateTest::test_ac11_role_autocommitted_answer_does_not_cover` — `tests/outcome_gate_sandbox.py:824`
+- mutation-036 «до»: `Ac4PrepareTest::test_ac4_git_head_not_read_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-037 «до»: `Ac4PrepareTest::test_ac4_side_base_timeout_refuses_naming_base` — `tests/outcome_gate_sandbox.py:824`
+- mutation-038 «до»: `Ac4PrepareTest::test_ac4_side_head_timeout_refuses_naming_head` — `tests/outcome_gate_sandbox.py:824`
+- mutation-039 «до»: `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head` — `tests/outcome_gate_sandbox.py:824`
+- mutation-040 «до»: `Ac4PrepareTest::test_ac4_side_head_unknown_refuses_naming_head` — `tests/outcome_gate_sandbox.py:824`
+- mutation-041 «до»: `Ac5PassToPassTest::test_ac5_no_tests_on_base_empty_pass_to_pass` — `tests/outcome_gate_sandbox.py:837`
+- mutation-042 «до»: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:708`
+- mutation-043 «до»: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:709`
+- mutation-044 «до»: `Ac6RerunTest::test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:709`
+- mutation-045 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_preparation_refusals` — `tests/outcome_gate_sandbox.py:824`
+- mutation-046 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_timeout_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-047 «до»: `Ac7RerunPrepareTest::test_ac7_rerun_base_record_missing_refuses` — `tests/outcome_gate_sandbox.py:824`
+- mutation-048 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-049 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_skipped_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-049 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/outcome_gate_sandbox.py:824`
+- mutation-050 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_missing_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-051 «до»: `Ac7RerunPrepareTest::test_ac7_branch_rerun_error_is_red` — `tests/outcome_gate_sandbox.py:824`
+- mutation-051 «до»: `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` — `tests/outcome_gate_sandbox.py:837`
+- mutation-052 «до»: `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1206`
+- mutation-053 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1291`
+- mutation-054 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1291`
+- mutation-055 «до»: `Ac9CompareTest::test_ac9_junit_records_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1330`
+- mutation-055 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1286`
+- mutation-056 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1286`
+- mutation-057 «до»: `Ac9CompareTest::test_ac9_junit_records_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1328`
+- mutation-057 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1286`
+- mutation-057 «до»: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1405`
+- mutation-058 «до»: `Ac9CompareTest::test_ac9_junit_records_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1328`
+- mutation-058 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1289`
+- mutation-058 «до»: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1405`
+- mutation-058 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1641`
+- mutation-059 «до»: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1409`
+- mutation-061 «до»: `Ac10OrderTest::test_ac10_findings_order_and_one_line_each` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1407`
+- mutation-061 «до»: `Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1296`
+- mutation-062 «до»: `Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1206`
+- mutation-062 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1641`
+- mutation-063 «до»: `Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts` — `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:1641`
 
 ## Соответствие имён «до → после»
 
@@ -375,8 +648,8 @@ schema_version: 5
 
 ## Находки
 
-Мутаций, не убитых «до», нет; исходов «ошибка сбора, импорта или setup» и
-предела в последних строках нет.
+- Находка mutation-060 (заявка `Ac10OrderTest::test_ac10_findings_order_and_one_line_each`, «внутри вида без сортировки — пары идут в порядке файлов»): «до» не убита никем. Патч убирает сортировку по идентификатору из `ordered` (`outcome_integrity.py:221`), но вход `ordered` уже упорядочен по идентификатору внутри вида: красные идут из `red = sorted(...)` (`outcome_integrity.py:943`), а записи `compare` — в порядке отчёта базы, где идентификатор начинается с пути файла, так что «порядок файлов» совпадает с порядком идентификаторов. Тест эту альтернативу не различает; тест не удалён, перенесён в `test_ac10_findings_order_and_one_line_each`.
+- Иных мутаций, не убитых «до», нет; исходов «ошибка сбора, импорта или setup» и предела в последних строках нет.
 
 ## Удалённые дубли
 
@@ -386,7 +659,7 @@ schema_version: 5
 
 - Тестов «до»: 42 в исходном файле (строк 1646) и 11 в модуле на базе (строк 781).
 - Тестов «после»: 53 в `tests/test_outcome_gate_module.py` (строк 2412).
-- Время контрольных прогонов `mutation-run` (без патча, `auto` рабочих процессов): «до» — 24.86 с (прогон №1), 41.02 с (прогон №2); «после» — ещё не было.
+- Время контрольных прогонов `mutation-run` (без патча, `auto` рабочих процессов): «до» — 24.86 с (прогон №1), 41.02 с (прогон №2), 34.36 с (прогон №3), 37.94 с (прогон №4), 24.43 с (прогон №5), 25.05 с (прогон №6), 22.55 с (прогон №7); «после» — 31.77 с (прогон №8).
 
 ## Влияние на систему
 

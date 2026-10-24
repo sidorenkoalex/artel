@@ -1,0 +1,12 @@
+# mutation-run №5 задачи 01M5QAEPC6RF097YQ43T3Y56D9
+# источник патчей: каталог на диске
+# ревизия прогона: base 579a38199ce682917b9d5e40f15ac95cde4aaddc
+# тесты: tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
+# рабочих процессов: auto
+# патч 61 mutation-061.diff sha256 bddfcdd66fe43489dbd5a92ae124ae39f60d175eebf5e045b9e5ddc1e525bfa4
+# патч 62 mutation-062.diff sha256 f608e8c1f74ebae512dc445b0b31ef5ba79e387a1c4ca2dbb59d9510264f20f7
+# патч 63 mutation-063.diff sha256 56ba94d659816cd2c23443d735ff75290093cf43ce724dfde59545bcc27ccbf4
+номер	исход	узлы
+61	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac10OrderTest::test_ac10_findings_order_and_one_line_each,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac9CompareTest::test_ac9_vitest_records_findings_and_non_findings
+62	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac8VerdictByRecordTest::test_ac8_flaky_on_base_no_refusal,tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
+63	убита	tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py::Ac13PassedRecordTest::test_ac13_passed_gate_journal_counts
