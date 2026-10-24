@@ -1,16 +1,17 @@
-# Записка spec_auditor — 01M5NPKPWFEWTYMBYWVR797AM6
+# Записка spec_auditor — 01M5NPKPWFEWTYMBYWVR797AM6 (круг 2)
 
 ## Выяснено
-- Факты SPEC о коде в основном верны: suite_run.py:553 `_base_copy`, :858 `cmd_suite_run`, :921–922 env без ARTEL_ROLE; suite_lock.py:40/93/166/172; acceptance.py:71/2343; appendix_tree.py:133; outcome.py:145; project_profile.py:379; artel.py:2181; config.py:132 = 2700.
-- Неверно/неточно: config.py:230 `FULL_SUITE_WORKERS = "auto"`, не 2 (в SPEC п.11 — читать как подмену в тестах).
-- Главная находка: `_carry_uncommitted` (appendix_tree.py:133–166) копирует файлы без коммита, а п.5 SPEC велит `git reset --hard HEAD && git clean -ffdx` после каждого патча — при `--ref worktree` со второго патча незакоммиченные файлы стёрты.
-- outcome.verdict (outcome.py:271–273): все passed + ненулевой код → «неизвестно»; SPEC п.6 даёт «не убита».
-- run_full_suite с профилем-отчётом игнорирует `extra` (acceptance.py:2416–2418).
-- Импорт mutation_run в artel.py (:797) и строка списка модулей (:650) — вне буквального ограничения зоны artel.py.
+- SPEC blob 91ac5b6a… совпал с миссией. Все 11 решений гейта круга 1 внесены.
+- Факты верны: suite_run.py:553/858/921–922, suite_lock.py:40/93/166/172(:178 сравнение run), acceptance.py:71/2343, appendix_tree.py:133 (переносит только неигнорируемые — коммит-основа исполним), outcome.py:145, config.py:132/223/230("auto")/238, artel.py:2181/2312/797/650/158. Сторож conftest.py:78 (SPEC пишет :80).
+- run_full_suite отдаёт (green, output), без кода возврата; предел — по префиксу вывода acceptance.py:2448.
+- Подпроцессный тест с FULL_SUITE_WORKERS: прецедент — копия orchestrator/ в песочницу с дописанной константой (tests/test_01m46c776szemypbqgpnjn1txy_suite_run_appendix.py:208–211).
+- Отклонения (concerns): О-1 источник refs/artifacts и sha ссылки без AC; О-2 porcelain-отказ без AC; О-3 неизменность docs/refs без AC; О-4 Codex/readonly БД не оговорён; О-5 нет строки инварианта 40 (invariants.md:70); О-6 перечень «трогает тесты» без .pytest.ini/pytest.toml/copy; О-7 «нормализация относительно копии» vs отказ до копии; пустой набор/кривой --patches не уточнён.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns, status ready; guard ок; blob-sha SPEC.md = d7decd89… совпал с миссией.
-- Прочие отклонения: отказ `--tests` только для литерала `tests` (обход `tests/`, `./tests`); «остаток предела» не определён; «красный» контроль не определён; нет матрицы неослабления.
+- SPEC-AUDIT.md написан: verdict concerns, status ready; guard ок.
+
+## Не сработало
+- Bash с `$VAR`/`cd` в команде требует подтверждения — писать абсолютные пути.
 
 ## Чего не хватило
 - Нет.
