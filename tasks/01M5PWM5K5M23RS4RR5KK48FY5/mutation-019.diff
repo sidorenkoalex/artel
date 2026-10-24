@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..be48261e 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -846,7 +846,7 @@
+     # Исходы «сломан правкой»/«нестабилен» начинаются с ветки, находки
+     # прежних версий и «замена не нужна» — с прежней версии, находки пути —
+     # со статуса или строки, прочие — с базы (`_redness`, `compare`).
+-    if kind in (BROKEN, UNSTABLE):
++    if kind == UNSTABLE:
+         return " — ветка: "
+     if kind in (PRIOR_RED, PRIOR_UNSTABLE, REPLACED_NEEDLESS):
+         return " — прежняя версия: "

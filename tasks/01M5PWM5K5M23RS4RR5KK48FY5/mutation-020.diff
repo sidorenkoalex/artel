@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..5f67ddff 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -881,7 +881,7 @@
+     """Находки, покрытые мандатом, из записи `PASSED_ACTION` (строки «… —
+     покрыто мандатом ANSWER-n»); неразобранная — `None`."""
+     return [_finding_of(line.rpartition(COVERED_MARK)[0])
+-            for line in (detail or "").splitlines() if COVERED_MARK in line]
++            for line in (detail or "").splitlines()]
+ 
+ 
+ def _covered_ids(detail: str) -> list:

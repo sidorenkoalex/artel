@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..778ff2ea 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -205,7 +205,7 @@
+         elif h.fails and not b.fails:
+             found.append(Finding(FAILS_APPEARED, cid, runs))
+     for cid, h in head_map.items():
+-        if cid in base_map:
++        if True:
+             continue
+         runs = f"база: нет записи; ветка: {describe(h)}"
+         if h.mode == _TODO_MODE:

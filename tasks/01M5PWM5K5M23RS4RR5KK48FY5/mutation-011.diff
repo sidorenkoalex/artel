@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..b99aef47 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -327,7 +327,7 @@
+     покрывших находки, и элементов `замена:…` утверждённых замен (SPEC
+     01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 9) — отсортированы и соединены
+     переводом строки, utf-8; таких элементов нет — «нет»."""
+-    used = sorted(set(elements_used))
++    used = sorted(elements_used)
+     if not used:
+         return MANDATE_NONE
+     return hashlib.sha256("\n".join(used).encode("utf-8")).hexdigest()

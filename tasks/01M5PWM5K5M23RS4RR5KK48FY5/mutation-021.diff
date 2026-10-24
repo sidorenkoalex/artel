@@ -1,0 +1,15 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..0318a848 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -272,6 +272,10 @@
+     source = id_mandate.get(cid)
+     if source is not None:
+         return cid, source
++    for element, other in id_mandate.items():
++        if cid.startswith(element) and \
++                cid[len(element):].startswith(("::", "[", "#")):
++            return element, other
+     return _covering_element(cid, mandate)
+ 
+ 

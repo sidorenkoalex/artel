@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..3040b708 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -200,7 +200,7 @@
+             found.append(Finding(GONE, cid, runs))
+         elif h.mode == _TODO_MODE and b.mode != _TODO_MODE:
+             found.append(Finding(TODO_APPEARED, cid, runs))
+-        elif h.outcome == outcome.SKIPPED and b.outcome != outcome.SKIPPED:
++        elif h.outcome == outcome.SKIPPED:
+             found.append(Finding(BECAME_SKIPPED, cid, runs))
+         elif h.fails and not b.fails:
+             found.append(Finding(FAILS_APPEARED, cid, runs))

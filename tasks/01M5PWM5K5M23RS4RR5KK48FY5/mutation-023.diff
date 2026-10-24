@@ -1,0 +1,16 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..192873e7 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -996,9 +996,9 @@
+         action = (BROKEN_REFUSAL_ACTION
+                   if all(f.kind == BROKEN for f in uncovered)
+                   else OUTCOME_REFUSAL_ACTION)
++        from .test_integrity import _mandate_hint as text_hint
+         return GateRefusal(action, "\n".join(lines + flaky_lines),
+-                           _mandate_hint(task_id, any(
+-                               f.kind in _NEW_KINDS for f in uncovered)))
++                           text_hint(task_id))
+     counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; тестов, "
+               f"прошедших перепрогон, {len(red)}; прогонов файлов "
+               f"{file_runs}; находок, покрытых мандатом, {len(covered)}")

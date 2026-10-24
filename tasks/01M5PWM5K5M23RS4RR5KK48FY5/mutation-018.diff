@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..b0f566a2 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -228,7 +228,8 @@
+     after = sum(1 for c in head if c.outcome == outcome.SKIPPED)
+     if after <= before:
+         return ""
+-    return f"число пропусков компонента выросло: база {before}, ветка {after}"
++    return (f"число пропусков компонента выросло: база {before}, ветка {after}: "
++            + ", ".join(c.id for c in head if c.outcome == outcome.SKIPPED))
+ 
+ 
+ def covering(cid: str, mandate: dict):

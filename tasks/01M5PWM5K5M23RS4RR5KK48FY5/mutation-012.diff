@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..e2df054a 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -178,7 +178,7 @@
+ def red_on_branch(case) -> bool:
+     """Красный в полном прогоне ветки: `failed`, `error` или `passed` с
+     повтором; `skipped` — не красный, его ловит сравнение."""
+-    return case.outcome in (outcome.FAILED, outcome.ERROR) or \
++    return case.outcome in (outcome.FAILED, outcome.ERROR, outcome.SKIPPED) or \
+         (case.outcome == outcome.PASSED and case.retries > 0)
+ 
+ 
