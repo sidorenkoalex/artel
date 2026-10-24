@@ -101,9 +101,10 @@ _SOURCE = re.compile(r"^# источник патчей: (\S.*)$")
 _REVISION = re.compile(r"^# ревизия прогона: (base|head|worktree) ([0-9a-f]{7,64})$")
 _TESTS = re.compile(r"^# тесты: (\S.*)$")
 _PATCH = re.compile(r"^# патч (\d+) (\S+) sha256 ([0-9a-f]{64})$")
+_WORKERS = re.compile(r"^# рабочих процессов: (\d+)$")
 _COLUMNS = "номер\tисход\tузлы"
 _ROW = re.compile(r"^(\d+)\t([^\t]+)(?:\t([^\t]*))?$")
-_TABLE_LINE = (_HEAD, _SOURCE, _REVISION, _TESTS, _PATCH)
+_TABLE_LINE = (_HEAD, _SOURCE, _REVISION, _TESTS, _WORKERS, _PATCH)
 _HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
 _REF = (re.compile(r"mutation-0*(\d+)(?!\d)"),
@@ -358,6 +359,10 @@ def tables(text: str) -> tuple[list[Table], list[str]]:
             i += 1
         if broken:
             continue
+        # Строка числа рабочих процессов шапки (`mutation-run --workers`,
+        # 01M5PWFGJQNV8YSAN5MF0CKHVW) стоит между `# тесты:` и `# патч …`.
+        if i < len(lines) and _WORKERS.match(lines[i]):
+            i += 1
         while i < len(lines) and _PATCH.match(lines[i]):
             match = _PATCH.match(lines[i])
             table.patches[int(match.group(1))] = (match.group(2), match.group(3))
