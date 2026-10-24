@@ -1,14 +1,14 @@
 ## Выяснено
-- orchestrator/ между base 549e997e и 7ea8ae48 не меняется (git diff --quiet rc 0); в tests/ — ровно 4 удаления + новый файл.
-- 72 патча, один хунк каждый, только orchestrator/; sha256 на диске совпадают с шапками таблиц.
-- В новом файле 80 функций, у всех «Ловит мутацию:», нет TestCase/subTest/skip/xfail; 99 passed; plank-run 26 passed.
-- Фикстуры schema_root/no_role/*_box эквивалентны прежним setUp (tests/sandbox.py:1819).
+- Итерация 2: возврат из merge_gate — помощник origin_backlog стенда окна тишины брал notes.BACKLOG_REL вместо литерала docs/backlog.md исходного NoteSilenceSandbox.
+- Правка 6dee632d (от 7ea8ae48): только новый silence_origin_backlog (литерал) и 4 вызова в test_window_ac5/ac6/ac7/ac8_closed; ассерты прежние. Все вызовы с silence_box теперь на литерале, apply_box — на BACKLOG_REL (как ApplySandbox).
+- orchestrator/, fixtures.py, sandbox.py между 549e997e и HEAD одинаковы; ни один патч мутаций не переопределяет BACKLOG_REL — таблица «после» (7ea8ae48) по смыслу не устаревает.
+- 99 passed; plank-run 26 passed, rc 0.
 
 ## Не сработало
-- Составные bash-команды через `;` требуют подтверждения — гонял проверки скриптом python3 -c.
+- Составные bash-команды (`;`, `$?`) отклоняются — гонял по одной.
 
 ## Где остановился
-- REVIEW.md итерации 1 записан: approved, реестр пуст. Наблюдение (альтернативы в заявках «либо» доказаны одной мутацией) — в «Предложения системе».
+- REVIEW.md итерации 2 записан: approved, реестр пуст.
 
 ## Чего не хватило
-- Ничего существенного; пакет был полным.
+- Инкрементального diff в пакете не было (база не определена) — сравнивал 7ea8ae48..6dee632d вручную.
