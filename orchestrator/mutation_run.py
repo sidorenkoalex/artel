@@ -680,6 +680,27 @@ def _running(task_id: str) -> dict | None:
     return state
 
 
+def _print_table(task_id: str, run_no) -> bool:
+    """Печатает основную таблицу прогона дословно (SPEC
+    01M5P2BHX6M16XXM0TSVWW9HEM): хозяйство `suite-run` роли на Claude
+    закрыто, и перенести таблицу в PLAN она может только из вывода.
+    False — файла таблицы этого прогона нет."""
+    if not isinstance(run_no, int) or isinstance(run_no, bool):
+        return False
+    path = _table_path(task_id, run_no)
+    try:
+        text = path.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return False
+    print(f"--- таблица {path} ---")
+    # Недописанная фоном последняя строка выводится как есть, но отделяется
+    # от следующего текста отчёта переводом строки.
+    if text and not text.endswith("\n"):
+        text += "\n"
+    print(text, end="")
+    return True
+
+
 def _wait(task_id: str, minutes: int) -> None:
     head = f"[{task_id}] {COMMAND}"
     state = suite_run._read_json(_run_path(task_id))
@@ -690,6 +711,7 @@ def _wait(task_id: str, minutes: int) -> None:
     while True:
         result = suite_run._read_json(_result_path(task_id))
         if result is not None and result.get("run") == state.get("run"):
+            _print_table(task_id, state.get("run"))
             print(result.get("report", ""))
             if not result.get("green"):
                 sys.exit(1)
@@ -697,12 +719,16 @@ def _wait(task_id: str, minutes: int) -> None:
         if not suite_run._alive(state.get("pid")):
             result = suite_run._read_json(_result_path(task_id))
             if result is None or result.get("run") != state.get("run"):
+                _print_table(task_id, state.get("run"))
+                sys.stdout.flush()
                 sys.exit(f"{head}: прогон №{state.get('run')} оборван — "
                          f"фонового процесса (pid {state.get('pid')}) больше "
                          f"нет, отчёта он не оставил; лог: {state.get('log')}")
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if not _print_table(task_id, state.get("run")):
+                print("таблица ещё не начата")
             print(f"{head}: прогон №{state.get('run')} ещё идёт; лог: "
                   f"{state.get('log')}")
             sys.exit(f"{head}: прогон не прерван; отчёт — повторным "
