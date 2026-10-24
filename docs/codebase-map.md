@@ -1,5 +1,5 @@
 ---
-built_at_sha: ec948ea430e262436fbedcd59c35c6f472764af9
+built_at_sha: 11a3d23ad57d3e91e0062263faa642429072c083
 ---
 
 # Codebase-map пульта
@@ -2628,7 +2628,7 @@ built_at_sha: ec948ea430e262436fbedcd59c35c6f472764af9
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/answer.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/github_adapter.py`, `orchestrator/project_profile.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
 
-**Импортируется:** `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py`, `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py`, `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py`, `tests/test_01m5jgsaanr1nzyqd4fcsve48y_outcome_components.py`
+**Импортируется:** `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py`, `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py`, `tests/test_01m5jgsaanr1nzyqd4fcsve48y_outcome_components.py`, `tests/test_outcome_gate_module.py`
 
 ## tests/report_outcome_sandbox.py
 
@@ -5762,16 +5762,6 @@ built_at_sha: ec948ea430e262436fbedcd59c35c6f472764af9
 - `window_refusal`
 
 **Импортирует:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/keychain.py`, `orchestrator/models.py`, `orchestrator/notes.py`, `orchestrator/store.py`, `tests/sandbox.py`
-
-**Импортируется:** —
-
-## tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py
-
-**Назначение:** Гейт неослабления по исходам на переходе `in_dev -> verifying`: `PASS_TO_PASS`, перепрогоны, сравнение отчётов, мандат, отказы и журнал.
-
-**Публичные функции:** (нет)
-
-**Импортирует:** `tests/outcome_gate_sandbox.py`
 
 **Импортируется:** —
 
@@ -9263,6 +9253,10 @@ built_at_sha: ec948ea430e262436fbedcd59c35c6f472764af9
 
 **Публичные функции:**
 - `arg_value`
+- `assert_no_gate`
+- `assert_prepare`
+- `box`
+- `broken_task`
 - `flow`
 - `gate_refusal`
 - `id_box`
@@ -9271,9 +9265,54 @@ built_at_sha: ec948ea430e262436fbedcd59c35c6f472764af9
 - `js_names`
 - `js_source`
 - `junit`
+- `no_gate_refusal`
+- `prepared`
+- `refusal`
+- `test_ac10_findings_order_and_one_line_each`
+- `test_ac11_class_prefix_mandate_covers`
+- `test_ac11_file_and_prefix_mandate_cover_findings`
+- `test_ac11_method_prefix_mandate_covers_variants`
+- `test_ac11_other_file_mandate_does_not_cover`
+- `test_ac11_prefix_needs_separator_after_it`
+- `test_ac11_role_autocommitted_answer_does_not_cover`
 - `test_ac11_role_autocommitted_id_mandate_does_not_cover`
 - `test_ac12_exact_id_with_n_covers_other_variant_does_not`
+- `test_ac13_passed_gate_journal_counts`
 - `test_ac13_refusal_hint_names_both_markers`
+- `test_ac1_artel_and_test_profile_no_gate`
+- `test_ac1_decide_skip_refusal_and_canary_no_gate`
+- `test_ac2_outcome_refusal_stops_before_review_rework_gate`
+- `test_ac2_text_gate_refusal_first_no_outcome_runs`
+- `test_ac3_full_suite_on_base_and_head_checkouts_fresh`
+- `test_ac4_git_base_checkout_failure_refuses`
+- `test_ac4_git_head_checkout_failure_refuses`
+- `test_ac4_git_head_not_read_refuses`
+- `test_ac4_git_preparation_failures_refuse`
+- `test_ac4_side_base_timeout_refuses_naming_base`
+- `test_ac4_side_head_timeout_refuses_naming_head`
+- `test_ac4_side_head_unknown_refuses_naming_head`
+- `test_ac4_side_not_started_or_timeout_refuses_naming_side`
+- `test_ac5_no_tests_on_base_empty_pass_to_pass`
+- `test_ac5_retried_on_base_not_in_pass_to_pass`
+- `test_ac6_red_kinds_rerun_twice_per_side_own_files_with_limit`
+- `test_ac6_skipped_on_branch_not_rerun`
+- `test_ac7_branch_rerun_error_is_red`
+- `test_ac7_branch_rerun_missing_is_red`
+- `test_ac7_branch_rerun_red_kinds`
+- `test_ac7_branch_rerun_retried_is_red`
+- `test_ac7_branch_rerun_skipped_is_red`
+- `test_ac7_rerun_base_record_missing_refuses`
+- `test_ac7_rerun_base_skipped_refuses`
+- `test_ac7_rerun_preparation_refusals`
+- `test_ac7_rerun_timeout_refuses`
+- `test_ac7_rerun_unknown_outcome_refuses`
+- `test_ac8_broken_unstable_and_flaky_on_base`
+- `test_ac8_flaky_on_base_no_refusal`
+- `test_ac8_neighbour_red_in_same_file_does_not_redden_rerun`
+- `test_ac8_unstable_after_change_general_refusal`
+- `test_ac9_junit_records_findings`
+- `test_ac9_one_finding_per_id_senior_kind`
+- `test_ac9_vitest_records_findings_and_non_findings`
 - `test_compare_junit_became_skipped_from_each_outcome`
 - `test_compare_vitest_findings_and_non_findings`
 - `test_covered_ids_round_trip_every_finding_kind`
@@ -9285,7 +9324,7 @@ built_at_sha: ec948ea430e262436fbedcd59c35c6f472764af9
 - `ulid`
 - `vitest`
 
-**Импортирует:** `orchestrator/advance_gates/outcome_integrity.py`, `orchestrator/answer.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/github_adapter.py`, `orchestrator/project_profile.py`, `orchestrator/reporters/outcome.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/fixtures.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/advance_gates/outcome_integrity.py`, `orchestrator/answer.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/github_adapter.py`, `orchestrator/project_profile.py`, `orchestrator/reporters/outcome.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/fixtures.py`, `tests/outcome_gate_sandbox.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
