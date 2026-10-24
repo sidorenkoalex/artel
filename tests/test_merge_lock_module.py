@@ -16,10 +16,25 @@
 Стенды — фикстуры поверх `tmp_root` с телами прежних `setUp`:
 `lock_stand` (`AcquireReleaseTest` и `RunWindowTest` — тела равны),
 `ownership_stand`, `race_stand`, `project_stand` (бывший `_Base`).
+
+Волна 3м-2 сведения тестов (SPEC 01M5R0AFX9Z1GA1DG5XV73JRTE): в конец
+файла сведены классы `AcquireByProjectTest`, `ReleaseAndHeartbeatTest` и
+`StoreMergeLockTest` долгоживущего
+`tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py` (SPEC
+01M57PM7NBFX34319TR0F9CB4F): мьютекс по проекту задачи — взятие,
+`release`, продление heartbeat, `store.set_merge_lock`. Стенд —
+`project_mutex_stand` (тело бывшего `_ProjectMutexBase.setUp`; та же
+фикстура — в `tests/test_merge_queue.py`), помощники с префиксом
+`project_mutex_` — одноимённые с функциями этого файла при другом теле.
+Идентификаторы и имя внешнего проекта случайны на каждый запуск; зерно
+печатается и входит в текст провала.
 """
 import os
+import random
+import re
 import socket
 import threading
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
@@ -544,3 +559,474 @@ def test_no_args_with_several_projects_renews_only_current_session(
         rows = locks(project_stand)
         assert rows[other_task]["heartbeat_ts"] == old, f"own_first={own_first}"
         assert rows[own_task]["heartbeat_ts"] != old, f"own_first={own_first}"
+
+
+# === волна 3м-2: мьютекс по проекту (бывший
+# tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ===
+# Стенд `project_mutex_stand` — тело `_ProjectMutexBase.setUp`; помощники —
+# методы `_ProjectMutexBase` функциями модуля (первый параметр — стенд).
+# `lock_by_task` и `clear` не перенесены: их тела равны `locks`/`clear`
+# этого файла.
+
+TS_FORMAT = "%Y-%m-%d %H:%M:%SZ"
+TAKEOVER_ACTION = "мьютекс merge перехвачен"
+_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def refusal_pattern(caller: str, holder: dict) -> str:
+    """Прежний текст отказа `acquire` целиком; секунды heartbeat — любое
+    целое."""
+    return (rf"^\[{re.escape(caller)}\] merge-окно занято сессией "
+            rf"{re.escape(holder['session_id'])} \(pid {holder['pid']}, "
+            rf"задача {re.escape(holder['task_id'])}\), heartbeat \d+ сек "
+            rf"назад — дождись освобождения и повтори approve$")
+
+
+@pytest.fixture
+def project_mutex_stand(tmp_root):
+    """Стенд бывшего `_ProjectMutexBase`: инициализированный пульт, пустые
+    `merge_locks`/`merge_queue`, объявленный внешний проект `ext` рядом с
+    артелью; зерно случайных входов печатается."""
+    capture(catalog.cmd_init)
+    tmp_root.seed = random.randrange(1 << 32)
+    print(f"зерно: {tmp_root.seed}")
+    tmp_root.rng = random.Random(tmp_root.seed)
+    tmp_root.artel = config.DEFAULT_TARGET
+    tmp_root.ext = new_project(tmp_root)
+    tmp_root.conn = store.db()
+    return tmp_root
+
+
+def token(stand, n: int = 10) -> str:
+    return "".join(stand.rng.choice(_ALPHABET) for _ in range(n))
+
+
+def new_project(stand) -> str:
+    name = "ext" + token(stand, 6).lower()
+    declare_target(name)
+    return name
+
+
+def project_mutex_new_task(stand, target) -> str:
+    """Задача в `merge_gate`; `target` — имя проекта, `""` или `None`."""
+    tid = "T" + token(stand, 12)
+    conn = store.db()
+    store.insert_task(conn, tid, "мерж по проекту", "merge_gate",
+                      f"task/{tid.lower()}", config.DEFAULT_TARGET, 25.0)
+    if target != config.DEFAULT_TARGET:
+        store.update_task(conn, tid, target=target)
+    return tid
+
+
+def session(stand) -> str:
+    return "s-" + token(stand, 8).lower()
+
+
+def foreign_pid(stand) -> int:
+    pid = stand.rng.randrange(100000, 4000000)
+    return pid if pid != os.getpid() else pid + 1
+
+
+def project_mutex_seed_lock(stand, task_id: str, session_id: str, pid: int,
+                            hostname: str = OTHER_HOST,
+                            heartbeat_ts: str = None) -> dict:
+    stand.conn.execute(
+        "INSERT INTO merge_locks (task_id, session_id, pid, hostname,"
+        " heartbeat_ts) VALUES (?,?,?,?,?)",
+        (task_id, session_id, pid, hostname,
+         heartbeat_ts or store.now()))
+    stand.conn.commit()
+    return locks(stand)[task_id]
+
+
+def live_holder(stand, target) -> dict:
+    return project_mutex_seed_lock(stand, project_mutex_new_task(stand, target),
+                                   session(stand), foreign_pid(stand))
+
+
+def project_mutex_actions(stand, task_id: str) -> list:
+    return [s["action"] for s in store.task_steps(stand.conn, task_id)]
+
+
+def msg(stand, ctx: str) -> str:
+    return f"{ctx}; зерно {stand.seed}"
+
+
+def assert_fresh(stand, ts: str, ctx: str) -> None:
+    stamp = datetime.strptime(ts, TS_FORMAT).replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    assert age < 60, msg(stand, f"{ctx}: heartbeat {ts} не свежий")
+
+
+def project_pairs(stand) -> tuple:
+    return ((stand.ext, stand.artel), (stand.artel, stand.ext))
+
+
+# --- AcquireByProjectTest (бывший
+# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+
+def test_ac1_other_project_holder_does_not_block_acquire(project_mutex_stand):
+    """Живой держатель проекта Q; `acquire` задачи проекта P другим
+    процессом берёт мьютекс, обе строки в таблице, строка Q прежняя.
+
+    Сценарий в обе стороны: Q — внешний, P — артель, и наоборот.
+
+    Ловит мутацию: `acquire` читает одну строку на пульт (прежний
+    `merge_lock_row`) — вернётся отказ «merge-окно занято …», и
+    `assert refusal is None` покраснеет; либо `set_merge_lock`
+    по-прежнему делает `DELETE` без `WHERE` — строка держателя Q пропадёт
+    из таблицы."""
+    for holder_target, caller_target in project_pairs(project_mutex_stand):
+        clear(project_mutex_stand)
+        holder = live_holder(project_mutex_stand, holder_target)
+        caller, sid = (project_mutex_new_task(project_mutex_stand, caller_target),
+                       session(project_mutex_stand))
+        ctx = msg(project_mutex_stand, f"держит {holder}, берёт {caller}")
+
+        refusal = merge_lock.acquire(project_mutex_stand.conn, caller, sid)
+
+        assert refusal is None, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        rows = locks(project_mutex_stand)
+        assert rows.get(holder["task_id"]) == holder, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        assert caller in rows, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        assert (rows[caller]["session_id"],
+                rows[caller]["pid"]) == (sid, os.getpid()), ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+
+
+def test_ac3_live_holder_of_same_project_refuses_with_old_text(
+        project_mutex_stand):
+    """Живой держатель проекта P; `acquire` второй задачи того же P
+    другим процессом даёт прежний текст отказа, таблица не меняется.
+
+    Проверяется для артели и для внешнего проекта.
+
+    Ловит мутацию: проект сверяется не по `target` задачи держателя
+    (например, держатель того же проекта считается чужим) — `acquire`
+    вернёт `None` и перепишет таблицу; либо текст отказа собран
+    иначе — сверка шаблона покраснеет."""
+    for target in (project_mutex_stand.artel, project_mutex_stand.ext):
+        clear(project_mutex_stand)
+        holder = live_holder(project_mutex_stand, target)
+        caller = project_mutex_new_task(project_mutex_stand, target)
+        ctx = msg(project_mutex_stand, f"проект {target}, держит {holder}")
+
+        refusal = merge_lock.acquire(project_mutex_stand.conn, caller,
+                                     session(project_mutex_stand))
+
+        assert refusal is not None, ctx + "; " + f"project={target!r}"
+        assert re.search(refusal_pattern(caller, holder), refusal), (
+            ctx + "; " + f"project={target!r}")
+        assert locks(project_mutex_stand) == {holder["task_id"]: holder}, (
+            ctx + "; " + f"project={target!r}")
+
+
+def test_ac4_dead_holder_of_same_project_is_taken_over(project_mutex_stand):
+    """Мёртвый держатель проекта P (протухший heartbeat) перехватывается
+    `acquire` задачи P; в журнал задачи — «мьютекс merge перехвачен».
+
+    Ловит мутацию: перехват ищет мёртвую строку не своего проекта (или
+    `set_merge_lock` добавляет строку, не снося прежнюю строку
+    проекта) — в таблице останется строка мёртвого держателя P, сверка
+    состава покраснеет; либо перехват идёт без записи журнала."""
+    stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 60)
+    for target in (project_mutex_stand.artel, project_mutex_stand.ext):
+        clear(project_mutex_stand)
+        dead = project_mutex_seed_lock(
+            project_mutex_stand,
+            project_mutex_new_task(project_mutex_stand, target),
+            session(project_mutex_stand), foreign_pid(project_mutex_stand),
+            heartbeat_ts=stale)
+        caller, sid = (project_mutex_new_task(project_mutex_stand, target),
+                       session(project_mutex_stand))
+        ctx = msg(project_mutex_stand, f"проект {target}, мёртв {dead}")
+
+        refusal = merge_lock.acquire(project_mutex_stand.conn, caller, sid)
+
+        assert refusal is None, ctx + "; " + f"project={target!r}"
+        rows = locks(project_mutex_stand)
+        assert sorted(rows) == [caller], ctx + "; " + f"project={target!r}"
+        assert rows[caller]["session_id"] == sid, (
+            ctx + "; " + f"project={target!r}")
+        assert TAKEOVER_ACTION in project_mutex_actions(project_mutex_stand,
+                                                        caller), (
+            ctx + "; " + f"project={target!r}")
+
+
+def test_ac4_dead_holder_of_other_project_is_left_intact(project_mutex_stand):
+    """Мёртвый держатель проекта Q (протухший heartbeat); `acquire`
+    задачи проекта P берёт мьютекс, строка Q остаётся без изменений.
+
+    Ловит мутацию: `acquire` перехватывает любую мёртвую строку
+    таблицы, а не строку своего проекта, либо `set_merge_lock`
+    стирает строки других проектов — строка Q исчезнет или окажется
+    переписанной, `assert rows.get(...) == dead` покраснеет."""
+    stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 60)
+    for holder_target, caller_target in project_pairs(project_mutex_stand):
+        clear(project_mutex_stand)
+        dead = project_mutex_seed_lock(
+            project_mutex_stand,
+            project_mutex_new_task(project_mutex_stand, holder_target),
+            session(project_mutex_stand), foreign_pid(project_mutex_stand),
+            heartbeat_ts=stale)
+        caller = project_mutex_new_task(project_mutex_stand, caller_target)
+        ctx = msg(project_mutex_stand, f"мёртв {dead}, берёт {caller}")
+
+        refusal = merge_lock.acquire(project_mutex_stand.conn, caller,
+                                     session(project_mutex_stand))
+
+        assert refusal is None, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        rows = locks(project_mutex_stand)
+        assert rows.get(dead["task_id"]) == dead, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        assert caller in rows, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        assert TAKEOVER_ACTION not in project_mutex_actions(
+            project_mutex_stand, caller), ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+
+
+def test_ac16_artel_holder_excludes_empty_null_and_missing_target(
+        project_mutex_stand):
+    """Живой держатель — задача артели с явным `target`; `acquire`
+    задачи с пустым `target`, с `NULL` и задачи без строки в `tasks`
+    — каждый отказ «merge-окно занято …», строка держателя прежняя.
+
+    Ловит мутацию: проект задачи берётся сырой колонкой `target`
+    (без нормализации `store.task_target`) — пустая/`NULL`/отсутствующая
+    задача окажется «другим проектом», `acquire` вернёт `None`."""
+    holder = live_holder(project_mutex_stand, project_mutex_stand.artel)
+    callers = {"пустой": project_mutex_new_task(project_mutex_stand, ""),
+               "NULL": project_mutex_new_task(project_mutex_stand, None),
+               "нет в tasks": "T" + token(project_mutex_stand, 12)}
+    for kind, caller in callers.items():
+        ctx = msg(project_mutex_stand,
+                  f"{kind} target {caller}, держит {holder}")
+
+        refusal = merge_lock.acquire(project_mutex_stand.conn, caller,
+                                     session(project_mutex_stand))
+
+        assert refusal is not None, ctx + "; " + f"caller={kind!r}"
+        assert "merge-окно занято" in refusal, ctx + "; " + f"caller={kind!r}"
+        assert locks(project_mutex_stand) == {holder["task_id"]: holder}, (
+            ctx + "; " + f"caller={kind!r}")
+
+
+def test_ac16_empty_or_null_target_holder_excludes_artel_task(
+        project_mutex_stand):
+    """Живой держатель — задача с пустым либо `NULL` `target`;
+    `acquire` задачи артели с явным `target` получает отказ.
+
+    Ловит мутацию: проект держателя берётся сырой колонкой `target` —
+    держатель с `""`/`NULL` окажется «другим проектом», `acquire`
+    задачи артели вернёт `None` и добавит вторую строку артели."""
+    for target in ("", None):
+        clear(project_mutex_stand)
+        holder = live_holder(project_mutex_stand, target)
+        caller = project_mutex_new_task(project_mutex_stand,
+                                        project_mutex_stand.artel)
+        ctx = msg(project_mutex_stand,
+                  f"держатель target={target!r} {holder}")
+
+        refusal = merge_lock.acquire(project_mutex_stand.conn, caller,
+                                     session(project_mutex_stand))
+
+        assert refusal is not None, ctx + "; " + f"holder_target={target!r}"
+        assert "merge-окно занято" in refusal, (
+            ctx + "; " + f"holder_target={target!r}")
+        assert locks(project_mutex_stand) == {holder["task_id"]: holder}, (
+            ctx + "; " + f"holder_target={target!r}")
+
+
+# --- ReleaseAndHeartbeatTest (бывший
+# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+
+def test_ac5_release_removes_only_own_process_row(project_mutex_stand):
+    """Три проекта: строка этого процесса (взята `acquire`), строка
+    держателя другого проекта и строка другого процесса той же
+    сессии (третий проект); `release` снимает только первую.
+
+    Ловит мутацию: `release`/`store.release_merge_lock` сносит строки
+    по одному `session_id` либо всю таблицу — строка соседа той же
+    сессии (или держателя другого проекта) пропадёт, сверка состава
+    покраснеет."""
+    targets = [project_mutex_stand.artel, project_mutex_stand.ext,
+               new_project(project_mutex_stand)]
+    project_mutex_stand.rng.shuffle(targets)
+    own_target, other_target, same_sid_target = targets
+    sid = session(project_mutex_stand)
+    own = project_mutex_new_task(project_mutex_stand, own_target)
+    ctx = msg(project_mutex_stand,
+              f"свой {own_target}, чужой {other_target}, "
+              f"та же сессия {same_sid_target}")
+    assert merge_lock.acquire(project_mutex_stand.conn, own, sid) is None, ctx
+    other = live_holder(project_mutex_stand, other_target)
+    same_sid = project_mutex_seed_lock(
+        project_mutex_stand,
+        project_mutex_new_task(project_mutex_stand, same_sid_target), sid,
+        foreign_pid(project_mutex_stand))
+
+    merge_lock.release(project_mutex_stand.conn, sid)
+
+    assert locks(project_mutex_stand) == {other["task_id"]: other,
+                                          same_sid["task_id"]: same_sid}, ctx
+
+
+def test_ac6_touch_heartbeat_renews_only_callers_project_row(
+        project_mutex_stand):
+    """Держат проекты A и B, обе строки с heartbeat десять минут назад;
+    `touch_heartbeat(conn, task_id, session_id)` держателя A делает
+    свежим heartbeat строки A, строка B прежняя.
+
+    Ловит мутацию: продление берёт «первую» строку таблицы или
+    продлевает все строки — heartbeat B станет свежим либо A останется
+    старым (в одном из двух порядков вставки)."""
+    old = _ts_ago(600)
+    for a_target, b_target in project_pairs(project_mutex_stand):
+        for a_first in (True, False):
+            clear(project_mutex_stand)
+            a_task, a_sid = (project_mutex_new_task(project_mutex_stand,
+                                                    a_target),
+                             session(project_mutex_stand))
+            b_task = project_mutex_new_task(project_mutex_stand, b_target)
+            seeds = [lambda: project_mutex_seed_lock(
+                         project_mutex_stand, a_task, a_sid, os.getpid(),
+                         socket.gethostname(), old),
+                     lambda: project_mutex_seed_lock(
+                         project_mutex_stand, b_task,
+                         session(project_mutex_stand),
+                         foreign_pid(project_mutex_stand), heartbeat_ts=old)]
+            for seed in (seeds if a_first else seeds[::-1]):
+                seed()
+            before = locks(project_mutex_stand)
+            ctx = msg(project_mutex_stand, f"A {a_task}, B {b_task}")
+
+            merge_lock.touch_heartbeat(project_mutex_stand.conn, a_task,
+                                       a_sid)
+
+            rows = locks(project_mutex_stand)
+            assert rows[b_task] == before[b_task], ctx + "; " + (
+                f"a={a_target!r}, b={b_target!r}, a_first={a_first!r}")
+            assert_fresh(project_mutex_stand, rows[a_task]["heartbeat_ts"],
+                         ctx + "; " + (
+                             f"a={a_target!r}, b={b_target!r}, a_first={a_first!r}"))
+            assert {k: v for k, v in rows[a_task].items()
+                    if k != "heartbeat_ts"} == \
+                {k: v for k, v in before[a_task].items()
+                 if k != "heartbeat_ts"}, ctx + "; " + (
+                f"a={a_target!r}, b={b_target!r}, a_first={a_first!r}")
+
+
+def test_ac7_touch_heartbeat_does_not_renew_intercepted_row(
+        project_mutex_stand):
+    """Строку проекта A перехватил новый держатель — (а) другая задача
+    A, (б) та же задача с другим session_id; `touch_heartbeat` с
+    задачей и сессией прежнего держателя строку нового не меняет.
+
+    Ловит мутацию: продление сверяет только проект строки (или только
+    задачу) — heartbeat нового держателя станет свежим либо строка
+    перепишется задачей/сессией прежнего, сверка «до/после»
+    покраснеет."""
+    old = _ts_ago(300)
+    for target in (project_mutex_stand.artel, project_mutex_stand.ext):
+        for variant in ("другая задача", "другая сессия"):
+            clear(project_mutex_stand)
+            old_task, old_sid = (project_mutex_new_task(project_mutex_stand,
+                                                        target),
+                                 session(project_mutex_stand))
+            new_task = (project_mutex_new_task(project_mutex_stand, target)
+                        if variant == "другая задача" else old_task)
+            holder = project_mutex_seed_lock(project_mutex_stand, new_task,
+                                             session(project_mutex_stand),
+                                             foreign_pid(project_mutex_stand),
+                                             heartbeat_ts=old)
+            ctx = msg(project_mutex_stand,
+                      f"{variant}: прежний {old_task}/{old_sid}, "
+                      f"новый {holder}")
+
+            merge_lock.touch_heartbeat(project_mutex_stand.conn, old_task,
+                                       old_sid)
+
+            assert locks(project_mutex_stand) == {new_task: holder}, (
+                ctx + "; " + f"project={target!r}, variant={variant!r}")
+
+
+def test_ac17_touch_heartbeat_without_args_keeps_old_behaviour(
+        project_mutex_stand):
+    """Одна строка мьютекса с heartbeat десять минут назад:
+    `touch_heartbeat(conn)` делает его свежим, прочие поля прежние; без
+    строки вызов ничего не меняет и не падает.
+
+    Ловит мутацию: прежняя форма вызова без `task_id`/`session_id`
+    превращена в ничего не делающую (сверка «своей» строки по `None`)
+    — heartbeat останется старым, `assert_fresh` покраснеет; либо
+    пустая таблица роняет вызов исключением."""
+    for target in (project_mutex_stand.artel, project_mutex_stand.ext):
+        clear(project_mutex_stand)
+        before = project_mutex_seed_lock(
+            project_mutex_stand,
+            project_mutex_new_task(project_mutex_stand, target),
+            session(project_mutex_stand), foreign_pid(project_mutex_stand),
+            heartbeat_ts=_ts_ago(600))
+        ctx = msg(project_mutex_stand, f"держит {before}")
+
+        merge_lock.touch_heartbeat(project_mutex_stand.conn)
+
+        rows = locks(project_mutex_stand)
+        assert sorted(rows) == [before["task_id"]], (
+            ctx + "; " + f"project={target!r}")
+        after = rows[before["task_id"]]
+        assert_fresh(project_mutex_stand, after["heartbeat_ts"],
+                     ctx + "; " + f"project={target!r}")
+        assert {k: v for k, v in after.items()
+                if k != "heartbeat_ts"} == \
+            {k: v for k, v in before.items()
+             if k != "heartbeat_ts"}, ctx + "; " + f"project={target!r}"
+    clear(project_mutex_stand)
+
+    merge_lock.touch_heartbeat(project_mutex_stand.conn)
+
+    assert locks(project_mutex_stand) == {}, msg(project_mutex_stand,
+                                                 "пустая таблица")
+
+
+# --- StoreMergeLockTest (бывший
+# test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+
+def test_ac11_set_merge_lock_keeps_other_project_row(project_mutex_stand):
+    """Строки держателей двух проектов; прежние `set_merge_lock`,
+    `merge_lock_row`, `release_merge_lock` с прежними сигнатурами:
+    запись строки проекта P не трогает строку Q, снятие — тоже.
+
+    Ловит мутацию: `set_merge_lock` оставлен с `DELETE` без `WHERE` —
+    строка Q пропадёт; либо `release_merge_lock` снимает строки по
+    проекту/всю таблицу — строка Q пропадёт после снятия P."""
+    for p_target, q_target in project_pairs(project_mutex_stand):
+        clear(project_mutex_stand)
+        q_row = live_holder(project_mutex_stand, q_target)
+        p_task, sid = (project_mutex_new_task(project_mutex_stand, p_target),
+                       session(project_mutex_stand))
+        pid, ts = foreign_pid(project_mutex_stand), store.now()
+        ctx = msg(project_mutex_stand, f"Q {q_row}, P {p_task}")
+
+        store.set_merge_lock(project_mutex_stand.conn, p_task, sid, pid,
+                             OTHER_HOST, ts)
+
+        rows = locks(project_mutex_stand)
+        assert rows.get(q_row["task_id"]) == q_row, ctx + "; " + (
+            f"p={p_target!r}, q={q_target!r}")
+        assert rows.get(p_task) == {"task_id": p_task, "session_id": sid,
+                                    "pid": pid, "hostname": OTHER_HOST,
+                                    "heartbeat_ts": ts}, ctx + "; " + (
+            f"p={p_target!r}, q={q_target!r}")
+        assert store.merge_lock_row(project_mutex_stand.conn) is not None, (
+            ctx + "; " + f"p={p_target!r}, q={q_target!r}")
+
+        store.release_merge_lock(project_mutex_stand.conn, sid, pid)
+
+        assert locks(project_mutex_stand) == {q_row["task_id"]: q_row}, (
+            ctx + "; " + f"p={p_target!r}, q={q_target!r}")
