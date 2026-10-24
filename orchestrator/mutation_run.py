@@ -1,7 +1,8 @@
 """Команда `mutation-run <id> --ref <base|head|worktree> --tests <путь>[,…]
-[--patches <a>-<b>] [--wait <минуты>]`: патчи мутаций `mutation-<nnn>.diff`
-задачи против названных тестовых файлов во временной копии и таблица
-«мутация → исход» (SPEC 01M5NPKPWFEWTYMBYWVR797AM6).
+[--patches <a>-<b>] [--wait <минуты>] [--wait-lock <минуты>] [--copy-table]
+[--workers <n>]`: патчи мутаций `mutation-<nnn>.diff` задачи против
+названных тестовых файлов во временной копии и таблица «мутация → исход»
+(SPEC 01M5NPKPWFEWTYMBYWVR797AM6, 01M5PWFGJQNV8YSAN5MF0CKHVW).
 
 Доказательство неослабления при консолидации тестов — множество убиваемых
 мутаций (ADR-0027 п. 8). Внутри шага роли прогон мутаций не исполним:
@@ -11,21 +12,28 @@
 
 - проверка аргументов, профиля и набора патчей — до замка и копии;
 - замок полных прогонов машины `suite_lock` (держатель — `suite-run`
-  задачи, номер прогона с префиксом `m`), занятый замок — отказ сразу;
+  задачи, номер прогона с префиксом `m`); занятый замок с `--wait-lock N`
+  — ожидание его освобождения не дольше N минут с проверкой раз в 10 с,
+  без флага — отказ без ожидания; ожидание замок не берёт и файлов
+  прогона не создаёт;
 - фоновый отвязанный процесс без признака роли в окружении, отчёт —
   `--wait` тем же или повторным вызовом;
 - временная копия клона `suite_run._base_copy` на выбранной ревизии
   (для `worktree` — с незакоммиченными файлами рабочей копии задачи) и
   локальный коммит-основа в ней; после каждого патча — сброс к основе;
 - контрольный прогон без патча, затем патчи по очереди узлом
-  `acceptance.run_full_suite` с отчётом junit-xml вне копии;
+  `acceptance.run_full_suite` с отчётом junit-xml вне копии; `--workers n`
+  задаёт число рабочих процессов xdist всех этих прогонов;
 - таблица `<id>-mutation-run-<n>.mutations.tsv` рядом с логом в
   хозяйстве `suite-run`, строка — сразу после каждой мутации.
 
-Таблица — свидетельство, не гейт: никакой гейт пульта её не читает.
-Документы задачи, её ветка и рабочая копия командой не меняются; файлы
-состояния — свои (`mutation-run.json`, `mutation-result.json`), `run.json`
-прогона `suite-run` не трогается.
+Таблица — свидетельство, не гейт: никакой гейт пульта её не читает. С
+`--copy-table` команда пишет в каталог документов задачи на диске
+справочную копию таблицы `mutation-run-<n>.tsv` (после шапки, после
+каждой строки и при каждом отчёте); доказательство исходов — основная
+таблица, не копия. Ссылку документов, ветку и рабочую копию задачи
+команда не меняет; файлы состояния — свои (`mutation-run.json`,
+`mutation-result.json`), `run.json` прогона `suite-run` не трогается.
 """
 import contextlib
 import hashlib
@@ -49,7 +57,12 @@ from .targets import PROFILE_RUNNER_DEFAULT
 COMMAND = "mutation-run"
 LOG_KIND = "mutation-run"
 USAGE = (f"{COMMAND} <id> --ref <base|head|worktree> --tests <путь>[,<путь>…] "
-         f"[--patches <a>-<b>] [--wait <минуты>]")
+         f"[--patches <a>-<b>] [--wait <минуты>] [--wait-lock <минуты>] "
+         f"[--copy-table] [--workers <n>]")
+
+# Шаг опроса замка машины при `--wait-lock` (требование 2 SPEC
+# 01M5PWFGJQNV8YSAN5MF0CKHVW); `suite_lock.POLL_SEC` (1 с) для него част.
+_LOCK_POLL_SEC = 10
 
 REFS = ("base", "head", "worktree")
 
@@ -121,6 +134,27 @@ def _log_path(task_id: str, run_no: int, suffix: str = "") -> Path:
 
 def _table_path(task_id: str, run_no: int) -> Path:
     return _task_dir(task_id) / f"{task_id}-{LOG_KIND}-{run_no}.mutations.tsv"
+
+
+def _copy_path(task_id: str, target: str, run_no: int) -> Path:
+    """Справочная копия таблицы первого уровня каталога документов задачи
+    (`--copy-table`); имя guard не считает посторонним."""
+    return artifact_branch.docs_dir(task_id, target) / f"{LOG_KIND}-{run_no}.tsv"
+
+
+def _write_copy(table: Path, copy: Path) -> bool:
+    """Перезаписывает копию байтами основной таблицы; False — каталога
+    документов или таблицы нет либо запись не удалась. Прямая перезапись,
+    без временного файла: каталог документов уходит автокоммитом шага, и
+    лишнее имя в нём — посторонний файл (требование 19). Каталог не
+    создаётся."""
+    try:
+        if not copy.parent.is_dir():
+            return False
+        copy.write_bytes(table.read_bytes())
+    except OSError:
+        return False
+    return True
 
 
 def _new_log(task_id: str) -> Path:
@@ -440,20 +474,33 @@ def _reset(copy: Path, base: str) -> None:
 class _Run:
     """Один прогон команды в фоновом процессе."""
 
-    def __init__(self, task_id: str, run_no: int, log: Path, scratch: Path):
+    def __init__(self, task_id: str, run_no: int, log: Path, scratch: Path,
+                 workers: str = "", copy_table: bool = False):
         self.task_id, self.run_no, self.log = task_id, run_no, log
         self.scratch = scratch
         self.table = _table_path(task_id, run_no)
+        self.workers = workers
+        self.copy_table = copy_table
+        self.copy: Path | None = None
 
     def note(self, text: str) -> None:
         with contextlib.suppress(OSError), \
                 open(self.log, "a", encoding="utf-8") as fh:
             fh.write(text.rstrip("\n") + "\n")
 
+    def sync_copy(self) -> None:
+        if self.copy is not None:
+            _write_copy(self.table, self.copy)
+
+    def header(self, text: str) -> None:
+        self.table.write_text(text, encoding="utf-8")
+        self.sync_copy()
+
     def row(self, number: int, result: str, nodes: list = ()) -> None:
         with open(self.table, "a", encoding="utf-8") as fh:
             fh.write(f"{number}\t{result}\t{','.join(nodes)}\n")
             fh.flush()
+        self.sync_copy()
         self.note(f"мутация {number}: {result}"
                   + (f" — {', '.join(nodes)}" if nodes else ""))
 
@@ -463,10 +510,13 @@ class _Run:
         report = self.scratch / f"{label}.xml"
         report.unlink(missing_ok=True)
         run_log = _log_path(self.task_id, self.run_no, f"-{label}")
+        # `-n` в конце `extra`: последнее значение в команде pytest берёт
+        # верх над `-n config.FULL_SUITE_WORKERS` узла прогона.
+        workers = ("-n", self.workers) if self.workers else ()
         green, output = acceptance.run_full_suite(
             copy, command=command, targets=tuple(tests),
-            extra=(*_PYTEST_FLAGS, f"--junitxml={report}"), log=run_log,
-            limit=limit)
+            extra=(*_PYTEST_FLAGS, f"--junitxml={report}", *workers),
+            log=run_log, limit=limit)
         self.note(f"прогон {label}: предел {limit[0]} с; лог: {run_log}")
         if not run_log.exists() or not run_log.stat().st_size:
             with contextlib.suppress(OSError):
@@ -494,7 +544,9 @@ def _header(run: _Run, ref: str, sha: str, tests: list, source: str,
     lines = [f"# {COMMAND} №{run.run_no} задачи {run.task_id}",
              f"# источник патчей: {where}",
              f"# ревизия прогона: {ref} {sha}",
-             f"# тесты: {', '.join(tests)}"]
+             f"# тесты: {', '.join(tests)}",
+             f"# рабочих процессов: "
+             f"{run.workers or config.FULL_SUITE_WORKERS}"]
     for number in chosen:
         name, body = patches[number]
         lines.append(f"# патч {number} {name} sha256 "
@@ -521,8 +573,10 @@ def _mutate(run: _Run, task_id: str, ref: str, tests: list, low: int,
     sha, reason = _revision(ref, task["branch"], clone, wt)
     if reason:
         raise Refusal(reason)
-    run.table.write_text(_header(run, ref, sha, tests, source, ref_sha,
-                                 chosen, patches), encoding="utf-8")
+    if run.copy_table:
+        run.copy = _copy_path(task_id, target, run.run_no)
+    run.header(_header(run, ref, sha, tests, source, ref_sha, chosen,
+                       patches))
     counts: dict = {}
     with suite_run._base_copy(clone, sha) as (copy, refusal):
         if copy is None:
@@ -589,9 +643,12 @@ def _one(run: _Run, copy: Path, command, tests: list, number: int,
 
 
 def background(task_id: str, run_text: str, ref: str, tests_text: str,
-               range_text: str, ref_sha: str = "") -> None:
+               range_text: str, ref_sha: str = "", workers: str = "",
+               copy_table: str = "") -> None:
     """Тело отвязанного процесса: замок, копия, контроль, патчи, отчёт.
-    Отчёт пишется на любом исходе; замок снимается в `finally`."""
+    Отчёт пишется на любом исходе; замок снимается в `finally`.
+    `workers` — значение `--workers` (пусто — умолчание узла прогона),
+    `copy_table` — непустое при `--copy-table`."""
     run_no = int(run_text)
     lock_run = _lock_run(run_no)
     log = _log_path(task_id, run_no)
@@ -607,7 +664,7 @@ def background(task_id: str, run_text: str, ref: str, tests_text: str,
     tests = [t for t in tests_text.split(",") if t]
     scratch = Path(tempfile.mkdtemp(prefix="artel-mutation-run-"))
     try:
-        run = _Run(task_id, run_no, log, scratch)
+        run = _Run(task_id, run_no, log, scratch, workers, bool(copy_table))
         try:
             report, green = _mutate(run, task_id, ref, tests, low, high,
                                     ref_sha), True
@@ -631,13 +688,26 @@ def background(task_id: str, run_text: str, ref: str, tests_text: str,
 
 # --------------------------------------------------------------- команда
 
+_SWITCHES = ("--copy-table",)
+
+# Флаги прогона: в режиме только отчёта им нечего задавать (требование 13).
+_RUN_FLAGS = ("--wait-lock", "--copy-table", "--workers")
+
+
 def _parse_args(rest: list) -> dict:
     options = {"--ref": None, "--tests": None, "--patches": None,
-               "--wait": None}
+               "--wait": None, "--wait-lock": None, "--workers": None,
+               "--copy-table": None}
     positional = []
     index = 0
     while index < len(rest):
         arg = rest[index]
+        if arg in _SWITCHES:
+            if options[arg] is not None:
+                sys.exit(f"{USAGE}: {arg} повторён")
+            options[arg] = True
+            index += 1
+            continue
         if arg in options:
             if options[arg] is not None or index + 1 >= len(rest):
                 sys.exit(f"{USAGE}: {arg} требует одно значение")
@@ -664,6 +734,40 @@ def _wait_minutes(text: str) -> int:
         sys.exit(f"{COMMAND} --wait: отказ — «{text}» не число минут от 0 до "
                  f"{limit}; прогон не тронут, жди повторным --wait")
     return minutes
+
+
+def _lock_minutes(text: str, wait: int | None) -> int:
+    """Значение `--wait-lock` (требования 1, 5, 6): целое `int(строка)`
+    от 0 до предела, в сумме с `--wait` не больше предела."""
+    limit = config.SUITE_RUN_MAX_WAIT_MIN
+    try:
+        minutes = int(text)
+    except ValueError:
+        minutes = -1
+    if not 0 <= minutes <= limit:
+        sys.exit(f"{COMMAND} --wait-lock: отказ — «{text}» не целое число "
+                 f"минут от 0 до {limit}; формат: --wait-lock <минуты>; "
+                 f"прогон не запускался")
+    if wait is not None and minutes + wait > limit:
+        sys.exit(f"{COMMAND}: отказ — --wait-lock {minutes} и --wait {wait} "
+                 f"в сумме больше предела {limit} мин одного вызова; прогон "
+                 f"не запускался")
+    return minutes
+
+
+def _workers(text: str) -> str:
+    """Значение `--workers` (требование 20; ANSWER-2 пп. 2–3): целое
+    `int(строка)` от 1 до числа процессоров машины."""
+    limit = os.cpu_count() or 1
+    try:
+        workers = int(text)
+    except ValueError:
+        workers = 0
+    if not 1 <= workers <= limit:
+        sys.exit(f"{COMMAND} --workers: отказ — «{text}» не целое число "
+                 f"рабочих процессов от 1 до {limit} (процессоров машины); "
+                 f"формат: --workers <n>; прогон не запускался")
+    return str(workers)
 
 
 def _running(task_id: str) -> dict | None:
@@ -701,6 +805,27 @@ def _print_table(task_id: str, run_no) -> bool:
     return True
 
 
+def _show_table(task_id: str, state: dict) -> bool:
+    """Таблица прогона в отчёте; у прогона с `--copy-table` копия сначала
+    перезаписывается из основной таблицы (требование 12), после таблицы —
+    её путь либо одна строка «копии нет» (требования 9, 11)."""
+    run_no = state.get("run")
+    copied = None
+    if state.get("copy_table") and isinstance(run_no, int) \
+            and not isinstance(run_no, bool):
+        target = store.task_target(suite_run._db(), task_id)
+        copy = _copy_path(task_id, target, run_no)
+        table = _table_path(task_id, run_no)
+        copied = copy if table.is_file() and _write_copy(table, copy) else ""
+    shown = _print_table(task_id, run_no)
+    if copied:
+        print(f"копия таблицы: {copied}")
+    elif copied is not None:
+        print("копии нет — каталога документов задачи на диске или таблицы "
+              "прогона нет")
+    return shown
+
+
 def _wait(task_id: str, minutes: int) -> None:
     head = f"[{task_id}] {COMMAND}"
     state = suite_run._read_json(_run_path(task_id))
@@ -711,7 +836,7 @@ def _wait(task_id: str, minutes: int) -> None:
     while True:
         result = suite_run._read_json(_result_path(task_id))
         if result is not None and result.get("run") == state.get("run"):
-            _print_table(task_id, state.get("run"))
+            _show_table(task_id, state)
             print(result.get("report", ""))
             if not result.get("green"):
                 sys.exit(1)
@@ -719,7 +844,7 @@ def _wait(task_id: str, minutes: int) -> None:
         if not suite_run._alive(state.get("pid")):
             result = suite_run._read_json(_result_path(task_id))
             if result is None or result.get("run") != state.get("run"):
-                _print_table(task_id, state.get("run"))
+                _show_table(task_id, state)
                 sys.stdout.flush()
                 sys.exit(f"{head}: прогон №{state.get('run')} оборван — "
                          f"фонового процесса (pid {state.get('pid')}) больше "
@@ -727,13 +852,42 @@ def _wait(task_id: str, minutes: int) -> None:
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            if not _print_table(task_id, state.get("run")):
+            if not _show_table(task_id, state):
                 print("таблица ещё не начата")
             print(f"{head}: прогон №{state.get('run')} ещё идёт; лог: "
                   f"{state.get('log')}")
             sys.exit(f"{head}: прогон не прерван; отчёт — повторным "
                      f"{_pult_command(task_id)} --wait <минуты>")
         time.sleep(min(suite_run._POLL_SEC, remaining))
+
+
+def _take_lock(task_id: str, minutes: int, head: str) -> None:
+    """Берёт замок машины за командой либо выходит отказом (требования
+    1–4). Занятый замок ждётся не дольше `minutes` минут, проверка — раз в
+    `_LOCK_POLL_SEC` с; ожидание замок не держит и файлов прогона не
+    заводит, `KeyboardInterrupt` из сна уходит наружу без прогона.
+    Освободившийся замок, перехваченный другим прогоном, — та же
+    занятость: ожидание идёт до срока."""
+    holder = suite_lock.acquire(task_id, None)
+    if holder is None:
+        return
+    if minutes <= 0:
+        sys.exit(f"{head}: отказ — на машине уже идёт прогон "
+                 f"{suite_lock.describe(holder)}; одновременно идёт один "
+                 f"полный прогон — повтори после его конца")
+    print(f"{head}: замок машины держит прогон {suite_lock.describe(holder)} "
+          f"— жду его освобождения не дольше {minutes} мин, проверка раз в "
+          f"{_LOCK_POLL_SEC} с", flush=True)
+    # Срок кратен шагу опроса: последняя проверка приходится ровно на срок.
+    deadline = time.monotonic() + minutes * 60
+    while time.monotonic() < deadline:
+        time.sleep(_LOCK_POLL_SEC)
+        holder = suite_lock.acquire(task_id, None)
+        if holder is None:
+            return
+    sys.exit(f"{head}: отказ — на машине уже идёт прогон "
+             f"{suite_lock.describe(holder)}; ожидание {minutes} мин истекло "
+             f"— повтори после его конца")
 
 
 def cmd_mutation_run(rest: list) -> None:
@@ -745,6 +899,12 @@ def cmd_mutation_run(rest: list) -> None:
     head = f"[{task_id}] {COMMAND}"
     ref, tests_raw = options["--ref"], options["--tests"]
     if ref is None and tests_raw is None and options["--patches"] is None:
+        flags = [f for f in _RUN_FLAGS if options[f] is not None]
+        if flags:
+            sys.exit(f"{head}: отказ — {', '.join(flags)} задаёт прогон, а "
+                     f"вызов без --ref, --tests и --patches — только отчёт; "
+                     f"формат отчёта: {COMMAND} <id> --wait <минуты>; "
+                     f"использование: {USAGE}")
         if minutes is None:
             sys.exit(USAGE)
         _wait(task_id, minutes)
@@ -752,6 +912,11 @@ def cmd_mutation_run(rest: list) -> None:
     if ref not in REFS or tests_raw is None:
         sys.exit(f"{head}: отказ — нужны --ref <base|head|worktree> и "
                  f"--tests; использование: {USAGE}")
+    lock_minutes = (_lock_minutes(options["--wait-lock"], minutes)
+                    if options["--wait-lock"] is not None else 0)
+    workers = (_workers(options["--workers"])
+               if options["--workers"] is not None else "")
+    copy_table = bool(options["--copy-table"])
     task = store.get_task(conn, task_id)
     target = store.task_target(conn, task_id)
 
@@ -788,11 +953,7 @@ def cmd_mutation_run(rest: list) -> None:
               f"(pid {running.get('pid')}) — второй не запускаю; отчёт: "
               f"{_pult_command(task_id)} --wait <минуты>")
         return
-    holder = suite_lock.acquire(task_id, None)
-    if holder is not None:
-        sys.exit(f"{head}: отказ — на машине уже идёт прогон "
-                 f"{suite_lock.describe(holder)}; одновременно идёт один "
-                 f"полный прогон — повтори после его конца")
+    _take_lock(task_id, lock_minutes, head)
     try:
         log = _new_log(task_id)
         run_no = int(log.stem.rsplit("-", 1)[1])
@@ -804,7 +965,8 @@ def cmd_mutation_run(rest: list) -> None:
         with open(_task_dir(task_id) / "mutation-background.log", "ab") as errors:
             proc = subprocess.Popen(
                 [sys.executable, "-c", _CHILD, task_id, str(run_no), ref,
-                 ",".join(tests), f"{span[0]}-{span[1]}", ref_sha],
+                 ",".join(tests), f"{span[0]}-{span[1]}", ref_sha, workers,
+                 "1" if copy_table else ""],
                 cwd=str(config.ROOT), env=env, stdin=subprocess.DEVNULL,
                 stdout=errors, stderr=subprocess.STDOUT,
                 start_new_session=True)
@@ -815,7 +977,7 @@ def cmd_mutation_run(rest: list) -> None:
     suite_run._write_json(_run_path(task_id), {
         "run": run_no, "pid": proc.pid, "log": str(log), "ref": ref,
         "tests": tests, "patches": f"{span[0]}-{span[1]}",
-        "started": time.time()})
+        "started": time.time(), "copy_table": copy_table})
     print(f"{head}: прогон №{run_no} (патчи {span[0]}-{span[1]}, ref {ref}) "
           f"запущен фоном, pid {proc.pid}; лог: {log}; таблица: "
           f"{_table_path(task_id, run_no)}")
