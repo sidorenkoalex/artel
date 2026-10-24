@@ -1,15 +1,14 @@
 ## Выяснено
-- Места кода в SPEC (artifact_branch.py :367/:378/:425/:442/:451/:458/:461/:477–494) верны на 9c0e8b8c.
-- `Ac5PassToPassTest` нет в tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py (там Ac5ProofMismatchTest :611); одноимённый класс — tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate.py:616.
-- `gitcmd.has_no_remote` зовёт `gitcmd.in_repo` напрямую (gitcmd.py:573), не через `artifact_branch._git` — шпион только на `_git` её не видит.
-- Нет AC на «ссылки нет в origin, досылка удалась → None».
-- Вердикт: concerns, 6 пунктов в SPEC-AUDIT.md; guard ок.
+- Визит 2 (spec_sha cf4384f9…): решения гейта №1 (п.1–6) перенесены в SPEC полностью; места кода верны на 9c0e8b8c.
+- Существующие тесты (test_artifact_ref_sync.py:169–205, test_artifact_branch_server_retry.py:205) при новой логике остаются зелёными по чтению.
+- Единственное отклонение: нет AC на «local пуст, в origin ссылка есть — без push» (мутация `if local != remote: _send`).
+- Вердикт: concerns, SPEC-AUDIT.md status: ready.
 
 ## Не сработало
-- grep с `--include=*.py` в zsh без кавычек падает (no matches found).
+- `ls` в Bash недоступен (command not found в eval); каталог документов не листал.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан со status: ready.
+- SPEC-AUDIT.md сдан, guard прогнан.
 
 ## Чего не хватило
-- Ничего существенного; дольше всего искал реальный адрес Ac5PassToPassTest.
+- Ничего существенного.
