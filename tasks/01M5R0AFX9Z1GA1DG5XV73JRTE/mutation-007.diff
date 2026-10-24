@@ -1,0 +1,14 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -782,8 +782,8 @@
+     row = conn.execute("SELECT target FROM tasks WHERE id=?",
+                        (task_id,)).fetchone()
+     if row is None:
+-        return config.DEFAULT_TARGET
+-    return row["target"] or config.DEFAULT_TARGET
++        return None
++    return row["target"]
+ 
+ 
+ def task_branch(conn: sqlite3.Connection, task_id: str) -> str:

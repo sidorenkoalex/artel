@@ -1,0 +1,12 @@
+diff --git a/orchestrator/fsm.py b/orchestrator/fsm.py
+--- a/orchestrator/fsm.py
++++ b/orchestrator/fsm.py
+@@ -978,7 +978,7 @@
+     store.set_state(conn, task_id, "killed", "operator",
+                     expected_state=state, detail=f"поделена на: {ids_text}")
+     if new_ids:
+-        merge_after.replace_divided(conn, task_id, new_ids[-1])
++        merge_after.replace_divided(conn, task_id, new_ids[0])
+     _cleanup_divided_parent(conn, task_id, t["branch"])
+ 
+ 

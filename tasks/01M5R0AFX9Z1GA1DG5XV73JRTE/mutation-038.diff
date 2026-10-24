@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -311,7 +311,7 @@
+         old = stored(row["merge_after"])
+         if parent_id not in old:
+             continue
+-        new_ids = [successor_id if dep == parent_id else dep for dep in old]
++        new_ids = [dep for dep in old if dep != parent_id]
+         # Канал без id родителя: правая часть записи «было → стало» —
+         # новое значение, и родитель в ней не называется.
+         rewrite(conn, row["id"], new_ids, "деление на гейте SPEC", "operator")

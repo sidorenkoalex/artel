@@ -1,0 +1,14 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -52,9 +52,7 @@
+ def _holder_row(conn, target: str | None):
+     """Строка держателя мьютекса проекта `target`; без него — прежняя
+     первая строка таблицы."""
+-    if target is None:
+-        return store.merge_lock_row(conn)
+-    return store.project_merge_lock_row(conn, target)
++    return store.merge_lock_row(conn)
+ 
+ 
+ def _current_holder_id(conn, target: str | None = None) -> str:

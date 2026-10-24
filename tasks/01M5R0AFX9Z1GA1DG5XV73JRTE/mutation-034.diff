@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -139,7 +139,7 @@
+     reasons = guard.merge_after_form_errors(items, task_id)
+     if reasons:
+         return [], reasons
+-    own_target = target if target is not None else store.task_target(conn, task_id)
++    own_target = store.task_target(conn, task_id)
+     resolved: list[tuple[str, str]] = []
+     for item in items:
+         matches = store.task_id_matches(conn, item)

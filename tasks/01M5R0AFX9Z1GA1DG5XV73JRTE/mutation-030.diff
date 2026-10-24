@@ -1,0 +1,11 @@
+diff --git a/orchestrator/schema.py b/orchestrator/schema.py
+--- a/orchestrator/schema.py
++++ b/orchestrator/schema.py
+@@ -287,7 +287,6 @@
+     # полные id через запятую в порядке SPEC, записанные `approve` гейта
+     # SPEC и каналами переписывания (`orchestrator/merge_after.py`). NULL —
+     # зависимостей нет.
+-    add_column(conn, "tasks", "merge_after", "TEXT")
+     conn.executescript(
+         "CREATE TABLE IF NOT EXISTS task_counters ("
+         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

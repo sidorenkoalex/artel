@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -270,7 +270,7 @@
+                    if not _justified(section, item, dep)]
+     if unjustified:
+         return [], (f"{FIELD} SPEC добавляет зависимости сверх заявленных "
+-                    f"Оператором без обоснования: {_text(unjustified)} — "
++                    f"Оператором без причины: {_text(unjustified)} — "
+                     f"назови каждую в разделе «## {JUSTIFICATION_SECTION}» "
+                     f"SPEC")
+     return added, None

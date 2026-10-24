@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -88,8 +88,6 @@
+                  f"назад) — перехвачен сессией {session_id}")
+         store.set_merge_lock(conn, task_id, session_id, pid, hostname,
+                              store.now())
+-        store.journal(conn, task_id, "merge-lock",
+-                     "мьютекс merge перехвачен", detail)
+         return None
+     finally:
+         if conn.in_transaction:

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -373,7 +373,7 @@
+ def lines_refusal(raw: str) -> str | None:
+     """Отказ файла с несколькими строками мандата зависимостей: строка
+     задаёт значение целиком, двух значений у одного ответа быть не может."""
+-    if len(_mandate_items(raw)) > 1:
++    if len(_mandate_items(raw)[:1]) > 1:
+         return (f"строка «{MERGE_AFTER_MANDATE_MARKER}» повторена — новое "
+                 f"значение задаёт одна строка")
+     return None

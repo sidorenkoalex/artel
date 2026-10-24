@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -80,7 +80,7 @@
+             return (f"[{task_id}] merge-окно занято сессией "
+                    f"{row['session_id']} (pid {row['pid']}, задача "
+                    f"{row['task_id']}), heartbeat {int(age)} сек назад — "
+-                   f"дождись освобождения и повтори approve")
++                   f"жди освобождения и повтори approve")
+         detail = (f"держатель мьютекса merge мёртв (сессия "
+                  f"{row['session_id']} на {row['hostname']}, pid "
+                  f"{row['pid']}, задача {row['task_id']}, heartbeat "

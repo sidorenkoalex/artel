@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -413,7 +413,7 @@
+     отдельный именованный отказ с каналом снятия, а не подсказка повтора:
+     иначе Оператор повторял бы `approve` без конца."""
+     states = _dependency_states(conn, t)
+-    dead = [(d, s) for d, s in states if s in ("killed", MISSING_STATE)]
++    dead = [(d, s) for d, s in states if s == "killed"]
+     if dead:
+         reason = (f"зависимость мержа не завершится: {_listing(dead)} — сними "
+                   f"или замени её ответом Оператора: artel.py answer "

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -164,7 +164,7 @@
+                 item, f"задача {dep} другого target ({dep_target}), у задачи "
+                       f"— {own_target}"))
+             continue
+-        if dep in [d for _, d in resolved]:
++        if item in [i for i, _ in resolved]:
+             reasons.append(_reason(item, f"повтор: задача {dep} уже названа"))
+             continue
+         resolved.append((item, dep))

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -309,8 +309,6 @@
+     из зависящих не зависит — цикла она не создаёт."""
+     for row in store.all_tasks(conn):
+         old = stored(row["merge_after"])
+-        if parent_id not in old:
+-            continue
+         new_ids = [successor_id if dep == parent_id else dep for dep in old]
+         # Канал без id родителя: правая часть записи «было → стало» —
+         # новое значение, и родитель в ней не называется.

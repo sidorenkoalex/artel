@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -135,7 +135,7 @@
+     rows = store.merge_lock_rows(conn)
+     if task_id is None:
+         if len(rows) <= 1:
+-            return rows
++            return [row for row in rows if row["task_id"] == task_id]
+         sid = session.resolve_session_id(session_id)
+         return [row for row in rows if row["session_id"] == sid]
+     sid = session.resolve_session_id(session_id)

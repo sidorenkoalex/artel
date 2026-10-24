@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -79,7 +79,7 @@
+     row = _holder_row(conn, target)
+     if row is None:
+         return "?"
+-    return f"{row['task_id']} (pid {row['pid']})"
++    return f"{row['task_id']} (pid {row['pid']}, проект {target})"
+ 
+ 
+ def queue_wait_minutes(conn, task_id: str) -> int | None:

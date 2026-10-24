@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -155,7 +155,7 @@
+         if dep == task_id:
+             reasons.append(_reason(item, f"ссылается на саму задачу {task_id}"))
+             continue
+-        if store.task_state(conn, dep) == "killed":
++        if store.task_state(conn, dep) in ("killed", "done"):
+             reasons.append(_reason(item, f"задача {dep} убита (killed)"))
+             continue
+         dep_target = store.task_target(conn, dep)

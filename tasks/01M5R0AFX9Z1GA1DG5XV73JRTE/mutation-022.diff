@@ -1,0 +1,12 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -1079,8 +1079,6 @@
+     отказа гейта, а не завершает `approve`."""
+     if not task_id:
+         return []
+-    if conn.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+-        return [task_id]
+     escaped = task_id.replace("%", r"\%").replace("_", r"\_")
+     return [r["id"] for r in conn.execute(
+         "SELECT id FROM tasks WHERE id LIKE ? ESCAPE '\\'", (f"{escaped}%",))]

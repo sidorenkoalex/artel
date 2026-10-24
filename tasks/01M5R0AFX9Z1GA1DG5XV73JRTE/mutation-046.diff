@@ -1,0 +1,23 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -253,13 +253,12 @@
+     lost = [d for d in declared if d not in new_ids]
+     if lost:
+         return [], (f"{FIELD} SPEC теряет зависимости, заявленные Оператором "
+-                    f"строкой ТЗ «{ORDER_LINE}»: {_text(lost)} — верни SPEC "
+-                    f"аналитику: artel.py reject {task_id} \"аналитик, "
+-                    f"эскалируй вопрос о зависимости {_text(lost)}\"; после "
+-                    f"эскалации аналитика ответ в escalated — artel.py "
+-                    f"answer {task_id} <файл> со строкой "
+-                    f"«{MERGE_AFTER_MANDATE_MARKER} …», затем artel.py "
+-                    f"approve {task_id}")
++                    f"строкой ТЗ «{ORDER_LINE}»: {_text(lost)} — ответ в "
++                    f"escalated — artel.py answer {task_id} <файл> со строкой "
++                    f"«{MERGE_AFTER_MANDATE_MARKER} …» после эскалации "
++                    f"аналитика; верни SPEC аналитику: artel.py reject "
++                    f"{task_id} \"аналитик, эскалируй вопрос о зависимости "
++                    f"{_text(lost)}\", затем artel.py approve {task_id}")
+     section = guard.section_body(spec_text, JUSTIFICATION_SECTION)
+     # `new_value` — итог `check` по элементам поля: тот же порядок и длина.
+     pairs = [(item, dep) for item, dep in

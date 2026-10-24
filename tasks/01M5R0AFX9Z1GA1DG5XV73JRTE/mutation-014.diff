@@ -1,0 +1,14 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -140,9 +140,7 @@
+         return [row for row in rows if row["session_id"] == sid]
+     sid = session.resolve_session_id(session_id)
+     target = store.task_target(conn, task_id)
+-    return [row for row in rows
+-            if row["target"] == target and row["task_id"] == task_id
+-            and row["session_id"] == sid]
++    return rows
+ 
+ 
+ def release(conn, session_id: str) -> None:

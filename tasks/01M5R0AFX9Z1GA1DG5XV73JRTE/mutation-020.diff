@@ -1,0 +1,10 @@
+diff --git a/orchestrator/idgen.py b/orchestrator/idgen.py
+--- a/orchestrator/idgen.py
++++ b/orchestrator/idgen.py
+@@ -56,5 +56,4 @@
+         return False
+     if _LEGACY_ID.match(text):
+         return True
+-    return (len(text) <= _TIME_CHARS + _RANDOM_CHARS
+-            and all(ch in _ENCODING for ch in text))
++    return all(ch in _ENCODING for ch in text)

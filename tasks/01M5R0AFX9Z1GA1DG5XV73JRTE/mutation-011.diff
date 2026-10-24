@@ -1,0 +1,12 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -1322,7 +1322,7 @@
+ # нормализацией, что у `task_target`: пустой, NULL или нет строки задачи —
+ # артель (SPEC 01M57PM7NBFX34319TR0F9CB4F, требование 13). Колонки
+ # `target` в самих таблицах нет — схема не меняется.
+-_ROW_TARGET_SQL = "COALESCE(NULLIF(t.target, ''), ?) AS target"
++_ROW_TARGET_SQL = "COALESCE(t.target, ?) AS target"
+ 
+ 
+ def merge_lock_rows(conn) -> list:

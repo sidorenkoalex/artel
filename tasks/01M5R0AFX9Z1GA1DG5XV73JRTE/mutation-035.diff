@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -247,7 +247,7 @@
+     (колонка до перезаписи, требования 5-6). Заявленного нет или гейт SPEC
+     уже пройден — сверки нет: ([], None)."""
+     declared = stored(t["merge_after"])
+-    if not declared or not _declared_in_force(conn, task_id):
++    if not declared:
+         return [], None
+     new_ids = stored(new_value)
+     lost = [d for d in declared if d not in new_ids]

@@ -1,0 +1,14 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -362,9 +362,7 @@
+     пишется ответ."""
+     if elements == [NONE_WORD]:
+         return []
+-    if NONE_WORD in elements:
+-        return [f"слово «{NONE_WORD}» снимает все зависимости и стоит в "
+-                f"строке одно, без id"]
++    elements = [e for e in elements if e != NONE_WORD]
+     if conn is None or task_id is None:
+         return guard.merge_after_form_errors(elements, task_id)
+     return check(conn, task_id, elements)[1]

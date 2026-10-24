@@ -1,0 +1,14 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -314,7 +314,9 @@
+         new_ids = [successor_id if dep == parent_id else dep for dep in old]
+         # Канал без id родителя: правая часть записи «было → стало» —
+         # новое значение, и родитель в ней не называется.
+-        rewrite(conn, row["id"], new_ids, "деление на гейте SPEC", "operator")
++        store.update_task(conn, row["id"], merge_after=column(new_ids))
++        store.journal(conn, parent_id, "operator", CHANGED_ACTION,
++                      f"{_text(old)} → {_text(new_ids)} (канал: деление)")
+ 
+ 
+ def apply_plan(conn, task_id: str, t, meta: dict, plan_text: str) -> None:

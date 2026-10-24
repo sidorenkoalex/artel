@@ -1,0 +1,15 @@
+diff --git a/orchestrator/store.py b/orchestrator/store.py
+--- a/orchestrator/store.py
++++ b/orchestrator/store.py
+@@ -1366,10 +1366,7 @@
+     ровно одну операцию окна, и это различие ему не нужно
+     (`orchestrator/merge_lock.py`)."""
+     target = task_target(conn, task_id)
+-    for row in merge_lock_rows(conn):
+-        if row["target"] == target:
+-            conn.execute("DELETE FROM merge_locks WHERE rowid=?",
+-                         (row["rowid"],))
++    conn.execute("DELETE FROM merge_locks")
+     conn.execute(
+         "INSERT INTO merge_locks (task_id, session_id, pid, hostname,"
+         " heartbeat_ts) VALUES (?,?,?,?,?)",

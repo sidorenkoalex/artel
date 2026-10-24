@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -235,8 +235,7 @@
+     """Раздел обоснования называет зависимость полным id либо тем же
+     элементом, что стоит в поле, — словом целиком: короткий префикс внутри
+     чужого id обоснованием не считается."""
+-    words = set(re.findall(r"[0-9A-Za-z]+", section))
+-    return dep in words or item in words
++    return dep in section or item in section
+ 
+ 
+ def spec_gate_declared_refusal(conn, task_id: str, t, meta: dict,

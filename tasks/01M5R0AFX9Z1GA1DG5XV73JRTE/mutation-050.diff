@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -383,7 +383,7 @@
+     """Новое значение (полные id) из строки мандата текста ответа, уже
+     прошедшего `mandate.refusals`; `None` — строки мандата зависимостей в
+     тексте нет."""
+-    found = _mandate_items(raw)
++    found = []
+     if not found:
+         return None
+     elements = found[0]

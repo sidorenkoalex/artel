@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_lock.py b/orchestrator/merge_lock.py
+--- a/orchestrator/merge_lock.py
++++ b/orchestrator/merge_lock.py
+@@ -68,8 +68,7 @@
+     """
+     conn.execute("BEGIN IMMEDIATE")
+     try:
+-        row = store.project_merge_lock_row(conn,
+-                                           store.task_target(conn, task_id))
++        row = store.merge_lock_row(conn)
+         pid, hostname = os.getpid(), socket.gethostname()
+         if row is None or _is_own_process(row, session_id, pid):
+             store.set_merge_lock(conn, task_id, session_id, pid, hostname,

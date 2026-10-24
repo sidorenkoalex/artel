@@ -1,0 +1,16 @@
+diff --git a/orchestrator/merge_queue.py b/orchestrator/merge_queue.py
+--- a/orchestrator/merge_queue.py
++++ b/orchestrator/merge_queue.py
+@@ -150,7 +150,11 @@
+     try:
+         while True:
+             store.touch_merge_queue_heartbeat(conn, sid, pid, store.now())
+-            _prune_dead_entries(conn)
++            own = [r["rowid"] for r in
++                   store.project_merge_queue_rows(conn, target)]
++            for row in store.merge_queue_rows(conn):
++                if row["rowid"] not in own and merge_lock._holder_is_dead(row):
++                    store.delete_merge_queue_row(conn, row["rowid"])
+             if _head_task_id(conn, target) == task_id:
+                 refusal = merge_lock.acquire(conn, task_id, sid)
+                 if refusal is None:

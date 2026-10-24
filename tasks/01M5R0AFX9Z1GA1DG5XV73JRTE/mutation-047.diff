@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -252,7 +252,7 @@
+     new_ids = stored(new_value)
+     lost = [d for d in declared if d not in new_ids]
+     if lost:
+-        return [], (f"{FIELD} SPEC теряет зависимости, заявленные Оператором "
++        return [], (f"{FIELD} в SPEC теряет зависимости, заявленные Оператором "
+                     f"строкой ТЗ «{ORDER_LINE}»: {_text(lost)} — верни SPEC "
+                     f"аналитику: artel.py reject {task_id} \"аналитик, "
+                     f"эскалируй вопрос о зависимости {_text(lost)}\"; после "
