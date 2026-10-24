@@ -1,17 +1,17 @@
-# Записка spec_auditor — 01M5NPKPWFEWTYMBYWVR797AM6 (круг 2)
+# Записка spec_auditor — 01M5NPKPWFEWTYMBYWVR797AM6 (круг 3)
 
 ## Выяснено
-- SPEC blob 91ac5b6a… совпал с миссией. Все 11 решений гейта круга 1 внесены.
-- Факты верны: suite_run.py:553/858/921–922, suite_lock.py:40/93/166/172(:178 сравнение run), acceptance.py:71/2343, appendix_tree.py:133 (переносит только неигнорируемые — коммит-основа исполним), outcome.py:145, config.py:132/223/230("auto")/238, artel.py:2181/2312/797/650/158. Сторож conftest.py:78 (SPEC пишет :80).
-- run_full_suite отдаёт (green, output), без кода возврата; предел — по префиксу вывода acceptance.py:2448.
-- Подпроцессный тест с FULL_SUITE_WORKERS: прецедент — копия orchestrator/ в песочницу с дописанной константой (tests/test_01m46c776szemypbqgpnjn1txy_suite_run_appendix.py:208–211).
-- Отклонения (concerns): О-1 источник refs/artifacts и sha ссылки без AC; О-2 porcelain-отказ без AC; О-3 неизменность docs/refs без AC; О-4 Codex/readonly БД не оговорён; О-5 нет строки инварианта 40 (invariants.md:70); О-6 перечень «трогает тесты» без .pytest.ini/pytest.toml/copy; О-7 «нормализация относительно копии» vs отказ до копии; пустой набор/кривой --patches не уточнён.
+- SPEC blob 82189dce… совпал с миссией. Все 8 решений гейта круга 2 внесены.
+- Сторож роли — conftest.py:80 (`def pytest_configure`); моя ссылка :78 в аудите круга 2 была ошибкой, SPEC прав, решение Оператора велело :78.
+- Факты сверены: suite_run.py:169–179 (_db с readonly), :553 _base_copy (git worktree add --detach в клоне, маркер pid создателя), :858, :921–922; suite_lock.py:40, :93, :166, :172–179 (adopt сравнивает run), :182–196; acceptance.py:37, :71, :2343 (отдаёт (green, output), кода возврата нет); outcome.py:145 (file_level по message COLLECTION_FAILURE); config.py:132/223/230("auto")/238/243; artel.py:158/2181/2312; invariants.md:70–71; test_invariants.py:3040.
+- Хук pre-commit клона пропускает отсоединённый HEAD — коммит-основа исполним.
+- Отклонения круга 3 (мелкие, concerns): таймаут контроля → текст «тесты красные»; занятый замок — ждать/отказ не сказано; AC-13 «тот же отказ» без перечня случаев; перечисление всех файлов tests/ в --tests.
 
 ## Где остановился
-- SPEC-AUDIT.md написан: verdict concerns, status ready; guard ок.
+- SPEC-AUDIT.md написан: verdict concerns (О-1…О-4), status ready; guard ок.
 
 ## Не сработало
-- Bash с `$VAR`/`cd` в команде требует подтверждения — писать абсолютные пути.
+- Bash с несколькими командами/`ls` требует подтверждения — по одной команде.
 
 ## Чего не хватило
 - Нет.
