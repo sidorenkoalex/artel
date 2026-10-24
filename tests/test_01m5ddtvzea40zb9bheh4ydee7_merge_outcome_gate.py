@@ -57,7 +57,7 @@ from orchestrator import (acceptance, checkpoint, ci, config, fsm,
                           workspace)
 from orchestrator.advance_gates import refusal_classes, two_sided
 from tests.sandbox import make_project_repo
-from tests.test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate import (
+from tests.outcome_gate_sandbox import (
     ENTRY_HEAD, PLAN_READY, PLANK_PY, SEP, OutcomeGateSandbox, flow,
     js_source, py_source, py_tests, spec_text, ulid)
 

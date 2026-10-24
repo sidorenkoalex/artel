@@ -53,7 +53,7 @@ from orchestrator import answer, liveness, project_profile, store
 from orchestrator.advance_gates import mandate
 from scripts import guard
 from tests.sandbox import make_project_repo
-from tests.test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate import (
+from tests.outcome_gate_sandbox import (
     ENTRY_HEAD, MATRIX_HEADERS, OutcomeGateSandbox, flow, js_source,
     py_source)
 from tests.test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate import (
