@@ -37,7 +37,7 @@ from orchestrator import (answer, checkpoint, config, project_profile, store,
                           workspace)
 from orchestrator.advance_gates import mandate, outcome_integrity
 from tests.sandbox import make_project_repo
-from tests.test_01m5cjvb5b5v55pqqvr2qrhwzn_outcome_gate import (
+from tests.outcome_gate_sandbox import (
     ENTRY_HEAD, LONG_TEMPLATE, MATRIX_HEADERS, PLANK_DIR, TASKS_DIR,
     VITEST_REPORT_ARGS, RunnerProc, flow, js_source, py_source, spec_text,
     ulid)
