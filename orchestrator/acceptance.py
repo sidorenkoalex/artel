@@ -677,12 +677,7 @@ def _vitest_head(profile, cwd: Path) -> tuple[list | None, str]:
     if not flags.require_assertions:
         return None, (f"Vitest {version} не принимает {flag} — без него "
                       f"прогон компонента не исполняется")
-    cache = _pult_dir(profile, "cache") / "vitest"
-    try:
-        cache.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return None, f"каталог кэша {cache} не заведён ({exc})"
-    return [*base, flag, f"{flags.cache_flag}={cache}"], ""
+    return [*base, flag, flags.cache_flag], ""
 
 
 def _subset_args(profile, subset: list) -> tuple[list | None, str]:

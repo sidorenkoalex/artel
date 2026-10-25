@@ -14,7 +14,7 @@ from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
 from ..reporters import outcome
 from ._base import GateRefusal
 from .acceptance import (blob_sha256, criterion_files, file_records,
-                         in_outcome_bounds, long_lived_manifest_rel,
+                         in_outcome_bounds, is_repeat, long_lived_manifest_rel,
                          not_passed_kind, outcome_kind, record_criterion,
                          record_location)
 from .refusal_classes import (FAIL_TO_PASS_PREPARE_REFUSAL_ACTION,
@@ -1184,8 +1184,7 @@ def _tests_writing_fail_to_pass_gate(conn, task_id: str, acc_tdir, run_cwd,
                       FILE_LEVEL_COUNTED_DETAIL.format(path=path, name=cfile.name))
     repeats = [f"{REPEAT_FINDING}{record.id}" for cfile in files
                for record in by_file[cfile]
-               if (where := record_location(record)) is not None
-               and where[3] is not None]
+               if is_repeat(record_location(record))]
     findings = (timeouts + repeats
                 + _criterion_findings(numbers, files, by_file,
                                       _green_list(anchor_text),

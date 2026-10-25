@@ -1484,7 +1484,7 @@ def test_vitest_component_with_workdir_gets_exact_pult_argv(box):
     args = case["fake"].runs()[-1]["args"]
     head = [*VITEST_BASE[1:], REQUIRE_ASSERTIONS]
     assert args[:len(head)] == head, box.note(str(args))
-    assert args[len(head)].startswith("--cacheDir="), box.note(str(args))
+    assert args[len(head)] == "--no-cache", box.note(str(args))
     tail = args[len(head) + 1:]
     assert len(tail) == len(VITEST_REPORT_ARGS), box.note(str(args))
     assert [a.split("=", 1)[0] for a in tail] == \

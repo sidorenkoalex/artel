@@ -256,8 +256,10 @@ VITEST_RUN_ACTION = "прогон vitest"
 # Блок Vitest: строка «Test Files», сразу за ней «Tests», и в пределах
 # следующих четырёх строк «Duration». Одной строки «Tests» мало: в листинге
 # кода она без «Test Files» перед ней итогом не является.
-_VITEST_COUNTS = (r"(?:\d+ (?:failed|passed|skipped|todo)"
-                  r"(?: \| \d+ (?:failed|passed|skipped|todo))*|no tests)")
+# «expected fail» — счётчик `it.fails` с упавшим телом в Vitest 4.
+_VITEST_COUNTS = (r"(?:\d+ (?:failed|passed|skipped|todo|expected fail)"
+                  r"(?: \| \d+ (?:failed|passed|skipped|todo|expected fail))*"
+                  r"|no tests)")
 _VITEST_FILES_RE = re.compile(rf"^Test Files  {_VITEST_COUNTS} \(\d+\)$")
 _VITEST_TESTS_RE = re.compile(rf"^Tests  ({_VITEST_COUNTS} \(\d+\))$")
 _VITEST_DURATION_RE = re.compile(r"^Duration  (\d+(?:\.\d+)?)(ms|s)(?: .*)?$")

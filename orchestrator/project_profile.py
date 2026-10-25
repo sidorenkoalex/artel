@@ -534,7 +534,8 @@ VITEST_REQUIRE_ASSERTIONS = "--expect.requireAssertions"
 
 @dataclass(frozen=True)
 class VitestFlags:
-    """Флаги пульта для главной версии Vitest: флаг каталога кэша и
+    """Флаги пульта для главной версии Vitest: `cache_flag` — готовый
+    аргумент пульта для кэша Vitest (каталога кэша пульт не заводит),
     принимает ли версия `--expect.requireAssertions`; `probe` — чем
     подтверждено значение."""
     cache_flag: str
@@ -543,10 +544,12 @@ class VitestFlags:
 
 
 # Главная версия Vitest → флаги пульта (ANSWER-2, В1). Версия вне таблицы —
-# отказ подготовки прогона: флаг кэша для неё не подтверждён. Значение для
-# Vitest 4 — кандидат; правит его проба этапа 2 (перевод записи sled).
+# отказ подготовки прогона: флаг кэша для неё не подтверждён. `cache_flag` —
+# готовый аргумент пульта для кэша Vitest, каталога кэша пульт не заводит:
+# Vitest 4 не знает `--cacheDir` (SPEC 01M5S6M2MZV68QH9QHWY0XP0YA).
 VITEST_VERSION_FLAGS = {
-    4: VitestFlags("--cacheDir", True, "не подтверждено пробой (этап 2)"),
+    4: VitestFlags("--no-cache", True,
+                   "проба 2.2 sled 7131152, 22.10; повторено 25.10 на 4.1.5"),
 }
 
 
@@ -607,12 +610,26 @@ def select_components(target: str, paths) -> tuple[str, ...]:
     return tuple(name for name in names if name in chosen)
 
 
+def _numbered_tail(name: str) -> tuple[str, int] | None:
+    """(часть перед `#`, номер) — имя кончается на `#<ASCII-цифры>` и часть
+    перед `#` непуста; `None` — нет. Одно условие на `test_id` и
+    `parse_test_id`: иначе они перестали бы быть взаимно обратными."""
+    head, hash_, tail = name.rpartition("#")
+    if hash_ and tail.isascii() and tail.isdigit() and head:
+        return head, int(tail)
+    return None
+
+
 def test_id(component: str, path: str, name: str, n: int | None = None) -> str:
     """Идентификатор теста компонента `<компонент>:<путь>::<полное
-    имя>[#<n>]` (ADR-0026 п. 3)."""
+    имя>[#<n>]` (ADR-0026 п. 3). Без `n` имя, которое само кончается на
+    `#<цифры>` (условие `parse_test_id`), получает `#1`: иначе разбор
+    принял бы хвост имени за номер повтора."""
     if ":" in component:
         raise ValueError(f"имя компонента '{component}' с ':'")
     text = f"{component}:{path}::{name}"
+    if n is None and _numbered_tail(name) is not None:
+        n = 1
     return text if n is None else f"{text}#{n}"
 
 
@@ -625,9 +642,9 @@ def parse_test_id(text: str) -> tuple[str, str, str, int | None]:
         raise ValueError(f"'{text}' — не идентификатор теста компонента "
                          f"<компонент>:<путь>::<полное имя>[#<n>]")
     n = None
-    head, hash_, tail = name.rpartition("#")
-    if hash_ and tail.isascii() and tail.isdigit() and head:
-        name, n = head, int(tail)
+    numbered = _numbered_tail(name)
+    if numbered is not None:
+        name, n = numbered
     return component, path, name, n
 
 
