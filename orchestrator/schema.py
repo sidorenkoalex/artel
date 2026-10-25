@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
-  merge_after TEXT,
+  merge_after TEXT, closed_as TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -159,6 +159,14 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 """
 
 
+# Признак поделённого родителя `tasks.closed_as` (SPEC
+# 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 1) и текст перехода родителя в
+# `killed`, по которому миграция узнаёт деления, сделанные до колонки.
+CLOSED_AS_DIVIDED = "divided"
+DIVIDED_DETAIL_PREFIX = "поделена на:"
+CLOSED_AS_MIGRATED_ACTION = "closed_as заполнен миграцией"
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
     """Создаёт схему БД (команда `init`); повторный вызов ничего не ломает."""
     conn.executescript(SCHEMA)
@@ -178,6 +186,28 @@ def add_column(conn: sqlite3.Connection, table: str, column: str,
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     conn.commit()
+
+
+def _mark_past_divisions(conn: sqlite3.Connection) -> None:
+    """`closed_as='divided'` каждой `killed`, чей переход в `killed` в
+    журнале несёт «поделена на: …», с одной записью журнала на строку
+    (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 2). Таблицы `steps` нет —
+    сверять не с чем."""
+    if not table_columns(conn, "steps"):
+        return
+    rows = conn.execute(
+        "SELECT id FROM tasks WHERE state='killed' AND closed_as IS NULL "
+        "AND EXISTS (SELECT 1 FROM steps WHERE steps.task_id=tasks.id "
+        "AND steps.action='state -> killed' AND steps.detail LIKE ?) "
+        "ORDER BY id", (f"{DIVIDED_DETAIL_PREFIX}%",)).fetchall()
+    if not rows:
+        return
+    from . import store  # отложенно — см. комментарий в `migrate`
+    for row in rows:
+        store.update_task(conn, row["id"], closed_as=CLOSED_AS_DIVIDED)
+        store.journal(conn, row["id"], "orchestrator", CLOSED_AS_MIGRATED_ACTION,
+                      f"{CLOSED_AS_DIVIDED} — по записи перехода в killed "
+                      f"«{DIVIDED_DETAIL_PREFIX} …»")
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -272,9 +302,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     # Связь родитель -> подзадача деления (01M29284PTCJXGERV5262E9XMM,
     # требование 1): NULL — задача не подзадача деления. «Родитель
-    # поделён» вычисляется каждый раз заново — наличием хотя бы одной
-    # строки с parent_task_id = <id родителя> при её состоянии killed,
-    # отдельный флаг на строке родителя не заводится.
+    # поделён» — колонка `closed_as` ниже (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW).
     add_column(conn, "tasks", "parent_task_id", "TEXT")
     # Набор моделей задачи (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 1):
     # имя набора из `model_sets.yaml` и его состав «роль -> модель» (JSON)
@@ -288,6 +316,16 @@ def migrate(conn: sqlite3.Connection) -> None:
     # SPEC и каналами переписывания (`orchestrator/merge_after.py`). NULL —
     # зависимостей нет.
     add_column(conn, "tasks", "merge_after", "TEXT")
+    # Признак поделённого родителя (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+    # требования 1-2): `divided` — задача ушла в `killed` делением на гейте
+    # SPEC, а не ликвидацией `kill`; NULL — признака нет. Прежние деления
+    # различимы только текстом перехода в журнале — их колонка получает
+    # один раз, в тот проход миграции, который её заводит: дальше
+    # `closed_as` пишет только само деление, и повторный проход ничего не
+    # меняет.
+    if "closed_as" not in table_columns(conn, "tasks"):
+        add_column(conn, "tasks", "closed_as", "TEXT")
+        _mark_past_divisions(conn)
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

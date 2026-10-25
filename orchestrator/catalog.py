@@ -934,15 +934,21 @@ def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
 
 
 def _division_suffix(rows, r) -> str:
-    """Добавка «[поделена: <id1>, <id2>]»/«[часть N/M родителя <id>]»
-    (01M29284PTCJXGERV5262E9XMM, требование 2) — ДОБАВКОЙ в конец строки,
-    тем же приёмом, что и `_lease_holder_suffix`/`_zone_wait_suffix`.
-    `rows` — уже прочитанный `store.all_tasks(conn)` (по возрастанию id),
-    отдельного запроса на строку не делается: подзадачи — те же строки,
-    отфильтрованные по `parent_task_id`."""
-    subtask_ids = [x["id"] for x in rows if x["parent_task_id"] == r["id"]]
-    if subtask_ids:
-        return f"  [поделена: {', '.join(subtask_ids)}]"
+    """Добавка «[поделена: части слиты N/M (<id1>, …)]»/«[часть N/M
+    родителя <id>]» (01M29284PTCJXGERV5262E9XMM, требование 2) — ДОБАВКОЙ
+    в конец строки, тем же приёмом, что и `_lease_holder_suffix`/
+    `_zone_wait_suffix`. `rows` — уже прочитанный `store.all_tasks(conn)`
+    (по возрастанию id), отдельного запроса на строку не делается:
+    подзадачи — те же строки, отфильтрованные по `parent_task_id`.
+
+    Родитель узнаётся по `closed_as='divided'`, а не по наличию частей
+    (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 3); N — части в `done`
+    по их состоянию на этот вызов `status`."""
+    if r["closed_as"] == store.CLOSED_AS_DIVIDED:
+        subtasks = [x for x in rows if x["parent_task_id"] == r["id"]]
+        merged = sum(1 for x in subtasks if x["state"] == "done")
+        ids = ", ".join(x["id"] for x in subtasks)
+        return f"  [поделена: части слиты {merged}/{len(subtasks)} ({ids})]"
     parent_id = r["parent_task_id"]
     if not parent_id:
         return ""

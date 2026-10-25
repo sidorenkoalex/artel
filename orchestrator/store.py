@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import config, session
 from .schema import SCHEMA, add_column, create_schema, migrate, table_columns
+from .schema import CLOSED_AS_DIVIDED, DIVIDED_DETAIL_PREFIX  # noqa: F401
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
 
