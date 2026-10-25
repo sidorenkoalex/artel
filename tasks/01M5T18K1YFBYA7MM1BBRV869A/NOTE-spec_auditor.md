@@ -1,17 +1,16 @@
-# Записка spec_auditor
+# Записка spec_auditor (итерация 2, SPEC sha 73f667c9…)
 
 ## Выяснено
-- SPEC sha 9886a26c… проверен, guard ок; вердикт concerns, SPEC-AUDIT.md status: ready.
-- Главная находка: через `knowledge` (элемент-файл `CLAUDE.md`, элемент-каталог `./`/`docs/` — берёт все *.md) `CLAUDE.md`/`AGENTS.md` проекта всё равно попадают в бриф (brief.py:678–683, 715–722, 738–741). ТЗ соседки 01M5T19041XE2KB6A52F0AT0NF (треб. 3) закрывает только элемент-файл обвязки; часть 1 деления её не ждёт.
-- Предел размера есть только у `_manifest_component` (brief.py:481) и `review.artifact_part` (review.py:190); у `_journal_component` (analyst, test_author) его нет.
-- Не задано поведение при сломанном заголовке (`---` + conventions_stamp, но YamlError или нет закрывающей `---`).
-- AC-6/AC-8 не требуют, чтобы HEAD клона песочницы был не на базе; AC-7/AC-9 не покрывают «клон не читается» и «путь — каталог».
+- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
+- Факты brief.py/review.py/role_prompt.py/yamlmini/branch_commit/doctor cli.py:139 подтверждены; номера строк тестов совпадают.
+- Соседняя 01M5T19041 (на spec_gate): AGENT_WRAPPER_MARKERS = ("**/.claude/", ".mcp.json", "**/CLAUDE.md", "**/AGENTS.md"); треб. 8 соседки (отказ загрузки knowledge внутри обвязки, кроме корневых CLAUDE/AGENTS) совместимо с AC-5.
+- Находки: О1 путь config.PROJECTS мимо repo_context.projects_root() (NO_AREA); О2 пустой sources → вечный ok doctor, AC не ловит; О3 symlink conventions.md не в AC; П4/М1 «без сети» без AC, NoNetworkTest вырождается без knowledge; М2 эталон «из нового кода»; Н1 счёт N обвязки неоднозначен.
 
 ## Не сработало
-- Составные bash-команды (`;`, `|xargs`, `ls`) требуют подтверждения — только простые grep/git.
+- Составные bash (`|xargs`) требуют подтверждения; `ls` недоступен.
 
 ## Где остановился
 - Аудит завершён.
 
 ## Чего не хватило
-- ТЗ соседней задачи нашлось через `git show refs/artifacts/01M5T19041XE2KB6A52F0AT0NF:tasks/.../TZ.md`.
+- Состояние соседки — через `git show refs/artifacts/01M5T19041XE2KB6A52F0AT0NF --stat` (паспорт).
