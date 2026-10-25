@@ -305,11 +305,8 @@ def _note_unresolved_wrapper(task_id: str, target: str, wt_path: Path) -> None:
     if store.db_usable():
         conn = store.db()
         if store.task_exists(conn, task_id):
-            seen = conn.execute(
-                "SELECT 1 FROM steps WHERE task_id = ? AND action = ?"
-                " AND detail = ? LIMIT 1",
-                (task_id, WRAPPER_UNRESOLVED_ACTION, text)).fetchone()
-            if seen is None:
+            if not store.journal_action_exists(
+                    conn, task_id, WRAPPER_UNRESOLVED_ACTION, text):
                 store.journal(conn, task_id, "orchestrator",
                               WRAPPER_UNRESOLVED_ACTION, text, target=target)
             return

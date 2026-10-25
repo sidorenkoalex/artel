@@ -1,5 +1,5 @@
 ---
-built_at_sha: b6d2ce6c05ea6312cb0c572125d19dfd085e6b4e
+built_at_sha: 20a40cd73af0902c7f065e4222a55139872f16d0
 ---
 
 # Codebase-map пульта
@@ -2053,6 +2053,7 @@ built_at_sha: b6d2ce6c05ea6312cb0c572125d19dfd085e6b4e
 - `insert_pair_verdict`
 - `insert_task`
 - `journal`
+- `journal_action_exists`
 - `journal_maxima`
 - `last_model_tariff`
 - `last_pair_resume_mark`
