@@ -135,6 +135,18 @@ codebase_map) — все зелёные.
   (sparse list, rev-parse, config, clean) — ensure зовут шаги и гейты; стоимость
   миллисекунды, `git clean` с glob-pathspec обходит дерево копии.
 
+## Расширение зон
+Пути: orchestrator/store.py
+
+Обоснование: причина возврата из verifying (CI 40235484958) —
+`tests/test_multitarget.py::SqlOnlyInStoreTest::test_no_sql_outside_store`
+(инвариант «SQL только в store.py») красный от запроса `SELECT 1 FROM steps …`
+в `workspace._note_unresolved_wrapper`. Запрос вынесен в новую функцию чтения
+журнала `store.journal_action_exists(conn, task_id, action, detail)`;
+`workspace.py` зовёт её. Других правок в `store.py` нет. Мандат Оператора —
+ANSWER-3.md, «Расширение зон разрешено: orchestrator/store.py»; матрица
+неослабления там же (тест не меняется).
+
 ## Риски
 - Свой `core.excludesFile` копии подменяет глобальный: текст глобального
   игнора дописывается в него на каждом `ensure` (тест

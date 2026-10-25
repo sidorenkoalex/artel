@@ -1,6 +1,9 @@
 # Записка developer
 
 ## Выяснено
+- Отказ гейта зон после возврата 2: мандат ANSWER-3 есть, но в PLAN.md не было раздела
+  «## Расширение зон» со строкой «Пути: orchestrator/store.py» (`advance_gates/zones.py:62`).
+  Раздел добавлен; test_multitarget + wrapper_excludes — 53 passed; guard ок.
 - Возврат 2 (CI 40235484958): `test_multitarget::SqlOnlyInStoreTest::test_no_sql_outside_store` —
   SQL в `workspace._note_unresolved_wrapper`. Вынесен в `store.journal_action_exists`
   (ANSWER-3 расширил зоны на store.py). 114 passed по затронутым файлам, карта регенерирована.
