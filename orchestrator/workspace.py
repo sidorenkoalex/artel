@@ -17,6 +17,7 @@
 
 Все операции идут через `gitcmd` с явным репозиторием клона.
 """
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -194,14 +195,18 @@ def ensure(task_id: str, branch: str,
     Ветки ещё нет в клоне — заводится от свежего `origin/<база>` (SPEC
     01M297HFSKV3GVZJ9YF20FZEZE, требование 1): `fetch` идёт ПЕРЕД самим
     `git worktree add -b`; fetch не удался — именованный отказ БЕЗ отката
-    на локальную базу (AC-3 той задачи)."""
+    на локальную базу (AC-3 той задачи).
+
+    Копия внешнего проекта — и новая, и уже зарегистрированная — на каждом
+    вызове приводится к копии без агентской обвязки (`_exclude_wrapper`);
+    сбой — причина отказа, роль в копии с обвязкой не стартует."""
     target = target or task_target(task_id)
     wt_path = path(task_id, target)
     clone, clone_error = ensure_clone(target)
     if clone_error is not None:
         return wt_path, clone_error
     if _registered(clone, wt_path):
-        return wt_path, None
+        return wt_path, _exclude_wrapper(wt_path, target)
     if gitcmd.branch_exists(branch, repo=clone):
         res = gitcmd.in_repo(clone, "worktree", "add", str(wt_path), branch)
     else:
@@ -219,7 +224,140 @@ def ensure(task_id: str, branch: str,
         reason = (res.stderr.strip()[:300] if res is not None and res.stderr
                   else f"git worktree add вернул {res.returncode if res else '—'}")
         return wt_path, reason
-    return wt_path, None
+    return wt_path, _exclude_wrapper(wt_path, target)
+
+
+# Агентская обвязка внешнего проекта вне диска его рабочей копии (SPEC
+# 01M5T19041XE2KB6A52F0AT0NF, требование 9; ADR-0003 п.14): файлы
+# остаются в дереве git ветки, на диске рабочей копии их нет — git
+# sparse-checkout без конусов, настройка только этой копии (`config.worktree`
+# при `extensions.worktreeConfig`, его включает сам `git sparse-checkout`).
+# Пути обвязки ещё и отбиты игнором копии (`core.excludesFile` её
+# `config.worktree`): без него `git add -A` чекпоинта выходит кодом 1 на
+# неотслеживаемом файле вне определения sparse-checkout
+# (`.claude/settings.local.json`, оставленном CLI роли).
+WRAPPER_EXCLUDE_FILE = "artel-agent-wrapper-exclude"
+_GLOB_SPECIALS = ("\\", "*", "?", "[")
+
+
+def _wrapper_pattern(path: str) -> str:
+    """Шаблон gitignore-формы пути обвязки: маска `**/…` — как есть (любая
+    глубина), прочий путь — от корня копии, спецсимволы шаблона экранированы."""
+    if path.startswith(config.PROTECTED_PATH_ANY_DIR_MASK):
+        return path
+    for ch in _GLOB_SPECIALS:
+        path = path.replace(ch, "\\" + ch)
+    return "/" + path
+
+
+def _wrapper_pathspec(path: str) -> str:
+    """Pathspec git того же пути: маска — glob, прочий путь — буквально."""
+    if path.startswith(config.PROTECTED_PATH_ANY_DIR_MASK):
+        return f":(glob){path}**" if path.endswith("/") else f":(glob){path}"
+    return f":(literal){path}"
+
+
+def wrapper_covers(rel: str, wrapper) -> bool:
+    """Путь копии `rel` покрыт списком обвязки так же, как его исключают
+    шаблоны sparse-checkout (`_wrapper_pattern`): маска — формулой
+    `config.is_protected_path`, прочий путь — сам он или путь внутри него."""
+    for path in wrapper:
+        if path.startswith(config.PROTECTED_PATH_ANY_DIR_MASK):
+            if config.is_protected_path(rel, (path,)):
+                return True
+        elif rel == path.rstrip("/") or rel.startswith(path.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def wrapper_file_on_disk(wt_path: Path, wrapper) -> str | None:
+    """Первый (по обходу) файл рабочей копии под списком обвязки; `None` —
+    таких нет. Каталог `.git` и вложенные репозитории не обходятся."""
+    for current, dirs, files in os.walk(wt_path):
+        dirs[:] = sorted(d for d in dirs if d != ".git")
+        base = Path(current).relative_to(wt_path).as_posix()
+        for name in sorted(files):
+            rel = name if base == "." else f"{base}/{name}"
+            if name != ".git" and wrapper_covers(rel, wrapper):
+                return rel
+    return None
+
+
+def _git_failure(res, what: str) -> str | None:
+    if res is not None and res.returncode == 0:
+        return None
+    detail = ((res.stderr or res.stdout or "").strip()[:300] if res is not None
+              else "git не ответил")
+    return f"{what}: {detail or f'код {res.returncode}'}"
+
+
+def _exclude_wrapper(wt_path: Path, target: str) -> str | None:
+    """Приводит рабочую копию внешнего проекта к копии без обвязки по
+    ТЕКУЩЕМУ действующему списку (`repo_context.wrapper_paths`); `None` —
+    приведена, иначе причина: роль в копии с обвязкой не стартует. Шаблоны
+    совпали с записанными — sparse-checkout не трогается (повторный вызов
+    идемпотентен). Неотслеживаемые и игнорируемые файлы под списком
+    убираются с диска (`git clean -x` по путям обвязки). У артели — `None`
+    без единого вызова git: её копия полная. Каталога копии нет — нечего
+    приводить (регистрация без каталога — прежний исход `ensure`)."""
+    if repo_context.is_artel(target) or not wt_path.is_dir():
+        return None
+    ctx = repo_context.resolve(target)
+    if ctx is None:
+        return (f"обвязка рабочей копии {wt_path} не исключена: "
+                f"{repo_context.unresolved_reason(target)}")
+    wrapper = repo_context.wrapper_paths(ctx)
+    patterns = [_wrapper_pattern(path) for path in wrapper]
+    wanted = ["/*", *(f"!{p}" for p in patterns)]
+    what = f"обвязка рабочей копии {wt_path} не исключена"
+    listed = gitcmd.in_repo(wt_path, "sparse-checkout", "list")
+    if (listed is None or listed.returncode != 0
+            or listed.stdout.splitlines() != wanted):
+        failure = _git_failure(gitcmd.in_repo(
+            wt_path, "sparse-checkout", "set", "--no-cone", *wanted),
+            f"{what}: git sparse-checkout set")
+        if failure is not None:
+            return failure
+    git_dir = gitcmd.in_repo(wt_path, "rev-parse", "--absolute-git-dir")
+    failure = _git_failure(git_dir, f"{what}: git rev-parse")
+    if failure is not None:
+        return failure
+    exclude = Path(git_dir.stdout.strip()) / WRAPPER_EXCLUDE_FILE
+    if not exclude.parent.is_dir():
+        return f"{what}: каталог git копии {exclude.parent} не найден"
+    own = _inherited_excludes(wt_path, exclude)
+    exclude.write_text("".join(f"{p}\n" for p in patterns) + own,
+                       encoding="utf-8")
+    failure = _git_failure(gitcmd.in_repo(
+        wt_path, "config", "--worktree", "core.excludesFile", str(exclude)),
+        f"{what}: git config --worktree core.excludesFile")
+    if failure is not None:
+        return failure
+    return _git_failure(gitcmd.in_repo(
+        wt_path, "clean", "-f", "-d", "-x", "-q", "--",
+        *(_wrapper_pathspec(path) for path in wrapper)),
+        f"{what}: git clean путей обвязки")
+
+
+def _inherited_excludes(wt_path: Path, exclude: Path) -> str:
+    """Текст файла игнора, действовавшего до своего `core.excludesFile`
+    копии (глобальный или `$XDG_CONFIG_HOME/git/ignore`): свой файл копии
+    его заменяет, и без переноса глобально игнорируемое (`.DS_Store`)
+    попало бы в `git add -A` чекпоинта."""
+    res = gitcmd.in_repo(wt_path, "config", "--path", "--get-all",
+                         "core.excludesFile")
+    values = ([v for v in res.stdout.splitlines() if v and v != str(exclude)]
+              if res is not None and res.returncode == 0 else [])
+    if values:
+        source = Path(values[-1]).expanduser()
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        source = Path(xdg) / "git" / "ignore"
+    try:
+        text = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return text if text.endswith("\n") or not text else text + "\n"
 
 
 def on_task_branch(task_id: str, branch: str,
