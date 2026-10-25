@@ -2,7 +2,7 @@
 task: 01M5SCGSQN0AT0B07H7M9803RA
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -44,6 +44,10 @@ schema_version: 5
    по требованию 14 (импорт `sandbox`, первый контекст
    `sandbox.declared_without_profile("sled")`).
 7. Регенерация `docs/codebase-map.md`.
+8. По ANSWER-2 (вариант (а)): `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py::ProjectAreaSandbox.setUp`
+   — одна строка `(self.root / ".artel" / "targets.yaml").unlink(missing_ok=True)` сразу после
+   `self.addCleanup(targets_patcher.stop)`: убирает запись артели, посеянную `RealGitSandbox` по
+   адресу локального слоя. Утверждения, методы и их число не менялись.
 
 ## Покрытие требований
 
@@ -62,14 +66,19 @@ schema_version: 5
 | 11 | 5 |
 | 12 | 1 (код канарейки не тронут; слой следует за `config.TARGETS`) |
 | 13 | 7 |
-| 14 | 6 |
+| 14 | 6, 8 (правка песочницы по мандату ANSWER-2) |
 
 Прогоны: все четыре долгоживущих файла задачи и
 `tests/test_acceptance_suite_profile.py` — 67 passed. Тесты затронутых
 модулей (targets/doctor/main_copy/test_lint/projects/role_refusal/
 core_reference/project_profile/repo_context/invariants и т. п.) — 440
 passed, 1 failed; файлы, перенаправляющие `config.TARGETS`, — 187 passed,
-29 failed: все 29 — одна причина, см. «Эскалация».
+29 failed (одна причина — посеянный `RealGitSandbox` файл по адресу
+локального слоя). После шага 8: `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`,
+`tests/test_invariants.py::MainCopyGitUnchangedDuringTaskTest`,
+`tests/test_acceptance_suite_profile.py` и четыре долгоживущих файла задачи —
+98 passed; `tests/test_invariants.py` целиком — 84 passed (прежний 1 failed
+затронутых модулей — `MainCopyGitUnchangedDuringTaskTest`, та же причина).
 
 ## Влияние на систему
 - Без файла `.artel/targets.yaml` выдача `load()`/`target()`/
@@ -88,7 +97,7 @@ passed, 1 failed; файлы, перенаправляющие `config.TARGETS`,
 - Песочницы тестов, кладущие что-либо по адресу
   `config.TARGETS.parent/.artel/targets.yaml`, теперь читают это как
   локальный слой — ровно это и случилось с `ProjectAreaSandbox`
-  (см. «Эскалация»).
+  (закрыто шагом 8 по ANSWER-2).
 
 ## Предложения системе
 - `tests/sandbox.py::RealGitSandbox` кладёт `config.TARGETS` песочницы в
@@ -98,69 +107,3 @@ passed, 1 failed; файлы, перенаправляющие `config.TARGETS`,
   `RealGitSandbox` без перенаправления). Класс: «новый файл по пути,
   производному от подменяемого атрибута, — сверить с раскладками
   существующих песочниц до SPEC».
-
-## Эскалация
-
-Код причины: покраснел существующий тест вне мандата (SPEC, требование 14:
-«Покраснел любой другой существующий тест — эскалация с его именем и
-причиной, а не правка»).
-
-**Вопросы**
-
-1. (блокирует) Разрешить правку песочницы
-   `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py::ProjectAreaSandbox.setUp`
-   одной строкой — убрать посеянный `RealGitSandbox` файл сразу после
-   перенаправления `config.TARGETS` на `root/targets.yaml`:
-
-   ```diff
-   @@ -172,6 +172,7 @@ class ProjectAreaSandbox(RealGitSandbox):
-                                                self.root / "targets.yaml")
-            targets_patcher.start()
-            self.addCleanup(targets_patcher.stop)
-   +        (self.root / ".artel" / "targets.yaml").unlink(missing_ok=True)
-   ```
-
-   Утверждения, методы и их число не меняются — только изоляция помощника,
-   как у правки требования 14. Проверено временным применением и откатом:
-   `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py` и
-   `tests/test_invariants.py::MainCopyGitUnchangedDuringTaskTest` — 31
-   passed.
-   Варианты: (а) эта строка в `ProjectAreaSandbox.setUp` — дефолт;
-   (б) правка `tests/sandbox.py::RealGitSandbox` (другое имя файла
-   `TARGETS` песочницы под `.artel/`) — шире, задевает все песочницы
-   на настоящем git, SPEC её исключает («Не входит»);
-   (в) иное решение Оператора.
-   Если гейт неослабления потребует машинной строки — «Ослабление тестов
-   разрешено: tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py» в
-   ANSWER-2.
-
-**Контекст**
-
-Красные тесты (29, одна причина):
-- `tests/test_invariants.py::MainCopyGitUnchangedDuringTaskTest::test_main_copy_git_is_unchanged_from_new_to_done`
-- `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py` — 28 методов
-  классов `ArtelTaskInProjectAreaTest`, `ExternalTaskInProjectAreaTest`,
-  `CloneCreationTest`, `RepoContextOfArtelTest`, `CodeCopyOfTaskTest`,
-  `CloneHooksFromPinTest`, `OperatorCommandsThroughCloneTest`,
-  `HeldRecordBaseFromCloneTest`, `EndToEndMainCopyUntouchedTest`,
-  `MergeGateStepsOnCloneTest`, `HistoricalDocsRefsTest` (все на
-  `ProjectAreaSandbox`/`TaskFlowSandbox`).
-
-Причина: `RealGitSandbox.setUp` (`tests/sandbox.py:1925-1931`) подменяет
-`config.TARGETS` на `root/.artel/targets.yaml` и сеет туда запись артели
-плоского вида; `ProjectAreaSandbox.setUp`
-(`tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py:171-174`)
-перенаправляет `config.TARGETS` на `root/targets.yaml` — и посеянный файл
-остаётся ровно по адресу локального слоя (`targets.local_path()` =
-`root/.artel/targets.yaml`). Загрузчик по требованию 2 отказывает:
-«запись артели — только в targets.yaml репозитория». Подстроить код под
-этот файл нельзя без нарушения требования 2 (запись `artel` и плоская
-запись в локальном слое — обязательные отказы, AC-5).
-
-Код всех требований 1–14 реализован и лежит в worktree; долгоживущие
-тесты задачи зелёные; карта регенерирована.
-
-**Блокирует**
-
-Зелёный полный набор `tests/` (рубеж `in_dev -> verifying`, CI ветки):
-без правки песочницы 29 существующих тестов красные.
