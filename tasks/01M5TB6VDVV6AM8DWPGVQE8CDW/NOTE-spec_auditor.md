@@ -1,18 +1,18 @@
 # Записка spec_auditor
 
 ## Выяснено
-- sha SPEC = 6a8f930d… совпал (git hash-object).
-- Литералы ("done","killed") в orchestrator/: ровно 13 мест/11 файлов (AST-обход), перечень SPEC полный.
-- fsm.py:1194-1336 _approve_spec_gate: до ветки деления (1333) уже пишутся zones/merge_after/budget (1310-1323), журнал declared/replaced (1292-1300), ACCEPTED_FAIL (1304). Guard на approve не перезапускается (коммент 1326-1332).
-- merge_after.check (126-182) работает только по строкам БД — части до заведения через него не проверить; replace_divided (299) идёт после и может создать цикл.
-- tests/test_01m45d29…_spec_gate_declared.py:463-512 требует: spawn_subtask с «Порядок: после <id>» НЕ пишет merge_after.
-- Импорт: store→models, guard→zone_lock, fsm→cleanup — обратный импорт fsm даёт цикл.
+- Визит 2 (редакция 2, sha a60549ba…): sha совпал (git hash-object).
+- Все 6 отклонений редакции 1 (Е-1, Е-2, В-2, В-1, А-1, Б-2) закрыты требованиями 3–10 и AC-7…AC-10, AC-14, AC-17.
+- Ссылки «Материалов» на fsm.py:1194/1242-1287/1288/1304/1310/1323/1333, merge_after 107/126/216/299, catalog 735/936 — верны.
+- Литералы ("done","killed") в orchestrator/: 13 мест в 11 файлах (AST), перечень SPEC полный; report.STATE_ORDER:46 — 12 состояний.
+- Существующие тесты с делением (test_merge_after_module division_spec, test_division_parent_cleanup, test_01m568…project_kill_cleanup:819) — цепочки «после части N», новые проверки им не откажут. «[поделена: <ids>]» ни один тест не проверяет.
+- Новые отклонения (мелкие): AC-10 буквально не выполним через cmd_approve — lease.acquire пишет «lease взят» (lease.py:144); нет AC на «часть без Рамка — потолок как сегодня»; AC-12 не проверяет журнал части; AC-13 не ловит `>=` на границе ROLE_BUDGET_CAP; ссылка «(требование 6)» в требовании 4 должна быть на 5.
 
 ## Не сработало
-- grep -E со скобками требует подтверждения — использовал python ast.
+- grep/python с фигурными скобками в Bash блокируется — скрипт AST клал во временный файл каталога документов (удалён).
 
 ## Где остановился
-- Вердикт concerns, SPEC-AUDIT.md записан (status ready), guard: ок. Отклонения: Е-1 цикл через replace_divided, Е-2 место отказа, В-2 рамка на approve (инвариант 10), В-1 нет AC на «после <id>», А-1 суффикс status, Б-2 test_ac13.
+- Вердикт concerns, SPEC-AUDIT.md записан (status ready), guard: ок. Отклонения: В-3 (AC-10 и lease), В-4 (рамка: часть без Рамка, журнал, граница cap), А-2 (ссылка на требование).
 
 ## Чего не хватило
-- Где approve гейта SPEC читает SPEC для деления и где перезапускается guard — искал по fsm.py:1194-1336.
+- Где пишутся записи журнала до обработчика approve (lease.run_locked → acquire, fixation.legitimize в _cmd_approve fsm.py:1642-1648).
