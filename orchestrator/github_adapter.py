@@ -95,10 +95,13 @@ def _touched_protected_paths(branch: str, base: str,
 
 def _protected_paths_source(ctx) -> str:
     """Имя перечня в тексте подсветки: у артели — константа пульта, у
-    внешнего проекта — поле его записи."""
+    внешнего проекта — поле `no_paths` его записи и обвязка (SPEC
+    01M5T19041XE2KB6A52F0AT0NF, требование 11). Без « (»: текст сам стоит
+    в скобках комментария."""
     if repo_context.is_artel(ctx):
         return "config.PROTECTED_PATHS"
-    return f"no_paths проекта {ctx.target} в targets.yaml"
+    return (f"no_paths проекта {ctx.target} в targets.yaml и его агентская "
+            f"обвязка: config.AGENT_WRAPPER_MARKERS и agent_wrapper записи")
 
 
 def _gh_repo_kwargs(target_name: str, ctx) -> dict:
