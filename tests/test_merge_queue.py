@@ -15,8 +15,23 @@ merge-окна (SPEC 01M291EPQ2VFGCHZTXXC81616V), записи очереди п
 
 Стенды — фикстуры поверх `tmp_root` с телами прежних `setUp`:
 `queue_stand` (бывший `_QueueTestBase`) и `project_stand` (бывший `_Base`).
+
+Волна 3м-2 сведения тестов (SPEC 01M5R0AFX9Z1GA1DG5XV73JRTE): в конец
+файла сведены классы `QueueByProjectTest` и `WaitTextsByProjectTest`
+долгоживущего `tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py`
+(SPEC 01M57PM7NBFX34319TR0F9CB4F): `wait_for_window` и голова очереди по
+проекту задачи, тексты ожидания при держателях нескольких проектов.
+Стенд — `project_mutex_stand` (тело бывшего `_ProjectMutexBase.setUp`; та
+же фикстура — в `tests/test_merge_lock_module.py`), помощники с префиксом
+`project_mutex_` — одноимённые с функциями этого файла при другом теле.
+Ожидание идёт на подменённых `time.monotonic` и паузе `merge_queue`
+(`patch_sleep`) — реального сна нет; зерно случайных входов печатается и
+входит в текст провала.
 """
 import itertools
+import os
+import random
+import re
 import socket
 import time
 from unittest import mock
@@ -521,3 +536,361 @@ def test_texts_name_own_project_holder_in_every_insertion_order(
                                f"{hp['task_id']} (pid {hp['pid']})"], label
             assert suffix == f"  [ждёт merge-окна: занято {hp['task_id']} " \
                              f"(pid {hp['pid']}), 2 мин]", label
+
+
+# === волна 3м-2: очередь по проекту (бывший
+# tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ===
+# Стенд `project_mutex_stand` — тело `_ProjectMutexBase.setUp`; помощники —
+# методы `_ProjectMutexBase` и `WaitTextsByProjectTest` функциями модуля
+# (первый параметр — стенд). `lock_by_task` и `clear` не перенесены: их
+# тела равны `locks`/`clear` этого файла.
+
+_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def refusal_pattern(caller: str, holder: dict) -> str:
+    """Прежний текст отказа `acquire` целиком; секунды heartbeat — любое
+    целое."""
+    return (rf"^\[{re.escape(caller)}\] merge-окно занято сессией "
+            rf"{re.escape(holder['session_id'])} \(pid {holder['pid']}, "
+            rf"задача {re.escape(holder['task_id'])}\), heartbeat \d+ сек "
+            rf"назад — дождись освобождения и повтори approve$")
+
+
+@pytest.fixture
+def project_mutex_stand(tmp_root):
+    """Стенд бывшего `_ProjectMutexBase`: инициализированный пульт, пустые
+    `merge_locks`/`merge_queue`, объявленный внешний проект `ext` рядом с
+    артелью; зерно случайных входов печатается."""
+    capture(catalog.cmd_init)
+    tmp_root.seed = random.randrange(1 << 32)
+    print(f"зерно: {tmp_root.seed}")
+    tmp_root.rng = random.Random(tmp_root.seed)
+    tmp_root.artel = config.DEFAULT_TARGET
+    tmp_root.ext = new_project(tmp_root)
+    tmp_root.conn = store.db()
+    return tmp_root
+
+
+def token(stand, n: int = 10) -> str:
+    return "".join(stand.rng.choice(_ALPHABET) for _ in range(n))
+
+
+def new_project(stand) -> str:
+    name = "ext" + token(stand, 6).lower()
+    declare_target(name)
+    return name
+
+
+def project_mutex_new_task(stand, target) -> str:
+    """Задача в `merge_gate`; `target` — имя проекта, `""` или `None`."""
+    tid = "T" + token(stand, 12)
+    conn = store.db()
+    store.insert_task(conn, tid, "мерж по проекту", "merge_gate",
+                      f"task/{tid.lower()}", config.DEFAULT_TARGET, 25.0)
+    if target != config.DEFAULT_TARGET:
+        store.update_task(conn, tid, target=target)
+    return tid
+
+
+def session(stand) -> str:
+    return "s-" + token(stand, 8).lower()
+
+
+def foreign_pid(stand) -> int:
+    pid = stand.rng.randrange(100000, 4000000)
+    return pid if pid != os.getpid() else pid + 1
+
+
+def project_mutex_seed_lock(stand, task_id: str, session_id: str, pid: int,
+                            hostname: str = OTHER_HOST,
+                            heartbeat_ts: str = None) -> dict:
+    stand.conn.execute(
+        "INSERT INTO merge_locks (task_id, session_id, pid, hostname,"
+        " heartbeat_ts) VALUES (?,?,?,?,?)",
+        (task_id, session_id, pid, hostname,
+         heartbeat_ts or store.now()))
+    stand.conn.commit()
+    return locks(stand)[task_id]
+
+
+def live_holder(stand, target) -> dict:
+    return project_mutex_seed_lock(stand, project_mutex_new_task(stand, target),
+                                   session(stand), foreign_pid(stand))
+
+
+def queue_task_ids(stand) -> list:
+    return [r["task_id"] for r in store.merge_queue_rows(stand.conn)]
+
+
+def project_mutex_enqueue(stand, task_id: str, ts: str, *,
+                          session_id: str = None, pid: int = None,
+                          hostname: str = OTHER_HOST) -> tuple:
+    sid = session_id or session(stand)
+    pid = pid or foreign_pid(stand)
+    store.enqueue_merge_wait(stand.conn, task_id, sid, pid, hostname, ts)
+    return sid, pid
+
+
+def run_wait(stand, task_id: str, sid: str, on_sleep=None) -> tuple:
+    """`wait_for_window` на подменённых часах: (паузы, текст выхода по
+    потолку либо `None` — окно получено)."""
+    clock = {"value": 0.0}
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock["value"] += seconds
+        if on_sleep is not None:
+            on_sleep(len(sleeps))
+
+    exited = None
+    with mock.patch.object(time, "monotonic", lambda: clock["value"]), \
+         patch_sleep(merge_queue, fake_sleep):
+        try:
+            merge_queue.wait_for_window(stand.conn, task_id, sid)
+        except SystemExit as exc:
+            exited = str(exc)
+    return sleeps, exited
+
+
+def project_mutex_actions(stand, task_id: str) -> list:
+    return [s["action"] for s in store.task_steps(stand.conn, task_id)]
+
+
+def msg(stand, ctx: str) -> str:
+    return f"{ctx}; зерно {stand.seed}"
+
+
+def project_pairs(stand) -> tuple:
+    return ((stand.ext, stand.artel), (stand.artel, stand.ext))
+
+
+def wait_texts(stand, caller: str, sid: str, case: str = "") -> tuple:
+    """(отказ `acquire`, действия журнала после `wait_for_window` до
+    потолка, добавка `status` записи очереди трёхминутной давности);
+    `case` — ярлык подслучая для сообщения утверждения подготовки."""
+    refusal = merge_lock.acquire(stand.conn, caller, sid)
+    _sleeps, exited = run_wait(stand, caller, sid)
+    assert exited is not None, msg(stand, f"{caller} получил окно") + case
+    actions = [a for a in project_mutex_actions(stand, caller)
+               if a.startswith("ждёт merge-окна")]
+    q_sid, q_pid = project_mutex_enqueue(stand, caller, _ts_ago(210))
+    suffix = merge_queue.wait_suffix(stand.conn,
+                                     store.get_task(stand.conn, caller))
+    store.dequeue_merge_wait(stand.conn, q_sid, q_pid)
+    return refusal, actions, suffix
+
+
+# --- QueueByProjectTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+
+def test_ac2_other_project_holder_does_not_delay_wait_for_window(
+        project_mutex_stand):
+    """Живой держатель проекта Q, у проекта P нет ни держателя, ни
+    записей очереди; `wait_for_window` задачи P возвращается без
+    единой паузы, мьютекс P взят этим процессом.
+
+    Ловит мутацию: `wait_for_window`/`acquire` ждёт освобождения
+    мьютекса всего пульта — опрос пойдёт до потолка, выход
+    `SystemExit` и непустой список пауз."""
+    for holder_target, caller_target in project_pairs(project_mutex_stand):
+        clear(project_mutex_stand)
+        holder = live_holder(project_mutex_stand, holder_target)
+        caller, sid = (project_mutex_new_task(project_mutex_stand, caller_target),
+                       session(project_mutex_stand))
+        ctx = msg(project_mutex_stand, f"держит {holder}, ждёт {caller}")
+
+        sleeps, exited = run_wait(project_mutex_stand, caller, sid)
+
+        assert exited is None, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        assert sleeps == [], ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        row = locks(project_mutex_stand).get(caller)
+        assert row is not None, ctx + "; " + (
+            f"holder={holder_target!r}, caller={caller_target!r}")
+        assert (row["session_id"], row["pid"]) == (sid, os.getpid()), (
+            ctx + "; " + f"holder={holder_target!r}, caller={caller_target!r}")
+
+
+def test_ac8_head_is_earliest_entry_of_own_project(project_mutex_stand):
+    """Раньше задачи P в очереди стоит живая запись проекта Q, мьютекс
+    свободен; `wait_for_window` задачи P — голова очереди своего
+    проекта — берёт окно без паузы, запись Q остаётся в очереди.
+
+    Ловит мутацию: голова очереди — первая запись всего пульта
+    (прежний `_head_task_id`) — P не станет головой, опрос дойдёт до
+    потолка, `assert exited is None` покраснеет."""
+    for q_target, p_target in project_pairs(project_mutex_stand):
+        clear(project_mutex_stand)
+        q_task = project_mutex_new_task(project_mutex_stand, q_target)
+        project_mutex_enqueue(project_mutex_stand, q_task, _ts_ago(120))
+        caller, sid = (project_mutex_new_task(project_mutex_stand, p_target),
+                       session(project_mutex_stand))
+        ctx = msg(project_mutex_stand,
+                  f"в очереди раньше {q_task}, ждёт {caller}")
+
+        sleeps, exited = run_wait(project_mutex_stand, caller, sid)
+
+        assert exited is None, ctx + "; " + (
+            f"queue_first={q_target!r}, caller={p_target!r}")
+        assert sleeps == [], ctx + "; " + (
+            f"queue_first={q_target!r}, caller={p_target!r}")
+        assert caller in locks(project_mutex_stand), ctx + "; " + (
+            f"queue_first={q_target!r}, caller={p_target!r}")
+        assert queue_task_ids(project_mutex_stand) == [q_task], ctx + "; " + (
+            f"queue_first={q_target!r}, caller={p_target!r}")
+
+
+def test_ac8_same_project_tasks_enter_in_fifo_order(project_mutex_stand):
+    """В очереди: запись проекта Q, затем запись задачи P1; задача P2
+    того же проекта P ждёт окна. Пока P1 в очереди, P2 окна не берёт
+    (мьютекс свободен); P1 уходит из очереди на первой паузе — P2
+    берёт окно на следующем опросе.
+
+    Ловит мутацию: FIFO внутри проекта снят (голова — любая запись
+    своего проекта либо своя) — P2 возьмёт окно без паузы, раньше P1;
+    либо голова считается по всей очереди — после ухода P1 голова
+    останется запись Q, и P2 дождётся потолка."""
+    for q_target, p_target in project_pairs(project_mutex_stand):
+        clear(project_mutex_stand)
+        q_task = project_mutex_new_task(project_mutex_stand, q_target)
+        project_mutex_enqueue(project_mutex_stand, q_task, _ts_ago(300))
+        p1 = project_mutex_new_task(project_mutex_stand, p_target)
+        p1_sid, p1_pid = project_mutex_enqueue(project_mutex_stand, p1,
+                                               _ts_ago(120))
+        p2, p2_sid = (project_mutex_new_task(project_mutex_stand, p_target),
+                      session(project_mutex_stand))
+        seen = {}
+
+        def on_sleep(n):
+            if n == 1:
+                seen["p2_locked_before_p1_left"] = (
+                    p2 in locks(project_mutex_stand))
+                store.dequeue_merge_wait(project_mutex_stand.conn, p1_sid,
+                                         p1_pid)
+
+        ctx = msg(project_mutex_stand, f"Q {q_task}, P1 {p1}, P2 {p2}")
+
+        sleeps, exited = run_wait(project_mutex_stand, p2, p2_sid, on_sleep)
+
+        assert len(sleeps) >= 1, f"P2 вошёл без паузы раньше P1; {ctx}" + (
+            "; " + f"other={q_target!r}, project={p_target!r}")
+        assert not seen.get("p2_locked_before_p1_left"), ctx + "; " + (
+            f"other={q_target!r}, project={p_target!r}")
+        assert exited is None, ctx + "; " + (
+            f"other={q_target!r}, project={p_target!r}")
+        assert p2 in locks(project_mutex_stand), ctx + "; " + (
+            f"other={q_target!r}, project={p_target!r}")
+
+
+def test_ac9_dead_entry_of_project_does_not_hold_its_head(project_mutex_stand):
+    """Очередь: живая запись проекта Q, затем мёртвая запись задачи P0
+    (протухший heartbeat либо неживой pid на этом host); задача P1 того
+    же проекта ждёт окна. Мёртвая запись убрана, P1 берёт окно без
+    паузы, запись Q на месте.
+
+    Ловит мутацию: пруна мёртвых записей не идёт до определения головы
+    проекта (или убирает только записи другого проекта) — P0 останется
+    головой P, P1 дождётся потолка; либо голова по всей очереди —
+    голова — запись Q."""
+    stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 60)
+    for q_target, p_target in project_pairs(project_mutex_stand):
+        for kind in ("протухший heartbeat", "неживой pid"):
+            clear(project_mutex_stand)
+            q_task = project_mutex_new_task(project_mutex_stand, q_target)
+            project_mutex_enqueue(project_mutex_stand, q_task, _ts_ago(600))
+            p0 = project_mutex_new_task(project_mutex_stand, p_target)
+            if kind == "протухший heartbeat":
+                project_mutex_enqueue(project_mutex_stand, p0, stale)
+            else:
+                project_mutex_enqueue(project_mutex_stand, p0, _ts_ago(300),
+                                      pid=_dead_pid(),
+                                      hostname=socket.gethostname())
+            p1, sid = (project_mutex_new_task(project_mutex_stand, p_target),
+                       session(project_mutex_stand))
+            ctx = msg(project_mutex_stand,
+                      f"Q {q_task}, мёртвая P0 {p0}, P1 {p1}")
+
+            sleeps, exited = run_wait(project_mutex_stand, p1, sid)
+
+            assert exited is None, ctx + "; " + (
+                f"other={q_target!r}, project={p_target!r}, dead={kind!r}")
+            assert sleeps == [], ctx + "; " + (
+                f"other={q_target!r}, project={p_target!r}, dead={kind!r}")
+            assert p1 in locks(project_mutex_stand), ctx + "; " + (
+                f"other={q_target!r}, project={p_target!r}, dead={kind!r}")
+            assert queue_task_ids(project_mutex_stand) == [q_task], (
+                ctx + "; " +
+                f"other={q_target!r}, project={p_target!r}, dead={kind!r}")
+
+
+# --- WaitTextsByProjectTest (бывший test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py) ---
+
+def test_ac10_wait_texts_name_holder_of_waiting_task_project(
+        project_mutex_stand):
+    """Держат проекты P и Q (обе строки живые, оба порядка вставки);
+    отказ `acquire`, запись журнала входа в очередь и добавка `status`
+    задачи P называют держателя P, не держателя Q.
+
+    Ловит мутацию: тексты собираются по «первой» строке таблицы
+    (прежние `merge_lock_row`/`_current_holder_label`) — при строке Q
+    первой в таблице текст назовёт задачу и pid держателя Q."""
+    for p_target, q_target in project_pairs(project_mutex_stand):
+        for p_first in (True, False):
+            clear(project_mutex_stand)
+            tasks = {p_target: project_mutex_new_task(project_mutex_stand,
+                                                      p_target),
+                     q_target: project_mutex_new_task(project_mutex_stand,
+                                                      q_target)}
+            order = ((p_target, q_target) if p_first
+                     else (q_target, p_target))
+            rows = {t: project_mutex_seed_lock(project_mutex_stand, tasks[t],
+                                               session(project_mutex_stand),
+                                               foreign_pid(project_mutex_stand))
+                    for t in order}
+            hp, hq = rows[p_target], rows[q_target]
+            caller = project_mutex_new_task(project_mutex_stand, p_target)
+            ctx = msg(project_mutex_stand, f"P {hp}, Q {hq}, ждёт {caller}")
+
+            refusal, actions, suffix = wait_texts(
+                project_mutex_stand, caller, session(project_mutex_stand),
+                "; " + f"p={p_target!r}, q={q_target!r}, p_first={p_first!r}")
+
+            assert refusal is not None, ctx + "; " + (
+                f"p={p_target!r}, q={q_target!r}, p_first={p_first!r}")
+            assert re.search(refusal_pattern(caller, hp), refusal), (
+                ctx + "; " +
+                f"p={p_target!r}, q={q_target!r}, p_first={p_first!r}")
+            assert actions == [f"ждёт merge-окна: держит {hp['task_id']} "
+                               f"(pid {hp['pid']})"], ctx + "; " + (
+                f"p={p_target!r}, q={q_target!r}, p_first={p_first!r}")
+            assert suffix == (f"  [ждёт merge-окна: занято {hp['task_id']} "
+                              f"(pid {hp['pid']}), 3 мин]"), ctx + "; " + (
+                f"p={p_target!r}, q={q_target!r}, p_first={p_first!r}")
+            for text in (refusal, suffix, *actions):
+                assert hq["task_id"] not in text, ctx + "; " + (
+                    f"p={p_target!r}, q={q_target!r}, p_first={p_first!r}")
+
+
+def test_ac10_single_project_texts_are_unchanged(project_mutex_stand):
+    """Один проект (артель), живой держатель: три текста ожидания
+    совпадают с прежними побайтно (секунды heartbeat — любое целое).
+
+    Ловит мутацию: тексты получили метку проекта или иной формат
+    (например «держит <id> (pid <pid>, проект artel)») — точные сверки
+    покраснеют."""
+    holder = live_holder(project_mutex_stand, project_mutex_stand.artel)
+    caller = project_mutex_new_task(project_mutex_stand,
+                                    project_mutex_stand.artel)
+    ctx = msg(project_mutex_stand, f"держит {holder}, ждёт {caller}")
+
+    refusal, actions, suffix = wait_texts(project_mutex_stand, caller,
+                                          session(project_mutex_stand))
+
+    assert refusal is not None, ctx
+    assert re.search(refusal_pattern(caller, holder), refusal), ctx
+    assert actions == [f"ждёт merge-окна: держит {holder['task_id']} "
+                       f"(pid {holder['pid']})"], ctx
+    assert suffix == (f"  [ждёт merge-окна: занято {holder['task_id']} "
+                      f"(pid {holder['pid']}), 3 мин]"), ctx
