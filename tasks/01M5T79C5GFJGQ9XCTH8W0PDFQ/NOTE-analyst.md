@@ -1,16 +1,20 @@
 # Записка analyst — 01M5T79C5GFJGQ9XCTH8W0PDFQ
 
 ## Выяснено
-- ТЗ достаточно, пишу SPEC (без QUESTIONS). Выбор по `_list_tree`: потоковое чтение с пределом байт и сроком — новая функция `gitcmd` (одна точка запуска под git 4).
-- Песочница `tests/sandbox.py::LightTransitionSandbox` (:2129, setUp :2173…) подменяет заглушками не только `gitcmd.git`, но и `gitcmd.in_repo` (дефолт уходит в `fake_git`), `show`, `ls_tree_files` — переносить места на `in_repo` нельзя, нужна отдельная функция (как `carpentry`).
-- `TmpRootTest` подменяет `gitcmd.subprocess.run` шпионом `SpyRun` (sandbox.py:1334–1384), который отвечает фейковым sha на `write-tree`/`hash-object` (:1375). Сейчас `suite_tree_hash` и `_list_tree` идут через `Popen` и шпиону не видны; перевод их на `subprocess.run` тихо изменил бы результат под песочницей. В SPEC это требование 4 (поведенческая форма).
-- Сроки сейчас: `suite_tree_hash` 15 с → None; `_clone_git`/`branch_commit` — `config.CORE_REFERENCE_GIT_TIMEOUT_SEC` → «git не ответил (TimeoutExpired)»; `_list_tree`/`_cat_blobs` — остаток дедлайна → `_Failure(DEADLINE, «срок исчерпан на ls-tree/cat-file»)`. У `tz_check._git` и `outcome_integrity._added_lines` срока нет — и не добавляется.
+- Шаг 2 (возврат со spec_gate 26.10): решения Оператора (1)–(6) по SPEC-AUDIT перенесены в SPEC, число AC прежнее (9), budget 40, status ready, guard ок.
+  - (1) треб. 4/AC-9: места 1 и 4 не на пути SpyRun (глобальный subprocess.run); места 2,3,5,6,7 остаются на пути, видимом SpyRun и шпионам subprocess.run. Альтернатива «доказательство в PLAN» оставлена только для fake_git/LightTransitionSandbox (её допускает ТЗ-4).
+  - (2) import subprocess в outcome_integrity.py сохраняется; сторож AC-2 импорт не запрещает (треб. 1, 5, AC-2).
+  - (3) carpentry для места 1 убрана: только функция gitcmd на Popen, срок 15 с, `-C <root>` (треб. 2).
+  - (4) OSError места 1 выходит исключением из suite_tree_hash (Контекст, треб. 3, AC-8).
+  - (5) место 4: TimeoutExpired при запуске → SOURCE_FAILED «ls-tree: TimeoutExpired: …» (Контекст, треб. 3, AC-4, AC-8).
+  - (6) AC-1: поведенческий тест на каждое место, обёртки acceptance._launch/_run_capture не используются (треб. 1, AC-1).
+- Ранее: LightTransitionSandbox подменяет gitcmd.git/in_repo/show/ls_tree_files; SpyRun стоит на глобальном subprocess.run (sandbox.py:1682).
 
 ## Не сработало
-- Составной bash с `cd` и пайпами отклоняется правами — только одиночные команды с абсолютными путями.
+- `ls` в shell недоступен (command not found) — читать файлы инструментом Read.
 
 ## Где остановился
-- SPEC написан (9 AC, budget 40 = рамка ТЗ, монолит с материалом для нарезки на 2 части), `status: ready`; guard: ок.
+- SPEC правлен и прошёл guard; шаг закончен.
 
 ## Чего не хватило
-- Сводки «какие функции gitcmd тесты подменяют заглушками» — собирал grep'ом по tests/.
+- Ничего нового: аудит дал адреса строк для всех решений.
