@@ -6296,9 +6296,12 @@ def protected_zones(zones, protected=None) -> list[str]:
     «записи-файле плюс суффикс» и только в сторону «защищён»).
 
     `protected` — перечень проекта задачи (SPEC 01M45FK56DWMNBRKA1VWM12H19,
-    требование 2); `None` — перечень артели `config.PROTECTED_PATHS`."""
+    требование 2); `None` — перечень артели `config.PROTECTED_PATHS`.
+    Зона, называющая сам каталог записи `**/<каталог>/` (`sub/.claude`),
+    защищена (`config.is_protected_zone`, SPEC 01M5T19041XE2KB6A52F0AT0NF,
+    требование 7)."""
     return sorted(z for z in set(zones)
-                  if config.is_protected_path(z, protected))
+                  if config.is_protected_zone(z, protected))
 
 
 def spec_unclassified_paths(text: str, meta: dict,

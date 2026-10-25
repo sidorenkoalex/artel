@@ -47,6 +47,9 @@ class RepoContext:
     # Поле `no_paths` записи внешнего проекта; у артели не читается
     # (`protected_paths`).
     no_paths: tuple = ()
+    # Поле `agent_wrapper` записи внешнего проекта; у артели не читается
+    # (`wrapper_paths`).
+    agent_wrapper: tuple = ()
 
 
 # Адрес области проектов при рассогласованных путях пульта: каталога нет и
@@ -93,7 +96,9 @@ def resolve(target_name: str) -> "RepoContext | None":
         return None
     return RepoContext(path=clone_path(target_name), remote=entry["url"],
                        base=entry["base"], target=target_name,
-                       no_paths=tuple(entry["no_paths"]))
+                       no_paths=tuple(entry["no_paths"]),
+                       agent_wrapper=tuple(entry.get(targets.WRAPPER_FIELD)
+                                           or ()))
 
 
 def unresolved_reason(target_name: str) -> str:
@@ -108,7 +113,10 @@ def protected_paths(ctx: RepoContext) -> tuple:
     сверки (ADR-0021 п.8; SPEC 01M45FK56DWMNBRKA1VWM12H19, требование 1),
     формула сверки — `config.is_protected_path(путь, перечень)`.
 
-    Внешний проект — поле `no_paths` его записи `targets.yaml`. Артель —
+    Внешний проект — поле `no_paths` его записи `targets.yaml`, за ним
+    пути действующего списка обвязки (`wrapper_paths`), которых в перечне
+    ещё нет той же строкой (SPEC 01M5T19041XE2KB6A52F0AT0NF, требование 6).
+    Артель —
     `config.PROTECTED_PATHS`, прочитанный в момент вызова: его
     `docs/invariants.md` называет единым источником защищённых путей, а
     поле `no_paths` записи `artel` — лишь его зеркало под сторожем, на
@@ -117,7 +125,17 @@ def protected_paths(ctx: RepoContext) -> tuple:
     зависит."""
     if is_artel(ctx):
         return tuple(config.PROTECTED_PATHS)
-    return tuple(ctx.no_paths)
+    own = tuple(ctx.no_paths)
+    return own + tuple(p for p in wrapper_paths(ctx) if p not in own)
+
+
+def wrapper_paths(ctx: RepoContext) -> tuple:
+    """Действующий список агентской обвязки проекта контекста
+    (`targets.wrapper_paths`: стандартные маркеры и поле `agent_wrapper`);
+    у артели пуст — её рабочие копии полные по замыслу."""
+    if is_artel(ctx):
+        return ()
+    return targets.wrapper_paths(ctx.agent_wrapper)
 
 
 PROFILE_PRESENT = "есть"

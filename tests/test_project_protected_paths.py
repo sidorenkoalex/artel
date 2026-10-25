@@ -79,13 +79,15 @@ class ProjectPerimeterTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_external_perimeter_is_its_no_paths(self):
-        """Перечень внешнего проекта — его `no_paths`, у артели —
+        """Перечень внешнего проекта — его `no_paths`, за ними маркеры
+        обвязки (SPEC 01M5T19041XE2KB6A52F0AT0NF, требование 6), у артели —
         `config.PROTECTED_PATHS`.
 
         Ловит мутацию: `protected_paths` отдаёт `config.PROTECTED_PATHS`
         любому проекту — у `vnesh` в перечне `skills/` вместо `zz/`."""
         self.assertEqual(repo_context.protected_paths(
-            repo_context.resolve("vnesh")), ("zz/",))
+            repo_context.resolve("vnesh")),
+            ("zz/", "**/.claude/", ".mcp.json", "**/CLAUDE.md", "**/AGENTS.md"))
         self.assertEqual(repo_context.protected_paths(
             repo_context.resolve(config.DEFAULT_TARGET)),
             tuple(config.PROTECTED_PATHS))
