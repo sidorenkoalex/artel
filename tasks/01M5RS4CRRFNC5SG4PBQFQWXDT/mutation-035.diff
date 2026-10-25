@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -519,6 +519,8 @@
+         `weakening_scope` (ANSWER-2)."""
+         if self.is_support(path):
+             return True
++        if path not in self.head_paths:
++            return False
+         if self.profile.tests:
+             return self.is_test(path)
+         return self.profile.in_weakening_scope(path)

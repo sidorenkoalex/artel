@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -682,7 +682,6 @@
+     if res is None or res.returncode != 0:
+         raise _Prepare(f"выписка стороны «{PRIOR}» ({head_sha[:12]}) не "
+                        f"создана: {_git_reason(res)}")
+-    trees[PRIOR] = tree
+     res = gitcmd.in_repo(tree, "checkout", base_sha, "--",
+                          *(f":(literal){p}" for p in paths))
+     if res is None or res.returncode != 0:

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -706,7 +706,7 @@
+     полный набор компонента, иначе только файлы C; судятся тесты
+     `PASS_TO_PASS` базы, чей файл попал в прогон, красный — перепрогон
+     на третьей выписке и на базе."""
+-    if any(files.is_support(p) for p in paths):
++    if True:
+         records = _full_run(task_id, profile, PRIOR, tree)
+         ran = None
+     else:

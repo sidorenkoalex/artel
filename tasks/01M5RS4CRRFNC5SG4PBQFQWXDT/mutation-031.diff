@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -583,6 +583,7 @@
+         raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+                        f"{head_sha[:12]} не получен: {exc}") from exc
+     if res.returncode != 0:
++        return {}
+         reason = (res.stderr or b"").decode("utf-8", errors="replace").strip()
+         raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
+                        f"{head_sha[:12]} не получен: "

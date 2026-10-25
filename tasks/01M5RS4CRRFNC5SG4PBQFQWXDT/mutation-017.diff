@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -711,7 +711,7 @@
+         ran = None
+     else:
+         limit = project_profile.component_limit(profile)[0]
+-        run = acceptance.report_run(profile, tree, list(paths), limit)
++        run = acceptance.report_run(profile, tree, sorted(files.base_paths), limit)
+         where = f"прогон прежних версий {len(paths)} файлов"
+         if run.refusal:
+             raise _Prepare(f"{where}: {run.refusal}")

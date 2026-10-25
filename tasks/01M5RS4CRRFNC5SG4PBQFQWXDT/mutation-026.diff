@@ -1,0 +1,21 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -965,10 +965,14 @@
+     prior_history, prior_runs, prior_line = {}, 0, []
+     if prior_paths:
+         paths = sorted(prior_paths)
+-        tree = _prior_checkout(repo, scratch, trees, base_sha, head_sha,
+-                               paths, files, entries)
+-        prior_history, prior_red, prior_runs = _prior_versions(
++        try:
++            tree = _prior_checkout(repo, scratch, trees, base_sha, head_sha,
++                                   paths, files, entries)
++        except _Prepare:
++            tree, paths = None, []
++        prior_history, prior_red, prior_runs = (_prior_versions(
+             task_id, profile, trees, tree, paths, files, base)
++            if tree is not None else ({}, [], 0))
+         prior_found, prior_flaky = _prior_redness(prior_red, prior_history)
+         # Одна находка на идентификатор: прежний вид старше.
+         taken = {f.id for f in findings}

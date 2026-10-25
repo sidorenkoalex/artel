@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -486,6 +486,8 @@
+     """Пути файлов записей отчёта, включая записи ошибок уровня файла."""
+     found = set()
+     for case in records:
++        if case.file_level:
++            continue
+         try:
+             found.add(project_profile.parse_test_id(case.id)[1])
+         except ValueError:

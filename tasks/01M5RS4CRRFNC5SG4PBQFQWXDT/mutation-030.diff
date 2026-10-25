@@ -1,0 +1,11 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -534,6 +534,7 @@
+     пустой набор (требование 8)."""
+     entries = gitcmd.diff_name_status(base_sha, head_sha, repo=repo)
+     if entries is None:
++        return []
+         raise _Prepare(f"diff --name-status базы {base_sha[:12]} и головы "
+                        f"{head_sha[:12]} не получен")
+     return entries

@@ -1,0 +1,67 @@
+"""Тесты гейта неослабления по исходам G3б-2 на стенде `PriorSandbox`:
+прежние версии изменённых тестов на коде ветки (третья выписка, набор C,
+перепрогоны, находки «прежняя версия красная/нестабильна на коде ветки»,
+удаление добавленных файлов тестов и поддержки), сбои подготовки и граница
+гейта (волна 2а-2в-1 сведения тестов, SPEC 01M5RS4CRRFNC5SG4PBQFQWXDT;
+ADR-0027 п. 8, ADR-0020 п. 8).
+
+Свод 22 тестов долгоживущего
+`tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py` (классы `Ac3` …
+`Ac13`, `Ac32`, `Ac33`, `Ac30` SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J):
+долгоживущий файл сокращён решением Оператора (ADR-0020 п. 8), свойства
+перенесённых тестов — здесь; остальные его тесты (стенды
+`ReplacementSandbox` и `StrictSandbox`) сводятся задачей 2а-2в-2.
+Доказательство неослабления — таблицы `mutation-run` «до» и «после» в PLAN
+задачи.
+
+Стенд `box` — `tests.prior_outcome_sandbox.PriorSandbox` поверх песочницы
+гейта исходов G3а-1а и её надстройки гейта мержа
+(`tests.merge_outcome_sandbox.MergeOutcomeSandbox` поверх
+`tests.outcome_gate_sandbox.OutcomeGateSandbox`): настоящий git, учебный
+внешний проект с единственным компонентом `junit-xml` на поддельном
+`pytest` (`python-ast` по умолчанию), раннер подменён шпионом
+`subprocess.Popen`, исход теста задаётся сценарием по стороне прогона.
+
+Сторона «прежние версии» (`OLD`): дерево прогона — выписка головы
+(`app.py` с меткой головы) в каталоге `scratch` гейта (рядом лежит маркер
+владельца `liveness.GATE_OWNER_MARKER`), имя каталога выписки — не `base`
+и не `head`. Исход теста на этой стороне — последовательность сценария
+`cases[(путь, имя)][OLD]` (по умолчанию `passed`); «спасатель» `rescue` —
+пути, при наличии которых в дереве прогона прежняя версия зелёная
+(подмена сломанной функции добавленным `conftest.py`). Шпион
+`subprocess.run` записывает каждую `worktree add` из кадров модуля гейта
+(путь и наличие маркера владельца рядом в момент вызова) и, по правилу
+сценария `git_fail`, отвечает отказом git.
+
+Мандат Оператора — `answer.cmd_answer` с маркером и матрицей
+неослабления (помощник `grant`). Помощники, утверждающие исход, —
+функции модуля `refusal`, `no_gate_refusal`, `passed`, `conftest_case`
+(первый параметр — стенд; у первых трёх последний — `case`: ярлык
+подслучая и зерно спереди к тексту каждого сообщения). Бывшие `subTest` —
+прежним циклом или прямым кодом в одной функции, ярлык подслучая и зерно —
+в локальном `case`.
+
+Имена проектов, файлов, тестов, позиции строк и выбор исходов — из
+`random`; зерно печатается и входит в текст каждого провала.
+"""
+import os
+
+import pytest
+
+from tests.fixtures import _sandbox
+from tests.outcome_gate_sandbox import GATE_ACTIONS, flow, py_source
+from tests.prior_outcome_sandbox import (
+    FILE_ERROR_MARK, FLAKY, OLD, OUTCOME_ACTION, PASSED_ACTION, PREPARE_ACTION,
+    PRIOR_LINE, PRIOR_RED, PRIOR_UNSTABLE, SIDES, SKIPPED, Link, Moved,
+    PriorSandbox)
+
+
+@pytest.fixture
+def box():
+    """Стенд PriorSandbox после setUp."""
+    yield from _sandbox(PriorSandbox)
+
+
+# ---------------------------------------------------------------- помощники
+
+

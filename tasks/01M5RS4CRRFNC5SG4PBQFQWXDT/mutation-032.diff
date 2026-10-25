@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -676,7 +676,7 @@
+     """Третья выписка (требование 3): голова в `scratch`, пути C — из
+     базы, добавленные веткой файлы тестов и поддержки удалены. Заведённая
+     дописывается в `trees` (уборка — у вызывающего)."""
+-    tree = scratch / _PRIOR_DIR
++    tree = Path(tempfile.mkdtemp(prefix="artel-prior-")).resolve() / _PRIOR_DIR
+     res = gitcmd.in_repo(repo, "worktree", "add", "--detach", str(tree),
+                          head_sha)
+     if res is None or res.returncode != 0:

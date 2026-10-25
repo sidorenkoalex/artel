@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -517,8 +517,6 @@
+         """Файл `A`, удаляемый на третьей выписке: под масками `tests` и
+         `test_support`, у компонента без `tests` — любой под
+         `weakening_scope` (ANSWER-2)."""
+-        if self.is_support(path):
+-            return True
+         if self.profile.tests:
+             return self.is_test(path)
+         return self.profile.in_weakening_scope(path)

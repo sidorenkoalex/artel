@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -963,7 +963,7 @@
+     prior_paths |= {project_profile.parse_test_id(cid)[1]
+                     for cid in replacements if cid in base_map}
+     prior_history, prior_runs, prior_line = {}, 0, []
+-    if prior_paths:
++    if True:
+         paths = sorted(prior_paths)
+         tree = _prior_checkout(repo, scratch, trees, base_sha, head_sha,
+                                paths, files, entries)

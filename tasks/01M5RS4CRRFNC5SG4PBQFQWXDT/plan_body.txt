@@ -1,0 +1,240 @@
+---
+task: 01M5RS4CRRFNC5SG4PBQFQWXDT
+type: plan
+author_role: developer
+status: draft
+schema_version: 5
+---
+
+# PLAN: Сведение тестов, волна 2а-2в-1 — песочницы G3б-2 в `tests/prior_outcome_sandbox.py`, 22 теста на `PriorSandbox` в `tests/test_outcome_prior_module.py`
+
+## Подход
+
+Свод механический и сверяется по AST помощниками планки
+(`acceptance_tests/_plan.py`); доказательство неослабления — один набор из
+37 патчей мутаций `orchestrator/advance_gates/outcome_integrity.py` против
+долгоживущего файла («до», `--ref base`) и нового модуля («после», `--ref
+worktree`) при неизменном дереве `orchestrator/`.
+
+- `tests/prior_outcome_sandbox.py` — докстринг одной строкой, строки 41–95
+  исходного файла (импорты и константы от `import contextlib` до `CLAIM`)
+  и классы `Moved`, `Link`, `PriorSandbox`, `ReplacementSandbox`,
+  `StrictSandbox` вырезкой строк без единой правки (строки-комментарии
+  разделов не перенесены).
+- `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py` — удалены пять
+  классов песочниц и 14 тестовых классов задачи со строками-комментариями
+  разделов `AC-3` … `AC-13`, `AC-32`, `AC-33`, `AC-30`; разделы
+  «заменяемые тесты» и «строгий режим» остались над своими оставшимися
+  классами; сразу после импорта `MergeOutcomeSandbox` — один оператор
+  `from tests.prior_outcome_sandbox import (Moved, ReplacementSandbox,
+  StrictSandbox)`. Прочее — без изменений, включая ставшие ненужными
+  импорты.
+- `tests/test_outcome_prior_module.py` — фикстура `box`
+  (`yield from _sandbox(PriorSandbox)`), помощники `refusal`,
+  `no_gate_refusal` (копия функций `tests/test_outcome_gate_module.py`
+  с докстрингами), `passed`, `grant`, `conftest_case` и 22 тестовые
+  функции с прежними именами в порядке файла.
+- Карта регенерирована `python3 scripts/codebase_map.py`.
+
+Бюджет SPEC ($50) не пересматривается: файлов и шагов столько, сколько
+оценивал SPEC.
+
+## Шаги
+
+1. Перенос песочниц, сокращение долгоживущего файла, свод 22 тестов,
+   карта — коммит 53dfb8c0. Проверка: сверка AST (раздел «Сверка по
+   AST»); адресно `python3 -m pytest tests/test_outcome_prior_module.py`
+   — 22 passed за 144,01 с, `python3 -m pytest
+   tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py` — 22 passed,
+   18 subtests passed за 204,90 с (оба — под нагрузкой параллельного
+   `mutation-run`); `pytest --collect-only` сокращённого файла — 22 теста.
+2. Патчи `mutation-001.diff` … `mutation-037.diff` по заявкам (раздел
+   «Мутации и заявки»); каждый проверен `git apply --check` на базе
+   a8e57874 и компилируется.
+3. Таблица «до» частями 1-15, 16-30, 31-37 (раздел «Мутации до»).
+4. Таблица «после» теми же диапазонами (раздел «Мутации после»),
+   соответствие строк падения — в описании каждой мутации.
+
+## Покрытие требований
+
+| Требование | Шаг |
+|---|---|
+| 1 | 2 (раздел «Мутации и заявки») |
+| 2 | 3 |
+| 3 | 3, 4 |
+| 4 | 3, 4 (раздел «Находки») |
+| 5 | 3, 4 |
+| 6 | 3, 4 |
+| 7 | 3, 4 (контроль зелёный во всех прогонах) |
+| 8 | 3, 4 (`--wait-lock 4`) |
+| 9 | 1–4 (раздел «Влияние на систему») |
+| 10 | 1 |
+| 11 | 1 |
+| 12 | 1 |
+| 13 | 1 |
+| 14 | 1 |
+| 15 | 3, 4 |
+| 16 | 1 |
+| 17 | 1 |
+| 18 | 1, 3 (раздел «Удалённые дубли», «Находки») |
+| 19 | 4 |
+| 20 | 4 |
+| 21 | 1, 4 (раздел «Числа и время») |
+| 22 | 1 |
+| 23 | 1 |
+| 24 | вне роли (сессия при Операторе) |
+
+## Соответствие имён «до → после»
+
+Каждый тест перенесён функцией с тем же именем, стенд — фикстура `box`.
+
+| Исходный тест | Функция |
+|---|---|
+| `Ac3GreenPriorTest::test_ac3_green_prior_version_passes_with_prior_line` | `tests/test_outcome_prior_module.py::test_ac3_green_prior_version_passes_with_prior_line` |
+| `Ac10EmptyPriorSetTest::test_ac10_empty_set_no_third_checkout` | `tests/test_outcome_prior_module.py::test_ac10_empty_set_no_third_checkout` |
+| `Ac4PriorRedTest::test_ac4_prior_red_thrice_refuses_outcome` | `tests/test_outcome_prior_module.py::test_ac4_prior_red_thrice_refuses_outcome` |
+| `Ac5PriorUnstableTest::test_ac5_prior_mixed_is_unstable_finding` | `tests/test_outcome_prior_module.py::test_ac5_prior_mixed_is_unstable_finding` |
+| `Ac5PriorUnstableTest::test_ac5_red_base_rerun_is_flaky_line_not_finding` | `tests/test_outcome_prior_module.py::test_ac5_red_base_rerun_is_flaky_line_not_finding` |
+| `Ac6OneFindingPerIdTest::test_ac6_old_kind_finding_wins_single_line` | `tests/test_outcome_prior_module.py::test_ac6_old_kind_finding_wins_single_line` |
+| `Ac7RunScopeTest::test_ac7_test_support_change_runs_full_suite` | `tests/test_outcome_prior_module.py::test_ac7_test_support_change_runs_full_suite` |
+| `Ac7RunScopeTest::test_ac7_tests_change_runs_only_changed_files` | `tests/test_outcome_prior_module.py::test_ac7_tests_change_runs_only_changed_files` |
+| `Ac8RestoredPathsTest::test_ac8_deleted_file_restored_and_judged` | `tests/test_outcome_prior_module.py::test_ac8_deleted_file_restored_and_judged` |
+| `Ac8RestoredPathsTest::test_ac8_renamed_file_old_path_restored_new_stays` | `tests/test_outcome_prior_module.py::test_ac8_renamed_file_old_path_restored_new_stays` |
+| `Ac8RestoredPathsTest::test_ac8_type_changed_file_in_set` | `tests/test_outcome_prior_module.py::test_ac8_type_changed_file_in_set` |
+| `Ac9NoTestsFieldTest::test_ac9_code_only_and_new_file_no_third_checkout` | `tests/test_outcome_prior_module.py::test_ac9_code_only_and_new_file_no_third_checkout` |
+| `Ac9NoTestsFieldTest::test_ac9_changed_base_file_and_file_level_record_in_set` | `tests/test_outcome_prior_module.py::test_ac9_changed_base_file_and_file_level_record_in_set` |
+| `Ac11PrepareTest::test_ac11_third_checkout_failure_refuses_prepare` | `tests/test_outcome_prior_module.py::test_ac11_third_checkout_failure_refuses_prepare` |
+| `Ac11PrepareTest::test_ac11_third_run_failure_refuses_prepare` | `tests/test_outcome_prior_module.py::test_ac11_third_run_failure_refuses_prepare` |
+| `Ac12DiffFailureTest::test_ac12_diff_failures_refuse_prepare` | `tests/test_outcome_prior_module.py::test_ac12_diff_failures_refuse_prepare` |
+| `Ac13OwnerMarkerTest::test_ac13_third_checkout_in_scratch_with_marker_and_removed` | `tests/test_outcome_prior_module.py::test_ac13_third_checkout_in_scratch_with_marker_and_removed` |
+| `Ac32AddedFilesRemovedTest::test_ac32_added_conftest_under_test_support_removed` | `tests/test_outcome_prior_module.py::test_ac32_added_conftest_under_test_support_removed` |
+| `Ac32AddedFilesRemovedTest::test_ac32_added_conftest_under_tests_masks_removed` | `tests/test_outcome_prior_module.py::test_ac32_added_conftest_under_tests_masks_removed` |
+| `Ac32AddedFilesRemovedTest::test_ac32_added_conftest_under_scope_without_tests_removed` | `tests/test_outcome_prior_module.py::test_ac32_added_conftest_under_scope_without_tests_removed` |
+| `Ac33SkippedMissingRedTest::test_ac33_prior_skipped_or_missing_is_red` | `tests/test_outcome_prior_module.py::test_ac33_prior_skipped_or_missing_is_red` |
+| `Ac30OutOfBoundsTest::test_ac30_test_profile_no_outcome_gate` | `tests/test_outcome_prior_module.py::test_ac30_test_profile_no_outcome_gate` |
+
+Помощники: `PriorSandbox.passed` → `passed(box, rows, output, case="")`,
+`PriorSandbox.grant` → `grant(box, t, …, case="")`,
+`Ac32AddedFilesRemovedTest.conftest_case` → `conftest_case(box, extra,
+conftest)`; `refusal`/`no_gate_refusal` — копия одноимённых функций
+`tests/test_outcome_gate_module.py` (методы песочницы
+`OutcomeGateSandbox.refusal`/`no_gate_refusal` «до»).
+
+Переименованных локальных имён нет: ни одно локальное имя 22 исходных
+тестов не совпало с функцией или фикстурой модуля (`box`, `refusal`,
+`no_gate_refusal`, `passed`, `grant`, `conftest_case`, имена тестов) и с
+фикстурами `tests/fixtures.py`.
+
+Заявки «Ловит мутацию» перенесены дословно, ни одна не переписана.
+
+## Сверка по AST
+
+Сверка — помощниками планки `_plan.py` на базе a8e57874 против рабочей
+копии (тот же код, что у планки):
+
+- `sandbox_statements(старый файл)` против операторов
+  `tests/prior_outcome_sandbox.py` без докстринга: 48 операторов, все 48
+  `ast.dump` равны, порядок тот же.
+- Сокращённый долгоживущий файл: оператор сразу после импорта
+  `MergeOutcomeSandbox` по `ast.dump` равен `from tests.prior_outcome_sandbox
+  import (Moved, ReplacementSandbox, StrictSandbox)`; прочие 62 оператора
+  верхнего уровня равны 62 оставшимся операторам базы в том же порядке
+  (докстринг, импорты, константы, `env_lines`, 16 классов,
+  `unittest.main()`).
+- Тела 22 тестовых функций: `actual_test_body(функция) ==
+  expected_test_body(метод)` — равны у всех 22 (подслучаи бывших `subTest`
+  — строка `case = f"{label}, зерно {box.seed}: "`, у двух блоков `Ac9` —
+  литералы «правка файла», «ошибка уровня файла»; прежние циклы `Ac9`,
+  `Ac12`, `Ac33` остались циклами); присваивания атрибутам стенда
+  (`box.cases[…]`, `box.watch_old`, `box.git_fail`, `box.timeout_when`) —
+  та же последовательность, что у `self.…` метода.
+- Помощники: `refusal`, `no_gate_refusal` — `ast.dump` равен функциям
+  `tests/test_outcome_gate_module.py`; `passed`, `grant`, `conftest_case`
+  — `actual_helper_body == expected_helper_body(метод, "box", case)`,
+  сигнатуры дословны (у `grant` сообщение — `case + box.note(f"answer
+  отказала: {output}")`, ANSWER-1 п. 1).
+
+## Мутации и заявки
+
+Номера — в порядке тестов исходного файла; каждый патч меняет одну
+функцию `orchestrator/advance_gates/outcome_integrity.py`. «Строка
+падения» — файл:строка упавшего утверждения из лога прогона патча
+(`<id>-mutation-run-<n>-p<nnn>.log`): «до» — прогоны №1–№3, «после» —
+№4–№6. Строки `tests/outcome_gate_sandbox.py:824`/`:837` «до» —
+утверждения методов `OutcomeGateSandbox.refusal`/`no_gate_refusal`,
+«после» им соответствуют функции модуля `refusal`
+(`tests/test_outcome_prior_module.py:73`) и `no_gate_refusal` (`:83`).
+
+@@MUTATIONS@@
+
+## Мутации до
+
+Части `--patches 1-15`, `16-30`, `31-37`, рабочих процессов auto
+(умолчание узла прогона), `--wait-lock 4`; контрольный прогон каждой
+части зелёный. Таблица части 1-15 перенесена в PLAN после старта части
+16-30: вызов второй части ушёл в одном пакете с записью PLAN, запись
+отказала, вторая часть стартовала — нарушение порядка требования 2 SPEC
+признаю; на исход и таблицы оно не влияет.
+
+@@TABLE 1@@
+
+@@TABLE 2@@
+
+## Мутации после
+
+@@AFTER@@
+
+## Находки
+
+@@FINDINGS@@
+
+## Удалённые дубли
+
+Нет: перенесены все 22 теста.
+
+## Числа и время
+
+- Тестов: «до» — 22 теста задачи в долгоживущем файле (1736 строк, 44
+  теста); «после» — 22 тестовые функции в
+  `tests/test_outcome_prior_module.py` (@@MODLINES@@ строк), в
+  сокращённом долгоживущем файле — 22 теста.
+- Подслучаев: 8 «до» (по два у четырёх бывших `subTest`) и 8 «после»
+  (строки `case`).
+- Контрольные прогоны `mutation-run` (весь целевой файл, рабочих
+  процессов auto): @@CONTROL@@
+
+## Влияние на систему
+
+- Код пульта (`orchestrator/`) не меняется; мутации живут только во
+  временной копии `mutation-run`; дерево `orchestrator/` ревизий шапок
+  «до» (a8e57874) и «после» (53dfb8c0 и рабочая копия) совпадает.
+- Гейт неослабления тестов увидит исчезновение 22 методов по пути
+  долгоживущего файла и, возможно, убыль храповика — покрыто мандатом
+  ANSWER-1 на этот путь; новые пути в мандат не вносятся. Утверждения не
+  удалены без переноса, сравнения не ослаблены, `skip`/`xfail` и пределов
+  нет.
+- `tests/outcome_gate_sandbox.py`, `tests/merge_outcome_sandbox.py`,
+  `tests/components_outcome_sandbox.py`, `tests/test_outcome_gate_module.py`,
+  `tests/fixtures.py`, `tests/sandbox.py`, `tests/test_invariants.py` не
+  менялись.
+- Временные файлы шага (генераторы патчей, свода и PLAN, сверка AST) жили в
+  каталоге документов под именами не `test_*`/`mutation-*`/`.md` и удалены
+  до конца шага; в рабочей копии временных файлов не было.
+- Откат — revert одного merge-коммита задачи.
+
+## Риски
+
+- Строки сообщений многострочных `assert` выровнены генератором свода не
+  идеально (продолжение строки внутри скобок) — на AST и поведение не
+  влияет.
+
+## Предложения системе
+
+- `mutation-run` не отличает в логе кадр утверждения песочницы от
+  итоговой строки исключения: строку падения в методе песочницы
+  (`tests/outcome_gate_sandbox.py:824: in refusal`) приходится выбирать по
+  трассе руками — разбор лога в строку «файл:строка утверждения» сэкономил
+  бы каждой волне ручную работу.
+- Смещения `col_offset` AST в байтах UTF-8: генератор свода по смещениям
+  на кириллических тестах ломается без перевода в байты — стоит карточки
+  знаний для волн сведения.

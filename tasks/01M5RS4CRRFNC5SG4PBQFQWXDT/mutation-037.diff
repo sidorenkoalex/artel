@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1019,7 +1019,7 @@
+         return None
+     decision = project_profile.decide(target)
+     if decision.refusal or decision.skip or \
+-            not in_outcome_bounds(decision.profile):
++            not project_profile.reported(decision.profile):
+         return None
+     return decision.profile
+ 

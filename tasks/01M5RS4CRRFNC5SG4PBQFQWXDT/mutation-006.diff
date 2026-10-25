@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -476,7 +476,7 @@
+         if any(is_red for is_red, _text in sides[BASE]):
+             flaky.append(cid)
+         elif all(is_red for is_red, _text in sides[PRIOR]):
+-            found.append(Finding(PRIOR_RED, cid, runs))
++            found.append(Finding(BROKEN, cid, runs))
+         else:
+             found.append(Finding(PRIOR_UNSTABLE, cid, runs))
+     return found, flaky

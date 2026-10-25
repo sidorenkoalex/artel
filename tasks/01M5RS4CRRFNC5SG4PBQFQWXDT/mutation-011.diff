@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -732,7 +732,7 @@
+         history[b.id] = {PRIOR: [(not green, describe(case))],
+                          BASE: [(False, describe(b))]}
+     red = sorted(cid for cid, sides in history.items() if sides[PRIOR][0][0])
+-    reruns = (_rerun(profile, trees, red, history, sides=(PRIOR, BASE))
++    reruns = (_rerun(profile, trees, red, history, sides=(PRIOR,))
+               if red else 0)
+     return history, red, 1 + reruns // 2
+ 

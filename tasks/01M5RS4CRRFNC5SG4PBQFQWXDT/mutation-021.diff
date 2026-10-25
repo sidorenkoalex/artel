@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -696,6 +696,9 @@
+             shutil.rmtree(target)
+         elif target.is_symlink() or target.exists():
+             target.unlink()
++    for status, _path, new in entries:
++        if status.startswith("R") and new:
++            (tree / new).unlink(missing_ok=True)
+     return tree
+ 
+ 

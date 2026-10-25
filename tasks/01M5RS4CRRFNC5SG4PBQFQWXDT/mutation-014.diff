@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -972,7 +972,7 @@
+         prior_found, prior_flaky = _prior_redness(prior_red, prior_history)
+         # Одна находка на идентификатор: прежний вид старше.
+         taken = {f.id for f in findings}
+-        findings += [f for f in prior_found if f.id not in taken]
++        findings += prior_found
+         flaky += [cid for cid in prior_flaky if cid not in flaky]
+         prior_line = [PRIOR_LINE.format(files=len(paths), runs=prior_runs)]
+     replaced_found, replaced_lines = _replacement_findings(

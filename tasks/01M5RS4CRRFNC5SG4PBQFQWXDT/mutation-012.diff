@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -473,7 +473,7 @@
+         sides = history[cid]
+         prior, base = _prior_runs_text(sides)
+         runs = f"прежняя версия: {prior}; база: {base}"
+-        if any(is_red for is_red, _text in sides[BASE]):
++        if False:
+             flaky.append(cid)
+         elif all(is_red for is_red, _text in sides[PRIOR]):
+             found.append(Finding(PRIOR_RED, cid, runs))

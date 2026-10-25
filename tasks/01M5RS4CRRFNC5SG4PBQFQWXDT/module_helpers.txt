@@ -1,0 +1,35 @@
+def passed(box, rows: list, output: str, case: str = "") -> str:
+    """Деталь последней записи пройденного гейта; провал — записи нет."""
+    found = box.details(rows, PASSED_ACTION)
+    box.assertTrue(found, case + f"записи «{PASSED_ACTION}» нет:\n"
+                   + box.explain(rows, output))
+    return found[-1]
+
+
+def grant(box, t, paths=(), ids=(), covered="tests/sandbox.py:1", case: str = "") -> None:
+    """Мандат Оператора `answer` на `paths`/`ids`; отказ команды — провал
+    подготовки."""
+    ok, output = box.operator_answer(t, paths, ids, covered)
+    box.assertTrue(ok, case + box.note(f"answer отказала: {output}"))
+
+
+def conftest_case(box, extra: dict | None, conftest: str):
+    """Ветка добавляет `conftest`, «чинящий» прежнюю версию изменённого
+    теста (на стороне прежних версий тест зелёный, только если файл
+    есть в дереве): ожидается отказ с находкой прежней версии и
+    отсутствие файла на третьей выписке."""
+    rel, name = box.py_rel(), box.py_name()
+    project = box.junit({rel: [name]}, extra=extra)
+    t = box.task(project)
+    box.cases[(rel, name)] = {"base": ["passed"], "head": ["passed"], OLD: ["failed"]}
+    box.rescue = (conftest,)
+    box.watch_old = (conftest,)
+    rows, output = box.developer_advance(t, {
+        conftest: "import app\n\napp.fixed = True\n", rel: box.edited_py([name])})
+    detail = refusal(box, rows, output, OUTCOME_ACTION)
+    cid = box.case_id(project, rel, name)
+    box.assertTrue(box.starting(detail, f"{PRIOR_RED}: {cid} — "),
+                   box.explain(rows, output))
+    box.assertTrue(box.old_runs(), box.explain(rows, output))
+    box.assertFalse(any(r["seen"][conftest] for r in box.old_runs()),
+                    box.explain(rows, output))

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -472,7 +472,7 @@
+     for cid in red:
+         sides = history[cid]
+         prior, base = _prior_runs_text(sides)
+-        runs = f"прежняя версия: {prior}; база: {base}"
++        runs = f"прежняя версия: {prior}"
+         if any(is_red for is_red, _text in sides[BASE]):
+             flaky.append(cid)
+         elif all(is_red for is_red, _text in sides[PRIOR]):

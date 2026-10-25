@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -958,7 +958,7 @@
+     replacements = _replacements(conn, task_id, profile)
+     base_map = {c.id: c for c in base if not c.file_level}
+     prior_paths = {path for status, path, _new in entries
+-                   if not status.startswith(("A", "C"))
++                   if not status.startswith(("A", "C", "D"))
+                    and (files.is_test(path) or files.is_support(path))}
+     prior_paths |= {project_profile.parse_test_id(cid)[1]
+                     for cid in replacements if cid in base_map}

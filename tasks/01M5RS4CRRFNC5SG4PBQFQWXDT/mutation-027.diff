@@ -1,0 +1,18 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -716,10 +716,11 @@
+         if run.refusal:
+             raise _Prepare(f"{where}: {run.refusal}")
+         if run.timed_out:
+-            raise _Prepare(f"{where}: таймаут ({limit} с)")
+-        if run.state not in (outcome.GREEN, outcome.RED):
++            records, ran = [], set(paths)
++        elif run.state not in (outcome.GREEN, outcome.RED):
+             raise _Prepare(f"{where}: исход «{run.state}» — {run.reason}")
+-        records, ran = list(run.tests), set(paths)
++        else:
++            records, ran = list(run.tests), set(paths)
+     by_id = {c.id: c for c in records}
+     history = {}
+     for b in base:

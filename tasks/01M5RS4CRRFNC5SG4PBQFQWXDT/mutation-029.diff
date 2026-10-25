@@ -1,0 +1,26 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1126,16 +1126,16 @@
+         # брошенный обрывом процесса, `doctor --fix` узнаёт сиротой.
+         (scratch / liveness.GATE_OWNER_MARKER).write_text(
+             str(os.getpid()), encoding="utf-8")
+-        return _judge(conn, task_id, branch, artifact_branch, profile,
+-                      repo, scratch, trees, base_of, merge, extra)
++        result = _judge(conn, task_id, branch, artifact_branch, profile,
++                        repo, scratch, trees, base_of, merge, extra)
++        for tree in trees.values():
++            gitcmd.in_repo(repo, "worktree", "remove", "--force", str(tree))
++        shutil.rmtree(scratch, ignore_errors=True)
++        return result
+     except _Prepare as exc:
+         reason = str(exc)
+     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
+         reason = f"сбой {exc!r}"
+-    finally:
+-        for tree in trees.values():
+-            gitcmd.in_repo(repo, "worktree", "remove", "--force", str(tree))
+-        shutil.rmtree(scratch, ignore_errors=True)
+     return GateRefusal(PREPARE_REFUSAL_ACTION, reason,
+                        f"разберись с подготовкой прогона и повтори artel.py "
+                        f"advance {task_id}")

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -728,7 +728,7 @@
+         if ran is not None and not (_record_paths([b]) & ran):
+             continue
+         case = by_id.get(b.id)
+-        green = case is not None and in_pass_to_pass(case)
++        green = case is None or case.outcome not in (outcome.FAILED, outcome.ERROR)
+         history[b.id] = {PRIOR: [(not green, describe(case))],
+                          BASE: [(False, describe(b))]}
+     red = sorted(cid for cid, sides in history.items() if sides[PRIOR][0][0])
