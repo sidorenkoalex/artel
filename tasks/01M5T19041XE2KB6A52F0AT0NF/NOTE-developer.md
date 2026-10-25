@@ -1,23 +1,25 @@
 # Записка developer
 
 ## Выяснено
-- Реализация готова, PLAN.md `ready`. Планка 5/5, долгоживущие 50/50, затронутые модули зелёные.
-- Зоны ТЗ/SPEC сверяет `guard.protected_zones` (catalog.py:218, fsm.py:1188) → теперь
-  `config.is_protected_zone` (расширение «сам каталог» только для записей `**/<d>/`; AC-5).
-- `workspace._exclude_wrapper`: `sparse-checkout list` ≠ нужного → `set --no-cone /* !…`
-  (git сам включает worktreeConfig); свой `core.excludesFile` в config.worktree (+ текст глобального
-  игнора); `git clean -fdx` по pathspec обвязки. Сбой → причина ensure → `runner.role_cwd` OSError.
-- `repo_context.wrapper_paths(ctx)` — действующий список; `RepoContext.agent_wrapper` — сырое поле.
-- Мандатные правки тестов: `test_project_protected_paths.py:87`, выборки `artel_only_path` и
-  перебор в draft_mr — исключение `config.is_protected_path(e, AGENT_WRAPPER_MARKERS)`.
-- Свой тест `tests/test_workspace_wrapper_excludes.py` — мутация проверена (красный).
+- Возврат из verifying (CI 40230886175): `test_merge_outcome_module::test_ac14…` — `ensure` отказывал
+  «обвязка … не исключена: контекст проекта не разрешён» для проекта без записи в targets.yaml.
+- Исправлено в `workspace._exclude_wrapper`: при `ctx is None` — `targets.wrapper_paths()` (только
+  стандартные маркеры, без agent_wrapper) + `_note_unresolved_wrapper`: журнал задачи
+  `wrapper_markers_only` (одна запись на одинаковый текст), без строки задачи в БД — stderr.
+  `_exclude_wrapper` теперь принимает `task_id`.
+- Новый тест `tests/test_workspace_wrapper_excludes.py::test_unresolved_entry_excludes_standard_markers_without_refusal`,
+  мутация (возврат отказа) — красный.
+- `test_merge_outcome_module.py` — 19 passed.
+- Ранее: реализация задачи готова (см. PLAN.md), планка 5/5, долгоживущие 50/50.
 
 ## Не сработало
-- `pytest -n` (xdist) в шаге — все воркеры падают «node down»; гонял последовательно.
-- `scripts/guard.py` на файлах tests/ требует frontmatter — гонять только на PLAN.md.
+- `pytest -n` (xdist) в шаге — воркеры падают; гонять последовательно.
+- В Bash шага нет `cat`/`ls`; `$(...)` и цепочки `&&` требуют подтверждения — по одному вызову.
 
 ## Где остановился
-- Сдано: PLAN.md `ready`, код в worktree незакоммичен (коммитит пульт), карта регенерирована.
+- Сдано: 38 файлов затронутых модулей — 551 passed, планка 5/5, guard ок, PLAN.md `ready`,
+  карта регенерирована, код в worktree незакоммичен (коммитит пульт).
 
 ## Чего не хватило
-- Как `git add -A` ведёт себя в sparse-копии — подсказала записка test_author (код 1 → игнор копии).
+- Полный набор разработчику недоступен (suite-run отказывает) — регрессию вне тестов задачи
+  ловит только CI; поиск вызовов `workspace.ensure` на проектах без записи — grep по tests/.

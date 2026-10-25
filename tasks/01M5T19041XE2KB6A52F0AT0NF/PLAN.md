@@ -45,6 +45,13 @@ schema_version: 5
   (`:(glob)**/.claude/**`, `:(literal)harness/`) — неотслеживаемые и
   игнорируемые под обвязкой (AC-19). Любой сбой — именованная причина `ensure`,
   `runner.role_cwd` поднимает `OSError`, роль не стартует (AC-21).
+- Возврат из verifying (CI 40230886175, `test_merge_outcome_module::test_ac14…`):
+  запись проекта не разрешена (нет в `targets.yaml`) — `ensure` НЕ отказывает,
+  как и до задачи: копия приводится по стандартным маркерам
+  (`targets.wrapper_paths()` без `agent_wrapper`), пометка — запись журнала
+  задачи `wrapper_markers_only` (одна на одинаковый текст: `ensure` зовут
+  каждый шаг и гейт), без строки задачи в БД — stderr
+  (`workspace._note_unresolved_wrapper`). Существующий тест не тронут.
 - `doctor`: новая `check_target_wrapper_worktrees` рядом с `target-wrapper`
   (`cli.all_checks`), обходит `worktrees/*` проекта (`workspace.wrapper_file_on_disk`,
   покрытие — `workspace.wrapper_covers`, согласовано с шаблонами sparse).
@@ -67,7 +74,9 @@ schema_version: 5
    `artel_only_path`/перебор записей в трёх файлах `01m45fk56…` — исключение
    вычисляется `config.is_protected_path(e, config.AGENT_WRAPPER_MARKERS)`);
    свой тест `tests/test_workspace_wrapper_excludes.py` (глобальный игнор
-   переживает свой файл игнора копии; мутация проверена — красный);
+   переживает свой файл игнора копии; неразрешённая запись — без отказа,
+   стандартные маркеры исключены, одна пометка в журнале; обе мутации
+   проверены — красный);
    карта `scripts/codebase_map.py`.
 
 ## Покрытие требований
@@ -88,7 +97,12 @@ schema_version: 5
 | 12 | 1 |
 | 13 | 4 (долгоживущий `…_wrapper_flow.py` зелёный) |
 
-Прогоны: планка `plank-run` — 5 passed, код 0; долгоживущие
+Прогоны после фикса возврата: `tests/test_merge_outcome_module.py` — 19 passed
+(упавший в CI `test_ac14…` зелёный); 38 файлов затронутых модулей (workspace*,
+project_*, *outcome*, two_sided*, worktree*, wrapper_* задачи, doctor) — 551 passed;
+планка 5 passed. Полный набор разработчику недоступен (`suite-run` отказывает) —
+его гоняют CI и гейт приёмки.
+Прежние прогоны: планка `plank-run` — 5 passed, код 0; долгоживущие
 `tests/test_01m5t19041xe2kb6a52f0at0nf_wrapper_*.py` — 50 passed; затронутые
 модули (protected_paths, 01m45fk56 ×5, workspace ×3, project_area, repo_context,
 doctor, stack, guard_zones, protected_paths_gate, protected_test_settings,
