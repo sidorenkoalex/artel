@@ -172,6 +172,7 @@ class ProjectAreaSandbox(RealGitSandbox):
                                             self.root / "targets.yaml")
         targets_patcher.start()
         self.addCleanup(targets_patcher.stop)
+        (self.root / ".artel" / "targets.yaml").unlink(missing_ok=True)
 
         origin_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, origin_tmp)
