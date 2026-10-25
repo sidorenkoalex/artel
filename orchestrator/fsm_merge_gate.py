@@ -357,6 +357,8 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
     передаёт его следующему заходу в тело гейта, чтобы не спрашивать CI
     повторно для того же самого head).
     """
+    # Ожидание долгое: документы команды — в origin до него (ADR-0021 п.3).
+    artifact_branch.send_pending()
     while True:
         green, note = ci.branch_status(branch,
                                        repo=workspace.task_repo(task_id))
@@ -652,6 +654,7 @@ def _await_main_ci(conn, task_id: str, head: str,
 
     `gh` не ответил — «не дождался» сразу: опросить нечем, и ждать до
     предела значило бы держать мьютекс впустую. Только self target."""
+    artifact_branch.send_pending()
     if not repo_context.is_artel(ctx):
         return
     start = time.monotonic()
@@ -736,6 +739,8 @@ def _sync_main_or_wait(conn, task_id: str, t, state: str, branch: str,
         # отпускает мьютекс сразу после возврата тела.
         repo = repo_context.path_or_none(ctx)
         new_head = gitcmd.branch_head_sha(branch, repo=repo)
+        # CI ветки читает PLAN.md из origin: документы — раньше кода.
+        artifact_branch.send_pending(task_id)
         push = repo_context.git(ctx, "push", "-u", "origin", branch)
         if push is None or push.returncode != 0:
             detail = (push.stderr.strip()[:500] if push is not None
@@ -1075,6 +1080,7 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     needed, command = _full_suite_command(conn, task_id, paths, scratch, ctx)
     if not needed:
         return
+    artifact_branch.send_pending()
     if isinstance(command, tuple):
         run = acceptance.components_full_suite(scratch, task_id, command,
                                                fresh=fresh_suite)

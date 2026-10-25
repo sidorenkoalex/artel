@@ -15,7 +15,8 @@ push; отдельный вызов адаптера здесь добавлял
 `merge_gate`, а не условие перехода (тот же приём, что `fsm.py::
 _regenerate_and_commit_map`/`_generate_and_commit_retro`, SPEC T042/T043).
 """
-from . import alerts, ci, config, gitcmd, repo_context, store, targets
+from . import (alerts, artifact_branch, ci, config, gitcmd, repo_context,
+               store, targets)
 
 # Пропуск черновика на пустой кодовой ветке (SPEC
 # 01M3HP7WAXKFK3GYZ3T6HX08M0, требование 8) — запись журнала ОБЫЧНОГО
@@ -157,6 +158,8 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
                       f"первом переходе после первого коммита")
         return
 
+    # CI ветки читает PLAN.md из origin: документы — раньше кода.
+    artifact_branch.send_pending(task_id)
     push = gitcmd.in_repo(repo, "push", "-u", "origin", branch)
     if push is None or push.returncode != 0:
         _incident(conn, task_id, "Draft MR FAILED",
@@ -231,6 +234,7 @@ def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:
     remote = gitcmd.remote_branch_sha(branch, repo=repo)
     if local and remote == local:
         return True, ""
+    artifact_branch.send_pending(task_id)
     push = gitcmd.in_repo(repo, "push", "-u", "origin", branch)
     if push is None or push.returncode != 0:
         err = ((push.stderr or push.stdout).strip()[:300]

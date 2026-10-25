@@ -1670,6 +1670,10 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
         cmd = provider.command(model_id,
                                docs_dir=_step_docs_dir(conn, task_id, project),
                                project=project)
+        # Шаг роли длится долго, и его CI/брифы читают origin: недосланное
+        # командой — туда до запуска агента (ADR-0021 п.3).
+        from . import artifact_branch
+        artifact_branch.send_pending()
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся
