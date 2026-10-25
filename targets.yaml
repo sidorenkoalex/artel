@@ -68,45 +68,6 @@ targets:
       # при 13 тест задачи поднял справочник до 14 937 байт, выше порога
       # предупреждения 14 746 (90 % предела).
       min_uses: 14
-  # Внешний доверенный проект (ADR-0023, вторая поправка 16.10.2026): sandbox
-  # не объявляется до D1а; профиль тестов (test_profile) вносится после мержа
-  # D0-1 (подполя runner, workdir, env).
-  sled:
-    forge: github
-    url: https://github.com/sledproject/sled
-    base: main
-    # Слот токена GitHub проекта (не подписки модели: artel-token — токен Claude).
-    token_slot: sled-github-token
-    no_paths: [.claude/, .codex/, .agents/, CLAUDE.md, AGENTS.md, frontend/.claude/, frontend/CLAUDE.md, .devcontainer/, .github/, CODEOWNERS, .pre-commit-config.yaml, backend/pyproject.toml, backend/uv.lock, backend/.python-version, **/conftest.py, frontend/package.json, frontend/package-lock.json, frontend/vitest.config.js]
-    project_skills: []
-    merge_gate: operator
-    # Профиль тестов backend (D0, решение Оператора 17.10): чистое окружение,
-    # база недоступна (DB__PORT 1, имя без _test) — тесты PostgreSQL пропускаются.
-    # Тесты, которым нужны PostgreSQL или Docker, пропускаются своими метками
-    # (исключения --deselect сняты 18.10 после задач 01M55SKHZ2 и 01M57W9PD5).
-    test_profile:
-      runner: pytest-own
-      workdir: backend
-      command: [uv, run, --frozen, pytest, -q]
-      long_lived_dir: backend/tests
-      long_lived_name: test_<id>_<name>.py
-      weakening_scope: [backend/tests/**/*.py]
-      mutation_claim_scope: [backend/tests/test_*.py]
-      report: junit-xml
-      install: []
-      full_suite_timeout_sec: 900
-      env:
-        DEBUG: "true"
-        BASE_URL: http://localhost:8000
-        CORS_ORIGINS: '["localhost"]'
-        JWT__SECRET: test-only-jwt-secret-not-for-production-0123456789
-        DB__HOST: 127.0.0.1
-        DB__PORT: "1"
-        DB__USER: test
-        DB__PASSWORD: test
-        DB__NAME: sled
-        UV_CACHE_DIR: /Users/al.sidorenko/projects/artel/.artel/projects/sled/cache/uv
-        UV_PYTHON_INSTALL_DIR: /Users/al.sidorenko/projects/artel/.artel/projects/sled/cache/uv-python
-        # OpenSSL из Homebrew впереди системного /usr/bin/openssl (LibreSSL 3.3.6):
-        # скрипты выпуска TLS sled (tests/test_release_scripts.py) требуют OpenSSL.
-        PATH: /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+  # Записи внешних проектов — в локальном слое .artel/targets.yaml машины
+  # пульта, не в репозитории (ADR-0021, поправка 25.10.2026; перенос —
+  # artel.py targets-migrate <имя>).
