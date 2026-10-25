@@ -1,17 +1,17 @@
-# Записка analyst — 01M5TBCY7WTN121S136XP2C6SR (Э2а), шаг 2 (возврат с гейта 26.10)
+# Записка analyst — 01M5TBCY7WTN121S136XP2C6SR (Э2а), шаг 3 (возврат с гейта по аудиту 2, 26.10)
 
 ## Выяснено
 - Кода Э1/Э0 в main по-прежнему нет (`epic_id|closed_as|start_after` — grep по orchestrator/ пуст).
-- Все каналы записи `merge_after` идут через `merge_after.check` (`merge_after.py:126`, граф цикла `:173`): `declared_from_tz` :197, `spec_gate_value` :185, `apply_plan` :320, `value_refusals` :358 (мандат answer). Объединённый граф в `check` закрывает все каналы в зоне `merge_after.py`.
-- Начисление стоимости шага — `spend.charge_step` из `runner.py:1839` (spend.py — только чтение, алерт 80 % — в runner после вызова).
-- Маркер первого шага — «agent run started» (`runner.py:1608`); стоп-кран — `runner.py:353`, блок отказов `:341-362`.
+- Начисление в runner: `charge_missing_result` :1824 и `charge_step` :1839, общий хвост `budget.check_program_spend` :1843; в pause — `charge_missing_result` :154.
+- `auto.py:966-968` — неузнанный отказ run → подсказка «budget … или kill» + alert=True; тексты остановок AUTO_STOP_* лежат в config.py (только чтение) — тексты конверта/start_after должны жить вне config.
+- `merge_after.check` отказывает killed на :158 — отсюда подстановка поделённой ДО check (решение 4). Журнал деления «поделена на: …» — fsm.py:978.
+- Мандат: `value_refusals` :358, `mandate_value` :382.
 
 ## Не сработало
-- `ls` в шелле недоступен — читать каталоги через Read/git.
+- В Bash нельзя `; echo rc=$?` (отказ «simple_expansion») — запускать guard без него.
 
 ## Где остановился
-- SPEC переписан (редакция 2, 17 требований, AC-1…AC-22) по 9 решениям Оператора; guard: ок; status ready; budget 50 (рамка ТЗ), монолит — решение Оператора.
-- В причине возврата суммы со знаком $ съедены шеллом («ровно ,0 при конверте »); прочитано как $8,0 при $10 — предупреждение, $10,0 — отказ (совпадает с В1 аудита).
+- SPEC редакция 3: 20 требований, AC-1…AC-26, зоны +pause.py, +auto.py (13 модулей + tests/); все 7 решений аудита 2 внесены; guard: ок; status ready; budget 50; монолит — решение Оператора.
 
 ## Чего не хватило
 - Кода Э1 (`board.py`, `epics.py`) для сверки имён и формулы «потрачено».
