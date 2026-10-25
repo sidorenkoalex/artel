@@ -52,6 +52,14 @@ schema_version: 5
   задачи `wrapper_markers_only` (одна на одинаковый текст: `ensure` зовут
   каждый шаг и гейт), без строки задачи в БД — stderr
   (`workspace._note_unresolved_wrapper`). Существующий тест не тронут.
+- Возврат из verifying (CI 40235484958, `test_multitarget::SqlOnlyInStoreTest::
+  test_no_sql_outside_store`): запрос повтора пометки вынесен из
+  `workspace._note_unresolved_wrapper` в `store.journal_action_exists(conn,
+  task_id, action, detail)` (зоны расширены на `orchestrator/store.py`,
+  ANSWER-3); тест не тронут. После фикса: `test_multitarget.py`,
+  `test_workspace_wrapper_excludes.py`, `test_merge_outcome_module.py`,
+  долгоживущий `…_wrapper_worktree.py`, `test_codebase_map.py` — 114 passed;
+  карта регенерирована.
 - `doctor`: новая `check_target_wrapper_worktrees` рядом с `target-wrapper`
   (`cli.all_checks`), обходит `worktrees/*` проекта (`workspace.wrapper_file_on_disk`,
   покрытие — `workspace.wrapper_covers`, согласовано с шаблонами sparse).
