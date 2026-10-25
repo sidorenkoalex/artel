@@ -1,25 +1,23 @@
 # Записка analyst
 
 ## Выяснено
-- Итерация 2 (возврат spec_gate 25.10): SPEC переписан — монолит, budget 60, деление снято;
-  треб. 11 — фильтр обвязки в knowledge (элемент → пометка «обвязка проекта, в бриф не
-  передаётся»; листинг каталога пропускает, строка «пропущено файлов обвязки: N»);
-  треб. 6 — три вида файла (без/сломанный/с заголовком); сломанный → «заголовок отметки
-  не читается» в брифе, doctor warn, отказ stamp. AC 12 штук.
-- Список обвязки соседки: `config.AGENT_WRAPPER_MARKERS` + `policy.agent_wrapper`
-  (её SPEC треб. 1, 3, 4; ANSWER-2 отв. 1, 5: соседка отказывает загрузке knowledge под
-  обвязкой КРОМЕ корневых CLAUDE.md/AGENTS.md — поэтому AC-5 использует только их и `./`).
-- Код блока: brief.py:45/602/777; knowledge — brief.py:665–774.
-- Тесты: фикстура KnowledgeSandbox.prepare (:245) обязана класть conventions.md — иначе
-  строка «не разобраны: файла нет» содержит ABSENT_MARK и краснит CyrillicNamesTest :940.
-  role_outputs (01m5jgsaanr…) использует KnowledgeSandbox — ожидаемо зелёный.
+- Итерация 3 (возврат 2 spec_gate 25.10): в SPEC внесены решения гейта 1–11 и У1–У4 ANSWER-1.
+  Путь — repo_context.projects_root() (repo_context.py в зонах, только чтение); подпись компонента
+  `conventions.md (.artel/projects/<имя>/conventions.md)`; пометка элемента обвязки —
+  «путь обвязки, пропущен»; N — на элемент-каталог; ctx None → «не прочитаны: <причина> — <где>»
+  + журнал без условия knowledge (треб. 3, AC-14); без сети — AC-13; символьная ссылка, OSError —
+  AC-2/AC-11; сломанные sources/base_branch — AC-3/AC-9/AC-11; AC-7 — отрицательная часть по
+  тексту role_prompt.py. Матрица — дословно из ANSWER-1. 14 AC, 9 файлов зоны, budget 60.
+- Отказ approve «.claude/ не классифицирован»: guard.mentioned_paths проверяет существование
+  относительно config.ROOT — у корня пульта `.claude/` есть, в worktree нет; guard в worktree
+  молчал. Проверял `guard.spec_unclassified_paths(text, meta, Path('<корень пульта>'))` — пусто.
+- Код блока: brief.py:777 `_project_conventions_parts` (подпись `f"{rel} ({where})"`).
 
 ## Не сработало
 - `ls` в shell нет — пользоваться Read/git.
-- guard требует классифицировать пути вида `./`, `docs/` — добавлены строкой в «Не входит».
 
 ## Где остановился
-SPEC.md готов, status: ready, guard ок.
+SPEC.md готов, status: ready, guard ок, пути классифицированы и от корня пульта.
 
 ## Чего не хватило
-Имя константы списка обвязки — только в SPEC соседки (refs/artifacts/01M5T19041…).
+Guard в worktree не воспроизводит отказ путей approve — нужно передавать root корня пульта.
