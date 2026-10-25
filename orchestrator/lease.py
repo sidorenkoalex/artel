@@ -21,7 +21,7 @@ import os
 import socket
 import sys
 
-from . import config, liveness, store
+from . import artifact_branch, config, liveness, store
 from .session import resolve_session_id  # noqa: F401 — единая функция identity (SPEC 01M1G..., требование 1): lease.resolve_session_id остаётся тем же объектом, что и session.resolve_session_id.
 
 
@@ -369,7 +369,11 @@ def run_locked(conn, task_id: str, session_id: str | None, body,
         print(refusal)
         return None
     try:
-        return body(sid)
+        # Область отложенной отправки ссылки документов (ADR-0021 п.3):
+        # коммиты тела уходят в origin одной досылкой при выходе — пока
+        # lease ещё держится.
+        with artifact_branch.deferred_sends():
+            return body(sid)
     finally:
         if fresh:
             release(conn, task_id, sid)

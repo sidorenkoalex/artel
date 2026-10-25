@@ -143,6 +143,9 @@ def commit_closing(conn, task_id: str, outcome: str, merge_sha: str = "",
         store.journal(conn, task_id, "orchestrator",
                       "коммит закрытия не записан", note)
         return _closing_failed(conn, task_id, note)
+    # Коммит закрытия — в origin до уборки, ожидания CI main и пересборки
+    # справочника, вместе с недосланной строкой паспорта (ADR-0021 п.3).
+    artifact_branch.send_pending(task_id)
     store.journal(conn, task_id, "orchestrator", CLOSING_ACTION,
                   f"{ref} <- {sha} ({outcome})")
     store.record_fixation(conn, task_id)

@@ -21,16 +21,24 @@
 головы, не теряют ни одной правки — проигравшая перечитывает ссылку и
 пересобирает коммит поверх новой головы.
 
-Каждый коммит ссылки сразу отправляется в `origin` репозитория задачи; отказ —
-запись журнала, повтор — на следующем переходе: коммит паспорта
-(`store.set_state` → `append_passport_line` → `commit_files`) отправляет
-ссылку целиком, вместе с недосланным коммитом. Ответ сервера (5xx)
-повторяется сразу, в той же отправке (`PUSH_SERVER_RETRY_ATTEMPTS`). Гейт
-мержа и закрытие сверяют ссылку с `origin` (`origin_sync_refusal`).
+Отправка ссылки в `origin` репозитория задачи (ADR-0021 п.3, поправка
+25.10.2026): внутри команды пульта, меняющей задачу (тело
+`lease.run_locked`, область `deferred_sends`), коммит только запоминает
+задачу в наборе недосланных, а ссылка уходит один раз — при выходе из
+команды и раньше, в точках досрочной досылки (`send_pending`: сверка и
+подтягивание с `origin`, отправка кодовой ветки, коммит закрытия, запуск
+агента шага, долгие этапы гейта мержа). Вне команды каждый коммит
+отправляется сразу. Отказ — запись журнала, повтор — на следующей
+отправке: она отправляет ссылку целиком, вместе с недосланным коммитом.
+Ответ сервера (5xx) повторяется сразу, в той же отправке
+(`PUSH_SERVER_RETRY_ATTEMPTS`). Гейт мержа и закрытие сверяют ссылку с
+`origin` (`origin_sync_refusal`).
 """
+import contextlib
 import io
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -279,7 +287,8 @@ def commit_files(task_id: str, files: dict, message: str,
     """Единый узел записи документов задачи (ADR-0021 п.3): коммит `files`
     поверх головы `refs/artifacts/<id>` (ссылки нет — первый коммит без
     родителя), `update-ref` со сверкой прежнего значения, затем отправка
-    в `origin` (`_send`). Ссылка физически живёт в репозитории задачи
+    в `origin` (`_send`; внутри команды пульта — досылкой, см. докстринг
+    модуля). Ссылка физически живёт в репозитории задачи
     (`task_repo`). Возвращает sha нового коммита; пустая строка — git не
     ответил. `remove` — см. `write_commit`. Проигрыш сверки и отказ
     отправки — см. докстринг модуля. `target` — проект задачи, когда её
@@ -340,7 +349,10 @@ def _write(task_id: str, files: dict, message: str, author_name: str,
         if upd_ref is None:
             return "", ""
         if upd_ref.returncode == 0:
-            _send(task_id, repo)
+            if _area_depth:
+                _remember_unsent(task_id, repo)
+            else:
+                _send(task_id, repo)
             return commit_sha, ""
     return "", ""
 
@@ -457,8 +469,10 @@ def _origin_configured(repo: Path) -> bool:
 
 
 def _send(task_id: str, repo: Path) -> bool:
-    """Отправка ссылки документов в `origin` репозитория задачи после
-    коммита и перед сверкой с `origin`. Отказ журналируется всегда; успех —
+    """Отправка ссылки документов в `origin` репозитория задачи: вне
+    команды пульта — сразу после коммита; внутри команды — досылкой
+    (`send_pending`) при выходе из неё и в точках досрочной досылки; перед
+    сверкой с `origin`. Отказ журналируется всегда; успех —
     только когда он что-то сообщает: пришёл после повтора в этом же вызове
     либо досылает после записанного раньше отказа (последний исход
     отправки задачи в журнале — отказ). Запись об успехе на каждой строке
@@ -483,6 +497,80 @@ def _last_send_failed(task_id: str) -> bool:
     return last is not None and last["action"] == _PUSH_FAILED_ACTION
 
 
+# Область отложенной отправки (ADR-0021 п.3, поправка 25.10.2026): глубина
+# открытых областей процесса и набор недосланных пар (задача, репозиторий
+# записи) в порядке первой записи. Репозиторий — тот, куда легла запись:
+# первая запись `new` идёт по `target=` до строки задачи в БД, и досылка по
+# БД ушла бы в проект по умолчанию.
+_area_depth = 0
+_unsent: list[tuple[str, Path]] = []
+
+
+def _remember_unsent(task_id: str, repo: Path) -> None:
+    if (task_id, repo) not in _unsent:
+        _unsent.append((task_id, repo))
+
+
+@contextlib.contextmanager
+def deferred_sends():
+    """Область отложенной отправки — тело одной команды пульта
+    (`lease.run_locked`). Коммиты внутри не отправляются сразу, а при
+    выходе из области на любом уровне вложенности досылается весь набор —
+    и при исключении тела (`SystemExit` отказа, `KeyboardInterrupt`). Сбой
+    досылки при летящем исключении тела его не подменяет: строка в stderr,
+    наружу — исключение тела."""
+    global _area_depth
+    _area_depth += 1
+    body_failed = True
+    try:
+        yield
+        body_failed = False
+    finally:
+        _area_depth -= 1
+        _send_pairs(_take_unsent(None, None), quiet=body_failed)
+
+
+def _take_unsent(task_id: str | None, repo: Path | None) -> list:
+    """Пары набора по задаче/репозиторию, убранные из набора до досылки:
+    повторной досылки той же пары нет, даже если досылка бросит."""
+    taken = [(t, r) for t, r in _unsent
+             if (task_id is None or t == task_id)
+             and (repo is None or r == repo)]
+    for pair in taken:
+        _unsent.remove(pair)
+    return taken
+
+
+def _send_pairs(pairs: list, *, quiet: bool) -> int:
+    """`_send` по одному разу на пару по порядку; исключение досылки не
+    обрывает остальные: при `quiet` — строка в stderr, иначе первое
+    поднимается после попытки всех. Возвращает число досылок."""
+    first_error = None
+    for task_id, repo in pairs:
+        try:
+            _send(task_id, repo)
+        except BaseException as exc:  # noqa: BLE001 — см. докстринг
+            if quiet:
+                print(f"[{task_id}] досылка {branch_name(task_id)} в origin "
+                      f"упала: {exc!r}", file=sys.stderr)
+            elif first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
+    return len(pairs)
+
+
+def send_pending(task_id: str | None = None, repo: Path | None = None) -> int:
+    """Досрочная досылка недосланных коммитов области: задачи `task_id`,
+    задач репозитория `repo` или (без аргументов) всего набора. Пустой
+    набор — ни одного вызова git и обращения к БД. Возвращает число
+    досылок (вызовов `_send`)."""
+    pairs = _take_unsent(task_id, repo)
+    if not pairs:
+        return 0
+    return _send_pairs(pairs, quiet=False)
+
+
 def origin_sync_refusal(task_id: str) -> str | None:
     """None — локальная `refs/artifacts/<id>` совпадает с ней же в
     `origin` (гейт мержа и закрытие могут идти дальше); иначе — текст
@@ -496,14 +584,20 @@ def origin_sync_refusal(task_id: str) -> str | None:
     `origin` отказывает первой же сверкой, без попытки `push`; `origin` не
     настроен вовсе — сверять не с чем (об этом говорит `doctor`). Клона внешнего проекта нет — ссылки
     локально нет и сверять нечего (о клоне говорит `doctor`, проверка
-    `target-layout`)."""
+    `target-layout`).
+
+    Первым действием — досылка недосланного коммита задачи из области
+    команды (`send_pending`); если она была, вторая отправка при
+    расхождении не делается: отправок за вызов не больше одной, как
+    прежде."""
+    sent = send_pending(task_id)
     repo = task_repo(task_id)
     if not _origin_configured(repo):
         return None
     local = _head(task_id, repo)
     remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
                                              repo=repo)
-    if not reason and local and local != remote:
+    if not reason and local and local != remote and not sent:
         _send(task_id, repo)
         remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
                                                  repo=repo)
@@ -572,7 +666,9 @@ def fetch_from_origin(task_id: str) -> tuple[str, str]:
     сдвигается только вперёд; локальная с коммитами не из `origin` —
     `FETCH_DIVERGED`, не тронута. Ссылки в `origin` нет — `FETCH_ABSENT`
     (отличается от «origin не ответил» второй сверкой `ls-remote`, только
-    когда fetch отказал)."""
+    когда fetch отказал). Недосланный коммит задачи из области команды
+    досылается до `git fetch` — своя голова не даёт `FETCH_DIVERGED`."""
+    send_pending(task_id)
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return FETCH_FAILED, NO_REPO_REASON
@@ -616,7 +712,9 @@ def fetch_all_from_origin(repo: Path) -> tuple[dict | None, str]:
     """Подтягивает все `refs/artifacts/*` из `origin` репозитория `repo`
     ОДНИМ `git fetch`: ({id: (исход `FETCH_*`, пояснение)}, "") либо
     (None, причина) — fetch или чтение ссылок не удались. Правило сдвига —
-    то же, что у `fetch_from_origin`."""
+    то же, что у `fetch_from_origin`; досылка до `git fetch` — задач этого
+    репозитория."""
+    send_pending(repo=repo)
     ns = f"{_FETCH_NS}/{os.getpid()}"
     res = _git(repo, "fetch", "-q", "--no-tags", "origin",
                f"+refs/artifacts/*:{ns}/*")

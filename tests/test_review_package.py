@@ -1209,9 +1209,11 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # задачи — там, где его оставляет роль, — и автокоммит шага его
         # переносит: хвост списка — сверка головы ссылки с фиксацией,
         # дерево ссылки, автор последнего коммита SPEC.md (кандидат на
-        # удаление), сверка PLAN.md с головой, запись ссылки и её отправка
-        # в `origin`, затем чтение головы ссылки и кодовой ветки
-        # перефиксацией. Последний — голова ссылки документов для поля
+        # удаление), сверка PLAN.md с головой, запись ссылки, затем чтение
+        # головы ссылки и кодовой ветки перефиксацией и голова ссылки ещё
+        # раз; отправка ссылки в `origin` (`remote get-url`, `push`) — при
+        # выходе из команды, в самом конце списка (ADR-0021 п.3, поправка
+        # 25.10.2026). Последний — голова ссылки документов для поля
         # `артефакты=` записи «sha зафиксирован», общей для любого проекта
         # (SPEC 01M484RNV3QBDY3B0M16J916ZP, строка 15).
         # С этапа 2 ADR-0021 (п.1) каждый git-вызов шага адресован явно:
@@ -1280,13 +1282,13 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                            f"{ref}:tasks/{self.TASK}/PLAN.md"],
                           ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
                           ["-C", clone, "update-ref", ref, "f" * 40, "0" * 40],
-                          ["-C", clone, "remote", "get-url", "origin"],
-                          ["-C", clone, "push", "-q", "origin", f"{ref}:{ref}"],
                           ["-C", clone, "rev-parse", "--verify", "--quiet", ref],
                           ["-C", clone, "rev-parse", "--verify", "--quiet",
                            f"refs/heads/{code_branch}"],
                           ["-C", clone, "rev-parse", "--verify", "--quiet",
-                           ref]],
+                           ref],
+                          ["-C", clone, "remote", "get-url", "origin"],
+                          ["-C", clone, "push", "-q", "origin", f"{ref}:{ref}"]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):
