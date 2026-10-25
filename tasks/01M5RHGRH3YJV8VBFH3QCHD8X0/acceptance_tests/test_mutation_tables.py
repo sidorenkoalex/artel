@@ -766,9 +766,21 @@ def _same_assertion_line(line, number, test, sites, after_killers) -> bool:
             if node is None:
                 continue
             site_func = _plan.function_chain(sites.head, n)[0]
-            site_canon = canon if site_func is func else \
-                _plan.Canon({site_func.args.args[0].arg} if site_func.args.args else set(), {})
-            if _plan.normal_form(node, site_canon) in before_forms:
+            if site_func is func:
+                candidates = [canon]
+            else:
+                # Помощник модуля: стенд — первый параметр; локальные имена,
+                # переименованные по требованию 9 (`_plan.LOCALS_TO_RENAME`),
+                # сводятся к прежнему имени (amend-tests 25.10, ложный отказ
+                # mutation-024: `journal` → `entries` в `spec_gate_assert_refused`).
+                stands = {site_func.args.args[0].arg} if site_func.args.args else set()
+                local_names = {n.id for n in ast.walk(site_func)
+                               if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+                candidates = [_plan.Canon(stands, {})] + [
+                    _plan.Canon(stands, {}, locals_={name: old})
+                    for name in sorted(local_names) for old in _plan.LOCALS_TO_RENAME
+                    if name != old]
+            if any(_plan.normal_form(node, c) in before_forms for c in candidates):
                 return True
     return False
 
