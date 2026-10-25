@@ -2906,9 +2906,23 @@ def suite_tree_hash(root: Path, *, ref: str = "HEAD", base: bool = False,
                     worktree: bool = True) -> str | None:
     """Снимок git-дерева через отдельный индекс; исходный индекс не меняется."""
     root = Path(root)
-    top = gitcmd.in_repo(root, "rev-parse", "--show-toplevel")
-    if (top is None or top.returncode != 0 or
-            Path(top.stdout.strip()).resolve() != root.resolve()):
+    # Корень и путь индекса — одним `rev-parse`; `--path-format` есть только
+    # с git 2.31, пол стека — 2.30 (`stack.py`): отказ объединённого вызова
+    # уводит на прежние два (SPEC 01M5R45M0FQB2WVRHYBRF81JM6, требование 2).
+    combined = gitcmd.in_repo(root, "rev-parse", "--show-toplevel",
+                              "--path-format=absolute", "--git-path", "index")
+    if combined is None:
+        return None
+    lines = combined.stdout.splitlines() if combined.returncode == 0 else []
+    index_path = lines[1].strip() if len(lines) == 2 else None
+    if index_path is not None:
+        top_dir = lines[0].strip()
+    else:
+        top = gitcmd.in_repo(root, "rev-parse", "--show-toplevel")
+        if top is None or top.returncode != 0:
+            return None
+        top_dir = top.stdout.strip()
+    if Path(top_dir).resolve() != root.resolve():
         return None
     if worktree:
         untracked = gitcmd.in_repo(root, "ls-files", "--others",
@@ -2920,13 +2934,15 @@ def suite_tree_hash(root: Path, *, ref: str = "HEAD", base: bool = False,
             return None
     with tempfile.TemporaryDirectory(prefix="artel-suite-index-") as holder:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(holder) / "index")}
-        if worktree:
+        if worktree and index_path is None:
             original = gitcmd.in_repo(root, "rev-parse", "--path-format=absolute",
                                       "--git-path", "index")
             if original is None or original.returncode != 0:
                 return None
+            index_path = original.stdout.strip()
+        if worktree:
             try:
-                shutil.copyfile(original.stdout.strip(), env["GIT_INDEX_FILE"])
+                shutil.copyfile(index_path, env["GIT_INDEX_FILE"])
             except (OSError, ValueError):
                 return None
         def git(*args):
