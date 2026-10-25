@@ -16,3 +16,4 @@
 2026-10-25 21:47:13Z  in_dev  actor=operator
 2026-10-25 21:51:59Z  verifying  actor=fsm
 2026-10-25 22:05:45Z  review  actor=fsm
+2026-10-25 22:10:28Z  acceptance  actor=fsm
