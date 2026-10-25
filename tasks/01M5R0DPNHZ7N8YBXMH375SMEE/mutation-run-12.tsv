@@ -1,0 +1,18 @@
+# mutation-run №12 задачи 01M5R0DPNHZ7N8YBXMH375SMEE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree b06b18d2c79ba467a0961a22ea3187804023424e
+# тесты: tests/test_outcome_gate_module.py
+# рабочих процессов: auto
+# патч 50 mutation-050.diff sha256 b4f6188bb56c5c53b5c28ecf9e9dd5c84aa7488ac881f8fcfa5cae7b1534f142
+# патч 51 mutation-051.diff sha256 3bd2dde791b39d0854b299421737f33caa83cd8ea9b0f4805f514b09c20eea56
+# патч 52 mutation-052.diff sha256 3f3a001819fa348892a9c53aa82303d65025cb26fb5a31e18481cf5b02f7fdcf
+# патч 53 mutation-053.diff sha256 14aead6465413b84598e4fa0078591fd7545a289b65bb0637e2afdb5088c2951
+# патч 54 mutation-054.diff sha256 d64e0505413fec96187ac64468d113a6ae61f6cc829fdf3cb67ded54f88c9a8a
+# патч 55 mutation-055.diff sha256 d2f1267eadea0bc5ce1edb468910194471b40a1bc0c2a4b778ce76b241983671
+номер	исход	узлы
+50	убита	tests/test_outcome_gate_module.py::test_quoted_path_latin1_text_and_no_final_newline
+51	убита	tests/test_outcome_gate_module.py::test_unexpected_header_is_prepare_refusal,tests/test_outcome_gate_module.py::test_noprefix_config_does_not_hide_added_lines
+52	убита	tests/test_outcome_gate_module.py::test_unexpected_header_is_prepare_refusal
+53	убита	tests/test_outcome_gate_module.py::test_deleted_file_header_dev_null_is_not_refusal
+54	убита	tests/test_outcome_gate_module.py::test_rename_from_test_path_to_code_path_is_checked
+55	убита	tests/test_outcome_gate_module.py::test_rename_between_test_paths_is_not_checked

@@ -2,7 +2,7 @@
 task: 01M5R0DPNHZ7N8YBXMH375SMEE
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -405,6 +405,194 @@ schema_version: 5
 30	убита	tests/test_merge_outcome_module.py::test_ac7_doc_only_lag_runs_gate_with_merge_base
 ```
 
+Перед прогоном №10: `git status --porcelain -- orchestrator/` — вывод пуст.
+
+```text
+# mutation-run №10 задачи 01M5R0DPNHZ7N8YBXMH375SMEE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 98398b908b51c83a667dff18ba2bea4babab4416
+# тесты: tests/test_merge_outcome_module.py
+# рабочих процессов: auto
+# патч 31 mutation-031.diff sha256 6adbfb6fd6caed34c4624ce4bf4311203a769866ccbc722b6f2187748a90ef61
+# патч 32 mutation-032.diff sha256 299378cb62a52aa816dea4f42dd9ea33a28e95d1a89ef86f7c57b54a3c5691fe
+# патч 33 mutation-033.diff sha256 4eb64fec5193c3299b301f5418d01993994312dd411005d8463f6adaf58b0322
+# патч 34 mutation-034.diff sha256 5d7ae52332efa15d97d59840f729a9d653b61a568a3ada347955e5373f20537c
+# патч 35 mutation-035.diff sha256 7e7a0c6b25560f00b24b7c96280a88706fd0b66e73d8054b964a902a49821295
+# патч 36 mutation-036.diff sha256 3f7a7b3e5e05afad183651a9e75df7e2effba03c1068648fac81d7d24a92f5b1
+# патч 37 mutation-037.diff sha256 c9e7e3edfa5cf4fba679f038c276f53b43e0da54df84285ef9cd3034c060251c
+# патч 38 mutation-038.diff sha256 ba4f68f5342bb2b145611eae1213afd08aceea5a5d0a21da0b5aee6d5ab86da6
+# патч 39 mutation-039.diff sha256 8bf41e531ef69c8d55d9925d89c59ae7cc97b62e344d8f70eeadcb2ce413e82c
+# патч 40 mutation-040.diff sha256 2a7c97e8047f2e1a81f8d75279c1d37873fb4829ff95c7bf1b8359fda544352a
+номер	исход	узлы
+31	убита	tests/test_merge_outcome_module.py::test_ac7_doc_only_lag_runs_gate_with_merge_base
+32	убита	tests/test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks
+33	убита	tests/test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks
+34	убита	tests/test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base
+35	убита	tests/test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head,tests/test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run,tests/test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate,tests/test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks,tests/test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base,tests/test_merge_outcome_module.py::test_ac13_retried_on_base_rerun_is_red_base
+36	не убита	
+37	убита	tests/test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head,tests/test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run,tests/test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary
+38	убита	tests/test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head
+39	убита	tests/test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head
+40	убита	tests/test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run
+```
+
+Перед прогоном №11: `git status --porcelain -- orchestrator/` — вывод пуст.
+
+```text
+# mutation-run №11 задачи 01M5R0DPNHZ7N8YBXMH375SMEE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree b06b18d2c79ba467a0961a22ea3187804023424e
+# тесты: tests/test_merge_outcome_module.py
+# рабочих процессов: auto
+# патч 41 mutation-041.diff sha256 fe0646b7d1f1ddc8e900913bbb30bac6aae561406e3b0b30fb3e75002bfebfda
+# патч 42 mutation-042.diff sha256 0e484c451290ab529001f9adbad4c0eee561c878274a32a35973e6bf3bb5c5b5
+# патч 43 mutation-043.diff sha256 3cd99e40a521dc5420d9310658f4c25caf36998c94556f24752be71e98cd88b4
+# патч 44 mutation-044.diff sha256 c9c9affa634660d267217800a5e2f0a8e9640e21308c7329f7fac63da4715916
+# патч 45 mutation-045.diff sha256 4839d5f32a38e3c6439c2b2a2ccdf5e727eca30e182224c6e1f247818c92bef0
+# патч 46 mutation-046.diff sha256 c1e3e5a528af3b3b9a656db978a36824ec9999372638c6736bcbfbd83e69e0a3
+# патч 47 mutation-047.diff sha256 da3d1daf83a1c223ec9ec755798e986b82322a5b39be9f13d1958e594659b05a
+# патч 48 mutation-048.diff sha256 dcb70bb90b70c0e763d5e270b2afdf464387a6f531976bf92d2c508b345094a8
+# патч 49 mutation-049.diff sha256 4154be3964ce66674b838b860c9d4be37e39b2686eb2e2f10000e5cf5dc643d1
+номер	исход	узлы
+41	убита	tests/test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run
+42	убита	tests/test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run,tests/test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary
+43	убита	tests/test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head,tests/test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run,tests/test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary
+44	убита	tests/test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary
+45	убита	tests/test_merge_outcome_module.py::test_ac11_only_check_failure_is_failure_on_check,tests/test_merge_outcome_module.py::test_ac12_passed_with_retry_is_side_failure_retry
+46	убита	tests/test_merge_outcome_module.py::test_ac11_only_check_failure_is_failure_on_check,tests/test_merge_outcome_module.py::test_ac12_passed_with_retry_is_side_failure_retry
+47	убита	tests/test_merge_outcome_module.py::test_ac12_passed_with_retry_is_side_failure_retry
+48	убита	tests/test_merge_outcome_module.py::test_ac13_retried_on_base_rerun_is_red_base
+49	убита	tests/test_merge_outcome_module.py::test_ac14_test_profile_and_multi_component_keep_prior_results
+```
+
+Перед прогоном №12: `git status --porcelain -- orchestrator/` — вывод пуст.
+
+```text
+# mutation-run №12 задачи 01M5R0DPNHZ7N8YBXMH375SMEE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree b06b18d2c79ba467a0961a22ea3187804023424e
+# тесты: tests/test_outcome_gate_module.py
+# рабочих процессов: auto
+# патч 50 mutation-050.diff sha256 b4f6188bb56c5c53b5c28ecf9e9dd5c84aa7488ac881f8fcfa5cae7b1534f142
+# патч 51 mutation-051.diff sha256 3bd2dde791b39d0854b299421737f33caa83cd8ea9b0f4805f514b09c20eea56
+# патч 52 mutation-052.diff sha256 3f3a001819fa348892a9c53aa82303d65025cb26fb5a31e18481cf5b02f7fdcf
+# патч 53 mutation-053.diff sha256 14aead6465413b84598e4fa0078591fd7545a289b65bb0637e2afdb5088c2951
+# патч 54 mutation-054.diff sha256 d64e0505413fec96187ac64468d113a6ae61f6cc829fdf3cb67ded54f88c9a8a
+# патч 55 mutation-055.diff sha256 d2f1267eadea0bc5ce1edb468910194471b40a1bc0c2a4b778ce76b241983671
+номер	исход	узлы
+50	убита	tests/test_outcome_gate_module.py::test_quoted_path_latin1_text_and_no_final_newline
+51	убита	tests/test_outcome_gate_module.py::test_unexpected_header_is_prepare_refusal,tests/test_outcome_gate_module.py::test_noprefix_config_does_not_hide_added_lines
+52	убита	tests/test_outcome_gate_module.py::test_unexpected_header_is_prepare_refusal
+53	убита	tests/test_outcome_gate_module.py::test_deleted_file_header_dev_null_is_not_refusal
+54	убита	tests/test_outcome_gate_module.py::test_rename_from_test_path_to_code_path_is_checked
+55	убита	tests/test_outcome_gate_module.py::test_rename_between_test_paths_is_not_checked
+```
+
+## Строки падений «до → после»
+
+Строка падения — нижний кадр `tests/…` секции FAILURES лога прогона патча (`<id>-mutation-run-<n>-p<nnn>.log`): «до» — прогоны №1–№6, «после» — №7–№12; соответствие «файл:строка до → файл:строка после» — перенесённое утверждение той же функции. Пометка «подготовка» — падение в методе подготовки `rewrite_passed` песочницы: доказательством не засчитано, мутацию доказывают другие строки той же мутации.
+
+Мутация 048 падает в помощнике исхода `no_gate_refusal` (вызов `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1078` → `tests/test_merge_outcome_module.py:754`) — утверждение исхода, не подготовки.
+
+Мутации 051 и 052 «после» падают на `pytest.raises(outcome_integrity._Prepare)` («DID NOT RAISE», вид `Failed`) — перенос `assertRaises` той же строки.
+
+- mutation-001: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:407` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:124`
+- mutation-001: «до» `Ac6LegacyRecordTest::test_ac6_record_without_proof_line_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:320` (подготовка `rewrite_passed` — не доказательство) → «после» `test_merge_outcome_module.py::test_ac6_record_without_proof_line_runs_gate` — `tests/merge_outcome_sandbox.py:280` (подготовка `rewrite_passed` — не доказательство)
+- mutation-001: «до» `Ac5ProofMismatchTest::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:320` (подготовка `rewrite_passed` — не доказательство) → «после» `test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/merge_outcome_sandbox.py:280` (подготовка `rewrite_passed` — не доказательство)
+- mutation-001: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:884` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:591`
+- mutation-001: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-001: «до» `Ac7MergeBaseTest::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:834` → «после» `test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_merge_outcome_module.py:542`
+- mutation-001: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:601` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:312`
+- mutation-002: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:411` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:128`
+- mutation-003: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:413` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:130`
+- mutation-003: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:884` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:591`
+- mutation-003: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-003: «до» `Ac7MergeBaseTest::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:835` → «после» `test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_merge_outcome_module.py:543`
+- mutation-003: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:601` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:312`
+- mutation-004: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:416` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:133`
+- mutation-005: «до» `Ac1ProofLineTest::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:444` → «после» `test_merge_outcome_module.py::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_merge_outcome_module.py:162`
+- mutation-005: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:416` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:133`
+- mutation-005: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-006: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:422` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:139`
+- mutation-007: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:422` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:139`
+- mutation-008: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:422` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:139`
+- mutation-009: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:407` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:124`
+- mutation-009: «до» `Ac6LegacyRecordTest::test_ac6_record_without_proof_line_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:320` (подготовка `rewrite_passed` — не доказательство) → «после» `test_merge_outcome_module.py::test_ac6_record_without_proof_line_runs_gate` — `tests/merge_outcome_sandbox.py:280` (подготовка `rewrite_passed` — не доказательство)
+- mutation-009: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-009: «до» `Ac7MergeBaseTest::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:834` → «после» `test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_merge_outcome_module.py:542`
+- mutation-009: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:601` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:312`
+- mutation-010: «до» `Ac1ProofLineTest::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:444` → «после» `test_merge_outcome_module.py::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_merge_outcome_module.py:162`
+- mutation-010: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-011: «до» `Ac1ProofLineTest::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:444` → «после» `test_merge_outcome_module.py::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_merge_outcome_module.py:162`
+- mutation-011: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-012: «до» `Ac2MergeFindingTest::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:479` → «после» `test_merge_outcome_module.py::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_merge_outcome_module.py:196`
+- mutation-012: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-012: «до» `Ac7MergeBaseTest::test_ac7_doc_only_lag_runs_gate_with_merge_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:751` → «после» `test_merge_outcome_module.py::test_ac7_doc_only_lag_runs_gate_with_merge_base` — `tests/test_merge_outcome_module.py:458`
+- mutation-012: «до» `Ac7MergeBaseTest::test_ac7_base_is_merge_base_with_fetched_main_not_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:724` → «после» `test_merge_outcome_module.py::test_ac7_base_is_merge_base_with_fetched_main_not_diff_base` — `tests/test_merge_outcome_module.py:431`
+- mutation-012: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-012: «до» `Ac6LegacyRecordTest::test_ac6_record_without_proof_line_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:683` → «после» `test_merge_outcome_module.py::test_ac6_record_without_proof_line_runs_gate` — `tests/test_merge_outcome_module.py:391`
+- mutation-012: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:604` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:315`
+- mutation-012: «до» `Ac5ProofMismatchTest::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:656` → «после» `test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_merge_outcome_module.py:366`
+- mutation-013: «до» `Ac2MergeFindingTest::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:480` → «после» `test_merge_outcome_module.py::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_merge_outcome_module.py:197`
+- mutation-014: «до» `Ac2MergeFindingTest::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:479` → «после» `test_merge_outcome_module.py::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_merge_outcome_module.py:196`
+- mutation-015: «до» `Ac2MergeFindingTest::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:479` → «после» `test_merge_outcome_module.py::test_ac2_finding_without_mandate_escalates_merge` — `tests/test_merge_outcome_module.py:196`
+- mutation-016: «до» `Ac2MergeFindingTest::test_ac2_merge_refusal_action_is_operator_class_key` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:493` → «после» `test_merge_outcome_module.py::test_ac2_merge_refusal_action_is_operator_class_key` — `tests/test_merge_outcome_module.py:209`
+- mutation-017: «до» `Ac2MergeFindingTest::test_ac2_merge_refusal_action_is_operator_class_key` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:494` → «после» `test_merge_outcome_module.py::test_ac2_merge_refusal_action_is_operator_class_key` — `tests/test_merge_outcome_module.py:210`
+- mutation-018: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-019: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-019: «до» `Ac1ProofLineTest::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:444` → «после» `test_merge_outcome_module.py::test_ac1_key_none_on_in_dev_is_prepare_refusal_without_record` — `tests/test_merge_outcome_module.py:162`
+- mutation-020: «до» `Ac3MergePrepareTest::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:555` → «после» `test_merge_outcome_module.py::test_ac3_prepare_failures_keep_merge_gate_without_push` — `tests/test_merge_outcome_module.py:268`
+- mutation-021: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-021: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:601` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:312`
+- mutation-022: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:601` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:312`
+- mutation-023: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-023: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:604` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:315`
+- mutation-024: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-024: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:604` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:315`
+- mutation-025: «до» `Ac5ProofMismatchTest::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:656` → «после» `test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_merge_outcome_module.py:366`
+- mutation-026: «до» `Ac5ProofMismatchTest::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:656` → «после» `test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_merge_outcome_module.py:366`
+- mutation-027: «до» `Ac5ProofMismatchTest::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:656` → «после» `test_merge_outcome_module.py::test_ac5_other_base_key_or_mandate_runs_gate` — `tests/test_merge_outcome_module.py:366`
+- mutation-028: «до» `Ac6LegacyRecordTest::test_ac6_record_without_proof_line_runs_gate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:683` → «после» `test_merge_outcome_module.py::test_ac6_record_without_proof_line_runs_gate` — `tests/test_merge_outcome_module.py:391`
+- mutation-029: «до» `Ac7MergeBaseTest::test_ac7_base_is_merge_base_with_fetched_main_not_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:725` → «после» `test_merge_outcome_module.py::test_ac7_base_is_merge_base_with_fetched_main_not_diff_base` — `tests/test_merge_outcome_module.py:432`
+- mutation-030: «до» `Ac7MergeBaseTest::test_ac7_doc_only_lag_runs_gate_with_merge_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:753` → «после» `test_merge_outcome_module.py::test_ac7_doc_only_lag_runs_gate_with_merge_base` — `tests/test_merge_outcome_module.py:460`
+- mutation-031: «до» `Ac7MergeBaseTest::test_ac7_doc_only_lag_runs_gate_with_merge_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:751` → «после» `test_merge_outcome_module.py::test_ac7_doc_only_lag_runs_gate_with_merge_base` — `tests/test_merge_outcome_module.py:458`
+- mutation-032: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-033: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:802` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:509`
+- mutation-034: «до» `Ac7MergeBaseTest::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:827` → «после» `test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_merge_outcome_module.py:535`
+- mutation-035: «до» `Ac1ProofLineTest::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:414` → «после» `test_merge_outcome_module.py::test_ac1_passed_record_carries_head_base_key_and_mandate` — `tests/test_merge_outcome_module.py:131`
+- mutation-035: «до» `Ac13RetriedBaseRerunTest::test_ac13_retried_on_base_rerun_is_red_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1080` → «после» `test_merge_outcome_module.py::test_ac13_retried_on_base_rerun_is_red_base` — `tests/test_merge_outcome_module.py:756`
+- mutation-035: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:878` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:585`
+- mutation-035: «до» `Ac7MergeBaseTest::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:788` → «после» `test_merge_outcome_module.py::test_ac7_gate_after_fresh_and_before_acceptance_locks` — `tests/test_merge_outcome_module.py:496`
+- mutation-035: «до» `Ac7MergeBaseTest::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:835` → «после» `test_merge_outcome_module.py::test_ac7_canary_from_db_and_in_dev_base_is_diff_base` — `tests/test_merge_outcome_module.py:543`
+- mutation-035: «до» `Ac4ProofTest::test_ac4_same_quadruple_proves_without_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:601` → «после» `test_merge_outcome_module.py::test_ac4_same_quadruple_proves_without_run` — `tests/test_merge_outcome_module.py:312`
+- mutation-037: «до» `Ac9ReviewNotRunTest::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:916` → «после» `test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_merge_outcome_module.py:622`
+- mutation-037: «до» `Ac10NoPythonSectionTest::test_ac10_component_without_python_has_section_except_canary` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:950` → «после» `test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary` — `tests/test_merge_outcome_module.py:655`
+- mutation-037: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:881` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:588`
+- mutation-038: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:884` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:591`
+- mutation-039: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:888` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:595`
+- mutation-040: «до» `Ac9ReviewNotRunTest::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:923` → «после» `test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_merge_outcome_module.py:629`
+- mutation-041: «до» `Ac9ReviewNotRunTest::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:916` → «после» `test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_merge_outcome_module.py:622`
+- mutation-042: «до» `Ac9ReviewNotRunTest::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:916` → «после» `test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_merge_outcome_module.py:622`
+- mutation-042: «до» `Ac10NoPythonSectionTest::test_ac10_component_without_python_has_section_except_canary` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:950` → «после» `test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary` — `tests/test_merge_outcome_module.py:655`
+- mutation-043: «до» `Ac9ReviewNotRunTest::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:916` → «после» `test_merge_outcome_module.py::test_ac9_no_record_for_current_head_says_not_run` — `tests/test_merge_outcome_module.py:622`
+- mutation-043: «до» `Ac10NoPythonSectionTest::test_ac10_component_without_python_has_section_except_canary` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:950` → «после» `test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary` — `tests/test_merge_outcome_module.py:655`
+- mutation-043: «до» `Ac8ReviewLinesTest::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:881` → «после» `test_merge_outcome_module.py::test_ac8_review_section_carries_outcome_gate_lines_for_head` — `tests/test_merge_outcome_module.py:588`
+- mutation-044: «до» `Ac10NoPythonSectionTest::test_ac10_component_without_python_has_section_except_canary` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:948` → «после» `test_merge_outcome_module.py::test_ac10_component_without_python_has_section_except_canary` — `tests/test_merge_outcome_module.py:653`
+- mutation-045: «до» `Ac12TwoSidedRetryTest::test_ac12_passed_with_retry_is_side_failure_retry` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1051` → «после» `test_merge_outcome_module.py::test_ac12_passed_with_retry_is_side_failure_retry` — `tests/test_merge_outcome_module.py:728`
+- mutation-045: «до» `Ac11TwoSidedErrorNameTest::test_ac11_only_check_failure_is_failure_on_check` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1019` → «после» `test_merge_outcome_module.py::test_ac11_only_check_failure_is_failure_on_check` — `tests/test_merge_outcome_module.py:695`
+- mutation-046: «до» `Ac12TwoSidedRetryTest::test_ac12_passed_with_retry_is_side_failure_retry` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1051` → «после» `test_merge_outcome_module.py::test_ac12_passed_with_retry_is_side_failure_retry` — `tests/test_merge_outcome_module.py:728`
+- mutation-046: «до» `Ac11TwoSidedErrorNameTest::test_ac11_only_check_failure_is_failure_on_check` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1022` → «после» `test_merge_outcome_module.py::test_ac11_only_check_failure_is_failure_on_check` — `tests/test_merge_outcome_module.py:698`
+- mutation-047: «до» `Ac12TwoSidedRetryTest::test_ac12_passed_with_retry_is_side_failure_retry` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1051` → «после» `test_merge_outcome_module.py::test_ac12_passed_with_retry_is_side_failure_retry` — `tests/test_merge_outcome_module.py:728`
+- mutation-048: «до» `Ac13RetriedBaseRerunTest::test_ac13_retried_on_base_rerun_is_red_base` — `tests/outcome_gate_sandbox.py:837` → «после» `test_merge_outcome_module.py::test_ac13_retried_on_base_rerun_is_red_base` — `tests/test_merge_outcome_module.py:82`
+- mutation-049: «до» `Ac14OutOfBoundsTest::test_ac14_test_profile_and_multi_component_keep_prior_results` — `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py:1113` → «после» `test_merge_outcome_module.py::test_ac14_test_profile_and_multi_component_keep_prior_results` — `tests/test_merge_outcome_module.py:787`
+- mutation-050: «до» `AddedLinesTest::test_quoted_path_latin1_text_and_no_final_newline` — `tests/test_outcome_integrity_added_lines.py:60` → «после» `test_outcome_gate_module.py::test_quoted_path_latin1_text_and_no_final_newline` — `tests/test_outcome_gate_module.py:2486`
+- mutation-051: «до» `AddedLinesTest::test_unexpected_header_is_prepare_refusal` — `tests/test_outcome_integrity_added_lines.py:99` → «после» `test_outcome_gate_module.py::test_unexpected_header_is_prepare_refusal` — `tests/test_outcome_gate_module.py:2527`
+- mutation-051: «до» `AddedLinesTest::test_noprefix_config_does_not_hide_added_lines` — `tests/test_outcome_integrity_added_lines.py:85` → «после» `test_outcome_gate_module.py::test_noprefix_config_does_not_hide_added_lines` — `tests/test_outcome_gate_module.py:2512`
+- mutation-052: «до» `AddedLinesTest::test_unexpected_header_is_prepare_refusal` — `tests/test_outcome_integrity_added_lines.py:99` → «после» `test_outcome_gate_module.py::test_unexpected_header_is_prepare_refusal` — `tests/test_outcome_gate_module.py:2527`
+- mutation-053: «до» `AddedLinesTest::test_deleted_file_header_dev_null_is_not_refusal` — `tests/test_outcome_integrity_added_lines.py:110` → «после» `test_outcome_gate_module.py::test_deleted_file_header_dev_null_is_not_refusal` — `tests/test_outcome_gate_module.py:2539`
+- mutation-054: «до» `CodeExceptionRenameTest::test_rename_from_test_path_to_code_path_is_checked` — `tests/test_outcome_integrity_added_lines.py:138` → «после» `test_outcome_gate_module.py::test_rename_from_test_path_to_code_path_is_checked` — `tests/test_outcome_gate_module.py:2553`
+- mutation-055: «до» `CodeExceptionRenameTest::test_rename_between_test_paths_is_not_checked` — `tests/test_outcome_integrity_added_lines.py:156` → «после» `test_outcome_gate_module.py::test_rename_between_test_paths_is_not_checked` — `tests/test_outcome_gate_module.py:2571`
+
 ## Соответствие имён «до → после»
 
 Каждый тест исходного файла перенесён в функцию приёмника с тем же именем.
@@ -450,7 +638,9 @@ schema_version: 5
 
 - Тестов «до»: 19 в `tests/test_01m5ddtvzea40zb9bheh4ydee7_merge_outcome_gate.py` (строк 1144), 6 в `tests/test_outcome_integrity_added_lines.py` (строк 156), 53 в `tests/test_outcome_gate_module.py` на базе (строк 2412).
 - Тестов «после»: 19 в `tests/test_merge_outcome_module.py` (строк 814), 59 в `tests/test_outcome_gate_module.py` (строк 2571); `tests/merge_outcome_sandbox.py` — строк 353, тестов нет.
-- Время контрольных прогонов `mutation-run` (без патча, рабочих процессов `auto`): «до» — 19.12 с (№1), 20.09 с (№2), 21.46 с (№3), 28.87 с (№4), 27.07 с (№5), 1.13 с (№6, группа Д).
+- Время контрольных прогонов `mutation-run` (без патча, рабочих процессов `auto`): «до» — 19.12 с (№1), 20.09 с (№2), 21.46 с (№3), 28.87 с (№4), 27.07 с (№5), 1.13 с (№6, группа Д, 6 тестов).
+- Время контрольных прогонов `mutation-run` «после»: 20.85 с (№7), 19.26 с (№8), 18.97 с (№9), 20.82 с (№10), 19.31 с (№11) — группа М, 19 тестов; 25.88 с (№12, группа Д — весь `tests/test_outcome_gate_module.py`, 59 тестов).
+- Ревизии шапок: «до» — base `72d52fd3`, «после» — worktree `98398b90` (№7–№10, код ещё не закоммичен) и `b06b18d2` (№11–№12, после WIP-чекпоинта пульта); `git diff --quiet` по `orchestrator/` между ними — код 0.
 
 ## Предусловия тела теста
 
@@ -469,6 +659,12 @@ schema_version: 5
 
 Нет: все 25 тестов перенесены.
 
+## Импортёры
+
+- `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py` и `tests/test_01m5jgsaanr1nzyqd4fcsve48y_outcome_components.py`: изменена только строка источника импорта (`tests.merge_outcome_sandbox`), разбивка строк та же.
+- Под ролью: `python3 -m pytest --collect-only -q -p no:cacheprovider <оба импортёра>` — «61 tests collected in 0.16s».
+- Итог CI кодовой ветки по `outcome_prior` и `outcome_components`: на конце шага разработчика ветки задачи в origin нет (`git ls-remote origin refs/heads/task/01m5r0dpnhz7n8ybxmh375smee-…` — пусто), прогона CI ещё не было; итог дописывается после первого пуша ветки пультом.
+
 ## Влияние на систему
 
 Код `orchestrator/` не меняется; мутации живут только во временной копии
@@ -481,6 +677,21 @@ merge-коммита задачи.
 
 - Мутации подслучаев со случайной стороной (`Ac11`, `Ac14`) и числами (`Ac8`) —
   патчи меняют путь кода одинаково для обеих сторон и любых чисел (обоснование
-  по ANSWER-1 п. 2 — в разделе строк падений).
+  по ANSWER-1 п. 2 — в разделе «Детерминизм при случайной стороне и числах»).
+- Итог CI кодовой ветки по импортёрам (требование 11, AC-8) в шаге разработчика
+  недоступен: ветка задачи до конца шага не в origin. Сбор импортёров под ролью —
+  61 тест; приёмочный тест `test_ac8_plan_names_ci_result_for_importers` до
+  дописки итога CI красный. Остальные тесты планки на PLAN с диска (сценарий
+  `plancheck.py` каталога документов: `_pult` с `artifact_text` по диску) —
+  81 из 82 зелёные; `plank-run` по закоммиченной ревизии документов — 99 passed,
+  10 failed (до автокоммита этого PLAN).
 
 ## Предложения системе
+
+- SPEC волн сведения (требование 11 «итог CI кодовой ветки в PLAN») требует от
+  разработчика итога CI, которого в его шаге ещё нет: ветка пушится пультом после
+  шага. Класс — требование SPEC к артефакту роли на событие после её шага;
+  `templates/SPEC` / skill аналитика: такой итог относить к ревьюверу или гейту.
+- `plank-run` читает PLAN из закоммиченной ревизии ссылки документов — правку PLAN
+  текущего шага планка не видит до автокоммита; не хватает режима `plank-run
+  --docs-disk` (обход — `plancheck.py` каталога документов).
