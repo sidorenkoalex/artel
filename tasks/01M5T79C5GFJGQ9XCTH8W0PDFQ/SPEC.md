@@ -14,7 +14,7 @@ budget_usd: 40
 Очередь скорости, решение Оператора от 24.10.2026: git 1, 5 и 2 уже смержены. Задача git 3 нужна для git 4 — памяти чтений git в контексте команды пульта (~12–16 % вызовов). Память можно повесить только на одну точку запуска git, а семь чтений сейчас идут мимо `orchestrator/gitcmd.py` прямым `subprocess` (сверка 25.10, пин 7e0c636c). Сама git 3 скорости почти не даёт: это перенос без смены поведения.
 
 Чтения мимо `gitcmd` (номера мест ниже — эти):
-1. `orchestrator/acceptance.py::suite_tree_hash`, вложенная `git()` — `read-tree`/`add -u`/`rm --cached`/`write-tree` через `subprocess.Popen(["git", "-C", <root>, …])` + `communicate(timeout=15)`, своё окружение `GIT_INDEX_FILE`; истечение срока → `None`; `OSError` запуска не ловится и выходит из `suite_tree_hash` (`acceptance.py:2944`, `Popen` вне `try`).
+1. `orchestrator/acceptance.py::suite_tree_hash`, вложенная `git()` — `read-tree`/`add -u`/`rm --cached`/`write-tree` через `subprocess.Popen(["git", "-C", <root>, …])` + `communicate(timeout=15)`, `cwd=config.ROOT`, своё окружение `GIT_INDEX_FILE`; истечение срока → процесс останавливается (`kill` и дочитывание вывода, `acceptance.py:2951-2952`) и результат `None`; `OSError` запуска (в том числе при отсутствующем каталоге `cwd`) не ловится и выходит из `suite_tree_hash` (`acceptance.py:2944`, `Popen` вне `try`).
 2. `orchestrator/brief.py::_clone_git` — `ls-tree -z`, `show`; вывод байтами; срок `config.CORE_REFERENCE_GIT_TIMEOUT_SEC`; истечение срока или `OSError` → `(None, "git не ответил (<имя исключения>)")`.
 3. `orchestrator/reference_cache.py::branch_commit` — `rev-parse --verify --quiet`; срок `config.CORE_REFERENCE_GIT_TIMEOUT_SEC`; истечение срока → `(None, "git не ответил (TimeoutExpired)")`.
 4. `orchestrator/reference_cache.py::_list_tree` — `ls-tree -r -l -z`, потоковое чтение `Popen` порциями `LISTING_CHUNK` с пределом `config.CORE_REFERENCE_MAX_LISTING_BYTES` и остановкой по остатку дедлайна; перебор предела → `_Failure(OVER_LIMITS, …)`, истечение срока при чтении → `_Failure(DEADLINE, "срок исчерпан на ls-tree")`; `OSError` или `TimeoutExpired`, поднятые при запуске процесса, → `_Failure(SOURCE_FAILED, "ls-tree: <имя исключения>: <текст>")` (`reference_cache.py:355-356`), не `DEADLINE`.
@@ -35,17 +35,18 @@ budget_usd: 40
    - срок выполнения. Истечение срока — именованный отказ, по которому вызывающий отличает истечение срока от прочих отказов; `subprocess.TimeoutExpired` наружу из `gitcmd` не выходит;
    - потоковое чтение вывода с пределом байт и остановкой по сроку (для места 4). Процесс git останавливается и при переборе предела, и при истечении срока. Перебор предела, истечение срока и ненулевой код возврата — три различимых исхода;
    - байтовый вывод и байтовый вход;
-   - своё окружение (`GIT_INDEX_FILE` места 1) — равноценной функцией `gitcmd` на `subprocess.Popen` со сроком 15 с и теми же аргументами (`-C <root>`). `gitcmd.carpentry` для места 1 не используется (у неё нет срока, вместо `-C` — `cwd`, и она идёт через `subprocess.run`, который перехватывает `SpyRun`).
+   - своё окружение (`GIT_INDEX_FILE` места 1) — равноценной функцией `gitcmd` на `subprocess.Popen` со сроком 15 с, теми же аргументами (`-C <root>`) и тем же `cwd` (`config.ROOT`); по истечении срока процесс git останавливается (`kill` и дочитывание вывода), как сейчас. `gitcmd.carpentry` для места 1 не используется (у неё нет срока, вместо `-C` — `cwd`, и она идёт через `subprocess.run`, который перехватывает `SpyRun`).
 3. Поведение семи мест не меняется:
    - те же аргументы git;
-   - тот же репозиторий (`-C <клон>` или рабочая копия);
+   - тот же репозиторий (`-C <клон>` или рабочая копия) и, у места 1, тот же `cwd` (`config.ROOT`);
    - то же окружение (маркер `pult_env` и, у места 1, `GIT_INDEX_FILE`);
    - те же значения срока: 15 с у места 1, `config.CORE_REFERENCE_GIT_TIMEOUT_SEC` у мест 2–3, остаток дедлайна у мест 4–5. У мест 6–7 срок не появляется;
    - те же коды отказа и тексты причин, в том числе при истечении срока и при отказе запуска (`OSError`) там, где место его сейчас ловит. У места 1 `OSError` запуска по-прежнему выходит исключением из `suite_tree_hash` (не `None`). У места 4 `TimeoutExpired` при запуске процесса по-прежнему даёт `_Failure(SOURCE_FAILED, "ls-tree: TimeoutExpired: …")`, не `DEADLINE`;
    - то же число процессов git (тесты считают процессы шпионом `subprocess.Popen`).
 4. Под каждой подменой существующих тестов результат каждого из семи мест тот же, что до переноса. Подмены:
    - `mock.patch.object(gitcmd, "git", fake_git)` (`tests/sandbox.py:2173` и десятки файлов `tests/`) и заглушки `gitcmd.in_repo`, `gitcmd.show`, `gitcmd.ls_tree_files` в `tests/sandbox.py::LightTransitionSandbox`. Перенос идёт через функции `gitcmd`, которые эти подмены не задевают, либо в PLAN по коду доказано, что ни один такой тест не исполняет перенесённое место;
-   - шпион глобального `subprocess.run` `tests/sandbox.py::SpyRun` (отвечает фейковым sha на `write-tree`/`hash-object`, `sandbox.py:1375`) и шпионы `subprocess.run` существующих тестов. Места 1 и 4 не переходят на путь, который перехватывает `SpyRun`. Места 2, 3, 5, 6, 7 остаются на пути, который видят `SpyRun` и шпионы `subprocess.run`, как сейчас; путь места 7 остаётся видимым подмене `outcome_integrity.subprocess.run` (`tests/test_outcome_gate_module.py:2525`).
+   - шпион глобального `subprocess.run` `tests/sandbox.py::SpyRun` (отвечает фейковым sha на `write-tree`/`hash-object`, `sandbox.py:1375`) и шпионы `subprocess.run` существующих тестов. Места 1 и 4 не переходят на путь, который перехватывает `SpyRun`. Места 2, 3, 5, 6, 7 остаются на пути, который видят `SpyRun` и шпионы `subprocess.run`, как сейчас; путь места 7 остаётся видимым подмене `outcome_integrity.subprocess.run` (`tests/test_outcome_gate_module.py:2525`);
+   - подмена модуля целиком `mock.patch.object(acceptance, "subprocess", fake)` (около десяти мест: `tests/test_01m56kcvctw5bv9twth54tw9q9_own_run_path.py:250`, `tests/test_01m52eehsrd93wmphwb5vjyrkd_profile_callers.py:727`, `tests/test_01m56kcvctw5bv9twth54tw9q9_pult_pytest_unchanged.py:264`, `tests/test_01m5mjfsyw6mh0wd05cy8v75tx_suite_durations.py:732`, `tests/test_01m52eedeyv14658x8vfnhcw8k_launch_places.py:213`, `tests/test_report_outcome_module.py:1187`, `:1211`, `:1336`, `:1344`, `tests/test_01m52eefna1wh31962hvnt0yz9_pytest_own_places.py:858`). После переноса места 1 в `gitcmd` эта подмена его запуск git больше не перехватит. Сведение разработчику (решение Оператора на гейте SPEC 26.10, без отдельного AC): проверить, что исход этих тестов не меняется, и назвать их в PLAN. По аудиту SPEC до `suite_tree_hash` под этой подменой доходят только `PytestSpy` (`profile_callers.py:727`, `test_report_outcome_module.py:1336`/`:1344`), а они передают git настоящему `Popen`.
 
    Тихое изменение поведения существующих тестов — дефект.
 5. Новый долгоживущий тест-сторож отдельным файлом задачи в `tests/` (по образцу `tests/test_invariants.py::CarpentryGitCallsGoThroughGitcmdTest`, без правки `tests/test_invariants.py`). Он проверяет, что в пяти модулях требования 1 нет прямого запуска git через `subprocess`; сам импорт `subprocess` он не запрещает.
@@ -65,7 +66,7 @@ AC-3. Существующие тесты этих мест зелёные бе�
 - `tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py:208`.
 
 AC-4. Истечение срока внутри `gitcmd` даёт у каждого из пяти мест со сроком прежний именованный отказ, и `TimeoutExpired` наружу не выходит. Каждое место проверяет свой тест:
-- место 1, `suite_tree_hash` → `None`;
+- место 1, `suite_tree_hash` → `None`, процесс git по истечении срока остановлен (`kill` и дочитывание вывода, как `acceptance.py:2951-2952`); тест краснеет на мутации «отказ по сроку без `kill`»;
 - место 2, `_clone_git` → `(None, "git не ответил (TimeoutExpired)")`;
 - место 3, `branch_commit` → `(None, "git не ответил (TimeoutExpired)")`;
 - место 4, `_list_tree`, срок истёк при чтении вывода → `_Failure` с кодом `DEADLINE` и причиной `"срок исчерпан на ls-tree"`; `TimeoutExpired` при запуске процесса → `_Failure` с кодом `SOURCE_FAILED` и причиной `"ls-tree: TimeoutExpired: <текст>"`, не `DEADLINE`;
@@ -80,6 +81,7 @@ AC-6. Место 4 читает вывод `ls-tree` потоком через �
 AC-7. У каждого из семи мест прежние:
 - аргументы git;
 - репозиторий (`-C <клон>` или рабочая копия);
+- у места 1 — `cwd` процесса git (`config.ROOT`); при отсутствующем каталоге `cwd` исход места 1 — как в AC-8 (исключение выходит из `suite_tree_hash`);
 - окружение (маркер `pult_env`; у места 1 — `GIT_INDEX_FILE` временного индекса);
 - байтовый или текстовый тип вывода и входа;
 - число процессов git, посчитанное шпионом `subprocess.Popen`.
