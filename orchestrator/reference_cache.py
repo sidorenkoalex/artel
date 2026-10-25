@@ -27,9 +27,7 @@ import hashlib
 import os
 import re
 import stat
-import subprocess
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -296,12 +294,12 @@ def branch_commit(clone: Path, branch: str) -> tuple[str | None, str]:
     if not clone.is_dir():
         return None, "клона проекта нет"
     try:
-        res = subprocess.run(
-            ["git", "-C", str(clone), "rev-parse", "--verify", "--quiet",
-             f"refs/heads/{branch}^{{commit}}"],
-            capture_output=True, text=True, env=gitcmd.pult_env(),
-            timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        res = gitcmd.read(clone, "rev-parse", "--verify", "--quiet",
+                          f"refs/heads/{branch}^{{commit}}", text=True,
+                          timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
+    except gitcmd.Timeout:
+        return None, "git не ответил (TimeoutExpired)"
+    except OSError as exc:
         return None, f"git не ответил ({type(exc).__name__})"
     head = res.stdout.strip()
     if res.returncode != 0 or not SHA_FORM.fullmatch(head):
@@ -349,44 +347,24 @@ def _list_tree(clone: Path, sha: str, deadline: float) -> tuple[list, int]:
     с пределом: ([(путь, blob, размер)], пропущенные)."""
     remaining = _remaining(deadline)
     try:
-        proc = subprocess.Popen(
-            ["git", "-C", str(clone), "ls-tree", "-r", "-l", "-z", sha],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=gitcmd.pult_env())
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise _Failure(SOURCE_FAILED, f"ls-tree: {type(exc).__name__}: {exc}") from exc
-    expired = threading.Event()
-
-    def kill_on_deadline():
-        expired.set()
-        proc.kill()
-
-    timer = threading.Timer(remaining, kill_on_deadline)
-    timer.start()
-    chunks, total, over = [], 0, False
-    try:
-        while True:
-            chunk = proc.stdout.read(LISTING_CHUNK)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > config.CORE_REFERENCE_MAX_LISTING_BYTES:
-                over = True
-                proc.kill()
-                break
-            chunks.append(chunk)
-        proc.stdout.close()
-        code = proc.wait()
-    finally:
-        timer.cancel()
-    if over:
+        res = gitcmd.read_stream(clone, "ls-tree", "-r", "-l", "-z", sha,
+                                 limit=config.CORE_REFERENCE_MAX_LISTING_BYTES,
+                                 timeout=remaining, chunk=LISTING_CHUNK)
+    except gitcmd.LaunchFailed as exc:
+        error = exc.error
+        raise _Failure(SOURCE_FAILED,
+                       f"ls-tree: {type(error).__name__}: {error}") from error
+    except gitcmd.OverLimit as exc:
         raise _Failure(OVER_LIMITS, f"вывод ls-tree > "
-                                    f"{config.CORE_REFERENCE_MAX_LISTING_BYTES} байт")
-    if expired.is_set() or time.monotonic() > deadline:
+                                    f"{config.CORE_REFERENCE_MAX_LISTING_BYTES} байт") from exc
+    except gitcmd.Timeout as exc:
+        raise _Failure(DEADLINE, "срок исчерпан на ls-tree") from exc
+    if time.monotonic() > deadline:
         raise _Failure(DEADLINE, "срок исчерпан на ls-tree")
-    if code != 0:
-        raise _Failure(SOURCE_FAILED, f"ls-tree {sha}: код {code}")
+    if res.returncode != 0:
+        raise _Failure(SOURCE_FAILED, f"ls-tree {sha}: код {res.returncode}")
     entries, skipped = [], 0
-    for record in b"".join(chunks).split(b"\0"):
+    for record in res.stdout.split(b"\0"):
         meta, tab, raw_path = record.partition(b"\t")
         parts = meta.decode("ascii", "replace").split()
         path = raw_path.decode("utf-8", "surrogateescape")
@@ -407,11 +385,10 @@ def _cat_blobs(clone: Path, objects: list, deadline: float) -> dict:
     `missing` в словарь не попадает."""
     remaining = _remaining(deadline)
     try:
-        res = subprocess.run(
-            ["git", "-C", str(clone), "cat-file", "--batch"],
-            input=("\n".join(objects) + "\n").encode("ascii"),
-            capture_output=True, env=gitcmd.pult_env(), timeout=remaining)
-    except subprocess.TimeoutExpired as exc:
+        res = gitcmd.read(clone, "cat-file", "--batch",
+                          input=("\n".join(objects) + "\n").encode("ascii"),
+                          timeout=remaining)
+    except gitcmd.Timeout as exc:
         raise _Failure(DEADLINE, "срок исчерпан на cat-file") from exc
     except OSError as exc:
         raise _Failure(SOURCE_FAILED, f"cat-file: {type(exc).__name__}: {exc}") from exc
