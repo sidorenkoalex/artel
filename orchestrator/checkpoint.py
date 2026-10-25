@@ -13,8 +13,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (config, fixation, gitcmd, project_profile, store, workspace,
-               yamlmini, zone_lock)
+from . import (config, fixation, gitcmd, project_profile, store, targets,
+               workspace, yamlmini, zone_lock)
 
 # Критерий допустимости файла первого уровня `acceptance_tests/` (SPEC
 # 01M1SAA01YRRTWAVADT2F81RRQ, AC-1): планка приёмки несёт только эти
@@ -1910,10 +1910,22 @@ _TS_FORMAT = "%Y-%m-%d %H:%M:%SZ"
 @dataclass(frozen=True)
 class MainCopyWatch:
     """Снимок главной копии на старте шага: id и время записи «agent run
-    started» шага и строки `git status --porcelain`."""
+    started» шага и строки `git status --porcelain`; `local_layer_digest` —
+    sha256 локального слоя `.artel/targets.yaml` (None — файла нет или он
+    не прочитан): файл вне git, и его правку `git status` не покажет
+    (SPEC 01M5SCGSQN0AT0B07H7M9803RA, требование 9)."""
     start_id: int
     start_ts: str
     status: frozenset
+    local_layer_digest: str | None = None
+
+
+def _local_layer_digest() -> str | None:
+    """sha256 файла локального слоя; None — файла нет или он не прочитан."""
+    try:
+        return hashlib.sha256(targets.local_path().read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _main_copy_status() -> frozenset | None:
@@ -1940,10 +1952,11 @@ def main_copy_watch_start(conn, task_id: str) -> MainCopyWatch | None:
     """Снимок главной копии до запуска агента; `None` — сверки после шага
     не будет (git не ответил или старт шага не записан в журнал)."""
     status = _main_copy_status()
+    digest = _local_layer_digest()
     started = store.last_task_step_of(conn, task_id, (_STEP_START_ACTION,))
     if status is None or started is None:
         return None
-    return MainCopyWatch(started["id"], started["ts"], status)
+    return MainCopyWatch(started["id"], started["ts"], status, digest)
 
 
 def _overlapping_steps(conn, task_id: str,
@@ -1992,13 +2005,20 @@ def watch_main_copy(conn, task_id: str, role: str,
     if watch is None:
         return False
     after = _main_copy_status()
+    # Сумма слоя сверяется и тогда, когда git не ответил (ANSWER-1, п. 4).
+    layer_changed = _local_layer_digest() != watch.local_layer_digest
     if after is None:
         store.journal(conn, task_id, "orchestrator",
                       MAIN_COPY_WATCH_FAILED_ACTION,
                       f"после шага {role}: git status главной копии "
                       f"{config.ROOT} не ответил")
-        return False
-    paths = sorted({line[3:] for line in after - watch.status})
+        if not layer_changed:
+            return False
+        after = watch.status
+    changed = {line[3:] for line in after - watch.status}
+    if layer_changed:
+        changed.add(config.TARGETS_LOCAL_REL)
+    paths = sorted(changed)
     if not paths:
         return False
     named = ", ".join(paths[:MAIN_COPY_WATCH_PATH_LIMIT])

@@ -32,6 +32,37 @@ def full_suite_timeout_check(name: str) -> doctor.Check:
         f"проект {name}: предел полного прогона tests/ {seconds} с "
         f"(источник: {source})")
 
+
+def targets_local_layer_check() -> doctor.Check:
+    """Строка `targets-local-layer` (SPEC 01M5SCGSQN0AT0B07H7M9803RA,
+    требование 8): где лежат записи внешних проектов. Зовётся только после
+    годного `targets.load()` — сломанный слой уже дал `targets-yaml`."""
+    name = "targets-local-layer"
+    path = doctor.targets.local_path()
+    try:
+        repo, local = doctor.targets.layers()
+    except doctor.targets.TargetsError as exc:
+        return doctor.Check(name, "fail", str(exc))
+    warnings = []
+    for entry in repo:
+        if entry == doctor.config.DEFAULT_TARGET:
+            continue
+        if local is not None and entry in local:
+            warnings.append(f"запись {entry} есть в обоих слоях, действует "
+                            f"локальная; убери её из targets.yaml: doc-commit "
+                            f"targets.yaml, затем pin-update")
+        else:
+            warnings.append(f"запись {entry} в targets.yaml репозитория — "
+                            f"перенеси: artel.py targets-migrate {entry}")
+    if warnings:
+        return doctor.Check(name, "warn", "; ".join(warnings))
+    if local is None:
+        return doctor.Check(name, "ok", f"локальный слой {path}: файла нет, "
+                                        f"внешних записей в targets.yaml нет")
+    return doctor.Check(name, "ok",
+                        f"локальный слой {path}: записи {', '.join(local)}")
+
+
 def all_checks(conn) -> list[doctor.Check]:
     """Требование 1: прогон всех проверок doctor.
 
@@ -103,6 +134,8 @@ def all_checks(conn) -> list[doctor.Check]:
     except doctor.targets.TargetsError as exc:
         checks.append(doctor.Check("targets-yaml", "fail", str(exc)))
         declared = {}
+    else:
+        checks.append(targets_local_layer_check())
     for name, entry in declared.items():
         checks.append(full_suite_timeout_check(name))
         checks.append(doctor.check_target_layout(name))

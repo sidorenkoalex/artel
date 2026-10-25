@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import acceptance, repo_context, store, targets
+from tests import sandbox
 
 OWN_VALUES = {
     "command": ["./run-tests"], "long_lived_dir": "backend/tests",
@@ -27,7 +28,8 @@ class AcceptanceSuiteProfileTest(unittest.TestCase):
         self.addCleanup(conn.close)
         result = acceptance.FullSuiteRun(
             True, acceptance.FULL_SUITE_GREEN, "зелёный", None, "зелёный")
-        with mock.patch.object(store, "task_target", return_value="sled"), \
+        with sandbox.declared_without_profile("sled"), \
+                mock.patch.object(store, "task_target", return_value="sled"), \
                 mock.patch.object(repo_context, "profile_of",
                                   return_value=answer) as profile_of, \
                 mock.patch.object(acceptance, "full_suite",
