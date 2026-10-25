@@ -71,3 +71,41 @@ def test_global_ignore_survives_own_excludes_file(sb):
     (wt / ".claude").mkdir()
     (wt / ".claude" / "settings.local.json").write_text("{}\n", encoding="utf-8")
     assert sb.git("-C", str(wt), "status", "--porcelain") == ""
+
+
+def test_unresolved_entry_excludes_standard_markers_without_refusal(sb):
+    """Запись проекта не разрешена (её нет в `targets.yaml`) — `ensure` не отказывает: копия приведена по стандартным маркерам, пометка в журнале задачи.
+
+    Сценарий: в `main` проекта — `src/m.py`, `CLAUDE.md`, `sub/.claude/x`;
+    в `targets.yaml` только артель; `ensure` задачи дважды — причина `None`
+    оба раза, `CLAUDE.md` и `sub/.claude/x` на диске нет, `src/m.py` есть,
+    запись журнала `wrapper_markers_only` ровно одна и называет
+    agent_wrapper.
+
+    Ловит мутацию: при неразрешённом контексте `_exclude_wrapper` снова
+    возвращает причину «не исключена» — `ensure` отказывает (регрессия
+    `test_merge_outcome_module`); либо копия остаётся с обвязкой на диске;
+    либо пометка не пишется или пишется на каждый вызов.
+    """
+    clone = make_project_repo(EXT)
+    config.TARGETS.write_text("targets:\n" + artel_target_entry(), encoding="utf-8")
+    for rel in ("src/m.py", "CLAUDE.md", "sub/.claude/x"):
+        (clone / rel).parent.mkdir(parents=True, exist_ok=True)
+        (clone / rel).write_text(f"{rel}\n", encoding="utf-8")
+    sb.git("-C", str(clone), "add", "-A")
+    sb.git("-C", str(clone), "commit", "-q", "-m", "проект")
+    sb.git("-C", str(clone), "push", "-q", "origin", config.MAIN_BRANCH)
+    task_id = idgen.new_task_id()
+    branch = f"task/{task_id.lower()}-unres"
+    store.insert_task(store.db(), task_id, "Фикстура без записи", "in_dev", branch,
+                      EXT, config.DEFAULT_BUDGET_USD)
+    for _ in range(2):
+        wt, error = workspace.ensure(task_id, branch, EXT)
+        assert error is None, error
+    assert not (wt / "CLAUDE.md").exists()
+    assert not (wt / "sub" / ".claude" / "x").exists()
+    assert (wt / "src" / "m.py").exists()
+    notes = [s["detail"] for s in store.task_steps(store.db(), task_id)
+             if s["action"] == workspace.WRAPPER_UNRESOLVED_ACTION]
+    assert len(notes) == 1, notes
+    assert "agent_wrapper" in notes[0], notes[0]

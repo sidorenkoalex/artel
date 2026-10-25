@@ -206,7 +206,7 @@ def ensure(task_id: str, branch: str,
     if clone_error is not None:
         return wt_path, clone_error
     if _registered(clone, wt_path):
-        return wt_path, _exclude_wrapper(wt_path, target)
+        return wt_path, _exclude_wrapper(wt_path, target, task_id)
     if gitcmd.branch_exists(branch, repo=clone):
         res = gitcmd.in_repo(clone, "worktree", "add", str(wt_path), branch)
     else:
@@ -224,7 +224,7 @@ def ensure(task_id: str, branch: str,
         reason = (res.stderr.strip()[:300] if res is not None and res.stderr
                   else f"git worktree add вернул {res.returncode if res else '—'}")
         return wt_path, reason
-    return wt_path, _exclude_wrapper(wt_path, target)
+    return wt_path, _exclude_wrapper(wt_path, target, task_id)
 
 
 # Агентская обвязка внешнего проекта вне диска его рабочей копии (SPEC
@@ -291,7 +291,32 @@ def _git_failure(res, what: str) -> str | None:
     return f"{what}: {detail or f'код {res.returncode}'}"
 
 
-def _exclude_wrapper(wt_path: Path, target: str) -> str | None:
+WRAPPER_UNRESOLVED_ACTION = "wrapper_markers_only"
+
+
+def _note_unresolved_wrapper(task_id: str, target: str, wt_path: Path) -> None:
+    """Пометка: копия приведена только по стандартным маркерам — запись
+    проекта не разрешена, её `agent_wrapper` не прочитан. Журнал задачи,
+    если её строка есть в БД (та же запись повторно не пишется: `ensure`
+    зовут каждый шаг и гейт); иначе — stderr."""
+    text = (f"обвязка рабочей копии {wt_path} исключена только по стандартным "
+            f"маркерам {', '.join(config.AGENT_WRAPPER_MARKERS)}, без "
+            f"agent_wrapper: {repo_context.unresolved_reason(target)}")
+    if store.db_usable():
+        conn = store.db()
+        if store.task_exists(conn, task_id):
+            seen = conn.execute(
+                "SELECT 1 FROM steps WHERE task_id = ? AND action = ?"
+                " AND detail = ? LIMIT 1",
+                (task_id, WRAPPER_UNRESOLVED_ACTION, text)).fetchone()
+            if seen is None:
+                store.journal(conn, task_id, "orchestrator",
+                              WRAPPER_UNRESOLVED_ACTION, text, target=target)
+            return
+    print(text, file=sys.stderr)
+
+
+def _exclude_wrapper(wt_path: Path, target: str, task_id: str) -> str | None:
     """Приводит рабочую копию внешнего проекта к копии без обвязки по
     ТЕКУЩЕМУ действующему списку (`repo_context.wrapper_paths`); `None` —
     приведена, иначе причина: роль в копии с обвязкой не стартует. Шаблоны
@@ -299,14 +324,20 @@ def _exclude_wrapper(wt_path: Path, target: str) -> str | None:
     идемпотентен). Неотслеживаемые и игнорируемые файлы под списком
     убираются с диска (`git clean -x` по путям обвязки). У артели — `None`
     без единого вызова git: её копия полная. Каталога копии нет — нечего
-    приводить (регистрация без каталога — прежний исход `ensure`)."""
+    приводить (регистрация без каталога — прежний исход `ensure`). Запись
+    проекта не разрешена — копия приводится по стандартным маркерам с
+    пометкой (`_note_unresolved_wrapper`), не отказ."""
     if repo_context.is_artel(target) or not wt_path.is_dir():
         return None
     ctx = repo_context.resolve(target)
     if ctx is None:
-        return (f"обвязка рабочей копии {wt_path} не исключена: "
-                f"{repo_context.unresolved_reason(target)}")
-    wrapper = repo_context.wrapper_paths(ctx)
+        # Без разрешённой записи `ensure` заводил копию и до обвязки: отказ
+        # здесь был бы регрессией. Стандартные маркеры от записи не зависят —
+        # исключаются они, без `agent_wrapper`, с пометкой о неполном списке.
+        wrapper = targets.wrapper_paths()
+        _note_unresolved_wrapper(task_id, target, wt_path)
+    else:
+        wrapper = repo_context.wrapper_paths(ctx)
     patterns = [_wrapper_pattern(path) for path in wrapper]
     wanted = ["/*", *(f"!{p}" for p in patterns)]
     what = f"обвязка рабочей копии {wt_path} не исключена"

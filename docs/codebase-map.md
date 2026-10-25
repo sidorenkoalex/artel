@@ -1,5 +1,5 @@
 ---
-built_at_sha: 86052e636c92635e4945832242863561a68345a9
+built_at_sha: b6d2ce6c05ea6312cb0c572125d19dfd085e6b4e
 ---
 
 # Codebase-map пульта
@@ -11264,6 +11264,7 @@ built_at_sha: 86052e636c92635e4945832242863561a68345a9
 **Публичные функции:**
 - `sb`
 - `test_global_ignore_survives_own_excludes_file`
+- `test_unresolved_entry_excludes_standard_markers_without_refusal`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/idgen.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
 
