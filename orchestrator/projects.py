@@ -186,11 +186,12 @@ def _split_entry(name: str, flat: dict) -> tuple[dict, list[str]]:
     `policy` с абсолютным значением."""
     cache = targets.cache_dir(name)
     placed = {"forge", "url", "token_slot", "base", "no_paths",
-              "project_skills", "merge_gate", "sandbox",
+              "project_skills", "merge_gate", "sandbox", targets.WRAPPER_FIELD,
               targets.PROFILE_FIELD, targets.COMPONENTS_FIELD}
     description = {"base": flat["base"]}
     policy = {field: flat[field] for field in
-              ("no_paths", "project_skills", "merge_gate", "sandbox")
+              ("no_paths", "project_skills", "merge_gate", "sandbox",
+               targets.WRAPPER_FIELD)
               if field in flat}
     machine = {field: flat[field] for field in ("forge", "url", "token_slot")}
     profile = flat.get(targets.PROFILE_FIELD)

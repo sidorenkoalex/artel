@@ -205,7 +205,9 @@ class InDevGatesSandbox(RealGitSandbox):
         """(запись `config.PROTECTED_PATHS`, путь под ней) — путь не задет
         перечнем внешнего проекта."""
         entries = [e for e in config.PROTECTED_PATHS
-                   if not e.startswith(exclude_prefixes)]
+                   if not e.startswith(exclude_prefixes)
+                   and not config.is_protected_path(
+                       e, config.AGENT_WRAPPER_MARKERS)]
         entry = self.rng.choice(entries)
         return entry, self.under(entry)
 

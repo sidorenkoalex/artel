@@ -239,7 +239,9 @@ class MergeGateSandbox(RealGitSandbox):
     def artel_only_path(self) -> str:
         """Путь под случайной записью `config.PROTECTED_PATHS` (не маской)."""
         entry = self.rng.choice([e for e in config.PROTECTED_PATHS
-                                 if not e.startswith("**/")])
+                                 if not e.startswith("**/")
+                                 and not config.is_protected_path(
+                                     e, config.AGENT_WRAPPER_MARKERS)])
         return f"{entry}{self.word()}.md" if entry.endswith("/") else entry
 
     # ----------------------------------------------------------- проект
