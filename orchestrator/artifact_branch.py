@@ -28,6 +28,7 @@
 повторяется сразу, в той же отправке (`PUSH_SERVER_RETRY_ATTEMPTS`). Гейт
 мержа и закрытие сверяют ссылку с `origin` (`origin_sync_refusal`).
 """
+import io
 import os
 import re
 import time
@@ -658,6 +659,35 @@ def read_tree(task_id: str) -> dict:
     repo = task_repo(task_id)
     if repo == _NO_REPO:
         return {}
+    # Голова разрешается один раз, дальше всё читается по её sha: сдвиг
+    # ссылки посреди чтения не собирает словарь из двух коммитов (SPEC
+    # 01M5R45M0FQB2WVRHYBRF81JM6, требование 1).
+    head = _head(task_id, repo)
+    entries = _tree_entries(repo, head, f"tasks/{task_id}") if head else None
+    if entries is None:
+        return _read_tree_by_files(branch, task_id, repo)
+    blobs = _cat_blobs(repo, [oid for kind, oid, rel in entries
+                              if kind == "blob" and not rel.startswith('"')])
+    files = {}
+    for kind, oid, rel in entries:
+        if kind == "blob" and not rel.startswith('"') and oid in blobs:
+            text = _blob_text(blobs[oid])
+        else:
+            # Подмодуль, путь в кавычках, `missing`, отказ `cat-file` —
+            # прежнее чтение файла, только по sha головы.
+            text, _ = gitcmd.show(head, rel, repo=repo)
+        if text is not None:
+            files[rel] = text
+    return files
+
+
+# `<режим> SP <тип> SP <oid> TAB <путь>` — строка `git ls-tree` без `-z`/`-l`.
+_LS_TREE_LINE = re.compile(r"([0-7]{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})\t(.+)")
+
+
+def _read_tree_by_files(branch: str, task_id: str, repo: Path) -> dict:
+    """Прежнее чтение по файлам: `ls_tree_files` и `show` по имени ссылки —
+    его подменяют лёгкие песочницы, читающие диск."""
     paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}", repo=repo) or []
     files = {}
     for rel in paths:
@@ -665,6 +695,69 @@ def read_tree(task_id: str) -> dict:
         if text is not None:
             files[rel] = text
     return files
+
+
+def _tree_entries(repo: Path, sha: str, rel_dir: str) -> list | None:
+    """[(тип, oid, путь)] записей `rel_dir` дерева коммита `sha` в порядке
+    `ls-tree`; None — git отказал или строка не разобрана."""
+    res = _git(repo, "ls-tree", "-r", sha, "--", rel_dir)
+    if res is None or res.returncode != 0:
+        return None
+    entries = []
+    for line in res.stdout.splitlines():
+        if not line:
+            continue
+        match = _LS_TREE_LINE.fullmatch(line)
+        if match is None:
+            return None
+        entries.append((match.group(2), match.group(3), match.group(4)))
+    return entries
+
+
+def _cat_blobs(repo: Path, oids: list) -> dict:
+    """{oid: байты} одним `git cat-file --batch` через `gitcmd.carpentry`
+    (точка подмены записи 33 docs/invariants.md). Ответ `missing`, отказ
+    процесса и всё после оборванного или неразобранного места в словарь не
+    попадают — эти пути дочитывает `show`."""
+    if not oids:
+        return {}
+    try:
+        res = gitcmd.carpentry(repo, ["cat-file", "--batch"], dict(os.environ),
+                               input="".join(f"{oid}\n" for oid in oids).encode(),
+                               text=False)
+    except OSError:
+        return {}
+    if res.returncode != 0 or not isinstance(res.stdout, bytes):
+        return {}
+    out, pos, blobs = res.stdout, 0, {}
+    for oid in oids:
+        end = out.find(b"\n", pos)
+        if end < 0:
+            break
+        header = out[pos:end].decode("ascii", "replace").split()
+        pos = end + 1
+        if header == [oid, "missing"]:
+            continue
+        if (len(header) != 3 or header[0] != oid or header[1] != "blob"
+                or not header[2].isdigit()):
+            break
+        size = int(header[2])
+        if out[pos + size:pos + size + 1] != b"\n":
+            break
+        blobs[oid] = out[pos:pos + size]
+        pos += size + 1
+    return blobs
+
+
+def _blob_text(data: bytes) -> str | None:
+    """Текст blob так же, как его отдал бы `gitcmd.show` (`text=True`):
+    кодировка локали строго, универсальные переводы строк; не
+    декодируется — None, файл выпадает."""
+    try:
+        text = data.decode(io.TextIOWrapper(io.BytesIO()).encoding)
+    except UnicodeDecodeError:
+        return None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def restrict_materialized_notes(task_id: str, dest_root: Path, role: str | None
