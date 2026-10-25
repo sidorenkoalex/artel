@@ -1,0 +1,15 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..6dcf2c20 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1079,9 +1079,7 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
+         base_sha = cached_base(repo, branch, head_sha)
+         paths = gitcmd.diff_names(base_sha, head_sha, repo=repo)
+         if paths is None:
+-            raise _Prepare(f"дифф базы {base_sha[:12]} и головы "
+-                           f"{head_sha[:12]} не получен — компоненты гейта "
+-                           f"не выбраны")
++            paths = []
+         profiles = project_profile.component_profiles(
+             target, project_profile.select_components(target, paths))
+     except _Prepare as exc:

@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..8faa37b6 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1094,7 +1094,7 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
+                            f"artel.py advance {task_id}")
+     outside = tuple(OUT_OF_BOUNDS_LINE.format(name=p.component)
+                     for p in profiles if not in_outcome_bounds(p))
+-    inside = [p for p in profiles if in_outcome_bounds(p)]
++    inside = list(profiles)
+     if not inside:
+         project_profile.journal_skip(
+             conn, task_id, CHECK_OUTCOME, project_profile.Decision(

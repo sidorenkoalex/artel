@@ -1,0 +1,14 @@
+diff --git a/orchestrator/project_profile.py b/orchestrator/project_profile.py
+index 8a4e474f..b0631435 100644
+--- a/orchestrator/project_profile.py
++++ b/orchestrator/project_profile.py
+@@ -578,9 +578,6 @@ def _touches(component: Component, path: str) -> bool:
+     потребитель). `contract` выбор не расширяет."""
+     fields = component.fields
+     regexes = _regexes(fields.get("paths"))
+-    for dep in (fields.get("depends_on") or {}).values():
+-        if dep.get("via") in ("paths", "files"):
+-            regexes += _regexes(dep.get("paths"))
+     if any(re.search(regex, path) for regex in regexes):
+         return True
+     return any(mask_matches(mask, path)

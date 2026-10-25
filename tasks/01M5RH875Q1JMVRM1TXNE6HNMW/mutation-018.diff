@@ -1,0 +1,13 @@
+diff --git a/orchestrator/fsm_advance.py b/orchestrator/fsm_advance.py
+index ee7ab5d2..0bb5edc2 100644
+--- a/orchestrator/fsm_advance.py
++++ b/orchestrator/fsm_advance.py
+@@ -517,7 +517,7 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
+     # Профиль тестов проекта (SPEC 01M45FJVGQT1K0P8HDEXZX6HS7, требования
+     # 3-5) — первым: без разрешённого контекста не читается и ссылка
+     # документов, а отказ обязан назвать контекст, не её.
+-    decision = project_profile.for_task_target(target, task_id, conn)
++    decision = project_profile.decide(target)
+     if _run_gates(conn, task_id,
+                   [lambda: _project_profile_gate(task_id, decision)]):
+         return False

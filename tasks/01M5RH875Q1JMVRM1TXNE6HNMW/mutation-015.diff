@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..80ea6749 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1260,7 +1260,7 @@ def _components_review_lines(conn, task_id: str, head_sha: str) -> list:
+         if fields is not None and fields[0] == head_sha:
+             latest[fields[2]] = (detail, fields)
+     if latest:
+-        return [line for detail, fields in latest.values()
++        return [line for detail, fields in list(latest.values())[-1:]
+                 for line in _record_lines(detail, fields)]
+     lines = [NOT_RUN_LINE.format(head=head_sha[:7] or "(не прочитана)")]
+     skip_action = f"{project_profile.SKIP_ACTION}: {CHECK_OUTCOME}"

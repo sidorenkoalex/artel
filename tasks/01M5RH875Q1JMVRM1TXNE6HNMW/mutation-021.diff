@@ -1,0 +1,12 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..c112b1d4 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1170,6 +1170,7 @@ def merge_gate_escalates(conn, task_id: str, state: str, main_sha_of) -> bool:
+         if t["is_canary"]:
+             return False
+         _merge_profile_refusal_exit(conn, task_id, target)
++        return False
+         artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+         refusal = _components_gate(conn, task_id, t["branch"],
+                                    artifact_branch, target,

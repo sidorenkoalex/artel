@@ -1,0 +1,22 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..67abe060 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1029,17 +1029,6 @@ def _outcome_integrity_gate(conn, task_id: str, t,
+     """Гейт (требования 1-6): вне границы — `None` без прогона и записи;
+     иначе прогоны, сравнение, мандат; сбой подготовки — отказ. Запись
+     из нескольких компонентов — компоненты диффа (`_components_gate`)."""
+-    target = t["target"] or config.DEFAULT_TARGET
+-    if project_profile.is_multi(target):
+-        if t["is_canary"]:
+-            return None
+-        decision = project_profile.for_task_target(target, task_id, conn)
+-        if decision.profile is None:
+-            return GateRefusal(project_profile.REFUSAL_ACTION,
+-                               decision.refusal,
+-                               project_profile.refusal_hint(task_id))
+-        return _components_gate(conn, task_id, t["branch"], artifact_branch,
+-                                target, _diff_base, merge=False)
+     profile = _bounds(t["is_canary"], t["target"])
+     if profile is None:
+         return None

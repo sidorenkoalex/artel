@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..e31cc9e1 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1103,7 +1103,7 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
+         return None
+     for profile in inside:
+         refusal = _gate(conn, task_id, branch, artifact_branch, profile,
+-                        cached_base, merge, extra=outside)
++                        cached_base, merge, extra=())
+         if refusal is not None:
+             return refusal._replace(
+                 detail=f"компонент {profile.component}: {refusal.detail}")

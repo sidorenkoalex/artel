@@ -1,0 +1,20 @@
+diff --git a/orchestrator/fsm_advance.py b/orchestrator/fsm_advance.py
+index ee7ab5d2..c2291866 100644
+--- a/orchestrator/fsm_advance.py
++++ b/orchestrator/fsm_advance.py
+@@ -596,11 +596,12 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
+     # чужого проекта не проверяются, как и на рубеже `in_dev`
+     # (`_network_address_gate`).
+     network_addresses = repo_context.is_artel(target)
+-    gates = [lambda: _tests_writing_foreign_plank_gate(
+-                 task_id, acc_tdir, target, profile),
+-             lambda: _tests_writing_test_groups_gate(
++    gates = [lambda: _tests_writing_test_groups_gate(
+                  acc_tdir, task_id, profile,
+                  network_addresses=network_addresses)]
++    if in_outcome_bounds(profile):
++        gates.insert(0, lambda: _tests_writing_foreign_plank_gate(
++            task_id, acc_tdir, target, profile))
+     if code_diff is not None:
+         gates.append(lambda: _tests_writing_long_lived_gate(
+             task_id, t["branch"], code_diff, long_lived, profile,

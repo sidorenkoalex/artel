@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/mandate.py b/orchestrator/advance_gates/mandate.py
+index 89e3e09c..6e9afdf4 100644
+--- a/orchestrator/advance_gates/mandate.py
++++ b/orchestrator/advance_gates/mandate.py
+@@ -329,8 +329,6 @@ def _test_id_refusal(element: str, decision) -> str | None:
+     if decision is not None and decision.refusal:
+         return (f"гейт неослабления по исходам мандат не засчитает — решение "
+                 f"профиля тестов проекта: отказ: {decision.refusal}")
+-    if decision is not None and project_profile.is_multi(decision.target):
+-        return _record_test_id_refusal(component, path, decision)
+     profile = _outcome_profile(decision)
+     if profile is None:
+         return ("мандат по идентификатору действует только у компонента "

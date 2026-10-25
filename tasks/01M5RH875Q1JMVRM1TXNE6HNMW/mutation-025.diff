@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/tests_writing.py b/orchestrator/advance_gates/tests_writing.py
+index 8746d7f5..91e8339f 100644
+--- a/orchestrator/advance_gates/tests_writing.py
++++ b/orchestrator/advance_gates/tests_writing.py
+@@ -1087,7 +1087,7 @@ def _tests_writing_foreign_plank_gate(task_id: str, acc_tdir, target: str,
+         comp = rule.component_of(path.name)
+         if not comp or comp == profile.component:
+             continue
+-        if in_outcome_bounds(owners.get(comp)):
++        if comp == profile.component and in_outcome_bounds(owners.get(comp)):
+             foreign.append(f"файл планки {path.name} — компонента {comp}, "
+                            f"задача — компонента {profile.component}")
+     if not foreign:

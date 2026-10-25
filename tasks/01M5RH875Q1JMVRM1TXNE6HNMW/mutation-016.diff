@@ -1,0 +1,29 @@
+diff --git a/orchestrator/review.py b/orchestrator/review.py
+index ded8f4ae..16b38853 100644
+--- a/orchestrator/review.py
++++ b/orchestrator/review.py
+@@ -703,7 +703,23 @@ def _outcome_gate_lines(conn, task_id: str, branch: str,
+     counted = dict.fromkeys(
+         row["detail"] or "" for row in store.task_steps(conn, task_id)
+         if row["action"] == tests_writing.FILE_LEVEL_COUNTED_ACTION)
+-    return (outcome_integrity.review_lines(conn, task_id, head)
++    lines = outcome_integrity.review_lines(conn, task_id, head)
++    if project_profile.is_multi(profile.project):
++        res = gitcmd.in_repo(workspace.task_repo(task_id), "rev-parse",
++                             f"{head}^{{tree}}")
++        tree = (res.stdout.strip()
++                if res is not None and res.returncode == 0 else "")
++        try:
++            key = acceptance.report_suite_result_key(tree, profile, False)
++        except Exception:  # noqa: BLE001
++            key = None
++        own = []
++        for detail in outcome_integrity._passed_details(conn, task_id):
++            fields = outcome_integrity.proof_fields(detail)
++            if fields is not None and fields[0] == head and fields[2] == key:
++                own += outcome_integrity._record_lines(detail, fields)
++        lines = own
++    return (lines
+             + [f"{tests_writing.FILE_LEVEL_COUNTED_ACTION}: {detail}"
+                for detail in counted])
+ 

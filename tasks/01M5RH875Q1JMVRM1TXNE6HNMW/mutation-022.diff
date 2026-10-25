@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/mandate.py b/orchestrator/advance_gates/mandate.py
+index 89e3e09c..ec1dcc01 100644
+--- a/orchestrator/advance_gates/mandate.py
++++ b/orchestrator/advance_gates/mandate.py
+@@ -229,9 +229,6 @@ def _weakening_scope_refusal(path: str, decision) -> str | None:
+     # Запись из нескольких компонентов: элемент годен и для находки
+     # другого компонента записи в границе гейта исходов (SPEC
+     # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 2) — по его области.
+-    for other in _record_outcome_profiles(decision):
+-        if _path_in_outcome_area(path, other):
+-            return None
+     scope = ", ".join(decision.profile.weakening_scope)
+     return (f"путь вне области {scope} — гейт неослабления тестов другие "
+             f"пути не рассматривает")

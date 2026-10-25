@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..0df85ebb 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1267,9 +1267,4 @@ def _components_review_lines(conn, task_id: str, head_sha: str) -> list:
+     head_line = _HEAD_LINE.format(head=head_sha)
+     skips = [r["detail"] or "" for r in store.task_steps(conn, task_id)
+              if head_sha and r["action"] == skip_action]
+-    for detail in reversed(skips):
+-        rows = detail.splitlines()
+-        if rows and rows[0] == head_line:
+-            lines += [f"гейт исходов: {row}" for row in rows[1:]]
+-            break
+     return lines

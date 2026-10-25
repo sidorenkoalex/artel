@@ -1,0 +1,13 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..6f7b2703 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1208,7 +1208,7 @@ def _merge_profile_refusal_exit(conn, task_id: str, target: str) -> None:
+     (`for_task`) — отказ мержа, не пропуск гейта и не эскалация (SPEC
+     01M5JGSAANR1NZYQD4FCSVE48Y, требование 2): задача остаётся на
+     `merge_gate`."""
+-    decision = project_profile.for_task_target(target, task_id, conn)
++    decision = project_profile.decide(target)
+     if decision.profile is not None:
+         return
+     # fsm_merge_gate импортирует этот модуль на верхнем уровне.

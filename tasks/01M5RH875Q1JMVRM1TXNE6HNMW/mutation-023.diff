@@ -1,0 +1,17 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..ac683ff4 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -981,8 +981,11 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
+                        + _strict_findings(profile, files, entries)
+                        + _code_exception_findings(files, entries, added))
+ 
++    own = project_profile.for_task(conn, task_id).profile
+     mandate, id_mandate = (_answer_mandates(artifact_branch, task_id)
+-                           if findings else ({}, {}))
++                           if findings and own is not None
++                           and own.component == profile.component
++                           else ({}, {}))
+     covered = [(f, _cover(f, mandate, id_mandate, replacements))
+                for f in findings]
+     uncovered = [f for f, pair in covered if pair is None]

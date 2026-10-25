@@ -1,0 +1,14 @@
+diff --git a/orchestrator/review.py b/orchestrator/review.py
+index ded8f4ae..527c4779 100644
+--- a/orchestrator/review.py
++++ b/orchestrator/review.py
+@@ -693,8 +693,7 @@ def _outcome_gate_lines(conn, task_id: str, branch: str,
+     компонентов — из `review_lines` (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y,
+     требование 3)."""
+     from .advance_gates import outcome_integrity, tests_writing
+-    if not outcome_integrity.in_outcome_bounds(profile) and \
+-            not project_profile.is_multi(profile.project):
++    if not outcome_integrity.in_outcome_bounds(profile):
+         return None
+     head = gitcmd.branch_head_sha(branch, repo=workspace.task_repo(task_id))
+     # Засчитывание ошибки уровня файла красным (SPEC

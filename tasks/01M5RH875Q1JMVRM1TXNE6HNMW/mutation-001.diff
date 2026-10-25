@@ -1,0 +1,15 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..b1845121 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1082,8 +1082,8 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
+             raise _Prepare(f"дифф базы {base_sha[:12]} и головы "
+                            f"{head_sha[:12]} не получен — компоненты гейта "
+                            f"не выбраны")
+-        profiles = project_profile.component_profiles(
+-            target, project_profile.select_components(target, paths))
++        profiles = (project_profile.for_task_target(target, task_id,
++                                                    conn).profile,)
+     except _Prepare as exc:
+         reason = str(exc)
+     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск

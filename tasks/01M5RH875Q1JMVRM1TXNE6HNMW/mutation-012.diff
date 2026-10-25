@@ -1,0 +1,14 @@
+diff --git a/orchestrator/advance_gates/outcome_integrity.py b/orchestrator/advance_gates/outcome_integrity.py
+index d61b463f..896c5fb6 100644
+--- a/orchestrator/advance_gates/outcome_integrity.py
++++ b/orchestrator/advance_gates/outcome_integrity.py
+@@ -1098,8 +1098,7 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
+     if not inside:
+         project_profile.journal_skip(
+             conn, task_id, CHECK_OUTCOME, project_profile.Decision(
+-                target, skip="\n".join([_HEAD_LINE.format(head=head_sha),
+-                                        *outside])))
++                target, skip="\n".join([*outside])))
+         return None
+     for profile in inside:
+         refusal = _gate(conn, task_id, branch, artifact_branch, profile,
