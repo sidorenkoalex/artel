@@ -18,8 +18,7 @@
   task_id, title, branch)["text"]`;
 - идентификатор границ — подмена `brief.new_run_id`, маркеры —
   `brief.wrap_boundary`; пометки — `brief.PROJECT_CONVENTIONS_ABSENT_MARK`,
-  `brief.PROJECT_CONVENTIONS_UNREAD_MARK`; перечень —
-  `brief.PROJECT_CONVENTIONS`; предел каталога —
+  `brief.PROJECT_CONVENTIONS_UNREAD_MARK`; предел каталога —
   `brief.KNOWLEDGE_DIR_MAX_FILES`; потолок файла —
   `config.CONTEXT_FILE_MAX_BYTES`;
 - журнал задачи — `store.task_steps`;
@@ -31,18 +30,22 @@
 git-репозиторий, он же клон артели. Учебный внешний проект — клон
 `make_project_repo` в области проектов песочницы (без `origin`), его запись
 в `config.TARGETS` песочницы — `components:` из одного компонента с полем
-`knowledge` (либо иная форма записи сценария); документы `knowledge` и
-конвенции лежат в коммите базовой ветки клона, ветка задачи отведена от неё.
+`knowledge` (либо иная форма записи сценария); документы `knowledge` лежат
+в коммите базовой ветки клона, ветка задачи отведена от неё; конвенции
+проекта — `conventions.md` в области проекта песочницы (SPEC
+01M5T18K1YFBYA7MM1BBRV869A).
 Символьные ссылки и подмодули — записи дерева с режимами 120000 и 160000.
 Сбой git — подменённый `subprocess.run`, отвечающий кодом 128 и stderr с
 уникальной строкой на git-вызовы клона, где упомянут нужный путь. Имена
 проекта, базы, компонента, файлов и их тексты выбираются модулем `random`;
 зерно печатается и входит в текст провала.
 
-Эталон прежнего вывода (AC-9, AC-10) снят с кода пина (`orchestrator/
-brief.py` до правки задачи) на фиксированном входе: проект
-`ETALON_PROJECT`, база `ETALON_BASE`, `CLAUDE.md` — `ETALON_CLAUDE`,
-`AGENTS.md` нет, `brief.new_run_id` отдаёт `ETALON_RUN_ID`. Эталон — склейка
+Эталон прежнего вывода (AC-9, AC-10) записан явным текстом на
+фиксированном входе: проект `ETALON_PROJECT`, база `ETALON_BASE`,
+`conventions.md` пульта — `ETALON_CLAUDE`, `brief.new_run_id` отдаёт
+`ETALON_RUN_ID`; от эталона, снятого с кода до задачи 01M5T18K1YFBYA7MM1BBRV869A,
+он отличается только тем, что куски `CLAUDE.md`/`AGENTS.md` базы и их
+пометки заменены компонентом `conventions.md`. Эталон — склейка
 кусков `_project_conventions_parts` переводом строки (так их склеивают все
 пять потребителей) в трёх способах оформления; тест ищет его в собранном
 тексте и требует, чтобы вне него не было ни упоминания проекта, ни слова
@@ -109,23 +112,20 @@ ETALON_RUN_ID = "0123456789abcdef0123456789abcdef"
 ETALON_CLAUDE = ("# Конвенции учебного проекта\n\n"
                  "Правило проекта: тесты рядом с кодом.\n")
 
-# Склейка кусков `_project_conventions_parts` пина переводом строки —
+# Склейка кусков `_project_conventions_parts` переводом строки —
 # оформление `_journal_component` (analyst, test_author).
 ETALON_JOURNAL = (
-    '### CLAUDE.md (корень ветки osnova-etalon проекта uchebnyetalon)\n'
+    '### conventions.md (.artel/projects/uchebnyetalon/conventions.md)\n'
     '\n'
     '=== ГРАНИЦА НЕДОВЕРЕННЫХ ДАННЫХ 0123456789abcdef0123456789abcdef ===\n'
     '# Конвенции учебного проекта\n'
     '\n'
     'Правило проекта: тесты рядом с кодом.\n'
     '=== КОНЕЦ ГРАНИЦЫ НЕДОВЕРЕННЫХ ДАННЫХ 0123456789abcdef0123456789abcdef ===\n'
-    '\n'
-    'конвенции проекта: AGENTS.md — файла нет (корень ветки osnova-etalon '
-    'проекта uchebnyetalon)\n'
 )
 # То же — оформление `_manifest_component` (developer, spec_auditor).
 ETALON_MANIFEST = (
-    '### CLAUDE.md (корень ветки osnova-etalon проекта uchebnyetalon) — 122 '
+    '### conventions.md (.artel/projects/uchebnyetalon/conventions.md) — 122 '
     'байт, sha256=52d5db695cef072cdca2f7227787e01faf1ab0167d846fc7e8a574bad85'
     '01f14\n'
     '\n'
@@ -134,15 +134,12 @@ ETALON_MANIFEST = (
     '\n'
     'Правило проекта: тесты рядом с кодом.\n'
     '=== КОНЕЦ ГРАНИЦЫ НЕДОВЕРЕННЫХ ДАННЫХ 0123456789abcdef0123456789abcdef ===\n'
-    '\n'
-    'конвенции проекта: AGENTS.md — файла нет (корень ветки osnova-etalon '
-    'проекта uchebnyetalon)\n'
 )
 # То же — оформление `review._conventions_component` (пакет ревьювера);
 # у этого входа побайтно совпадает с описью `_manifest_component`, но
 # держится отдельным литералом: способы оформления вправе разойтись.
 ETALON_REVIEW = (
-    '### CLAUDE.md (корень ветки osnova-etalon проекта uchebnyetalon) — 122 '
+    '### conventions.md (.artel/projects/uchebnyetalon/conventions.md) — 122 '
     'байт, sha256=52d5db695cef072cdca2f7227787e01faf1ab0167d846fc7e8a574bad85'
     '01f14\n'
     '\n'
@@ -151,9 +148,6 @@ ETALON_REVIEW = (
     '\n'
     'Правило проекта: тесты рядом с кодом.\n'
     '=== КОНЕЦ ГРАНИЦЫ НЕДОВЕРЕННЫХ ДАННЫХ 0123456789abcdef0123456789abcdef ===\n'
-    '\n'
-    'конвенции проекта: AGENTS.md — файла нет (корень ветки osnova-etalon '
-    'проекта uchebnyetalon)\n'
 )
 ETALONS = {"developer": ETALON_MANIFEST, "spec_auditor": ETALON_MANIFEST,
            "analyst": ETALON_JOURNAL, "test_author": ETALON_JOURNAL,
@@ -250,7 +244,9 @@ class KnowledgeSandbox(RealGitSandbox):
         `links` (путь -> цель) и подмодули `gitlinks` — в коммите базовой
         ветки клона; запись проекта вида `record` с полем `knowledge`;
         ветка задачи отведена от базы (её версии файлов — `branch_files`),
-        клон стоит на `main` с файлами `tree_files` в рабочем дереве."""
+        клон стоит на `main` с файлами `tree_files` в рабочем дереве;
+        `conventions.md` пульта — `ETALON_CLAUDE` у `fixed`, иначе
+        уникальный текст."""
         if fixed:
             self.project, self.base = ETALON_PROJECT, ETALON_BASE
             self.component = ETALON_COMPONENT
@@ -307,6 +303,10 @@ class KnowledgeSandbox(RealGitSandbox):
         self.commit_docs({
             "SPEC.md": f"# SPEC\n\nSPEC учебной задачи {word(self.rng, 12)}.\n",
             "TZ.md": f"# ТЗ\n\nТЗ учебной задачи {word(self.rng)}.\n"})
+        self.pult_text = (ETALON_CLAUDE if fixed
+                          else self.doc("Конвенции пульта"))
+        (config.PROJECTS / self.project / "conventions.md").write_text(
+            self.pult_text, encoding="utf-8")
 
     def commit_docs(self, files: dict) -> None:
         """Коммит документов задачи в ссылку `refs/artifacts/<id>` клона —
@@ -456,16 +456,16 @@ class ElementFileTest(KnowledgeSandbox):
     def test_ac1_element_files_after_conventions_in_record_order(self):
         """Компонент с `knowledge: [<подкаталог>/<файл>, <файл корня>]`.
 
-        В корне базы `CLAUDE.md` (текст эталона), `AGENTS.md` нет; два
-        элемента-файла — в подкаталоге и в корне, их другие версии лежат на
-        ветке задачи и в рабочем дереве клона. В добавке test_author и брифе
-        developer: прежние куски `CLAUDE.md`/пометка `AGENTS.md` побайтно
-        (эталон), за ними — куски элементов в порядке записи; заголовок
-        куска — «<путь> (knowledge компонента <имя>, ветка <base> проекта
-        <target>)», тело — текст коммита базы.
+        `conventions.md` пульта — текст эталона, в корне базы `CLAUDE.md`,
+        `AGENTS.md` нет; два элемента-файла — в подкаталоге и в корне, их
+        другие версии лежат на ветке задачи и в рабочем дереве клона. В
+        добавке test_author и брифе developer: компонент `conventions.md`
+        побайтно (эталон), за ним — куски элементов в порядке записи;
+        заголовок куска — «<путь> (knowledge компонента <имя>, ветка <base>
+        проекта <target>)», тело — текст коммита базы.
 
         Ловит мутацию: элементы `knowledge` не читаются, либо куски
-        вставлены перед `CLAUDE.md`, либо отсортированы вместо порядка
+        вставлены перед `conventions.md`, либо отсортированы вместо порядка
         записи, либо текст взят с ветки задачи или рабочего дерева, либо
         путь в подкаталоге не найден (`ls-tree` без пути) — в тексте нет
         куска элемента, порядок или текст другие."""
@@ -482,7 +482,7 @@ class ElementFileTest(KnowledgeSandbox):
                 etalon = ETALONS[role]
                 pos = text.find(etalon)
                 self.assertGreaterEqual(pos, 0, self.note(
-                    f"{role}: прежние куски CLAUDE.md/AGENTS.md не побайтно"))
+                    f"{role}: компонент conventions.md не побайтно"))
                 previous = pos + len(etalon)
                 for path in (deep, top):
                     header, body = self.chunk(text, texts[path].strip())
@@ -765,21 +765,23 @@ class ElementKindMarksTest(KnowledgeSandbox):
 class RepeatsAndMarksTest(KnowledgeSandbox):
 
     def test_ac6_shown_paths_not_repeated(self):
-        """Компонент с `knowledge: [./CLAUDE.md, docs/<a>.md, docs/,
-        CLAUDE.md]`; в базе `CLAUDE.md`, `docs/<a>.md`, `docs/<b>.md`.
+        """Компонент с `knowledge: [./<файл корня>.md, docs/<a>.md, docs/,
+        <файл корня>.md]`; в базе нейтральный файл корня (вне обвязки),
+        `docs/<a>.md`, `docs/<b>.md`.
 
-        Текст `CLAUDE.md` и текст `docs/<a>.md` — по одному разу; кусок
+        Текст файла корня и текст `docs/<a>.md` — по одному разу; кусок
         каталога — только `docs/<b>.md` с подписью «документ 1 из 1»;
-        заголовка «CLAUDE.md (knowledge компонента …» нет.
+        второго заголовка «<файл корня>.md (knowledge компонента …» нет.
 
-        Ловит мутацию: «./CLAUDE.md» не сведён к пути дерева, повтор между
-        элементами не убран, каталог не учёл уже показанный файл (M = 2) —
-        текст выведен дважды или подпись другая."""
-        claude = self.doc("CLAUDE")
+        Ловит мутацию: «./<файл корня>.md» не сведён к пути дерева, повтор
+        между элементами не убран, каталог не учёл уже показанный файл
+        (M = 2) — текст выведен дважды или подпись другая."""
+        root_name = f"{word(self.rng)}.md"
+        claude = self.doc("Корень")
         a_path, b_path = sorted(f"docs/{word(self.rng)}.md" for _ in range(2))
         a_text, b_text = self.doc("A"), self.doc("B")
-        self.prepare({"CLAUDE.md": claude, a_path: a_text, b_path: b_text},
-                     ["./CLAUDE.md", a_path, "docs/", "CLAUDE.md"])
+        self.prepare({root_name: claude, a_path: a_text, b_path: b_text},
+                     [f"./{root_name}", a_path, "docs/", root_name])
         for role in ("test_author", "developer"):
             with self.subTest(роль=role):
                 text = self.text_of(role)
@@ -788,48 +790,55 @@ class RepeatsAndMarksTest(KnowledgeSandbox):
                 header, _ = self.chunk(text, b_text.strip())
                 self.assertTrue(header.startswith(
                     "### " + self.dir_label("docs/", 1, 1)), self.note(header))
-                self.assertFalse(self.lines_with(
-                    text, "CLAUDE.md (knowledge компонента"), self.note(role))
+                self.assertEqual(len(self.lines_with(
+                    text, f"### {root_name} (knowledge компонента")), 1,
+                    self.note(role))
 
     def test_ac6_size_skip_in_render_counts_as_shown(self):
-        """`CLAUDE.md` базы крупнее `config.CONTEXT_FILE_MAX_BYTES`;
-        компонент с `knowledge: [CLAUDE.md]`; бриф developer (оформление с
-        потолком файла).
+        """Нейтральный файл корня базы (вне обвязки) крупнее
+        `config.CONTEXT_FILE_MAX_BYTES`; компонент с `knowledge: [<файл>.md,
+        ./<файл>.md]`; бриф developer (оформление с потолком файла).
 
-        Заголовок `CLAUDE.md` — один (прежний, с пропуском по размеру);
-        заголовка «CLAUDE.md (knowledge компонента …» нет.
+        Заголовок файла — один, с пропуском по размеру; второго куска
+        `knowledge` на тот же путь нет.
 
         Ловит мутацию: «показанным» считается только кусок, вошедший в
-        текст, — пропущенный по размеру `CLAUDE.md` выводится второй раз
-        куском `knowledge`."""
+        текст, — пропущенный по размеру файл выводится второй раз куском
+        второго элемента."""
+        root_name = f"{word(self.rng)}.md"
         filler = f"Строка правил {word(self.rng)} " + "ж" * 60 + "\n"
         count = config.CONTEXT_FILE_MAX_BYTES // len(filler.encode()) + 20
         claude = "# Большие правила\n\n" + filler * count
-        self.prepare({"CLAUDE.md": claude}, ["CLAUDE.md"])
+        self.prepare({root_name: claude}, [root_name, f"./{root_name}"])
         text = self.text_of("developer")
         headers = [line for line in text.splitlines()
-                   if line.startswith("### ") and "CLAUDE.md" in line]
+                   if line.startswith("### ") and root_name in line]
         self.assertEqual(len(headers), 1, self.note(f"заголовки: {headers}"))
-        self.assertNotIn("knowledge компонента", headers[0], self.note(headers[0]))
+        self.assertIn("пропущен", headers[0], self.note(headers[0]))
 
     def test_ac6_marked_paths_not_counted_as_shown(self):
-        """В корне базы `AGENTS.md` нет, `CLAUDE.md` — байты не UTF-8;
-        компонент с `knowledge: [AGENTS.md, CLAUDE.md]`.
+        """В корне базы файла `<нет>.md` нет, `<не-UTF-8>.md` — байты не
+        UTF-8 (оба пути вне обвязки); компонент с `knowledge: [<нет>.md,
+        ./<нет>.md, <не-UTF-8>.md, ./<не-UTF-8>.md]`.
 
-        Пометка «файла нет» с `AGENTS.md` — не меньше двух (прежняя и
-        элемента), пометка «конвенции проекта не прочитаны» с `CLAUDE.md` —
+        Пометка «файла нет» с `<нет>.md` — не меньше двух (по элементу на
+        путь), пометка «конвенции проекта не прочитаны» с `<не-UTF-8>.md` —
         не меньше двух.
 
-        Ловит мутацию: путь с пометкой заносится в «показанные» — элемент
-        `knowledge` молча пропущен, вторая пометка не выведена."""
+        Ловит мутацию: путь с пометкой заносится в «показанные» — второй
+        элемент на тот же путь молча пропущен, вторая пометка не
+        выведена."""
+        absent = f"net{word(self.rng)}.md"
+        broken = f"kodirovka{word(self.rng)}.md"
         raw = f"# Правила {word(self.rng)}\n".encode("cp1251")
-        self.prepare({"CLAUDE.md": raw}, ["AGENTS.md", "CLAUDE.md"])
+        self.prepare({broken: raw},
+                     [absent, f"./{absent}", broken, f"./{broken}"])
         text = self.text_of("test_author")
         self.assertGreaterEqual(len(self.lines_with(text, ABSENT_MARK,
-                                                    "AGENTS.md")), 2,
+                                                    absent)), 2,
                                 self.note(text))
         self.assertGreaterEqual(len(self.lines_with(text, UNREAD_MARK,
-                                                    "CLAUDE.md")), 2,
+                                                    broken)), 2,
                                 self.note(text))
 
     def test_ac6_missing_element_file_marked_absent(self):
@@ -982,10 +991,10 @@ class UnreadBaseTest(KnowledgeSandbox):
         из клона после отведения ветки задачи.
 
         В брифе test_author и developer — ровно одна строка с «конвенции
-        проекта не прочитаны»; в ней — каждый файл `PROJECT_CONVENTIONS` и
-        оба элемента `knowledge`; кусков `knowledge` нет.
+        проекта не прочитаны»; в ней — оба элемента `knowledge`; кусков
+        `knowledge` нет.
 
-        Ловит мутацию: пометка базы перечисляет только `PROJECT_CONVENTIONS`,
+        Ловит мутацию: пометка базы не перечисляет элементы `knowledge`,
         либо элементы `knowledge` дают по своей пометке вслед за общей."""
         element = f"{word(self.rng)}.md"
         self.prepare({"CLAUDE.md": self.doc("CLAUDE"),
@@ -998,7 +1007,7 @@ class UnreadBaseTest(KnowledgeSandbox):
                 text = self.text_of(role)
                 lines = self.lines_with(text, UNREAD_MARK)
                 self.assertEqual(len(lines), 1, self.note(f"{role}: {lines}"))
-                for name in (*brief.PROJECT_CONVENTIONS, element, "docs/"):
+                for name in (element, "docs/"):
                     self.assertIn(name, lines[0], self.note(
                         f"{role}: в пометке нет {name}"))
                 self.assertNotIn("knowledge компонента", text, self.note(role))
@@ -1018,11 +1027,12 @@ class EtalonTest(KnowledgeSandbox):
                 self.assert_etalon(role, self.text_of(role), (nonce.strip(),))
 
     def test_ac9_test_profile_record_output_matches_etalon(self):
-        """Запись `test_profile` с `CLAUDE.md` в базе и без `AGENTS.md`.
+        """Запись `test_profile` с `CLAUDE.md` в базе и без `AGENTS.md`,
+        `conventions.md` пульта — текст эталона.
 
         Во всех пяти потребителях (оформление с описью, без описи, пакет
-        ревьювера) кусок конвенций побайтно равен эталону пина; вне него
-        нет ни проекта, ни `knowledge`, ни пометок.
+        ревьювера) кусок конвенций побайтно равен эталону; вне него нет ни
+        проекта, ни `knowledge`, ни пометок.
 
         Ловит мутацию: правка задачи сменила подпись или пометку прежних
         кусков (`where`, порядок, перевод строки) либо добавила строку о
@@ -1201,15 +1211,14 @@ class ConsumersTest(KnowledgeSandbox):
         """Компонент с `knowledge: [<файл>, docs/]` (порядок записи — не
         алфавитный: файл `rules…` раньше `docs/`).
 
-        В пакете ревьювера заголовки идут так: `CLAUDE.md`, `AGENTS.md`,
+        В пакете ревьювера заголовки идут так: `conventions.md` пульта,
         кусок элемента-файла, кусок файла каталога.
 
         Ловит мутацию: в пакете ревьювера куски `knowledge` не выводятся,
-        стоят до `CLAUDE.md`/`AGENTS.md` или отсортированы по пути."""
+        стоят до `conventions.md` или отсортированы по пути."""
         self.prepare_consumers()
         text = self.text_of("reviewer")
-        order = [self.header_pos(text, "CLAUDE.md ("),
-                 self.header_pos(text, "AGENTS.md ("),
+        order = [self.header_pos(text, "conventions.md ("),
                  self.header_pos(text, self.file_label(self.element)),
                  self.header_pos(text, self.dir_label("docs/", 1, 1))]
         self.assertEqual(order, sorted(order), self.note(f"порядок: {order}"))
