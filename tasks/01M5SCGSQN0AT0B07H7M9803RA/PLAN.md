@@ -44,10 +44,16 @@ schema_version: 5
    по требованию 14 (импорт `sandbox`, первый контекст
    `sandbox.declared_without_profile("sled")`).
 7. Регенерация `docs/codebase-map.md`.
-8. По ANSWER-2 (вариант (а)): `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py::ProjectAreaSandbox.setUp`
-   — одна строка `(self.root / ".artel" / "targets.yaml").unlink(missing_ok=True)` сразу после
-   `self.addCleanup(targets_patcher.stop)`: убирает запись артели, посеянную `RealGitSandbox` по
-   адресу локального слоя. Утверждения, методы и их число не менялись.
+8. По ANSWER-3 (возврат из verifying, CI 40193672834, 53 failed; вариант (б) вместо (а) ANSWER-2):
+   - п. 1: `tests/sandbox.py::RealGitSandbox.setUp` — `config.TARGETS` песочницы теперь
+     `self.root / ".artel" / "repo-targets.yaml"` (под игнорируемым `.artel/`, не адрес
+     `targets.local_path()`), комментарий дополнен причиной; посев записи артели и прочее не тронуты;
+   - п. 2: строка `unlink` ANSWER-2 в `ProjectAreaSandbox.setUp` снята — файл больше не сеется по
+     адресу локального слоя; `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py` равен main;
+   - п. 3: `targets.target()` берёт запись из `targets.load()` (единая точка чтения: подмена `load`
+     в `test_01m545edths47hsb59akc1ez9c_project_token.py`/`test_01m55v7wb94c9bzxtxtth83ywv_project_gh.py`
+     видна и здесь); `layers()` зовётся только для текста отказа неизвестного имени.
+   Утверждения, методы и их число ни в одном тесте не менялись.
 
 ## Покрытие требований
 
@@ -66,7 +72,7 @@ schema_version: 5
 | 11 | 5 |
 | 12 | 1 (код канарейки не тронут; слой следует за `config.TARGETS`) |
 | 13 | 7 |
-| 14 | 6, 8 (правка песочницы по мандату ANSWER-2) |
+| 14 | 6, 8 (правка песочницы по мандату ANSWER-3) |
 
 Прогоны: все четыре долгоживущих файла задачи и
 `tests/test_acceptance_suite_profile.py` — 67 passed. Тесты затронутых
@@ -79,6 +85,12 @@ passed, 1 failed; файлы, перенаправляющие `config.TARGETS`,
 `tests/test_acceptance_suite_profile.py` и четыре долгоживущих файла задачи —
 98 passed; `tests/test_invariants.py` целиком — 84 passed (прежний 1 failed
 затронутых модулей — `MainCopyGitUnchangedDuringTaskTest`, та же причина).
+После шага 8 по ANSWER-3: project_token, project_gh, project_area, suite_run (01M462…),
+acceptance_suite_profile и четыре долгоживущих файла задачи — 151 passed; targets_* /
+multitarget* / in_dev_gates / main_copy_watch / task_component / project_target /
+external_flow / sandbox_copies / invariants — 221 passed. Полный набор (ANSWER-3 п. 4)
+в шаге разработчика запустить нельзя (`suite-run` роли developer отказывает) — его прогон
+за CI/гейтом приёмки.
 
 ## Влияние на систему
 - Без файла `.artel/targets.yaml` выдача `load()`/`target()`/
@@ -97,7 +109,7 @@ passed, 1 failed; файлы, перенаправляющие `config.TARGETS`,
 - Песочницы тестов, кладущие что-либо по адресу
   `config.TARGETS.parent/.artel/targets.yaml`, теперь читают это как
   локальный слой — ровно это и случилось с `ProjectAreaSandbox`
-  (закрыто шагом 8 по ANSWER-2).
+  (закрыто шагом 8 по ANSWER-3: песочница перенесла свой файл).
 
 ## Предложения системе
 - `tests/sandbox.py::RealGitSandbox` кладёт `config.TARGETS` песочницы в

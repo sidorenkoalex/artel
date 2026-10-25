@@ -1,21 +1,20 @@
 # Записка developer — 01M5SCGSQN0AT0B07H7M9803RA
 
 ## Выяснено
-- Требования 1–14 реализованы и закоммичены пультом (0366c1c8).
-- По ANSWER-2 (вариант (а)) в `ProjectAreaSandbox.setUp`
-  (tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py:175) добавлена одна строка
-  `(self.root / ".artel" / "targets.yaml").unlink(missing_ok=True)`. Больше в файле ничего не менялось.
-- После правки: project_area + invariants::MainCopyGit… + acceptance_suite_profile + 4 долгоживущих
-  файла задачи — 98 passed; tests/test_invariants.py целиком — 84 passed.
-- Карта перегенерирована (изменился только built_at_sha).
+- Требования 1–14 реализованы ранее (0366c1c8, 8ede83b8).
+- Возврат из verifying (CI 40193672834, 53 failed) закрыт по ANSWER-3:
+  - tests/sandbox.py `RealGitSandbox.setUp`: TARGETS песочницы → `root/.artel/repo-targets.yaml`;
+  - строка unlink ANSWER-2 в project_area снята (файл равен main);
+  - `targets.target()` теперь берёт запись из `load()` (подмена load в тестах token_slot видна).
+- Прогоны: 151 passed (token/gh/project_area/suite_run/долгоживущие), 221 passed (targets*/multitarget*/
+  in_dev_gates/main_copy_watch/invariants и др.). Карта перегенерирована.
 
 ## Не сработало
-- `ls`, `$VAR`, перенаправление в /tmp в Bash шага требуют подтверждения — работать через git/Read.
-- pytest -n 4 в шаге падает (node down) — гонять последовательно.
+- `$(...)` в Bash шага запрещён — списки файлов передавать литералом.
 
 ## Где остановился
-- PLAN.md status: ready, раздел «Эскалация» снят, добавлен шаг 8. Guard: ок.
-- ANSWER-2 требует, чтобы сессия при Операторе сверила дифф файла до approve на merge_gate.
+- PLAN.md status: ready. Полный набор (ANSWER-3 п. 4) роли developer недоступен — за CI/гейтом.
+- ANSWER-3: сверка диффа sandbox.py и project_area сессией при Операторе до approve merge_gate.
 
 ## Чего не хватило
-- Пересечение адреса локального слоя с раскладкой RealGitSandbox (tests/sandbox.py:1925-1931) — не было в SPEC/записке test_author.
+- Список 51 упавшего теста CI — в брифе только число; проверял выборкой файлов на RealGitSandbox.
