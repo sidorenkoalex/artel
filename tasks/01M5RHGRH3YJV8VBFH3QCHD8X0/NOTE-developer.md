@@ -1,6 +1,7 @@
 # Записка developer — 01M5RHGRH3YJV8VBFH3QCHD8X0
 
-Итог шага 3: всё сделано, PLAN `status: escalate` только из-за дефекта планки (ac15, mutation-024: нет допуска `journal`→`entries` в помощнике). Подробности — «Где остановился».
+Итог шага 4: после ANSWER-2 (amend-tests, лок b911bacd) `plank-run` — 76 passed, код 0; раздел «Эскалация» PLAN заменён на «Ответ на эскалацию», PLAN `status: ready`, guard ок. Код и рабочая копия не менялись (git status чистый, всё в коммите 8d6a6cb1 + подтяжка 01fa9ab3).
+Итог шага 3 (прежний): PLAN `escalate` из-за дефекта планки (ac15, mutation-024: нет допуска `journal`→`entries` в помощнике).
 
 ## Выяснено
 - Образец — волна 3м-2 (refs/artifacts/01M5R0AFX9Z1GA1DG5XV73JRTE: make_patches.py, make_plan.py, fail_lines.py). Логи патчей: `.artel/logs/suite-run/<id>/<id>-mutation-run-<n>-pNNN.log`; `fail_lines.py <прогоны>` печатает кадры (`:N ` — строка вызова в тесте, `:N in` — утверждение в помощнике, `AssertionError` — в теле теста).
