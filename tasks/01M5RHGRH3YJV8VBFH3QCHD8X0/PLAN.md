@@ -2,7 +2,7 @@
 task: 01M5RHGRH3YJV8VBFH3QCHD8X0
 type: plan
 author_role: developer
-status: draft
+status: escalate
 schema_version: 5
 ---
 
@@ -226,6 +226,7 @@ schema_version: 5
 - mutation-022: SpecGateKilledForeignSelfTest::test_ac3_killed_dependency_refused — tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:163 (вызов в теле теста tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:236) → test_merge_after_module.py::test_ac3_killed_dependency_refused — tests/test_merge_after_module.py:1772 (вызов в теле теста tests/test_merge_after_module.py:1842) (то же утверждение)
 - mutation-023: SpecGateKilledForeignSelfTest::test_ac3_dependency_of_other_target_refused — tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:163 (вызов в теле теста tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:256) → test_merge_after_module.py::test_ac3_dependency_of_other_target_refused — tests/test_merge_after_module.py:1772 (вызов в теле теста tests/test_merge_after_module.py:1863) (то же утверждение)
 - mutation-023: NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces — tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py:162 (вызов в теле теста tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py:368) → test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces — tests/test_merge_after_module.py:2360 (вызов в теле теста tests/test_merge_after_module.py:2563) (то же утверждение)
+- mutation-024: SpecGateKilledForeignSelfTest::test_ac3_prefix_resolving_to_own_id_refused — tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:165 (вызов в теле теста tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:279) → test_merge_after_module.py::test_ac3_prefix_resolving_to_own_id_refused — tests/test_merge_after_module.py:1774 (вызов в теле теста tests/test_merge_after_module.py:1887) (то же утверждение)
 - mutation-025: SpecGateCycleTest::test_ac4_cycle_through_existing_values_refused — tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:163 (вызов в теле теста tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:310) → test_merge_after_module.py::test_ac4_cycle_through_existing_values_refused — tests/test_merge_after_module.py:1772 (вызов в теле теста tests/test_merge_after_module.py:1916) (то же утверждение)
 - mutation-027: SpecGateWritesColumnTest::test_ac5_prefixes_written_as_full_ids_in_spec_order — tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:338 → test_merge_after_module.py::test_ac5_prefixes_written_as_full_ids_in_spec_order — tests/test_merge_after_module.py:1941 (то же утверждение)
 - mutation-028: SpecGateWritesColumnTest::test_ac5_spec_without_field_leaves_column_empty — tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:359 → test_merge_after_module.py::test_ac5_spec_without_field_leaves_column_empty — tests/test_merge_after_module.py:1963 (то же утверждение)
@@ -233,6 +234,8 @@ schema_version: 5
 - mutation-030: StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done — tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py:177 → test_merge_after_module.py::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done — tests/test_merge_after_module.py:2126 (то же утверждение)
 - mutation-030: DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies — tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py:440 → test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies — tests/test_merge_after_module.py:2634 (то же утверждение)
 - mutation-031: StatusSuffixTest::test_ac13_no_suffix_without_field_or_all_done убивает её лишь на части зёрен — из сравнения «до → после» выведен (требование 13).
+- mutation-031: StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done — tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py:177 → test_merge_after_module.py::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done — tests/test_merge_after_module.py:2120 (утверждения результата одного сценария, но разные: какое из них падает первым, задаёт зерно, убийство — нет; то же утверждение — строкой ниже)
+- mutation-031: DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies — tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py:440 → test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies — tests/test_merge_after_module.py:2634 (то же утверждение)
 - mutation-032: StatusSuffixTest::test_ac13_no_suffix_in_other_state — tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py:195 → test_merge_after_module.py::test_ac13_no_suffix_in_other_state — tests/test_merge_after_module.py:2146 (то же утверждение)
 - mutation-033: StatusSuffixTest::test_ac13_no_suffix_without_field_or_all_done — tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py:224 → test_merge_after_module.py::test_ac13_no_suffix_without_field_or_all_done — tests/test_merge_after_module.py:2174 (то же утверждение)
 - mutation-034: ShowDependenciesTest::test_ac14_show_lists_all_dependencies_with_states — tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py:253 → test_merge_after_module.py::test_ac14_show_lists_all_dependencies_with_states — tests/test_merge_after_module.py:2201 (то же утверждение)
@@ -937,3 +940,47 @@ schema_version: 5
 
 - `mutation-run`: строка падения (файл:строка утверждения и вызова) по каждому патчу — в таблицу команды; сейчас её добывают разбором логов своим сценарием (`fail_lines.py`, `make_plan.py` волн 3м-2 и 3м-2б).
 - Планка волн читает PLAN из ссылки документов, а не с диска: проверить PLAN до автокоммита шага роль может только самодельным `_pult` — не хватает `plank-run --docs-disk`.
+
+## Эскалация
+
+**Вопросы** (по блокирующести):
+
+1. Код причины: дефект планки (ложный отказ), не `тест-навязывает-устройство`.
+   `acceptance_tests/test_mutation_tables.py::test_ac15_killed_before_by_t_killed_after_by_its_function_same_assertion`
+   красен только по mutation-024: строка падения «до» —
+   `tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py:165`
+   (`self.assertTrue([e for e in journal if …], …)` в `assert_refused`,
+   вызов :279), «после» — `tests/test_merge_after_module.py:1774`
+   (`assert [e for e in entries if …], …` в `spec_gate_assert_refused`,
+   вызов :1887). Переименование `journal` → `entries` в `assert_refused`
+   `spec_gate` предписано требованием 9 SPEC. Планка в
+   `_same_assertion_line` (test_mutation_tables.py:768–770) нормализует
+   утверждение помощника `_plan.Canon({стенд}, {})` без карты `locals_`
+   переименованных локальных имён (для функции-теста карту даёт
+   `new_canon`), поэтому формы расходятся только именем локальной.
+   Проверено: `_plan.Canon({'stand'}, {}, locals_={'entries': 'journal'})`
+   даёт форму, равную форме :165 базы; без карты — не равную. Других
+   убийц у mutation-024 нет (заявка одного теста), подставить другую пару
+   строк честно нельзя — убийство идёт именно утверждением :165/:1774.
+   Варианты: (а) `amend-tests`: в `_same_assertion_line` (и, если нужно,
+   в `before_ok`/`after_ok`) для помощника передавать карту переименованных
+   локальных из `_plan.LOCALS_TO_RENAME` (`journal`/`task`) по сопоставлению
+   с исходным методом; (б) Оператор принимает отказ этой проверки по
+   mutation-024 на гейте как известный ложный; (в) вернуть в помощнике имя
+   `journal` (против требования 9 SPEC). Дефолт при молчании — (а).
+
+**Контекст**:
+- Сделано всё по плану: 50 патчей, таблицы «до» (прогоны №1–20) и
+  «после» (№21–40) теми же частями и `--workers`, свод в модуль (коммит
+  8d6a6cb1, 53 теста модуля зелёные), удаление шести файлов, карта.
+- Планка против этого PLAN (копия планки с `_pult`, читающим PLAN с диска
+  каталога документов, в `$TMPDIR`): 75 passed, 1 failed — только
+  описанный выше случай. `plank-run` пульта читает PLAN из ссылки
+  документов (прежнюю ревизию до автокоммита шага), поэтому его итог
+  сейчас отстаёт: 3 failed по mutation-024 и mutation-031; mutation-031
+  закрыта этой ревизией PLAN (строка с убийцей
+  `DeclaredStatusShowTest::test_ac8_…`, :440 → :2634, то же утверждение).
+
+**Блокирует**: сдачу `ready` — гейт приёмки по AC-15 откажет на
+mutation-024 до правки планки или решения Оператора.
+

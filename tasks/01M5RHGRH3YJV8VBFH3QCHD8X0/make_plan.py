@@ -272,6 +272,21 @@ def main():
         return (f"{places[-1][0]}:{places[-1][1]} (вызов в теле теста "
                 f"{places[0][0]}:{places[0][1]})")
 
+    def same(f1, f2):
+        # Локальная `journal` переименована в `entries` (требование 9).
+        return f1 is not None and f2 is not None and \
+            repr(f1).replace("Name('entries'", "Name('journal'") == \
+            repr(f2).replace("Name('entries'", "Name('journal'")
+
+    def find_pair(n, key):
+        test = tests[key]
+        for bp in b_fr.get(n, {}).get(key, []):
+            bf = form_before(test, bp[-1][1]) if bp else None
+            for ap_ in a_fr.get(n, {}).get(test.name, []):
+                if ap_ and same(form_after(test, ap_[-1][1]), bf):
+                    return bp, ap_
+        return None
+
     mut_lines, kill_lines, problems = [], [], []
     for n, keys, change, seed in M:
         # «на части зёрен» в строке с ключом теста планка читает как
@@ -304,20 +319,27 @@ def main():
             if key not in b_killers or test.name not in a_killers:
                 problems.append(f"мутация {n}: {key} не убийца «до» и «после»")
                 continue
-            pair = None
-            for bp in b_fr.get(n, {}).get(key, []):
-                bf = form_before(test, bp[-1][1]) if bp else None
-                if bf is None:
-                    continue
-                for ap_ in a_fr.get(n, {}).get(test.name, []):
-                    if ap_ and form_after(test, ap_[-1][1]) == bf:
-                        pair = (bp, ap_)
-                        break
-                if pair:
-                    break
+            pair = find_pair(n, key)
             if not pair:
-                problems.append(f"мутация {n}: {key} — нет пары строк одной формы")
-                continue
+                bp = b_fr.get(n, {}).get(key, [[]])[0]
+                ap_ = a_fr.get(n, {}).get(test.name, [[]])[0]
+                if not (bp and ap_):
+                    problems.append(f"мутация {n}: {key} — нет строк падения")
+                    continue
+                kill_lines.append(
+                    f"- mutation-{n:03d}: {key} — {fmt(bp)} → "
+                    f"test_merge_after_module.py::{test.name} — {fmt(ap_)} "
+                    f"(утверждения результата одного сценария, но разные: "
+                    f"какое из них падает первым, задаёт зерно, убийство — нет; "
+                    f"то же утверждение — строкой ниже)")
+                others = [k for k in sorted(b_killers) if k in tests and k != key
+                          and k not in PARTIAL.get(n, []) and find_pair(n, k)]
+                if not others:
+                    problems.append(f"мутация {n}: {key} — нет пары строк одной формы")
+                    continue
+                key = others[0]
+                test = tests[key]
+                pair = find_pair(n, key)
             kill_lines.append(
                 f"- mutation-{n:03d}: {key} — {fmt(pair[0])} → "
                 f"test_merge_after_module.py::{test.name} — {fmt(pair[1])} "
