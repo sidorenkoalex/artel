@@ -1,16 +1,21 @@
-# Записка spec_auditor (итерация 2, SPEC sha 73f667c9…)
+# Записка spec_auditor (итерация 3, SPEC sha 8ae17298…)
 
 ## Выяснено
 - SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
-- Факты brief.py/review.py/role_prompt.py/yamlmini/branch_commit/doctor cli.py:139 подтверждены; номера строк тестов совпадают.
-- Соседняя 01M5T19041 (на spec_gate): AGENT_WRAPPER_MARKERS = ("**/.claude/", ".mcp.json", "**/CLAUDE.md", "**/AGENTS.md"); треб. 8 соседки (отказ загрузки knowledge внутри обвязки, кроме корневых CLAUDE/AGENTS) совместимо с AC-5.
-- Находки: О1 путь config.PROJECTS мимо repo_context.projects_root() (NO_AREA); О2 пустой sources → вечный ok doctor, AC не ловит; О3 symlink conventions.md не в AC; П4/М1 «без сети» без AC, NoNetworkTest вырождается без knowledge; М2 эталон «из нового кода»; Н1 счёт N обвязки неоднозначен.
+- Решения ANSWER-1 (1–11, У1–У4) и решения гейта №2 в SPEC внесены; матрица SPEC = матрица ANSWER-1.
+- Новые находки:
+  - М4: external_brief `test_ac9`, сценарии 1–3 (`run_scenario` :510–552) краснеют. В `PROJECT_ENTRY` нет `knowledge`, а треб. 3 даёт пометку только при `knowledge`; перечень SPEC не говорит добавить `knowledge` в фикстуру.
+  - М5: `assertNotEqual` на :459 BothConventionFilesTest теряет предмет; судьба не названа.
+  - П1: AC-9 без отказа stamp на symlink `conventions.md` и прочих случаев треб. 7.
+  - Н2: N для файлов не `*.md`.
+  - Ф1: у соседки список обвязки — требование 5, не 4.
+- Соседка 01M5T19041 — в `tests_writing` (гейт SPEC прошла).
 
 ## Не сработало
-- Составные bash (`|xargs`) требуют подтверждения; `ls` недоступен.
+- `cd … && git`, составные bash и `grep` с некоторыми шаблонами требуют подтверждения — только одиночные команды с абсолютными путями.
 
 ## Где остановился
 - Аудит завершён.
 
 ## Чего не хватило
-- Состояние соседки — через `git show refs/artifacts/01M5T19041XE2KB6A52F0AT0NF --stat` (паспорт).
+- Как ведут себя сценарии `test_ac9` без `knowledge` — пришлось прослеживать `_project_conventions_parts` (brief.py:777) вместе с `PROJECT_ENTRY` теста.
