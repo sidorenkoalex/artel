@@ -1930,7 +1930,12 @@ class RealGitSandbox(TmpRootTest):
                 # дереве репозитория песочницы: посеянная запись артели
                 # (`seed_artel_targets`, SPEC 01M45FJVGQT1K0P8HDEXZX6HS7)
                 # иначе лежала бы неотслеживаемым файлом в `git status`.
-                path = self.root / ".artel" / "targets.yaml"
+                # Имя файла — не `targets.yaml`: `root/.artel/targets.yaml` —
+                # адрес локального слоя (`targets.local_path()`, SPEC
+                # 01M5SCGSQN0AT0B07H7M9803RA) песочниц с `TARGETS` в `root/`,
+                # и посеянная запись артели читалась бы там как запись
+                # локального слоя (ANSWER-3 задачи, п. 1).
+                path = self.root / ".artel" / "repo-targets.yaml"
             patcher = mock.patch.object(config, attr, path)
             patcher.start()
             self.addCleanup(patcher.stop)

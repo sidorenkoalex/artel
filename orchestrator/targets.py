@@ -149,27 +149,83 @@ class ComponentsPending(TargetsError):
     перехват отказа не был шире него."""
 
 
-def load() -> dict:
-    """Все записи targets.yaml, проверенные. TargetsError — файл не годен.
+def local_path() -> Path:
+    """Файл локального слоя записей внешних проектов (SPEC
+    01M5SCGSQN0AT0B07H7M9803RA, требование 1): от `config.TARGETS` в
+    момент вызова — подмена `config.TARGETS` уводит и слой."""
+    return config.TARGETS.parent / config.TARGETS_LOCAL_REL
 
-    Порядок записей сохраняется: «первая запись — artel» видно и коду,
-    и читателю файла.
-    """
+
+def _read_section(path: Path, *, missing_ok: bool = False,
+                  only_root: bool = False) -> dict | None:
+    """Сырые записи раздела `targets:` файла `path` в порядке файла;
+    None — файла нет и `missing_ok`. TargetsError — файл не годен (тексты
+    одни на оба слоя)."""
     try:
-        text = config.TARGETS.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        if missing_ok:
+            return None
+        raise TargetsError(f"{path} не прочитан: {exc}") from exc
     except (OSError, UnicodeDecodeError) as exc:
-        raise TargetsError(f"{config.TARGETS} не прочитан: {exc}") from exc
+        raise TargetsError(f"{path} не прочитан: {exc}") from exc
     try:
         data = yamlmini.mapping(text)
     except yamlmini.YamlError as exc:
-        raise TargetsError(f"{config.TARGETS} не разобран: {exc}") from exc
+        raise TargetsError(f"{path} не разобран: {exc}") from exc
     entries = data.get("targets")
     if not isinstance(entries, dict):
-        raise TargetsError(f"{config.TARGETS}: нет раздела 'targets:'")
+        raise TargetsError(f"{path}: нет раздела 'targets:'")
+    if only_root:
+        # В локальном слое — только раздел записей (ANSWER-1, п. 7).
+        extra = [key for key in data if key != "targets"]
+        if extra:
+            raise TargetsError(f"{path}: корневой ключ '{extra[0]}' — в "
+                               f"локальном слое допустим только 'targets:'")
+    return entries
+
+
+def _repo_entries() -> dict:
+    """Проверенные записи слоя репозитория прежнего плоского вида."""
+    entries = _read_section(config.TARGETS)
     if not entries:
         raise TargetsError(f"{config.TARGETS}: раздел 'targets:' пуст")
     for name, entry in entries.items():
         check(name, entry)
+    return entries
+
+
+def _local_entries() -> dict | None:
+    """Записи локального слоя, сведённые в прежний вид и проверенные;
+    None — файла слоя нет."""
+    path = local_path()
+    entries = _read_section(path, missing_ok=True, only_root=True)
+    if entries is None:
+        return None
+    if not entries:
+        raise TargetsError(f"{path}: раздел 'targets:' пуст")
+    return {name: merge_local(name, entry, path)
+            for name, entry in entries.items()}
+
+
+def layers() -> tuple[dict, dict | None]:
+    """(записи слоя репозитория, записи локального слоя или None — файла
+    нет), обе проверенные, в прежнем плоском виде, без производных пар
+    `long_lived`. TargetsError — слой не годен."""
+    return _repo_entries(), _local_entries()
+
+
+def load() -> dict:
+    """Все записи обоих слоёв, проверенные. TargetsError — слой не годен.
+
+    Порядок записей сохраняется: «первая запись — artel» видно и коду,
+    и читателю файла. Записи локального слоя (требование 5) перекрывают
+    одноимённые записи репозитория на их месте, прочие идут следом в
+    порядке файла слоя.
+    """
+    repo, local = layers()
+    entries = dict(repo)
+    entries.update(local or {})
     # Производная пара шаблона `long_lived` — только в отданной копии
     # (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требование 2): её читают
     # `repo_context.profile_of` и `project_profile` без смены своей логики.
@@ -178,33 +234,37 @@ def load() -> dict:
 
 
 def target(name: str) -> dict:
-    """Запись одного target'а. TargetsError — файл не годен или записи нет."""
+    """Запись одного target'а. TargetsError — слой не годен или записи нет.
+
+    Запись берётся из `load()` — единой точки чтения записей: подмена
+    `load` в тесте или вызывающем видна и здесь (ANSWER-3, п. 3)."""
     entries = load()
-    entry = entries.get(name)
-    if entry is None:
-        raise TargetsError(
-            f"{config.TARGETS}: target '{name}' не объявлен "
-            f"(есть: {', '.join(entries)})")
-    return entry
+    if name in entries:
+        return entries[name]
+    repo, local = layers()
+    layer = (f"записи {', '.join(local)}" if local is not None
+             else "файла нет")
+    raise TargetsError(
+        f"{config.TARGETS}: target '{name}' не объявлен "
+        f"(есть: {', '.join(repo)}); локальный слой {local_path()}: "
+        f"{layer} — записи внешних проектов лежат в локальном слое")
 
 
 def core_reference(name: str) -> dict | None:
     """Поле `core_reference` записи проекта `name`; None — записи или поля
-    нет. TargetsError — файл не годен, запись проекта или её поле неверны.
+    нет. TargetsError — слой не годен, запись проекта или её поле неверны.
 
     В отличие от `target()` проверяется только запись `name`: сломанная
-    чужая запись не отключает справочник этого проекта (требование 3)."""
-    try:
-        text = config.TARGETS.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise TargetsError(f"{config.TARGETS} не прочитан: {exc}") from exc
-    try:
-        data = yamlmini.mapping(text)
-    except yamlmini.YamlError as exc:
-        raise TargetsError(f"{config.TARGETS} не разобран: {exc}") from exc
-    entries = data.get("targets")
-    if not isinstance(entries, dict):
-        raise TargetsError(f"{config.TARGETS}: нет раздела 'targets:'")
+    чужая запись не отключает справочник этого проекта (требование 3).
+    Артель — только слой репозитория; внешний проект — запись локального
+    слоя, если она там есть (требование 5)."""
+    if name != config.DEFAULT_TARGET:
+        path = local_path()
+        local = _read_section(path, missing_ok=True, only_root=True)
+        if local and name in local:
+            value = merge_local(name, local[name], path).get(REFERENCE_FIELD)
+            return dict(value) if value is not None else None
+    entries = _read_section(config.TARGETS)
     if name not in entries:
         return None
     entry = entries[name]
@@ -213,9 +273,302 @@ def core_reference(name: str) -> dict | None:
     return dict(value) if value is not None else None
 
 
-def check(name: str, entry: object) -> None:
-    """Проверка одной записи. TargetsError называет поле, а не только файл."""
-    where = f"{config.TARGETS}: target '{name}'"
+# Формат записи локального слоя (требование 2): ровно три раздела.
+# Значение — обязательна ли запись поля в разделе.
+LOCAL_SECTIONS = ("description", "policy", "machine")
+LOCAL_FIELDS = {
+    "description": {"base": True, PROFILE_FIELD: False,
+                    COMPONENTS_FIELD: False, KNOWLEDGE_FIELD: False,
+                    REFERENCE_FIELD: False},
+    "policy": {"no_paths": True, "project_skills": True, "merge_gate": True,
+               "sandbox": False, "weakening_scope": False,
+               "mutation_claim_scope": False, COMPONENTS_FIELD: False},
+    "machine": {"forge": True, "url": True, "token_slot": True,
+                "path": False, COMPONENTS_FIELD: False},
+}
+# Подполя профиля и компонента, которые живут в разделе `policy`.
+LOCAL_POLICY_SCOPES = ("weakening_scope", "mutation_claim_scope")
+LOCAL_MACHINE_COMPONENT_FIELDS = ("path",)
+# Заполнитель каталога кэша проекта в значении `env` раздела `description`.
+CACHE_MARK = "<cache>"
+
+
+def cache_dir(name: str) -> str:
+    """Каталог кэша проекта `name` в области пульта — значение `<cache>`."""
+    return str(config.PROJECTS / name / "cache")
+
+
+def _section_of(field: str) -> str | None:
+    """Раздел, которому принадлежит поле верхнего уровня записи."""
+    for section, fields in LOCAL_FIELDS.items():
+        if field in fields and field != COMPONENTS_FIELD:
+            return section
+    return None
+
+
+def _strings(value: object, prefix: str):
+    """(поле, строка) всех строк значения на любой глубине."""
+    if isinstance(value, str):
+        yield prefix, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _strings(item, f"{prefix}.{key}")
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item, prefix)
+
+
+def _env_cache_value(value: str) -> bool:
+    return value == CACHE_MARK or value.startswith(CACHE_MARK + "/")
+
+
+def _description_envs(description: dict) -> list[tuple[str, dict]]:
+    """(поле, env) профиля и компонентов раздела `description`."""
+    found = []
+    profile = description.get(PROFILE_FIELD)
+    if isinstance(profile, dict) and isinstance(profile.get("env"), dict):
+        found.append((f"description.{PROFILE_FIELD}.env", profile["env"]))
+    comps = description.get(COMPONENTS_FIELD)
+    if isinstance(comps, dict):
+        for comp, fields in comps.items():
+            if isinstance(fields, dict) and isinstance(fields.get("env"), dict):
+                found.append((f"description.{COMPONENTS_FIELD}.{comp}.env",
+                              fields["env"]))
+    return found
+
+
+def merge_local(name: str, entry: object, source: Path | None = None) -> dict:
+    """Запись локального слоя в трёх разделах → проверенная запись прежнего
+    плоского вида (требования 2-4). TargetsError называет файл слоя,
+    запись, раздел и поле."""
+    source = local_path() if source is None else source
+    where = f"{source}: target '{name}'"
+    if name == config.DEFAULT_TARGET:
+        raise TargetsError(f"{where}: запись артели — только в targets.yaml "
+                           f"репозитория")
+    if not isinstance(entry, dict):
+        raise TargetsError(f"{where} — не набор разделов "
+                           f"{', '.join(LOCAL_SECTIONS)}")
+    for key in entry:
+        if key in LOCAL_SECTIONS:
+            continue
+        home = _section_of(key)
+        if home is not None or key in (PROFILE_FIELD, COMPONENTS_FIELD):
+            raise TargetsError(
+                f"{where}: поле '{key}' вне раздела — плоская запись прежнего "
+                f"вида не принимается, нужны разделы "
+                f"{', '.join(LOCAL_SECTIONS)} (перенос: artel.py "
+                f"targets-migrate {name})")
+        raise TargetsError(f"{where}: неизвестный раздел '{key}' (известны: "
+                           f"{', '.join(LOCAL_SECTIONS)})")
+    for section in LOCAL_SECTIONS:
+        if section not in entry:
+            raise TargetsError(f"{where}: нет раздела '{section}'")
+        if not isinstance(entry[section], dict):
+            raise TargetsError(f"{where}: раздел '{section}' — не набор полей")
+    description, policy, machine = (entry[s] for s in LOCAL_SECTIONS)
+    _check_local_sections(where, description, policy, machine)
+    _check_local_values(name, where, entry)
+    flat = _flatten(name, description, policy, machine)
+    check(name, flat, source)
+    return flat
+
+
+def _check_local_sections(where: str, description: dict, policy: dict,
+                          machine: dict) -> None:
+    """Поля каждого раздела — на своём месте; компоненты `policy`/`machine`
+    — из `description.components`."""
+    for section, fields in (("description", description), ("policy", policy),
+                            ("machine", machine)):
+        known = LOCAL_FIELDS[section]
+        for field in fields:
+            if field in known:
+                continue
+            home = _section_of(field)
+            if home is not None:
+                raise TargetsError(f"{where}: раздел '{section}': поле "
+                                   f"'{field}' не в своём разделе — его "
+                                   f"раздел '{home}'")
+            raise TargetsError(f"{where}: раздел '{section}': неизвестное "
+                               f"поле '{field}' (известны: "
+                               f"{', '.join(known)})")
+        for field, required in known.items():
+            if required and field not in fields:
+                raise TargetsError(f"{where}: раздел '{section}': нет поля "
+                                   f"'{field}'")
+    has_profile = PROFILE_FIELD in description
+    comps = description.get(COMPONENTS_FIELD)
+    if has_profile == (comps is not None):
+        raise TargetsError(f"{where}: раздел 'description': нужно ровно одно "
+                           f"из полей '{PROFILE_FIELD}' и '{COMPONENTS_FIELD}'")
+    if has_profile:
+        profiles = [(f"description.{PROFILE_FIELD}", description[PROFILE_FIELD])]
+    elif isinstance(comps, dict):
+        profiles = [(f"description.{COMPONENTS_FIELD}.{comp}", fields)
+                    for comp, fields in comps.items()]
+    else:
+        profiles = []
+    for here, fields in profiles:
+        if not isinstance(fields, dict):
+            continue
+        for sub in LOCAL_POLICY_SCOPES:
+            if sub in fields:
+                raise TargetsError(f"{where}: поле '{here}.{sub}' не в своём "
+                                   f"разделе — его раздел 'policy'")
+    for field, env in _description_envs(description):
+        if "PATH" in env:
+            raise TargetsError(f"{where}: поле '{field}.PATH' — PATH "
+                               f"задаётся в разделе 'machine' (machine.path)")
+    if "sandbox" in policy and not (isinstance(policy["sandbox"], str)
+                                    and policy["sandbox"].strip()):
+        raise TargetsError(f"{where}: поле 'policy.sandbox' — "
+                           f"{policy['sandbox']!r}, не непустая строка")
+    for sub in LOCAL_POLICY_SCOPES:
+        if sub in policy and not has_profile:
+            raise TargetsError(f"{where}: поле 'policy.{sub}' — только при "
+                               f"'description.{PROFILE_FIELD}'; у компонентов "
+                               f"— policy.{COMPONENTS_FIELD}.<имя>.{sub}")
+    names = comps if isinstance(comps, dict) else {}
+    for section, allowed in (("policy", LOCAL_POLICY_SCOPES),
+                             ("machine", LOCAL_MACHINE_COMPONENT_FIELDS)):
+        own = (policy if section == "policy" else machine).get(COMPONENTS_FIELD)
+        if own is None:
+            continue
+        field = f"{section}.{COMPONENTS_FIELD}"
+        if not isinstance(own, dict):
+            raise TargetsError(f"{where}: поле '{field}' — не отображение "
+                               f"«имя компонента → поля»")
+        for comp, fields in own.items():
+            if comp not in names:
+                raise TargetsError(f"{where}: поле '{field}': компонента "
+                                   f"'{comp}' нет в description.{COMPONENTS_FIELD}")
+            if not isinstance(fields, dict):
+                raise TargetsError(f"{where}: поле '{field}.{comp}' — не "
+                                   f"набор полей")
+            for sub in fields:
+                if sub not in allowed:
+                    raise TargetsError(f"{where}: поле '{field}.{comp}': "
+                                       f"неизвестное поле '{sub}' (известны: "
+                                       f"{', '.join(allowed)})")
+    paths = [("machine.path", machine.get("path"))] if "path" in machine else []
+    for comp, fields in (machine.get(COMPONENTS_FIELD) or {}).items():
+        if "path" in fields:
+            paths.append((f"machine.{COMPONENTS_FIELD}.{comp}.path",
+                          fields["path"]))
+    for field, value in paths:
+        if not isinstance(value, str) or not value.strip():
+            raise TargetsError(f"{where}: поле '{field}' — не непустая строка")
+
+
+def _check_local_values(name: str, where: str, entry: dict) -> None:
+    """`<cache>` — только в начале значения `env` раздела `description`;
+    абсолютных путей в `description` и `policy` нет (требования 3-4)."""
+    envs = {field for field, _env in _description_envs(entry["description"])}
+    for section in LOCAL_SECTIONS:
+        for field, value in _strings(entry[section], section):
+            if CACHE_MARK not in value:
+                continue
+            if not (field.rsplit(".", 1)[0] in envs
+                    and _env_cache_value(value)):
+                raise TargetsError(
+                    f"{where}: поле '{field}' — {CACHE_MARK} допустим только "
+                    f"в начале значения env раздела 'description'")
+            if ".." in value[len(CACHE_MARK):].split("/"):
+                raise TargetsError(f"{where}: поле '{field}' — путь после "
+                                   f"{CACHE_MARK} выходит за каталог кэша")
+    for section in ("description", "policy"):
+        for field, value in _strings(entry[section], section):
+            if value.startswith(("/", "~")):
+                raise TargetsError(
+                    f"{where}: абсолютный путь в записи {name}: {field} — "
+                    f"каталог кэша задаётся `{CACHE_MARK}`, PATH — "
+                    f"`machine.path`")
+    machine = entry["machine"]
+    description = entry["description"]
+    profile = description.get(PROFILE_FIELD)
+    if isinstance(profile, dict) and "path" in machine:
+        runner = profile.get("runner", PROFILE_RUNNER_DEFAULT)
+        if runner != PROFILE_RUNNER_OWN:
+            raise TargetsError(
+                f"{where}: поле 'machine.path' — PATH профиля допустим только "
+                f"при 'runner: {PROFILE_RUNNER_OWN}' (runner — '{runner}')")
+    comps = description.get(COMPONENTS_FIELD)
+    if isinstance(comps, dict) and len(comps) == 1:
+        comp, fields = next(iter(comps.items()))
+        own = (machine.get(COMPONENTS_FIELD) or {}).get(comp) or {}
+        field = (f"machine.{COMPONENTS_FIELD}.{comp}.path" if "path" in own
+                 else "machine.path" if "path" in machine else None)
+        runner = (fields.get("runner", PROFILE_RUNNER_DEFAULT)
+                  if isinstance(fields, dict) else PROFILE_RUNNER_DEFAULT)
+        if field and runner != PROFILE_RUNNER_OWN:
+            raise TargetsError(
+                f"{where}: поле '{field}' — PATH единственного компонента "
+                f"допустим только при 'runner: {PROFILE_RUNNER_OWN}' (runner "
+                f"— '{runner}')")
+
+
+def _with_env(fields: dict, name: str, path: str | None) -> dict:
+    """Копия профиля или компонента: `<cache>` в `env` подставлен, PATH
+    раздела `machine` дописан. Не набор полей — как есть: отказ даст
+    `check()`."""
+    if not isinstance(fields, dict):
+        return fields
+    fields = dict(fields)
+    env = fields.get("env")
+    if isinstance(env, dict):
+        env = {key: (cache_dir(name) + value[len(CACHE_MARK):]
+                     if isinstance(value, str) and _env_cache_value(value)
+                     else value)
+               for key, value in env.items()}
+    if path is not None:
+        env = dict(env or {}, PATH=path)
+    if env is not None:
+        fields["env"] = env
+    return fields
+
+
+def _flatten(name: str, description: dict, policy: dict,
+             machine: dict) -> dict:
+    """Три раздела → запись прежнего вида (требование 3)."""
+    flat = {field: machine[field] for field in ("forge", "url")}
+    flat["base"] = description["base"]
+    flat["token_slot"] = machine["token_slot"]
+    for field in ("no_paths", "project_skills", "merge_gate", "sandbox"):
+        if field in policy:
+            flat[field] = policy[field]
+    common = machine.get("path")
+    if PROFILE_FIELD in description:
+        profile = _with_env(description[PROFILE_FIELD], name, common)
+        for sub in LOCAL_POLICY_SCOPES:
+            if sub in policy and isinstance(profile, dict):
+                profile[sub] = policy[sub]
+        flat[PROFILE_FIELD] = profile
+    comps = description.get(COMPONENTS_FIELD)
+    if isinstance(comps, dict):
+        scopes = policy.get(COMPONENTS_FIELD) or {}
+        paths = machine.get(COMPONENTS_FIELD) or {}
+        merged = {}
+        for comp, fields in comps.items():
+            path = (paths.get(comp) or {}).get("path", common)
+            fields = _with_env(fields, name, path)
+            if isinstance(fields, dict):
+                fields.update(scopes.get(comp) or {})
+            merged[comp] = fields
+        flat[COMPONENTS_FIELD] = merged
+    elif comps is not None:
+        flat[COMPONENTS_FIELD] = comps
+    for field in (KNOWLEDGE_FIELD, REFERENCE_FIELD):
+        if field in description:
+            flat[field] = description[field]
+    return flat
+
+
+def check(name: str, entry: object, source: Path | None = None) -> None:
+    """Проверка одной записи. TargetsError называет поле, а не только файл.
+
+    `source` — файл слоя, из которого пришла запись (требование 7); по
+    умолчанию — `config.TARGETS`, текст прежний."""
+    where = f"{config.TARGETS if source is None else source}: target '{name}'"
     if not isinstance(entry, dict):
         raise TargetsError(f"{where} — не набор полей")
     for field, kind in FIELDS.items():

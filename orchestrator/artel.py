@@ -177,7 +177,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
   kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
-  target-init <target> | reference <проект> [--sha <sha>] |
+  target-init <target> | targets-migrate <проект> |
+  reference <проект> [--sha <sha>] |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
@@ -2295,6 +2296,10 @@ def main() -> None:
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),
         "target-init": lambda: projects.cmd_target_init(rest[0]),
+        # Пишет локальный слой записей проектов `.artel/targets.yaml` —
+        # команда Оператора, вне белого списка ролей (SPEC
+        # 01M5SCGSQN0AT0B07H7M9803RA, требование 10).
+        "targets-migrate": lambda: projects.cmd_targets_migrate(rest[0]),
         # Пишет кэш справочника и журнал пульта — команда Оператора, вне
         # белого списка ролей (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 4).
         "reference": lambda: projects.cmd_reference(rest),

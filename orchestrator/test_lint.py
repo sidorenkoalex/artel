@@ -10,10 +10,11 @@
 import ast
 
 CLOCK_CALLS = ("monotonic", "time", "monotonic_ns", "time_ns")
-LIVE_FILES = ("targets.yaml", "roles.yaml", "model_sets.yaml")
+LIVE_FILES = ("targets.yaml", "roles.yaml", "model_sets.yaml",
+              ".artel/targets.yaml")
 # Имена `config`, равные имени живого файла (относительный путь от
 # корня, а не путь песочницы).
-LIVE_FILE_CONFIG_ATTRS = ("MODEL_SETS_REL",)
+LIVE_FILE_CONFIG_ATTRS = ("MODEL_SETS_REL", "TARGETS_LOCAL_REL")
 
 
 def _is_time_module(node) -> bool:

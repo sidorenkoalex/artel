@@ -18,6 +18,13 @@ ROLES = ROOT / "roles.yaml"
 # Декларация целевых проектов (ADR-0003 п.2). Читатель —
 # orchestrator/targets.py.
 TARGETS = ROOT / "targets.yaml"
+# Локальный слой записей внешних проектов (поправка ADR-0021, решение
+# Оператора 25.10.2026): данные внешних проектов — вне git, как
+# `.artel/models.yaml`. Относительный путь, а не `ROOT / …`: читается он
+# от `TARGETS.parent` в момент вызова (`targets.local_path`), поэтому
+# песочница и клон канарейки, подменившие `TARGETS`, видят свой слой без
+# новой записи в `ALL_CONFIG_ATTRS` и `canary._CLONE_CONFIG_ATTRS`.
+TARGETS_LOCAL_REL = ".artel/targets.yaml"
 # Каталог моделей: провайдер, минимум версии CLI, прейскурант и статус
 # модели (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 1). Защищённый путь
 # (PROTECTED_PATHS ниже), в git — общее знание всех клонов, поэтому
