@@ -2,7 +2,7 @@
 task: 01M5R0DPNHZ7N8YBXMH375SMEE
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -663,7 +663,7 @@ schema_version: 5
 
 - `tests/test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior.py` и `tests/test_01m5jgsaanr1nzyqd4fcsve48y_outcome_components.py`: изменена только строка источника импорта (`tests.merge_outcome_sandbox`), разбивка строк та же.
 - Под ролью: `python3 -m pytest --collect-only -q -p no:cacheprovider <оба импортёра>` — «61 tests collected in 0.16s».
-- Итог CI кодовой ветки по `outcome_prior` и `outcome_components`: на конце шага разработчика ветки задачи в origin нет (`git ls-remote origin refs/heads/task/01m5r0dpnhz7n8ybxmh375smee-…` — пусто), прогона CI ещё не было; итог дописывается после первого пуша ветки пультом.
+- Итог CI кодовой ветки по `outcome_prior` и `outcome_components`: ветка запушена пультом 2026-10-25 00:00:44Z (голова `b06b18d2` в origin, `git ls-remote`), но итог прогона CI роли недоступен — `gh run list`, `gh api …/check-runs` и `curl` к API GitHub требуют подтверждения, команды пульта для статуса CI ветки в `in_dev` нет. Итог не вписан — эскалация ниже.
 
 ## Влияние на систему
 
@@ -695,3 +695,13 @@ merge-коммита задачи.
 - `plank-run` читает PLAN из закоммиченной ревизии ссылки документов — правку PLAN
   текущего шага планка не видит до автокоммита; не хватает режима `plank-run
   --docs-disk` (обход — `plancheck.py` каталога документов).
+- Нет команды пульта для статуса CI ветки задачи в `in_dev`, а `gh`/`curl` роли
+  требуют подтверждения — требование SPEC «итог CI в PLAN» роль выполнить не может
+  даже после пуша ветки (предложение: `artel.py ci-status <id>` только на чтение).
+
+## Эскалация
+
+- **Вопросы** (один батч):
+  1. Итог CI кодовой ветки (голова `b06b18d2`) по `outcome_prior` и `outcome_components` для AC-8 / требования 11. Роль не может его прочитать: `gh` и запросы к API GitHub требуют подтверждения, которого в шаге нет. Варианты: (а) Оператор вписывает итог CI в ANSWER-2, разработчик в следующем шаге переносит его в раздел «Импортёры» и сдаёт `ready`; (б) Оператор разрешает роли `gh run list`/`gh api` на ветку задачи, и итог читает следующий шаг; (в) `amend-tests`: итог CI по импортёрам проверяет ревьювер или гейт, а не PLAN разработчика. Дефолт при молчании — (а): итог CI с ветки, которую видит Оператор.
+- **Контекст**: всё остальное готово — `plank-run`: 108 passed, 1 failed (`test_module_form.py::test_ac8_plan_names_ci_result_for_importers`, нет строки CI). Мутации «до»/«после» сходятся (036 не убита — находка), сбор импортёров — 61 тест, ветка в origin с 2026-10-25 00:00:44Z.
+- **Блокирует**: зелёный AC-8 планки и переход `in_dev -> review`.
