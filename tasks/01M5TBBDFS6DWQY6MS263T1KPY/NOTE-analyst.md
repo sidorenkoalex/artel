@@ -1,18 +1,21 @@
 # Записка аналитика
 
 ## Выяснено
-- ТЗ достаточно — пишу SPEC (без QUESTIONS).
-- Э0 (01M5TB6VDVV6AM8DWPGVQE8CDW) на ветке ещё нет: `fsm.STATES`, `fsm.TERMINAL_STATES`, `closed_as` не найдены grep'ом в orchestrator/ (есть только `cleanup.TERMINAL_STATES`, `watch._TERMINAL_STATES`). SPEC опирается на имена Э0; merge_after = Э0.
-- Прямая краснота: `tests/test_multitarget.py:289` — `assertEqual(sorted(config.PROJECT_DIRS), ["knowledge","logs","tasks","worktrees"])`; добавление `epics` её краснит. Литерал — список, в «Меняемое поведение» не входит (только скаляры); оформлено отдельным разделом с матрицей по мандату ТЗ 25.10.
-- Прочие тесты схемы (`test_observation_edges.py:25` issubset и т.п.) новой таблицей не краснеют.
-- CLI в `orchestrator/artel.py` — ручной разбор (`_cmd_new(rest)` ~2266), флагов `--epic/--after/--as-epic` нет.
-- Сигналы деления: 8 файлов зоны (без общих), >10 AC, бюджет 75 ≥ 60. Решение в SPEC — монолит (материал Оператору), бюджет = Рамка ТЗ $75 (рекомендация таблицы $85).
+- Шаг 2 (возврат с гейта SPEC 26.10, 12 решений Оператора) — ТЗ + решения достаточно, переписываю SPEC, QUESTIONS не нужен.
+- Системные записи журнала — константа task_id в config (`PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"`, config.py:313; `PROGRAM_SPEND_RESEED_TASK_ID`, :305). В `schema.migrate` (schema.py:183) журнала сейчас нет.
+- «ЖДЁТ ОПЕРАТОРА» — catalog.py:992, состояния spec_gate, acceptance, merge_gate, escalated.
+- Текст отказа merge_after.check: `merge_after: элемент «<x>» — нет такой задачи` (merge_after.py:103-147); форма — guard.py:5636 «не в формате id задачи». Буква `E` входит в алфавит ULID (idgen.py:23), но полный id эпика 27 знаков — длиннее 26, форма отказывает.
+- `approve` CLI: artel.py:2278, позиционный sha — `_approve_sha_arg` (artel.py:2006): новый флаг надо исключить оттуда.
+- Ожидание зоны в status — `zone_lock.queue_wait` (catalog.py:885), включает «ждёт зону ради зависимости».
+- tests/test_multitarget.py:288-289 — литерал-список, правка по мандату (Оператор даст на следующем гейте).
 
 ## Не сработало
-- Составные bash-команды с `cd`/пайпами отказываются песочницей — только одиночные команды с абсолютными путями.
+- `ls`/составные команды недоступны в Bash — только grep/одиночные.
 
 ## Где остановился
-- SPEC.md написан, status: ready, 18 AC, guard: ок. Класс красного теста — `TargetInitTest`.
+- SPEC.md переписан, status: ready, 29 AC, 13 требований, guard: ок. Пункты возврата: 1 → «Правка существующих тестов» + матрица; 2 → треб. 11, AC-22/23; 3 → AC-19; 4 → треб. 13, AC-27/29; 5 → AC-2/21; 6 → AC-26; 7 → AC-18; 8 → AC-20/21/25; 9 → AC-9; 10 → AC-28; 11 → AC-14; 12 → AC-4/17/10; второстепенные → AC-13, AC-16.
+- Выбрано мной (на проверку гейту): имена ключей модели и функции `board.build_model(conn, project)`; lease — на id эпика; порядок правил waiting_on (operator/ci по состоянию раньше dependency) — поэтому merge_after даёт dependency только через ожидание зоны «ради зависимости».
+- Порог сигнала бюджета — 60 (config.SPLIT_SIGNAL_BUDGET_USD), шаблон говорит 30 — устарел.
 
 ## Чего не хватило
-- Нет быстрого способа узнать, что Э0 ещё не в main и какие его имена появятся: искал `fsm.STATES`/`closed_as` grep'ом.
+- Нет единого места «какие состояния у задачи» до Э0 — собирал по `set_state(` grep'ом.
