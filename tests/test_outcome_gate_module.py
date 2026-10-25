@@ -42,6 +42,13 @@ ADR-0020 п. 8).
 `broken_task` — функции модуля по тому же правилу. Бывшие `subTest` —
 прямым кодом или прежним циклом в одной функции: ярлык подслучая и зерно —
 в локальном `case`, он стоит в сообщении каждого утверждения подслучая.
+
+Волна 2а-2а (SPEC 01M5R0DPNHZ7N8YBXMH375SMEE) дописала в конец модуля
+отдельным разделом 6 тестов `tests/test_outcome_integrity_added_lines.py`
+(разбор добавленных строк `git diff -M -U0` и вид файла переименования в
+находке «исключение в коде»); файл удалён. Стенд `added_repo` — бывший
+`setUp` на настоящем git поверх фикстуры `tmp_dir`, его методы — функции
+модуля `git`, `commit`, `files`.
 """
 import contextlib
 import io
@@ -61,6 +68,7 @@ import pytest
 from orchestrator import (answer, checkpoint, config, fsm, github_adapter,
                           project_profile, store, workspace)
 from orchestrator.advance_gates import outcome_integrity as gate
+from orchestrator.advance_gates import outcome_integrity
 from orchestrator.reporters.outcome import CaseResult
 from tests.fixtures import _sandbox
 from tests.outcome_gate_sandbox import (py_source, re, BROKEN_ACTION,
@@ -2410,3 +2418,154 @@ def test_ac13_passed_gate_journal_counts(box):
         text = f"{row['action']} {row['detail'] or ''}"
         return {int(x) for x in re.findall(r"(?<![\w.:-])\d+(?![\w.:-])", text)}
     assert any(set(wanted) <= numbers(r) for r in rows), box.explain(rows, output) + f"\nожидались числа {wanted}"
+
+
+# ---------------------------------------------------------------- added_lines (волна 2а-2а)
+# Разбор добавленных строк `git diff -M -U0` гейта исходов (SPEC
+# 01M5J0JYW3GZSSHHK3TYCYTQ3J, требование 7): края, которых не касаются
+# долгоживущие файлы задачи — путь, который git берёт в кавычки, текст не в
+# utf-8, строка без перевода строки в конце файла, конфиг git процесса пульта
+# с `diff.noprefix` и переименование из тестового пути в путь кода. Стенд —
+# настоящий git во временном каталоге (`added_repo` поверх `tmp_dir`).
+
+
+def git(box, *args: str) -> str:
+    res = subprocess.run(
+        ["git", "-C", str(box.repo), "-c", "user.name=t",
+         "-c", "user.email=t@example.invalid", *args],
+        capture_output=True, text=True, check=True)
+    return res.stdout.strip()
+
+
+@pytest.fixture
+def added_repo(tmp_dir):
+    """Бывший `AddedLinesTest.setUp`: репозиторий `repo` с коммитом базы `base`."""
+    tmp_dir.repo = tmp_dir.tdir / "repo"
+    tmp_dir.repo.mkdir()
+    git(tmp_dir, "init", "-q")
+    (tmp_dir.repo / "app.js").write_text("const a = 1;\n", encoding="utf-8")
+    git(tmp_dir, "add", "-A")
+    git(tmp_dir, "commit", "-q", "-m", "база")
+    tmp_dir.base = git(tmp_dir, "rev-parse", "HEAD")
+    return tmp_dir
+
+
+def commit(box) -> str:
+    git(box, "add", "-A")
+    git(box, "commit", "-q", "-m", "голова")
+    return git(box, "rev-parse", "HEAD")
+
+
+def files(tests=()):
+    profile = project_profile.Profile(
+        command=("npx", "vitest"), long_lived_dir="tests",
+        long_lived_name="test_{id}_{slug}.py",
+        weakening_scope=("tests/**/*.py",), mutation_claim_scope=(),
+        tests=tests)
+    return outcome_integrity._Files(profile, {"tests/test_util.py"},
+                                    {"tests/test_util.py"})
+
+
+def test_quoted_path_latin1_text_and_no_final_newline(added_repo):
+    """Путь с табуляцией и кавычкой разобран из кавычек git, строка не в utf-8 не роняет разбор, последняя строка без перевода строки засчитана со своим номером.
+
+    Ловит мутацию: путь `+++ "b/…"` не снимается с кавычек — ключ с
+    кавычками и экранами; вывод декодируется строго — исключение
+    `UnicodeDecodeError` вместо разбора; строка «\\ No newline at end of
+    file» сбрасывает счёт ханка или считается добавленной — номер или
+    состав строк иной.
+    """
+    odd = 'lib/odd\tna"me.js'
+    (added_repo.repo / "lib").mkdir()
+    (added_repo.repo / odd).write_text("const x = 1;\nconst m = 'NODE_ENV';",
+                                       encoding="utf-8")
+    (added_repo.repo / "app.js").write_bytes(
+        "const a = 1;\n// caf\xe9 eslint-disable\n".encode("latin-1"))
+    head = commit(added_repo)
+    added = outcome_integrity._added_lines(added_repo.repo, added_repo.base, head)
+    assert added[odd] == [(1, "const x = 1;"),
+                          (2, "const m = 'NODE_ENV';")]
+    assert len(added["app.js"]) == 1
+    number, text = added["app.js"][0]
+    assert number == 2
+    assert "eslint-disable" in text
+
+
+def test_noprefix_config_does_not_hide_added_lines(added_repo):
+    """`diff.noprefix=true` и `diff.mnemonicPrefix=true` в конфиге git процесса пульта не меняют разбор: добавленная строка с подстрокой исключения найдена с номером по голове.
+
+    Ловит мутацию: префиксы `--src-prefix=a/ --dst-prefix=b/` убраны из
+    argv — при `diff.noprefix=true` заголовок `+++ app.js` без `b/`, и
+    разбор либо молча теряет строки файла (fail-open требования 8),
+    либо отказывает подготовкой.
+    """
+    (added_repo.repo / "app.js").write_text(
+        "const a = 1;\nconst m = process.env.NODE_ENV;\n",
+        encoding="utf-8")
+    head = commit(added_repo)
+    for key in ("diff.noprefix", "diff.mnemonicPrefix"):
+        env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": key,
+               "GIT_CONFIG_VALUE_0": "true"}
+        with mock.patch.dict(os.environ, env):
+            added = outcome_integrity._added_lines(added_repo.repo,
+                                                   added_repo.base, head)
+            assert added == {"app.js": [
+                (2, "const m = process.env.NODE_ENV;")]}, f"{key}: "
+
+
+def test_unexpected_header_is_prepare_refusal(added_repo):
+    """Заголовок `+++ ` без префикса `b/` (и не `/dev/null`) — отказ подготовки `_Prepare`, а не пропуск строк файла.
+
+    Ловит мутацию: заголовок неожиданной формы снова ставит путь `None`
+    — гейт молча получает ноль добавленных строк вместо отказа.
+    """
+    out = (b"diff --git x/app.js y/app.js\n--- x/app.js\n+++ y/app.js\n"
+           b"@@ -1,0 +2 @@\n+NODE_ENV\n")
+    done = subprocess.CompletedProcess([], 0, stdout=out, stderr=b"")
+    with mock.patch.object(outcome_integrity.subprocess, "run",
+                           return_value=done):
+        with pytest.raises(outcome_integrity._Prepare):
+            outcome_integrity._added_lines(added_repo.repo, added_repo.base, "f" * 40)
+
+
+def test_deleted_file_header_dev_null_is_not_refusal(added_repo):
+    """Удалённый файл (`+++ /dev/null`) не отказ подготовки и добавленных строк не даёт.
+
+    Ловит мутацию: `/dev/null` попадает под проверку префикса `b/` —
+    любое удаление файла веткой роняет гейт отказом подготовки.
+    """
+    (added_repo.repo / "app.js").unlink()
+    head = commit(added_repo)
+    assert outcome_integrity._added_lines(added_repo.repo, added_repo.base, head) == {}
+
+
+def test_rename_from_test_path_to_code_path_is_checked():
+    """Файл, переименованный из тестового пути в путь кода, проверяется как файл кода: подстрока исключения в добавленной строке даёт находку «исключение в коде» по пути головы — у компонента с полем `tests` и без него.
+
+    Ловит мутацию: вид файла решается и по старому пути переименования
+    (`for p in (path, old)`) — у переименования тест→код находки нет.
+    """
+    added = {"lib/util.py": [(3, 'if os.environ["NODE_ENV"]:')]}
+    for tests in ((), ("tests/**/*.py",)):
+        found = outcome_integrity._code_exception_findings(
+            files(tests),
+            [("R090", "tests/test_util.py", "lib/util.py")], added)
+        assert [(f.kind, f.id, f.runs) for f in found] == \
+            [(outcome_integrity.CODE_EXCEPTION, "lib/util.py",
+              "строка 3: NODE_ENV")], f"{tests}: "
+
+
+def test_rename_between_test_paths_is_not_checked():
+    """Переименование тестового файла в тестовый путь с записями в отчёте головы у компонента без `tests` находки «исключение в коде» не даёт — новый путь тестовый по правилу файла `A`.
+
+    Ловит мутацию: правило файла `A` под `weakening_scope` с записями в
+    отчёте головы не распространено на новый путь `R` — ложная находка
+    на переименованный тест.
+    """
+    profile = files().profile
+    rename_files = outcome_integrity._Files(profile, {"tests/test_util.py"},
+                                            {"tests/test_tools.py"})
+    found = outcome_integrity._code_exception_findings(
+        rename_files, [("R090", "tests/test_util.py", "tests/test_tools.py")],
+        {"tests/test_tools.py": [(1, 'os.environ["NODE_ENV"] = "x"')]})
+    assert found == []
