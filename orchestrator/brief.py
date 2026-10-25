@@ -549,10 +549,11 @@ def _clone_git(clone: Path, *args: str,
     маска."""
     opts = ["--literal-pathspecs"] if literal else []
     try:
-        res = subprocess.run(["git", "-C", str(clone), *opts, *args],
-                             capture_output=True, env=gitcmd.pult_env(),
-                             timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        res = gitcmd.read(clone, *opts, *args,
+                          timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
+    except gitcmd.Timeout:
+        return None, "git не ответил (TimeoutExpired)"
+    except OSError as exc:
         return None, f"git не ответил ({type(exc).__name__})"
     if res.returncode != 0:
         err = " ".join(res.stderr.decode("utf-8", "replace").split())
