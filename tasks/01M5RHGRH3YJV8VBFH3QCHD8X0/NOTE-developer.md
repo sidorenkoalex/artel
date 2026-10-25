@@ -1,5 +1,6 @@
 # Записка developer — 01M5RHGRH3YJV8VBFH3QCHD8X0
 
+Итог шага 5 (возврат из merge_gate): в докстринге `test_ac1_self_reference_names_field_and_element` (модуль :1230, :1237) возвращено «поле `task:`»; в PLAN убран `spec_gate_declared_refusal_spec_text` из «Имён», у mutation-031 «после» — :2126 (то же утверждение, бывшая :177). Модуль 53 passed, plank-run 76 passed, guard ок, карта перегенерирована (изменилась только built_at_sha). Таблицы мутаций не перепрогонялись (по причине возврата).
 Итог шага 4: после ANSWER-2 (amend-tests, лок b911bacd) `plank-run` — 76 passed, код 0; раздел «Эскалация» PLAN заменён на «Ответ на эскалацию», PLAN `status: ready`, guard ок. Код и рабочая копия не менялись (git status чистый, всё в коммите 8d6a6cb1 + подтяжка 01fa9ab3).
 Итог шага 3 (прежний): PLAN `escalate` из-за дефекта планки (ac15, mutation-024: нет допуска `journal`→`entries` в помощнике).
 
