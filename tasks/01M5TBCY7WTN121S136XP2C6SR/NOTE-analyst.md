@@ -1,16 +1,17 @@
-# Записка analyst — 01M5TBCY7WTN121S136XP2C6SR (Э2а)
+# Записка analyst — 01M5TBCY7WTN121S136XP2C6SR (Э2а), шаг 2 (возврат с гейта 26.10)
 
 ## Выяснено
-- Э1 (01M5TBBDFS6DWQY6MS263T1KPY) на 25.10 в `spec_writing`, его кода в main нет: `orchestrator/epics.py`, `orchestrator/board.py`, таблицы `epics`, `tasks.epic_id`, `tasks.closed_as` (Э0) — не существуют. Сверка «имени модуля команд эпика по коду Э1», которую просит ТЗ, невозможна; имена в SPEC взяты из ТЗ и ADR-0028 (п. 5, 8, 9, 12).
-- Точка проверок перед шагом роли: `orchestrator/runner.py:341` (пауза) и `:352` (стоп-кран) — приём `store.journal(...)` + `return "exit", "... run отклонён: ..."`.
-- `budget.spent_with_estimate` — `budget.py:251`; `spend.cli_number` — `spend.py:22`; `merge_after.check` — `merge_after.py:126`; `replace_divided` — `:299`.
-- guard не требует существования путей зон — пути Э1 в zones проходят.
+- Кода Э1/Э0 в main по-прежнему нет (`epic_id|closed_as|start_after` — grep по orchestrator/ пуст).
+- Все каналы записи `merge_after` идут через `merge_after.check` (`merge_after.py:126`, граф цикла `:173`): `declared_from_tz` :197, `spec_gate_value` :185, `apply_plan` :320, `value_refusals` :358 (мандат answer). Объединённый граф в `check` закрывает все каналы в зоне `merge_after.py`.
+- Начисление стоимости шага — `spend.charge_step` из `runner.py:1839` (spend.py — только чтение, алерт 80 % — в runner после вызова).
+- Маркер первого шага — «agent run started» (`runner.py:1608`); стоп-кран — `runner.py:353`, блок отказов `:341-362`.
 
 ## Не сработало
-- `artel.py docs` недоступна роли analyst.
+- `ls` в шелле недоступен — читать каталоги через Read/git.
 
 ## Где остановился
-- SPEC написан (status: ready), budget 50 = рамка ТЗ; секция «Оценка объёма» — обоснование монолита (решение на гейте Оператора).
+- SPEC переписан (редакция 2, 17 требований, AC-1…AC-22) по 9 решениям Оператора; guard: ок; status ready; budget 50 (рамка ТЗ), монолит — решение Оператора.
+- В причине возврата суммы со знаком $ съедены шеллом («ровно ,0 при конверте »); прочитано как $8,0 при $10 — предупреждение, $10,0 — отказ (совпадает с В1 аудита).
 
 ## Чего не хватило
-- Кода Э1 в main: модель `board.py` (`waiting_on`) и модуль команд `epic` — только по ADR.
+- Кода Э1 (`board.py`, `epics.py`) для сверки имён и формулы «потрачено».
