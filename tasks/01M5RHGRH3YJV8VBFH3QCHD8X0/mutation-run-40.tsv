@@ -1,0 +1,14 @@
+# mutation-run №40 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 47 mutation-047.diff sha256 162393c4d098bfa2062c6becaa3b28d0928948cdf773dac57499ded4f0e50c6d
+# патч 48 mutation-048.diff sha256 480e8c23496049703b6fb08a0007a79b9d13ebcf21b08e1f1ec37bd3fe479ea8
+# патч 49 mutation-049.diff sha256 4acf5f52f8b9efbdc714599c59390d61be192fcab5e5528e428d39eb14c77a3e
+# патч 50 mutation-050.diff sha256 1b7eddad8d45d7f466c10baf9f10120bdb039d840d4b0b7af35096f7aaedd06b
+номер	исход	узлы
+47	убита	tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together
+48	убита	tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together
+49	убита	tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+50	убита	tests/test_merge_after_module.py::test_ac13_no_suffix_in_other_state,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies

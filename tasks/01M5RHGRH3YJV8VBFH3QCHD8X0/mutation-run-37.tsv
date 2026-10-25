@@ -1,0 +1,8 @@
+# mutation-run №37 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 44 mutation-044.diff sha256 7ab1f165b056c401c70e2d1ddb6a20161b572f24afca7724f6de997b83bb3295
+номер	исход	узлы
+44	убита	tests/test_merge_after_module.py::test_ac5_repeated_order_line_refused_without_traces

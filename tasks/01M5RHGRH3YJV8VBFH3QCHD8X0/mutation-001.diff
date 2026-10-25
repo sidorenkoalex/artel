@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -360,8 +360,6 @@
+     (требование 3). `["нет"]` — снятие всех зависимостей, годно всегда.
+     Без `conn` — только форма: проверка по БД нужна задаче, для которой
+     пишется ответ."""
+-    if elements == [NONE_WORD]:
+-        return []
+     if NONE_WORD in elements:
+         return [f"слово «{NONE_WORD}» снимает все зависимости и стоит в "
+                 f"строке одно, без id"]

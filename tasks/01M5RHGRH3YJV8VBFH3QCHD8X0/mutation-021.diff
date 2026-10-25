@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -142,7 +142,7 @@
+     own_target = target if target is not None else store.task_target(conn, task_id)
+     resolved: list[tuple[str, str]] = []
+     for item in items:
+-        matches = store.task_id_matches(conn, item)
++        matches = store.task_id_matches(conn, item)[:1]
+         if not matches:
+             reasons.append(_reason(item, "нет такой задачи"))
+             continue

@@ -1,0 +1,13 @@
+diff --git a/orchestrator/catalog.py b/orchestrator/catalog.py
+--- a/orchestrator/catalog.py
++++ b/orchestrator/catalog.py
+@@ -635,8 +635,7 @@
+             project_reasons = _project_line_reasons(tz_raw, target)
+         if order_reasons:
+             refusal = "\n".join(
+-                ([refusal] if refusal else [])
+-                + [f"ТЗ {tz_path}: «{merge_after.ORDER_LINE}»: {r}"
++                [f"ТЗ {tz_path}: «{merge_after.ORDER_LINE}»: {r}"
+                    for r in order_reasons]
+                 + ["new: зависимости мержа ТЗ не годны — задача не заведена"])
+         if project_reasons:

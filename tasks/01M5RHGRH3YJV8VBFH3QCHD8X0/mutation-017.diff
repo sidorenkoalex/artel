@@ -1,0 +1,25 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -340,7 +340,7 @@
+         detail = f"{'; '.join(reasons)}; остаётся {_text(old)}"
+         store.journal(conn, task_id, "fsm", PLAN_REJECTED_ACTION, detail)
+         print(f"[{task_id}] ВНИМАНИЕ: {PLAN_REJECTED_ACTION}: {detail}")
+-        return
++        return True
+     rewrite(conn, task_id, ids, "PLAN", "fsm")
+ 
+ 
+diff --git a/orchestrator/fsm_advance.py b/orchestrator/fsm_advance.py
+--- a/orchestrator/fsm_advance.py
++++ b/orchestrator/fsm_advance.py
+@@ -839,7 +839,8 @@
+     # Канал PLAN зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
+     # требование 3) — тем же местом и тем же правилом, что бюджет из PLAN:
+     # отказ значения пишется в журнал и переход не останавливает.
+-    merge_after.apply_plan(conn, task_id, t, plan_meta, plan_text)
++    if merge_after.apply_plan(conn, task_id, t, plan_meta, plan_text):
++        return False
+     store.update_task(conn, task_id, verifying_attempts=0)
+     store.set_state(conn, task_id, "verifying", "fsm",
+                     expected_state=state, detail="MR готов — жду зелёного CI ветки")

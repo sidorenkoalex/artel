@@ -1,0 +1,15 @@
+diff --git a/scripts/guard.py b/scripts/guard.py
+--- a/scripts/guard.py
++++ b/scripts/guard.py
+@@ -5648,8 +5648,10 @@
+ def spec_merge_after_errors(path: Path | str, meta: dict) -> list[str]:
+     """Форма поля `merge_after` SPEC (требование 1, AC-1); поля нет —
+     ошибок нет. `path` — только для текста ошибок."""
+-    if (meta.get("type") or "") != "spec" or MERGE_AFTER_FIELD not in meta:
++    if (meta.get("type") or "") != "spec":
+         return []
++    if MERGE_AFTER_FIELD not in meta:
++        return [f"{path}: {MERGE_AFTER_FIELD}: поле обязательно, а его нет"]
+     items = merge_after_items(meta.get(MERGE_AFTER_FIELD))
+     return [f"{path}: {e}" for e in merge_after_form_errors(items,
+                                                             meta.get("task"))]

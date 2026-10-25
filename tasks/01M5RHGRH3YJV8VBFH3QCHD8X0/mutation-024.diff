@@ -1,0 +1,21 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -152,7 +152,7 @@
+                       f"задачами: {', '.join(sorted(matches))}"))
+             continue
+         dep = matches[0]
+-        if dep == task_id:
++        if item == task_id:
+             reasons.append(_reason(item, f"ссылается на саму задачу {task_id}"))
+             continue
+         if store.task_state(conn, dep) == "killed":
+@@ -173,7 +173,7 @@
+     graph = {r["id"]: stored(r["merge_after"]) for r in store.all_tasks(conn)}
+     graph[task_id] = [dep for _, dep in resolved]
+     for item, dep in resolved:
+-        path = _cycle_path(graph, dep, task_id)
++        path = None if dep == task_id else _cycle_path(graph, dep, task_id)
+         if path is not None:
+             reasons.append(_reason(
+                 item, f"цикл: {' → '.join([task_id] + path)}"))

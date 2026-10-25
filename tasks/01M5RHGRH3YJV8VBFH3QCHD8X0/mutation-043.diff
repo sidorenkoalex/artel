@@ -1,0 +1,25 @@
+diff --git a/orchestrator/catalog.py b/orchestrator/catalog.py
+--- a/orchestrator/catalog.py
++++ b/orchestrator/catalog.py
+@@ -628,8 +628,7 @@
+         order_reasons: list[str] = []
+         project_reasons: list[str] = []
+         if not canary:
+-            declared, order_reasons = merge_after.declared_from_tz(
+-                conn, tz_raw, target)
++            declared, order_reasons = [], []
+             # Строка «Проект:» (требование 4) — тем же рубежом, до клона;
+             # канарейка её не разбирает, как и «Порядок:».
+             project_reasons = _project_line_reasons(tz_raw, target)
+@@ -666,6 +665,11 @@
+                  journal_detail=f"{title} (проект {target})",
+                  model_set=model_set,
+                  set_members=set_members)
++    if tz_raw is not None and not canary:
++        declared, late_reasons = merge_after.declared_from_tz(conn, tz_raw, target)
++        if late_reasons:
++            sys.exit("\n".join(late_reasons) + "\nnew: зависимости мержа ТЗ "
++                     "не годны — задача не заведена")
+     if tz_check_detail is not None:
+         store.journal(conn, task_id, "operator", tz_check.ACTION,
+                       tz_check_detail)

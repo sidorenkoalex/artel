@@ -1,0 +1,8 @@
+# mutation-run №33 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 40 mutation-040.diff sha256 3b23b723f15a80517b0cc772e557c88bc507ce6a5c7ac4ff0bba14100c007dd0
+номер	исход	узлы
+40	убита	tests/test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole,tests/test_merge_after_module.py::test_ac3_order_line_without_after_declares_nothing

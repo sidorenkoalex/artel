@@ -1,0 +1,12 @@
+diff --git a/scripts/guard.py b/scripts/guard.py
+--- a/scripts/guard.py
++++ b/scripts/guard.py
+@@ -5631,7 +5631,7 @@
+     каналов переписывания значения (`orchestrator/merge_after.py`)."""
+     errors: list[str] = []
+     seen: set[str] = set()
+-    for item in items:
++    for item in dict.fromkeys(items):
+         if not idgen.is_task_id_form(item):
+             errors.append(f"{MERGE_AFTER_FIELD}: элемент «{item}» не в формате "
+                           f"id задачи (полный id или его префикс)")

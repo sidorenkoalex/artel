@@ -1,0 +1,12 @@
+diff --git a/orchestrator/catalog.py b/orchestrator/catalog.py
+--- a/orchestrator/catalog.py
++++ b/orchestrator/catalog.py
+@@ -621,6 +621,8 @@
+         # 2-4) — здесь же, ДО id/ветки/строки БД (требование 3, AC-3):
+         # отказ не оставляет ни артефактной ветки, ни строки задачи.
+         refusal = _tz_path_refusal(tz_path, tz_raw, target)
++        if refusal is not None:
++            sys.exit(refusal)
+         # Зависимости мержа строки «Порядок: после …» (SPEC
+         # 01M45D29BQJE8FJYJA4JQWSYFZ, требования 1-2) — тем же рубежом;
+         # обе причины печатаются одним заходом. Канарейка строку не

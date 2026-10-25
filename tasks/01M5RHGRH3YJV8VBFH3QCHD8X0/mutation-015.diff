@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -326,7 +326,7 @@
+     обоснования не требует. Отличное — применяется, только если раздел
+     «Влияние на систему» упоминает `merge_after` (обоснование смены) и
+     значение прошло те же проверки, что на гейте SPEC."""
+-    if FIELD not in meta:
++    if not meta.get(FIELD):
+         return
+     old = stored(t["merge_after"])
+     ids, reasons = check(conn, task_id, guard.merge_after_items(meta[FIELD]))

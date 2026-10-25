@@ -1,0 +1,17 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -440,12 +440,7 @@
+     (`STATUS_DECLARED_STATES`) — своя добавка «[мерж после: …]» с
+     заявленными Оператором зависимостями (SPEC 01M45D29BQJE8FJYJA4JQWSYFZ,
+     требование 4)."""
+-    if t["state"] in STATUS_WAIT_STATES:
+-        label = "ждёт мержа"
+-    elif t["state"] in STATUS_DECLARED_STATES:
+-        label = "мерж после"
+-    else:
+-        return ""
++    label = "ждёт мержа"
+     pending = [(d, s) for d, s in _dependency_states(conn, t) if s != "done"]
+     if not pending:
+         return ""

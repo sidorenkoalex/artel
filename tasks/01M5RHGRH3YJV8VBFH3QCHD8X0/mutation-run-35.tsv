@@ -1,0 +1,8 @@
+# mutation-run №35 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 42 mutation-042.diff sha256 6359ed99b45b5c36cc529a6a846518a01fbc8871736f38b3a7bcbff1e5f4f95a
+номер	исход	узлы
+42	убита	tests/test_merge_after_module.py::test_ac4_unparsed_element_refused_without_traces

@@ -1,0 +1,21 @@
+diff --git a/orchestrator/answer.py b/orchestrator/answer.py
+--- a/orchestrator/answer.py
++++ b/orchestrator/answer.py
+@@ -398,7 +398,7 @@
+     test_ids: list[str] = []
+     merge_deps: list[str] | None = None
+     if state == "escalated":
+-        raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])
++        raw = _read_answer_file(task_id, file_path)
+         merge_deps = merge_after.mandate_value(conn, task_id, raw)
+     elif state in INSTRUCTION_STATES:
+         if runner.in_role_environment():
+@@ -440,6 +440,8 @@
+                  f"состоянии escalated (сейчас: {state})")
+ 
+     rel_answer, branch = _commit_answer(conn, task_id, raw)
++    if state == "escalated":
++        _read_checked_answer_file(conn, task_id, file_path, t["branch"])
+ 
+     if merge_deps is not None:
+         merge_after.rewrite(conn, task_id, merge_deps,

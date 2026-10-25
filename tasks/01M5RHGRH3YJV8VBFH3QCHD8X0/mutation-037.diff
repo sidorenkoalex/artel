@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -218,7 +218,7 @@
+     (требование 3); пустое — колонка и журнал не трогаются."""
+     if not ids:
+         return
+-    store.update_task(conn, task_id, merge_after=column(ids))
++    store.update_task(conn, task_id, merge_after=column(ids[::-1]))
+     store.journal(conn, task_id, "operator", DECLARED_ACTION, _text(ids))
+     print(f"[{task_id}] {DECLARED_ACTION}: {_text(ids)}")
+ 

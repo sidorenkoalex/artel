@@ -1,0 +1,677 @@
+---
+task: 01M5RHGRH3YJV8VBFH3QCHD8X0
+type: plan
+author_role: developer
+status: draft
+schema_version: 5
+---
+
+# PLAN: сведение тестов, волна 3м-2б — шесть файлов `merge_after` в `tests/test_merge_after_module.py`
+
+## Подход
+
+Черновик: идут прогоны «до». Полный текст плана собирается после свода.
+
+## Шаги
+
+1. Патчи мутаций, таблица «до».
+
+## Покрытие требований
+
+| Требование | Шаг |
+|---|---|
+| 1–2 | 1 |
+
+## Влияние на систему
+
+Черновик.
+
+## Мутации до
+
+Команда частей: `mutation-run 01M5RHGRH3YJV8VBFH3QCHD8X0 --ref base --tests <шесть файлов волны> --copy-table --wait-lock 4 --patches <a>-<b>`, рабочих процессов — по умолчанию (`auto`).
+
+Часть №1:
+
+```
+# mutation-run №1 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 1 mutation-001.diff sha256 b3309d055b1b47e0fce351402e347e47b5fca4407261b647a201cbbef7b12d8e
+# патч 2 mutation-002.diff sha256 6f1403596aadf7995636660dcaaaf71615e408a018a9ee408db8f86f83e7c7ce
+# патч 3 mutation-003.diff sha256 143266dae32ea8c6ec5de68b8b0e400984ac656becb3f0602ffc7c58db4fefb2
+# патч 4 mutation-004.diff sha256 95947f974b47f8a40ebb9d5802d67a7ced7d23c172a255b4349e3bb66b3cbc07
+# патч 5 mutation-005.diff sha256 2d0e364f910a700af91c0c40d3bbf059dbc9f38fe19fbb64a56460bd2f4b6fbe
+# патч 6 mutation-006.diff sha256 56586fc4e65fbfe14d5a5456eea4acebb80d8f254cb98a4f22828fb820fb6dbb
+# патч 7 mutation-007.diff sha256 b4f3eb89507bacedde2e6cfc58187b87c5f0bc6a8aef6d1b22a7a3d67407e8f3
+# патч 8 mutation-008.diff sha256 d8158f2ae72c316ae402dd108cbef3c01ac09ebdaad50e6a805ffa7b3d6fa092
+# патч 9 mutation-009.diff sha256 df9b2db4fa0a9b223969433944659f1c3fca4300d31fbacb3a290b220363e504
+# патч 10 mutation-010.diff sha256 b5b17202281d659d35e434fd444e629449366bfd51387dfdbf0ee5eaf445782e
+# патч 11 mutation-011.diff sha256 4880e8e47e428e2ef5db129aa99985d2ce31fc42aaa5e1497423142b154da3c4
+номер	исход	узлы
+1	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateAcceptedTest::test_ac11_escalated_answer_sets_and_clears_value
+2	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateAcceptedTest::test_ac11_escalated_answer_sets_and_clears_value,tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateAcceptedTest::test_ac11_merge_gate_answer_outside_role_env_accepted
+3	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateAcceptedTest::test_ac11_merge_gate_answer_outside_role_env_accepted
+4	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_invalid_mandate_element_refused_before_commit
+5	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_invalid_mandate_element_refused_before_commit
+6	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_merge_gate_without_line_or_from_role_env_refused
+7	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_merge_gate_without_line_or_from_role_env_refused
+8	убита	tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py::GuardMergeAfterFieldTest::test_ac1_self_reference_names_field_and_element
+9	убита	tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py::GuardMergeAfterFieldTest::test_ac1_repeated_element_is_a_repeat_error
+10	убита	tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py::GuardMergeAfterFieldTest::test_ac1_element_not_in_task_id_format_is_a_form_error
+11	убита	tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py::GuardMergeAfterFieldTest::test_ac1_valid_list_and_missing_field_pass
+```
+
+Часть №2:
+
+```
+# mutation-run №2 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 12 mutation-012.diff sha256 28ebaadb67a982f43c97245ace0be3a0b869f1a341534442103625eb3d17a705
+номер	исход	узлы
+12	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_no_suffix_in_other_state,tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py::GuardMergeAfterFieldTest::test_ac1_repeated_element_is_a_repeat_error,tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py::GuardMergeAfterFieldTest::test_ac1_valid_list_and_missing_field_pass,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac1_order_line_declares_full_ids_in_line_order,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::ShowDependenciesTest::test_ac14_show_lists_all_dependencies_with_states,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+```
+
+Часть №3:
+
+```
+# mutation-run №3 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 13 mutation-013.diff sha256 7675a1ebafce60997d81b5e71f41683edf89ed31e0f16716c2d8a0eebccb6568
+# патч 14 mutation-014.diff sha256 3a828d119a13a6e5d80ed78560d33789e3c4f6bfe72fdc4a60eda795ce1a9c8b
+# патч 15 mutation-015.diff sha256 4d9c07c5ec5e3f83100bf12f69d31f27fd48fda7a651b9fee025a9233d709025
+# патч 16 mutation-016.diff sha256 b1620e505b197af1edba012019409f110a723ee513e3ef390b8287ae368687a8
+# патч 17 mutation-017.diff sha256 c6ac2f6a10727737e81a94a8297f7d271d93b32cc4d99786ff791a1be5e71510
+# патч 18 mutation-018.diff sha256 6bd4f0f9603534e90ff04a75df05641d8f49c2e3142152fb2162a2ac01d9697d
+# патч 19 mutation-019.diff sha256 4dc2f44b122ba91f15d0c91a06de971945c46f36f076855f337165d74a28d4c0
+номер	исход	узлы
+13	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_empty_plan_value_clears_dependencies,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_justified_plan_value_replaces_db_value,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+14	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateAcceptedTest::test_ac11_escalated_answer_sets_and_clears_value,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_justified_plan_value_replaces_db_value
+15	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_empty_plan_value_clears_dependencies
+16	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_plan_without_field_keeps_db_value
+17	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+18	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+19	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+```
+
+Часть №4:
+
+```
+# mutation-run №4 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 20 mutation-020.diff sha256 7ad7f09479bc3b204a0a83dba6e6b6dce60f1f0fa6363b16ba1498df68b9dc37
+номер	исход	узлы
+20	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateMissingOrAmbiguousTest::test_ac2_missing_task_keeps_spec_gate_and_column_empty,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+```
+
+Часть №5:
+
+```
+# mutation-run №5 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 21 mutation-021.diff sha256 01e97cc5008433518beca03b9f0dc020f69222bee95dcf67728d09e811d36f8c
+номер	исход	узлы
+21	убита	tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateMissingOrAmbiguousTest::test_ac2_ambiguous_prefix_keeps_spec_gate_and_column_empty,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Часть №6:
+
+```
+# mutation-run №6 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 22 mutation-022.diff sha256 28701215bd85e927caba6fa72d057498601cc5178029fa4d0ac6e9c87e2ca971
+номер	исход	узлы
+22	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateKilledForeignSelfTest::test_ac3_killed_dependency_refused,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+```
+
+Часть №7:
+
+```
+# mutation-run №7 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 23 mutation-023.diff sha256 57f2df25d2f1e46b1a78dd4179693f81a0387b08345e7bd49259f02c3241ab7e
+номер	исход	узлы
+23	убита	tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateKilledForeignSelfTest::test_ac3_dependency_of_other_target_refused,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Часть №8:
+
+```
+# mutation-run №8 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 24 mutation-024.diff sha256 bf128847abd7648dc1f82dabe1bd7998b355eea4426de684a214178270e23d57
+номер	исход	узлы
+24	убита	tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateKilledForeignSelfTest::test_ac3_prefix_resolving_to_own_id_refused
+```
+
+Часть №9:
+
+```
+# mutation-run №9 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 25 mutation-025.diff sha256 0829aa652fd3d78ab7a598967a20be57a16a8c8b9c6a8be6d37c1ea18224c69e
+номер	исход	узлы
+25	убита	tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py::AnswerMandateRefusedTest::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateCycleTest::test_ac4_cycle_through_existing_values_refused,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition
+```
+
+Часть №10:
+
+```
+# mutation-run №10 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 26 mutation-026.diff sha256 84ab46b24bb84870d226cf6a82bdc5c0429fbd33087c3d9fd9d687860fad97b4
+номер	исход	узлы
+26	не убита	
+```
+
+Часть №11:
+
+```
+# mutation-run №11 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 27 mutation-027.diff sha256 1a48b0a4431f769308471709cecaafbb9fe71a33a7659e5b555ecc09877d0bbb
+# патч 28 mutation-028.diff sha256 6ee6e9c7aeecabc1556ceb68bb7a452cc91938b92673623e41328eb5ad4d2d8f
+# патч 29 mutation-029.diff sha256 51219ae0b0b5fb4cb01685dbfa4a6c6379c509b7f752ff39f6680d424515a6f5
+# патч 30 mutation-030.diff sha256 43af1d7401dfdfd4a7143551ed59424e81d003109f1207df01b95a6da859b939
+# патч 31 mutation-031.diff sha256 c70ea3ba96850685b4dff4e0a0fc04c44ca330474ece96691b4a95f98fc9225c
+# патч 32 mutation-032.diff sha256 bb955d793d3b7df7daf32f7ef3ee9e7539d34c89a9ab58abbf5b96711c7033a5
+# патч 33 mutation-033.diff sha256 9c426d41e1fb1f4e0f92457876785803a4d6751e0ac05051c6df3fc8b6093903
+# патч 34 mutation-034.diff sha256 1801418cff8c1ee659a9dc98b64a0cb029ecf54657b0a597cd5341421504559f
+# патч 35 mutation-035.diff sha256 881518c24f6adfc99c364a2104652ff658b77fe07492925b56532d93d916c15d
+# патч 36 mutation-036.diff sha256 5900940c4b62d4bf70d84d20be42b07d952da1b103650735bd1fa85b1eeb17bf
+# патч 37 mutation-037.diff sha256 a853fc01755a5671392601ff62841c6c37fb30f84683002f21afb547f795e2b4
+# патч 38 mutation-038.diff sha256 934b982b9a28015f3080af392ab4b7ebb5a2d17db9d5b32773691709f2480ced
+номер	исход	узлы
+27	убита	tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_plan_without_field_keeps_db_value,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateWritesColumnTest::test_ac5_prefixes_written_as_full_ids_in_spec_order,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_no_suffix_in_other_state,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_empty_plan_value_clears_dependencies,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateCycleTest::test_ac4_cycle_through_existing_values_refused,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelRejectsTest::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py::PlanChannelAppliesTest::test_ac9_justified_plan_value_replaces_db_value,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::ShowDependenciesTest::test_ac14_show_lists_all_dependencies_with_states
+28	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::ShowDependenciesTest::test_ac14_show_without_dependencies_has_no_line,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateWritesColumnTest::test_ac5_spec_without_field_leaves_column_empty
+29	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::ShowDependenciesTest::test_ac14_show_without_dependencies_has_no_line,tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateWritesColumnTest::test_ac5_spec_without_field_leaves_column_empty
+30	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+31	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_no_suffix_without_field_or_all_done,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+32	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_no_suffix_in_other_state,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+33	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::StatusSuffixTest::test_ac13_no_suffix_without_field_or_all_done,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+34	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::ShowDependenciesTest::test_ac14_show_lists_all_dependencies_with_states
+35	убита	tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py::ShowDependenciesTest::test_ac14_show_without_dependencies_has_no_line
+36	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac1_order_line_declares_full_ids_in_line_order,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+37	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac1_order_line_declares_full_ids_in_line_order
+38	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac1_order_line_declares_full_ids_in_line_order
+```
+
+Часть №12:
+
+```
+# mutation-run №12 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 39 mutation-039.diff sha256 96d253fa97abd8a74dbb9c2c0d42d406f75bd8df029c3c6ea40f31ff9f38b70f
+номер	исход	узлы
+39	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac2_list_ends_at_parenthesis_or_dot
+```
+
+Часть №13:
+
+```
+# mutation-run №13 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 40 mutation-040.diff sha256 3b23b723f15a80517b0cc772e557c88bc507ce6a5c7ac4ff0bba14100c007dd0
+номер	исход	узлы
+40	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac3_order_line_without_after_declares_nothing
+```
+
+Часть №14:
+
+```
+# mutation-run №14 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 41 mutation-041.diff sha256 0d848c1620df2dd58216587663a86296bb6e573fb0464f585bdc2f6fc2175180
+номер	исход	узлы
+41	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac3_order_line_without_after_declares_nothing
+```
+
+Часть №15:
+
+```
+# mutation-run №15 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 42 mutation-042.diff sha256 6359ed99b45b5c36cc529a6a846518a01fbc8871736f38b3a7bcbff1e5f4f95a
+номер	исход	узлы
+42	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac4_unparsed_element_refused_without_traces
+```
+
+Часть №16:
+
+```
+# mutation-run №16 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 43 mutation-043.diff sha256 656bb2fd4f7fc917a428e769d356e5701201644ac99b3c00df7ece9e5a6565f1
+номер	исход	узлы
+43	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac5_repeated_order_line_refused_without_traces,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac4_unparsed_element_refused_without_traces,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Часть №17:
+
+```
+# mutation-run №17 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 44 mutation-044.diff sha256 7ab1f165b056c401c70e2d1ddb6a20161b572f24afca7724f6de997b83bb3295
+номер	исход	узлы
+44	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac5_repeated_order_line_refused_without_traces
+```
+
+Часть №18:
+
+```
+# mutation-run №18 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 45 mutation-045.diff sha256 3a6b0c6a92d0378c9c69b8d52d97875f2690d9709bb355791515996265aaa5e0
+номер	исход	узлы
+45	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac5_repeated_order_line_refused_without_traces
+```
+
+Часть №19:
+
+```
+# mutation-run №19 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 46 mutation-046.diff sha256 4f0815c9ecd2a677bd0b75a53b4add824a8ea1fad25623c5eba0a9d3b5c2d148
+номер	исход	узлы
+46	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac1_order_line_declares_full_ids_in_line_order
+```
+
+Часть №20:
+
+```
+# mutation-run №20 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 47 mutation-047.diff sha256 162393c4d098bfa2062c6becaa3b28d0928948cdf773dac57499ded4f0e50c6d
+# патч 48 mutation-048.diff sha256 480e8c23496049703b6fb08a0007a79b9d13ebcf21b08e1f1ec37bd3fe479ea8
+# патч 49 mutation-049.diff sha256 4acf5f52f8b9efbdc714599c59390d61be192fcab5e5528e428d39eb14c77a3e
+# патч 50 mutation-050.diff sha256 1b7eddad8d45d7f466c10baf9f10120bdb039d840d4b0b7af35096f7aaedd06b
+номер	исход	узлы
+47	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac7_path_refusal_and_order_refusal_printed_together
+48	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac7_path_refusal_and_order_refusal_printed_together
+49	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+50	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::DeclaredStatusShowTest::test_ac8_status_and_show_carry_declared_dependencies
+```
+
+<!-- конец мутаций до -->
+
+## Мутации после
+
+Перед частью №21: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №21 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 1 mutation-001.diff sha256 b3309d055b1b47e0fce351402e347e47b5fca4407261b647a201cbbef7b12d8e
+# патч 2 mutation-002.diff sha256 6f1403596aadf7995636660dcaaaf71615e408a018a9ee408db8f86f83e7c7ce
+# патч 3 mutation-003.diff sha256 143266dae32ea8c6ec5de68b8b0e400984ac656becb3f0602ffc7c58db4fefb2
+# патч 4 mutation-004.diff sha256 95947f974b47f8a40ebb9d5802d67a7ced7d23c172a255b4349e3bb66b3cbc07
+# патч 5 mutation-005.diff sha256 2d0e364f910a700af91c0c40d3bbf059dbc9f38fe19fbb64a56460bd2f4b6fbe
+# патч 6 mutation-006.diff sha256 56586fc4e65fbfe14d5a5456eea4acebb80d8f254cb98a4f22828fb820fb6dbb
+# патч 7 mutation-007.diff sha256 b4f3eb89507bacedde2e6cfc58187b87c5f0bc6a8aef6d1b22a7a3d67407e8f3
+# патч 8 mutation-008.diff sha256 d8158f2ae72c316ae402dd108cbef3c01ac09ebdaad50e6a805ffa7b3d6fa092
+# патч 9 mutation-009.diff sha256 df9b2db4fa0a9b223969433944659f1c3fca4300d31fbacb3a290b220363e504
+# патч 10 mutation-010.diff sha256 b5b17202281d659d35e434fd444e629449366bfd51387dfdbf0ee5eaf445782e
+# патч 11 mutation-011.diff sha256 4880e8e47e428e2ef5db129aa99985d2ce31fc42aaa5e1497423142b154da3c4
+номер	исход	узлы
+1	убита	tests/test_merge_after_module.py::test_ac11_escalated_answer_sets_and_clears_value,tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+2	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_merge_after_module.py::test_ac11_escalated_answer_sets_and_clears_value,tests/test_merge_after_module.py::test_ac11_merge_gate_answer_outside_role_env_accepted
+3	убита	tests/test_merge_after_module.py::test_ac11_merge_gate_answer_outside_role_env_accepted
+4	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit
+5	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit
+6	убита	tests/test_merge_after_module.py::test_ac12_merge_gate_without_line_or_from_role_env_refused
+7	убита	tests/test_merge_after_module.py::test_ac12_merge_gate_without_line_or_from_role_env_refused
+8	убита	tests/test_merge_after_module.py::test_ac1_self_reference_names_field_and_element
+9	убита	tests/test_merge_after_module.py::test_ac1_repeated_element_is_a_repeat_error
+10	убита	tests/test_merge_after_module.py::test_ac1_element_not_in_task_id_format_is_a_form_error
+11	убита	tests/test_merge_after_module.py::test_ac1_valid_list_and_missing_field_pass
+```
+
+Перед частью №22: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №22 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 12 mutation-012.diff sha256 28ebaadb67a982f43c97245ace0be3a0b869f1a341534442103625eb3d17a705
+номер	исход	узлы
+12	убита	tests/test_merge_after_module.py::test_ac1_valid_list_and_missing_field_pass,tests/test_merge_after_module.py::test_ac1_repeated_element_is_a_repeat_error,tests/test_merge_after_module.py::test_short_prefix_inside_other_id_is_not_justification,tests/test_merge_after_module.py::test_ac9_empty_plan_value_clears_dependencies,tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac9_justified_plan_value_replaces_db_value,tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac2_missing_task_keeps_spec_gate_and_column_empty,tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_merge_after_module.py::test_ac1_order_line_declares_full_ids_in_line_order,tests/test_merge_after_module.py::test_ac14_show_lists_all_dependencies_with_states,tests/test_merge_after_module.py::test_ac5_prefixes_written_as_full_ids_in_spec_order,tests/test_merge_after_module.py::test_ac13_no_suffix_in_other_state,tests/test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+```
+
+Перед частью №23: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №23 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 13 mutation-013.diff sha256 7675a1ebafce60997d81b5e71f41683edf89ed31e0f16716c2d8a0eebccb6568
+# патч 14 mutation-014.diff sha256 3a828d119a13a6e5d80ed78560d33789e3c4f6bfe72fdc4a60eda795ce1a9c8b
+# патч 15 mutation-015.diff sha256 4d9c07c5ec5e3f83100bf12f69d31f27fd48fda7a651b9fee025a9233d709025
+# патч 16 mutation-016.diff sha256 b1620e505b197af1edba012019409f110a723ee513e3ef390b8287ae368687a8
+# патч 17 mutation-017.diff sha256 c6ac2f6a10727737e81a94a8297f7d271d93b32cc4d99786ff791a1be5e71510
+# патч 18 mutation-018.diff sha256 6bd4f0f9603534e90ff04a75df05641d8f49c2e3142152fb2162a2ac01d9697d
+# патч 19 mutation-019.diff sha256 4dc2f44b122ba91f15d0c91a06de971945c46f36f076855f337165d74a28d4c0
+номер	исход	узлы
+13	убита	tests/test_merge_after_module.py::test_ac9_empty_plan_value_clears_dependencies,tests/test_merge_after_module.py::test_plan_value_equal_to_db_after_resolution_is_silent,tests/test_merge_after_module.py::test_ac9_justified_plan_value_replaces_db_value,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+14	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac11_escalated_answer_sets_and_clears_value,tests/test_merge_after_module.py::test_ac9_justified_plan_value_replaces_db_value
+15	убита	tests/test_merge_after_module.py::test_ac9_empty_plan_value_clears_dependencies
+16	убита	tests/test_merge_after_module.py::test_ac9_plan_without_field_keeps_db_value
+17	убита	tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+18	убита	tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+19	убита	tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+```
+
+Перед частью №24: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №24 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 20 mutation-020.diff sha256 7ad7f09479bc3b204a0a83dba6e6b6dce60f1f0fa6363b16ba1498df68b9dc37
+номер	исход	узлы
+20	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_merge_after_module.py::test_ac2_missing_task_keeps_spec_gate_and_column_empty,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Перед частью №25: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №25 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 21 mutation-021.diff sha256 01e97cc5008433518beca03b9f0dc020f69222bee95dcf67728d09e811d36f8c
+номер	исход	узлы
+21	убита	tests/test_merge_after_module.py::test_ac2_ambiguous_prefix_keeps_spec_gate_and_column_empty,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Перед частью №26: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №26 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 22 mutation-022.diff sha256 28701215bd85e927caba6fa72d057498601cc5178029fa4d0ac6e9c87e2ca971
+номер	исход	узлы
+22	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_merge_after_module.py::test_ac3_killed_dependency_refused,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Перед частью №27: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №27 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 23 mutation-023.diff sha256 57f2df25d2f1e46b1a78dd4179693f81a0387b08345e7bd49259f02c3241ab7e
+номер	исход	узлы
+23	убита	tests/test_merge_after_module.py::test_ac3_dependency_of_other_target_refused,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Перед частью №28: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №28 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 24 mutation-024.diff sha256 bf128847abd7648dc1f82dabe1bd7998b355eea4426de684a214178270e23d57
+номер	исход	узлы
+24	убита	tests/test_merge_after_module.py::test_ac3_prefix_resolving_to_own_id_refused
+```
+
+Перед частью №29: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №29 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 25 mutation-025.diff sha256 0829aa652fd3d78ab7a598967a20be57a16a8c8b9c6a8be6d37c1ea18224c69e
+номер	исход	узлы
+25	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac4_cycle_through_existing_values_refused
+```
+
+Перед частью №30: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №30 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 26 mutation-026.diff sha256 84ab46b24bb84870d226cf6a82bdc5c0429fbd33087c3d9fd9d687860fad97b4
+номер	исход	узлы
+26	не убита	
+```
+
+Перед частью №31: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №31 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 27 mutation-027.diff sha256 1a48b0a4431f769308471709cecaafbb9fe71a33a7659e5b555ecc09877d0bbb
+# патч 28 mutation-028.diff sha256 6ee6e9c7aeecabc1556ceb68bb7a452cc91938b92673623e41328eb5ad4d2d8f
+# патч 29 mutation-029.diff sha256 51219ae0b0b5fb4cb01685dbfa4a6c6379c509b7f752ff39f6680d424515a6f5
+# патч 30 mutation-030.diff sha256 43af1d7401dfdfd4a7143551ed59424e81d003109f1207df01b95a6da859b939
+# патч 31 mutation-031.diff sha256 c70ea3ba96850685b4dff4e0a0fc04c44ca330474ece96691b4a95f98fc9225c
+# патч 32 mutation-032.diff sha256 bb955d793d3b7df7daf32f7ef3ee9e7539d34c89a9ab58abbf5b96711c7033a5
+# патч 33 mutation-033.diff sha256 9c426d41e1fb1f4e0f92457876785803a4d6751e0ac05051c6df3fc8b6093903
+# патч 34 mutation-034.diff sha256 1801418cff8c1ee659a9dc98b64a0cb029ecf54657b0a597cd5341421504559f
+# патч 35 mutation-035.diff sha256 881518c24f6adfc99c364a2104652ff658b77fe07492925b56532d93d916c15d
+# патч 36 mutation-036.diff sha256 5900940c4b62d4bf70d84d20be42b07d952da1b103650735bd1fa85b1eeb17bf
+# патч 37 mutation-037.diff sha256 a853fc01755a5671392601ff62841c6c37fb30f84683002f21afb547f795e2b4
+# патч 38 mutation-038.diff sha256 934b982b9a28015f3080af392ab4b7ebb5a2d17db9d5b32773691709f2480ced
+номер	исход	узлы
+27	убита	tests/test_merge_after_module.py::test_ac9_empty_plan_value_clears_dependencies,tests/test_merge_after_module.py::test_ac9_plan_without_field_keeps_db_value,tests/test_merge_after_module.py::test_ac13_no_suffix_in_other_state,tests/test_merge_after_module.py::test_ac9_justified_plan_value_replaces_db_value,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac5_prefixes_written_as_full_ids_in_spec_order,tests/test_merge_after_module.py::test_ac4_cycle_through_existing_values_refused,tests/test_merge_after_module.py::test_ac14_show_lists_all_dependencies_with_states,tests/test_merge_after_module.py::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done
+28	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac5_spec_without_field_leaves_column_empty,tests/test_merge_after_module.py::test_ac13_no_suffix_without_field_or_all_done,tests/test_merge_after_module.py::test_ac14_show_without_dependencies_has_no_line,tests/test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent
+29	убита	tests/test_merge_after_module.py::test_ac5_spec_without_field_leaves_column_empty,tests/test_merge_after_module.py::test_ac14_show_without_dependencies_has_no_line
+30	убита	tests/test_merge_after_module.py::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+31	убита	tests/test_merge_after_module.py::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+32	убита	tests/test_merge_after_module.py::test_ac13_no_suffix_in_other_state,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+33	убита	tests/test_merge_after_module.py::test_ac13_no_suffix_without_field_or_all_done,tests/test_merge_after_module.py::test_ac13_status_suffix_lists_unfinished_and_disappears_after_done,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+34	убита	tests/test_merge_after_module.py::test_ac14_show_lists_all_dependencies_with_states
+35	убита	tests/test_merge_after_module.py::test_ac14_show_without_dependencies_has_no_line
+36	убита	tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged,tests/test_merge_after_module.py::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_merge_after_module.py::test_ac1_order_line_declares_full_ids_in_line_order,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+37	убита	tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged,tests/test_merge_after_module.py::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_merge_after_module.py::test_ac1_order_line_declares_full_ids_in_line_order
+38	убита	tests/test_merge_after_module.py::test_ac1_order_line_declares_full_ids_in_line_order
+```
+
+Перед частью №32: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №32 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 39 mutation-039.diff sha256 96d253fa97abd8a74dbb9c2c0d42d406f75bd8df029c3c6ea40f31ff9f38b70f
+номер	исход	узлы
+39	убита	tests/test_merge_after_module.py::test_explicit_target_of_new_task_is_used,tests/test_merge_after_module.py::test_ac2_list_ends_at_parenthesis_or_dot
+```
+
+Перед частью №33: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №33 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 40 mutation-040.diff sha256 3b23b723f15a80517b0cc772e557c88bc507ce6a5c7ac4ff0bba14100c007dd0
+номер	исход	узлы
+40	убита	tests/test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole,tests/test_merge_after_module.py::test_ac3_order_line_without_after_declares_nothing
+```
+
+Перед частью №34: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №34 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 41 mutation-041.diff sha256 0d848c1620df2dd58216587663a86296bb6e573fb0464f585bdc2f6fc2175180
+номер	исход	узлы
+41	убита	tests/test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole,tests/test_merge_after_module.py::test_ac3_order_line_without_after_declares_nothing
+```
+
+Перед частью №35: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №35 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 42 mutation-042.diff sha256 6359ed99b45b5c36cc529a6a846518a01fbc8871736f38b3a7bcbff1e5f4f95a
+номер	исход	узлы
+42	убита	tests/test_merge_after_module.py::test_ac4_unparsed_element_refused_without_traces
+```
+
+Перед частью №36: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №36 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 43 mutation-043.diff sha256 656bb2fd4f7fc917a428e769d356e5701201644ac99b3c00df7ece9e5a6565f1
+номер	исход	узлы
+43	убита	tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_merge_after_module.py::test_ac5_repeated_order_line_refused_without_traces,tests/test_merge_after_module.py::test_ac4_unparsed_element_refused_without_traces,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces
+```
+
+Перед частью №37: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №37 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 44 mutation-044.diff sha256 7ab1f165b056c401c70e2d1ddb6a20161b572f24afca7724f6de997b83bb3295
+номер	исход	узлы
+44	убита	tests/test_merge_after_module.py::test_ac5_repeated_order_line_refused_without_traces
+```
+
+Перед частью №38: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №38 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 45 mutation-045.diff sha256 3a6b0c6a92d0378c9c69b8d52d97875f2690d9709bb355791515996265aaa5e0
+номер	исход	узлы
+45	убита	tests/test_merge_after_module.py::test_ac5_repeated_order_line_refused_without_traces
+```
+
+Перед частью №39: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №39 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 46 mutation-046.diff sha256 4f0815c9ecd2a677bd0b75a53b4add824a8ea1fad25623c5eba0a9d3b5c2d148
+номер	исход	узлы
+46	убита	tests/test_merge_after_module.py::test_ac1_order_line_declares_full_ids_in_line_order,tests/test_merge_after_module.py::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+```
+
+Перед частью №40: `git status --porcelain -- orchestrator/ scripts/` — вывод пуст
+
+```
+# mutation-run №40 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 47 mutation-047.diff sha256 162393c4d098bfa2062c6becaa3b28d0928948cdf773dac57499ded4f0e50c6d
+# патч 48 mutation-048.diff sha256 480e8c23496049703b6fb08a0007a79b9d13ebcf21b08e1f1ec37bd3fe479ea8
+# патч 49 mutation-049.diff sha256 4acf5f52f8b9efbdc714599c59390d61be192fcab5e5528e428d39eb14c77a3e
+# патч 50 mutation-050.diff sha256 1b7eddad8d45d7f466c10baf9f10120bdb039d840d4b0b7af35096f7aaedd06b
+номер	исход	узлы
+47	убита	tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together
+48	убита	tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together
+49	убита	tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+50	убита	tests/test_merge_after_module.py::test_ac13_no_suffix_in_other_state,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies
+```
+
+<!-- конец мутаций после -->

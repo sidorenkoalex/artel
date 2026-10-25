@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -206,7 +206,7 @@
+     if len(tails) > 1:
+         return [], [f"строка «{ORDER_LINE}» повторена — значение задаёт "
+                     f"одна строка"]
+-    tail = _ORDER_LIST_END.split(tails[0], maxsplit=1)[0]
++    tail = tails[0]
+     items = guard.merge_after_items(tail)
+     if not items:
+         return [], [f"в строке «{ORDER_LINE}» нет ни одного id задачи"]

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/answer.py b/orchestrator/answer.py
+--- a/orchestrator/answer.py
++++ b/orchestrator/answer.py
+@@ -416,7 +416,7 @@
+                 and merge_deps is None:
+             sys.exit(f"[{task_id}] answer доступна только для задачи в "
+                      f"состоянии escalated (сейчас: {state})")
+-    elif state == "merge_gate":
++    elif state == "merge_gate_":
+         if runner.in_role_environment():
+             sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
+         raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])

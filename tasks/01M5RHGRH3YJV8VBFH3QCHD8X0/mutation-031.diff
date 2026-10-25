@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -446,7 +446,7 @@
+         label = "мерж после"
+     else:
+         return ""
+-    pending = [(d, s) for d, s in _dependency_states(conn, t) if s != "done"]
++    pending = _dependency_states(conn, t)
+     if not pending:
+         return ""
+     return f"  [{label}: {_listing(pending)}]"

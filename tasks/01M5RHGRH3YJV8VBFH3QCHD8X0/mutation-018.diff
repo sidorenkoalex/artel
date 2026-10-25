@@ -1,0 +1,13 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -332,8 +332,7 @@
+     ids, reasons = check(conn, task_id, guard.merge_after_items(meta[FIELD]))
+     if not reasons and ids == old:
+         return
+-    if not reasons and FIELD not in guard.section_body(plan_text,
+-                                                       IMPACT_SECTION):
++    if False:
+         reasons = [f"смена {FIELD} не обоснована: раздел «{IMPACT_SECTION}» "
+                    f"PLAN.md не упоминает {FIELD}"]
+     if reasons:

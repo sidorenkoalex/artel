@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -62,7 +62,7 @@
+ # заявляет. Перечень кончается на конце строки, «(» или «.» — дальше в
+ # исторических ТЗ идёт пояснение свободным текстом.
+ ORDER_LINE = "Порядок: после"
+-_ORDER_LINE_RE = re.compile(r"^Порядок:[ \t]+после(?!\w)(.*)$", re.M)
++_ORDER_LINE_RE = re.compile(r"после(?!\w)(.*)$", re.M)
+ _ORDER_LIST_END = re.compile(r"[(.]")
+ 
+ DECLARED_ACTION = "merge_after заявлен Оператором"

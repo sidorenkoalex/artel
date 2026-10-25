@@ -1,0 +1,8 @@
+# mutation-run №39 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 46 mutation-046.diff sha256 4f0815c9ecd2a677bd0b75a53b4add824a8ea1fad25623c5eba0a9d3b5c2d148
+номер	исход	узлы
+46	убита	tests/test_merge_after_module.py::test_ac1_order_line_declares_full_ids_in_line_order,tests/test_merge_after_module.py::test_ac2_list_ends_at_parenthesis_or_dot,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces,tests/test_merge_after_module.py::test_ac8_status_and_show_carry_declared_dependencies

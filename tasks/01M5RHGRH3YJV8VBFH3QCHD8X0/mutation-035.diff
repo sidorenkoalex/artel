@@ -1,0 +1,10 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -456,6 +456,4 @@
+     """Строка `show` со всеми зависимостями, включая завершённые;
+     `None` — зависимостей нет."""
+     states = _dependency_states(conn, t)
+-    if not states:
+-        return None
+     return f"  зависимости мержа: {_listing(states)}"

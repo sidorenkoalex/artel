@@ -1,0 +1,189 @@
+---
+task: 01M5RHGRH3YJV8VBFH3QCHD8X0
+type: plan
+author_role: developer
+status: {{STATUS}}
+schema_version: 5
+---
+
+# PLAN: сведение тестов, волна 3м-2б — шесть файлов `merge_after` в `tests/test_merge_after_module.py`
+
+## Подход
+
+Перенос, не улучшение: 33 теста шести долгоживущих файлов (`answer`,
+`guard`, `plan`, `spec_gate`, `status_show` — SPEC 01M44EP0D47F498TEE08MNGBYT;
+`new_declares` — SPEC 01M45D29BQJE8FJYJA4JQWSYFZ) дописаны в конец
+`tests/test_merge_after_module.py` в стиле pytest, шесть файлов удалены
+(мандат ANSWER-1). Доказательство неослабления — один набор из 50 патчей
+мутаций кода `orchestrator/` и `scripts/guard.py` против шести файлов на
+базе («до») и против модуля на рабочей копии («после») теми же частями.
+
+- Патчи — `make_patches.py` каталога документов (замены текста, у каждой —
+  комментарий с заявкой; `git apply --check` на каждом). Альтернативы
+  заявок, убиваемые лишь при части зёрен, переписаны на мутацию того же
+  кода, убиваемую при любом зерне (см. «Мутации»); там, где такой мутации
+  нет, — находка; заявки тестов в модуле переписаны под новые мутации.
+- Свод — `convert.py` (перевод текста по позициям `ast` исходника:
+  `self.` → стенд, методы → функции `<префикс>_<метод>(stand, …)`,
+  `self.assertX(…)` → `assert …` по соответствию требования 11, `subTest`
+  → прежний цикл с ярлыком `+ "; " + f"<ключ>={<значение>!r}"` в каждом
+  сообщении, параметр `case: str = ""`/`label: str = ""` у помощников с
+  ярлыком) и `assemble.py` (абзац докстринга, недостающие импорты новыми
+  строками, переписанные заявки, удаление шести файлов). Комментарии и
+  разбивка строк исходников сохранены.
+- Части «до» и «после» — `run_part.py` (один вызов `mutation-run … --wait
+  5`, затем копия таблицы в этот PLAN — `add_table.py`, до старта следующей
+  части; перед частью «после» — проверка пустого `git status --porcelain --
+  orchestrator/ scripts/`). Патч, меняющий строки узлов `check`,
+  `_cycle_path`, `declared_from_tz`, `_ORDER_LINE_RE`, `merge_after_items`,
+  — один в своей части.
+- PLAN собирает `make_plan.py` (строки падения «до → после» из логов
+  патчей, места утверждений подготовки, перечни имён, числа и время).
+
+Бюджет SPEC ($60) не пересматривается.
+
+## Шаги
+
+1. Патчи мутаций 001–050, таблица «до» (прогоны №1–20) — сделано.
+2. Свод в модуль, удаление шести файлов, регенерация карты — сделано
+   (коммит 8d6a6cb1).
+3. Таблица «после» (прогоны №21–40) теми же диапазонами и `--workers` —
+   сделано; сравнение «до → после» и строки падения — ниже.
+
+## Покрытие требований
+
+| Требование | Шаг |
+|---|---|
+| 1 патчи и заявки | 1, «Мутации» |
+| 2 таблица «до», части | 1, «Мутации до» |
+| 3 строки падения | «Строки падения» |
+| 4 не доказательство | «Подготовка и предпосылки», «Строки падения» |
+| 5 зерно, находки | «Мутации», «Находки» |
+| 6 красный контроль | контроль всех 40 частей зелёный, повторов не было |
+| 7 временные файлы | только файлы каталога документов (`*.py`, `*.txt`, `*.tsv`) |
+| 8 свод в конец модуля | 2 |
+| 9 имена | 2, «Имена» |
+| 10 стенды-фикстуры | 2, «Имена» |
+| 11 перенос тел | 2 |
+| 12 дубли | «Удалённые дубли» |
+| 13 таблица «после» | 3, «Мутации после» |
+| 14 прогоны и замеры | «Числа и время» |
+| 15 удаление, мандат | 2 (ANSWER-1) |
+| 16 зоны | 2 — менялись только модуль, шесть файлов и карта |
+| 17 независимая проверка | вне роли |
+
+## Влияние на систему
+
+Меняются только тесты: дописка в `tests/test_merge_after_module.py`
+(20 прежних тестов, их фикстуры, функции, константы и `DivisionSandbox`
+не тронуты — дифф модуля только добавления), удаление шести файлов волны
+по мандату ANSWER-1 и вывод генератора `docs/codebase-map.md`. Код
+`orchestrator/` и `scripts/` не менялся (мутации — только во временной
+копии `mutation-run`); {{TREES}}. Каждое утверждение шести файлов
+перенесено в той же форме, `skip`/`xfail` нет, пределы не тронуты; свойство
+каждого удалённого файла держит его раздел модуля — таблица «после».
+Откат — revert коммита свода.
+
+## Риски
+
+- Строки, удлинённые заменой `self.` на имя стенда, местами длиннее
+  79 знаков (линтера длины в проекте нет); переразбивка строк не делалась,
+  чтобы не трогать тела.
+- Убийцы-соседи разных файлов (например, `012` роняет `approve` гейта SPEC
+  в стендах `plan`/`status_show`) убивают через подготовку — их строки не
+  служат доказательством; доказательство — строки заявивших тестов ниже.
+
+## Имена
+
+Прежнее имя → новое имя:
+- константы: `MARKER` (`answer`) → `ANSWER_MARKER` (литерал, не `MANDATE`);
+  `SPEC_TEXT` → `GUARD_SPEC_TEXT`, `PLAN_SPEC_TEXT`, `SPEC_GATE_SPEC_TEXT`,
+  `STATUS_SHOW_SPEC_TEXT`; `UNFINISHED_STATES` → `STATUS_SHOW_UNFINISHED_STATES`,
+  `NEW_DECLARES_UNFINISHED_STATES`; `FIELD` (`guard`) и `ZONES` (`spec_gate`,
+  `new_declares`) не переопределены — у модуля тот же литерал; `CROCKFORD` —
+  одно определение в разделе `spec_gate`, `WAIT_PREFIX` — в разделе
+  `status_show`, `ids_of` (с докстрингом) — в разделе `answer`; остальные
+  константы — прежними именами;
+- стенды: `AnswerMandateSandbox.setUp` → фикстура `answer_stand(real_git)`,
+  `GuardMergeAfterFieldTest.setUp` → `guard_stand(tmp_dir)` (три первые
+  строки), `PlanChannelSandbox.setUp` → `plan_stand(light_transition)`,
+  `MergeAfterSpecGateSandbox.setUp` → `spec_gate_stand(light_transition)`,
+  `DependencyOutputSandbox.setUp` → `status_show_stand(light_transition)`,
+  `DeclaredMergeAfterSandbox.setUp` → `new_declares_stand(light_transition)`;
+- методы → функции модуля (первый параметр `stand`): {{HELPERS}};
+  `branch_not_behind` → `plan_branch_not_behind(repo, *args)`;
+- локальные: `journal` → `entries` (`test_ac11_escalated_answer_sets_and_clears_value`,
+  три теста `plan`, `spec_gate_assert_refused`,
+  `test_ac1_order_line_declares_full_ids_in_line_order`,
+  `test_ac3_order_line_without_after_declares_nothing`); `task` → `task_id`
+  (четыре теста `guard`, `test_ac2_missing_task_keeps_spec_gate_and_column_empty`);
+  параметр только по имени `task` у `guard_field_errors` и `task=` вызовов
+  прежние.
+
+Совпадения тел (не объединены, требование 9): `answer_note`, `guard_note`,
+`plan_note`, `spec_gate_note`, `status_show_note`, `new_declares_note`;
+`answer_set_state`, `plan_set_task_state`, `spec_gate_set_task_state`,
+`status_show_set_state`, `new_declares_set_state`; `answer_unique_prefix`,
+`plan_unique_prefix`, `spec_gate_unique_prefix`, `new_declares_unique_prefix`;
+`*_last_step_id`, `*_journal_since` (`answer`, `plan`, `spec_gate`);
+`plan_new_task`, `spec_gate_new_task`, `status_show_new_task` и
+`new_declares_live_task`; `spec_gate_insert`/`new_declares_insert`; `ids_of`
+пяти файлов (у `status_show` — без докстринга).
+
+## Удалённые дубли
+
+Удалённых нет: все 33 теста перенесены (модуль — 20 + 33).
+
+## Мутации
+
+{{MUTATIONS}}
+
+## Находки
+
+- Находка: mutation-026 (`SpecGateCycleTest::test_ac4_cycle_through_existing_values_refused`, альтернатива «граф строится без нового значения A») «до» и «после» не убита никем: путь B → A находится по рёбрам БД без рёбер A. Тест не удалён; его заявка переписана на mutation-025.
+- Находка: `SpecGateWritesColumnTest::test_ac5_prefixes_written_as_full_ids_in_spec_order`, альтернатива «id сортируются»: при одной зависимости или уже упорядоченных id сортировка ничего не меняет — мутации порядка, убиваемой при любом зерне, у теста нет; заявка переписана на mutation-027.
+- Находка: `NewDeclaresTest::test_ac2_list_ends_at_parenthesis_or_dot`, альтернатива «склеивает продолжение на следующей строке»: перечень режется на «(»/«.» первой строки, склейка следующей строки не наблюдается ни при каком зерне; заявка переписана на mutation-039.
+
+## Строки падения
+
+Формат: мутация, убийца «до» — `файл:строка` упавшего утверждения (для
+помощника результата — и строка вызова-действия в теле теста) → функция
+модуля — `файл:строка` её утверждения и вызова; «то же утверждение» —
+соответствие требования 11. Строки — из логов прогонов патчей
+(`<id>-mutation-run-<n>-p<nnn>.log`).
+
+{{KILLS}}
+
+## Подготовка и предпосылки
+
+Утверждения и вызовы, не служащие доказательством (требование 4), и их
+места после свода:
+
+{{PREP}}
+
+## Числа и время
+
+{{COUNTS}}
+{{TIMES}}
+
+## Мутации до
+
+Команда частей: `mutation-run 01M5RHGRH3YJV8VBFH3QCHD8X0 --ref base --tests <шесть файлов волны> --copy-table --wait-lock 4 --patches <a>-<b>`, рабочих процессов — по умолчанию (`auto`). Части: 1-11, 12, 13-19, 20, 21, 22, 23, 24, 25, 26, 27-38, 39, 40, 41, 42, 43, 44, 45, 46, 47-50.
+
+{{BEFORE}}
+
+<!-- конец мутаций до -->
+
+## Мутации после
+
+Команда частей: `mutation-run 01M5RHGRH3YJV8VBFH3QCHD8X0 --ref worktree --tests tests/test_merge_after_module.py --copy-table --wait-lock 4 --patches <a>-<b>` теми же диапазонами, рабочих процессов — `auto`.
+
+<!-- начало мутаций после -->
+{{AFTER}}
+
+<!-- конец мутаций после -->
+
+## Предложения системе
+
+- `mutation-run`: строка падения (файл:строка утверждения и вызова) по каждому патчу — в таблицу команды; сейчас её добывают разбором логов своим сценарием (`fail_lines.py`, `make_plan.py` волн 3м-2 и 3м-2б).
+- Планка волн читает PLAN из ссылки документов, а не с диска: проверить PLAN до автокоммита шага роль может только самодельным `_pult` — не хватает `plank-run --docs-disk`.

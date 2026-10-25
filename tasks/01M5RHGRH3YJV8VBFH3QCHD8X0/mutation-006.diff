@@ -1,0 +1,14 @@
+diff --git a/orchestrator/answer.py b/orchestrator/answer.py
+--- a/orchestrator/answer.py
++++ b/orchestrator/answer.py
+@@ -421,10 +421,6 @@
+             sys.exit(f"[{task_id}] {_ROLE_ENV_REFUSAL}")
+         raw = _read_checked_answer_file(conn, task_id, file_path, t["branch"])
+         merge_deps = merge_after.mandate_value(conn, task_id, raw)
+-        if merge_deps is None:
+-            sys.exit(f"[{task_id}] answer в состоянии merge_gate принимает "
+-                     f"только строку «{mandate.MERGE_AFTER_MANDATE_MARKER} "
+-                     f"…» — ANSWER не создан")
+     elif state == "spec_gate":
+         # Мандат тестов на гейте SPEC (SPEC 01M4R4JQZEX2MBDB195SBJ8A7S):
+         # без этого канала SPEC, заранее требующий правки теста, обрекал

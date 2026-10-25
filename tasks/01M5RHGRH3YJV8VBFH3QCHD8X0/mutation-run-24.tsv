@@ -1,0 +1,8 @@
+# mutation-run №24 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 20 mutation-020.diff sha256 7ad7f09479bc3b204a0a83dba6e6b6dce60f1f0fa6363b16ba1498df68b9dc37
+номер	исход	узлы
+20	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_merge_after_module.py::test_ac2_missing_task_keeps_spec_gate_and_column_empty,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces

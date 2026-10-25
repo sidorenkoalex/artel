@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -187,7 +187,7 @@
+     """(значение колонки, причина отказа) для `approve` гейта SPEC
+     (требование 2). Поля в SPEC нет — (`None`, `None`): колонка пуста."""
+     if FIELD not in meta:
+-        return None, None
++        return "None", None
+     ids, reasons = check(conn, task_id, guard.merge_after_items(meta[FIELD]))
+     if reasons:
+         return None, "; ".join(reasons)

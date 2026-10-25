@@ -1,0 +1,8 @@
+# mutation-run №38 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 45 mutation-045.diff sha256 3a6b0c6a92d0378c9c69b8d52d97875f2690d9709bb355791515996265aaa5e0
+номер	исход	узлы
+45	убита	tests/test_merge_after_module.py::test_ac5_repeated_order_line_refused_without_traces

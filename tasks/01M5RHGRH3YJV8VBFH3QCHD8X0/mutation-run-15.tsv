@@ -1,0 +1,8 @@
+# mutation-run №15 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 42 mutation-042.diff sha256 6359ed99b45b5c36cc529a6a846518a01fbc8871736f38b3a7bcbff1e5f4f95a
+номер	исход	узлы
+42	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac4_unparsed_element_refused_without_traces

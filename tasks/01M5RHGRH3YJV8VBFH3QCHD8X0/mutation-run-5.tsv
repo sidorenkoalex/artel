@@ -1,0 +1,8 @@
+# mutation-run №5 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 21 mutation-021.diff sha256 01e97cc5008433518beca03b9f0dc020f69222bee95dcf67728d09e811d36f8c
+номер	исход	узлы
+21	убита	tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateMissingOrAmbiguousTest::test_ac2_ambiguous_prefix_keeps_spec_gate_and_column_empty,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces

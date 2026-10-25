@@ -1,0 +1,8 @@
+# mutation-run №28 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 24 mutation-024.diff sha256 bf128847abd7648dc1f82dabe1bd7998b355eea4426de684a214178270e23d57
+номер	исход	узлы
+24	убита	tests/test_merge_after_module.py::test_ac3_prefix_resolving_to_own_id_refused

@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -443,7 +443,7 @@
+     if t["state"] in STATUS_WAIT_STATES:
+         label = "ждёт мержа"
+     elif t["state"] in STATUS_DECLARED_STATES:
+-        label = "мерж после"
++        label = "ждёт мержа"
+     else:
+         return ""
+     pending = [(d, s) for d, s in _dependency_states(conn, t) if s != "done"]

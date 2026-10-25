@@ -1,0 +1,8 @@
+# mutation-run №25 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 21 mutation-021.diff sha256 01e97cc5008433518beca03b9f0dc020f69222bee95dcf67728d09e811d36f8c
+номер	исход	узлы
+21	убита	tests/test_merge_after_module.py::test_ac2_ambiguous_prefix_keeps_spec_gate_and_column_empty,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces

@@ -1,0 +1,11 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -327,6 +327,7 @@
+     «Влияние на систему» упоминает `merge_after` (обоснование смены) и
+     значение прошло те же проверки, что на гейте SPEC."""
+     if FIELD not in meta:
++        store.update_task(conn, task_id, merge_after=None)
+         return
+     old = stored(t["merge_after"])
+     ids, reasons = check(conn, task_id, guard.merge_after_items(meta[FIELD]))

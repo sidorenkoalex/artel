@@ -1,0 +1,20 @@
+# mutation-run №23 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 13 mutation-013.diff sha256 7675a1ebafce60997d81b5e71f41683edf89ed31e0f16716c2d8a0eebccb6568
+# патч 14 mutation-014.diff sha256 3a828d119a13a6e5d80ed78560d33789e3c4f6bfe72fdc4a60eda795ce1a9c8b
+# патч 15 mutation-015.diff sha256 4d9c07c5ec5e3f83100bf12f69d31f27fd48fda7a651b9fee025a9233d709025
+# патч 16 mutation-016.diff sha256 b1620e505b197af1edba012019409f110a723ee513e3ef390b8287ae368687a8
+# патч 17 mutation-017.diff sha256 c6ac2f6a10727737e81a94a8297f7d271d93b32cc4d99786ff791a1be5e71510
+# патч 18 mutation-018.diff sha256 6bd4f0f9603534e90ff04a75df05641d8f49c2e3142152fb2162a2ac01d9697d
+# патч 19 mutation-019.diff sha256 4dc2f44b122ba91f15d0c91a06de971945c46f36f076855f337165d74a28d4c0
+номер	исход	узлы
+13	убита	tests/test_merge_after_module.py::test_ac9_empty_plan_value_clears_dependencies,tests/test_merge_after_module.py::test_plan_value_equal_to_db_after_resolution_is_silent,tests/test_merge_after_module.py::test_ac9_justified_plan_value_replaces_db_value,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+14	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac11_escalated_answer_sets_and_clears_value,tests/test_merge_after_module.py::test_ac9_justified_plan_value_replaces_db_value
+15	убита	tests/test_merge_after_module.py::test_ac9_empty_plan_value_clears_dependencies
+16	убита	tests/test_merge_after_module.py::test_ac9_plan_without_field_keeps_db_value
+17	убита	tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+18	убита	tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition
+19	убита	tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition

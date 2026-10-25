@@ -1,0 +1,8 @@
+# mutation-run №14 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 41 mutation-041.diff sha256 0d848c1620df2dd58216587663a86296bb6e573fb0464f585bdc2f6fc2175180
+номер	исход	узлы
+41	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewDeclaresTest::test_ac3_order_line_without_after_declares_nothing

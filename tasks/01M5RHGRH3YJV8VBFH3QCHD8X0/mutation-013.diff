@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -330,7 +330,7 @@
+         return
+     old = stored(t["merge_after"])
+     ids, reasons = check(conn, task_id, guard.merge_after_items(meta[FIELD]))
+-    if not reasons and ids == old:
++    if not reasons and ids != old:
+         return
+     if not reasons and FIELD not in guard.section_body(plan_text,
+                                                        IMPACT_SECTION):

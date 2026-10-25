@@ -1,0 +1,16 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -157,12 +157,6 @@
+             continue
+         if store.task_state(conn, dep) == "killed":
+             reasons.append(_reason(item, f"задача {dep} убита (killed)"))
+-            continue
+-        dep_target = store.task_target(conn, dep)
+-        if dep_target != own_target:
+-            reasons.append(_reason(
+-                item, f"задача {dep} другого target ({dep_target}), у задачи "
+-                      f"— {own_target}"))
+             continue
+         if dep in [d for _, d in resolved]:
+             reasons.append(_reason(item, f"повтор: задача {dep} уже названа"))

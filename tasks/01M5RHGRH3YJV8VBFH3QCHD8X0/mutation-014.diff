@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -291,7 +291,7 @@
+     стало» с названием канала (требование 3)."""
+     old = stored(store.get_task(conn, task_id)["merge_after"])
+     store.update_task(conn, task_id, merge_after=column(new_ids))
+-    detail = f"{_text(old)} → {_text(new_ids)} (канал: {channel})"
++    detail = f"{_text(old)} → (канал: {channel})"
+     store.journal(conn, task_id, actor, CHANGED_ACTION, detail)
+     print(f"[{task_id}] {CHANGED_ACTION}: {detail}")
+ 

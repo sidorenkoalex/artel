@@ -1,0 +1,8 @@
+# mutation-run №36 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 43 mutation-043.diff sha256 656bb2fd4f7fc917a428e769d356e5701201644ac99b3c00df7ece9e5a6565f1
+номер	исход	узлы
+43	убита	tests/test_merge_after_module.py::test_ac7_path_refusal_and_order_refusal_printed_together,tests/test_merge_after_module.py::test_ac5_repeated_order_line_refused_without_traces,tests/test_merge_after_module.py::test_ac4_unparsed_element_refused_without_traces,tests/test_merge_after_module.py::test_ac6_invalid_dependency_refused_without_traces

@@ -1,0 +1,13 @@
+diff --git a/scripts/guard.py b/scripts/guard.py
+--- a/scripts/guard.py
++++ b/scripts/guard.py
+@@ -5638,9 +5638,6 @@
+         elif item in seen:
+             errors.append(f"{MERGE_AFTER_FIELD}: элемент «{item}» указан "
+                           f"повторно")
+-        elif own_task_id and item == str(own_task_id):
+-            errors.append(f"{MERGE_AFTER_FIELD}: элемент «{item}» — id самой "
+-                          f"задачи, задача не может зависеть от себя")
+         seen.add(item)
+     return errors
+ 

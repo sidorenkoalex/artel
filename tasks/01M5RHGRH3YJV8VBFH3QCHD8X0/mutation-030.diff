@@ -1,0 +1,22 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -392,11 +392,17 @@
+     return check(conn, task_id, elements)[0]
+ 
+ 
++_STATES_CACHE: dict = {}
++
++
+ def _dependency_states(conn, t) -> list[tuple[str, str]]:
+     """(id, текущее состояние) каждой зависимости задачи — из БД на каждый
+     вызов, без кэша."""
+-    return [(dep, store.task_state(conn, dep) or MISSING_STATE)
++    if t["id"] not in _STATES_CACHE:
++        _STATES_CACHE[t["id"]] = [
++            (dep, store.task_state(conn, dep) or MISSING_STATE)
+             for dep in stored(t["merge_after"])]
++    return _STATES_CACHE[t["id"]]
+ 
+ 
+ def _listing(pairs: list[tuple[str, str]]) -> str:

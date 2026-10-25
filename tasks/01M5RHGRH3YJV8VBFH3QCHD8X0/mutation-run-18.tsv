@@ -1,0 +1,8 @@
+# mutation-run №18 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 45 mutation-045.diff sha256 3a6b0c6a92d0378c9c69b8d52d97875f2690d9709bb355791515996265aaa5e0
+номер	исход	узлы
+45	убита	tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac5_repeated_order_line_refused_without_traces

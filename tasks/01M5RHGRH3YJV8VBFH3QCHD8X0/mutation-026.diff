@@ -1,0 +1,11 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -171,7 +171,6 @@
+     if reasons:
+         return [], reasons
+     graph = {r["id"]: stored(r["merge_after"]) for r in store.all_tasks(conn)}
+-    graph[task_id] = [dep for _, dep in resolved]
+     for item, dep in resolved:
+         path = _cycle_path(graph, dep, task_id)
+         if path is not None:

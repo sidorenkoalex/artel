@@ -1,0 +1,12 @@
+diff --git a/orchestrator/fsm.py b/orchestrator/fsm.py
+--- a/orchestrator/fsm.py
++++ b/orchestrator/fsm.py
+@@ -1308,7 +1308,7 @@
+     # assessment рядом — meta уже прочитана выше, поле отсутствует у
+     # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
+     store.update_task(conn, task_id, zones=meta.get("zones"),
+-                      merge_after=merge_deps)
++                      merge_after=None)
+     merge_after.record_added(conn, task_id, added)
+     # Перечитывание budget_usd на гейте SPEC (SPEC
+     # 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5): Оператор мог поправить

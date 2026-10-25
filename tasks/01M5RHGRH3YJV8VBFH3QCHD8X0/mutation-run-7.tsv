@@ -1,0 +1,8 @@
+# mutation-run №7 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: base ad3608c6d2ceedd43f2d91ad569a6b8684804782
+# тесты: tests/test_01m44ep0d47f498tee08mngbyt_answer_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_guard_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_plan_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py, tests/test_01m44ep0d47f498tee08mngbyt_status_show_merge_after.py, tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py
+# рабочих процессов: auto
+# патч 23 mutation-023.diff sha256 57f2df25d2f1e46b1a78dd4179693f81a0387b08345e7bd49259f02c3241ab7e
+номер	исход	узлы
+23	убита	tests/test_01m44ep0d47f498tee08mngbyt_spec_gate_merge_after.py::SpecGateKilledForeignSelfTest::test_ac3_dependency_of_other_target_refused,tests/test_01m45d29bqje8fjyja4jqwsyfz_new_declares_merge_after.py::NewRefusesTest::test_ac6_invalid_dependency_refused_without_traces

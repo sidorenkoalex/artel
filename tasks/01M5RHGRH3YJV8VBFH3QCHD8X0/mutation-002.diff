@@ -1,0 +1,12 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -389,7 +389,7 @@
+     elements = found[0]
+     if elements == [NONE_WORD]:
+         return []
+-    return check(conn, task_id, elements)[0]
++    return check(conn, task_id, elements)[1]
+ 
+ 
+ def _dependency_states(conn, t) -> list[tuple[str, str]]:

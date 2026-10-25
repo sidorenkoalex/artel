@@ -1,0 +1,12 @@
+diff --git a/scripts/guard.py b/scripts/guard.py
+--- a/scripts/guard.py
++++ b/scripts/guard.py
+@@ -5621,7 +5621,7 @@
+     запятыми отбрасываются тем же правилом, что у списка зон."""
+     if raw is None:
+         return []
+-    return [item.strip() for item in str(raw).split(",") if item.strip()]
++    return [item.strip() for item in str(raw).split(";") if item.strip()]
+ 
+ 
+ def merge_after_form_errors(items: list[str], own_task_id) -> list[str]:

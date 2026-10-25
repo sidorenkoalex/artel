@@ -1,0 +1,11 @@
+diff --git a/orchestrator/merge_after.py b/orchestrator/merge_after.py
+--- a/orchestrator/merge_after.py
++++ b/orchestrator/merge_after.py
+@@ -144,7 +144,6 @@
+     for item in items:
+         matches = store.task_id_matches(conn, item)
+         if not matches:
+-            reasons.append(_reason(item, "нет такой задачи"))
+             continue
+         if len(matches) > 1:
+             reasons.append(_reason(

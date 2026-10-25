@@ -1,0 +1,8 @@
+# mutation-run №29 задачи 01M5RHGRH3YJV8VBFH3QCHD8X0
+# источник патчей: каталог на диске
+# ревизия прогона: worktree 8d6a6cb1b7ef043bc36ae4e0ffad1fe54c387d02
+# тесты: tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 25 mutation-025.diff sha256 0829aa652fd3d78ab7a598967a20be57a16a8c8b9c6a8be6d37c1ea18224c69e
+номер	исход	узлы
+25	убита	tests/test_merge_after_module.py::test_ac12_invalid_mandate_element_refused_before_commit,tests/test_merge_after_module.py::test_ac10_rejected_plan_value_keeps_db_and_transition,tests/test_merge_after_module.py::test_ac4_cycle_through_existing_values_refused
