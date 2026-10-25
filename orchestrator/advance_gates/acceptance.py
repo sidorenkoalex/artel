@@ -311,6 +311,13 @@ def record_location(record) -> tuple[str, str, str, int | None] | None:
         return None
 
 
+def is_repeat(where) -> bool:
+    """`where` (`record_location`) — повтор имени теста в файле: номер от 2.
+    `#1` несёт первое вхождение имени, которое само кончается на
+    `#<цифры>` (`project_profile.test_id`), повтором оно не является."""
+    return where is not None and where[3] is not None and where[3] >= 2
+
+
 def record_criterion(record, cfile: CriterionFile) -> int | None:
     """Номер критерия записи по метке в последнем сегменте полного имени
     (требование 3): `AC-<n>: ` в начале — у файла с меткой, `test_ac<n>_`
@@ -344,8 +351,7 @@ def file_records(files: list[CriterionFile], runs: dict) -> dict:
 def not_passed_kind(record) -> str:
     """Вид исхода записи, которая обязана пройти (тест на ветке, тест
     файла «Зелёный с рождения:»); пусто — прошла без повтора."""
-    where = record_location(record)
-    if where is not None and where[3] is not None:
+    if is_repeat(record_location(record)):
         return "повтор имени теста в файле"
     if record.retries:
         return f"{outcome.RETRY_NOTE} внутри прогона: {record.retries}"
