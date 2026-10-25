@@ -195,6 +195,26 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
     print(f"[{task_id}] бюджет из SPEC: {detail}")
 
 
+DIVISION_FRAME_ACTION = "потолок из рамки деления"
+
+
+def apply_division_frame(conn, task_id: str, value: float, parent_id: str,
+                         number: int) -> None:
+    """Рамка части, утверждённая `approve` деления, — потолок заведённой
+    части с источником `operator` (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+    требование 10): рамку утвердил Оператор, и `budget_usd` из SPEC части
+    её не перебивает (`apply_spec_budget`); поднять её можно командой
+    `budget`."""
+    old = store.get_task(conn, task_id)["budget_usd"] or 0.0
+    store.update_task(conn, task_id, budget_usd=value,
+                      budget_source=config.BUDGET_SOURCE_OPERATOR,
+                      updated_at=store.now())
+    detail = (f"${value:.2f} — рамка части {number} деления {parent_id} "
+              f"(прежний потолок ${old:.2f})")
+    store.journal(conn, task_id, "operator", DIVISION_FRAME_ACTION, detail)
+    print(f"[{task_id}] {DIVISION_FRAME_ACTION}: {detail}")
+
+
 def recommended_budget_usd(ac_count: int, zone_files: int) -> float:
     """Ориентир потолка задачи по калибровочной таблице
     (`config.BUDGET_CALIBRATION_TABLE`, ADR-0014 п.7) — по числу

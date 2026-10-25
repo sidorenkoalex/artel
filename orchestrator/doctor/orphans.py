@@ -6,7 +6,7 @@ orchestrator/doctor/__init__.py) -- не импортируются напрям
 from pathlib import Path
 import tempfile
 
-from orchestrator import doctor
+from orchestrator import doctor, fsm
 
 
 # --- сироты (требование 8) ----------------------------------------------
@@ -185,7 +185,7 @@ def check_orphans(conn) -> list[doctor.Check]:
                   lambda msg: doctor._dir_alert_live(msg, known_ids))
 
     stale = [r for r in doctor.store.all_tasks(conn)
-            if r["state"] in ("done", "killed") and r["branch"]
+            if r["state"] in fsm.TERMINAL_STATES and r["branch"]
             and doctor.gitcmd.branch_exists(
                 r["branch"], repo=doctor.workspace.repo(
                     r["target"] or doctor.config.DEFAULT_TARGET))]

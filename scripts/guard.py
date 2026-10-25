@@ -6047,6 +6047,29 @@ def _division_zone_list(raw: str | None) -> list[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
+def division_frame(raw: str | None) -> tuple[float | None, str]:
+    """(сумма, причина отказа) поля «Рамка:» части деления (SPEC
+    01M5TB6VDVV6AM8DWPGVQE8CDW, требования 8-9). Поля нет — (None, ""):
+    оно необязательно. Форма — «$N», `$` необязателен; число разбирается
+    тем же `spend.cli_number`, что и `budget_usd`, — он «$» не понимает,
+    поэтому префикс снимается до разбора. Граница — `config.
+    ROLE_BUDGET_CAP` включительно. Общая для guard и для `approve`
+    деления (`orchestrator/fsm.py`), который перепроверяет рамку на тексте
+    SPEC, поправленном на гейте."""
+    if raw is None:
+        return None, ""
+    text = raw.strip()
+    value = spend.cli_number(text[1:] if text.startswith("$") else text)
+    if value is None:
+        return None, f"«{raw}» — не сумма в долларах (форма «$N»)"
+    if value <= 0:
+        return None, f"«{raw}» — сумма не больше нуля"
+    if value > config.ROLE_BUDGET_CAP:
+        return None, (f"«{raw}» выше потолка ролей "
+                      f"${config.ROLE_BUDGET_CAP:.2f} — {ROLE_BUDGET_CAP_HINT}")
+    return value, ""
+
+
 def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str]:
     """Формат секции «## Деление» (требование 1, AC-2..AC-4, AC-13, AC-14).
     `path` — только для текста ошибок (см. `schema_errors`).
@@ -6085,8 +6108,13 @@ def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str
             f"этому диапазону")
 
     parent_zones = set(_division_zone_list(meta.get("zones")))
-    for sub in subsections:
+    for number, sub in enumerate(subsections, 1):
         title = sub["title"] or "(без названия)"
+        _, frame_refused = division_frame(sub["budget"])
+        if frame_refused:
+            errors.append(
+                f"{path}: подраздел '{title}' (часть {number}) секции "
+                f"'## {DIVISION_SECTION}': поле 'Рамка:' {frame_refused}")
         if not sub["title"]:
             errors.append(
                 f"{path}: подраздел секции '## {DIVISION_SECTION}' без "
