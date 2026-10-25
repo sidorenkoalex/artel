@@ -234,19 +234,20 @@ def load() -> dict:
 
 
 def target(name: str) -> dict:
-    """Запись одного target'а. TargetsError — слой не годен или записи нет."""
+    """Запись одного target'а. TargetsError — слой не годен или записи нет.
+
+    Запись берётся из `load()` — единой точки чтения записей: подмена
+    `load` в тесте или вызывающем видна и здесь (ANSWER-3, п. 3)."""
+    entries = load()
+    if name in entries:
+        return entries[name]
     repo, local = layers()
-    entries = dict(repo)
-    entries.update(local or {})
-    entry = entries.get(name)
-    if entry is None:
-        layer = (f"записи {', '.join(local)}" if local is not None
-                 else "файла нет")
-        raise TargetsError(
-            f"{config.TARGETS}: target '{name}' не объявлен "
-            f"(есть: {', '.join(repo)}); локальный слой {local_path()}: "
-            f"{layer} — записи внешних проектов лежат в локальном слое")
-    return _with_long_lived_pairs(entry)
+    layer = (f"записи {', '.join(local)}" if local is not None
+             else "файла нет")
+    raise TargetsError(
+        f"{config.TARGETS}: target '{name}' не объявлен "
+        f"(есть: {', '.join(repo)}); локальный слой {local_path()}: "
+        f"{layer} — записи внешних проектов лежат в локальном слое")
 
 
 def core_reference(name: str) -> dict | None:
