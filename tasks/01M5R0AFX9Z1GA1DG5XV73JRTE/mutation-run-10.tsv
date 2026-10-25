@@ -1,0 +1,10 @@
+# mutation-run №10 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree a6eb9bc46a354a0eeaa06db37a2463685d80dd68
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py, tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 51 mutation-051.diff sha256 8ad1dfbd5b701eebd46ef5dc364ef34863d516b39b9411f5c088f45889652ed9
+# патч 52 mutation-052.diff sha256 0e124d5d547bbce9e93a903e9d0f5fe42814494ee2f5e1834ba0ab75bbabdc57
+номер	исход	узлы
+51	убита	tests/test_merge_lock_module.py::test_ac6_touch_heartbeat_renews_only_callers_project_row,tests/test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+52	убита	tests/test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head

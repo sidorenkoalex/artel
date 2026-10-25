@@ -41,18 +41,27 @@ def fail_places(run: int) -> dict:
         patch = int(path.rsplit("-p", 1)[1].split(".")[0])
         found = out.setdefault(patch, {})
         current = None
+        pending = None
         for line in open(path, encoding="utf-8", errors="replace"):
             line = line.rstrip("\n")
             head = HEAD_RE.match(line)
             if head:
                 name = head.group(1).split(" (", 1)[0].split("[", 1)[0]
                 current = name.replace(".", "::")
+                pending = None
                 continue
             place = PLACE.match(line)
+            item = None
             if place and current and place.group(3) == "AssertionError":
                 item = (place.group(1), int(place.group(2)))
-                if item not in found.setdefault(current, []):
-                    found[current].append(item)
+            elif place and current and place.group(3) == "in":
+                # Кадр помощника unittest-утверждения: место — последний кадр
+                # перед строкой «E   AssertionError».
+                pending = (place.group(1), int(place.group(2)))
+            elif pending and current and line.startswith("E   AssertionError"):
+                item, pending = pending, None
+            if item and item not in found.setdefault(current, []):
+                found[current].append(item)
     return out
 
 
@@ -192,7 +201,7 @@ def main():
             f"Перед частью №{run}: `git status --porcelain -- orchestrator/` — "
             f"{data.STATUS_BEFORE.get(run, 'вывод пуст')}\n\n```\n{table_text(run)}\n```\n")
 
-    text = (DOCS / "plan_static.md").read_text(encoding="utf-8")
+    text = (DOCS / "plan_static.txt").read_text(encoding="utf-8")
     text = text.replace("{{STATUS}}", args.status)
     text = text.replace("{{PATCHES}}", "\n".join(data.patch_lines()))
     text = text.replace("{{SEEDS}}", "\n".join(data.seed_lines()))

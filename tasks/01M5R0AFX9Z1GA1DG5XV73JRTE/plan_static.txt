@@ -1,0 +1,234 @@
+---
+task: 01M5R0AFX9Z1GA1DG5XV73JRTE
+type: plan
+author_role: developer
+status: {{STATUS}}
+schema_version: 5
+---
+
+# PLAN: Сведение тестов, волна 3м-2 — мьютекс по проекту и зависимости мержа в файлы модулей pytest
+
+## Подход
+
+Перенос без улучшений: 17 тестов долгоживущего
+`tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py` — функциями
+в конец `tests/test_merge_lock_module.py` (классы `AcquireByProjectTest`,
+`ReleaseAndHeartbeatTest`, `StoreMergeLockTest`) и `tests/test_merge_queue.py`
+(`QueueByProjectTest`, `WaitTextsByProjectTest`); 20 тестов
+`tests/test_merge_after.py`, `tests/test_merge_after_declared.py`,
+`tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py`,
+`tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py` — в новый
+`tests/test_merge_after_module.py`. Ожидания — дословно в форме `assert …`
+(соответствие требования 12), сообщение — вторым операндом, наборы `subTest`
+— прежним циклом с ярлыком `+ "; " + f"<ключ>={<значение>!r}, …"` в каждом
+сообщении подслучая. Пять исходных файлов удалены (мандат ANSWER-1).
+
+Доказательство неослабления — 52 патча мутаций `mutation-001.diff` …
+`mutation-052.diff` (генератор `make_patches.py` в каталоге документов —
+замены текста в `orchestrator/` и `git apply --check`), прогнанных
+`mutation-run` «до» (`--ref base`, пять файлов волны) и «после»
+(`--ref worktree`, три файла модулей) одними диапазонами `--patches`:
+1-5, 6-10 (патчи пути взятия окна и цикла `wait_for_window` — части по 5,
+решение 3 ANSWER-1), 11-30, 31-50, 51-52. Строки падения и соответствие
+«до → после» собраны из логов прогонов (`fail_lines.py`, `make_plan.py`).
+
+Удалённых дублей нет: каждый из 37 тестов перенесён своей функцией с тем же
+именем (тест каждого из пяти файлов держит хотя бы одну мутацию, которую в
+своём файле убивает только он, либо дубль не проходит условие (б)).
+
+## Шаги
+
+1. Патчи мутаций по 37 заявкам (52 патча, раздел «Мутации: патчи и заявки»),
+   прогоны «до» частями.
+2. Свод mutex_by_project в файлы замка и очереди: фикстура
+   `project_mutex_stand`, помощники-функции, тесты в конец файлов, абзац о
+   волне 3м-2 в докстрингах, недостающие импорты.
+3. Свод четырёх файлов merge_after в `tests/test_merge_after_module.py`:
+   фикстуры `merge_after_stand`, `loss_stand`, `declared_path_stand`,
+   `division_sandbox`/`division_stand`, класс `DivisionSandbox`.
+4. Удаление пяти файлов волны, регенерация `docs/codebase-map.md`.
+5. Прогоны «после» теми же частями, соответствие «до → после», замеры.
+
+## Мутации: патчи и заявки
+
+Каждая строка — патч, файл его правки, что он меняет и чьи заявки
+(альтернативы «либо …») он воплощает. Одинаковые по смыслу альтернативы
+разных тестов сведены в одну мутацию со списком тестов.
+
+{{PATCHES}}
+
+Альтернатива заявки `ReleaseAndHeartbeatTest::test_ac17_touch_heartbeat_without_args_keeps_old_behaviour`
+«либо пустая таблица роняет вызов исключением» патчем не воплощена: тест
+ловит её только исключением без падения утверждения (требование 4 — не
+доказательство); см. раздел «Находки».
+
+## Перенос: метод → функция
+
+Стенды (тело `setUp` дословно без `super().setUp()`, `self.` → параметр,
+хвост `return <параметр>`):
+- `_ProjectMutexBase.setUp` → `project_mutex_stand(tmp_root)` — в обоих
+  файлах `tests/test_merge_lock_module.py` и `tests/test_merge_queue.py`,
+  тела одинаковы;
+- `MergeAfterDbSandbox.setUp` и `DeclaredSandbox.setUp` (тела равны) →
+  `merge_after_stand(light_transition)`;
+- `LossRefusalTextTest.setUp` → `loss_stand(initialized_tmp_root)`;
+- `DeclaredPathTest.setUp` → `declared_path_stand(light_transition)`,
+  `self.addCleanup(env.stop)` → `light_transition.addCleanup(env.stop)`;
+- `DivisionRewritesDependentsTest.TASK_TITLE` → класс
+  `DivisionSandbox(LightTransitionSandbox)` с тем же литералом, фикстура
+  `division_sandbox()` = `yield from _sandbox(DivisionSandbox)`;
+  `DivisionRewritesDependentsTest.setUp` → `division_stand(division_sandbox)`.
+
+Помощники `_ProjectMutexBase` (первый параметр — стенд `stand`):
+- в обоих файлах: `token` → `token`, `new_project` → `new_project`,
+  `new_task` → `project_mutex_new_task`, `session` → `session`,
+  `foreign_pid` → `foreign_pid`, `seed_lock` → `project_mutex_seed_lock`,
+  `live_holder` → `live_holder`, `actions` → `project_mutex_actions`,
+  `msg` → `msg`, `project_pairs` → `project_pairs`;
+- только в файле замка: `assert_fresh` → `assert_fresh` (помощник с
+  утверждением, тест зовёт голым именем, ярлык подслучая — через `ctx`);
+- только в файле очереди: `queue_task_ids` → `queue_task_ids`, `enqueue` →
+  `project_mutex_enqueue`, `run_wait` → `run_wait`;
+  `WaitTextsByProjectTest.wait_texts` → `wait_texts` с последним параметром
+  `case: str = ""` и сообщением `… + case`;
+- не перенесены, тесты зовут функции модуля: `lock_by_task` → `locks`,
+  `clear` → `clear` (тела совпадают после замены `self.` параметром).
+- Константы модуля: файл замка — `TS_FORMAT`, `TAKEOVER_ACTION`, `_ALPHABET`,
+  `refusal_pattern`; файл очереди — `_ALPHABET`, `refusal_pattern`
+  (литералы и тела те же); `OTHER_HOST` не переопределён.
+- Префикс `project_mutex_`: одноимённые с иным телом (`new_task`,
+  `seed_lock`, `enqueue` 3м-1) и совпадающий с локальной переменной
+  (`actions` в `wait_texts`).
+
+Помощники merge_after:
+- `MergeAfterDbSandbox.insert` → `merge_after_db_insert`,
+  `MergeAfterDbSandbox.set_deps` → `set_deps`;
+- `DeclaredSandbox.insert` → `declared_insert`;
+- `SpecGateDeclaredRefusalTest.spec_text` → `spec_gate_declared_refusal_spec_text`
+  (функция модуля `spec_text` бывшего spec_gate_hint сохраняет имя);
+- `DivisionRewritesDependentsTest`: `new_task` → `new_task`, `msg` → `msg`,
+  `divide` → `divide`, `stored_deps` → `stored_deps`, `journal` → `journal`;
+- `LossRefusalTextTest.task` → `task`;
+- `DeclaredPathTest`: `note` → `declared_path_note`, `run_cmd` → `run_cmd`,
+  `live_task` → `live_task`, `declared_task` → `declared_task`,
+  `refusal` → `refusal`, `no_code_tree` → `no_code_tree` (без параметра
+  стенда; передаётся заменой в `mock.patch`).
+- Локальная `note` в `test_ac8` и `test_ac9` бывшего spec_gate_hint
+  переименована в `failure_note`.
+- Совпадения тел: `msg` деления и `declared_path_note` — одно тело, но
+  функции разных стендов, не объединены; `clear`/`lock_by_task` — с
+  `clear`/`locks` файлов 3м-1 (не перенесены).
+
+## Строки падения и соответствие «до → после»
+
+Строка — мутация, убивший её «до» тест T и место упавшего утверждения в
+прежнем файле, функция, в которую перенесён T, и место того же утверждения
+в файле модуля по логу прогона «после».
+
+{{KILLS}}
+
+## Зерно
+
+{{SEEDS}}
+
+## Находки
+
+- Заявка `ReleaseAndHeartbeatTest::test_ac17_touch_heartbeat_without_args_keeps_old_behaviour`,
+  альтернатива «пустая таблица роняет вызов исключением»: тест ловит её
+  только исключением без падения утверждения (утверждение `assertEqual(…, {})`
+  после вызова не исполнится), по требованию 4 это не доказательство;
+  мутации, убиваемой этим путём утверждением, нет. Тест не удалён, зерно не
+  фиксировано; первую альтернативу заявки держит патч из раздела выше.
+
+## Удалённые дубли
+
+Нет: все 37 тестов пяти файлов перенесены функциями с прежними именами.
+
+## Мутации до
+
+Команда: `mutation-run 01M5R0AFX9Z1GA1DG5XV73JRTE --ref base --tests
+tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py,tests/test_merge_after.py,tests/test_merge_after_declared.py,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py,tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py
+--copy-table --wait-lock 4 --patches <часть>`; вывод частей дословно.
+
+{{BEFORE}}
+
+## Мутации после
+
+Команда: `mutation-run 01M5R0AFX9Z1GA1DG5XV73JRTE --ref worktree --tests
+tests/test_merge_lock_module.py,tests/test_merge_queue.py,tests/test_merge_after_module.py
+--copy-table --wait-lock 4 --patches <часть>` — те же диапазоны и то же
+`--workers` (умолчание), что «до»; вывод частей дословно.
+
+{{AFTER}}
+
+## Замеры
+
+- До свода (база ветки): mutex_by_project — 17 тестов, 669 строк;
+  `tests/test_merge_after.py` — 10 тестов, 214 строк;
+  `tests/test_merge_after_declared.py` — 5 тестов, 119 строк; division — 3
+  теста, 214 строк; spec_gate_hint — 2 теста, 278 строк; всего 37 тестов,
+  1494 строки; файлы 3м-1: замок 19 тестов, 546 строк; очередь 21 тест,
+  523 строки.
+{{COUNTS}}
+- Время контрольных прогонов `mutation-run` (без патча): {{TIMES}}.
+- Дерево `orchestrator/` шапок совпадает: `git rev-parse
+  72d52fd367828949767e234ecbe9b0cc79851084:orchestrator` и
+  `a6eb9bc46a354a0eeaa06db37a2463685d80dd68:orchestrator` — оба
+  `6df36660d6bfd9580a3c6dd3f907b09fb1158a4a`. sha256 каждого патча в шапках
+  «до» и «после» совпадает (и с файлом на диске).
+
+## Покрытие требований
+
+| Требование | Шаг |
+|---|---|
+| 1 (патчи, заявки) | 1 |
+| 2 (таблица «до») | 1 |
+| 3 (строка падения) | 1, 5 |
+| 4 (не доказательство) | 1, 5 |
+| 5 (зерно, находки) | 1, 5 |
+| 6 (красный контроль) | 1, 5 |
+| 7 (временные файлы) | 1–5 |
+| 8 (свод mutex_by_project) | 2 |
+| 9 (свод merge_after) | 3 |
+| 10 (фикстуры) | 2, 3 |
+| 11 (помощники) | 2, 3 |
+| 12 (утверждения) | 2, 3 |
+| 13 (дубли) | 2, 3 |
+| 14 (таблица «после») | 5 |
+| 15 (соответствие) | 5 |
+| 16 (замеры) | 5 |
+| 17 (удаление, мандат) | 4 |
+| 18 (зоны) | 1–5 |
+| 19 (независимая проверка) | сессия при Операторе |
+
+## Влияние на систему
+
+Меняются только `tests/`: добавления в конец двух файлов 3м-1 (их 40
+тестов, фикстуры и функции не тронуты), новый файл модуля, удаление пяти
+файлов волны под мандатом ANSWER-1, `docs/codebase-map.md` — вывод
+генератора. `orchestrator/`, `tests/fixtures.py`, `tests/sandbox.py`,
+`tests/test_invariants.py` и прочие файлы требования 18 не меняются.
+Гейты неослабления сверят перенос по мандату; ни одно утверждение не
+удалено и не ослаблено, `skip`/`xfail` и пределы не добавлены. Откат —
+revert одного merge-коммита задачи.
+
+## Риски
+
+- Машинный замок полных прогонов занят чужими `suite-run` — части ждут
+  `--wait-lock`; при истечении часть перезапускается тем же вызовом.
+- Тесты 3м-1 очереди без подмены паузы на патчах окна «после» могут
+  упасть `Timeout` — не повод переписывать патч, если перенесённая функция
+  падает утверждением (требование 14).
+
+## Предложения системе
+
+- `mutation-run`: логи прогонов патчей лежат вне каталогов роли — `grep`/`Read`
+  по ним роли запрещены, читаются только через `python3`; строка падения
+  каждой мутации нужна PLAN — не хватает команды пульта, печатающей
+  «патч → тест → файл:строка» (здесь — `fail_lines.py`).
+- Планка читает PLAN из ссылки документов, а ссылка обновляется только
+  автокоммитом по итогам шага: проверить PLAN своей планкой внутри шага
+  developer нечем, кроме самодельного `_pult` (здесь — `selfcheck.py`).
+- Вспомогательный файл `.md` в каталоге документов (здесь `plan_static.md`)
+  молча не пережил смену шага, а файлы иных расширений пережили: правило
+  требования 7 SPEC стоит повторить в миссии шага, иначе работа теряется.

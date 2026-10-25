@@ -2,7 +2,7 @@
 task: 01M5R0AFX9Z1GA1DG5XV73JRTE
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -176,30 +176,85 @@ schema_version: 5
 прежнем файле, функция, в которую перенесён T, и место того же утверждения
 в файле модуля по логу прогона «после».
 
-- mutation-001: AcquireByProjectTest::test_ac1_other_project_holder_does_not_block_acquire — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:181 → test_merge_lock_module.py::test_ac1_other_project_holder_does_not_block_acquire (строка формы не найдена)
-- mutation-001: AcquireByProjectTest::test_ac4_dead_holder_of_other_project_is_left_intact — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:262 → test_merge_lock_module.py::test_ac4_dead_holder_of_other_project_is_left_intact (строка формы не найдена)
-- mutation-001: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:633 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project (строка формы не найдена)
-- mutation-001: QueueByProjectTest::test_ac2_other_project_holder_does_not_delay_wait_for_window — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:490 → test_merge_queue.py::test_ac2_other_project_holder_does_not_delay_wait_for_window (строка формы не найдена)
-- mutation-002: AcquireByProjectTest::test_ac16_artel_holder_excludes_empty_null_and_missing_target — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:281 → test_merge_lock_module.py::test_ac16_artel_holder_excludes_empty_null_and_missing_target (строка формы не найдена)
-- mutation-002: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project (только утверждением подготовки — не доказательство)
-- mutation-002: AcquireByProjectTest::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:236 → test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over (строка формы не найдена)
-- mutation-002: AcquireByProjectTest::test_ac3_live_holder_of_same_project_refuses_with_old_text — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:208 → test_merge_lock_module.py::test_ac3_live_holder_of_same_project_refuses_with_old_text (строка формы не найдена)
-- mutation-002: AcquireByProjectTest::test_ac16_empty_or_null_target_holder_excludes_artel_task — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:302 → test_merge_lock_module.py::test_ac16_empty_or_null_target_holder_excludes_artel_task (строка формы не найдена)
-- mutation-002: WaitTextsByProjectTest::test_ac10_single_project_texts_are_unchanged → test_merge_queue.py::test_ac10_single_project_texts_are_unchanged (только утверждением подготовки — не доказательство)
-- mutation-003: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:633 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project (строка формы не найдена)
-- mutation-003: AcquireByProjectTest::test_ac3_live_holder_of_same_project_refuses_with_old_text — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:209 → test_merge_lock_module.py::test_ac3_live_holder_of_same_project_refuses_with_old_text (строка формы не найдена)
-- mutation-003: WaitTextsByProjectTest::test_ac10_single_project_texts_are_unchanged — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:659 → test_merge_queue.py::test_ac10_single_project_texts_are_unchanged (строка формы не найдена)
-- mutation-004: AcquireByProjectTest::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:236 → test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over (строка формы не найдена)
-- mutation-005: AcquireByProjectTest::test_ac4_dead_holder_of_other_project_is_left_intact — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:260 → test_merge_lock_module.py::test_ac4_dead_holder_of_other_project_is_left_intact (строка формы не найдена)
-- mutation-005: StoreMergeLockTest::test_ac11_set_merge_lock_keeps_other_project_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:458 → test_merge_lock_module.py::test_ac11_set_merge_lock_keeps_other_project_row (строка формы не найдена)
-- mutation-005: AcquireByProjectTest::test_ac1_other_project_holder_does_not_block_acquire — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:183 → test_merge_lock_module.py::test_ac1_other_project_holder_does_not_block_acquire (строка формы не найдена)
-- mutation-006: AcquireByProjectTest::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:234 → test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over (строка формы не найдена)
-- mutation-007: AcquireByProjectTest::test_ac16_artel_holder_excludes_empty_null_and_missing_target — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:281 → test_merge_lock_module.py::test_ac16_artel_holder_excludes_empty_null_and_missing_target (строка формы не найдена)
-- mutation-008: QueueByProjectTest::test_ac8_head_is_earliest_entry_of_own_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:515 → test_merge_queue.py::test_ac8_head_is_earliest_entry_of_own_project (строка формы не найдена)
-- mutation-008: QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:584 → test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head (строка формы не найдена)
-- mutation-008: QueueByProjectTest::test_ac8_same_project_tasks_enter_in_fifo_order — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:553 → test_merge_queue.py::test_ac8_same_project_tasks_enter_in_fifo_order (строка формы не найдена)
-- mutation-009: QueueByProjectTest::test_ac8_same_project_tasks_enter_in_fifo_order — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:550 → test_merge_queue.py::test_ac8_same_project_tasks_enter_in_fifo_order (строка формы не найдена)
-- mutation-010: QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:584 → test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head (строка формы не найдена)
+- mutation-001: AcquireByProjectTest::test_ac1_other_project_holder_does_not_block_acquire — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:181 → test_merge_lock_module.py::test_ac1_other_project_holder_does_not_block_acquire — tests/test_merge_lock_module.py:687 (то же утверждение)
+- mutation-001: AcquireByProjectTest::test_ac4_dead_holder_of_other_project_is_left_intact — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:262 → test_merge_lock_module.py::test_ac4_dead_holder_of_other_project_is_left_intact — tests/test_merge_lock_module.py:787 (то же утверждение)
+- mutation-001: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:633 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_merge_queue.py:862 (то же утверждение)
+- mutation-001: QueueByProjectTest::test_ac2_other_project_holder_does_not_delay_wait_for_window — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:490 → test_merge_queue.py::test_ac2_other_project_holder_does_not_delay_wait_for_window — tests/test_merge_queue.py:705 (то же утверждение)
+- mutation-002: AcquireByProjectTest::test_ac16_artel_holder_excludes_empty_null_and_missing_target — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:281 → test_merge_lock_module.py::test_ac16_artel_holder_excludes_empty_null_and_missing_target — tests/test_merge_lock_module.py:812 (то же утверждение)
+- mutation-002: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:597 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_merge_queue.py:675 (только утверждением подготовки — не доказательство)
+- mutation-002: AcquireByProjectTest::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:236 → test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_merge_lock_module.py:753 (то же утверждение)
+- mutation-002: AcquireByProjectTest::test_ac3_live_holder_of_same_project_refuses_with_old_text — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:208 → test_merge_lock_module.py::test_ac3_live_holder_of_same_project_refuses_with_old_text — tests/test_merge_lock_module.py:719 (то же утверждение)
+- mutation-002: AcquireByProjectTest::test_ac16_empty_or_null_target_holder_excludes_artel_task — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:302 → test_merge_lock_module.py::test_ac16_empty_or_null_target_holder_excludes_artel_task — tests/test_merge_lock_module.py:837 (то же утверждение)
+- mutation-002: WaitTextsByProjectTest::test_ac10_single_project_texts_are_unchanged — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:597 → test_merge_queue.py::test_ac10_single_project_texts_are_unchanged — tests/test_merge_queue.py:675 (только утверждением подготовки — не доказательство)
+- mutation-003: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:633 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_merge_queue.py:862 (то же утверждение)
+- mutation-003: AcquireByProjectTest::test_ac3_live_holder_of_same_project_refuses_with_old_text — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:209 → test_merge_lock_module.py::test_ac3_live_holder_of_same_project_refuses_with_old_text — tests/test_merge_lock_module.py:720 (то же утверждение)
+- mutation-003: WaitTextsByProjectTest::test_ac10_single_project_texts_are_unchanged — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:659 → test_merge_queue.py::test_ac10_single_project_texts_are_unchanged — tests/test_merge_queue.py:892 (то же утверждение)
+- mutation-004: AcquireByProjectTest::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:236 → test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_merge_lock_module.py:753 (то же утверждение)
+- mutation-005: AcquireByProjectTest::test_ac4_dead_holder_of_other_project_is_left_intact — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:260 → test_merge_lock_module.py::test_ac4_dead_holder_of_other_project_is_left_intact — tests/test_merge_lock_module.py:783 (то же утверждение)
+- mutation-005: StoreMergeLockTest::test_ac11_set_merge_lock_keeps_other_project_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:458 → test_merge_lock_module.py::test_ac11_set_merge_lock_keeps_other_project_row — tests/test_merge_lock_module.py:1017 (то же утверждение)
+- mutation-005: AcquireByProjectTest::test_ac1_other_project_holder_does_not_block_acquire — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:183 → test_merge_lock_module.py::test_ac1_other_project_holder_does_not_block_acquire — tests/test_merge_lock_module.py:690 (то же утверждение)
+- mutation-006: AcquireByProjectTest::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:234 → test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over — tests/test_merge_lock_module.py:750 (то же утверждение)
+- mutation-007: AcquireByProjectTest::test_ac16_artel_holder_excludes_empty_null_and_missing_target — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:281 → test_merge_lock_module.py::test_ac16_artel_holder_excludes_empty_null_and_missing_target — tests/test_merge_lock_module.py:812 (то же утверждение)
+- mutation-008: QueueByProjectTest::test_ac8_head_is_earliest_entry_of_own_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:515 → test_merge_queue.py::test_ac8_head_is_earliest_entry_of_own_project — tests/test_merge_queue.py:735 (то же утверждение)
+- mutation-008: QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:584 → test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_merge_queue.py:817 (то же утверждение)
+- mutation-008: QueueByProjectTest::test_ac8_same_project_tasks_enter_in_fifo_order — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:553 → test_merge_queue.py::test_ac8_same_project_tasks_enter_in_fifo_order — tests/test_merge_queue.py:781 (то же утверждение)
+- mutation-009: QueueByProjectTest::test_ac8_same_project_tasks_enter_in_fifo_order — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:550 → test_merge_queue.py::test_ac8_same_project_tasks_enter_in_fifo_order — tests/test_merge_queue.py:777 (то же утверждение)
+- mutation-010: QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:584 → test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_merge_queue.py:817 (то же утверждение)
+- mutation-011: AcquireByProjectTest::test_ac16_empty_or_null_target_holder_excludes_artel_task — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:302 → test_merge_lock_module.py::test_ac16_empty_or_null_target_holder_excludes_artel_task — tests/test_merge_lock_module.py:837 (то же утверждение)
+- mutation-012: ReleaseAndHeartbeatTest::test_ac5_release_removes_only_own_process_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:333 → test_merge_lock_module.py::test_ac5_release_removes_only_own_process_row — tests/test_merge_lock_module.py:873 (то же утверждение)
+- mutation-013: StoreMergeLockTest::test_ac11_set_merge_lock_keeps_other_project_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:467 → test_merge_lock_module.py::test_ac11_set_merge_lock_keeps_other_project_row — tests/test_merge_lock_module.py:1028 (то же утверждение)
+- mutation-013: ReleaseAndHeartbeatTest::test_ac5_release_removes_only_own_process_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:333 → test_merge_lock_module.py::test_ac5_release_removes_only_own_process_row — tests/test_merge_lock_module.py:873 (то же утверждение)
+- mutation-014: ReleaseAndHeartbeatTest::test_ac6_touch_heartbeat_renews_only_callers_project_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:366 → test_merge_lock_module.py::test_ac6_touch_heartbeat_renews_only_callers_project_row — tests/test_merge_lock_module.py:910 (то же утверждение)
+- mutation-014: ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:399 → test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_merge_lock_module.py:952 (то же утверждение)
+- mutation-015: ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:399 → test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_merge_lock_module.py:952 (то же утверждение)
+- mutation-016: ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:399 → test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_merge_lock_module.py:952 (то же утверждение)
+- mutation-017: ReleaseAndHeartbeatTest::test_ac17_touch_heartbeat_without_args_keeps_old_behaviour — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:154 → test_merge_lock_module.py::test_ac17_touch_heartbeat_without_args_keeps_old_behaviour — tests/test_merge_lock_module.py:658 (то же утверждение)
+- mutation-018: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:634 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_merge_queue.py:865 (то же утверждение)
+- mutation-019: WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:634 → test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project — tests/test_merge_queue.py:865 (то же утверждение)
+- mutation-019: WaitTextsByProjectTest::test_ac10_single_project_texts_are_unchanged — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:660 → test_merge_queue.py::test_ac10_single_project_texts_are_unchanged — tests/test_merge_queue.py:893 (то же утверждение)
+- mutation-020: TaskIdFormTest::test_form_accepts_ids_prefixes_and_legacy_rejects_rest — tests/test_merge_after.py:32 → test_merge_after_module.py::test_form_accepts_ids_prefixes_and_legacy_rejects_rest — tests/test_merge_after_module.py:361 (то же утверждение)
+- mutation-021: TaskIdFormTest::test_form_accepts_ids_prefixes_and_legacy_rejects_rest — tests/test_merge_after.py:32 → test_merge_after_module.py::test_form_accepts_ids_prefixes_and_legacy_rejects_rest — tests/test_merge_after_module.py:361 (то же утверждение)
+- mutation-022: TaskIdMatchesTest::test_exact_match_wins_over_longer_ids_with_same_prefix — tests/test_merge_after.py:64 → test_merge_after_module.py::test_exact_match_wins_over_longer_ids_with_same_prefix — tests/test_merge_after_module.py:375 (то же утверждение)
+- mutation-023: CheckTest::test_prefix_and_full_id_of_same_task_is_a_repeat — tests/test_merge_after.py:83 → test_merge_after_module.py::test_prefix_and_full_id_of_same_task_is_a_repeat — tests/test_merge_after_module.py:394 (то же утверждение)
+- mutation-024: CheckTest::test_done_dependency_is_valid — tests/test_merge_after.py:94 → test_merge_after_module.py::test_done_dependency_is_valid — tests/test_merge_after_module.py:406 (то же утверждение)
+- mutation-025: MergeGateMissingDependencyTest::test_dependency_missing_from_db_refuses_with_answer_channel — tests/test_merge_after.py:116 → test_merge_after_module.py::test_dependency_missing_from_db_refuses_with_answer_channel — tests/test_merge_after_module.py:430 (то же утверждение)
+- mutation-026: MandateLineTest::test_none_word_mixed_with_ids_refused — tests/test_merge_after.py:134 → test_merge_after_module.py::test_none_word_mixed_with_ids_refused — tests/test_merge_after_module.py:449 (то же утверждение)
+- mutation-027: MandateLineTest::test_two_mandate_lines_refused — tests/test_merge_after.py:147 → test_merge_after_module.py::test_two_mandate_lines_refused — tests/test_merge_after_module.py:465 (то же утверждение)
+- mutation-028: PlanChannelSameValueTest::test_plan_value_equal_to_db_after_resolution_is_silent — tests/test_merge_after.py:167 → test_merge_after_module.py::test_plan_value_equal_to_db_after_resolution_is_silent — tests/test_merge_after_module.py:486 (то же утверждение)
+- mutation-029: ReplaceDividedTest::test_task_not_depending_on_parent_is_untouched — tests/test_merge_after.py:189 → test_merge_after_module.py::test_task_not_depending_on_parent_is_untouched — tests/test_merge_after_module.py:515 (то же утверждение)
+- mutation-030: MigrationTest::test_migrate_adds_merge_after_to_old_tasks_table — tests/test_merge_after.py:210 → test_merge_after_module.py::test_migrate_adds_merge_after_to_old_tasks_table — tests/test_merge_after_module.py:538 (то же утверждение)
+- mutation-031: DeclaredFromTzTest::test_label_must_start_line_and_word_must_be_whole — tests/test_merge_after_declared.py:41 → test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole — tests/test_merge_after_module.py:553 (то же утверждение)
+- mutation-032: DeclaredFromTzTest::test_label_must_start_line_and_word_must_be_whole — tests/test_merge_after_declared.py:41 → test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole — tests/test_merge_after_module.py:553 (то же утверждение)
+- mutation-033: DeclaredFromTzTest::test_empty_list_is_refused — tests/test_merge_after_declared.py:54 → test_merge_after_module.py::test_empty_list_is_refused — tests/test_merge_after_module.py:569 (то же утверждение)
+- mutation-034: DeclaredFromTzTest::test_explicit_target_of_new_task_is_used — tests/test_merge_after_declared.py:65 → test_merge_after_module.py::test_explicit_target_of_new_task_is_used — tests/test_merge_after_module.py:581 (то же утверждение)
+- mutation-035: SpecGateDeclaredRefusalTest::test_no_check_after_spec_gate_was_passed — tests/test_merge_after_declared.py:93 → test_merge_after_module.py::test_no_check_after_spec_gate_was_passed — tests/test_merge_after_module.py:608 (то же утверждение)
+- mutation-036: SpecGateDeclaredRefusalTest::test_short_prefix_inside_other_id_is_not_justification — tests/test_merge_after_declared.py:118 → test_merge_after_module.py::test_short_prefix_inside_other_id_is_not_justification — tests/test_merge_after_module.py:638 (то же утверждение)
+- mutation-037: DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:151 → test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_merge_after_module.py:662 (то же утверждение)
+- mutation-037: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:179 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:691 (то же утверждение)
+- mutation-038: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:179 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:691 (то же утверждение)
+- mutation-038: DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:151 → test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_merge_after_module.py:662 (то же утверждение)
+- mutation-039: DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:151 → test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_merge_after_module.py:662 (то же утверждение)
+- mutation-039: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:172 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:683 (то же утверждение)
+- mutation-039: DivisionRewritesDependentsTest::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:209 → test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent — tests/test_merge_after_module.py:723 (то же утверждение)
+- mutation-040: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:179 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:691 (то же утверждение)
+- mutation-040: DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:151 → test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_merge_after_module.py:662 (то же утверждение)
+- mutation-041: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:172 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:683 (то же утверждение)
+- mutation-042: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:172 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:683 (то же утверждение)
+- mutation-043: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:172 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:683 (то же утверждение)
+- mutation-043: DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:151 → test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_merge_after_module.py:662 (то же утверждение)
+- mutation-043: DivisionRewritesDependentsTest::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:209 → test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent — tests/test_merge_after_module.py:723 (то же утверждение)
+- mutation-044: DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:151 → test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent — tests/test_merge_after_module.py:662 (то же утверждение)
+- mutation-044: DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:172 → test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value — tests/test_merge_after_module.py:683 (то же утверждение)
+- mutation-044: DivisionRewritesDependentsTest::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent — tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py:209 → test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent — tests/test_merge_after_module.py:723 (то же утверждение)
+- mutation-045: LossRefusalTextTest::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer — tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py:128 → test_merge_after_module.py::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer — tests/test_merge_after_module.py:775 (то же утверждение)
+- mutation-046: LossRefusalTextTest::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer — tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py:129 → test_merge_after_module.py::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer — tests/test_merge_after_module.py:776 (то же утверждение)
+- mutation-047: LossRefusalTextTest::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer — tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py:125 → test_merge_after_module.py::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer — tests/test_merge_after_module.py:772 (то же утверждение)
+- mutation-048: DeclaredPathTest::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged — tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py:239 → test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged — tests/test_merge_after_module.py:845 (то же утверждение)
+- mutation-049: DeclaredPathTest::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged — tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py:271 → test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged — tests/test_merge_after_module.py:879 (то же утверждение)
+- mutation-050: DeclaredPathTest::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged — tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py:225 → test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged — tests/test_merge_after_module.py:826 (то же утверждение)
+- mutation-051: ReleaseAndHeartbeatTest::test_ac6_touch_heartbeat_renews_only_callers_project_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:366 → test_merge_lock_module.py::test_ac6_touch_heartbeat_renews_only_callers_project_row — tests/test_merge_lock_module.py:910 (то же утверждение)
+- mutation-051: ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:399 → test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row — tests/test_merge_lock_module.py:952 (то же утверждение)
+- mutation-052: QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py:584 → test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head — tests/test_merge_queue.py:817 (то же утверждение)
 
 ## Зерно
 
@@ -317,6 +372,123 @@ tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py,tests/test_merge
 10	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head
 ```
 
+Часть №3:
+
+```
+# mutation-run №3 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: base 72d52fd367828949767e234ecbe9b0cc79851084
+# тесты: tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py, tests/test_merge_after.py, tests/test_merge_after_declared.py, tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py, tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py
+# рабочих процессов: auto
+# патч 11 mutation-011.diff sha256 839b89aad00866e9df27444731c1bf8a21fdc8f05aa40cde909300aa910c224d
+# патч 12 mutation-012.diff sha256 81bae703be72e3ccb73d28ad49acdf4e3287d4eae648463bcd7a9736a53e05fc
+# патч 13 mutation-013.diff sha256 53c08a882b76cc902aa68938877f96c1d725f432902c56d778d4fd8aa97dad05
+# патч 14 mutation-014.diff sha256 b85c786ad896080d8a6c1e6bc57cf129882f35b238fbc62f35af067bb8de9f57
+# патч 15 mutation-015.diff sha256 abc49e25e285d683400985b745653739366fca8e9aa26c8c31b89c9c7059f1c8
+# патч 16 mutation-016.diff sha256 d5157f8f37cd6b043e9f06f406e9dffaedb6808cf2adc2c32eb8d6ed25ff0294
+# патч 17 mutation-017.diff sha256 059b0bc8f7b5ee37ff8aa781c05acca3638738f6b7c91ecfd2ecc8d2a5a26865
+# патч 18 mutation-018.diff sha256 09937644ceb3a19b25a41bd0c049b36a2910524d4f7818449e7a4581ed84e92b
+# патч 19 mutation-019.diff sha256 23cdfa4a71dd217f8270909c0964d235f45a961d7f9c4bf40c0890bc1c47f06a
+# патч 20 mutation-020.diff sha256 f888b4e7802d94749ebe0e68e723abb35699efc3964147afa7b0725182e97648
+# патч 21 mutation-021.diff sha256 58e1229508beb7f9dac14f776847fcaaa71f59ba6b10130dddda5c34e445cf93
+# патч 22 mutation-022.diff sha256 8dacbdbd68bc9e1ca5217a4e5db2ea8a0612c280b599641d331d44c03ae8ac50
+# патч 23 mutation-023.diff sha256 0b48bf6a4a52ea2d2e15b0adeb0f41099c5dccf1c45feb763cbdba246531ab7f
+# патч 24 mutation-024.diff sha256 21fd7eebc4681126e1f138fca9aed4a8e8f6082d3c5cd9602a5ba20da062268e
+# патч 25 mutation-025.diff sha256 afb983b3346cd5166ffccb1c7015cc4c93a283f93f48b256ac5a7d206356437f
+# патч 26 mutation-026.diff sha256 43181b4130747c960e8bb65383c59df42fb699ea1521a883cb69d9c103195e3c
+# патч 27 mutation-027.diff sha256 fa5abd36803024e399bc2d2b44736bd4515a4c718beb5f4dc626ddae1da1da40
+# патч 28 mutation-028.diff sha256 67f174f19f3ab66827efb59e149eab1daa6ac7fccbad8dab2bf55be93e3e6823
+# патч 29 mutation-029.diff sha256 cae629840ecfcff996f379f487cfbb46bd0004385c2a881b5ec3ad39450eaf5c
+# патч 30 mutation-030.diff sha256 2f833199e615837560ca79c9cfd04861deafa08dcb85d70ecf0022f68920ea9f
+номер	исход	узлы
+11	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::AcquireByProjectTest::test_ac16_empty_or_null_target_holder_excludes_artel_task
+12	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac5_release_removes_only_own_process_row
+13	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::StoreMergeLockTest::test_ac11_set_merge_lock_keeps_other_project_row,tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac5_release_removes_only_own_process_row
+14	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac6_touch_heartbeat_renews_only_callers_project_row,tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+15	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+16	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+17	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac17_touch_heartbeat_without_args_keeps_old_behaviour
+18	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project
+19	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::WaitTextsByProjectTest::test_ac10_wait_texts_name_holder_of_waiting_task_project,tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::WaitTextsByProjectTest::test_ac10_single_project_texts_are_unchanged
+20	убита	tests/test_merge_after.py::TaskIdFormTest::test_form_accepts_ids_prefixes_and_legacy_rejects_rest
+21	убита	tests/test_merge_after.py::TaskIdFormTest::test_form_accepts_ids_prefixes_and_legacy_rejects_rest
+22	убита	tests/test_merge_after.py::TaskIdMatchesTest::test_exact_match_wins_over_longer_ids_with_same_prefix
+23	убита	tests/test_merge_after.py::CheckTest::test_prefix_and_full_id_of_same_task_is_a_repeat
+24	убита	tests/test_merge_after.py::CheckTest::test_done_dependency_is_valid
+25	убита	tests/test_merge_after.py::MergeGateMissingDependencyTest::test_dependency_missing_from_db_refuses_with_answer_channel
+26	убита	tests/test_merge_after.py::MandateLineTest::test_none_word_mixed_with_ids_refused
+27	убита	tests/test_merge_after.py::MandateLineTest::test_two_mandate_lines_refused
+28	убита	tests/test_merge_after.py::PlanChannelSameValueTest::test_plan_value_equal_to_db_after_resolution_is_silent
+29	убита	tests/test_merge_after.py::ReplaceDividedTest::test_task_not_depending_on_parent_is_untouched
+30	убита	tests/test_merge_after.py::MigrationTest::test_migrate_adds_merge_after_to_old_tasks_table
+```
+
+Часть №4:
+
+```
+# mutation-run №4 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: base 72d52fd367828949767e234ecbe9b0cc79851084
+# тесты: tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py, tests/test_merge_after.py, tests/test_merge_after_declared.py, tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py, tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py
+# рабочих процессов: auto
+# патч 31 mutation-031.diff sha256 ce25ea82e915eee5dde41d4c4d10bb3107ef53c87ee5c74951203f704b33685c
+# патч 32 mutation-032.diff sha256 75df665fa23dfbaaa291ed878da42694c6d890e961df841cb505124f9fd1ff6e
+# патч 33 mutation-033.diff sha256 7dbc52f11967eb4c5dec460bd8f4c19ee4792f1f02fb453b9b1b9e162a47b83d
+# патч 34 mutation-034.diff sha256 ec7955764094df855255637c72306777285c33a971d200345def2a623f0a7e75
+# патч 35 mutation-035.diff sha256 b121b8cf4e96ceee4b6b585a3bbd16e5238d4292834830511a815d22551a50bb
+# патч 36 mutation-036.diff sha256 111dde2bf745f83f9abd90a2d316c8553efdb71b0f9fc492ff0ee074bc4cd9ca
+# патч 37 mutation-037.diff sha256 2a093a730d605b314009543a1de144803cb2acedda812bceb8666cdef2a3f720
+# патч 38 mutation-038.diff sha256 c6b2d41e2c2ebbcddbefda61b54f89f8cbc46b7ea0fb58b8e8d83f21c8874c66
+# патч 39 mutation-039.diff sha256 e89fe75ec12af7aaaf0d522f891df9286dc134166b6d9082579f9dc8c7c79077
+# патч 40 mutation-040.diff sha256 64ecbdc8fb03c81d06106c94f039b86ed2a54034198196f076b24f0b9ebfe720
+# патч 41 mutation-041.diff sha256 8494b7a94ac4916298041e700ea848096b8fceb860249b23d24349e35a62fcba
+# патч 42 mutation-042.diff sha256 3063630fb1d7e32fa304c808335c819f8c497fb682e165e43bbaad937f3c174b
+# патч 43 mutation-043.diff sha256 4183702bd53468f5e982385aaf68ccee9d26feee6125a4f901ad2966ca923608
+# патч 44 mutation-044.diff sha256 af9729e4dffa8a0c5ea002e01b9451ffc363633a0979204a221eccece73896c0
+# патч 45 mutation-045.diff sha256 199e6dca92a847e833c004753ac674648b10817f6bd3746dc169a5955ee23204
+# патч 46 mutation-046.diff sha256 790201e394566ef8ffbc1462a86475d49241ec94f616c9176a33770aa276b2b7
+# патч 47 mutation-047.diff sha256 72918206748fd3fb7f78e1d8d2042283fc5fdb9702d194aa432504bcc51042e8
+# патч 48 mutation-048.diff sha256 7829f5254b0096467a73af6369db5804d736b6a89a170832640ef67cb0a28ad1
+# патч 49 mutation-049.diff sha256 07c6fcf1d064889f7a3fa121a38068489a81ac84d9774bf6002cb7f84dbb58a8
+# патч 50 mutation-050.diff sha256 a191413d034276304d67c5de15b77bada9d0aa903d339e403d6263faf21f4d12
+номер	исход	узлы
+31	убита	tests/test_merge_after_declared.py::DeclaredFromTzTest::test_label_must_start_line_and_word_must_be_whole
+32	убита	tests/test_merge_after_declared.py::DeclaredFromTzTest::test_label_must_start_line_and_word_must_be_whole
+33	убита	tests/test_merge_after_declared.py::DeclaredFromTzTest::test_empty_list_is_refused
+34	убита	tests/test_merge_after_declared.py::DeclaredFromTzTest::test_explicit_target_of_new_task_is_used
+35	убита	tests/test_merge_after_declared.py::SpecGateDeclaredRefusalTest::test_no_check_after_spec_gate_was_passed
+36	убита	tests/test_merge_after_declared.py::SpecGateDeclaredRefusalTest::test_short_prefix_inside_other_id_is_not_justification
+37	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value
+38	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent
+39	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent
+40	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent
+41	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value
+42	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value
+43	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent
+44	убита	tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac2_dependent_journal_names_old_and_new_value,tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py::DivisionRewritesDependentsTest::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent
+45	убита	tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py::LossRefusalTextTest::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer
+46	убита	tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py::LossRefusalTextTest::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer
+47	убита	tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py::LossRefusalTextTest::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer
+48	убита	tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py::DeclaredPathTest::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+49	убита	tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py::DeclaredPathTest::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+50	убита	tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py::DeclaredPathTest::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+```
+
+Часть №5:
+
+```
+# mutation-run №5 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: base 72d52fd367828949767e234ecbe9b0cc79851084
+# тесты: tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py, tests/test_merge_after.py, tests/test_merge_after_declared.py, tests/test_01m4jc58gzfhz4pzhw254p22m2_division_merge_after.py, tests/test_01m5fghnb29qa254fm07qr55ab_spec_gate_hint.py
+# рабочих процессов: auto
+# патч 51 mutation-051.diff sha256 8ad1dfbd5b701eebd46ef5dc364ef34863d516b39b9411f5c088f45889652ed9
+# патч 52 mutation-052.diff sha256 0e124d5d547bbce9e93a903e9d0f5fe42814494ee2f5e1834ba0ab75bbabdc57
+номер	исход	узлы
+51	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac6_touch_heartbeat_renews_only_callers_project_row,tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::ReleaseAndHeartbeatTest::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+52	убита	tests/test_01m57pm7nbfx34319tr0f9cb4f_merge_mutex_by_project.py::QueueByProjectTest::test_ac9_dead_entry_of_project_does_not_hold_its_head
+```
+
 
 ## Мутации после
 
@@ -325,7 +497,165 @@ tests/test_merge_lock_module.py,tests/test_merge_queue.py,tests/test_merge_after
 --copy-table --wait-lock 4 --patches <часть>` — те же диапазоны и то же
 `--workers` (умолчание), что «до»; вывод частей дословно.
 
-(частей ещё нет)
+Перед частью №6: `git status --porcelain -- orchestrator/` — вывод пуст
+
+```
+# mutation-run №6 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree a6eb9bc46a354a0eeaa06db37a2463685d80dd68
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py, tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 1 mutation-001.diff sha256 7fa89af27aca7ac24d9c470f508310b1e268ca6f9f3a6ca1367aac85b9ddd58a
+# патч 2 mutation-002.diff sha256 648fb594a125ff10a1e48510d3d5d634a3f15808156739a5acb2101a0c9fdad2
+# патч 3 mutation-003.diff sha256 1b306c96f6c2565e710d2a25160294e172bda908b0d1b7acf80661c41a4eb38e
+# патч 4 mutation-004.diff sha256 7c0915f3b97184c259381004bf0a7a19d29ef2f8b6ea4553f5feac290d1b89a7
+# патч 5 mutation-005.diff sha256 61aa8415ed970faf8ba3b75cf048f5434f97ed1bb108f886db22fbcfb1ade011
+номер	исход	узлы
+1	убита	tests/test_merge_lock_module.py::test_ac4_dead_holder_of_other_project_is_left_intact,tests/test_merge_lock_module.py::test_ac1_other_project_holder_does_not_block_acquire,tests/test_merge_queue.py::test_texts_name_own_project_holder_in_every_insertion_order,tests/test_merge_queue.py::test_earlier_entry_of_other_project_does_not_delay_entry,tests/test_merge_queue.py::test_ac2_other_project_holder_does_not_delay_wait_for_window,tests/test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project
+2	убита	tests/test_merge_lock_module.py::test_ac3_live_holder_of_same_project_refuses_with_old_text,tests/test_merge_lock_module.py::test_dead_process_of_own_session_is_intercepted_and_journalled,tests/test_merge_lock_module.py::test_refusal_text_for_own_session_equals_foreign_session_text,tests/test_merge_lock_module.py::test_foreign_fresh_lock_refuses_and_names_holder_and_task,tests/test_merge_lock_module.py::test_ac16_empty_or_null_target_holder_excludes_artel_task,tests/test_merge_lock_module.py::test_live_other_process_of_same_session_is_refused_with_holder_pid,tests/test_merge_lock_module.py::test_ac16_artel_holder_excludes_empty_null_and_missing_target,tests/test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over,tests/test_merge_lock_module.py::test_concurrent_acquire_on_free_lock_exactly_one_wins,tests/test_merge_lock_module.py::test_refusal_exits_without_running_the_body,tests/test_merge_lock_module.py::test_foreign_dead_pid_on_a_different_host_is_not_taken_over,tests/test_merge_lock_module.py::test_foreign_stale_heartbeat_lock_is_taken_over_and_journalled,tests/test_merge_queue.py::test_queue_entry_journal_names_the_holder_pid,tests/test_merge_queue.py::test_texts_name_own_project_holder_in_every_insertion_order,tests/test_merge_queue.py::test_ceiling_expiry_dequeues_and_exits_without_touching_state,tests/test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project,tests/test_merge_queue.py::test_ac10_single_project_texts_are_unchanged
+3	убита	tests/test_merge_lock_module.py::test_ac3_live_holder_of_same_project_refuses_with_old_text,tests/test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project,tests/test_merge_queue.py::test_ac10_single_project_texts_are_unchanged
+4	убита	tests/test_merge_lock_module.py::test_dead_process_of_own_session_is_intercepted_and_journalled,tests/test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over,tests/test_merge_lock_module.py::test_foreign_stale_heartbeat_lock_is_taken_over_and_journalled
+5	убита	tests/test_merge_lock_module.py::test_ac4_dead_holder_of_other_project_is_left_intact,tests/test_merge_lock_module.py::test_ac1_other_project_holder_does_not_block_acquire,tests/test_merge_lock_module.py::test_ac11_set_merge_lock_keeps_other_project_row
+```
+
+Перед частью №7: `git status --porcelain -- orchestrator/` — вывод пуст
+
+```
+# mutation-run №7 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree a6eb9bc46a354a0eeaa06db37a2463685d80dd68
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py, tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 6 mutation-006.diff sha256 d50abc5da6f4bdda7d4fe30e42ba04fcadf132b8e391b256c71eb821f3139962
+# патч 7 mutation-007.diff sha256 3e9743aa251a9800fd62350283439eb0c8eb156d1dc76e71179f92392e9fc6e7
+# патч 8 mutation-008.diff sha256 c8dfaee251a4de5d737807b1f1f2f6d4805f497144d197747003631f4ce2ac95
+# патч 9 mutation-009.diff sha256 a0e61e6c8b7c4990e4d8a30958813f836e1cc6aa325dcd7e7a306c7e9d8c549b
+# патч 10 mutation-010.diff sha256 c08cac66cdfa1e715e492800ce6930f40052cdb5d6ea40d9780c1d382767d19e
+номер	исход	узлы
+6	убита	tests/test_merge_lock_module.py::test_dead_process_of_own_session_is_intercepted_and_journalled,tests/test_merge_lock_module.py::test_foreign_dead_pid_on_local_host_is_taken_over_despite_fresh_heartbeat,tests/test_merge_lock_module.py::test_refusal_text_for_own_session_equals_foreign_session_text,tests/test_merge_lock_module.py::test_ac4_dead_holder_of_same_project_is_taken_over,tests/test_merge_lock_module.py::test_own_process_re_enters_and_refreshes_the_row,tests/test_merge_lock_module.py::test_foreign_stale_heartbeat_lock_is_taken_over_and_journalled
+7	убита	tests/test_merge_lock_module.py::test_ac16_artel_holder_excludes_empty_null_and_missing_target
+8	убита	tests/test_merge_queue.py::test_earlier_entry_of_other_project_does_not_delay_entry,tests/test_merge_queue.py::test_ac8_head_is_earliest_entry_of_own_project,tests/test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head,tests/test_merge_queue.py::test_ac8_same_project_tasks_enter_in_fifo_order
+9	убита	tests/test_merge_queue.py::test_non_head_process_of_the_same_session_does_not_take_the_window,tests/test_merge_queue.py::test_ac8_same_project_tasks_enter_in_fifo_order
+10	убита	tests/test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head
+```
+
+Перед частью №8: `git status --porcelain -- orchestrator/` — вывод пуст
+
+```
+# mutation-run №8 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree a6eb9bc46a354a0eeaa06db37a2463685d80dd68
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py, tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 11 mutation-011.diff sha256 839b89aad00866e9df27444731c1bf8a21fdc8f05aa40cde909300aa910c224d
+# патч 12 mutation-012.diff sha256 81bae703be72e3ccb73d28ad49acdf4e3287d4eae648463bcd7a9736a53e05fc
+# патч 13 mutation-013.diff sha256 53c08a882b76cc902aa68938877f96c1d725f432902c56d778d4fd8aa97dad05
+# патч 14 mutation-014.diff sha256 b85c786ad896080d8a6c1e6bc57cf129882f35b238fbc62f35af067bb8de9f57
+# патч 15 mutation-015.diff sha256 abc49e25e285d683400985b745653739366fca8e9aa26c8c31b89c9c7059f1c8
+# патч 16 mutation-016.diff sha256 d5157f8f37cd6b043e9f06f406e9dffaedb6808cf2adc2c32eb8d6ed25ff0294
+# патч 17 mutation-017.diff sha256 059b0bc8f7b5ee37ff8aa781c05acca3638738f6b7c91ecfd2ecc8d2a5a26865
+# патч 18 mutation-018.diff sha256 09937644ceb3a19b25a41bd0c049b36a2910524d4f7818449e7a4581ed84e92b
+# патч 19 mutation-019.diff sha256 23cdfa4a71dd217f8270909c0964d235f45a961d7f9c4bf40c0890bc1c47f06a
+# патч 20 mutation-020.diff sha256 f888b4e7802d94749ebe0e68e723abb35699efc3964147afa7b0725182e97648
+# патч 21 mutation-021.diff sha256 58e1229508beb7f9dac14f776847fcaaa71f59ba6b10130dddda5c34e445cf93
+# патч 22 mutation-022.diff sha256 8dacbdbd68bc9e1ca5217a4e5db2ea8a0612c280b599641d331d44c03ae8ac50
+# патч 23 mutation-023.diff sha256 0b48bf6a4a52ea2d2e15b0adeb0f41099c5dccf1c45feb763cbdba246531ab7f
+# патч 24 mutation-024.diff sha256 21fd7eebc4681126e1f138fca9aed4a8e8f6082d3c5cd9602a5ba20da062268e
+# патч 25 mutation-025.diff sha256 afb983b3346cd5166ffccb1c7015cc4c93a283f93f48b256ac5a7d206356437f
+# патч 26 mutation-026.diff sha256 43181b4130747c960e8bb65383c59df42fb699ea1521a883cb69d9c103195e3c
+# патч 27 mutation-027.diff sha256 fa5abd36803024e399bc2d2b44736bd4515a4c718beb5f4dc626ddae1da1da40
+# патч 28 mutation-028.diff sha256 67f174f19f3ab66827efb59e149eab1daa6ac7fccbad8dab2bf55be93e3e6823
+# патч 29 mutation-029.diff sha256 cae629840ecfcff996f379f487cfbb46bd0004385c2a881b5ec3ad39450eaf5c
+# патч 30 mutation-030.diff sha256 2f833199e615837560ca79c9cfd04861deafa08dcb85d70ecf0022f68920ea9f
+номер	исход	узлы
+11	убита	tests/test_merge_lock_module.py::test_ac16_empty_or_null_target_holder_excludes_artel_task
+12	убита	tests/test_merge_lock_module.py::test_ac5_release_removes_only_own_process_row,tests/test_merge_lock_module.py::test_store_release_merge_lock_requires_both_session_and_pid,tests/test_merge_lock_module.py::test_release_from_non_holder_process_keeps_the_mutex
+13	убита	tests/test_merge_lock_module.py::test_release_removes_only_the_matching_session,tests/test_merge_lock_module.py::test_ac5_release_removes_only_own_process_row,tests/test_merge_lock_module.py::test_store_release_merge_lock_requires_both_session_and_pid,tests/test_merge_lock_module.py::test_release_from_non_holder_process_keeps_the_mutex,tests/test_merge_lock_module.py::test_ac11_set_merge_lock_keeps_other_project_row
+14	убита	tests/test_merge_lock_module.py::test_ac6_touch_heartbeat_renews_only_callers_project_row,tests/test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+15	убита	tests/test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+16	убита	tests/test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+17	убита	tests/test_merge_lock_module.py::test_ac17_touch_heartbeat_without_args_keeps_old_behaviour
+18	убита	tests/test_merge_queue.py::test_texts_name_own_project_holder_in_every_insertion_order,tests/test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project
+19	убита	tests/test_merge_queue.py::test_label_names_task_and_pid_of_the_holder,tests/test_merge_queue.py::test_queued_reports_minutes_waited_and_the_current_holder,tests/test_merge_queue.py::test_queue_entry_journal_names_the_holder_pid,tests/test_merge_queue.py::test_ac10_wait_texts_name_holder_of_waiting_task_project,tests/test_merge_queue.py::test_ac10_single_project_texts_are_unchanged,tests/test_merge_queue.py::test_texts_name_own_project_holder_in_every_insertion_order
+20	убита	tests/test_merge_after_module.py::test_form_accepts_ids_prefixes_and_legacy_rejects_rest
+21	убита	tests/test_merge_after_module.py::test_form_accepts_ids_prefixes_and_legacy_rejects_rest
+22	убита	tests/test_merge_after_module.py::test_exact_match_wins_over_longer_ids_with_same_prefix
+23	убита	tests/test_merge_after_module.py::test_prefix_and_full_id_of_same_task_is_a_repeat
+24	убита	tests/test_merge_after_module.py::test_done_dependency_is_valid
+25	убита	tests/test_merge_after_module.py::test_dependency_missing_from_db_refuses_with_answer_channel
+26	убита	tests/test_merge_after_module.py::test_none_word_mixed_with_ids_refused
+27	убита	tests/test_merge_after_module.py::test_two_mandate_lines_refused
+28	убита	tests/test_merge_after_module.py::test_plan_value_equal_to_db_after_resolution_is_silent
+29	убита	tests/test_merge_after_module.py::test_task_not_depending_on_parent_is_untouched
+30	убита	tests/test_merge_after_module.py::test_migrate_adds_merge_after_to_old_tasks_table
+```
+
+Перед частью №9: `git status --porcelain -- orchestrator/` — вывод пуст
+
+```
+# mutation-run №9 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree a6eb9bc46a354a0eeaa06db37a2463685d80dd68
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py, tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 31 mutation-031.diff sha256 ce25ea82e915eee5dde41d4c4d10bb3107ef53c87ee5c74951203f704b33685c
+# патч 32 mutation-032.diff sha256 75df665fa23dfbaaa291ed878da42694c6d890e961df841cb505124f9fd1ff6e
+# патч 33 mutation-033.diff sha256 7dbc52f11967eb4c5dec460bd8f4c19ee4792f1f02fb453b9b1b9e162a47b83d
+# патч 34 mutation-034.diff sha256 ec7955764094df855255637c72306777285c33a971d200345def2a623f0a7e75
+# патч 35 mutation-035.diff sha256 b121b8cf4e96ceee4b6b585a3bbd16e5238d4292834830511a815d22551a50bb
+# патч 36 mutation-036.diff sha256 111dde2bf745f83f9abd90a2d316c8553efdb71b0f9fc492ff0ee074bc4cd9ca
+# патч 37 mutation-037.diff sha256 2a093a730d605b314009543a1de144803cb2acedda812bceb8666cdef2a3f720
+# патч 38 mutation-038.diff sha256 c6b2d41e2c2ebbcddbefda61b54f89f8cbc46b7ea0fb58b8e8d83f21c8874c66
+# патч 39 mutation-039.diff sha256 e89fe75ec12af7aaaf0d522f891df9286dc134166b6d9082579f9dc8c7c79077
+# патч 40 mutation-040.diff sha256 64ecbdc8fb03c81d06106c94f039b86ed2a54034198196f076b24f0b9ebfe720
+# патч 41 mutation-041.diff sha256 8494b7a94ac4916298041e700ea848096b8fceb860249b23d24349e35a62fcba
+# патч 42 mutation-042.diff sha256 3063630fb1d7e32fa304c808335c819f8c497fb682e165e43bbaad937f3c174b
+# патч 43 mutation-043.diff sha256 4183702bd53468f5e982385aaf68ccee9d26feee6125a4f901ad2966ca923608
+# патч 44 mutation-044.diff sha256 af9729e4dffa8a0c5ea002e01b9451ffc363633a0979204a221eccece73896c0
+# патч 45 mutation-045.diff sha256 199e6dca92a847e833c004753ac674648b10817f6bd3746dc169a5955ee23204
+# патч 46 mutation-046.diff sha256 790201e394566ef8ffbc1462a86475d49241ec94f616c9176a33770aa276b2b7
+# патч 47 mutation-047.diff sha256 72918206748fd3fb7f78e1d8d2042283fc5fdb9702d194aa432504bcc51042e8
+# патч 48 mutation-048.diff sha256 7829f5254b0096467a73af6369db5804d736b6a89a170832640ef67cb0a28ad1
+# патч 49 mutation-049.diff sha256 07c6fcf1d064889f7a3fa121a38068489a81ac84d9774bf6002cb7f84dbb58a8
+# патч 50 mutation-050.diff sha256 a191413d034276304d67c5de15b77bada9d0aa903d339e403d6263faf21f4d12
+номер	исход	узлы
+31	убита	tests/test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole
+32	убита	tests/test_merge_after_module.py::test_label_must_start_line_and_word_must_be_whole
+33	убита	tests/test_merge_after_module.py::test_empty_list_is_refused
+34	убита	tests/test_merge_after_module.py::test_explicit_target_of_new_task_is_used
+35	убита	tests/test_merge_after_module.py::test_no_check_after_spec_gate_was_passed
+36	убита	tests/test_merge_after_module.py::test_short_prefix_inside_other_id_is_not_justification
+37	убита	tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value
+38	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent
+39	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent
+40	убита	tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value
+41	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value
+42	убита	tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value
+43	убита	tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value,tests/test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent
+44	убита	tests/test_merge_after_module.py::test_ac1_parent_replaced_by_last_subtask_in_every_dependent,tests/test_merge_after_module.py::test_ac3_merge_gate_of_dependent_does_not_refuse_on_parent,tests/test_merge_after_module.py::test_ac2_dependent_journal_names_old_and_new_value
+45	убита	tests/test_merge_after_module.py::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer
+46	убита	tests/test_merge_after_module.py::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer
+47	убита	tests/test_merge_after_module.py::test_ac8_loss_refusal_leads_through_reject_and_escalated_answer
+48	убита	tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+49	убита	tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+50	убита	tests/test_merge_after_module.py::test_ac9_escalated_answer_unblocks_same_spec_and_other_refusals_unchanged
+```
+
+Перед частью №10: `git status --porcelain -- orchestrator/` — вывод пуст
+
+```
+# mutation-run №10 задачи 01M5R0AFX9Z1GA1DG5XV73JRTE
+# источник патчей: каталог на диске
+# ревизия прогона: worktree a6eb9bc46a354a0eeaa06db37a2463685d80dd68
+# тесты: tests/test_merge_lock_module.py, tests/test_merge_queue.py, tests/test_merge_after_module.py
+# рабочих процессов: auto
+# патч 51 mutation-051.diff sha256 8ad1dfbd5b701eebd46ef5dc364ef34863d516b39b9411f5c088f45889652ed9
+# патч 52 mutation-052.diff sha256 0e124d5d547bbce9e93a903e9d0f5fe42814494ee2f5e1834ba0ab75bbabdc57
+номер	исход	узлы
+51	убита	tests/test_merge_lock_module.py::test_ac6_touch_heartbeat_renews_only_callers_project_row,tests/test_merge_lock_module.py::test_ac7_touch_heartbeat_does_not_renew_intercepted_row
+52	убита	tests/test_merge_queue.py::test_ac9_dead_entry_of_project_does_not_hold_its_head
+```
+
 
 ## Замеры
 
@@ -335,8 +665,13 @@ tests/test_merge_lock_module.py,tests/test_merge_queue.py,tests/test_merge_after
   теста, 214 строк; spec_gate_hint — 2 теста, 278 строк; всего 37 тестов,
   1494 строки; файлы 3м-1: замок 19 тестов, 546 строк; очередь 21 тест,
   523 строки.
-- После свода (HEAD): `tests/test_merge_lock_module.py` — 30 тестов, 1032 строк; `tests/test_merge_queue.py` — 27 тестов, 898 строк; `tests/test_merge_after_module.py` — 20 тестов, 882 строк; всего 77 тестов, 2812 строк.
-- Время контрольных прогонов `mutation-run` (без патча): «до» №1: 37 тестов за 3,83 с; «до» №2: 37 тестов за 3,69 с.
+- После свода (HEAD): `tests/test_merge_lock_module.py` — 30 тестов, 1029 строк; `tests/test_merge_queue.py` — 27 тестов, 896 строк; `tests/test_merge_after_module.py` — 20 тестов, 882 строк; всего 77 тестов, 2807 строк.
+- Время контрольных прогонов `mutation-run` (без патча): «до» №1: 37 тестов за 3,83 с; «до» №2: 37 тестов за 3,69 с; «до» №3: 37 тестов за 3,69 с; «до» №4: 37 тестов за 3,62 с; «до» №5: 37 тестов за 4,65 с; «после» №6: 77 тестов за 5,69 с; «после» №7: 77 тестов за 4,72 с; «после» №8: 77 тестов за 3,22 с; «после» №9: 77 тестов за 4,32 с; «после» №10: 77 тестов за 5,00 с.
+- Дерево `orchestrator/` шапок совпадает: `git rev-parse
+  72d52fd367828949767e234ecbe9b0cc79851084:orchestrator` и
+  `a6eb9bc46a354a0eeaa06db37a2463685d80dd68:orchestrator` — оба
+  `6df36660d6bfd9580a3c6dd3f907b09fb1158a4a`. sha256 каждого патча в шапках
+  «до» и «после» совпадает (и с файлом на диске).
 
 ## Покрытие требований
 
@@ -390,3 +725,6 @@ revert одного merge-коммита задачи.
 - Планка читает PLAN из ссылки документов, а ссылка обновляется только
   автокоммитом по итогам шага: проверить PLAN своей планкой внутри шага
   developer нечем, кроме самодельного `_pult` (здесь — `selfcheck.py`).
+- Вспомогательный файл `.md` в каталоге документов (здесь `plan_static.md`)
+  молча не пережил смену шага, а файлы иных расширений пережили: правило
+  требования 7 SPEC стоит повторить в миссии шага, иначе работа теряется.
