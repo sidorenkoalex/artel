@@ -63,6 +63,20 @@ schema_version: 5
 3. `gitcmd.py`: `_push_plan` во всех пяти точках, журнал и белый список.
 4. Тест `tests/test_gitcmd_push_point.py` (долгоживущий минимум точки
    отправки: планка задачи разовая), карта кодовой базы.
+5. Возврат из verifying (CI 40365146908), два сторожа:
+   - литерал окончательных состояний в `gitcmd.py` убран: «своя ветка»
+     сверяется с `fsm.TERMINAL_STATES` через `gitcmd._dead_states()`
+     (импорт `fsm` отложен — `fsm` сам импортирует `gitcmd`);
+   - SQL вне хранилища (мандат ANSWER-2 на `orchestrator/store.py`):
+     запрос занятости имени ветки из `catalog.branch_refusal` перенесён
+     дословно в новую `store.project_branch_tasks`; тот же класс в
+     `gitcmd.py` закрыт существующими функциями хранилища —
+     `_project_tasks` -> `store.project_tasks`, `_last_sent_sha` ->
+     `store.last_task_step_of`. Сторожа и их тесты не менялись.
+   Прогон: сторож литерала, `test_multitarget.py`, долгоживущие файлы
+   задачи, `test_gitcmd_push_point.py`, А0 — 115 passed; планка — 75
+   passed; соседние `catalog`/`gitcmd`/`store`/`artifact_branch`/деление —
+   160 passed.
 
 ## Покрытие требований
 
@@ -70,7 +84,7 @@ schema_version: 5
 |---|---|
 | 1 | 1 |
 | 2 | 2 |
-| 3 (а), (б) | 3, 4 |
+| 3 (а), (б) | 3, 4, 5 |
 | 3 (в), (г) | 1 (предикат, норма опции), 3, 4 |
 
 Проверено: долгоживущие файлы задачи — 44 passed
