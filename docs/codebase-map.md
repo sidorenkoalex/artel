@@ -1,5 +1,5 @@
 ---
-built_at_sha: dbbc8fb71b7347e35b5bef6a7c7159f63e934c67
+built_at_sha: f909b7dd9e93e623e6bb1d2a3d519d4625b4afe4
 ---
 
 # Codebase-map пульта
@@ -7391,6 +7391,7 @@ built_at_sha: dbbc8fb71b7347e35b5bef6a7c7159f63e934c67
 **Публичные функции:**
 - `block_header`
 - `board`
+- `carries_id`
 - `cell`
 - `cli`
 - `count_near`
