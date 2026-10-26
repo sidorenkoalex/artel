@@ -78,6 +78,16 @@ schema_version: 5
    passed; соседние `catalog`/`gitcmd`/`store`/`artifact_branch`/деление —
    160 passed.
 
+## Расширение зон
+Пути: orchestrator/store.py
+
+Обоснование: причина возврата из verifying (CI 40365146908) — сторож
+`tests/test_multitarget.py::SqlOnlyInStoreTest` требует SQL только в модуле
+хранилища; запрос занятости имени ветки из `catalog.branch_refusal`
+перенесён в новую `store.project_branch_tasks`. Мандат Оператора —
+ANSWER-2.md («Расширение зон разрешено: orchestrator/store.py»), матрица
+неослабления там же.
+
 ## Покрытие требований
 
 | Требование | Шаг |
