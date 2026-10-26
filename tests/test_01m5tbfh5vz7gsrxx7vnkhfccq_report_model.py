@@ -10,7 +10,8 @@
 `artel.main()`, доска — раздел «Борд задач» файла `.artel/report.html`
 после `report.cmd_report()`; колонка доски читается текстом без тегов.
 Число запросов к `steps` считает обратный вызов трассировки соединения,
-через которое идёт весь прогон (`store.db` подменён). Названия,
+через которое идёт весь прогон (`store.db` подменён), — только пока идёт
+вызов `board.build_model`. Названия,
 состояния, проекты и числа порождаются модулем `random` при каждом
 запуске; зерно печатается и входит в текст провала.
 """
@@ -297,39 +298,68 @@ def seed_in_dev(stand, projects: list, zone: str) -> None:
 
 
 def counted_report(conn) -> dict:
+    """Прогон `cmd_report`; запросы к `steps`, вызовы `last_step_times` и
+    `queue_wait` считаются только внутри вызовов `board().build_model`."""
     shared = SharedDb(conn)
     steps = []
+    inside = []
+    conns = []
+    last = collections.Counter()
+    queue = []
+    real_build = board().build_model
+    real_last = store.last_step_times
+    real_queue = zone_lock.queue_wait
 
     def trace(statement) -> None:
-        if statement and re.search(r"\bfrom\s+steps\b", str(statement), re.I):
+        if inside and statement and re.search(r"\bfrom\s+steps\b", str(statement), re.I):
             steps.append(statement)
 
+    def build(model_conn, *args, **kwargs):
+        conns.append(getattr(model_conn, "conn", model_conn))
+        inside.append(True)
+        try:
+            return real_build(model_conn, *args, **kwargs)
+        finally:
+            inside.pop()
+
+    def last_times(*args, **kwargs):
+        if inside:
+            last[args[1] if len(args) > 1 else kwargs.get("project")] += 1
+        return real_last(*args, **kwargs)
+
+    def queue_wait(*args, **kwargs):
+        if inside:
+            queue.append(args)
+        return real_queue(*args, **kwargs)
+
     with mock.patch.object(store, "db", shared), \
-            mock.patch.object(store, "last_step_times",
-                              wraps=store.last_step_times) as last, \
-            mock.patch.object(zone_lock, "queue_wait",
-                              wraps=zone_lock.queue_wait) as queue:
+            mock.patch.object(board(), "build_model", build), \
+            mock.patch.object(store, "last_step_times", last_times), \
+            mock.patch.object(zone_lock, "queue_wait", queue_wait):
         conn.set_trace_callback(trace)
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 report.cmd_report()
         finally:
             conn.set_trace_callback(None)
-    per_project = collections.Counter(
-        call.args[1] if len(call.args) > 1 else call.kwargs.get("project")
-        for call in last.call_args_list)
-    return {"steps": len(steps), "opened": shared.opened,
-            "last": dict(per_project), "queue": queue.call_count}
+    return {"steps": len(steps), "opened": shared.opened, "builds": len(conns),
+            "own_conn": all(c is conn for c in conns),
+            "last": dict(last), "queue": len(queue)}
 
 
 def test_ac14_report_steps_queries_do_not_grow_with_tasks(counted):
-    """`cmd_report` на 2 и на 7 задачах `in_dev` с общей зоной в тех же двух проектах: число запросов к `steps` одинаково, `store.last_step_times` — по одному разу на проект, `store.db()` открыт один раз за прогон, `zone_lock.queue_wait` не вызван.
+    """`cmd_report` на 2 и на 7 задачах `in_dev` с общей зоной в тех же двух проектах: запросов к `steps` внутри `board.build_model` одинаково, `store.last_step_times` — по разу на проект, модель получает соединение `report`, `store.db()` открыт один раз за прогон.
+
+    Прочие места `report` (например, `spend.known_cost_pairs`) читают
+    журнал на каждую задачу и вне критерия: запросы считаются только пока
+    идёт вызов `build_model`.
 
     Ловит мутацию: `report` строит модели с расчётом `waiting_on` —
     `zone_lock.queue_wait` читает журнал на каждую карточку (запросов к
-    `steps` на 7 задачах больше); `build_model` для `report` открывает своё
-    `store.db()` (открытий два); модель строится на каждую задачу, а не на
-    проект (`last_step_times` зовётся больше раза на проект).
+    `steps` внутри модели на 7 задачах больше); `build_model` для `report`
+    открывает своё `store.db()` вместо переданного соединения (открытий два);
+    модель читает журнал задачей за задачей (`store.task_steps` на карточку)
+    вместо одного `last_step_times` на проект.
     """
     stand = counted
     projects = [config.DEFAULT_TARGET, stand.other]
@@ -344,9 +374,11 @@ def test_ac14_report_steps_queries_do_not_grow_with_tasks(counted):
 
     want_last = {p: 1 for p in projects}
     for name, run in (("2 задачи", small), ("7 задач", large)):
+        assert run["builds"] > 0, note(stand, f"{name}: report не зовёт build_model")
+        assert run["own_conn"], note(stand, f"{name}: build_model получил чужое соединение")
         assert run["opened"] == 1, note(stand, f"{name}: store.db() {run['opened']} раз")
         assert run["queue"] == 0, note(stand, f"{name}: queue_wait {run['queue']} раз")
         assert run["last"] == want_last, note(stand, f"{name}: last_step_times {run['last']}")
-    assert small["steps"] > 0, note(stand, "счётчик не увидел запросов к steps")
+    assert small["steps"] > 0, note(stand, "счётчик не увидел запросов к steps в модели")
     assert small["steps"] == large["steps"], note(
-        stand, f"запросов к steps: {small['steps']} и {large['steps']}")
+        stand, f"запросов к steps в build_model: {small['steps']} и {large['steps']}")
