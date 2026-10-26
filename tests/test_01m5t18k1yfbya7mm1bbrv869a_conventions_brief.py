@@ -640,7 +640,7 @@ def test_ac4_size_limit_counts_text_without_header(scene):
 
     shortfall = scene.rng.randrange(1, len(header.encode("utf-8")))
     target = limit - shortfall
-    count = (target - len(head.encode("utf-8"))) // len(filler.encode("utf-8"))
+    count = (target - len(head.encode("utf-8")) - 1) // len(filler.encode("utf-8"))
     body = head + filler * count
     body += "y" * (target - len(body.encode("utf-8")) - 1) + "\n"
     size = len(body.encode("utf-8"))
