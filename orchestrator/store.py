@@ -681,6 +681,81 @@ def project_tasks(conn: sqlite3.Connection, project: str) -> list:
         (config.DEFAULT_TARGET, project)).fetchall()
 
 
+# ===== Надзор эпика `auto --epic` (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS) =====
+
+# Автор записей журнала надзирающего процесса эпика: по нему `watch`
+# доставляет их в сессию (требование 10) — без фильтра классов событий.
+EPIC_SUPERVISOR_ACTOR = "epic-supervisor"
+
+
+def epic_supervisor_row(conn, epic_id: str) -> sqlite3.Row | None:
+    """Строка блокировки надзора эпика; `None` — блокировки нет."""
+    return conn.execute("SELECT * FROM epic_supervisors WHERE epic_id=?",
+                        (epic_id,)).fetchone()
+
+
+def insert_epic_supervisor(conn, epic_id: str, pid: int, host: str,
+                           started_at: str, session_id: str) -> None:
+    """Без `commit`: блокировку берут внутри `begin_immediate`."""
+    conn.execute("INSERT INTO epic_supervisors (epic_id, pid, host, "
+                 "started_at, session_id) VALUES (?,?,?,?,?)",
+                 (epic_id, pid, host, started_at, session_id))
+
+
+def delete_epic_supervisor(conn, epic_id: str, pid: int | None = None) -> bool:
+    """Снимает блокировку надзора эпика — при `pid` только строку этого
+    процесса; `True` — строка была. Без `commit`, как `insert`."""
+    if pid is None:
+        cursor = conn.execute("DELETE FROM epic_supervisors WHERE epic_id=?",
+                              (epic_id,))
+    else:
+        cursor = conn.execute("DELETE FROM epic_supervisors WHERE epic_id=? "
+                              "AND pid=?", (epic_id, pid))
+    return cursor.rowcount > 0
+
+
+def insert_epic_child(conn, epic_id: str, task_id: str, pid: int, host: str,
+                      started_at: str, step_id: int) -> None:
+    with conn:
+        conn.execute("INSERT INTO epic_children (epic_id, task_id, pid, host, "
+                     "started_at, step_id) VALUES (?,?,?,?,?,?)",
+                     (epic_id, task_id, pid, host, started_at, step_id))
+
+
+def last_epic_children(conn, epic_id: str) -> dict:
+    """{id задачи: строка последнего дочернего `auto` надзора эпика}."""
+    rows = conn.execute(
+        "SELECT * FROM epic_children WHERE id IN (SELECT MAX(id) FROM "
+        "epic_children WHERE epic_id=? GROUP BY task_id)", (epic_id,)).fetchall()
+    return {row["task_id"]: row for row in rows}
+
+
+def session_active_observations(conn, session_id: str,
+                                target: str | None = None) -> list:
+    """Активные наблюдения сессии (при `target` — только этого проекта),
+    свежие первыми — порядок `matching_observation`."""
+    sql = "SELECT * FROM observations WHERE session_id=? AND state='active'"
+    params: tuple = (session_id,)
+    if target is not None:
+        sql += " AND target=?"
+        params += (target,)
+    sql += " ORDER BY last_seen_at DESC, created_at DESC, rowid DESC"
+    return conn.execute(sql, params).fetchall()
+
+
+def epic_supervisor_steps_since(conn, epic_ids: set, since_id: int,
+                                through_id: int) -> list:
+    """Записи журнала надзора эпиков `epic_ids` в окне `(since_id,
+    through_id]` по возрастанию `id` (требование 10)."""
+    if not epic_ids:
+        return []
+    marks = ", ".join("?" for _ in epic_ids)
+    return conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE id>? AND id<=? "
+        f"AND actor=? AND task_id IN ({marks}) ORDER BY id",
+        (since_id, through_id, EPIC_SUPERVISOR_ACTOR, *sorted(epic_ids))).fetchall()
+
+
 # ===== Черновики и решения эпика (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB) =====
 
 # Таблицы эпика, которые воссоздаёт `epic restore`, и их ключ строки.

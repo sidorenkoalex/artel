@@ -21,10 +21,17 @@
 одной области `artifact_branch.deferred_sends`, так что ссылка уходит в
 `origin` один раз на команду. Файлы ссылки — Markdown для чтения и первой
 строкой JSON строк БД (`_data_line`): `epic restore` читает только его.
+
+`epic parallel|stop|retry` — лимит, остановка и разрешение перезапуска
+надзора эпика `auto --epic` (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS); сам надзор —
+`auto.cmd_auto_epic`.
 """
 import json
+import os
 import re
+import signal
 import sys
+import time
 
 from scripts import guard
 
@@ -48,6 +55,12 @@ DRAFT_PROMOTE_ACTION = "черновик эпика переведён в зад
 DECISION_ACTION = "решение эпика"
 RESTORE_ACTION = "эпик восстановлен из ссылки"
 REF_WRITE_FAILED_ACTION = "запись ссылки эпика FAILED"
+PARALLEL_ACTION = "лимит надзора эпика изменён"
+STOP_REQUEST_ACTION = "epic stop: SIGTERM надзору"
+STOP_CHILD_ACTION = "epic stop: SIGTERM дочернему auto"
+# Сколько `epic stop` ждёт остановки надзора, прежде чем трогать дочерние:
+# надзор слышит SIGTERM сразу, и во сне опроса, и между запусками.
+EPIC_STOP_WAIT_SEC = 60
 DRAFT, PROMOTED, DROPPED = "draft", "promoted", "dropped"
 # Привязка решения (`epic_decisions.for_kind`).
 FOR_EPIC, FOR_DRAFT, FOR_TASK, FOR_ENVELOPE = "epic", "draft", "task", "envelope"
@@ -70,7 +83,10 @@ epic draft edit <id>/<n> [--tz <файл>] [--start-after …] [--after …] [--
 epic draft drop|promote <id>/<n>
 epic decision <id> "<дословно>" [--for <id>/<n>|<задача>|envelope]
 epic export <id>
-epic restore <проект> <id>"""
+epic restore <проект> <id>
+epic parallel <id> N
+epic stop <id>
+epic retry <id> <задача>"""
 
 
 def new_epic_id() -> str:
@@ -379,6 +395,130 @@ def cmd_start_after(args: list) -> None:
         return True
 
     lease.run_locked(conn, task_id, None, locked)
+
+
+# ===== Надзор эпика: лимит, остановка, перезапуск (SPEC
+# 01M5TBF7JRZ6FGRR4K53KPAJDS, требования 3, 5, 11) =====
+
+
+def cmd_parallel(args: list) -> None:
+    """Лимит одновременно живых дочерних `auto` надзора эпика: годно только
+    целое > 0; иначе отказ, лимит прежний."""
+    if len(args) != 2:
+        sys.exit(f"epic parallel: нужны id эпика и лимит\n{USAGE}")
+    epic_id, raw = args
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        sys.exit(f"epic parallel: лимит {raw!r} не целое число — лимит не "
+                 f"изменён")
+    if value <= 0:
+        sys.exit(f"epic parallel: лимит должен быть больше нуля, получено "
+                 f"{raw!r} — лимит не изменён")
+    from . import auto  # отложенно: `auto` тянет граф, импортирующий этот модуль
+    conn = store.db()
+    _existing(conn, epic_id)
+
+    def body():
+        epic = store.get_epic(conn, epic_id)
+        store.update_epic(conn, epic_id, parallel=value)
+        old = epic["parallel"]
+        if old is None:
+            old = f"не задан ({auto.EPIC_DEFAULT_PARALLEL})"
+        store.journal(conn, epic_id, "operator", PARALLEL_ACTION,
+                      f"{old} → {value}", target=epic["project"])
+
+    _transaction(conn, body)
+    print(f"[{epic_id}] лимит дочерних auto надзора эпика: {value}")
+    _write_ref(conn, epic_id)
+
+
+def _wait_supervisor_gone(conn, epic, row) -> bool:
+    """Ждёт, пока надзор, получивший SIGTERM, снимет свою блокировку либо
+    умрёт (тогда блокировку снимает эта команда); `False` — не дождались."""
+    from . import auto
+    deadline = time.monotonic() + EPIC_STOP_WAIT_SEC
+    while time.monotonic() < deadline:
+        current = store.epic_supervisor_row(conn, epic["id"])
+        if current is None or current["pid"] != row["pid"]:
+            return True
+        if not lease.process_alive(row["pid"], row["host"], row["started_at"]):
+            auto.drop_dead_supervisor_lock(conn, epic, row, "epic stop")
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def cmd_stop(args: list) -> None:
+    """Сначала надзор (SIGTERM живому, после его остановки новых дочерних
+    запусков нет; мёртвая блокировка снимается без сигнала), затем живые
+    дочерние `auto`, запущенные надзором, — штатный SIGTERM: `auto`
+    доигрывает текущий шаг и пишет остановку сам. `auto <id>`, запущенный
+    Оператором, не трогается: его нет среди дочерних надзора."""
+    if len(args) != 1:
+        sys.exit(f"epic stop: нужен id эпика\n{USAGE}")
+    epic_id = args[0]
+    from . import auto
+    conn = store.db()
+    epic = _existing(conn, epic_id)
+    project = epic["project"]
+    row = store.epic_supervisor_row(conn, epic_id)
+    if row is not None:
+        if lease.process_alive(row["pid"], row["host"], row["started_at"]):
+            try:
+                os.kill(row["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                auto.drop_dead_supervisor_lock(conn, epic, row, "epic stop")
+            else:
+                store.journal(conn, epic_id, "operator", STOP_REQUEST_ACTION,
+                              f"SIGTERM надзору pid {row['pid']}", target=project)
+                print(f"[{epic_id}] epic stop: SIGTERM надзору pid {row['pid']}")
+                if not _wait_supervisor_gone(conn, epic, row):
+                    sys.exit(f"[{epic_id}] надзор pid {row['pid']} не "
+                             f"остановился за {EPIC_STOP_WAIT_SEC} с — дочерние "
+                             f"auto не тронуты; повтори artel.py epic stop "
+                             f"{epic_id}")
+        else:
+            auto.drop_dead_supervisor_lock(conn, epic, row, "epic stop")
+    children = auto.live_epic_children(conn, epic_id)
+    for child in children:
+        try:
+            os.kill(child["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        detail = f"эпик {epic_id}: SIGTERM дочернему auto pid {child['pid']}"
+        store.journal(conn, child["task_id"], "operator", STOP_CHILD_ACTION,
+                      detail)
+        store.journal(conn, epic_id, "operator", STOP_CHILD_ACTION,
+                      f"{child['task_id']}: SIGTERM pid {child['pid']}",
+                      target=project)
+        print(f"[{epic_id}] epic stop: SIGTERM дочернему auto "
+              f"{child['task_id']} pid {child['pid']} — доиграет текущий шаг "
+              f"и завершится сам")
+    if row is None and not children:
+        sys.exit(f"[{epic_id}] надзор эпика не запущен и живых дочерних auto "
+                 f"нет — нечего останавливать")
+
+
+def cmd_retry(args: list) -> None:
+    """Явное разрешение перезапуска задачи эпика после остановки не на
+    гейте: запись журнала задачи, которую надзор считает новым действием
+    Оператора (требования 4, 5)."""
+    if len(args) != 2:
+        sys.exit(f"epic retry: нужны id эпика и id задачи\n{USAGE}")
+    epic_id, task_ref = args
+    from . import auto
+    conn = store.db()
+    _existing(conn, epic_id)
+    t = store.get_task(conn, task_ref)
+    if t["epic_id"] != epic_id:
+        where = f"в эпике {t['epic_id']}" if t["epic_id"] else "без эпика"
+        sys.exit(f"epic retry: задача {t['id']} не в эпике {epic_id} ({where}) "
+                 f"— запись не сделана")
+    store.journal(conn, t["id"], "operator", auto.EPIC_RETRY_ACTION,
+                  f"эпик {epic_id}: перезапуск после остановки не на гейте")
+    print(f"[{epic_id}] задача {t['id']}: перезапуск разрешён — надзор "
+          f"запустит её на ближайшем опросе, когда она готова")
 
 
 def create_from_division(conn, parent_id: str, title: str, project: str,
@@ -1127,7 +1267,8 @@ def cmd_epic(rest: list) -> None:
                 "close": cmd_close, "add": cmd_add, "remove": cmd_remove,
                 "envelope": cmd_envelope, "start-after": cmd_start_after,
                 "draft": cmd_draft, "decision": cmd_decision,
-                "export": cmd_export, "restore": cmd_restore}
+                "export": cmd_export, "restore": cmd_restore,
+                "parallel": cmd_parallel, "stop": cmd_stop, "retry": cmd_retry}
     if not rest or rest[0] not in commands:
         sys.exit(f"epic: нужна подкоманда\n{USAGE}")
     with artifact_branch.deferred_sends():
