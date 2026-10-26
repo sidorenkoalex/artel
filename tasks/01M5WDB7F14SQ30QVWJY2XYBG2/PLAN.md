@@ -125,6 +125,24 @@ schema_version: 5
    `test_multitarget.py`, новый тест хранилища — 133 passed; соседние
    (отправки в origin, точки чтения git, плотницкая запись, токен хостинга,
    деление, ссылки документов) — 177 passed; планка — 75 passed.
+8. Возврат из verifying (CI 40384230945,
+   `tests/test_git_hooks.py::PultMarkerInGitEnvTest::test_repo_context_git_reaches_a_real_child_with_the_marker`
+   — «псевдоним git в команде» у артели). Уточнение гейта merge: `-c alias.*`
+   и `--config-env alias.*` — отказ при любой подкоманде, но только для клона
+   проекта под белым списком. Отказ шага 7 перенесён после `targets.load()`
+   и сужен новой `gitcmd._alias_guarded_project`: проект — клон вызова либо
+   слово после подкоманды (путь, `file://`, `url` записи); отказ, только
+   если проект внешний и под белым списком (`targets.push_whitelisted`) или
+   с неизвестным гейтом (требование 3 (г)). Артель и `operator` — вызов
+   прежний. Тест `tests/test_gitcmd_push_point.py::test_alias_defined_in_command_refused`
+   (файл новый в ветке): случай `operator` теперь «уходит в процесс»;
+   новый `test_alias_in_command_into_whitelisted_clone_from_pult_root_refused`.
+   Мутации: отказ без условия белого списка — 6 failed (3 `operator`, 2
+   новых, упавший в CI тест `test_git_hooks.py`); проект только по рабочему
+   каталогу — 2 failed; код возвращён. Прогон: `test_gitcmd_push_point.py`,
+   `test_git_hooks.py`, `test_multitarget.py`, файлы задачи, А0, тест
+   хранилища — 163 passed; `gitcmd_explicit_repo`, `git_guard` — 20 passed;
+   планка — 75 passed. Карта регенерирована.
 
 ## Расширение зон
 Пути: orchestrator/store.py
@@ -143,7 +161,7 @@ ANSWER-2.md («Расширение зон разрешено: orchestrator/stor
 | 1 | 1 |
 | 2 | 2 |
 | 3 (а), (б) | 3, 4, 5 |
-| 3 (в), (г) | 1 (предикат, норма опции), 3, 4, 6, 7 |
+| 3 (в), (г) | 1 (предикат, норма опции), 3, 4, 6, 7, 8 |
 
 Проверено: долгоживущие файлы задачи — 44 passed
 (`tests/test_01m5wdb7f14sq30qvwjy2xybg2_*.py`); планка `plank-run` — 75
@@ -166,8 +184,10 @@ passed; А0 и точки чтения git — 86 passed.
 - Нечитаемый `targets.yaml` теперь отказывает отправку из клона внешнего
   проекта (требование 3 (г)) — у таких проектов и раньше хостинговая
   операция без записи шла без токена.
-- Шаг 7: `-c alias.*`/`--config-env alias.*` отказываются у любого проекта,
-  включая артель (в коде пульта таких вызовов нет — проверено grep). Под
+- Шаги 7–8: `-c alias.*`/`--config-env alias.*` отказываются только для
+  клона проекта под белым списком (или с неизвестным гейтом); у артели и
+  проектов `operator` такие вызовы прежние (`repo_context.git` с
+  `!`-псевдонимом — `tests/test_git_hooks.py`). Под
   белым списком отправка своей ветки уходит с переписанным явным refspec
   `<источник>:refs/heads/<имя>` и одним-двумя лишними `rev-parse` на
   проверку источника; у артели и проектов `operator` argv отправки прежний.

@@ -1,21 +1,21 @@
 # Записка developer — 01M5WDB7F14SQ30QVWJY2XYBG2
 
 ## Выяснено
-- Возврат из merge_gate (3 обхода) закрыт в `orchestrator/gitcmd.py` (шаг 7 PLAN):
-  - `_alias_in_argv`: `-c alias.*`/`--config-env alias.*` — отказ всегда (любой проект);
-    подкоманда не из встроенных под белым списком/неизвестным гейтом — отказ при глобальной опции кроме `-C`.
-  - `_location_projects`: проект по `--git-dir`/`GIT_DIR`, `--work-tree`/`GIT_WORK_TREE`, `GIT_COMMON_DIR`; разные проекты — отказ.
-    Под белым списком `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR` в окружении — отказ.
-  - `_explicit_source`: источник — HEAD, полный sha или ветка клона; refspec переписывается в `<src>:refs/heads/<имя>`.
-- `store.project_branch_tasks` — COALESCE(target, 'artel').
-- Тесты: `tests/test_gitcmd_push_point.py` (+5 тестов, 21 всего), `tests/test_store_project_branch_tasks.py`; мутации проверены.
-- Прогоны: задача+А0+multitarget 133 passed; соседние 177 passed; планка 75 passed. Карта регенерирована.
+- Возврат из verifying (CI 40384230945): `test_git_hooks.py::...test_repo_context_git_reaches_a_real_child_with_the_marker`
+  падал — `-c alias.probe=!echo` во временном репо (не проект) отказывался «псевдоним git в команде».
+- Уточнение гейта: отказ `-c alias.*`/`--config-env alias.*` при любой подкоманде, но только для клона под белым списком.
+- Исправлено (шаг 8 PLAN): в `gitcmd._push_plan` отказ псевдонима после `targets.load()`, через новую
+  `_alias_guarded_project` (клон вызова или слово после подкоманды — путь/`file://`/url записи;
+  отказ при внешнем проекте под белым списком или с неизвестным гейтом).
+- Тесты: `test_alias_defined_in_command_refused` — у `operator` теперь проходит; новый
+  `test_alias_in_command_into_whitelisted_clone_from_pult_root_refused`. Мутации красные (6 и 2).
+- Прогоны: 163 passed (push_point, git_hooks, multitarget, файлы задачи, А0, store), 20 passed соседние, планка 75 passed.
 
 ## Не сработало
-- heredoc в Bash роли запрещён — правки только через Edit.
+- heredoc/`cp` в Bash роли требуют подтверждения — мутации только через Edit.
 
 ## Где остановился
-- Шаг завершён: PLAN.md status: ready.
+- Шаг завершён: PLAN.md status: ready, карта регенерирована.
 
 ## Чего не хватило
 - Ничего существенного.
