@@ -15,3 +15,4 @@
 2026-10-26 14:10:03Z  merge_gate  actor=autogate
 2026-10-26 14:16:33Z  in_dev  actor=operator
 2026-10-26 14:19:03Z  verifying  actor=fsm
+2026-10-26 14:35:54Z  review  actor=fsm
