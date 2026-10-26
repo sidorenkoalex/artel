@@ -206,18 +206,16 @@ def _unsaved_work_reason(path: Path) -> str | None:
     return None
 
 
-_CLOSED_STATES = ("done", "killed")
-
-
 def _worktree_dir_candidates(conn) -> list:
     """Каталоги `config.WORKTREES` (не символические ссылки), чьё имя — не
     id незакрытой задачи пульта (SPEC 01M5M675F6K2TE7TTJN3AET4PP,
     требование 2); имя закрытой задачи защиты не даёт (ANSWER-2 п.5)."""
+    from . import fsm
     root = config.WORKTREES
     if not root.is_dir():
         return []
     open_ids = {row["id"] for row in store.all_tasks(conn)
-                if row["state"] not in _CLOSED_STATES}
+                if row["state"] not in fsm.TERMINAL_STATES}
     return [path for path in sorted(root.iterdir())
             if not path.is_symlink() and path.is_dir()
             and path.name not in open_ids]

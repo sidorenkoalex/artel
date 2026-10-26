@@ -27,7 +27,8 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import agent_log, ci, config, gitcmd, session, spend, store, workspace
+from . import (agent_log, ci, config, fsm, gitcmd, session, spend, store,
+               workspace)
 from .advance_gates import refusal_classes
 from .providers.claude import TOOL_CALL_LINE_PREFIX
 
@@ -38,7 +39,7 @@ _DEFAULT_EVENTS = ("transitions", "refusals", "gates", "steps", "stops", "ci",
                    "pytest")
 _GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
 _GATE_ACTIONS = tuple(f"state -> {state}" for state in _GATE_STATES)
-_TERMINAL_STATES = ("done", "killed")
+_TERMINAL_STATES = fsm.TERMINAL_STATES
 
 # Действие журнала остановки цикла `auto` (`auto.auto_stop`, `orchestrator/
 # auto.py:421`) — любой `actor`, любая причина (SPEC 01M290PP4KBTG1KYS1PWKQJH6T,
