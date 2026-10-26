@@ -289,10 +289,20 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
     top_step, top_alert = store.journal_maxima(conn)
     steps = store.observation_steps_since(conn, row["id"], start_step, top_step)
     task_ids = set(store.observation_tasks(conn, row["id"]))
+    # Надзор эпика (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS, требование 10): его
+    # записи (`task_id` = id эпика) и алерты по эпику доходят, если в
+    # наборе есть задача этого эпика; записи надзора — без фильтра классов.
+    epic_ids = {epic_id for epic_id in (store.task_epic_id(conn, t)
+                                        for t in task_ids) if epic_id}
+    supervisor_steps = store.epic_supervisor_steps_since(
+        conn, epic_ids, start_step, top_step)
+    if supervisor_steps:
+        steps = sorted([*steps, *supervisor_steps], key=lambda item: item["id"])
     next_step = max(start_step, top_step)
     for item in steps:
         action, detail = item["action"], item["detail"] or ""
-        if _matches_class(action, detail, events):
+        if (item["task_id"] in epic_ids
+                or _matches_class(action, detail, events)):
             if (budget is not None
                     and action in _TEST_RUN_ACTIONS
                     and not budget.take(item["task_id"])):
@@ -315,7 +325,7 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
         # «Оповещено» — позиция самого наблюдения (`next_alert`), так что
         # отметка одного наблюдения доставку другому не снимает.
         targets = (task_ids | {store.task_target(conn, t) for t in task_ids}
-                   | {row["target"], config.DEFAULT_TARGET, None})
+                   | {row["target"], config.DEFAULT_TARGET, None} | epic_ids)
         for item in alerts:
             if item["target"] in targets:
                 _print_line(item["ts"], item["target"] or "-", item["source"],

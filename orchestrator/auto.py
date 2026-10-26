@@ -2,15 +2,21 @@
 
 Крутится, пока в шаге работает агент (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906:
 предварительный advance пробует готовый артефакт до запуска роли, не
-после)."""
+после).
+
+`auto --epic` — надзирающий процесс эпика (`cmd_auto_epic`, SPEC
+01M5TBF7JRZ6FGRR4K53KPAJDS): ведёт линию задач эпика отвязанными `auto
+<id>`, сам шагов ролей не делает и гейтов не проходит."""
+import os
 import re
 import signal
+import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
-              fsm, lease, merge_after, models, pause, pull, rounds, runner,
-              store, zone_lock)
+              fsm, lease, merge_after, models, parallel_limit, pause, pull,
+              rounds, runner, session, store, zone_lock)
 from .advance_gates import refusal_classes, spec_audit
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -1123,3 +1129,395 @@ def _auto_cycle(conn, task_id: str, session_id: str, wait_zone: bool = False) ->
     reason, hint = auto_stop_advice(conn, task_id, state)
     auto_stop(conn, task_id, state, reason, hint,
               alert=_final_stop_raises_alert(state, steps))
+
+
+# ===== Надзор эпика `auto --epic` (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS) =====
+#
+# Отвязанный долгоживущий процесс: на каждом опросе разбирает задачи
+# эпика (`_epic_view`), запускает готовым отвязанные `auto <id>` в пределах
+# лимитов и спит `EPIC_POLL_SEC`. Блокировка — строка `epic_supervisors`
+# (не lease), дочерние — строки `epic_children`; их живость — по pid и
+# времени старта процесса (`lease.process_alive`). Записи журнала надзора
+# по эпику — `task_id` = id эпика, `target` = проект эпика, автор
+# `store.EPIC_SUPERVISOR_ACTOR`.
+
+EPIC_POLL_SEC = 15
+EPIC_DEFAULT_PARALLEL = 1
+EPIC_GATE_STATES = ("spec_gate", "acceptance", "merge_gate")
+EPIC_SUPERVISOR_START_ACTION = "надзор эпика запущен"
+EPIC_SUPERVISOR_END_ACTION = "надзор эпика завершён"
+EPIC_SUPERVISOR_STOP_ACTION = "надзор эпика остановлен"
+EPIC_SUPERVISOR_ABORT_ACTION = "надзор эпика оборван"
+EPIC_SUPERVISOR_REFUSED_ACTION = "надзор эпика не запущен: жив другой"
+EPIC_LOCK_DROPPED_ACTION = "мёртвая блокировка надзора эпика снята"
+EPIC_CHILD_LAUNCH_ACTION = "надзор эпика: запущен дочерний auto"
+EPIC_CHILD_LOST_ACTION = ("надзор эпика: дочерний auto вышел без записи об "
+                          "остановке")
+# Явное разрешение перезапуска задачи после остановки не на гейте —
+# запись команды `epic retry` (требование 5).
+EPIC_RETRY_ACTION = "epic retry: перезапуск разрешён"
+# Отказ `run` по глобальному лимиту — литерал записи `runner.cmd_run`:
+# место не освободилось, задача остаётся в очереди (требование 6).
+_GLOBAL_LIMIT_REFUSAL_ACTION = "run отклонён: лимит параллельных задач"
+# Остановка дочернего `auto` в этих состояниях — не «не на гейте»: из гейта
+# и эскалации задачу выводит сам Оператор, окончательная не продолжается.
+_NOT_HOLDING_STOP_STATES = EPIC_GATE_STATES + ("escalated", "done", "killed")
+# Записи, от которых считается «новое действие Оператора после остановки».
+_CHILD_END_ACTIONS = (zone_lock.AUTO_STOPPED_ACTION,
+                      zone_lock.CYCLE_ABORTED_ACTION, EPIC_CHILD_LOST_ACTION)
+
+_epic_stop_requested = False
+_epic_sleeping = False
+
+
+class _EpicStopDuringSleep(Exception):
+    """Сон надзора прерван SIGTERM (`epic stop`): бросается из обработчика
+    сигнала, только пока `_epic_sleeping` взведён, — приём
+    `_StopDuringZoneWait`."""
+
+
+def _on_epic_sigterm(signum, frame) -> None:
+    global _epic_stop_requested
+    _epic_stop_requested = True
+    if _epic_sleeping:
+        raise _EpicStopDuringSleep()
+
+
+def _epic_sleep() -> None:
+    global _epic_sleeping
+    if _epic_stop_requested:
+        return
+    try:
+        _epic_sleeping = True
+        if not _epic_stop_requested:
+            time.sleep(EPIC_POLL_SEC)
+    except _EpicStopDuringSleep:
+        pass
+    finally:
+        _epic_sleeping = False
+
+
+def _operator_actions() -> tuple[tuple, tuple]:
+    """(действия, префиксы действий) записей команд Оператора, открывающих
+    перезапуск (требование 4): `approve`/`reject`/`budget` — переходы
+    `state -> …` автора `operator`; `answer`/`zones-extend` — «ANSWER
+    создан…»; `pause`/`pause --now`; `resume` пишет журнал, только снимая
+    паузу (`pause.cmd_resume`). Записи цикла `auto` и запуска дочернего в
+    перечень не входят. Отложенный импорт: `amend` тянет граф гейтов."""
+    from . import amend, ci_rerun
+    return (("бюджет изменён", "resume", amend.AMEND_ACTION,
+             ci_rerun.CI_RERUN_ACTION, EPIC_RETRY_ACTION),
+            ("state -> ", "ANSWER создан", "pause"))
+
+
+def _is_operator_action(row, actions: tuple, prefixes: tuple) -> bool:
+    return row["actor"] == "operator" and (
+        row["action"] in actions or row["action"].startswith(prefixes))
+
+
+def _child_holds(conn, epic_id: str, child) -> bool:
+    """Задача, чей последний дочерний `auto` надзора не жив, ждёт нового
+    действия Оператора (требование 6, последнее условие): дочерний
+    остановился не на гейте — `auto остановлен` в состоянии вне
+    `_NOT_HOLDING_STOP_STATES`, `цикл оборван` или выход без записи об
+    остановке, — и после этой записи нет действия из перечня
+    `_operator_actions`. Отказ `run` по глобальному лимиту остановкой не
+    считается. Выход без записи помечается записью задачи один раз — она
+    и есть точка отсчёта нового действия."""
+    task_id = child["task_id"]
+    rows = store.task_steps_since(conn, task_id, child["step_id"])
+    if any(row["action"] == _GLOBAL_LIMIT_REFUSAL_ACTION for row in rows):
+        return False
+    anchor = None
+    for index, row in enumerate(rows):
+        if row["action"] in _CHILD_END_ACTIONS:
+            anchor = index
+    if anchor is None:
+        store.journal(conn, task_id, store.EPIC_SUPERVISOR_ACTOR,
+                      EPIC_CHILD_LOST_ACTION,
+                      f"эпик {epic_id}: pid {child['pid']} не жив, записи "
+                      f"«{zone_lock.AUTO_STOPPED_ACTION}» нет — перезапуск "
+                      f"после действия Оператора (artel.py epic retry "
+                      f"{epic_id} {task_id})")
+        return True
+    end = rows[anchor]
+    if (end["action"] == zone_lock.AUTO_STOPPED_ACTION
+            and (end["detail"] or "").split(":", 1)[0] in _NOT_HOLDING_STOP_STATES):
+        return False
+    actions, prefixes = _operator_actions()
+    return not any(_is_operator_action(row, actions, prefixes)
+                   for row in rows[anchor + 1:])
+
+
+_RUNNING, _WAITING, _HELD, _BUSY, _READY, _DEPENDS, _BLOCKED = (
+    "под дочерним auto", "ждёт Оператора на гейте или в эскалации",
+    "ждёт действия Оператора после остановки не на гейте",
+    "под чужим живым lease", "готова", "ждёт start_after",
+    "заблокирована без решения Оператора вне гейта")
+
+
+@dataclass
+class _EpicView:
+    """Разбор задач эпика одного опроса надзора."""
+    status: dict = field(default_factory=dict)
+    why: dict = field(default_factory=dict)
+    ready: list = field(default_factory=list)
+    running: set = field(default_factory=set)
+    free: int = 0
+    live: bool = False
+
+
+def _epic_view(conn, epic) -> _EpicView:
+    """Состояние линии эпика (требования 6, 7, 12): статус каждой
+    неокончательной задачи, готовые к запуску по порядку эпика, свободные
+    места и признак «надзору есть ради чего жить»."""
+    view = _EpicView()
+    epic_id = epic["id"]
+    tasks = store.epic_tasks(conn, epic_id)
+    children = store.last_epic_children(conn, epic_id)
+    view.running = {task_id for task_id, child in children.items()
+                    if lease.process_alive(child["pid"], child["host"],
+                                           child["started_at"])}
+    # Живые lease пульта — тем же счётом, что `parallel_limit` (задачи с
+    # пустым id нет — в счёт идут все строки).
+    busy = {row["task_id"] for row in parallel_limit.busy_other_tasks(conn, "")}
+    envelope = epic["envelope_usd"]
+    exhausted = (envelope is not None
+                 and budget.epic_spent(conn, epic_id) >= envelope)
+    depends: dict = {}
+    for t in tasks:
+        task_id, state = t["id"], t["state"]
+        if state in fsm.TERMINAL_STATES:
+            continue
+        if task_id in view.running:
+            status = _RUNNING
+        elif state in EPIC_GATE_STATES or state == "escalated":
+            status = _WAITING
+        elif task_id in children and _child_holds(conn, epic_id,
+                                                  children[task_id]):
+            status = _HELD
+        elif task_id in busy:
+            status = _BUSY
+        elif merge_after.role_step_started(conn, task_id):
+            status = _READY
+        else:
+            waiting, dead = merge_after.start_after_pending(conn, t)
+            if dead:
+                status = _BLOCKED
+                view.why[task_id] = ("start_after на "
+                                     + ", ".join(f"{d} ({s})" for d, s in dead))
+            elif exhausted:
+                status = _BLOCKED
+                view.why[task_id] = "исчерпан конверт эпика до первого шага роли"
+            elif waiting:
+                status = _DEPENDS
+                depends[task_id] = [dep for dep, _ in waiting]
+            else:
+                status = _READY
+        view.status[task_id] = status
+
+    def can_finish(task_id: str, seen: frozenset) -> bool:
+        # Зависимость вне эпика (или уже окончательная) ждать есть смысл —
+        # мёртвые отсеяны выше; внутри эпика — по её собственному статусу.
+        status = view.status.get(task_id)
+        if status is None or status not in (_BLOCKED, _DEPENDS):
+            return True
+        if status == _BLOCKED or task_id in seen:
+            return False
+        return all(can_finish(dep, seen | {task_id}) for dep in depends[task_id])
+
+    for task_id in depends:
+        if not can_finish(task_id, frozenset()):
+            view.status[task_id] = _BLOCKED
+            view.why[task_id] = ("start_after на заблокированную задачу: "
+                                 + ", ".join(depends[task_id]))
+    view.live = any(status != _BLOCKED for status in view.status.values())
+    view.ready = [t["id"] for t in tasks if view.status.get(t["id"]) == _READY]
+    parallel = epic["parallel"] or EPIC_DEFAULT_PARALLEL
+    others = busy - view.running
+    view.free = min(parallel - len(view.running),
+                    config.MAX_PARALLEL_TASKS - len(view.running) - len(others))
+    return view
+
+
+def _epic_journal(conn, epic, action: str, detail: str) -> None:
+    store.journal(conn, epic["id"], store.EPIC_SUPERVISOR_ACTOR, action,
+                  detail, target=epic["project"])
+
+
+def _end_supervision(conn, epic, reason: str) -> None:
+    """Самостоятельное завершение надзора (требования 9, 12, 13): запись
+    журнала эпика и алерт `kind=attention` Оператору по эпику."""
+    _epic_journal(conn, epic, EPIC_SUPERVISOR_END_ACTION, reason)
+    alerts.raise_attention_alert(
+        conn, epic["id"], f"[{epic['id']}] надзор эпика завершён: {reason}")
+    print(f"[{epic['id']}] надзор эпика завершён: {reason}")
+
+
+def _end_reason(view: _EpicView) -> str:
+    if not view.status:
+        return "все задачи эпика окончательны"
+    blocked = "; ".join(f"{task_id} — {view.why.get(task_id, _BLOCKED)}"
+                        for task_id in view.status)
+    return f"оставшиеся задачи заблокированы без решения Оператора вне гейта: {blocked}"
+
+
+def _launch_epic_child(conn, epic, task_id: str, observation_id: str,
+                       launch_child):
+    """Дочерний `auto <id>` готовой задачи (требования 7, 9): задача —
+    в наборе наблюдения эпика до запуска (в том числе снова, если `stop`
+    её оттуда выключил); `launch_child` — отказ `_launch_observation`
+    (`SystemExit`) завершает надзор. Возвращает `Popen` дочернего либо
+    `None` — надзор завершён."""
+    store.add_observation_tasks(conn, observation_id, [task_id])
+    step_id, _ = store.journal_maxima(conn)
+    try:
+        proc = launch_child(conn, task_id, observation_id)
+    except SystemExit as exc:
+        _end_supervision(conn, epic, f"наблюдение {observation_id} отказало "
+                                     f"запуску {task_id}: {exc}")
+        return None
+    store.insert_epic_child(conn, epic["id"], task_id, proc.pid,
+                            socket.gethostname(), store.now(), step_id)
+    store.journal(conn, task_id, store.EPIC_SUPERVISOR_ACTOR,
+                  EPIC_CHILD_LAUNCH_ACTION, f"эпик {epic['id']}: pid {proc.pid}")
+    _epic_journal(conn, epic, EPIC_CHILD_LAUNCH_ACTION,
+                  f"{task_id}: pid {proc.pid}")
+    return proc
+
+
+def _supervise(conn, epic_id: str, observation_id: str, launch_child) -> None:
+    procs: list = []
+    while True:
+        epic = store.get_epic(conn, epic_id)
+        if _epic_stop_requested:
+            _epic_journal(conn, epic, EPIC_SUPERVISOR_STOP_ACTION,
+                          "SIGTERM (epic stop) — новых дочерних запусков нет")
+            print(f"[{epic_id}] надзор эпика остановлен: SIGTERM")
+            return
+        # Вышедшие дочерние пожинаются: зомби отвечал бы на pid «жив».
+        procs = [proc for proc in procs if proc.poll() is None]
+        view = _epic_view(conn, epic)
+        if not view.live:
+            _end_supervision(conn, epic, _end_reason(view))
+            return
+        for task_id in view.ready[:max(view.free, 0)]:
+            if _epic_stop_requested:
+                break
+            proc = _launch_epic_child(conn, epic, task_id, observation_id,
+                                      launch_child)
+            if proc is None:
+                return
+            procs.append(proc)
+            print(f"[{epic_id}] запущен дочерний auto {task_id}: pid {proc.pid}")
+        _epic_sleep()
+
+
+def drop_dead_supervisor_lock(conn, epic, row, by: str) -> bool:
+    """Снимает мёртвую блокировку надзора эпика с записью журнала
+    (требования 2, 11); `False` — строку уже сменил другой процесс."""
+    store.begin_immediate(conn)
+    try:
+        current = store.epic_supervisor_row(conn, epic["id"])
+        if current is None or current["pid"] != row["pid"]:
+            conn.rollback()
+            return False
+        store.delete_epic_supervisor(conn, epic["id"], row["pid"])
+        store.journal(conn, epic["id"], "operator", EPIC_LOCK_DROPPED_ACTION,
+                      f"{by}: pid {row['pid']} ({row['host']}, с "
+                      f"{row['started_at']}) не жив", target=epic["project"])
+    except BaseException:
+        conn.rollback()
+        raise
+    print(f"[{epic['id']}] {EPIC_LOCK_DROPPED_ACTION}: pid {row['pid']}")
+    return True
+
+
+def live_supervisor_lock(conn, epic_id: str):
+    """Строка блокировки надзора эпика, если её процесс жив; иначе `None`."""
+    row = store.epic_supervisor_row(conn, epic_id)
+    if row is not None and lease.process_alive(row["pid"], row["host"],
+                                               row["started_at"]):
+        return row
+    return None
+
+
+def live_epic_children(conn, epic_id: str) -> list:
+    """Живые дочерние `auto`, запущенные надзором эпика (требование 11)."""
+    return [child for child in store.last_epic_children(conn, epic_id).values()
+            if lease.process_alive(child["pid"], child["host"],
+                                   child["started_at"])]
+
+
+def _take_supervisor_lock(conn, epic, session_id: str) -> bool:
+    """Блокировка надзора берётся самим надзирающим процессом своим pid в
+    одной транзакции (требования 1, 2): живая чужая — выход без надзора;
+    мёртвая — снимается с записью журнала."""
+    epic_id = epic["id"]
+    pid, host = os.getpid(), socket.gethostname()
+    store.begin_immediate(conn)
+    try:
+        row = store.epic_supervisor_row(conn, epic_id)
+        dropped = None
+        if row is not None and (row["pid"], row["host"]) != (pid, host):
+            if lease.process_alive(row["pid"], row["host"], row["started_at"]):
+                conn.rollback()
+                _epic_journal(conn, epic, EPIC_SUPERVISOR_REFUSED_ACTION,
+                              f"надзор эпика ведёт pid {row['pid']}")
+                print(f"[{epic_id}] надзор эпика уже ведёт pid {row['pid']} "
+                      f"— второй не запускается")
+                return False
+            dropped = row
+        store.delete_epic_supervisor(conn, epic_id)
+        store.insert_epic_supervisor(conn, epic_id, pid, host, store.now(),
+                                     session_id)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    if dropped is not None:
+        _epic_journal(conn, epic, EPIC_LOCK_DROPPED_ACTION,
+                      f"auto --epic: pid {dropped['pid']} ({dropped['host']}, "
+                      f"с {dropped['started_at']}) не жив")
+    return True
+
+
+def cmd_auto_epic(epic_id: str, observation_id: str, launch_child) -> None:
+    """Надзирающий процесс эпика (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS) —
+    исполняется отвязанным процессом `auto --epic <id> --observation <ID>
+    --attach`. `launch_child(conn, task_id, observation_id)` — отвязанный
+    запуск `auto <id>` с проверкой наблюдения (`artel._launch_epic_child`),
+    возвращает `Popen`. Гейтов надзор не проходит (требование 8): задача на
+    гейте просто не готова, `approve`/`reject` остаются Оператору.
+
+    SIGTERM (`epic stop`) прерывает сон опроса; надзор пишет запись
+    остановки и снимает свою блокировку. Блокировку снимает и любой иной
+    выход процесса, кроме убийства без исполнения кода."""
+    global _epic_stop_requested
+    _epic_stop_requested = False
+    conn = store.db()
+    epic = store.get_epic(conn, epic_id)
+    if epic is None:
+        print(f"эпик {epic_id} не найден — надзор не запущен")
+        return
+    observer = store.observation(conn, observation_id)
+    session_id = (observer["session_id"] if observer is not None
+                  else session.resolve_session_id(None))
+    signal.signal(signal.SIGTERM, _on_epic_sigterm)
+    if not _take_supervisor_lock(conn, epic, session_id):
+        return
+    pid = os.getpid()
+    _epic_journal(conn, epic, EPIC_SUPERVISOR_START_ACTION,
+                  f"pid {pid}, наблюдение {observation_id}, лимит "
+                  f"{epic['parallel'] or EPIC_DEFAULT_PARALLEL}")
+    print(f"[{epic_id}] надзор эпика: pid {pid}, наблюдение {observation_id}")
+    try:
+        _supervise(conn, epic_id, observation_id, launch_child)
+    except BaseException as exc:
+        _epic_journal(store.db(), epic, EPIC_SUPERVISOR_ABORT_ACTION,
+                      f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        closing = store.db()
+        with closing:
+            store.delete_epic_supervisor(closing, epic_id, pid)

@@ -169,10 +169,12 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   epic draft drop|promote <id>/<n> |
   epic decision <id> "<дословно>" [--for <id>/<n>|<задача>|envelope] |
   epic export <id> | epic restore <проект> <id> |
+  epic parallel <id> N | epic stop <id> | epic retry <id> <задача> |
   advance <id> | set-models <id> <набор>|--default |
   run <id> [--attach | [--observation <ID>] [--client codex|claude --chat <id>]] |
   auto <id> [--wait-zone] [--attach | [--observation <ID>]
             [--client codex|claude --chat <id>]] |
+  auto --epic <id> [--observation <ID>] |
   stop <id> |
   observe register [--client codex|claude --chat <id>] --tasks <id[,id...]> |
   observe add|remove <observation-id> --tasks <id[,id...]> |
@@ -1005,6 +1007,15 @@ def _launch_detached(cmd: str, task_id: str, client: str | None = None,
                  f"(session_id={row['session_id']}, pid={row['pid']}, "
                  f"host={row['hostname']}) — не запускаю второй отвязанный "
                  f"процесс; подожди её или `artel.py stop {task_id}`")
+    _spawn_detached(conn, cmd, task_id, target, observer, client, chat, extra)
+
+
+def _spawn_detached(conn, cmd: str, task_id: str, target: str, observer,
+                    client: str | None = None, chat: str | None = None,
+                    extra: tuple = ()) -> subprocess.Popen:
+    """Отвязанный процесс `cmd <id> --attach` с логом, строкой
+    `observed_runs` и записью аудита запуска — после проверок
+    `_launch_detached` либо надзора эпика (`_launch_epic_child`)."""
     config.LOGS.mkdir(parents=True, exist_ok=True)
     prefix = f"{task_id}-{cmd}-"
     used = [int(p.stem[len(prefix):]) for p in config.LOGS.glob(f"{prefix}*.log")
@@ -1037,6 +1048,138 @@ def _launch_detached(cmd: str, task_id: str, client: str | None = None,
     print(f"[{task_id}] {cmd} отвязан от сессии: pid {proc.pid}")
     print(f"  лог: {log_path}")
     print(f"  наблюдать: artel.py log {task_id}")
+    return proc
+
+
+def _launch_epic_child(conn, task_id: str, observation_id: str) -> subprocess.Popen:
+    """Дочерний `auto <id>` надзора эпика (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS,
+    требования 7, 9): гейт наблюдения — тот же `_launch_observation`, его
+    отказ (`SystemExit`) завершает надзор. Проверки `lease.is_live` здесь
+    нет: надзор уже сверил живость lease по pid, а lease мёртвого pid
+    дочерний перехватит сам."""
+    target = store.get_task(conn, task_id)["target"] or config.DEFAULT_TARGET
+    observer = _launch_observation(conn, task_id, target, observation_id)
+    return _spawn_detached(conn, "auto", task_id, target, observer)
+
+
+_EPIC_AUTO_USAGE = "auto --epic <id> [--observation <ID>]"
+_EPIC_SUPERVISOR_LAUNCH_ACTION = "надзор эпика отвязан"
+
+
+def _epic_observation(conn, epic, observation_id: str | None,
+                      session_id: str):
+    """Наблюдение эпика (требование 9): названное `--observation` — только
+    оно и только своей сессии; иначе активное наблюдение сессии с задачей
+    эпика в наборе; иначе самое свежее активное наблюдение сессии в проекте
+    эпика. Нет подходящего — отказ запуска."""
+    epic_id = epic["id"]
+    hint = (f"`artel.py observe register --tasks <задача эпика>`, затем "
+            f"`artel.py watch --observation <ID>`")
+    if observation_id is not None:
+        observer = store.observation(conn, observation_id)
+        if observer is None:
+            sys.exit(f"[{epic_id}] наблюдение {observation_id} не найдено — {hint}")
+        if observer["session_id"] != session_id:
+            sys.exit(f"[{epic_id}] наблюдение {observation_id} принадлежит "
+                     f"другой сессии — надзор эпика не запущен; {hint}")
+        if observer["state"] != "active":
+            sys.exit(f"[{epic_id}] наблюдение {observation_id} не активно "
+                     f"(состояние {observer['state']}) — {hint}")
+        return observer
+    epic_task_ids = {t["id"] for t in store.epic_tasks(conn, epic_id)}
+    for observer in store.session_active_observations(conn, session_id):
+        if epic_task_ids & set(store.observation_tasks(conn, observer["id"])):
+            return observer
+    own = store.session_active_observations(conn, session_id, epic["project"])
+    if own:
+        return own[0]
+    sys.exit(f"[{epic_id}] нет активного наблюдения текущей сессии ни с задачей "
+             f"эпика, ни в проекте {epic['project']} — надзор эпика не "
+             f"запущен; {hint}")
+
+
+def _launch_epic_supervisor(epic_id: str, observation_id: str | None) -> None:
+    """`auto --epic <id>` без `--attach` (требования 1, 2, 9): проверка
+    блокировки до отвязки — живая отказывает с pid, мёртвая снимается с
+    записью журнала (сама блокировка берётся надзирающим процессом своим
+    pid); выбор наблюдения; неокончательные задачи эпика — в его набор до
+    первого запуска; затем отвязанный `auto --epic … --attach`."""
+    conn = store.db()
+    epic = store.get_epic(conn, epic_id)
+    if epic is None:
+        sys.exit(epics.not_found(epic_id))
+    if epic["state"] != "open":
+        sys.exit(f"[{epic_id}] эпик закрыт — надзор не запускается")
+    row = store.epic_supervisor_row(conn, epic_id)
+    if row is not None:
+        if lease.process_alive(row["pid"], row["host"], row["started_at"]):
+            sys.exit(f"[{epic_id}] надзор эпика уже идёт: pid {row['pid']} "
+                     f"(host {row['host']}, с {row['started_at']}) — второй не "
+                     f"запускаю; остановить: artel.py epic stop {epic_id}")
+        auto.drop_dead_supervisor_lock(conn, epic, row, "auto --epic")
+    session_id = session.resolve_session_id(None)
+    observer = _epic_observation(conn, epic, observation_id, session_id)
+    pending = [t["id"] for t in store.epic_tasks(conn, epic_id)
+               if t["state"] not in fsm.TERMINAL_STATES]
+    store.add_observation_tasks(conn, observer["id"], pending)
+    config.LOGS.mkdir(parents=True, exist_ok=True)
+    prefix = f"{epic_id}-auto-epic-"
+    used = [int(p.stem[len(prefix):]) for p in config.LOGS.glob(f"{prefix}*.log")
+            if p.stem[len(prefix):].isdigit()]
+    log_path = config.LOGS / f"{prefix}{max(used, default=0) + 1}.log"
+    log_fh = open(log_path, "ab", buffering=0)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(Path(__file__).resolve()), "auto",
+             "--epic", epic_id, "--observation", observer["id"], "--attach"],
+            stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            # Сессия надзора — сессия запуска (требование 2): дочерние
+            # `auto` и проверка наблюдения видят ту же identity.
+            env={**os.environ, "ARTEL_SESSION_ID": session_id})
+    finally:
+        log_fh.close()
+    store.journal(conn, epic_id, "operator", _EPIC_SUPERVISOR_LAUNCH_ACTION,
+                  f"pid {proc.pid}, наблюдение {observer['id']}, задачи в "
+                  f"наборе: {', '.join(pending) or '—'}", target=epic["project"])
+    print(f"[{epic_id}] надзор эпика отвязан от сессии: pid {proc.pid}")
+    print(f"  наблюдение: {observer['id']}")
+    print(f"  лог: {log_path}")
+    print(f"  остановить: artel.py epic stop {epic_id}")
+
+
+def _cmd_auto_epic(rest: list) -> None:
+    """`auto --epic <id> [--observation <ID>] [--attach]`; `--attach` —
+    сам надзирающий процесс (его так зовёт отвязка)."""
+    positional, values, attach = [], {}, False
+    index = 0
+    while index < len(rest):
+        arg = rest[index]
+        if arg in ("--epic", "--observation"):
+            if (arg in values or index + 1 >= len(rest)
+                    or rest[index + 1].startswith("--")
+                    or not rest[index + 1].strip()):
+                sys.exit(f"{_EPIC_AUTO_USAGE}: требуется одно значение {arg}")
+            values[arg] = rest[index + 1]
+            index += 2
+            continue
+        if arg == "--attach":
+            attach = True
+        elif arg.startswith("--"):
+            sys.exit(f"неизвестный флаг {arg!r}; использование: {_EPIC_AUTO_USAGE}")
+        else:
+            positional.append(arg)
+        index += 1
+    if positional or "--epic" not in values:
+        sys.exit(_EPIC_AUTO_USAGE)
+    epic_id, observation_id = values["--epic"], values.get("--observation")
+    if attach:
+        if observation_id is None:
+            sys.exit(f"{_EPIC_AUTO_USAGE}: надзирающему процессу нужно "
+                     f"--observation")
+        auto.cmd_auto_epic(epic_id, observation_id, _launch_epic_child)
+        return
+    _launch_epic_supervisor(epic_id, observation_id)
 
 
 def _cmd_run_or_detach(rest: list) -> None:
@@ -1053,6 +1196,9 @@ def _cmd_run_or_detach(rest: list) -> None:
 
 def _cmd_auto_or_detach(rest: list) -> None:
     _refuse_sandbox_cycle()
+    if "--epic" in rest:
+        _cmd_auto_epic(rest)
+        return
     task_id, attach, client, chat, observation_id = _cycle_args(
         rest, f"auto <id> [--attach | {_DETACHED_FLAGS_USAGE}] [--wait-zone]",
         _CYCLE_FLAGS_AUTO)
@@ -2269,8 +2415,9 @@ def _role_allowed_command(cmd: str, rest: list) -> bool:
         return bool(rest) and rest[0] in _ROLE_ALLOWED_SUBCOMMANDS[cmd]
     # Ребёнок отвязанного запуска наследует окружение родителя и несёт
     # `--attach` — его отказ сломал бы штатный `run`/`auto` (требование 6).
+    # Надзор эпика (`auto --epic`) — команда Оператора и с `--attach`.
     if cmd in ("run", "auto"):
-        return "--attach" in rest
+        return "--attach" in rest and "--epic" not in rest
     return False
 
 

@@ -20,6 +20,7 @@ lease не второй конечный автомат, а только пра�
 import os
 import socket
 import sys
+from datetime import datetime, timezone
 
 from . import artifact_branch, config, liveness, store
 from .session import resolve_session_id  # noqa: F401 — единая функция identity (SPEC 01M1G..., требование 1): lease.resolve_session_id остаётся тем же объектом, что и session.resolve_session_id.
@@ -393,6 +394,26 @@ def run_task_command(task_id: str, session_id: str | None, body):
     task_id = store.resolve_task_id(conn, task_id)
     return run_locked(conn, task_id, session_id,
                       lambda sid: body(conn, task_id))
+
+
+def process_alive(pid: int, host: str, started_at: str) -> bool:
+    """Жив ли процесс, записанный с `pid` на `host` в момент `started_at`
+    (`store.now()`): pid жив на ЭТОМ хосте и время старта процесса с этим
+    pid (`doctor.process_start_time`) не позже `started_at` (SPEC
+    01M5TBF7JRZ6FGRR4K53KPAJDS, требования 2, 7) — иначе pid уже занят
+    другим процессом или старт не определён, и записанный процесс считается
+    не живым. Блокировка надзора эпика и дочерние `auto` надзора сверяются
+    одной этой функцией. Отложенный импорт `doctor`: фасад тянет почти весь
+    пакет, включая этот модуль."""
+    if host != socket.gethostname() or not liveness._pid_alive(pid):
+        return False
+    from . import doctor
+    started = doctor.process_start_time(pid)
+    if started is None:
+        return False
+    recorded = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%SZ").replace(
+        tzinfo=timezone.utc)
+    return started <= recorded
 
 
 def is_live(conn, task_id: str) -> bool:

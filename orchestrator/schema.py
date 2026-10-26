@@ -114,7 +114,7 @@ EPICS_DDL = """
 CREATE TABLE IF NOT EXISTS epics (
   id TEXT PRIMARY KEY, project TEXT NOT NULL, title TEXT, goal TEXT,
   envelope_usd REAL, state TEXT NOT NULL DEFAULT 'open', outcome TEXT,
-  created_at TEXT, closed_at TEXT
+  created_at TEXT, closed_at TEXT, parallel INTEGER
 );
 """
 TASKS_EPIC_INDEX_DDL = """
@@ -144,6 +144,25 @@ CREATE TABLE IF NOT EXISTS epic_decisions (
 );
 """
 
+# Надзор эпика `auto --epic` (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS, требования
+# 2, 7; ADR-0028 уровень 2, п. 10). `epic_supervisors` — блокировка надзора,
+# своя, не `leases`: строка на эпик, `session_id` — сессия надзора.
+# `epic_children` — дочерние `auto`, запущенные надзором: pid и время
+# запуска для сверки живости по pid, `step_id` — максимум журнала перед
+# запуском (записи задачи после него — исход этого запуска). Тем же
+# литералом в `SCHEMA` и `migrate()` (см. `MODEL_TARIFFS_DDL`).
+EPIC_SUPERVISION_DDL = """
+CREATE TABLE IF NOT EXISTS epic_supervisors (
+  epic_id TEXT PRIMARY KEY, pid INTEGER NOT NULL, host TEXT NOT NULL,
+  started_at TEXT NOT NULL, session_id TEXT
+);
+CREATE TABLE IF NOT EXISTS epic_children (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, epic_id TEXT NOT NULL,
+  task_id TEXT NOT NULL, pid INTEGER NOT NULL, host TEXT NOT NULL,
+  started_at TEXT NOT NULL, step_id INTEGER NOT NULL
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -165,6 +184,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 {EPICS_DDL}
 {TASKS_EPIC_INDEX_DDL}
 {EPIC_DRAFTS_DDL}
+{EPIC_SUPERVISION_DDL}
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
@@ -501,6 +521,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             "OR notified_alert_id IS NULL OR acknowledged_alert_id IS NULL")
     conn.executescript(PAIR_SUSPENSION_DDL)
     conn.executescript(EPIC_DRAFTS_DDL)
+    conn.executescript(EPIC_SUPERVISION_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:
@@ -520,3 +541,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     # Последним: запись журнала о миграции требует уже догнанных колонок
     # `steps` (`target`, `session_id`) выше.
     _migrate_epics(conn)
+    # Лимит `epic parallel` (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS, требование 3)
+    # — колонка, которой нет у `epics` БД прошлых версий; NULL — не задан.
+    add_column(conn, "epics", "parallel", "INTEGER")
+    conn.commit()
