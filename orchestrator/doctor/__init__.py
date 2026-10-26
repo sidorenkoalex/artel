@@ -52,7 +52,7 @@ subprocess-вызовов», см. `preflight_checks`).
 пакета — один раздел (граница комментария-разделителя) на файл, тело
 функций не переписано, только перенесено. Этот файл (фасад) — ЕДИНСТВЕННОЕ
 место, где коллаборанты (`alerts`, `artifact_branch`, `brief`, `canary`, `ci`,
-`coldstart`, `config`, `conventions`, `fixation`, `gitcmd`, `liveness`, `pool_seal`,
+`coldstart`, `config`, `conventions`, `fixation`, `forge`, `gitcmd`, `liveness`, `pool_seal`,
 `project_profile`, `projects`, `providers`, `roles`, `runner`, `snapshot`, `spend`, `stack`, `store`,
 `targets`, `workspace`, `zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
 их не импортируют (AC-9: сканирующий тест красит любой прямой
@@ -96,7 +96,7 @@ from pathlib import Path
 from .. import (acceptance, alerts, artifact_branch, brief, canary, ci, coldstart,
                 config, conventions,
                 cycle_hint,
-                fixation, gitcmd, keychain, liveness, merge_lock, models,
+                fixation, forge, gitcmd, keychain, liveness, merge_lock, models,
                 notes, pool_seal, project_profile, projects, providers,
                 repo_context, roles,
                 runner, snapshot, spend, stack, store, targets, workspace,
@@ -176,7 +176,8 @@ from .hung_test_watchdog import (_HUNG_TEST_CMD_RE, _ETIME_RE,
                                  check_hung_test_runs, _fix_hung_test_runs,
                                  _fix_dead_lease_groups, check_zone_waits)
 from .misc_checks import (check_backup_age, check_pending_notes,
-                          check_task_counters, gh_env, check_base_branch)
+                          check_task_counters, gh_env, check_base_branch,
+                          check_token_expiry)
 from .project_checks import project_entry_checks
 from .project_conventions import (PROJECT_CONVENTIONS_CHECK,
                                   check_project_conventions)

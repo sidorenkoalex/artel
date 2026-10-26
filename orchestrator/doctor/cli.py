@@ -157,6 +157,12 @@ def all_checks(conn) -> list[doctor.Check]:
         checks.append(doctor.check_target_wrapper(name))
         checks.append(doctor.check_target_wrapper_worktrees(name))
         checks.append(doctor.check_base_branch(name, entry))
+        # Срок токена хостинга (SPEC 01M5WCXBR9K8CN586W1AP3ZN6Q, требование
+        # 2) — следом за сверкой базы: предмет тот же, API хостинга; у
+        # хостинга без срока токена строки нет.
+        expiry = doctor.check_token_expiry(conn, name, entry)
+        if expiry is not None:
+            checks.append(expiry)
         # Клон, пуш, CI, защита ветки, токен, no_paths и project_skills
         # записи проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7)
         # — рядом с base-branch: предмет тот же, хостинг проекта.

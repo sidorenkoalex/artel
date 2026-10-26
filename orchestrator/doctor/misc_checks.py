@@ -1,8 +1,9 @@
-"""Пакет orchestrator/doctor -- разрозненные проверки: бэкап, счётчики, base-branch.
+"""Пакет orchestrator/doctor -- разрозненные проверки: бэкап, счётчики, base-branch, срок токена хостинга.
 
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
+import datetime
 import os
 import time
 
@@ -94,10 +95,18 @@ def check_base_branch(name: str, entry: dict) -> doctor.Check:
     требование 2, AC-2).
 
     `gh` внешнего проекта — с токеном слота `token_slot` его записи
-    (`gh_env`, SPEC 01M545EDTHS47HSB59AKC1EZ9C, требование 1)."""
-    if entry.get("forge") != "github":
+    (`gh_env`, SPEC 01M545EDTHS47HSB59AKC1EZ9C, требование 1).
+
+    Реализация хостинга — из реестра `forge` по полю `forge` записи (SPEC
+    01M5WCXBR9K8CN586W1AP3ZN6Q, требование 1): у реализации со сведениями
+    проекта (`project_info`) база сверяется с её `default_branch`, у
+    реализации без них — прежним `gh repo view`."""
+    implementation = _forge_implementation(entry)
+    if implementation is None:
         return doctor.Check("base-branch", "skip",
                      f"forge {entry.get('forge')} — сверка не реализована")
+    if hasattr(implementation, "project_info"):
+        return _base_branch_by_project_info(name, entry)
     gh = doctor.shutil.which("gh")
     if gh is None:
         return doctor.Check("base-branch", "skip", "gh CLI не найден — сверка пропущена")
@@ -125,3 +134,69 @@ def check_base_branch(name: str, entry: dict) -> doctor.Check:
     return doctor.Check("base-branch", "ok", f"база сходится: {remote_base}")
 
 
+def _forge_implementation(entry: dict):
+    """Реализация хостинга записи из реестра `forge`; `None` — значения
+    поля `forge` в реестре нет."""
+    return doctor.forge.IMPLEMENTATIONS.get(entry.get("forge"))
+
+
+def _base_branch_by_project_info(name: str, entry: dict) -> doctor.Check:
+    """Сверка базы записи с `default_branch` проекта у хостинга; причина
+    адаптера (нет токена, ошибка HTTP, сеть, адрес) — `skip` с ней."""
+    info = doctor.forge.project_info(name)
+    if info.reason:
+        return doctor.Check("base-branch", "skip",
+                            f"сверка базы пропущена: {info.reason}")
+    if not info.default_branch:
+        return doctor.Check("base-branch", "skip",
+                            "хостинг не вернул ветку проекта по умолчанию")
+    if info.default_branch != entry.get("base"):
+        return doctor.Check("base-branch", "warn",
+                            f"targets.yaml base={entry.get('base')!r}, у форджа "
+                            f"{info.default_branch!r}")
+    return doctor.Check("base-branch", "ok", f"база сходится: {info.default_branch}")
+
+
+def check_token_expiry(conn, name: str, entry: dict) -> doctor.Check | None:
+    """Строка `token-expiry-<проект>` — срок токена хостинга (SPEC
+    01M5WCXBR9K8CN586W1AP3ZN6Q, требование 2); `None` — у реализации
+    хостинга записи срока токена нет, строки нет вовсе.
+
+    Срок через `TOKEN_EXPIRY_WARN_DAYS` дней реализации или раньше —
+    `warn`. Токен без срока — информационная строка, пока задач проекта в
+    БД пульта (кроме `killed`) меньше `TOKEN_NO_EXPIRY_TASKS_WARN`, затем
+    `warn`: бессрочный токен с правом записи — тем больший риск, чем
+    больше проект ведётся пультом. Нет токена или запрос не удался —
+    `skip` с причиной адаптера (Н-4 родительской задачи): строка
+    диагностическая и не должна краснеть от сети."""
+    implementation = _forge_implementation(entry)
+    if not hasattr(implementation, "token_expiry"):
+        return None
+    check_name = f"token-expiry-{name}"
+    expiry = doctor.forge.token_expiry(name)
+    if expiry.reason:
+        return doctor.Check(check_name, "skip",
+                            f"проект {name}: срок токена не прочитан — {expiry.reason}")
+    if expiry.expires_at is None:
+        tasks = sum(1 for row in doctor.store.project_tasks(conn, name)
+                    if row["state"] != "killed")
+        limit = implementation.TOKEN_NO_EXPIRY_TASKS_WARN
+        status = "warn" if tasks >= limit else "ok"
+        return doctor.Check(check_name, status,
+                            f"проект {name}: токен без срока; задач проекта "
+                            f"{tasks} (порог {limit}) — бессрочный токен "
+                            f"стоит заменить токеном со сроком")
+    days = (expiry.expires_at - datetime.date.today()).days
+    limit = implementation.TOKEN_EXPIRY_WARN_DAYS
+    if days < 0:
+        return doctor.Check(check_name, "warn",
+                            f"проект {name}: срок токена истёк "
+                            f"{expiry.expires_at.isoformat()}")
+    if days <= limit:
+        return doctor.Check(check_name, "warn",
+                            f"проект {name}: токен истекает "
+                            f"{expiry.expires_at.isoformat()}, через {days} дн. "
+                            f"(порог {limit}) — выпусти новый")
+    return doctor.Check(check_name, "ok",
+                        f"проект {name}: токен действует до "
+                        f"{expiry.expires_at.isoformat()}, через {days} дн.")
