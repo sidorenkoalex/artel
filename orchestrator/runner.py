@@ -170,6 +170,25 @@ def cmd_run(task_id: str, session_id: str | None = None) -> bool | None:
     return lease.run_task_command(task_id, session_id, _cmd_run)
 
 
+UNSUPPORTED_PROJECT_ACTION = "отказ: проект не поддержан"
+
+
+def refuse_unsupported_project(conn, task_id: str, command: str) -> None:
+    """Отказ команды `command` (`run`, `auto`, `approve`) задаче проекта с
+    неподдержанным хостингом или гейтом мержа (SPEC
+    01M5W27CY7K7NR9347NKD8F0NX, требования 4-5): запись журнала задачи и
+    выход с причиной `targets.unsupported_reason` — до lease, подтяжки,
+    агента и git. Поддержанный проект — возврат без следов."""
+    task_id = store.resolve_task_id(conn, task_id)
+    target = store.task_target(conn, task_id)
+    reason = targets.unsupported_reason(target)
+    if reason is None:
+        return
+    store.journal(conn, task_id, "operator", UNSUPPORTED_PROJECT_ACTION,
+                  f"{command}: проект {target}: {reason}")
+    sys.exit(f"[{task_id}] {command} отклонён: проект {target}: {reason}")
+
+
 def cmd_run_and_advance(task_id: str) -> None:
     """Команда `artel.py run <id>`: шаг роли и, если он успешен, один
     `advance` (SPEC 01M446WEVJXARR5CDED8RE9CCR, требование 6) — тот же
@@ -210,6 +229,9 @@ def cmd_run_and_advance(task_id: str) -> None:
 
 
 def _cmd_run(conn, task_id: str) -> bool | None:
+    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
+    # 4) — первым действием под обвязкой: до подтяжки, агента и git.
+    refuse_unsupported_project(conn, task_id, "run")
     t = store.get_task(conn, task_id)
     # Бюджет проверяем до всего остального: потраченные деньги не зависят от
     # состояния задачи, а из escalated Оператор её вернуть уже мог.

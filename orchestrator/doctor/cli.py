@@ -33,6 +33,20 @@ def full_suite_timeout_check(name: str) -> doctor.Check:
         f"(источник: {source})")
 
 
+def project_support_check(name: str) -> doctor.Check:
+    """Строка `project-support-<проект>` (SPEC 01M5W27CY7K7NR9347NKD8F0NX,
+    требование 6): ведёт ли пульт задачи проекта — `fail` с причиной
+    `targets.unsupported_reason`, иначе `ok`."""
+    check_name = f"project-support-{name}"
+    reason = doctor.targets.unsupported_reason(name)
+    if reason is not None:
+        return doctor.Check(check_name, "fail",
+                            f"проект {name}: {reason} — new, run, auto и "
+                            f"approve его задач отказывают")
+    return doctor.Check(check_name, "ok",
+                        f"проект {name}: хостинг и гейт мержа исполняются")
+
+
 def targets_local_layer_check() -> doctor.Check:
     """Строка `targets-local-layer` (SPEC 01M5SCGSQN0AT0B07H7M9803RA,
     требование 8): где лежат записи внешних проектов. Зовётся только после
@@ -137,6 +151,7 @@ def all_checks(conn) -> list[doctor.Check]:
     else:
         checks.append(targets_local_layer_check())
     for name, entry in declared.items():
+        checks.append(project_support_check(name))
         checks.append(full_suite_timeout_check(name))
         checks.append(doctor.check_target_layout(name))
         checks.append(doctor.check_target_wrapper(name))

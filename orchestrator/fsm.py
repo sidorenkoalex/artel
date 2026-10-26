@@ -1749,6 +1749,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                  accept_audit_fail: bool = False,
                  during_canary: str | None = None,
                  as_epic_goal: str | None = None) -> None:
+    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
+    # 5) — первым действием под lease, до таблицы состояний: в любом
+    # состоянии, иначе гейт мержа влил бы ветку в `base` проекта с гейтом
+    # людей проекта сам.
+    from . import runner
+    runner.refuse_unsupported_project(conn, task_id, "approve")
     t = store.get_task(conn, task_id)
     state = t["state"]
     # Повтор предварительной проверки `--as-epic` уже под lease: эпик мог

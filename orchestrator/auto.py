@@ -1030,6 +1030,10 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
     (SPEC 01M59DP2GV3SAN54M562CQY42R, требование 6): переход в состояние без
     роли (`escalated`) выходит из цикла, и сверка обязана случиться в том же
     вызове `auto`, на какой бы остановке цикл ни вышел."""
+    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
+    # 4) — на входе цикла, до предварительного advance, опроса CI и git:
+    # отказ одного `run` внутри цикла пришёл бы после них.
+    runner.refuse_unsupported_project(conn, task_id, "auto")
     _auto_cycle(conn, task_id, session_id, wait_zone)
     rounds.raise_once(conn, task_id)
 
