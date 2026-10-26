@@ -1,14 +1,14 @@
 ## Выяснено
-- Модуль команд эпика после Э1 — `orchestrator/epics.py` (в origin/main; в ветке задачи и локальном main его ещё нет — ветка старше мержа Э1 7f37c6dd7). `cmd_epic`: new/show/edit/close/add/remove; `parallel`/`stop` нет.
-- `_launch_detached` (`artel.py` ~977 в origin/main): отказ при живом lease, наблюдение через `_launch_observation`; `stop <id>` = SIGTERM, `auto` выходит на границе шагов.
-- ТЗ: «Порядок: после 01M5TBCY7WTN121S136XP2C6SR» (Э2а, in_dev) → merge_after в SPEC. Зоны 6 файлов + tests → сигнал деления (≥5 зон); рамка ТЗ $65, дефолт $50, класс ~45.
-- Противоречие ТЗ: треб. 3 (ждать гейты) vs треб. 5 (выход, когда «ждут Оператора») → QUESTIONS.md п. 1; п. 2 — что занимает место `epic parallel`; п. 3 — что такое «наблюдение эпика».
+- ANSWER-1: все три вопроса — вариант A (гейт не повод выхода; место лимита — живой дочерний `auto`; наблюдение — выбранное при запуске, схема `observations` не меняется).
+- Модуль команд эпика — `orchestrator/epics.py` (origin/main); `epic parallel`/`epic stop` нет, колонки лимита в `epics` (`schema.py` `EPICS_DDL`) нет — их вводит эта задача.
+- `_cmd_stop` (`artel.py` ~1396 origin/main) сам журнала не пишет: запись остановки даёт `auto.auto_stop` (`AUTO_STOPPED_ACTION`) после SIGTERM-флага `_stop_requested`.
+- Э2а SPEC (refs/artifacts/01M5TBCY…): «первый шаг роли» = запись «agent run started»; `start_after` проверяется только до первого шага — SPEC Э2б опирается на это определение.
 
 ## Не сработало
-- Bash с `$?`/`$b` отклоняется песочницей (simple_expansion) — писать команды без подстановок.
+- В песочнице нет `ls`/`rm` в PATH — удалял файл через python3.
 
 ## Где остановился
-- QUESTIONS.md (3 вопроса, guard ок), SPEC.md не писал. После ANSWER: SPEC, удалить QUESTIONS.md, в «Оценке объёма» — обоснование монолита (место под `parallel`/блокировку без надзирающего процесса не мержимо отдельно).
+- SPEC.md написан (14 AC, budget 45, merge_after Э2а, обоснование монолита — материал Оператору), guard ок; QUESTIONS.md удалён.
 
 ## Чего не хватило
-- Э1 не подтянут в ветку задачи — модуль эпика пришлось искать в origin/main (`git ls-tree origin/main`).
+- Ветка задачи старше мержа Э1 — код эпика читал через `git show origin/main:…`.
