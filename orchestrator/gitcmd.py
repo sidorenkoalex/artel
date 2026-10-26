@@ -174,7 +174,6 @@ PUSH_SUBCOMMANDS = ("push", "send-pack")
 PUSH_RESET_CONFIG = ("-c", "push.followTags=false", "-c", "push.pushOption=")
 PUSH_ALLOWED_FLAGS = ("-u", "--set-upstream", "-q", "--delete")
 PUSH_LEASE_FLAG = "--force-with-lease"
-PUSH_DEAD_STATES = ("killed", "done")
 ARTIFACT_REF_PREFIX = "refs/artifacts/"
 GIT_CONFIG_ENV_NAMES = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
 GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
@@ -204,9 +203,7 @@ def _project_tasks(project: str) -> list:
     if not config.DB.exists():
         return []
     from . import store
-    return store.db().execute(
-        "SELECT id, branch, state FROM tasks WHERE COALESCE(target, ?)=?",
-        (config.DEFAULT_TARGET, project)).fetchall()
+    return store.project_tasks(store.db(), project)
 
 
 def _last_sent_sha(task_id: str) -> str | None:
@@ -214,9 +211,7 @@ def _last_sent_sha(task_id: str) -> str | None:
     if not config.DB.exists():
         return None
     from . import store
-    row = store.db().execute(
-        "SELECT detail FROM steps WHERE task_id=? AND action=? "
-        "ORDER BY id DESC LIMIT 1", (task_id, PUSH_SENT_ACTION)).fetchone()
+    row = store.last_task_step_of(store.db(), task_id, (PUSH_SENT_ACTION,))
     return (row["detail"] or "").split(" ")[0] if row is not None else None
 
 
@@ -302,13 +297,21 @@ class _PushPlan:
             pass
 
 
+def _dead_states() -> tuple:
+    """Окончательные состояния: ветка такой задачи — не «своя» ветка
+    отправки. Список — `fsm.TERMINAL_STATES`; импорт отложен, потому что
+    `fsm` сам импортирует этот модуль."""
+    from . import fsm
+    return fsm.TERMINAL_STATES
+
+
 def _refspecs(refspecs: list, tasks: list) -> list:
     """Разбор refspec отправки: словарь на каждый — назначение, вид
     (`branch`/`artifacts`/`ref`), форма (`+`, `:<ref>`) и задача проекта, к
     ветке или ссылке документов которой он относится (`None` — нет такой)."""
     by_branch: dict = {}
     for row in tasks:
-        live = row["state"] not in PUSH_DEAD_STATES
+        live = row["state"] not in _dead_states()
         if row["branch"] not in by_branch or live:
             by_branch[row["branch"]] = row
     ids = {row["id"]: row for row in tasks}
@@ -384,7 +387,7 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         if spec["name"] == entry.get("base"):
             return f"отправка в base {spec['name']}"
         task = spec["task"]
-        if task is None or task["state"] in PUSH_DEAD_STATES:
+        if task is None or task["state"] in _dead_states():
             return f"ветка {spec['name']} — не ветка живой задачи проекта"
     for lease in leases:
         ref, colon, sha = lease.partition(":")

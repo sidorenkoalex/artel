@@ -665,10 +665,7 @@ def branch_refusal(conn, project: str, names: list) -> str | None:
     у задачи проекта в любом состоянии (БД) или на сервере (`ls-remote`
     клона); сбой `ls-remote` — «имя ветки не проверено». None — имена
     свободны. Зовётся только при шаблоне не по умолчанию."""
-    marks = ",".join("?" * len(names))
-    rows = conn.execute(
-        f"SELECT id, branch, state FROM tasks WHERE target=? AND branch IN "
-        f"({marks})", (project, *names)).fetchall()
+    rows = store.project_branch_tasks(conn, project, names)
     if rows:
         return "; ".join(f"ветка {r['branch']} уже у задачи {r['id']} "
                          f"({r['state']})" for r in rows)
