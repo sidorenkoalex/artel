@@ -238,6 +238,34 @@ def test_alias_in_command_into_whitelisted_clone_from_pult_root_refused(
     assert gitcmd.PUSH_REFUSED_ACTION not in res.stderr, res
 
 
+@pytest.mark.parametrize("layer", ["target-human", "broken"])
+@pytest.mark.parametrize("form", ["-c", "--config-env"])
+@pytest.mark.parametrize("body", ["push", "shell-C", "shell-cd"])
+def test_alias_body_into_whitelisted_clone_from_pult_root_refused(
+        alias_spy, monkeypatch, body, form, layer):
+    """Псевдоним из argv, у которого назначение — клон проекта под белым списком — лежит в теле (`alias.p=push <клон> main`, `!git -C <клон> push origin main`, `!cd <клон>&&git push origin main`), а не в словах после подкоманды: из корня пульта — отказ до процесса, под белым списком и при нечитаемом `targets.yaml`; тело задаётся `-c` и `--config-env`.
+
+    Ловит мутацию: слова тела псевдонима не учитываются
+    (`_alias_body_words` возвращает пустые списки) — вызов `p` без слов из
+    корня пульта уходит в процесс отправки в `main` клона.
+    """
+    clone = project("qaliasbody", "target-human")
+    if layer == "broken":
+        targets.local_path().write_text("targets: [не запись\n", encoding="utf-8")
+    value = {"push": f"push {clone} {config.MAIN_BRANCH}",
+             "shell-C": f"!git -C {clone} push origin {config.MAIN_BRANCH}",
+             "shell-cd": f"!cd {clone}&&git push origin {config.MAIN_BRANCH}",
+             }[body]
+    if form == "-c":
+        words = ("-c", f"alias.p={value}")
+    else:
+        monkeypatch.setenv("ALIAS_BODY", value)
+        words = ("--config-env", "alias.p=ALIAS_BODY")
+    res = gitcmd.git(*words, "p")
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert alias_spy.pushes == []
+
+
 def test_global_option_before_unknown_subcommand_refused(alias_spy):
     """Проект `target-human`: глобальная опция, кроме `-C`, перед подкомандой не из встроенных (`-c include.path=…` подкладывает псевдоним) — отказ до процесса.
 

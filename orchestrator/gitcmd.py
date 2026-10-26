@@ -2,6 +2,7 @@
 репозиторию (артефактные git-репо внешних target, ADR-0003 3д, tasks/T021)."""
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import threading
@@ -282,14 +283,48 @@ def _alias_in_argv(globals_: list) -> str | None:
     return None
 
 
+def _alias_body_words(globals_: list, env: dict) -> tuple[list, list]:
+    """(слова, проекты по тексту) тел псевдонимов, заданных самой командой.
+
+    Тело `-c alias.<имя>=<тело>` — как есть, у `--config-env` — значение
+    названной переменной окружения; у `!`-формы — слова shell-команды с
+    подставленными `$VAR`/`${VAR}` окружения. Слово `--опция=<значение>`
+    даёт и значение. Проекты по тексту — имена из упоминаний
+    `.artel/projects/<имя>/` в теле: путь в клон может стоять внутри слова
+    shell-команды (`cd …&&`), а не отдельным словом."""
+    words, named = [], []
+    for name in ("-c", "--config-env"):
+        for value in _global_values(globals_, name):
+            key, _, body = value.partition("=")
+            if not key.lower().startswith("alias."):
+                continue
+            if name == "--config-env":
+                body = env.get(body, "")
+            body = re.sub(r"\$\{([A-Za-z_]\w*)[^}]*\}|\$([A-Za-z_]\w*)",
+                          lambda m: env.get(m.group(1) or m.group(2), ""),
+                          body.removeprefix("!"))
+            named += re.findall(r"\.artel/projects/([^/\s\"';&|]+)/", body)
+            try:
+                split = shlex.split(body)
+            except ValueError:
+                split = body.split()
+            for word in split:
+                words.append(word)
+                if word.startswith("-") and "=" in word:
+                    words.append(word.split("=", 1)[1])
+    return words, named
+
+
 def _alias_guarded_project(cwd_project: str | None, words: list, cwd: Path,
-                           entries: dict | None) -> str | None:
+                           entries: dict | None,
+                           named: list = ()) -> str | None:
     """Внешний проект под белым списком или с неизвестным гейтом, к клону
-    которого относится вызов с псевдонимом в argv: клон вызова либо слово
-    после подкоманды — путь, `file://`-адрес или `url` записи проекта.
+    которого относится вызов с псевдонимом в argv: клон вызова, проект,
+    названный в теле псевдонима, либо слово после подкоманды или тела
+    псевдонима — путь, `file://`-адрес или `url` записи проекта.
     None — псевдоним вызова белый список не касается."""
     from . import targets
-    candidates = [cwd_project] if cwd_project else []
+    candidates = ([cwd_project] if cwd_project else []) + list(named)
     for word in words:
         local = _local_dest_path(word)
         if local:
@@ -589,8 +624,12 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
         # отправку мимо разбора подкоманды — под белым списком (и при
         # неизвестном гейте) отказ при любой подкоманде; у артели и
         # проектов `operator` вызов прежний.
-        guarded = _alias_guarded_project(cwd_project, args[index + 1:], cwd,
-                                         entries)
+        # Назначение может стоять и в теле псевдонима (`alias.p=push <клон>
+        # main`, `!git -C <клон> push …`), не только в словах после него.
+        body_words, named = _alias_body_words(globals_, env)
+        guarded = _alias_guarded_project(cwd_project,
+                                         body_words + args[index + 1:], cwd,
+                                         entries, named)
         if guarded is None:
             return None
         return _refuse(plan, guarded, None, env, task_id,
