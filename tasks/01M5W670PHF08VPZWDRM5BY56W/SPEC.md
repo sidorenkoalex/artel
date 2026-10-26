@@ -4,7 +4,7 @@ type: spec
 author_role: analyst
 status: ready
 schema_version: 5
-zones: orchestrator/forge.py, orchestrator/gitlab_adapter.py, orchestrator/ci.py, orchestrator/github_adapter.py, orchestrator/doctor/misc_checks.py, orchestrator/doctor/cli.py, orchestrator/doctor/__init__.py, orchestrator/artel.py, tests/sandbox.py, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py
+zones: orchestrator/forge.py, orchestrator/gitlab_adapter.py, orchestrator/ci.py, orchestrator/github_adapter.py, orchestrator/doctor/misc_checks.py, orchestrator/doctor/cli.py, orchestrator/doctor/__init__.py, orchestrator/artel.py, tests/sandbox.py
 merge_after: 01M5W27CY7K7NR9347NKD8F0NX
 budget_usd: 70
 ---
@@ -28,7 +28,7 @@ HTTP-адреса в тестах запрещает сторож
 тестах — только подменой. Требования ниже учитывают ответ Оператора
 ANSWER-1 (решения 1A, 2A, 3A, 4A, 5A, 6A, 7A, 8A, 9A, 10A, 11A, 12B, 13A)
 и решения гейта SPEC 26.10 по отклонениям аудита (О-1…О-6 и мелкие
-замечания).
+замечания), затем О-7…О-9 и замечания третьего аудита.
 
 ## Требования
 
@@ -50,16 +50,14 @@ ANSWER-1 (решения 1A, 2A, 3A, 4A, 5A, 6A, 7A, 8A, 9A, 10A, 11A, 12B, 13A)
      «последний конвейер ветки» — sha, итог и задания последнего конвейера
      названной ветки.
 
-   Выбор реализации (решение гейта SPEC 26.10, О-3) — один реестр в
-   `forge.py`, ключи которого — значения поля `forge`. `ci.py`, `doctor` и
-   прочие потребители выбирают реализацию через `forge`. Иных сравнений
-   значения `forge` с литералами `"github"`/`"gitlab"` эта задача не
-   добавляет. Сторож А0
+   Выбор реализации (решения гейта SPEC 26.10, О-3 и О-9) — один реестр в
+   `forge.py`: словарь, ключи которого — значения поля `forge`; реализация
+   выбирается поиском по ключу, без сравнения значения `forge` с
+   литералами. `ci.py`, `doctor` и прочие потребители выбирают реализацию
+   через `forge`. Иных сравнений значения `forge` с литералами
+   `"github"`/`"gitlab"` эта задача не добавляет. Сторож А0
    `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py::test_ac9_no_support_literals_outside_targets`
-   дополняется в `EXEMPT` одной записью для `forge.py` — места реестра.
-   Это правка долгоживущего теста задачи эпика А0 по мандату Оператора
-   26.10 с матрицей неослабления (раздел ниже). Других правок этого файла
-   нет.
+   не правится: запись `EXEMPT` для `forge.py` не нужна и не добавляется.
 2. **Реализация GitHub в `forge`** (ANSWER-1, п. 2; решение гейта SPEC
    26.10, О-4).
    `pipeline_status` для `forge: github` оборачивает нынешнее чтение check
@@ -128,12 +126,17 @@ ANSWER-1 (решения 1A, 2A, 3A, 4A, 5A, 6A, 7A, 8A, 9A, 10A, 11A, 12B, 13A)
      из этих случаев итог не `green`;
    - `green` требует, чтобы все завершённые задания без права падать были
      `success`;
-   - задание `manual` допустимо. Задание `created` или `skipped` допустимо,
-     только если в том же конвейере есть задание `manual` в более ранней
-     стадии. Порядок стадий — порядок их первого появления в выдаче
-     заданий. Кроме того, допустимое задание не должно быть перечислено в
+   - задание `manual` допустимо, если оно не перечислено в
      `policy.ci_required_jobs` записи (поле читается, если есть; его
-     объявление — шаг Б1);
+     объявление — шаг Б1). Задание `manual`, перечисленное в
+     `policy.ci_required_jobs`, даёт итог `running`, не `green` (решение
+     гейта SPEC 26.10, О-7);
+   - задание `created` или `skipped` допустимо, только если в том же
+     конвейере есть задание `manual` в более ранней стадии и само задание
+     не перечислено в `policy.ci_required_jobs`;
+   - порядок стадий (решение гейта SPEC 26.10, О-8) — по наименьшему id
+     задания стадии: стадия, чьё наименьшее id задания меньше, — более
+     ранняя. Порядок заданий в выдаче API на порядок стадий не влияет;
    - есть `failed` без права падать — `red`;
    - есть `running`, `pending`, `waiting_for_resource`, `preparing` или
      `scheduled` — `running`;
@@ -301,8 +304,8 @@ GitLab в отображение `<classname>::<name>` → исход. Два т
 
 AC-11. Ответы 401, 403, 404, 429, 5xx и таймаут транспорта — именованные
 причины, а не исключения. На 429/5xx запрос повторяется ограниченное число
-раз, на 401/403/404 — не повторяется. Проверяется по числу вызовов
-подменённого транспорта.
+раз, на 401/403/404 и на таймаут — не повторяется. Проверяется по числу
+вызовов подменённого транспорта.
 
 AC-12. Фикстурное значение токена не встречается в журнале шагов, выводе
 `doctor`, выводе `forge-probe` и тексте именованных причин ошибок (включая
@@ -357,7 +360,10 @@ AC-17. Строка `doctor` о сроке токена GitLab на подмен
 - срок дальше порога — не `warn`;
 - токен без срока при числе задач проекта меньше
   `TOKEN_NO_EXPIRY_TASKS_WARN` — информационная строка, не `warn`;
-- токен без срока при числе задач проекта не меньше порога — `warn`.
+- токен без срока при числе задач проекта не меньше порога — `warn`;
+- задачи проекта в состоянии `killed` в счёт не идут: токен без срока при
+  числе задач не-`killed` меньше порога и числе всех задач (с `killed`)
+  не меньше порога — информационная строка, не `warn`.
 
 AC-18. `forge-probe <проект> --job <имя>` на подменённом API печатает
 пользователя токена и уровень доступа, срок токена, защищённые ветки и
@@ -392,10 +398,21 @@ AC-22. Подменённый транспорт поднимает `URLError` (
 недоступна:», а не исключение. `pipeline_status` даёт `unknown` с этой
 причиной.
 
+AC-23. `pipeline_status` для GitLab (требование 6, решение О-7):
+конвейер `manual`, задания `success` и задание `manual`, перечисленное в
+`policy.ci_required_jobs` записи, → `running`, не `green`. То же задание
+`manual` вне `policy.ci_required_jobs` → `green`.
+
+AC-24. `pipeline_status` для GitLab (требование 6, решение О-8): фикстура
+выдачи заданий идёт в порядке убывания id. Задание `manual` стадии с
+меньшими id и задание `created` стадии с большими id (вне
+`policy.ci_required_jobs`) → `green`. Задание `created` стадии с меньшими
+id и задание `manual` стадии с большими id → не `green`.
+
 ## Оценка объёма и деление
 Сработавшие сигналы:
 - файлов зоны 8 в `orchestrator/` (≥ 5);
-- критериев приёмки 22 (≥ 10);
+- критериев приёмки 24 (≥ 10);
 - `budget_usd` $70 (≥ $30);
 - зона задевает механизм, на который опирается инвариант 19 («неизвестный
   статус не зелёный», `ci.py`).
@@ -403,9 +420,9 @@ AC-22. Подменённый транспорт поднимает `URLError` (
 Решение — **нарезка на 2 части** по границам зон (ANSWER-1, п. 4).
 
 - **Часть 1 «механика адаптера и подключение `ci`»**: требования 1–10 и
-  14; AC-1…AC-15, AC-19, AC-20, AC-22 (AC-12 — в части журнала и текстов
-  причин). Файлы: `forge.py`, `gitlab_adapter.py`, `ci.py`,
-  `github_adapter.py` и запись `EXEMPT` сторожа А0 (требование 1). В эту
+  14; AC-1…AC-15, AC-19, AC-20, AC-22…AC-24 (AC-12 — в части журнала и
+  текстов причин). Файлы: `forge.py`, `gitlab_adapter.py`, `ci.py`,
+  `github_adapter.py`. В эту
   часть входят все функции адаптера, включая сведения проекта и последний
   конвейер ветки. Часть мержима самостоятельно: GitHub-поведение
   `ci`/`github_adapter` не меняется, GitLab-ветка закрыта
@@ -428,26 +445,26 @@ AC-22. Подменённый транспорт поднимает `URLError` (
 
 ### GitLab А1.1: интерфейс адаптера, реализация GitLab, подключение ci
 
-Зоны: orchestrator/forge.py, orchestrator/gitlab_adapter.py, orchestrator/ci.py, orchestrator/github_adapter.py, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py
+Зоны: orchestrator/forge.py, orchestrator/gitlab_adapter.py, orchestrator/ci.py, orchestrator/github_adapter.py
 Порядок: после 01M5W27CY7K7NR9347NKD8F0NX
 Рамка: $50
 
 Часть 1 деления задачи 01M5W670PHF08VPZWDRM5BY56W (ADR-0029 п. 8; шаг А1
 после А0 — `targets.unsupported_reason`). Требования и критерии взяты из
 SPEC родителя с учётом ANSWER-1 родителя и решений его гейта SPEC 26.10
-(О-2…О-6): требования 1–10 и 14; AC-1…AC-15, AC-19, AC-20, AC-22. AC-12
+(О-2…О-9): требования 1–10 и 14; AC-1…AC-15, AC-19, AC-20, AC-22…AC-24.
+AC-12
 здесь проверяет журнал и тексты причин ошибок; вывод
 `doctor`/`forge-probe` проверяет часть 2.
 
 Требуется:
 1. Модуль `orchestrator/forge.py`. Реализация выбирается одним реестром в
-   `forge.py`, ключи которого — значения поля `forge`; `ci.py` выбирает
+   `forge.py` — словарём, ключи которого — значения поля `forge`; выбор —
+   поиском по ключу, без сравнения с литералами. `ci.py` выбирает
    реализацию через `forge`. Иных сравнений значения `forge` с литералами
-   `"github"`/`"gitlab"` нет. В `EXEMPT` сторожа А0
+   `"github"`/`"gitlab"` нет. Сторож А0
    `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py::test_ac9_no_support_literals_outside_targets`
-   добавляется одна запись для `forge.py` как места реестра. Это правка
-   долгоживущего теста задачи эпика А0 по мандату Оператора 26.10 с
-   матрицей неослабления SPEC родителя; других правок этого файла нет.
+   не правится: запись `EXEMPT` для `forge.py` не нужна и не добавляется.
    Функции:
    - `pipeline_status(target, sha)` — итог
      `green`/`red`/`running`/`none`/`unknown` с причиной и задания с
@@ -503,10 +520,14 @@ SPEC родителя с учётом ANSWER-1 родителя и решени�
      — `running`; `canceled` или иной статус — `unknown`; ни в одном из
      этих случаев не `green`;
    - завершённые задания без права падать — `success`;
-   - `manual` допустимо; `created`/`skipped` допустимо, только если в том
-     же конвейере есть `manual` в более ранней стадии (порядок стадий — по
-     первому появлению в выдаче) и задание вне
-     `policy.ci_required_jobs` (поле читается, если есть);
+   - `manual` допустимо, если задание вне `policy.ci_required_jobs` (поле
+     читается, если есть); `manual` из `policy.ci_required_jobs` — итог
+     `running`, не `green`;
+   - `created`/`skipped` допустимо, только если в том же конвейере есть
+     `manual` в более ранней стадии и задание вне
+     `policy.ci_required_jobs`;
+   - порядок стадий — по наименьшему id задания стадии (меньше — раньше),
+     не по порядку выдачи API;
    - `failed` без права падать — `red`;
    - `running`/`pending`/`waiting_for_resource`/`preparing`/`scheduled` —
      `running`;
@@ -547,8 +568,9 @@ SPEC родителя с учётом ANSWER-1 родителя и решени�
 Не входит: `doctor`, команда `forge-probe` и подмена транспорта в
 `tests/sandbox.py` (часть 2); создание и снятие
 черновика MR в потоке задачи (Б1/Б2); чтение отчётов в гейте по исходам
-(В1); расширение `SUPPORTED_FORGES` (Б2); поля ветки и коммитов (Б1).
-Существующие тесты `ci`/`github_adapter` для GitHub остаются зелёными без
+(В1); расширение `SUPPORTED_FORGES` (Б2); поля ветки и коммитов (Б1);
+поведение `ci.accepted_full_suite` для `forge: gitlab` (Б2/В1); правка
+сторожа А0 и его `EXEMPT`. Существующие тесты `ci`/`github_adapter` для GitHub остаются зелёными без
 правки.
 
 ### GitLab А1.2: doctor, проверочная команда forge-probe и песочница без живого HTTP
@@ -623,9 +645,8 @@ https://localhost/…`. После подмены из п. 5 строки `docto
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `EXEMPT` сторожа `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py::test_ac9_no_support_literals_outside_targets` дополняется одной записью `forge.py` — место реестра реализаций (требование 1) | Поддержка хостинга проверяется только через `targets.unsupported_reason`, без сравнения `forge` с литералом вне `targets.py`: origin/main того же файла :411-520, `EXEMPT` :418-423 | да: прочие модули и прочие функции `forge.py` сторож проверяет как прежде; исключена одна запись — место реестра; остальные записи `EXEMPT` и самосверка сторожа на образцах не меняются | тот же сторож; то, что реестр сам не проверяет поддержку, показывают AC-4…AC-8 и AC-19: `forge` отдаёт итоги для записи `forge: gitlab`, неподдержанной по `SUPPORTED_FORGES` (требование 13) | остаётся; мандат Оператора 26.10 (решение гейта SPEC, О-3) |
 | `tests/sandbox.py::isolate_keychain_and_role` подменяет транспорт `gitlab_adapter` по умолчанию (требование 15) | Изоляция связки ключей и признака роли в тестах: `tests/sandbox.py:663-680`; нет внешних сетевых адресов в тестах: `tests/test_invariants.py::NoNetworkAddressesInTestsTest` (инвариант 35, `tests/test_invariants.py:2101`) | да, усиливается: подмена связки ключей и снятие признака роли не меняются, добавляется запрет живого HTTP к GitLab | AC-21 (нет соединения без своей подмены; своя подмена теста имеет приоритет); `NoNetworkAddressesInTestsTest` без правки | остаётся; мандат Оператора 26.10 (решение гейта SPEC, О-1, вариант (а)) |
-| `ci.verifying_status`/`branch_status`/`failed_check_names` получают ветку `forge: gitlab` | Инвариант 19 «неизвестный статус не зелёный»: `tests/test_invariants.py::MergeNeedsGreenCiTest` (`tests/test_invariants.py:855`, только артель/github) | да: для github без изменения; для gitlab `none`, `unknown`, `red` и конвейер `failed` не дают зелёного | `MergeNeedsGreenCiTest` без правки; AC-8, AC-14, AC-19 (новые) | остаётся |
+| `ci.verifying_status`/`branch_status`/`failed_check_names` получают ветку `forge: gitlab` | Инвариант 19 «неизвестный статус не зелёный»: `tests/test_invariants.py::MergeNeedsGreenCiTest` (`tests/test_invariants.py:855`, только артель/github) | да: для github без изменения; для gitlab `none`, `unknown`, `red`, конвейер `failed`, задание `manual` из `policy.ci_required_jobs` и `created` без ручного задания в более ранней стадии (по наименьшему id) не дают зелёного | `MergeNeedsGreenCiTest` без правки; AC-8, AC-14, AC-19, AC-23, AC-24 (новые) | остаётся |
 | `doctor.check_base_branch` для gitlab: `skip` → сверка через адаптер | `tests/test_doctor.py::BaseBranchCheckTest::test_non_github_forge_is_skipped` (`tests/test_doctor.py:670`) | да: запись без `token_slot` по-прежнему даёт `skip` | тот же тест без правки; AC-16 | остаётся |
 | GitHub-ветки `ci`/`github_adapter` | существующие `tests/test_ci*.py`, `tests/test_github_adapter.py`, `tests/test_doctor.py` | да (требование 2) | полный набор без правки; AC-13 | остаётся |
 
@@ -642,9 +663,12 @@ https://localhost/…`. После подмены из п. 5 строки `docto
   ANSWER-1, п. 3).
 - Чтение заданий-мостов (`…/bridges`): их нет в белом списке, а упавший
   мост виден по статусу конвейера `failed` (требование 6).
-- Правки существующих тестов, кроме двух названных: записи `EXEMPT`
-  сторожа А0 (требование 1) и подмены транспорта в
-  `tests/sandbox.py::isolate_keychain_and_role` (требование 15).
+- Поведение `ci.accepted_full_suite` для `forge: gitlab`: ТЗ называет его
+  внешним входом, но не задаёт поведение; пока `SUPPORTED_FORGES` закрыт,
+  вызов недостижим — шаг Б2/В1.
+- Правки существующих тестов, кроме одной названной: подмены транспорта в
+  `tests/sandbox.py::isolate_keychain_and_role` (требование 15). Сторож А0
+  и его `EXEMPT` не правятся (решение гейта SPEC 26.10, О-9).
 - Правка путей только для чтения: `orchestrator/config.py` (его зону
   держит параллельная Б1), `orchestrator/targets.py`,
   `orchestrator/fsm_merge_gate.py`, `orchestrator/fsm_advance.py`,
