@@ -666,6 +666,10 @@ def cmd_auto(task_id: str, session_id: str | None = None,
     signal.signal(signal.SIGTERM, _on_sigterm)
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
+    # 4) — на входе, до lease, предварительного advance, опроса CI и git:
+    # отказ одного `run` внутри цикла пришёл бы после них.
+    runner.refuse_unsupported_project(conn, task_id, "auto")
     try:
         lease.run_locked(conn, task_id, session_id,
                          lambda sid: _cmd_auto(conn, task_id, sid, wait_zone),

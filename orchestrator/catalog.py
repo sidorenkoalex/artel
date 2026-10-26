@@ -753,6 +753,12 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
     # 2): до ТЗ, клона, id, ссылки документов и строки БД.
     target = _checked_target(target)
+    # Неподдержанный хостинг или гейт мержа (SPEC 01M5W27CY7K7NR9347NKD8F0NX,
+    # требование 3) — тем же рубежом, до клона и id: задачи нет, журнала
+    # задачи тоже.
+    unsupported = targets.unsupported_reason(target)
+    if unsupported is not None:
+        sys.exit(f"new: проект {target}: {unsupported} — задача не заведена")
     ref_pairs = _new_refs(refs or [], target, canary)
     conn = store.db()
     if epic_id is not None:

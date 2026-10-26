@@ -167,7 +167,27 @@ def cmd_run(task_id: str, session_id: str | None = None) -> bool | None:
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится в
     `lease.run_task_command`, до lease (REVIEW T094 итерация 1, замечание 1).
     """
+    refuse_unsupported_project(store.db(), task_id, "run")
     return lease.run_task_command(task_id, session_id, _cmd_run)
+
+
+UNSUPPORTED_PROJECT_ACTION = "отказ: проект не поддержан"
+
+
+def refuse_unsupported_project(conn, task_id: str, command: str) -> None:
+    """Отказ команды `command` (`run`, `auto`, `approve`) задаче проекта с
+    неподдержанным хостингом или гейтом мержа (SPEC
+    01M5W27CY7K7NR9347NKD8F0NX, требования 4-5): запись журнала задачи и
+    выход с причиной `targets.unsupported_reason` — до lease, подтяжки,
+    агента и git. Поддержанный проект — возврат без следов."""
+    task_id = store.resolve_task_id(conn, task_id)
+    target = store.task_target(conn, task_id)
+    reason = targets.unsupported_reason(target)
+    if reason is None:
+        return
+    store.journal(conn, task_id, "operator", UNSUPPORTED_PROJECT_ACTION,
+                  f"{command}: проект {target}: {reason}")
+    sys.exit(f"[{task_id}] {command} отклонён: проект {target}: {reason}")
 
 
 def cmd_run_and_advance(task_id: str) -> None:

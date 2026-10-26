@@ -22,6 +22,12 @@ from . import config, yamlmini
 
 FORGES = ("github", "gitlab")
 MERGE_GATES = ("operator", "target-human")
+# Значения, которые пульт исполняет (ADR-0029 п. 8; SPEC
+# 01M5W27CY7K7NR9347NKD8F0NX): запись принимает весь `FORGES`/`MERGE_GATES`,
+# а задачу, отправку и мерж ведёт только этот список — расширение (адаптер
+# GitLab, гейт людей проекта) — одна строка здесь.
+SUPPORTED_FORGES = ("github",)
+SUPPORTED_MERGE_GATES = ("operator",)
 
 # Поля записи (ADR-0003 п.2) и их вид. "text" — непустая строка,
 # "list" — список строк (возможно пустой).
@@ -259,6 +265,29 @@ def target(name: str) -> dict:
         f"{config.TARGETS}: target '{name}' не объявлен "
         f"(есть: {', '.join(repo)}); локальный слой {local_path()}: "
         f"{layer} — записи внешних проектов лежат в локальном слое")
+
+
+def unsupported_reason(name: str) -> str | None:
+    """Причина, по которой пульт не ведёт задачи проекта `name`: значение
+    `forge` или `merge_gate` записи вне исполняемых (`SUPPORTED_FORGES`,
+    `SUPPORTED_MERGE_GATES`); None — проект поддержан.
+
+    Отказ ставят действия, ведущие к задаче, отправке и мержу (`new`,
+    `run`, `auto`, `approve`), а не загрузка записи: чтение, `doctor` и
+    уборка такой записи безопасны (SPEC 01M5W27CY7K7NR9347NKD8F0NX,
+    требование 2). Нечитаемый слой или необъявленный проект — тоже None:
+    их отказ называет своя проверка (`target`, сверка проекта `new`), а
+    не эта."""
+    try:
+        entry = target(name)
+    except TargetsError:
+        return None
+    if entry["forge"] not in SUPPORTED_FORGES:
+        return f"хостинг {entry['forge']} не поддержан: адаптера нет (ADR-0029)"
+    if entry["merge_gate"] not in SUPPORTED_MERGE_GATES:
+        return (f"гейт мержа {entry['merge_gate']} не исполняется "
+                f"(ADR-0029)")
+    return None
 
 
 def core_reference(name: str) -> dict | None:
