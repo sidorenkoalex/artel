@@ -1,4 +1,4 @@
-<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 380.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": null} -->
+<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 380.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 2} -->
 # Эпик E01M5W66QH7MNY4XWVRTP4TAWRP: Проект на GitLab с гейтом людей проекта (ADR-0029)
 
 - Проект: artel
@@ -11,4 +11,7 @@
 
 ## Задачи
 
-задач нет
+| задача | название | состояние | closed_as |
+|---|---|---|---|
+| 01M5W670PHF08VPZWDRM5BY56W | GitLab А1: адаптер хостинга — общий интерфейс, реализация GitLab, проверочная команда только на чтение | spec_writing | — |
+| 01M5W67E0AYGKF03SEM6E2AQX2 | GitLab Б1: ветка по ключу трекера, автор и шаблон коммита, сжатие и перебазирование, единая точка отправки | spec_writing | — |
