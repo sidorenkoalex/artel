@@ -681,6 +681,18 @@ def project_tasks(conn: sqlite3.Connection, project: str) -> list:
         (config.DEFAULT_TARGET, project)).fetchall()
 
 
+def project_branch_tasks(conn: sqlite3.Connection, project: str,
+                         names: list) -> list:
+    """Задачи проекта в любом состоянии, чья ветка — одно из имён `names`
+    (занятость имени ветки при шаблоне не по умолчанию, SPEC
+    01M5WDB7F14SQ30QVWJY2XYBG2, требование 2)."""
+    marks = ",".join("?" * len(names))
+    return conn.execute(
+        f"SELECT id, branch, state FROM tasks WHERE COALESCE(target, ?)=? "
+        f"AND branch IN ({marks})",
+        (config.DEFAULT_TARGET, project, *names)).fetchall()
+
+
 # ===== Внешние ссылки задач и эпиков (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ) =====
 
 REF_KIND_TASK = "task"
