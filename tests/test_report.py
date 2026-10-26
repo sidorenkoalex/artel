@@ -206,14 +206,23 @@ class MetricsHtmlTest(unittest.TestCase):
 class TileHtmlTest(unittest.TestCase):
 
     def test_non_escalated_task_has_no_escalation_marker(self):
-        row = _row(id="T001", title="Задача", state="in_dev",
+        """Вход — карточка модели доски (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ).
+
+        Ловит мутацию: `_tile_html` ставит маркер эскалации безусловно —
+        у карточки без `escalated_from` вне `escalated` появляется
+        «Эскалация»."""
+        row = _row(task="T001", title="Задача", state="in_dev",
                    escalated_from=None, budget_usd=10.0, spent_usd=1.0,
                    review_iters=0)
 
         self.assertNotIn("Эскалация", report._tile_html(row))
 
     def test_escalated_task_names_the_source_step(self):
-        row = _row(id="T002", title="Задача", state="escalated",
+        """Вход — карточка модели доски (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ).
+
+        Ловит мутацию: маркер эскалации не выводится или не называет
+        `escalated_from` карточки — нет «Эскалация» или «review»."""
+        row = _row(task="T002", title="Задача", state="escalated",
                    escalated_from="review", budget_usd=10.0, spent_usd=1.0,
                    review_iters=1)
 
@@ -223,7 +232,11 @@ class TileHtmlTest(unittest.TestCase):
         self.assertIn("review", html)
 
     def test_title_is_html_escaped(self):
-        row = _row(id="T003", title="<script>alert(1)</script>",
+        """Вход — карточка модели доски (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ).
+
+        Ловит мутацию: название карточки идёт в плитку без `_esc` — в HTML
+        живой `<script>`."""
+        row = _row(task="T003", title="<script>alert(1)</script>",
                    state="in_dev", escalated_from=None, budget_usd=1.0,
                    spent_usd=0.0, review_iters=0)
 
@@ -236,10 +249,14 @@ class TileHtmlTest(unittest.TestCase):
 class BoardHtmlTest(unittest.TestCase):
 
     def test_known_states_follow_canonical_fsm_order(self):
+        """Вход — карточки модели доски (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ).
+
+        Ловит мутацию: колонки идут в порядке карточек, а не
+        `STATE_ORDER` — `done` раньше `in_dev`."""
         tasks = [
-            _row(id="T001", title="A", state="done", escalated_from=None,
+            _row(task="T001", title="A", state="done", escalated_from=None,
                 budget_usd=1.0, spent_usd=0.0, review_iters=0),
-            _row(id="T002", title="B", state="in_dev", escalated_from=None,
+            _row(task="T002", title="B", state="in_dev", escalated_from=None,
                 budget_usd=1.0, spent_usd=0.0, review_iters=0),
         ]
 
@@ -248,7 +265,11 @@ class BoardHtmlTest(unittest.TestCase):
         self.assertLess(html.index("in_dev"), html.index("done"))
 
     def test_unknown_state_is_appended_sorted_not_dropped(self):
-        tasks = [_row(id="T001", title="A", state="zzz_unknown",
+        """Вход — карточки модели доски (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ).
+
+        Ловит мутацию: колонки строятся только из `STATE_ORDER` — карточка
+        неизвестного состояния пропадает с доски."""
+        tasks = [_row(task="T001", title="A", state="zzz_unknown",
                      escalated_from=None, budget_usd=1.0, spent_usd=0.0,
                      review_iters=0)]
 

@@ -284,6 +284,13 @@ def core_reference(name: str) -> dict | None:
     return dict(value) if value is not None else None
 
 
+# Политика внешних ссылок задач проекта (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ,
+# требования 6, 9) — необязательные поля раздела `policy`:
+# `ref_required` — система, ссылка которой обязательна задаче проекта;
+# `ref_systems` — список допустимых систем ссылок.
+REF_REQUIRED_FIELD = "ref_required"
+REF_SYSTEMS_FIELD = "ref_systems"
+
 # Формат записи локального слоя (требование 2): ровно три раздела.
 # Значение — обязательна ли запись поля в разделе.
 LOCAL_SECTIONS = ("description", "policy", "machine")
@@ -294,7 +301,8 @@ LOCAL_FIELDS = {
     "policy": {"no_paths": True, "project_skills": True, "merge_gate": True,
                "sandbox": False, WRAPPER_FIELD: False,
                "weakening_scope": False,
-               "mutation_claim_scope": False, COMPONENTS_FIELD: False},
+               "mutation_claim_scope": False, COMPONENTS_FIELD: False,
+               REF_REQUIRED_FIELD: False, REF_SYSTEMS_FIELD: False},
     "machine": {"forge": True, "url": True, "token_slot": True,
                 "path": False, COMPONENTS_FIELD: False},
 }
@@ -546,7 +554,7 @@ def _flatten(name: str, description: dict, policy: dict,
     flat["base"] = description["base"]
     flat["token_slot"] = machine["token_slot"]
     for field in ("no_paths", "project_skills", "merge_gate", "sandbox",
-                  WRAPPER_FIELD):
+                  WRAPPER_FIELD, REF_REQUIRED_FIELD, REF_SYSTEMS_FIELD):
         if field in policy:
             flat[field] = policy[field]
     common = machine.get("path")
@@ -600,6 +608,17 @@ def check(name: str, entry: object, source: Path | None = None) -> None:
                 isinstance(item, str) for item in value):
             raise TargetsError(f"{where}: поле '{WRAPPER_FIELD}' — не список "
                                f"строк")
+    if REF_REQUIRED_FIELD in entry:
+        value = entry[REF_REQUIRED_FIELD]
+        if not isinstance(value, str) or not value.strip():
+            raise TargetsError(f"{where}: поле '{REF_REQUIRED_FIELD}' — "
+                               f"{value!r}, не непустая строка")
+    if REF_SYSTEMS_FIELD in entry:
+        value = entry[REF_SYSTEMS_FIELD]
+        if not isinstance(value, list) or not all(
+                isinstance(item, str) and item.strip() for item in value):
+            raise TargetsError(f"{where}: поле '{REF_SYSTEMS_FIELD}' — не "
+                               f"список непустых строк")
     if entry["forge"] not in FORGES:
         raise TargetsError(f"{where}: поле 'forge' — '{entry['forge']}', "
                            f"ожидается {' | '.join(FORGES)}")
