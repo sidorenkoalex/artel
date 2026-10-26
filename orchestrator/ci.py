@@ -19,7 +19,7 @@ from typing import NamedTuple
 
 from scripts import ci_push_class
 
-from . import config, gitcmd, repo_context, workspace
+from . import config, forge, gitcmd, repo_context, workspace
 
 # Заключения проверок, считающиеся зелёными. `skipped` обязателен: job
 # `protected-paths` идёт только на pull_request и на push репозитория
@@ -199,6 +199,39 @@ def _repo_kwargs(repo: Path | None) -> dict:
     if repo is None or repo_context.is_artel(repo):
         return {}
     return {"repo": repo}
+
+
+def _pipeline_project(repo: Path | None) -> str:
+    """Имя проекта клона `repo`, итог CI которого даёт
+    `forge.pipeline_status`, а не check runs этого модуля; "" — check runs
+    (артель, GitHub, неразрешённый клон). Хостинг различает только реестр
+    `forge` (SPEC 01M5WCXBM7WCMRWCBWNCHMAR3T, требование 1)."""
+    ctx, _refusal = _project_context(repo)
+    if ctx is None or not forge.ci_by_pipeline(ctx.target):
+        return ""
+    return ctx.target
+
+
+def _forge_refusal(name: str, what: str) -> str:
+    """Отказ функции `ci`, у которой для хостинга проекта `name` нет
+    реализации: без `gh` и без HTTP (требование 8)."""
+    return f"{what}: не поддержано для {forge.hosting(name)}"
+
+
+def _pipeline_note(name: str, sha: str) -> "tuple[forge.PipelineStatus, str]":
+    """(итог `forge.pipeline_status`, `note` в словах `branch_status`/
+    `verifying_status`): красный — «не зелёный:», идущий — «ещё идёт»,
+    `none`/`unknown` — «неизвестен» (`status_kind`, `verifying_is_red`)."""
+    res = forge.pipeline_status(name, sha)
+    short = sha[:8]
+    if res.verdict == forge.GREEN:
+        marks = f"; {'; '.join(res.marks)}" if res.marks else ""
+        return res, f"CI коммита {short} зелёный (конвейеры хостинга){marks}"
+    if res.verdict == forge.RED:
+        return res, f"CI коммита {short} не зелёный: {res.reason}"
+    if res.verdict == forge.RUNNING:
+        return res, f"CI коммита {short} ещё идёт: {res.reason}"
+    return res, f"статус CI коммита {short} неизвестен: {res.reason}"
 
 
 def head_sha(branch: str, repo: Path | None = None) -> tuple[str, str]:
@@ -989,6 +1022,12 @@ def verifying_status(branch: str, repo: Path | None = None) -> tuple[str, str]:
     sha, why = head_sha(branch, **_repo_kwargs(repo))
     if not sha:
         return VERIFYING_NONE, f"статус CI неизвестен: {why}"
+    name = _pipeline_project(repo)
+    if name:
+        res, note = _pipeline_note(name, sha)
+        return {forge.GREEN: VERIFYING_GREEN, forge.RED: VERIFYING_RED,
+                forge.RUNNING: VERIFYING_RUNNING}.get(res.verdict,
+                                                      VERIFYING_NONE), note
     short = sha[:8]
     project = _project_kwargs(repo)
 
@@ -1136,8 +1175,20 @@ def failed_check_names(sha: str,
     неизвестный статус не зелёный). Та же трактовка, что у
     `branch_status` для того же обстоятельства.
 
-    `repo` — клон проекта коммита, как у `check_runs`.
+    `repo` — клон проекта коммита, как у `check_runs`. У проекта, итог CI
+    которого даёт `forge.pipeline_status`, имена — упавшие задания без
+    права падать; красный итог без такого задания — (None, причина).
     """
+    name = _pipeline_project(repo)
+    if name:
+        res, note = _pipeline_note(name, sha)
+        if res.verdict in (forge.GREEN, forge.RUNNING):
+            return set(), ""
+        if res.verdict == forge.RED and res.failed:
+            return set(res.failed), ""
+        if res.verdict == forge.RED:
+            return None, f"{note} — краснота без упавшего задания"
+        return None, note
     runs, why = check_runs(sha, **_project_kwargs(repo))
     short = sha[:8]
     if runs is None and _actions_fallback(repo, why):
@@ -1166,6 +1217,10 @@ def branch_status(branch: str, repo: Path | None = None) -> tuple[bool, str]:
     sha, why = head_sha(branch, **_repo_kwargs(repo))
     if not sha:
         return False, f"статус CI неизвестен: {why}"
+    name = _pipeline_project(repo)
+    if name:
+        res, note = _pipeline_note(name, sha)
+        return res.verdict == forge.GREEN, note
 
     project = _project_kwargs(repo)
     runs, why = check_runs(sha, **project)
@@ -1444,8 +1499,13 @@ def main_line_status(sha: str, repo: Path | None = None) -> MainLineStatus:
     родительская линия и дифф пропущенных проверок; `None` (по умолчанию)
     — клон артели, тем же приёмом, что у `head_sha`. Клон внешнего проекта
     — ещё и адрес `gh` (`check_runs`, прогоны коммитов); главная копия
-    `config.ROOT` — вызов артели.
+    `config.ROOT` — вызов артели. У проекта, итог CI которого даёт
+    `forge.pipeline_status`, — `MAIN_UNKNOWN` с отказом без `gh`.
     """
+    name = _pipeline_project(repo)
+    if name:
+        note = _forge_refusal(name, f"цвет CI main {sha[:8]}")
+        return MainLineStatus(MAIN_UNKNOWN, sha, [], [], "", note)
     line = (first_parent_line(sha, MAIN_LINE_MAX_COMMITS, **_repo_kwargs(repo))
             or [sha])
     ref = line[0]
@@ -1557,6 +1617,9 @@ def find_run_id(sha: str, repo: Path | None = None) -> tuple[str, str]:
 
     `repo` — клон проекта коммита, как у `check_runs`.
     """
+    name = _pipeline_project(repo)
+    if name:
+        return "", _forge_refusal(name, "поиск прогона CI")
     res = _gh_at(repo, "api", f"repos/{{owner}}/{{repo}}/actions/runs"
                               f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
     if res.returncode != 0:
@@ -1619,6 +1682,9 @@ def check_run_workflow_run(check_id: str,
 
     `repo` — клон проекта задачи, как у `check_runs`.
     """
+    name = _pipeline_project(repo)
+    if name:
+        return "", _forge_refusal(name, "прогон проверки CI")
     res = _gh_at(repo, "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{check_id}")
     if res.returncode != 0:
         detail = (res.stderr or res.stdout).strip()[:200]
@@ -1655,6 +1721,9 @@ def trigger_rerun(branch: str, run_id: str = "",
     `repo` — клон проекта задачи: голова ветки читается в нём, поиск
     прогона и сам повтор адресованы репозиторию его проекта.
     """
+    name = _pipeline_project(repo)
+    if name:
+        return f"ре-ран CI не запущен: {_forge_refusal(name, 'повтор прогона')}"
     if run_id:
         rerun = _gh_at(repo, "run", "rerun", run_id)
     else:
