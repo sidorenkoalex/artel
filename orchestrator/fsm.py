@@ -973,11 +973,6 @@ def cmd_approve(task_id: str, sha: str | None = None,
     SPEC. Отказы флага — до `lease.run_locked` и без записей."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
-    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
-    # 5) — до таблицы состояний и lease: в любом состоянии, иначе гейт
-    # мержа влил бы ветку в `base` проекта с гейтом людей проекта сам.
-    from . import runner
-    runner.refuse_unsupported_project(conn, task_id, "approve")
     as_epic_goal = _as_epic_goal(conn, task_id) if as_epic else None
     lease.run_locked(
         conn, task_id, session_id,
@@ -1754,6 +1749,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                  accept_audit_fail: bool = False,
                  during_canary: str | None = None,
                  as_epic_goal: str | None = None) -> None:
+    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
+    # 5) — первым действием под lease, до таблицы состояний: в любом
+    # состоянии, иначе гейт мержа влил бы ветку в `base` проекта с гейтом
+    # людей проекта сам.
+    from . import runner
+    runner.refuse_unsupported_project(conn, task_id, "approve")
     t = store.get_task(conn, task_id)
     state = t["state"]
     # Повтор предварительной проверки `--as-epic` уже под lease: эпик мог

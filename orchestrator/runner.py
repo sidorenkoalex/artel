@@ -167,7 +167,6 @@ def cmd_run(task_id: str, session_id: str | None = None) -> bool | None:
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится в
     `lease.run_task_command`, до lease (REVIEW T094 итерация 1, замечание 1).
     """
-    refuse_unsupported_project(store.db(), task_id, "run")
     return lease.run_task_command(task_id, session_id, _cmd_run)
 
 
@@ -230,6 +229,9 @@ def cmd_run_and_advance(task_id: str) -> None:
 
 
 def _cmd_run(conn, task_id: str) -> bool | None:
+    # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
+    # 4) — первым действием под обвязкой: до подтяжки, агента и git.
+    refuse_unsupported_project(conn, task_id, "run")
     t = store.get_task(conn, task_id)
     # Бюджет проверяем до всего остального: потраченные деньги не зависят от
     # состояния задачи, а из escalated Оператор её вернуть уже мог.
