@@ -1,17 +1,18 @@
-# Записка spec_auditor — 01M5WDB7F14SQ30QVWJY2XYBG2 (аудит 2, spec_sha e4c4ffd3)
+# Записка spec_auditor — 01M5WDB7F14SQ30QVWJY2XYBG2 (аудит 3, spec_sha 57f5bdf4)
 
 ## Выяснено
-- Факты SPEC верны: catalog.py:918, fsm.py:1037/1067 (эпик до частей), gitcmd.py:37/86-118/164/341/413/441/469. `_division_check` определён на fsm.py:1016, :1403 — место вызова в approve (до записей :1408-1444).
-- Места push: artifact_cleanup.py:103, github_adapter.py:166/241, artifact_branch.py:427, cleanup.py:265/268 (`_bounded` добавляет `-c http.lowSpeed*` перед push, :257), fsm_merge_gate.py:744/1316, snapshot.py:297, doctor/project_checks.py:98 (`push --dry-run` — белый список его отказывает для target-human), doctor/artifact_branches.py:140 (push по URL из `source`, может быть ROOT).
-- `_hosting_project` (gitcmd.py:94) распознаёт push только после пар `-C`/`-c`; URL-проект — через `project_by_url`, при нечитаемом targets — None.
-- ARTEL_TASK (config.py:103) ставится только в окружении роли (runner.py:1182) — «контекст задачи» для команд Оператора не определён.
-- Вердикт: concerns (11 пунктов).
+- Факты SPEC верны: catalog.py:918/844/1024, fsm.py:1016/1403 (до записей :1414/:1431/:1444), gitcmd.py:37/86/94/164/341/413/441/469; шестой subprocess.run — check_ignore gitcmd.py:549 (не push).
+- Внутренние противоречия SPEC: AC-9 `push_options: [X, Y]` и AC-6 `-o X` против нормы формы `ИМЯ=значение` (AC-1); `--delete` вне белого списка флагов при разрешённом удалении refs/artifacts/<id>.
+- Долгоживущий тест А0 tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:474 запрещает сравнение merge_gate с "operator" вне targets.py — предикат белого списка только в targets.py.
+- Обход: общий config клона (push.pushOption, remote.origin.pushurl/push/mirror), --config-env, GIT_CONFIG_* в env, send-pack.
+- artifact_cleanup.py:103 удаляет refs/heads/artifact/* артели, не refs/artifacts/<id> (ТЗ ошибался, SPEC не перенёс).
+- Вердикт: concerns, 9 отклонений; guard ок.
 
 ## Не сработало
-- `$(...)` в Bash требует подтверждения — только простые команды.
+- `ls`, `cd … && git`, heredoc с `$` в Bash — отказ/подтверждение; только простые команды.
 
 ## Где остановился
-- SPEC-AUDIT.md записан (status: ready, verdict: concerns, 11 отклонений), guard: ок. Шаг завершён.
+- SPEC-AUDIT.md записан (status: ready, verdict: concerns). Шаг завершён.
 
 ## Чего не хватило
-- Перечня всех push-мест — grep '"push"' orchestrator/.
+- Перечня push-мест: `grep -rn '"push"' orchestrator/`.
