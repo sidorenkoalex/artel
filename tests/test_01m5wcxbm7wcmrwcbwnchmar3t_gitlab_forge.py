@@ -1,7 +1,7 @@
 """Адаптер хостинга `forge` и его реализация GitLab (`gitlab_adapter`) на подменённом транспорте; ветка `ci` для записи `forge: gitlab`.
 
 Группа: долгоживущий
-Красен до реализации: модулей `orchestrator.forge` и `orchestrator.gitlab_adapter` ещё нет — импорт файла падает `ImportError`, ни один тест не собирается.
+Красен до реализации: модулей `orchestrator.forge` и `orchestrator.gitlab_adapter` ещё нет — файл собирается (модули импортируются при вызове `forge()`/`gitlab_adapter()`), каждый тест падает `ModuleNotFoundError` на первом обращении к ним.
 
 Окружение (фикстура `lab`) — подмены публичных точек:
 - `gitlab_adapter.transport(method, url, headers, body, timeout)` —
@@ -39,6 +39,7 @@
 import dataclasses
 import datetime
 import enum
+import importlib
 import inspect
 import json
 import math
@@ -52,8 +53,19 @@ from typing import NamedTuple
 
 import pytest
 
-from orchestrator import ci, config, forge, gitlab_adapter, store, targets
+from orchestrator import ci, config, store, targets
 from tests.sandbox import make_project_repo
+
+
+def forge():
+    """Модуль `orchestrator.forge` — импорт при вызове, чтобы файл собирался и до появления модуля."""
+    return importlib.import_module("orchestrator.forge")
+
+
+def gitlab_adapter():
+    """Модуль `orchestrator.gitlab_adapter` — импорт при вызове, как `forge()`."""
+    return importlib.import_module("orchestrator.gitlab_adapter")
+
 
 GL = "glproj"
 GH = "ghproj"
@@ -213,7 +225,7 @@ def job(jid: int, name: str, status: str, stage: str = "test",
 @pytest.fixture
 def lab(monkeypatch):
     fake = Lab()
-    monkeypatch.setattr(gitlab_adapter, "transport", fake.transport)
+    monkeypatch.setattr(gitlab_adapter(), "transport", fake.transport)
     monkeypatch.setattr(targets, "target", fake.target)
     # Подмена по пути: AC-3 называет точку подмены `gitcmd.hosting_token`.
     monkeypatch.setattr("orchestrator.gitcmd.hosting_token", fake.hosting_token)
@@ -337,36 +349,36 @@ def shuffled(gen: random.Random, items: list) -> list:
 
 # Вызовы функций `forge` для записи `forge: gitlab` (параметр `target` — имя).
 GL_CALLS = {
-    "pipeline_status": lambda: forge.pipeline_status(GL, SHA),
-    "job_result": lambda: forge.job_result(GL, SHA, "test"),
-    "job_test_report": lambda: forge.job_test_report(GL, SHA, "test"),
-    "open_mr": lambda: forge.open_mr(GL, "task/abc", config.MAIN_BRANCH, TITLE,
+    "pipeline_status": lambda: forge().pipeline_status(GL, SHA),
+    "job_result": lambda: forge().job_result(GL, SHA, "test"),
+    "job_test_report": lambda: forge().job_test_report(GL, SHA, "test"),
+    "open_mr": lambda: forge().open_mr(GL, "task/abc", config.MAIN_BRANCH, TITLE,
                                      "Описание", True, 42),
-    "undraft_mr": lambda: forge.undraft_mr(GL, MR),
-    "assign_mr": lambda: forge.assign_mr(GL, MR, 42),
-    "mr_status": lambda: forge.mr_status(GL, MR),
-    "token_user": lambda: forge.token_user(GL),
-    "token_expiry": lambda: forge.token_expiry(GL),
-    "protections": lambda: forge.protections(GL),
-    "project_info": lambda: forge.project_info(GL),
-    "branch_pipeline": lambda: forge.branch_pipeline(GL, config.MAIN_BRANCH),
+    "undraft_mr": lambda: forge().undraft_mr(GL, MR),
+    "assign_mr": lambda: forge().assign_mr(GL, MR, 42),
+    "mr_status": lambda: forge().mr_status(GL, MR),
+    "token_user": lambda: forge().token_user(GL),
+    "token_expiry": lambda: forge().token_expiry(GL),
+    "protections": lambda: forge().protections(GL),
+    "project_info": lambda: forge().project_info(GL),
+    "branch_pipeline": lambda: forge().branch_pipeline(GL, config.MAIN_BRANCH),
 }
 GL_CALL_NAMES = list(GL_CALLS)
 
 # Те же функции, кроме `pipeline_status`, для записи `forge: github`.
 GH_CALLS = {
-    "job_result": lambda: forge.job_result(GH, SHA, "test"),
-    "job_test_report": lambda: forge.job_test_report(GH, SHA, "test"),
-    "open_mr": lambda: forge.open_mr(GH, "task/abc", config.MAIN_BRANCH, TITLE,
+    "job_result": lambda: forge().job_result(GH, SHA, "test"),
+    "job_test_report": lambda: forge().job_test_report(GH, SHA, "test"),
+    "open_mr": lambda: forge().open_mr(GH, "task/abc", config.MAIN_BRANCH, TITLE,
                                      "Описание", True, 42),
-    "undraft_mr": lambda: forge.undraft_mr(GH, MR),
-    "assign_mr": lambda: forge.assign_mr(GH, MR, 42),
-    "mr_status": lambda: forge.mr_status(GH, MR),
-    "token_user": lambda: forge.token_user(GH),
-    "token_expiry": lambda: forge.token_expiry(GH),
-    "protections": lambda: forge.protections(GH),
-    "project_info": lambda: forge.project_info(GH),
-    "branch_pipeline": lambda: forge.branch_pipeline(GH, config.MAIN_BRANCH),
+    "undraft_mr": lambda: forge().undraft_mr(GH, MR),
+    "assign_mr": lambda: forge().assign_mr(GH, MR, 42),
+    "mr_status": lambda: forge().mr_status(GH, MR),
+    "token_user": lambda: forge().token_user(GH),
+    "token_expiry": lambda: forge().token_expiry(GH),
+    "protections": lambda: forge().protections(GH),
+    "project_info": lambda: forge().project_info(GH),
+    "branch_pipeline": lambda: forge().branch_pipeline(GH, config.MAIN_BRANCH),
 }
 
 
@@ -412,7 +424,7 @@ def test_ac1_forbidden_pair_refused_before_transport(lab, rng, kind):
     """
     gen, seed = rng
     method, path, body = forbidden_pairs(gen)[kind]
-    res = gitlab_adapter.request(GL, method, path, body)
+    res = gitlab_adapter().request(GL, method, path, body)
     assert calls_of(lab) == [], f"зерно: {seed}; {kind}: транспорт вызван {calls_of(lab)}"
     text = joined(res)
     assert method in text, f"зерно: {seed}; {kind}: в причине нет метода: {res!r}"
@@ -467,7 +479,7 @@ def test_ac2_allowed_read_reaches_transport(lab, rng, kind):
     """
     gen, seed = rng
     full, path, query = allowed_reads(gen)[kind]
-    gitlab_adapter.request(GL, "GET", full)
+    gitlab_adapter().request(GL, "GET", full)
     sent = [c for c in lab.calls if (c.method, c.path) == ("GET", path)]
     assert sent, f"зерно: {seed}; {kind}: транспорт не получил GET {path}: {calls_of(lab)}"
     for key, value in query.items():
@@ -506,7 +518,7 @@ def test_ac2_allowed_write_reaches_transport(lab, rng, kind):
         current_mr(lab, f"Draft: {text}" if kind == "снять Draft" else text)
         body = {"исполнитель": {"assignee_id": 42}, "добавить Draft": {"title": f"Draft: {text}"},
                 "снять Draft": {"title": text}}[kind]
-    gitlab_adapter.request(GL, method, path, body)
+    gitlab_adapter().request(GL, method, path, body)
     sent = [c for c in lab.calls if (c.method, c.path) == (method, path)]
     assert sent, f"зерно: {seed}; {kind}: транспорт не получил {method} {path}: {calls_of(lab)}"
     assert sent[-1].body == body, f"зерно: {seed}; {kind}: тело {sent[-1].body}"
@@ -537,7 +549,7 @@ def test_ac2_other_mr_edit_refused_without_put(lab, rng, kind):
             "описание": {"description": "Новое описание"},
             "целевая ветка": {"target_branch": "release"},
             "исполнитель и state_event": {"assignee_id": 42, "state_event": "close"}}[kind]
-    res = gitlab_adapter.request(GL, "PUT", MR_PATH, body)
+    res = gitlab_adapter().request(GL, "PUT", MR_PATH, body)
     assert [c for c in lab.calls if c.method != "GET"] == [], \
         f"зерно: {seed}; {kind}: отправлено {calls_of(lab)}"
     assert any(t.strip() for t in texts(res)), f"зерно: {seed}; {kind}: нет отказа в {res!r}"
@@ -592,7 +604,7 @@ def test_ac4_success_and_manual_jobs_green(lab, rng, pipeline_status):
     lab.pipeline(500, pipeline_status, shuffled(gen, [
         job(11, "build", "success", "build"), job(12, "test", "success", "test"),
         job(13, "deploy", "manual", "deploy")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"green"}, f"зерно: {seed}; {res!r}"
 
 
@@ -613,7 +625,7 @@ def test_ac4_created_or_skipped_after_manual_green(lab, rng, status):
     lab.pipeline(501, "manual", shuffled(gen, [
         job(21, "build", "success", "build"), job(22, "approve", "manual", "approve"),
         job(23, "publish", status, "publish")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"green"}, f"зерно: {seed}; {res!r}"
 
 
@@ -635,7 +647,7 @@ def test_ac5_required_created_not_green(lab, rng):
     lab.pipeline(502, "manual", shuffled(gen, [
         job(31, "build", "success", "build"), job(32, "approve", "manual", "approve"),
         job(33, "publish", "created", "publish")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     found = verdicts(res)
     assert len(found) == 1 and "green" not in found, f"зерно: {seed}; {res!r}"
 
@@ -657,7 +669,7 @@ def test_ac5_without_earlier_manual(lab, rng, status, expected):
     lab.pipeline(503, "manual", shuffled(gen, [
         job(41, "build", "success", "build"), job(42, "publish", status, "publish"),
         job(43, "approve", "manual", "approve")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {expected}, f"зерно: {seed}; {res!r}"
 
 
@@ -675,7 +687,7 @@ def test_ac5_record_without_required_field_manual_green(lab, rng):
     lab.pipeline(504, "manual", shuffled(gen, [
         job(51, "build", "success", "build"), job(52, "test", "success", "test"),
         job(53, "deploy", "manual", "deploy")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"green"}, f"зерно: {seed}; {res!r}"
 
 
@@ -693,7 +705,7 @@ def test_ac6_failed_job_red(lab, rng):
     gen, seed = rng
     lab.pipeline(505, "failed", shuffled(gen, [
         job(61, "build", "success", "build"), job(62, "test", "failed", "test")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"red"}, f"зерно: {seed}; {res!r}"
 
 
@@ -714,7 +726,7 @@ def test_ac6_allowed_failure_green_with_mark(lab, rng):
     lab.pipeline(506, "success", shuffled(gen, [
         job(71, "build", "success", "build"), job(72, "test", "success", "test"),
         job(73, name, "failed", "test", allow_failure=True)]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"green"}, f"зерно: {seed}; {res!r}"
     assert [t for t in texts(res) if name in t and t != name], \
         f"зерно: {seed}; нет пометки о задании {name}: {res!r}"
@@ -737,7 +749,7 @@ def test_ac7_two_pipelines_one_red(lab, rng):
     lab.pipeline(ids[0], "success", [job(81, "test", "success")], source="push")
     lab.pipeline(ids[1], "failed", [job(82, "test", "failed")],
                  source="merge_request_event")
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"red"}, f"зерно: {seed}; {res!r}"
 
 
@@ -755,7 +767,7 @@ def test_ac7_active_job_running(lab, rng, status, pipeline_status):
     gen, seed = rng
     lab.pipeline(507, pipeline_status, shuffled(gen, [
         job(91, "build", "success", "build"), job(92, "test", status, "test")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"running"}, f"зерно: {seed}; {res!r}"
 
 
@@ -768,7 +780,7 @@ def test_ac7_no_pipeline_none_with_reason(lab):
     `green`; либо `none` без текста «конвейер не создан (ветка не под
     правилом workflow?)».
     """
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"none"}, repr(res)
     assert NO_PIPELINE in joined(res), repr(res)
 
@@ -813,7 +825,7 @@ def test_ac8_unknown_with_reason(lab, rng, case):
     """
     gen, seed = rng
     unknown_case(lab, gen, case)
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {"unknown"}, f"зерно: {seed}; {case}: {res!r}"
     assert reasons(res, lab), f"зерно: {seed}; {case}: нет причины в {res!r}"
 
@@ -833,7 +845,7 @@ def test_ac8_failed_job_on_second_page_red(lab, rng):
     jobs = [job(1000 + i, f"job-{i}", "success", "test") for i in range(149)]
     jobs = shuffled(gen, jobs) + [job(2000, "job-red", "failed", "test")]
     lab.pipeline(509, "success", jobs)
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     job_calls = [c for c in lab.calls if c.path.endswith("/pipelines/509/jobs")]
     per = max(1, min(int((job_calls[0].query.get("per_page") if job_calls else None) or 20), 100))
     assert verdicts(res) == {"red"}, f"зерно: {seed}; {res!r}"
@@ -856,7 +868,7 @@ def test_ac8_red_pipeline_on_second_page_red(lab, rng):
     for i, pid in enumerate(ids):
         lab.pipeline(pid, "success", [job(10000 + i, "test", "success")])
     lab.pipeline(3000, "failed", [job(9999, "test", "failed")])
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     list_calls = [c for c in lab.calls if c.path == f"/projects/{PID}/pipelines"]
     assert verdicts(res) == {"red"}, f"зерно: {seed}; {res!r}"
     assert len(list_calls) >= 2, f"зерно: {seed}; список конвейеров прочитан одной страницей"
@@ -879,7 +891,7 @@ def test_ac9_job_result_requested_status(lab, rng, name, expected, other):
     gen, seed = rng
     lab.pipeline(510, "running", shuffled(gen, [
         job(111, "build", "success", "build"), job(112, "test", "failed", "test")]))
-    res = forge.job_result(GL, SHA, name)
+    res = forge().job_result(GL, SHA, name)
     found = texts(res)
     assert expected in found and other not in found, f"зерно: {seed}; {name}: {res!r}"
 
@@ -897,7 +909,7 @@ def test_ac9_missing_job_named_reason(lab, rng):
     gen, seed = rng
     lab.pipeline(511, "running", shuffled(gen, [
         job(121, "build", "success", "build"), job(122, "test", "failed", "test")]))
-    res = forge.job_result(GL, SHA, "absent-job")
+    res = forge().job_result(GL, SHA, "absent-job")
     found = texts(res)
     assert "success" not in found and "failed" not in found, f"зерно: {seed}; {res!r}"
     assert reasons(res, lab), f"зерно: {seed}; нет причины в {res!r}"
@@ -917,7 +929,7 @@ def test_ac9_last_attempt_wins(lab, rng, first, last):
     gen, seed = rng
     lab.pipeline(512, "running", shuffled(gen, [
         job(130, "test", first, "test"), job(135, "test", last, "test")]))
-    res = forge.job_result(GL, SHA, "test")
+    res = forge().job_result(GL, SHA, "test")
     found = texts(res)
     assert last in found and first not in found, f"зерно: {seed}; {res!r}"
 
@@ -952,7 +964,7 @@ def test_ac10_report_keys_class_and_name(lab, rng):
                            case("tests.test_b", "test_x", "failed"),
                            case("tests.test_a", "test_y", "skipped")])
     lab.reports[513] = (200, report(cases))
-    res = forge.job_test_report(GL, SHA, "pytest")
+    res = forge().job_test_report(GL, SHA, "pytest")
     expected = {"tests.test_a::test_x": "success", "tests.test_b::test_x": "failed",
                 "tests.test_a::test_y": "skipped"}
     found = [{k: _plain(v) for k, v in m.items()} for m in mappings(res)]
@@ -975,7 +987,7 @@ def test_ac10_duplicate_key_ambiguous(lab, rng):
     lab.reports[514] = (200, report(shuffled(gen, [
         case("tests.test_a", "test_x", "success"), case("tests.test_a", "test_x", "failed"),
         case("tests.test_a", "test_y", "success")])))
-    res = forge.job_test_report(GL, SHA, "pytest")
+    res = forge().job_test_report(GL, SHA, "pytest")
     assert None in top_values(res), f"зерно: {seed}; {res!r}"
     assert "неоднозначный идентификатор" in joined(res), f"зерно: {seed}; {res!r}"
     assert not any("::" in str(k) for m in mappings(res) for k in m), f"зерно: {seed}; {res!r}"
@@ -998,7 +1010,7 @@ def test_ac10_absent_or_expired_report_none(lab, kind):
         lab.reports[515] = (200, {"total_count": 0, "test_suites": []})
     elif kind == "истёк":
         lab.reports[515] = (200, report([], suite_error="Test report artifacts have expired"))
-    res = forge.job_test_report(GL, SHA, "pytest")
+    res = forge().job_test_report(GL, SHA, "pytest")
     assert None in top_values(res), f"{kind}: {res!r}"
     assert reasons(res, lab), f"{kind}: нет причины в {res!r}"
 
@@ -1019,7 +1031,7 @@ def test_ac11_client_errors_named_without_retry(lab, status):
     одного раза; либо `HTTPError` пробрасывается исключением.
     """
     lab.routes[USER] = [(status, {"message": f"{status} Forbidden"})]
-    res = forge.token_user(GL)
+    res = forge().token_user(GL)
     assert calls_of(lab) == [USER], f"{status}: {calls_of(lab)}"
     assert any(t.strip() for t in texts(res)), f"{status}: нет причины в {res!r}"
 
@@ -1034,7 +1046,7 @@ def test_ac11_timeout_named_without_retry(lab):
     вызван несколько раз.
     """
     lab.exc = TimeoutError("timed out")
-    res = forge.token_user(GL)
+    res = forge().token_user(GL)
     assert len(lab.calls) == 1, calls_of(lab)
     assert any(t.strip() for t in texts(res)), f"нет причины в {res!r}"
 
@@ -1051,7 +1063,7 @@ def test_ac11_server_errors_retried_bounded(lab, status):
     предела — шаг висит до таймаута теста.
     """
     lab.routes[USER] = [(status, {"message": f"{status}"})]
-    res = forge.token_user(GL)
+    res = forge().token_user(GL)
     assert 2 <= len(lab.calls) <= 20, f"{status}: вызовов {len(lab.calls)}"
     assert any(t.strip() for t in texts(res)), f"{status}: нет причины в {res!r}"
 
@@ -1068,7 +1080,7 @@ def test_ac11_retry_then_success(lab, status):
     (ошибочного) ответа — имени пользователя в результате нет.
     """
     lab.routes[USER] = [(status, {"message": "busy"}), (200, {"id": 7, "username": "robot-pult"})]
-    res = forge.token_user(GL)
+    res = forge().token_user(GL)
     assert len(lab.calls) == 2, calls_of(lab)
     assert "robot-pult" in texts(res), repr(res)
 
@@ -1088,7 +1100,7 @@ def test_ac11_reasons_are_distinct(lab):
         lab.exc = TimeoutError("timed out") if status == "таймаут" else None
         if status != "таймаут":
             lab.routes[USER] = [(status, {"message": "error"})]
-        found[status] = joined(forge.token_user(GL))
+        found[status] = joined(forge().token_user(GL))
     assert len(set(found.values())) == len(found), found
 
 
@@ -1111,12 +1123,12 @@ def test_ac12_token_absent_from_reasons_and_journal(initialized_tmp_root, lab):
         lab.routes = {USER: [(status, {"message": f"{status} Unauthorized"})],
                       ("GET", MR_PATH): [(status, {"message": f"{status} Unauthorized"})],
                       ("GET", f"/projects/{PID}/pipelines"): [(status, {"message": "x"})]}
-        results += [forge.token_user(GL), forge.mr_status(GL, MR),
-                    forge.pipeline_status(GL, SHA)]
+        results += [forge().token_user(GL), forge().mr_status(GL, MR),
+                    forge().pipeline_status(GL, SHA)]
     for exc in (TimeoutError("timed out"),
                 urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))):
         lab.exc = exc
-        results += [forge.token_user(GL), forge.protections(GL)]
+        results += [forge().token_user(GL), forge().protections(GL)]
     sent = [str(v) for c in lab.calls for v in c.headers.values()]
     assert TOKEN in sent, "токен не дошёл до транспорта — проверка была бы пустой"
     leaked = [t for res in results for t in texts(res) if TOKEN in t]
@@ -1166,7 +1178,7 @@ def test_ac13_github_verdict_from_check_runs(lab, rng, case):
     else:
         runs, expected = GH_VERDICT_CASES[case]
         lab.check_runs_answer = (shuffled(gen, runs), "")
-    res = forge.pipeline_status(GH, SHA)
+    res = forge().pipeline_status(GH, SHA)
     assert verdicts(res) == {expected}, f"зерно: {seed}; {case}: {res!r}"
     assert any(SHA in args or SHA in kwargs.values() for args, kwargs in lab.check_runs_calls), \
         f"{case}: ci.check_runs не спрошен о sha"
@@ -1327,7 +1339,7 @@ def test_ac16_pipeline_own_status_counts(lab, rng, pipeline_status, jobs, expect
     gen, seed = rng
     lab.pipeline(800, pipeline_status,
                  shuffled(gen, [job(801 + i, n, s, st) for i, (n, s, st) in enumerate(jobs)]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {expected}, f"зерно: {seed}; {res!r}"
 
 
@@ -1388,7 +1400,7 @@ def test_ac19_required_manual_job_running(lab, rng, required, expected):
     lab.pipeline(900, "manual", shuffled(gen, [
         job(901, "build", "success", "build"), job(902, "test", "success", "test"),
         job(903, "deploy", "manual", "deploy")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {expected}, f"зерно: {seed}; {required}: {res!r}"
 
 
@@ -1414,7 +1426,7 @@ def test_ac20_stage_order_by_smallest_id(lab, jobs, green):
     """
     lab.records[GL] = gl_entry(ci_required_jobs=["build"])
     lab.pipeline(950, "manual", list(jobs))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     found = verdicts(res)
     assert len(found) == 1, repr(res)
     assert ("green" in found) is green, repr(res)
@@ -1457,7 +1469,7 @@ def test_ac22_verdict_precedence(lab, rng, case):
     for n, (pid, (status, statuses)) in enumerate(zip(ids, pipes)):
         lab.pipeline(pid, status, shuffled(gen, [
             job(5000 + 10 * n + i, f"job-{i}", s, f"stage-{i}") for i, s in enumerate(statuses)]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     assert verdicts(res) == {expected}, f"зерно: {seed}; {case}: {res!r}"
 
 
@@ -1482,7 +1494,7 @@ def test_ac23_record_from_loader(lab, rng, with_key):
     lab.pipeline(960, "manual", shuffled(gen, [
         job(961, "build", "success", "build"), job(962, "test", "success", "test"),
         job(963, "deploy", "manual", "deploy")]))
-    res = forge.pipeline_status(GL, SHA)
+    res = forge().pipeline_status(GL, SHA)
     found = verdicts(res)
     assert GL in lab.target_calls, lab.target_calls
     assert len(found) == 1 and ("green" in found) is (not with_key), f"зерно: {seed}; {res!r}"
@@ -1509,7 +1521,7 @@ def test_ac24_open_mr(lab, rng, draft):
     title = f"Draft: {TITLE}" if draft else TITLE
     lab.routes[("POST", path)] = [(201, {"iid": MR, "web_url": MR_URL, "title": title,
                                          "draft": draft, "state": "opened"})]
-    res = forge.open_mr(GL, branch, config.MAIN_BRANCH, TITLE, "Описание изменения", draft, 42)
+    res = forge().open_mr(GL, branch, config.MAIN_BRANCH, TITLE, "Описание изменения", draft, 42)
     assert calls_of(lab) == [("POST", path)], f"зерно: {seed}; {calls_of(lab)}"
     sent = leaves(lab.calls[0].body)
     for value in (branch, config.MAIN_BRANCH, title, "Описание изменения", 42):
@@ -1539,7 +1551,7 @@ def test_ac25_undraft_mr(lab):
                                            "work_in_progress": True, "state": "opened"})]
     lab.routes[("PUT", MR_PATH)] = [(200, {"iid": MR, "title": TITLE, "draft": False,
                                            "work_in_progress": False, "state": "opened"})]
-    res = forge.undraft_mr(GL, MR)
+    res = forge().undraft_mr(GL, MR)
     writes = [c for c in lab.calls if c.method != "GET"]
     assert [(c.method, c.path) for c in writes] == [("PUT", MR_PATH)], calls_of(lab)
     assert writes[0].body == {"title": TITLE}, writes[0].body
@@ -1563,7 +1575,7 @@ def test_ac26_assign_mr(lab):
     lab.routes[("PUT", MR_PATH)] = [(200, {
         "iid": MR, "title": TITLE, "assignee": {"id": 42, "username": "reviewer-bob"},
         "assignees": [{"id": 42, "username": "reviewer-bob"}]})]
-    res = forge.assign_mr(GL, MR, 42)
+    res = forge().assign_mr(GL, MR, 42)
     writes = [c for c in lab.calls if c.method != "GET"]
     assert [(c.method, c.path) for c in writes] == [("PUT", MR_PATH)], calls_of(lab)
     body = writes[0].body
@@ -1591,7 +1603,7 @@ def test_ac27_mr_status(lab, state, draft, assignee):
     lab.routes[("GET", MR_PATH)] = [(200, {"iid": MR, "title": TITLE, "state": state,
                                            "draft": draft, "work_in_progress": draft,
                                            "assignee": assignee})]
-    res = forge.mr_status(GL, MR)
+    res = forge().mr_status(GL, MR)
     assert calls_of(lab) == [("GET", MR_PATH)], calls_of(lab)
     assert state in texts(res), repr(res)
     assert any(v is True for v in leaves(res)) is draft, repr(res)
@@ -1611,7 +1623,7 @@ def test_ac28_token_user(lab):
     вызов не тот, имени нет.
     """
     lab.routes[USER] = [(200, {"id": 7, "username": "robot-pult", "name": "Robot"})]
-    res = forge.token_user(GL)
+    res = forge().token_user(GL)
     assert calls_of(lab) == [USER], calls_of(lab)
     assert "robot-pult" in texts(res), repr(res)
 
@@ -1632,7 +1644,7 @@ def test_ac29_token_expiry(lab, expires_at):
     path = ("GET", "/personal_access_tokens/self")
     lab.routes[path] = [(200, {"id": 3, "name": "pult", "expires_at": expires_at,
                                "active": True, "scopes": ["api"]})]
-    res = forge.token_expiry(GL)
+    res = forge().token_expiry(GL)
     assert calls_of(lab) == [path], calls_of(lab)
     if expires_at:
         assert expires_at in texts(res) or datetime.date(2026, 12, 31) in leaves(res), repr(res)
@@ -1659,7 +1671,7 @@ def test_ac30_protections(lab):
     lab.routes[("GET", f"/projects/{PID}/protected_tags")] = [
         (200, [{"name": "v*", "create_access_levels": []}],
          {"X-Total": "1", "X-Total-Pages": "1", "X-Next-Page": ""})]
-    res = forge.protections(GL)
+    res = forge().protections(GL)
     assert set(calls_of(lab)) == {("GET", f"/projects/{PID}/protected_branches"),
                                   ("GET", f"/projects/{PID}/protected_tags")}, calls_of(lab)
     for name in ("main", "release/*", "v*"):
@@ -1697,7 +1709,7 @@ def test_ac31_project_info(lab, rng):
                                   "permissions": {"project_access": {"access_level": level,
                                                                      "notification_level": 3},
                                                   "group_access": None}, **extra})]
-    res = forge.project_info(GL)
+    res = forge().project_info(GL)
     found = leaves(res)
     assert calls_of(lab) == [project], f"зерно: {seed}; {calls_of(lab)}"
     assert branch in found, f"зерно: {seed}; нет ветки {branch}: {res!r}"
@@ -1739,7 +1751,7 @@ def test_ac32_branch_pipeline_last(lab, rng, last_status, other_status, expected
         sha=last_sha, ref=branch)
     lab.pipeline(5500, "running", [job(7201, "foreign-job", "running")],
                  sha=foreign_sha, ref="other-branch")
-    res = forge.branch_pipeline(GL, branch)
+    res = forge().branch_pipeline(GL, branch)
     lists = [c for c in lab.calls if c.path == f"/projects/{PID}/pipelines"]
     assert lists and all(c.query.get("ref") == branch for c in lists), \
         f"зерно: {seed}; список конвейеров ветки: {[c.query for c in lists]}"
