@@ -1,18 +1,18 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 2 (spec_sha 26748fcb…): все 11 решений гейта SPEC и ANSWER-1 в SPEC отражены.
-- Сжатие и rebase на fsm_advance.py:771 стоят раньше рубежа переделки ревью (fsm_advance.py:816). Рубеж смотрит на дату коммиттера %cI коммитов, кроме подтяжки (advance_gates/review.py:110-129). Переписанная ветка проходит его без шага developer — путь обхода.
-- Части деления заводятся циклом в fsm.py:1070; атомарность невозможна в зонах части 1 без fsm.py. При feature/{ref} имя части = имя родителя (родитель ещё в БД в spec_gate) — отказ гарантирован, AC-8 слабый.
-- ensure_head_in_origin состояние не меняет (github_adapter.py:226-229); эскалация AC-16 требует advance_gates/tests_writing.py:_origin_push_gate — не в зонах части 2.
-- В gitcmd пять точек запуска git (git, carpentry, read, read_env, read_stream); при нечитаемом targets.yaml _declared_targets → {} → белый список не включится (fail-open).
-- A0 уже на origin/main: targets.unsupported_reason отказывает new/run/auto/approve проектам target-human и gitlab.
+- Визит 3 (spec_sha a636b8dc…): 11 решений второго возврата в SPEC отражены; номера строк fsm_advance.py:771/786/816/831/833, pull.py:462-463/535/543/575/589, fsm.py:236/1070-1073/1577, fsm_merge_gate.py:701/727, github_adapter.py:166/211/241, gitcmd.py:37/86/164/341/413/441/469 подтвердились.
+- checkpoint.py:962-966 — докстринг commit_step_artifacts; кода, различающего коммиты пульта и роли по автору, в orchestrator/ нет (поиск FIXATION_AUTHOR/%ae: только notes.py:927 для коммитов note). AC-26 не к чему привязать.
+- Инкрементальный пакет ревью: review.py:245 `git diff prev...branch`, база — prev_sha (review.py:864-866). После сжатия/rebase prev_sha не предок головы → «инкремент» = весь дифф задачи.
+- fsm_advance.py:774-776: сверка перечня долгоживущих после подтяжки «сверяется голова, которая уйдёт в CI» — при rebase после рубежей это свойство теряется.
+- Конфликт rebase → метка PULL_CONFLICT_ROLE_STEP_MARKER → шаг developer (runner.py:605-643), роль разрешает слиянием; rebase без сжатия выбросит merge-коммит и снова упрётся в конфликт.
+- Белый список пропускает `--force-with-lease=<ref>:<sha>` без сверки sha с журналом.
 
 ## Не сработало
-- Составные bash-команды и `for … $(…)` песочница не пропускает — построчные проверки делал через python3 -c.
+- grep с --include и составные команды песочница не пропускает — поиск через python3 -c.
 
 ## Где остановился
-SPEC-AUDIT.md сдан: verdict concerns, 11 отклонений.
+SPEC-AUDIT.md сдан (status ready, verdict concerns, 9 пунктов), guard ок. Не проверено: сверяют ли тесты журнала байт-в-байт путь с настоящей отправкой (Е-4).
 
 ## Чего не хватило
-Дольше всего искал, какие гейты опираются на историю ветки (затрагивает сжатие и rebase): advance_gates/review.py:_latest_developer_commit_iso_date.
+Где пульт отличает свои коммиты от коммитов роли: такого кода нет, есть только докстринг checkpoint.py:962-966.
