@@ -63,7 +63,7 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/gitcmd.py (`_push_plan`, определение проекта по назначению) | `file://`-адрес клона внешнего проекта не распознаётся как путь в клон: `_is_url` истинно, `removeprefix("file://")` мёртв | отправка по `file://` в клон проекта `target-human` или при нечитаемом `targets.yaml` проходит без белого списка и без отказа (г) | распознавать `file://` как путь до `_is_url`; тест в `tests/test_gitcmd_push_point.py` |
+| R1-F1 | fixed | orchestrator/gitcmd.py (`_push_plan`, определение проекта по назначению) | `file://`-адрес клона внешнего проекта не распознаётся как путь в клон: `_is_url` истинно, `removeprefix("file://")` мёртв | отправка по `file://` в клон проекта `target-human` или при нечитаемом `targets.yaml` проходит без белого списка и без отказа (г) | распознавать `file://` как путь до `_is_url`; тест в `tests/test_gitcmd_push_point.py` — developer: `gitcmd._local_dest_path` (путь и `file://`-адрес → путь на диске) перед `_project_of_path`; тест `test_dest_into_project_clone_refused_as_path_or_file_url` (путь/`file://` × `target-human`/испорченный слой), красный на мутации |
 
 ## Вердикт
 `changes_requested`: исправить R1-F1 — `file://`-назначение в клон под

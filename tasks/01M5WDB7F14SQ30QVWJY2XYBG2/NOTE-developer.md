@@ -1,15 +1,16 @@
 # Записка developer — 01M5WDB7F14SQ30QVWJY2XYBG2
 
 ## Выяснено
-- Возврат из verifying (CI 40365146908) закрыт кодом в прошлом шаге: литерал окончательных состояний в gitcmd -> `_dead_states()` (fsm.TERMINAL_STATES); SQL из catalog -> `store.project_branch_tasks` (мандат ANSWER-2); SQL gitcmd -> существующие функции store.
-- Отказ advance «мандат есть, раздел PLAN не оформлен»: в этом шаге добавлен раздел `## Расширение зон` со строкой `Пути: orchestrator/store.py` (формат — `advance_gates/zones.py::_plan_zones_extension_paths`).
-- Сторожа test_multitarget.py + литерала окончательных состояний — 52 passed; guard PLAN.md — ок.
+- R1-F1 (ревью, итерация 1) закрыт: `gitcmd._local_dest_path` — путь на диске для простого пути и `file://`-адреса; `_push_plan` определяет проект назначения по нему. Под белым списком `file://` отказан и проверкой «не origin и не url записи».
+- Тест `tests/test_gitcmd_push_point.py::test_dest_into_project_clone_refused_as_path_or_file_url` — 4 варианта; мутация «путь только без схемы» краснит 2 `file://`-варианта.
+- Прогон: push_point + долгоживущие задачи + А0 + test_multitarget — 118 passed; планка — 75 passed. Карта регенерирована.
+- В REVIEW.md запись R1-F1 размечена `fixed`.
 
 ## Не сработало
-- `pytest -n 4` в рабочей копии роняет воркеры — гонял последовательно.
+- heredoc в Bash роли запрещён (cat/python3 - <<EOF) — правки только через Edit.
 
 ## Где остановился
-- Шаг завершён: PLAN.md status: ready.
+- Шаг завершён: PLAN.md status: ready (шаг 6 в PLAN).
 
 ## Чего не хватило
-- Требование оформить раздел «Расширение зон» при мандате в ANSWER не было в брифе прошлого шага — узнал только из отказа гейта зон.
+- Ничего существенного.

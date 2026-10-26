@@ -77,6 +77,18 @@ schema_version: 5
    задачи, `test_gitcmd_push_point.py`, А0 — 115 passed; планка — 75
    passed; соседние `catalog`/`gitcmd`/`store`/`artifact_branch`/деление —
    160 passed.
+6. Ревью, итерация 1 (R1-F1): назначение `file://<путь>` в `_push_plan`
+   миновало проверку пути (`_is_url` истинно, `removeprefix` был мёртв).
+   Новая `gitcmd._local_dest_path` даёт путь на диске и для простого пути, и
+   для `file://`-адреса (`urllib.parse`, с `unquote`); проект назначения
+   определяется по нему до поиска по `url` записи. Класс проверен: проект по
+   назначению определяется только здесь; под белым списком `file://` и так
+   отказан проверкой «не origin и не url записи». Тест
+   `tests/test_gitcmd_push_point.py::test_dest_into_project_clone_refused_as_path_or_file_url`
+   (путь и `file://` × `target-human` и испорченный `targets.yaml`) —
+   красный на мутации «проверка пути только без схемы» (2 failed), с
+   фиксом — 7 passed. Соседние: долгоживущие файлы задачи, А0,
+   `test_multitarget.py` — 118 passed; планка — 75 passed.
 
 ## Расширение зон
 Пути: orchestrator/store.py
@@ -95,7 +107,7 @@ ANSWER-2.md («Расширение зон разрешено: orchestrator/stor
 | 1 | 1 |
 | 2 | 2 |
 | 3 (а), (б) | 3, 4, 5 |
-| 3 (в), (г) | 1 (предикат, норма опции), 3, 4 |
+| 3 (в), (г) | 1 (предикат, норма опции), 3, 4, 6 |
 
 Проверено: долгоживущие файлы задачи — 44 passed
 (`tests/test_01m5wdb7f14sq30qvwjy2xybg2_*.py`); планка `plank-run` — 75
