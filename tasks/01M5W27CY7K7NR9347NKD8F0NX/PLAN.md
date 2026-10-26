@@ -23,13 +23,17 @@ schema_version: 5
   причиной, журнала задачи нет (задачи нет).
 - `runner.refuse_unsupported_project(conn, task_id, command)` — общий
   отказ задач: запись журнала `отказ: проект не поддержан` (detail —
-  команда, проект, причина) и `sys.exit` с причиной. Зовут его
-  `runner.cmd_run` (до `lease.run_task_command`, значит до подтяжки, агента
-  и git), `auto.cmd_auto` (сразу за `resolve_task_id`, до lease и
-  `_cmd_auto` — значит до `_pre_advance_step`, `fsm.cmd_advance`, опроса
-  CI) и `fsm.cmd_approve` (до `_as_epic_goal` и lease — до таблицы
+  команда, проект, причина) и `sys.exit` с причиной. Зовут его первым
+  действием ВНУТРИ тел под lease-обвязкой (возврат из verifying, CI
+  40330101818: вызов в публичных `cmd_run`/`cmd_auto`/`cmd_approve` до
+  обвязки нарушал линтер «обвязка команды — только
+  `lease.run_task_command`» и читал БД при подменённой обвязке):
+  `runner._cmd_run` (до бюджета, подтяжки, агента и git),
+  `auto._cmd_auto` (до `_auto_cycle` — значит до `_pre_advance_step`,
+  `fsm.cmd_advance`, опроса CI) и `fsm._cmd_approve` (до таблицы
   состояний, в любом состоянии; ленивый импорт `runner`, как прочие
-  ленивые импорты `fsm.py`).
+  ленивые импорты `fsm.py`). Тела этих команд вызываются только через
+  обвязку, других вызывателей нет.
 - `doctor/cli.project_support_check(name)` — строка
   `project-support-<проект>` первой в цикле записей `all_checks`: `fail`
   с причиной или `ok`.
@@ -40,7 +44,7 @@ schema_version: 5
 ## Шаги
 1. `targets.py`: константы и `unsupported_reason`.
 2. Точки отказа: `catalog.cmd_new`, `runner.refuse_unsupported_project` +
-   вызовы в `runner.cmd_run`, `auto.cmd_auto`, `fsm.cmd_approve`.
+   вызовы в `runner._cmd_run`, `auto._cmd_auto`, `fsm._cmd_approve`.
 3. `doctor/cli.py`: `project_support_check` в `all_checks`.
 4. Регенерация `docs/codebase-map.md`; прогон долгоживущего файла задачи,
    планки и тестов затронутых модулей.
@@ -67,6 +71,14 @@ schema_version: 5
 Собственных тестов не добавлено: все свойства SPEC покрыты долгоживущим
 файлом задачи.
 
+Итерация 2 (возврат из verifying): после переноса проверки внутрь тел —
+долгоживущий файл задачи + `test_lease_run_task_command.py`,
+`test_01m5mhvrs39cdp5v4hbwy4k7wk_run_task_command.py`,
+`test_01m3xtf5506gf43hd51ece230t_role_refusal.py` — 36 passed (прежние 6
+падений CI закрыты); 18 файлов `test_approve_*`/`test_auto_*`/
+`test_catalog_*`/`test_fsm_*`/`test_runner_*` + `test_doctor.py`,
+`test_multitarget.py` — 342 passed; `plank-run` — 1 passed.
+
 ## Влияние на систему
 - Гейты, лимиты, инварианты не ослабляются: добавлены только отказы.
   Проверка записи `targets.check` прежняя — `doctor`, уборка, чтение
@@ -75,7 +87,7 @@ schema_version: 5
 - `doctor` для записи `gitlab`/`target-human` получает строку `fail` —
   это и есть требование 6; код выхода `doctor` при такой записи станет
   ненулевым (как у любой `fail`).
-- `runner.cmd_run` теперь читает `targets.yaml` один раз на вызов (в
+- `runner._cmd_run` теперь читает `targets.yaml` один раз на вызов (в
   `auto` — и на каждом шаге цикла): нечитаемый слой не отказывает (None).
 - Откат — revert коммита задачи; схемы БД и форматов не меняется.
 
@@ -86,6 +98,10 @@ schema_version: 5
   `cmd_auto` — так и сделано.
 
 ## Предложения системе
+- Правило «обвязка публичной команды задачи — только
+  `lease.run_task_command`, новая проверка — внутрь тела `_cmd_*`» знает
+  линтер `tests/test_lease_run_task_command.py`, но не `coding-standards`
+  и не карточки знаний: класс поймал только CI (возврат из verifying).
 - Bash шага роли отклоняет `ls`/`cd X && …`/пайпы с `grep -v` как
   «требует подтверждения» — разведка ролей идёт только одиночными
   командами; стоит отметить это в миссии шага, чтобы роли не тратили ходы.
