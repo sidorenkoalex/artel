@@ -151,3 +151,24 @@ def test_operator_push_gets_options_and_record(spy):
                           f"refs/artifacts/{own}").returncode == 0
     assert "-o" not in spy.pushes[-1]
     assert gitcmd.in_repo(clone, "push", "origin", config.MAIN_BRANCH).returncode == 0
+
+
+@pytest.mark.parametrize("form", ["path", "file-url"])
+@pytest.mark.parametrize("layer", ["target-human", "broken"])
+def test_dest_into_project_clone_refused_as_path_or_file_url(spy, form, layer):
+    """Отправка из корня пульта в клон внешнего проекта — простым путём и `file://`-адресом — отказ до процесса: под белым списком и при нечитаемом `targets.yaml`.
+
+    Ловит мутацию: назначение `file://<клон>` не распознаётся как путь в
+    клон проекта (проверка пути только для назначения без схемы) — отправка
+    в `main` клона уходит в процесс без белого списка и без отказа
+    «гейт мержа неизвестен».
+    """
+    clone = project("qfile", "target-human")
+    if layer == "broken":
+        targets.local_path().write_text("targets: [не запись\n", encoding="utf-8")
+        with pytest.raises(targets.TargetsError):
+            targets.load()
+    dest = clone.as_uri() if form == "file-url" else str(clone)
+    res = gitcmd.git("push", dest, config.MAIN_BRANCH)
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert spy.pushes == []

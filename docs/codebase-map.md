@@ -1,5 +1,5 @@
 ---
-built_at_sha: c30e098d0ed2383fde45199defabbaa1a4e18cf7
+built_at_sha: c2a05dd0bc2d2da8bc64039bd12cfc0ef1f2cf64
 ---
 
 # Codebase-map пульта
@@ -9868,6 +9868,7 @@ built_at_sha: c30e098d0ed2383fde45199defabbaa1a4e18cf7
 - `sent`
 - `spy`
 - `task`
+- `test_dest_into_project_clone_refused_as_path_or_file_url`
 - `test_operator_push_gets_options_and_record`
 - `test_whitelist_lease_checked_against_last_sent_sha`
 - `test_whitelist_refuses_base_push_with_alert`

@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -266,6 +267,16 @@ def _is_url(dest: str) -> bool:
     return "://" in dest or (":" in dest and "@" in dest.split(":", 1)[0])
 
 
+def _local_dest_path(dest: str) -> str | None:
+    """Путь на диске, в который ведёт назначение отправки: сам путь или
+    путь `file://`-адреса (git отправляет по нему в тот же каталог, что и
+    по простому пути); None — сетевой адрес."""
+    if dest.startswith("file://"):
+        parts = urllib.parse.urlsplit(dest)
+        return urllib.parse.unquote(parts.path) or None
+    return None if _is_url(dest) else dest
+
+
 class _PushPlan:
     """Решение точки отправки по одному вызову git: argv к запуску или
     отказ; после успешного кода — записи «ветка отправлена»."""
@@ -464,8 +475,9 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     flags, options, positional = _push_words(args[index + 1:])
     dest = positional[0] if positional else ""
     project = cwd_project
-    if project is None and dest and not _is_url(dest):
-        project = _project_of_path(cwd / dest.removeprefix("file://"))
+    local = _local_dest_path(dest) if dest else None
+    if project is None and local:
+        project = _project_of_path(cwd / local)
     if project is None and dest and entries is not None:
         found = project_by_url(dest, entries)
         project = found[0] if found is not None else None
