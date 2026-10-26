@@ -13,6 +13,7 @@
 targets.yaml» — свойство файла, и узнать о сломанной записи лучше
 на первом же чтении, чем на подключении того проекта через месяц.
 """
+import posixpath
 import re
 import shlex
 from pathlib import Path
@@ -124,6 +125,16 @@ FORGE_SECRET_ENV_NAMES = ("GITHUB_TOKEN", "GH_TOKEN")
 # `knowledge_cards.read_cards`. Имя файла — один уровень каталога знаний.
 KNOWLEDGE_FIELD = "knowledge"
 KNOWLEDGE_FILE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.yaml")
+
+# Пути агентской обвязки проекта сверх стандартных маркеров — необязательное
+# поле записи, «список строк», как `no_paths` (SPEC
+# 01M5T19041XE2KB6A52F0AT0NF, требование 4); в локальном слое — раздел
+# `policy`.
+WRAPPER_FIELD = "agent_wrapper"
+# Корневые файлы обвязки, которые элемент `knowledge` компонента называть
+# может (ANSWER-2, ответ 1): их канал в бриф — задача
+# 01M5T18K1YFBYA7MM1BBRV869A.
+KNOWLEDGE_WRAPPER_ALLOWED = ("CLAUDE.md", "AGENTS.md")
 
 # Настройка справочника ядра — необязательное поле записи (SPEC
 # 01M4S24963R9H18AN2XDP6R15B, требование 3); читает её
@@ -281,7 +292,8 @@ LOCAL_FIELDS = {
                     COMPONENTS_FIELD: False, KNOWLEDGE_FIELD: False,
                     REFERENCE_FIELD: False},
     "policy": {"no_paths": True, "project_skills": True, "merge_gate": True,
-               "sandbox": False, "weakening_scope": False,
+               "sandbox": False, WRAPPER_FIELD: False,
+               "weakening_scope": False,
                "mutation_claim_scope": False, COMPONENTS_FIELD: False},
     "machine": {"forge": True, "url": True, "token_slot": True,
                 "path": False, COMPONENTS_FIELD: False},
@@ -533,7 +545,8 @@ def _flatten(name: str, description: dict, policy: dict,
     flat = {field: machine[field] for field in ("forge", "url")}
     flat["base"] = description["base"]
     flat["token_slot"] = machine["token_slot"]
-    for field in ("no_paths", "project_skills", "merge_gate", "sandbox"):
+    for field in ("no_paths", "project_skills", "merge_gate", "sandbox",
+                  WRAPPER_FIELD):
         if field in policy:
             flat[field] = policy[field]
     common = machine.get("path")
@@ -581,6 +594,12 @@ def check(name: str, entry: object, source: Path | None = None) -> None:
                 raise TargetsError(f"{where}: поле '{field}' — не список строк")
         elif not isinstance(value, str) or not value.strip():
             raise TargetsError(f"{where}: поле '{field}' пусто")
+    if WRAPPER_FIELD in entry:
+        value = entry[WRAPPER_FIELD]
+        if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value):
+            raise TargetsError(f"{where}: поле '{WRAPPER_FIELD}' — не список "
+                               f"строк")
     if entry["forge"] not in FORGES:
         raise TargetsError(f"{where}: поле 'forge' — '{entry['forge']}', "
                            f"ожидается {' | '.join(FORGES)}")
@@ -603,12 +622,46 @@ def check(name: str, entry: object, source: Path | None = None) -> None:
                                f"'{COMPONENTS_FIELD}' вместе недопустимы — "
                                f"оставь одно")
         _check_components(name, where, entry[COMPONENTS_FIELD])
+        if name != config.DEFAULT_TARGET:
+            _check_knowledge_outside_wrapper(where, entry)
     if KNOWLEDGE_FIELD in entry:
         reason = _knowledge_error(name, entry[KNOWLEDGE_FIELD])
         if reason:
             raise TargetsError(f"{where}: поле '{KNOWLEDGE_FIELD}' — {reason}")
     if REFERENCE_FIELD in entry:
         _check_reference(where, entry[REFERENCE_FIELD])
+
+
+def wrapper_paths(agent_wrapper=()) -> tuple:
+    """Действующий список обвязки внешнего проекта (SPEC
+    01M5T19041XE2KB6A52F0AT0NF, требование 5): `config.AGENT_WRAPPER_MARKERS`,
+    за ними элементы поля `agent_wrapper` записи в их порядке; строка, уже
+    стоящая в списке, повторно не добавляется."""
+    return tuple(dict.fromkeys((*config.AGENT_WRAPPER_MARKERS,
+                                *agent_wrapper)))
+
+
+def _check_knowledge_outside_wrapper(where: str, entry: dict) -> None:
+    """Элемент `knowledge` компонента внешнего проекта не указывает в его
+    обвязку (SPEC 01M5T19041XE2KB6A52F0AT0NF, требование 8): элемент,
+    нормализованный так же, как его читает бриф (`posixpath.normpath`),
+    совпадающий с путём действующего списка обвязки или лежащий внутри
+    него, — отказ загрузки записи. Корневые `KNOWLEDGE_WRAPPER_ALLOWED` и
+    элемент-каталог выше обвязки (`./`, `docs/`) загружаются."""
+    wrapper = wrapper_paths(entry.get(WRAPPER_FIELD) or ())
+    for comp, fields in entry[COMPONENTS_FIELD].items():
+        for item in fields.get("knowledge") or ():
+            rel = posixpath.normpath(item)
+            if rel == "." or rel in KNOWLEDGE_WRAPPER_ALLOWED:
+                continue
+            hit = next((path for path in wrapper
+                        if config.is_protected_path(rel, (path,))
+                        or config.is_protected_zone(rel + "/", (path,))), None)
+            if hit is not None:
+                raise TargetsError(
+                    f"{where}: компонент '{comp}': поле 'knowledge' — элемент "
+                    f"'{item}' ({rel}) лежит в агентской обвязке проекта "
+                    f"(путь обвязки '{hit}'): обвязка в бриф не передаётся")
 
 
 def _check_reference(where: str, value: object) -> None:

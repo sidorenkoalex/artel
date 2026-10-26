@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import config, session
 from .schema import SCHEMA, add_column, create_schema, migrate, table_columns
+from .schema import CLOSED_AS_DIVIDED, DIVIDED_DETAIL_PREFIX  # noqa: F401
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
 
@@ -576,8 +577,13 @@ def insert_task(conn: sqlite3.Connection, task_id: str, title: str,
                 state: str, branch: str, target: str,
                 budget_usd: float, *, is_canary: bool = False,
                 model_set: str | None = None,
-                model_set_members: str | None = None) -> None:
+                model_set_members: str | None = None,
+                epic_id: str | None = None) -> None:
     """Заводит строку задачи (команда `new`).
+
+    `epic_id` — эпик задачи (`new --epic`, часть деления; SPEC
+    01M5TBBDFS6DWQY6MS263T1KPY, требование 4): тем же INSERT, что и строка, —
+    в транзакции привязки, которую открыл вызывающий.
 
     `is_canary` — keyword-only, дефолт `False` не меняет поведение
     существующих вызывателей (tasks/T065/SPEC.md, требование 6):
@@ -592,11 +598,92 @@ def insert_task(conn: sqlite3.Connection, task_id: str, title: str,
     stamp = now()
     conn.execute(
         "INSERT INTO tasks (id,title,state,branch,target,budget_usd,"
-        "is_canary,model_set,model_set_members,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "is_canary,model_set,model_set_members,epic_id,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (task_id, title, state, branch, target, budget_usd,
-         int(is_canary), model_set, model_set_members, stamp, stamp))
+         int(is_canary), model_set, model_set_members, epic_id, stamp, stamp))
     conn.commit()
+
+
+# ===== Эпики (SPEC 01M5TBBDFS6DWQY6MS263T1KPY) =====
+#
+# Помощники записи ниже НЕ делают `commit`: команды эпика и привязка
+# исполняются одной транзакцией `begin_immediate` (требование 4), а
+# закрывает её запись журнала — последней (требование 14).
+
+
+def begin_immediate(conn: sqlite3.Connection) -> None:
+    """Открывает транзакцию записи до первого чтения: проверки команды
+    видят состояние, которое никто не изменит до её `commit`."""
+    conn.commit()  # чужая незакрытая транзакция не даст взять свою
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def get_epic(conn: sqlite3.Connection, epic_id: str) -> sqlite3.Row | None:
+    """Строка эпика; `None` — эпика нет."""
+    return conn.execute("SELECT * FROM epics WHERE id=?",
+                        (epic_id,)).fetchone()
+
+
+def insert_epic(conn: sqlite3.Connection, epic_id: str, project: str,
+                title: str, goal: str, envelope_usd: float | None) -> None:
+    conn.execute(
+        "INSERT INTO epics (id, project, title, goal, envelope_usd, state,"
+        " created_at) VALUES (?,?,?,?,?,'open',?)",
+        (epic_id, project, title, goal, envelope_usd, now()))
+
+
+def update_epic(conn: sqlite3.Connection, epic_id: str, **fields) -> None:
+    """Правит поля строки эпика; имена полей сверяются со схемой, как у
+    `update_task`."""
+    if not fields:
+        return
+    unknown = fields.keys() - table_columns(conn, "epics")
+    if unknown:
+        raise ValueError(f"epics: нет колонок {', '.join(sorted(unknown))}")
+    assignments = ", ".join(f"{name}=?" for name in fields)
+    conn.execute(f"UPDATE epics SET {assignments} WHERE id=?",
+                 (*fields.values(), epic_id))
+
+
+def set_task_epic(conn: sqlite3.Connection, task_id: str,
+                  epic_id: str | None) -> None:
+    conn.execute("UPDATE tasks SET epic_id=?, updated_at=? WHERE id=?",
+                 (epic_id, now(), task_id))
+
+
+def epic_tasks(conn: sqlite3.Connection, epic_id: str) -> list:
+    """Задачи эпика по возрастанию id."""
+    return conn.execute("SELECT * FROM tasks WHERE epic_id=? ORDER BY id",
+                        (epic_id,)).fetchall()
+
+
+def project_epics(conn: sqlite3.Connection, project: str) -> list:
+    """Эпики проекта по возрастанию id."""
+    return conn.execute("SELECT * FROM epics WHERE project=? ORDER BY id",
+                        (project,)).fetchall()
+
+
+def project_tasks(conn: sqlite3.Connection, project: str) -> list:
+    """Задачи проекта по возрастанию id; строка без `target` — артели,
+    как у `task_target`."""
+    return conn.execute(
+        "SELECT * FROM tasks WHERE COALESCE(target, ?)=? ORDER BY id",
+        (config.DEFAULT_TARGET, project)).fetchall()
+
+
+def any_task_in_epic(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM tasks WHERE epic_id IS NOT NULL LIMIT 1").fetchone() is not None
+
+
+def last_step_times(conn: sqlite3.Connection, project: str) -> dict:
+    """{id задачи: время последней записи её журнала} по задачам проекта."""
+    rows = conn.execute(
+        "SELECT task_id, ts FROM steps WHERE id IN (SELECT MAX(id) FROM steps"
+        " WHERE task_id IN (SELECT id FROM tasks WHERE COALESCE(target, ?)=?)"
+        " GROUP BY task_id)", (config.DEFAULT_TARGET, project)).fetchall()
+    return {r["task_id"]: r["ts"] for r in rows}
 
 
 def update_task(conn: sqlite3.Connection, task_id: str, **fields) -> None:
@@ -1210,6 +1297,18 @@ def last_task_step_of(conn: sqlite3.Connection, task_id: str,
         f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE task_id=? "
         f"AND action IN ({marks}) ORDER BY id DESC LIMIT 1",
         (task_id, *actions)).fetchone()
+
+
+def journal_action_exists(conn: sqlite3.Connection, task_id: str,
+                          action: str, detail: str) -> bool:
+    """Есть ли в журнале задачи запись `action` с тем же `detail`.
+
+    Читатель — `workspace._note_unresolved_wrapper` (SPEC
+    01M5T19041XE2KB6A52F0AT0NF): `ensure` зовут каждый шаг и гейт, и
+    одинаковая пометка пишется в журнал один раз."""
+    return conn.execute(
+        "SELECT 1 FROM steps WHERE task_id = ? AND action = ? AND detail = ?"
+        " LIMIT 1", (task_id, action, detail)).fetchone() is not None
 
 
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "",

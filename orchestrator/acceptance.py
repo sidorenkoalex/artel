@@ -2941,17 +2941,11 @@ def suite_tree_hash(root: Path, *, ref: str = "HEAD", base: bool = False,
             except (OSError, ValueError):
                 return None
         def git(*args):
-            process = subprocess.Popen(["git", "-C", str(root), *args],
-                                       cwd=config.ROOT, env=gitcmd.pult_env(env),
-                                       stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, text=True)
             try:
-                stdout, _ = process.communicate(timeout=15)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+                res = gitcmd.read_env(root, env, *args, timeout=15)
+            except gitcmd.Timeout:
                 return None
-            return stdout.strip() if process.returncode == 0 else None
+            return res.stdout.strip() if res.returncode == 0 else None
         if not worktree and git("read-tree", ref) is None:
             return None
         if worktree and git("add", "-u", "--", ".") is None:

@@ -5,8 +5,8 @@ import signal
 import socket
 import sys
 
-from . import (ci, config, fixation, gitcmd, lease, liveness, repo_context,
-               store, targets, workspace)
+from . import (ci, config, fixation, fsm, gitcmd, lease, liveness,
+               repo_context, store, targets, workspace)
 
 
 def _dir_in_main(task_id: str) -> bool | None:
@@ -540,7 +540,9 @@ def _journal_tz_before_cleanup(conn, task_id: str, branch: str,
 
 # Терминальные состояния FSM: kill из них — no-op на самом переходе
 # (SPEC T050, требование 6) — уборка ниже всё равно остаётся безусловной.
-TERMINAL_STATES = ("done", "killed")
+# Список — `fsm.TERMINAL_STATES` (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+# требование 11).
+TERMINAL_STATES = fsm.TERMINAL_STATES
 
 
 def _group_kill_lease_step(conn, task_id: str) -> None:

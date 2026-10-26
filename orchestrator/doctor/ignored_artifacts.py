@@ -4,7 +4,7 @@
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
 
-from orchestrator import doctor
+from orchestrator import doctor, fsm
 
 
 # --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
@@ -33,7 +33,7 @@ def _fix_ignored_artifact_files(conn) -> None:
     та же, что у `checkpoint` (не коммитить вслепую без фильтрации).
     """
     for row in doctor.store.all_tasks(conn):
-        if row["state"] in ("done", "killed"):
+        if row["state"] in fsm.TERMINAL_STATES:
             continue
         task_id = row["id"]
         branch = doctor.artifact_branch.branch_name(task_id)
