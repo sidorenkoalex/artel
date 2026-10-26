@@ -155,6 +155,14 @@ def task_repo(task_id: str) -> Path:
     return repo_for_target(store.task_target(store.db(), task_id))
 
 
+def _task_project(task_id: str) -> str:
+    """Проект задачи для подписи коммита — тем же разрешением, что
+    `task_repo`."""
+    if not store.db_usable():
+        return config.DEFAULT_TARGET
+    return store.task_target(store.db(), task_id)
+
+
 def _git(repo: Path, *args: str):
     if repo == _NO_REPO:
         return None
@@ -354,6 +362,13 @@ def _write(task_id: str, files: dict, message: str, author_name: str,
     repo = repo_for_target(target) if target else task_repo(task_id)
     if repo == _NO_REPO:
         return "", ""
+    # Коммит ссылки документов — коммит пульта (SPEC
+    # 01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-4): автор `commit_author`
+    # проекта, соавтор и трейлер — в сообщении.
+    project = target or _task_project(task_id)
+    author_name, author_email = gitcmd.pult_identity(project, author_name,
+                                                     author_email)
+    message = gitcmd.pult_message(message, project)
     for _ in range(_CAS_ATTEMPTS):
         parent = _head(task_id, repo)
         commit_sha = write_commit(repo, files, message, author_name,

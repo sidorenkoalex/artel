@@ -275,7 +275,8 @@ def _line_count(text: str) -> int:
     return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
-def _union_merged_text(wt_path, rel: str, stage_dir) -> str | None:
+def _union_merged_text(wt_path, rel: str, stage_dir,
+                       rebase: bool = False) -> str | None:
     """Union-слияние трёх стадий индекса конфликтного файла `rel`, либо
     `None` — аддитивность не доказана (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9,
     требования 5-6, 8).
@@ -326,12 +327,18 @@ def _union_merged_text(wt_path, rel: str, stage_dir) -> str | None:
         stages[stage] = path
         if stage == 1:
             base_text = text
-    main_added = _side_added_lines(wt_path, stages[1], stages[3])
-    branch_added = _side_added_lines(wt_path, stages[1], stages[2])
+    # При перебазировании стороны индекса обратны слиянию: `:2:` — main
+    # (на неё кладётся коммит), `:3:` — ветка задачи. Порядок добавок
+    # тот же — «main, затем ветка задачи» (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T,
+    # требование 11).
+    main_stage, branch_stage = (stages[2], stages[3]) if rebase else (
+        stages[3], stages[2])
+    main_added = _side_added_lines(wt_path, stages[1], main_stage)
+    branch_added = _side_added_lines(wt_path, stages[1], branch_stage)
     if main_added is None or branch_added is None:
         return None
     merged = _git_text(wt_path, "merge-file", "-p", "--union",
-                       str(stages[3]), str(stages[1]), str(stages[2]))
+                       str(main_stage), str(stages[1]), str(branch_stage))
     if merged is None:
         return None
     if _line_count(merged) != _line_count(base_text) + main_added + branch_added:
@@ -339,7 +346,8 @@ def _union_merged_text(wt_path, rel: str, stage_dir) -> str | None:
     return merged
 
 
-def _merged_doc_texts(wt_path, docs: list) -> dict | None:
+def _merged_doc_texts(wt_path, docs: list,
+                      rebase: bool = False) -> dict | None:
     """Слитые тексты всех документов `docs` — либо `None`, если хотя бы
     один не доказан аддитивным. Считается ЦЕЛИКОМ до первой записи на
     диск: неудача на втором документе иначе оставила бы первый уже
@@ -350,7 +358,7 @@ def _merged_doc_texts(wt_path, docs: list) -> dict | None:
         for number, rel in enumerate(docs):
             stage_dir = Path(tmp) / str(number)
             stage_dir.mkdir()
-            text = _union_merged_text(wt_path, rel, stage_dir)
+            text = _union_merged_text(wt_path, rel, stage_dir, rebase)
             if text is None:
                 return None
             merged[rel] = text
@@ -459,9 +467,14 @@ def _auto_resolve_conflict(conn, task_id: str, wt_path, source_branch: str,
     if MAP_REL in files and not _resolve_map_stage(conn, task_id, wt_path):
         return False
 
-    if not _git_step_ok(conn, task_id, wt_path, "commit", "-m",
-                        f"{task_id}: подтяжка {source_branch}"):
+    project = store.task_target(conn, task_id)
+    if not _git_step_ok(conn, task_id, wt_path,
+                        *gitcmd.pult_identity_args(project), "commit", "-m",
+                        gitcmd.pult_message(f"{task_id}: подтяжка {source_branch}",
+                                            project)):
         return False
+    gitcmd.journal_pult_commit(conn, task_id, project, gitcmd.head_sha(wt_path),
+                               "авторазрешение конфликта подтяжки")
     if MAP_REL in files:
         store.journal(
             conn, task_id, "orchestrator",
@@ -532,12 +545,16 @@ def _clean_worktree_before_merge(conn, task_id: str, wt_path) -> str | None:
     return None
 
 
-def _run_merge(wt_path, base: str, task_id: str, source_branch: str):
+def _run_merge(wt_path, base: str, task_id: str, source_branch: str,
+               project: str | None = None):
     """`git merge --no-ff` зафетченного sha main в worktree задачи —
     не rebase, ветка задачи в аргументах не упоминается и не трогает
-    main ни байтом (ADR-0006 п.2)."""
-    return gitcmd.in_repo(wt_path, "merge", "--no-ff", base, "-m",
-                          f"{task_id}: подтяжка {source_branch}")
+    main ни байтом (ADR-0006 п.2). Merge-коммит — коммит пульта (SPEC
+    01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-4)."""
+    return gitcmd.in_repo(wt_path, *gitcmd.pult_identity_args(project),
+                          "merge", "--no-ff", base, "-m",
+                          gitcmd.pult_message(
+                              f"{task_id}: подтяжка {source_branch}", project))
 
 
 def _handle_merge_failure(conn, task_id: str, state: str, branch: str,
@@ -761,7 +778,8 @@ def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
 
 def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
             origin_main_sha, read_branch_text_or_refuse,
-            repo_path=None, run_plank=True, operator_pull=False):
+            repo_path=None, run_plank=True, operator_pull=False,
+            merge_main=True):
     """Исход подтяжки главной ветки target'а задачи в её ветку — вызывается
     из `fsm._pull_main_or_escalate`. `origin_main_source`/`origin_main_sha`/
     `read_branch_text_or_refuse` — узлы `fsm.py`, инъекция параметрами (не
@@ -795,6 +813,12 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     git неотличим от «main уже в ветке»; (3) отказ ПОСЛЕ слияния
     эскалирует задачу причиной `UNVERIFIED_HEAD_REASON`. Прежние
     вызыватели (`False`) получают прежние исходы.
+
+    `merge_main=False` — переход `in_dev -> verifying` проекта с `freshness:
+    rebase` (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования 8, 10): узел
+    выполняет чекпоинт WIP и отказ «посторонние файлы», но не `git merge` и
+    не прогон планки — ветку перебазирует `prepare_branch` после рубежей
+    перехода. Исход `Pulled(base)` значит «main впереди, нужна подтяжка».
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
@@ -848,12 +872,18 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
                       detail)
         print(f"[{task_id}] переход отклонён: {detail}")
         return Refused(detail)
-    merge = _run_merge(wt_path, base, task_id, source_branch)
+    if not merge_main:
+        return Pulled(base)
+    project = store.task_target(conn, task_id)
+    merge = _run_merge(wt_path, base, task_id, source_branch, project)
     if merge is None or merge.returncode != 0:
         outcome = _handle_merge_failure(conn, task_id, state, branch,
                                         source_branch, merge, wt_path)
         if outcome is not None:
             return outcome
+    else:
+        gitcmd.journal_pult_commit(conn, task_id, project,
+                                   gitcmd.head_sha(wt_path), "подтяжка")
 
     if not run_plank:
         return Pulled(base)
@@ -868,3 +898,241 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
                         expected_state=state, detail=detail)
         return Conflict([], detail)
     return outcome
+
+
+# Подготовка ветки на переходе `in_dev -> verifying` (SPEC
+# 01M5WDB7JY0VJGHVKCABA2QC5T, требования 7-11; ADR-0029 п. 4-6): сжатие
+# коммитов задачи в один и перебазирование на голову main — ПОСЛЕ всех
+# рубежей перехода, перед отправкой. Переписываются только коммиты,
+# прошедшие рубежи: незакоммиченная правка отказывает переходу.
+PREPARE_DIRTY_ACTION = "переход отклонён: незакоммиченная правка перед сжатием"
+PREPARE_FAILED_ACTION = "переход отклонён: сжатие ветки не выполнено"
+REBASE_MAP_ACTION = "конфликт перебазирования: карта авторазрешена регенерацией"
+BRANCH_RESTORED_ACTION = "ветка возвращена к голове до сжатия"
+
+
+class Prepared:
+    """Ветка подготовлена: `before` — голова до сжатия (коммиты роли),
+    `rewritten` — голова переписана этим переходом."""
+
+    def __init__(self, before: str, rewritten: bool):
+        self.before = before
+        self.rewritten = rewritten
+
+    def __repr__(self) -> str:
+        return f"Prepared(before={self.before!r}, rewritten={self.rewritten!r})"
+
+
+def commit_title(conn, task_id: str, t, entry: dict) -> str:
+    """Сообщение сжатого коммита по `policy.commit_template`: `{text}` —
+    название задачи, `{id}` — её id, `{ref}` — ключ ссылки системы
+    `ref_required`."""
+    from . import targets
+    template = entry.get("commit_template") or targets.DEFAULT_COMMIT_TEMPLATE
+    ref = ""
+    if "{ref}" in template:
+        system = entry.get(targets.REF_REQUIRED_FIELD)
+        for row in store.external_refs(conn, store.REF_KIND_TASK, task_id):
+            if row["system"] == system:
+                ref = row["key"]
+                break
+    return (template.replace("{id}", task_id).replace("{ref}", ref)
+            .replace("{text}", t["title"] or task_id))
+
+
+def _uncommitted_paths(wt_path, task_id: str) -> list | None:
+    """Незакоммиченные пути рабочей копии (в том числе неотслеживаемые),
+    кроме документов задачи `tasks/<id>/`; None — git не ответил."""
+    res = gitcmd.in_repo(wt_path, "status", "--porcelain",
+                         "--untracked-files=all")
+    if res is None or res.returncode != 0:
+        return None
+    own = f"tasks/{task_id}/"
+    paths = [line[3:] for line in res.stdout.splitlines() if len(line) > 3]
+    return [p for p in paths if not p.strip('"').startswith(own)]
+
+
+def _prepare_refused(conn, task_id: str, action: str, detail: str) -> Refused:
+    store.journal(conn, task_id, "fsm", action, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    return Refused(detail)
+
+
+def _git_failure(res) -> str:
+    if res is None:
+        return "git не ответил"
+    text = (res.stderr or res.stdout or "").strip()
+    return text[-STEP_STDERR_TAIL:] or f"код {res.returncode}"
+
+
+def _reset_to(wt_path, sha: str, mode: str = "--hard") -> bool:
+    res = gitcmd.in_repo(wt_path, "reset", "-q", mode, sha)
+    return res is not None and res.returncode == 0
+
+
+def _regenerate_map(conn, task_id: str, wt_path) -> bool:
+    """Карта кодовой базы — выход `scripts/codebase_map.py` на дереве
+    перебазирования (не объединение сторон), интерпретатором пульта —
+    тот же приём, что `_resolve_map_stage`."""
+    step = "регенерация карты scripts/codebase_map.py"
+    try:
+        regen = subprocess.run([sys.executable, "scripts/codebase_map.py"],
+                               cwd=wt_path, capture_output=True, text=True)
+    except OSError as exc:
+        _journal_step_failure(conn, task_id, step, None, str(exc))
+        return False
+    if regen.returncode != 0:
+        _journal_step_failure(conn, task_id, step, regen.returncode,
+                              regen.stderr)
+        return False
+    return _git_step_ok(conn, task_id, wt_path, "add", MAP_REL)
+
+
+def _resolve_rebase_conflict(conn, task_id: str, wt_path, files: list,
+                             ident: list) -> bool:
+    """Конфликт перебазирования, который пульт разрешает сам (требование
+    11): карта — регенерацией, аддитивные документы — прежним правилом
+    подтяжки; затем `rebase --continue`. `False` — путь автоматики закрыт,
+    перебазирование не завершено."""
+    docs = [rel for rel in files if rel != MAP_REL]
+    if not all(_is_doc_path(rel) for rel in docs):
+        return False
+    merged = _merged_doc_texts(wt_path, docs, rebase=True) if docs else {}
+    if merged is None:
+        return False
+    for rel, text in merged.items():
+        try:
+            (Path(wt_path) / rel).write_text(text, encoding="utf-8")
+        except OSError as exc:
+            _journal_step_failure(conn, task_id, f"запись слитого {rel}",
+                                  None, str(exc))
+            return False
+        if not _git_step_ok(conn, task_id, wt_path, "add", rel):
+            return False
+    if MAP_REL in files and not _regenerate_map(conn, task_id, wt_path):
+        return False
+    if not _git_step_ok(conn, task_id, wt_path, "-c", "core.editor=true",
+                        *ident, "rebase", "--continue"):
+        return False
+    if MAP_REL in files:
+        store.journal(conn, task_id, "orchestrator", REBASE_MAP_ACTION,
+                      f"{MAP_REL} — регенерация scripts/codebase_map.py на "
+                      f"дереве перебазирования, не объединение сторон")
+    if docs:
+        store.journal(
+            conn, task_id, "orchestrator", ADDITIVE_CONFLICT_ACTION,
+            f"{', '.join(docs)} — union-слияние стадий индекса средствами "
+            f"git merge-file при перебазировании, порядок добавок: main, "
+            f"затем ветка задачи")
+    return True
+
+
+def _rebase(conn, task_id: str, t, state: str, wt_path, base: str,
+            before: str, project: str):
+    """Перебазирование сжатого коммита на `base`; None — состоялось,
+    иначе `Conflict` — задача эскалирована прежним путём конфликта
+    подтяжки, ветка возвращена к голове до сжатия."""
+    ident = gitcmd.pult_identity_args(project)
+    res = gitcmd.in_repo(wt_path, *ident, "rebase", "-q", base)
+    if res is not None and res.returncode == 0:
+        return None
+    files = _conflicting_files(wt_path) if res is not None else []
+    if files and _resolve_rebase_conflict(conn, task_id, wt_path, files, ident):
+        return None
+    abort = gitcmd.in_repo(wt_path, "rebase", "--abort")
+    note = _merge_conflict_note(files, res)
+    if abort is None or abort.returncode != 0:
+        note += f"; git rebase --abort не удался: {_git_failure(abort)}"
+    if not _reset_to(wt_path, before):
+        note += f"; ветка не возвращена к голове до сжатия {before}"
+    detail = (f"конфликт перебазирования ветки {t['branch']} на {base}: "
+              f"{note}")
+    store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
+                    detail=detail)
+    if state in PULL_CONFLICT_MARKED_STATES:
+        store.journal(conn, task_id, "fsm", PULL_CONFLICT_ROLE_STEP_MARKER, detail)
+    return Conflict(files, detail)
+
+
+def prepare_branch(conn, task_id: str, t, state: str, *, entry: dict,
+                   base: str | None, rebase: bool, repo_path=None):
+    """Сжатие коммитов задачи от точки ответвления от `base` (голова main
+    на origin) в один коммит пульта по `commit_template` и, при `rebase`,
+    перебазирование его на `base` (требования 8-11).
+
+    Исход: `Prepared` — ветка готова к отправке; `Refused` — переход
+    отклонён, ветка не тронута (незакоммиченная правка, сбой git);
+    `Conflict` — неразрешимый конфликт перебазирования, задача
+    эскалирована, ветка возвращена к голове до сжатия."""
+    branch = t["branch"]
+    project = t["target"] or config.DEFAULT_TARGET
+    wt_path, error = workspace.ensure(task_id, branch)
+    if error is not None:
+        return _prepare_refused(conn, task_id, PREPARE_FAILED_ACTION,
+                                f"worktree задачи не готов: {error}")
+    dirty = _uncommitted_paths(wt_path, task_id)
+    if dirty is None:
+        return _prepare_refused(conn, task_id, PREPARE_FAILED_ACTION,
+                                "git status рабочей копии не ответил")
+    if dirty:
+        return _prepare_refused(
+            conn, task_id, PREPARE_DIRTY_ACTION,
+            f"в рабочей копии незакоммиченная правка ({', '.join(dirty[:10])})"
+            f" — после рубежей перехода пульт её не коммитит; закоммить или "
+            f"убери правку и повтори advance")
+    before = gitcmd.head_sha(wt_path)
+    fork = ""
+    if base:
+        res = gitcmd.in_repo(wt_path, "merge-base", "HEAD", base)
+        if res is not None and res.returncode == 0:
+            fork = res.stdout.strip()
+    if not fork:
+        fork = gitcmd.diff_base(branch, repo=repo_path) or ""
+    if not before or not fork:
+        return _prepare_refused(conn, task_id, PREPARE_FAILED_ACTION,
+                                f"точка ответвления ветки {branch} не "
+                                f"определена — git не ответил")
+    if fork == before:
+        return Prepared(before, False)
+    reset = gitcmd.in_repo(wt_path, "reset", "-q", "--soft", fork)
+    if reset is None or reset.returncode != 0:
+        _reset_to(wt_path, before, "--soft")
+        return _prepare_refused(conn, task_id, PREPARE_FAILED_ACTION,
+                                f"git reset --soft {fork}: {_git_failure(reset)}")
+    staged = gitcmd.in_repo(wt_path, "diff", "--cached", "--quiet")
+    if staged is not None and staged.returncode == 0:
+        # Коммиты задачи в сумме не меняют дерево — сжимать нечего.
+        _reset_to(wt_path, before, "--soft")
+        return Prepared(before, False)
+    message = gitcmd.pult_message(commit_title(conn, task_id, t, entry), project)
+    commit = gitcmd.in_repo(wt_path, *gitcmd.pult_identity_args(project),
+                            "commit", "-q", "-m", message)
+    if commit is None or commit.returncode != 0:
+        _reset_to(wt_path, before, "--soft")
+        return _prepare_refused(conn, task_id, PREPARE_FAILED_ACTION,
+                                f"сжатый коммит не записан: "
+                                f"{_git_failure(commit)}")
+    gitcmd.journal_pult_commit(conn, task_id, project,
+                               gitcmd.head_sha(wt_path), "сжатие")
+    if rebase and base and not gitcmd.is_ancestor(base, "HEAD", repo=wt_path):
+        conflict = _rebase(conn, task_id, t, state, wt_path, base, before,
+                           project)
+        if conflict is not None:
+            return conflict
+        gitcmd.journal_pult_commit(conn, task_id, project,
+                                   gitcmd.head_sha(wt_path), "перебазирование")
+    return Prepared(before, True)
+
+
+def restore_branch(conn, task_id: str, t, prepared: Prepared) -> None:
+    """Локальная ветка задачи — обратно к голове до сжатия (требование
+    16): после отказа или эскалации отправки переписанная ветка не
+    остаётся."""
+    if not prepared.rewritten:
+        return
+    wt_path, error = workspace.ensure(task_id, t["branch"])
+    ok = error is None and _reset_to(wt_path, prepared.before)
+    store.journal(conn, task_id, "orchestrator", BRANCH_RESTORED_ACTION,
+                  f"{t['branch']} -> {prepared.before}" if ok else
+                  f"{t['branch']}: возврат к {prepared.before} не удался "
+                  f"({error or 'git reset --hard отказал'})")

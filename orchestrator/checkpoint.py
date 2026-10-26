@@ -1878,14 +1878,19 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
         return False, "", stray, "", mandated
+    # Чекпоинт — коммит пульта (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования
+    # 2-5): автор `commit_author` проекта, соавтор и трейлер в сообщении.
+    project = store.task_target(conn, task_id)
     commit = gitcmd.in_repo(
-        wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-        "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-        "commit", "-q", "-m", message)
+        wt, *gitcmd.pult_identity_args(project, fixation.FIXATION_AUTHOR_NAME,
+                                       fixation.FIXATION_AUTHOR_EMAIL),
+        "commit", "-q", "-m", gitcmd.pult_message(message, project))
     if commit.returncode != 0:
         return False, "", stray, _journal_git_failure(
             conn, task_id, "commit", commit), mandated
-    return True, gitcmd.head_sha(wt), stray, "", mandated
+    sha = gitcmd.head_sha(wt)
+    gitcmd.journal_pult_commit(conn, task_id, project, sha, "чекпоинт")
+    return True, sha, stray, "", mandated
 
 
 # Сторож главной копии пульта после шага роли (SPEC

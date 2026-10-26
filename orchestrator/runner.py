@@ -1182,6 +1182,13 @@ def role_env(role: str | None = None, task_id: str | None = None,
         env[config.ARTEL_TASK_ENV] = task_id
     for name, value in git_identity().items():
         env.setdefault(name, value)
+    # `commit_author` записи проекта сильнее идентичности окружения роли и
+    # сессии (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требование 1).
+    author = gitcmd.commit_author(project) if project is not None else None
+    if author is not None:
+        for option, names in GIT_IDENTITY:
+            value = author[0] if option == "user.name" else author[1]
+            env.update(dict.fromkeys(names, value))
     return env
 
 

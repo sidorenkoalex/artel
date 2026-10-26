@@ -58,13 +58,122 @@ def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
     не ждёт CI и не читает origin (`canary._kill_at_verifying` убивает
     задачу сразу по входу) — push на origin-заглушку
     (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
-    построению, не по сбою."""
+    построению, не по сбою.
+
+    Проект со сжатием (`squash_before_mr: true`) — перезапись своей ветки
+    `_rewrite_push_gate` (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования
+    15-16). Отказ сверки автора в точке отправки — эскалация задачи
+    (требование 6)."""
+    if _squashes(t):
+        return _rewrite_push_gate(conn, task_id, t)
     push_ok, push_detail = github_adapter.ensure_head_in_origin(
         conn, task_id, t["branch"])
     if push_ok:
         return None
+    if _author_check_refused(push_detail):
+        return _push_escalation(conn, task_id, t, AUTHOR_CHECK_ESCALATION,
+                                push_detail)
     hint = f"почини доступ к origin и повтори artel.py advance {task_id}"
     return GateRefusal("переход отклонён: голова не в origin", push_detail, hint)
+
+
+# Исходы отправки переписанной ветки (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T,
+# требования 6, 15-16): «сеть» — отказ перехода, задача в `in_dev`; прочее —
+# эскалация с причиной.
+PUSH_NETWORK_ACTION = "переход отклонён: сеть"
+FOREIGN_COMMIT_ESCALATION = "чужой коммит в ветке на сервере"
+UNRECORDED_BRANCH_ESCALATION = "ветка на сервере без записи отправки"
+REWRITE_REJECTED_ESCALATION = "перезапись отвергнута сервером"
+AUTHOR_CHECK_ESCALATION = "сверка автора отказала отправку"
+REWRITE_PUSH_ACTION = "push (перезапись ветки)"
+# Признаки отказа сервера (не сети) в stderr `git push`.
+_SERVER_REJECT_MARKERS = ("[rejected]", "[remote rejected]", "stale info",
+                          "hook declined", "protected branch")
+
+
+def _squashes(t) -> bool:
+    try:
+        entry = targets.target(t["target"] or config.DEFAULT_TARGET)
+    except targets.TargetsError:
+        return False
+    return isinstance(entry, dict) and entry.get("squash_before_mr") is True
+
+
+def _author_check_refused(detail: str) -> bool:
+    return (gitcmd.PUSH_REFUSED_ACTION in detail
+            and gitcmd.AUTHOR_CHECK_REFUSAL in detail)
+
+
+def _push_escalation(conn, task_id: str, t, reason: str,
+                     detail: str) -> GateRefusal:
+    """Эскалация задачи на рубеже отправки: состояние — `escalated` с
+    причиной и текстом; запись отказа — каркасом гейтов."""
+    text = f"{reason}: {detail}"
+    store.set_state(conn, task_id, "escalated", "fsm",
+                    expected_state=t["state"], detail=text)
+    return GateRefusal(f"переход отклонён: {reason}", text,
+                       f"разбери ветку {t['branch']} на сервере и ответь "
+                       f"artel.py answer {task_id}")
+
+
+def _rewrite_push_gate(conn, task_id: str, t) -> GateRefusal | None:
+    """Отправка ветки проекта со сжатием: первая отправка — обычная (ветки
+    на сервере нет); перезапись — только `--force-with-lease` с sha
+    последней записи «ветка отправлена»."""
+    branch = t["branch"]
+    repo = workspace.task_repo(task_id)
+    hint = f"почини доступ к origin и повтори artel.py advance {task_id}"
+    local = gitcmd.branch_head_sha(branch, repo=repo)
+    remote, why = gitcmd.remote_ref_state(branch, repo=repo)
+    if why:
+        return GateRefusal(PUSH_NETWORK_ACTION,
+                           f"сеть: голова ветки {branch} на сервере не "
+                           f"прочитана — {why}", hint)
+    if local and remote == local:
+        return None
+    last = gitcmd.last_sent_sha(task_id)
+    if last is None:
+        if remote:
+            return _push_escalation(
+                conn, task_id, t, UNRECORDED_BRANCH_ESCALATION,
+                f"ветка {branch} уже есть на сервере ({remote}), а записи "
+                f"«{gitcmd.PUSH_SENT_ACTION}» у задачи нет — перезаписи и "
+                f"обычной отправки не было")
+        args = ("push", "-u", "origin", branch)
+    elif remote != last:
+        return _push_escalation(
+            conn, task_id, t, FOREIGN_COMMIT_ESCALATION,
+            f"голова ветки {branch} на сервере {remote or 'отсутствует'}, а "
+            f"последняя отправка пульта — {last}; перезаписи не было")
+    else:
+        args = ("push", f"{gitcmd.PUSH_LEASE_FLAG}=refs/heads/{branch}:{last}",
+                "-u", "origin", branch)
+    artifact_branch.send_pending(task_id)
+    push = gitcmd.in_repo(repo, *args)
+    if push is not None and push.returncode == 0:
+        store.journal(conn, task_id, "orchestrator", REWRITE_PUSH_ACTION,
+                      f"git {' '.join(args)}: {local}")
+        github_adapter._ensure_draft_mr_after_publish(
+            conn, task_id, t["target"] or config.DEFAULT_TARGET, branch,
+            local, repo)
+        return None
+    err = ((push.stderr or push.stdout).strip()[:500] if push is not None
+           else "git не ответил")
+    if _author_check_refused(err):
+        return _push_escalation(conn, task_id, t, AUTHOR_CHECK_ESCALATION, err)
+    if any(marker in err for marker in _SERVER_REJECT_MARKERS) or \
+            err.startswith(gitcmd.PUSH_REFUSED_ACTION):
+        if last is None:
+            return GateRefusal("переход отклонён: голова не в origin",
+                               f"голова ветки не в origin, push не удался: "
+                               f"{err}", hint)
+        return _push_escalation(conn, task_id, t, REWRITE_REJECTED_ESCALATION,
+                                f"git push {gitcmd.PUSH_LEASE_FLAG} ветки "
+                                f"{branch} отказан сервером, повторной "
+                                f"отправки нет — {err}")
+    return GateRefusal(PUSH_NETWORK_ACTION,
+                       f"сеть: отправка ветки {branch} не удалась — {err}",
+                       hint)
 
 
 # Адрес в `tests/` чинит разработчик — класс «чинит роль». Своего действия
