@@ -1,15 +1,13 @@
-# Записка аналитика 01M5TBFH5VZ7GSRXX7VNKHFCCQ (Э4), шаг 2 — возврат со spec_gate 26.10
+# Записка аналитика 01M5TBFH5VZ7GSRXX7VNKHFCCQ (Э4), шаг 3 — возврат со spec_gate (аудит 2), 26.10
 
 ## Выяснено
-- Причина возврата — решения Оператора (1)–(9); все переносятся в SPEC без вопросов.
-- Факты по origin/main (ветка задачи Э1 не содержит): `report.py:48` STATE_ORDER = fsm.STATES, `_tile_html` `:565`, `_board_html` `:596`, `cmd_report` `:1428` (всё на `store.all_tasks`, доска одна на все проекты). `board.py:39` `_card` — нет `review_iters`, `escalated_from`, проекта; `build_model(conn, project)` `:123`.
-- Внутренности доски в tests/ зовёт только `tests/test_report.py:213,220,230` (_tile_html), `:246,255,261` (_board_html); `spec_audit_units.py:357` — `report.STATE_ORDER`. Прочие ~10 файлов report-тестов идут через cmd_report/_render-вывод.
-- Части деления: `catalog.spawn_subtask` `:786`, зов `fsm.py:1070`.
-- `targets.py:289-294` LOCAL_SECTIONS/LOCAL_FIELDS — сюда `ref_required`, `ref_systems`.
+- Причина возврата — решения Оператора (1)–(7) + мандат ANSWER-1 на 6 методов tests/test_report.py (:208,:215,:225,:238,:250,:260 — определения методов).
+- origin/main: catalog.py:738 `_new_external_artifact_branch` (ссылка документов в new); canary_drive.py:54 `cmd_new(canary=True)`; report.py:1378 projects = declared ∪ проекты задач, :1440 all_tasks; command_report.py:524/:550 и test_report.py:1018 — сторожа «steps не растут, один store.db()».
+- board_model.py (Э1): :141 ключи верхнего уровня, :266 нет записи в БД, :269 детерминизм.
 
 ## Где остановился
-- SPEC переписан (status: ready, 13 AC, матрица неослабления по 6 методам test_report.py + строки «без правки», budget 60, монолит/деление — на выбор Оператора), guard: ок.
-- Пп. возврата → SPEC: (1)(4) треб. 2/AC-5,6; (2) AC-7; (3) треб. 3/AC-8; (5) AC-5; (6) матрица; (7) треб. 9/AC-13; (8) треб. 5/AC-12; (9) Контекст/Материалы, треб. 6-7/AC-9,10.
+- SPEC переписан, status: ready, 15 AC, guard ок. Решения → SPEC: (1) треб. 3/AC-14 + строка матрицы; (2) треб. 2/AC-5 (задача незаявленного проекта); (4) треб. 5/AC-15; (5) треб. 10/AC-11,12; (6) треб. 9/AC-11; (7) треб. 1,2,7/AC-4,6,9,10, ссылки матрицы исправлены.
+- «Неизвестный проект» для board определён как: нет в targets.yaml и нет задач/эпиков в БД (согласовано с решением (2)).
 
 ## Чего не хватило
-- Ветка задачи отстаёт от origin/main (нет Э1) — сверка только `git show origin/main:`.
+- Ветка задачи отстаёт от origin/main (нет Э1) — сверка только `git show origin/main:`; `ls` в шелле нет.
