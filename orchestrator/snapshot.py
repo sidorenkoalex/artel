@@ -273,10 +273,11 @@ def _history_commit(repo, task_id: str, dir_tree: str,
            "GIT_AUTHOR_EMAIL": fixation.FIXATION_AUTHOR_EMAIL,
            "GIT_COMMITTER_NAME": fixation.FIXATION_AUTHOR_NAME,
            "GIT_COMMITTER_EMAIL": fixation.FIXATION_AUTHOR_EMAIL}
-    message = (f"{task_id}: {HISTORY_ACTION} tasks/{task_id}/ из origin/main "
-               f"{origin_main}\n\nДерево — каталог задачи из origin/main "
-               f"{origin_main} как есть (ADR-0021, этап 4; команда "
-               f"{HISTORY_COMMAND}).\n")
+    message = gitcmd.pult_message(
+        f"{task_id}: {HISTORY_ACTION} tasks/{task_id}/ из origin/main "
+        f"{origin_main}\n\nДерево — каталог задачи из origin/main "
+        f"{origin_main} как есть (ADR-0021, этап 4; команда "
+        f"{HISTORY_COMMAND}).\n", config.DEFAULT_TARGET)
     res = gitcmd.carpentry(repo, ["commit-tree", root, "-m", message], env)
     return (_out(res) or "").strip()
 

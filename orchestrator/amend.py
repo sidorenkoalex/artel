@@ -789,19 +789,27 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
     return tail
 
 
-def _commit_long_lived(wt_path: Path, paths: list[str], message: str) -> bool:
+def _commit_long_lived(conn, task_id: str, wt_path: Path, paths: list[str],
+                       message: str) -> bool:
     """Коммит в worktree кодовой ветки ровно `paths` (включая удаления) —
-    запись (а) требования 1; сбой снимает их со сцены и отдаёт `False`."""
+    запись (а) требования 1; сбой снимает их со сцены и отдаёт `False`.
+    Коммит пульта (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-5):
+    автор `commit_author` проекта, соавтор и трейлер — в сообщении."""
+    project = store.task_target(conn, task_id)
     added = gitcmd.in_repo(wt_path, "add", "-A", "--", *paths)
     commit = None
     if added is not None and added.returncode == 0:
         commit = gitcmd.in_repo(
-            wt_path, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-            "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-            "commit", "-q", "-m", message, "--", *paths)
+            wt_path, *gitcmd.pult_identity_args(
+                project, fixation.FIXATION_AUTHOR_NAME,
+                fixation.FIXATION_AUTHOR_EMAIL),
+            "commit", "-q", "-m", gitcmd.pult_message(message, project),
+            "--", *paths)
     if commit is None or commit.returncode != 0:
         gitcmd.in_repo(wt_path, "reset", "-q", "--", *paths)
         return False
+    gitcmd.journal_pult_commit(conn, task_id, project,
+                               gitcmd.head_sha(wt_path), "amend-tests")
     return True
 
 
@@ -1070,7 +1078,7 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
 
     if long_changed:
         if not _commit_long_lived(
-                wt_path, long_changed,
+                conn, task_id, wt_path, long_changed,
                 f"{task_id}: правка долгоживущих тестов — {reason}"):
             sys.exit(f"[{task_id}] amend-tests: коммит правки "
                      f"{', '.join(long_changed)} в кодовую ветку не удался — "

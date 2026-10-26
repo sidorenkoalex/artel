@@ -235,7 +235,8 @@ def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | Non
 
 def _pull_main_or_escalate(conn, task_id: str, t, state: str,
                            run_plank: bool = True, *,
-                           operator_pull: bool = False) -> str:
+                           operator_pull: bool = False,
+                           merge_main: bool = True) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
     01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1..AC-4/AC-8) и, начиная с T053
@@ -284,15 +285,23 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str,
     `pull.evaluate`. Только на этом пути возможен пятый исход
     `"unavailable"` — сверка свежести не дала ответа; прежние вызыватели
     его не получают.
+
+    `merge_main=False` — переход `in_dev -> verifying` проекта с
+    `freshness: rebase` (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требование 10):
+    чекпоинт без `git merge`, см. `pull.evaluate`.
     """
     ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
     repo_path = repo_context.path_or_none(ctx)
+    # Флаг передаётся, только когда он отличен от умолчания: прочие
+    # вызовы узла остаются прежними байт в байт.
+    extra = {} if merge_main else {"merge_main": False}
     outcome = pull.evaluate(
         conn, task_id, t, state,
         origin_main_source=_origin_main_source,
         origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
         read_branch_text_or_refuse=_read_foreign_branch_text_or_refuse,
-        repo_path=repo_path, run_plank=run_plank, operator_pull=operator_pull)
+        repo_path=repo_path, run_plank=run_plank, operator_pull=operator_pull,
+        **extra)
     if isinstance(outcome, pull.Unavailable):
         store.journal(conn, task_id, "fsm", pull.UNAVAILABLE_ACTION,
                       outcome.reason)

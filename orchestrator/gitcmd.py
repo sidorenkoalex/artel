@@ -170,7 +170,11 @@ def hosting_env(env: dict, token: str) -> dict:
 # модуля. Любая отправка ветки задачи — запись «ветка отправлена» и опции
 # `policy.push_options`; проект под белым списком (`targets.push_whitelisted`)
 # — проверка argv, окружения и конфигурации клона до запуска процесса.
-PUSH_SENT_ACTION = "ветка отправлена"
+# Запись читается как «ветка отправлена: <sha> <ветка>» (действие и
+# `detail` подряд, SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требование 15); записи
+# прежнего вида без двоеточия `_last_sent_sha` тоже читает.
+PUSH_SENT_ACTION = "ветка отправлена:"
+PUSH_SENT_LEGACY_ACTION = "ветка отправлена"
 PUSH_REFUSED_ACTION = "отправка отказана"
 PUSH_WHITELIST_SOURCE = "branch_push_whitelist"
 PUSH_SUBCOMMANDS = ("push", "send-pack")
@@ -217,8 +221,137 @@ def _last_sent_sha(task_id: str) -> str | None:
     if not config.DB.exists():
         return None
     from . import store
-    row = store.last_task_step_of(store.db(), task_id, (PUSH_SENT_ACTION,))
+    row = store.last_task_step_of(store.db(), task_id,
+                                  (PUSH_SENT_ACTION, PUSH_SENT_LEGACY_ACTION))
     return (row["detail"] or "").split(" ")[0] if row is not None else None
+
+
+def last_sent_sha(task_id: str) -> str | None:
+    """sha последней записи «ветка отправлена» задачи; None — записи нет."""
+    return _last_sent_sha(task_id) or None
+
+
+# Подпись коммита пульта (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-5):
+# автор и коммиттер — `machine.commit_author` записи проекта, строка
+# `policy.co_author` и трейлер — в сообщении, запись журнала «коммит
+# пульта» — только при `commit_author`. Трейлер — сведение, решений по нему
+# пульт не принимает.
+PULT_ACTOR_TRAILER = "Artel-Actor: orchestrator"
+PULT_COMMIT_ACTION = "коммит пульта:"
+
+
+def _project_entry(project: str | None) -> dict:
+    if not project:
+        return {}
+    from . import targets
+    try:
+        entry = targets.target(project)
+    except targets.TargetsError:
+        return {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def commit_author(project: str | None) -> tuple[str, str] | None:
+    """(имя, почта) `commit_author` записи проекта; None — поля нет."""
+    author = _project_entry(project).get("commit_author")
+    if isinstance(author, dict) and author.get("name") and author.get("email"):
+        return str(author["name"]), str(author["email"])
+    return None
+
+
+def pult_identity(project: str | None, name: str, email: str) -> tuple[str, str]:
+    """Автор коммита пульта: `commit_author` проекта, иначе прежний."""
+    return commit_author(project) or (name, email)
+
+
+def pult_identity_args(project: str | None, name: str | None = None,
+                       email: str | None = None) -> list:
+    """`-c user.name=… -c user.email=…` коммита пульта в рабочей копии;
+    пусто — у проекта нет `commit_author` и прежнего автора не задано
+    (идентичность клона, как раньше)."""
+    author = commit_author(project)
+    if author is None:
+        if name is None:
+            return []
+        author = (name, email)
+    return ["-c", f"user.name={author[0]}", "-c", f"user.email={author[1]}"]
+
+
+def pult_message(message: str, project: str | None) -> str:
+    """Сообщение коммита пульта: строка `co_author` и трейлер пульта
+    последним абзацем."""
+    lines = []
+    co_author = _project_entry(project).get("co_author")
+    if isinstance(co_author, str) and co_author.strip():
+        lines.append(co_author.strip())
+    lines.append(PULT_ACTOR_TRAILER)
+    return message.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
+
+
+def journal_pult_commit(conn, task_id: str, project: str | None, sha: str,
+                        kind: str) -> None:
+    """Запись «коммит пульта: <sha> (<вид>)» — только для проекта с
+    `commit_author`: журнал прочих проектов не меняется."""
+    if not sha or commit_author(project) is None:
+        return
+    from . import store
+    store.journal(conn, task_id, "orchestrator", PULT_COMMIT_ACTION,
+                  f"{sha} ({kind})")
+
+
+# Сверка `commit_author` с владельцем токена (требование 6) — до первой
+# отправки ветки задачи, в этой точке, по любому пути отправки.
+AUTHOR_CHECK_REFUSAL = "сверка автора"
+AUTHOR_CHECK_SKIPPED_ACTION = "сверка автора — после адаптера"
+
+
+def _token_user_unimplemented(forge, project: str, reason: str) -> bool:
+    """Ответ `reason` — именованный отказ реестра forge «у реализации
+    хостинга проекта нет функции token_user». Признак берётся из реестра, не
+    из сравнения значения `forge` с литералом: текст «не реализовано»,
+    пришедший от хостинга, у которого функция есть, пропуском не считается."""
+    hosting = forge.hosting(project)
+    implementation = forge.IMPLEMENTATIONS.get(hosting)
+    if implementation is None or hasattr(implementation, "token_user"):
+        return False
+    return reason == f"token_user: не реализовано для {hosting}"
+
+
+def _author_check_refusal(project: str, entry: dict, task_id: str) -> str | None:
+    """Причина отказа отправки ветки задачи `task_id` по сверке автора;
+    None — отправка идёт (совпадение, проекта без `commit_author`, ветка уже
+    отправлялась, хостинг github без функции)."""
+    author = entry.get("commit_author")
+    if not (isinstance(author, dict) and author.get("name")):
+        return None
+    if _last_sent_sha(task_id):
+        return None
+    name = str(author["name"])
+    from . import forge
+    user = forge.token_user(project)
+    reason = getattr(user, "reason", "") or ""
+    if reason:
+        if _token_user_unimplemented(forge, project, reason):
+            from . import store
+            try:
+                store.journal(store.db(), task_id, "orchestrator",
+                              AUTHOR_CHECK_SKIPPED_ACTION,
+                              f"commit_author {name}: {reason} — сверка с "
+                              f"владельцем токена отложена до адаптера "
+                              f"{forge.hosting(project)}")
+            except sqlite3.Error:
+                pass
+            return None
+        return (f"{AUTHOR_CHECK_REFUSAL} не выполнена: commit_author {name}, "
+                f"владелец токена не получен — {reason}")
+    username = getattr(user, "username", None)
+    if not username:
+        return (f"{AUTHOR_CHECK_REFUSAL} не выполнена: commit_author {name}, "
+                f"token_user дал пустой ответ (имени владельца токена нет)")
+    if username != name:
+        return (f"{AUTHOR_CHECK_REFUSAL}: commit_author {name} не совпадает с "
+                f"владельцем токена token_user {username}")
+    return None
 
 
 def _raw_config(cwd: Path, *args: str) -> str:
@@ -690,6 +823,12 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
             added += ["-o", option]
     if sub == "push" and not deleting and "--dry-run" not in flags \
             and "-n" not in flags:
+        if entry is not None:
+            for task_id_of in dict.fromkeys(s["task"]["id"] for s in branches):
+                reason = _author_check_refusal(project, entry, task_id_of)
+                if reason is not None:
+                    return _refuse(plan, project, task_id_of, env, task_id,
+                                   reason)
         plan.sent = [(s["task"]["id"], s["src"], s["name"]) for s in branches]
     reset = list(PUSH_RESET_CONFIG) if whitelisted else []
     rest = list(args[index + 1:])

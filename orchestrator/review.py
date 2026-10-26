@@ -12,6 +12,9 @@ def review_package_measurement(reports: list[str]) -> str:
     return reports[-1] if reports else ""
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
+# Пометка пакета после перезаписи ветки (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T,
+# требование 18).
+REWRITTEN_MARK = "ветка перезаписана — дифф полный"
 
 # Пометка отката для трёх артефактов задачи (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM,
 # требование 3, AC-2): их источник — артефактная ветка, а откат — каталог
@@ -862,7 +865,16 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     repo = repo_context.path_or_none(repo_context.resolve(target))
 
     incremental = iteration > 1 and bool(prev_sha)
-    if incremental:
+    # Ветка перезаписана сжатием/перебазированием после прошлого ревью
+    # (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требование 18): sha вердикта есть,
+    # но не предок головы — инкремент от него неверен, пакет несёт полный
+    # дифф от той же базы, что у первой итерации, с пометкой.
+    rewritten = (incremental and gitcmd.commit_exists(prev_sha, repo=repo)
+                 and not gitcmd.is_ancestor(prev_sha, branch, repo=repo))
+    if rewritten:
+        incremental = False
+        base = gitcmd.diff_base(branch, repo=repo) or config.MAIN_BRANCH
+    elif incremental:
         base = prev_sha
     elif iteration == 1:
         # tasks/01M1SG9T962WJJ31S282GWM0EN, требование 3/AC-3: полный diff
@@ -967,6 +979,11 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         text, reason = gitcmd.show(branch, rel, repo=repo)
         note = LONG_LIVED_NOTE if text is not None else f"(не показан: {reason})"
         parts.append(artifact_part(rel, text, note, run_id))
+    if rewritten:
+        parts.append(f"### {REWRITTEN_MARK}\n\nsha прошлого вердикта "
+                     f"{prev_sha} не предок головы {branch}: ветка "
+                     f"переписана сжатием или перебазированием, дифф — вся "
+                     f"задача от merge-base с origin/{config.MAIN_BRANCH}\n")
     parts.append(f"### Изменённые файлы (git diff --stat {base}...{branch})"
                  f"\n\n{brief.wrap_boundary(run_id, shown['stat'])}\n")
     parts.append(f"### Diff (git diff {base}...{branch})"

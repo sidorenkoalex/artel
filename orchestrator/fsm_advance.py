@@ -20,7 +20,8 @@ from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
               fsm, fsm_autogate, gitcmd, github_adapter, merge_after,
-              project_profile, repo_context, store, workspace, yamlmini)
+              project_profile, pull, repo_context, store, targets, workspace,
+              yamlmini)
 from .advance_gates import spec_audit as spec_audit_gate
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
@@ -734,6 +735,27 @@ def _apply_plan_budget(conn, task_id: str, t, meta: dict) -> None:
     print(f"[{task_id}] бюджет из PLAN: {detail}")
 
 
+def _delivery_fields(t) -> dict:
+    """Запись проекта задачи — поля доставки читаются из неё через `.get`;
+    запись не прочитана — пусто, переход прежний (требование 14)."""
+    try:
+        entry = targets.target(t["target"] or config.DEFAULT_TARGET)
+    except targets.TargetsError:
+        return {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def _prepare_branch(conn, task_id: str, t, state: str, entry: dict,
+                    rebase: bool):
+    """`pull.prepare_branch` с головой main на origin проекта задачи."""
+    ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
+    repo_path = repo_context.path_or_none(ctx)
+    base = fsm._origin_main_sha(t["target"] or config.DEFAULT_TARGET,
+                                repo=repo_path)
+    return pull.prepare_branch(conn, task_id, t, state, entry=entry,
+                               base=base, rebase=rebase, repo_path=repo_path)
+
+
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Разработчик закончил: PLAN ready и ветка запушена -> в verifying
     # (ADR-0015, требования 1-2: CI подтянутой головы проверяется ДО
@@ -767,9 +789,16 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         return False
     if _acceptance_lock_refuses(conn, task_id, t, branch, foreign):
         return False
-    # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4).
-    if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
-            "escalated", "refused"):
+    # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4). При
+    # `freshness: rebase` узел только чекпоинтит WIP — перебазирует ветку
+    # `pull.prepare_branch` после рубежей (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T,
+    # требования 8, 10).
+    delivery = _delivery_fields(t)
+    rebase = delivery.get("freshness") == "rebase"
+    pulled = (fsm._pull_main_or_escalate(conn, task_id, t, state,
+                                         merge_main=False) if rebase
+              else fsm._pull_main_or_escalate(conn, task_id, t, state))
+    if pulled in ("escalated", "refused"):
         return False
     # Сверка перечня долгоживущих файлов (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
     # требование 7) — после подтяжки: сверяется голова, которая уйдёт в CI.
@@ -820,6 +849,14 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # в CI ветки. За прежними гейтами: старшинство их отказов не меняется.
     if _run_gates(conn, task_id, [lambda: _network_address_gate(conn, task_id, t)]):
         return False
+    # Сжатие и перебазирование — после всех рубежей, перед отправкой (SPEC
+    # 01M5WDB7JY0VJGHVKCABA2QC5T, требование 7): рубежи видели коммиты роли.
+    prepared = None
+    if delivery.get("squash_before_mr") is True and not t["is_canary"]:
+        prepared = _prepare_branch(conn, task_id, t, state, delivery,
+                                   rebase and pulled == "pulled")
+        if not isinstance(prepared, pull.Prepared):
+            return False
     # Сверка головы на origin (ADR-0015, требование 2) — не для канареечной
     # задачи (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 11/AC-11): её
     # `verifying` не ждёт CI и не читает origin (`canary._kill_at_verifying`
@@ -829,6 +866,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # входе `review()`.
     if not t["is_canary"]:
         if _run_gates(conn, task_id, [lambda: _origin_push_gate(conn, task_id, t)]):
+            # Отказ и эскалация отправки возвращают локальную ветку к
+            # коммитам роли (требование 16).
+            if prepared is not None:
+                pull.restore_branch(conn, task_id, t, prepared)
             return False
     if _acceptance_run_refuses(conn, task_id, t, tdir, target, branch):
         return False
