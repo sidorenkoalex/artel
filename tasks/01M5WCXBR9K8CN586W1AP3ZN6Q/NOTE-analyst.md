@@ -1,15 +1,17 @@
 ## Выяснено
-- ТЗ полное, SPEC.md написан (status: ready, guard ок): 5 AC, взятых из AC-12/16/17/18/21 SPEC родителя (refs/artifacts/01M5W670PHF08VPZWDRM5BY56W).
-- Часть 1 = 01M5WCXBM7WCMRWCBWNCHMAR3T (уже влита в эту ветку). forge.py даёт project_info/token_user/token_expiry/protections/branch_pipeline/job_test_report через реестр IMPLEMENTATIONS и `_call`.
-- misc_checks.check_base_branch:90 сейчас сравнивает `forge != "github"` с литералом и отдаёт skip.
-- merge_after: часть 1 + А0. «Часть 1» из ТЗ развёрнута в полный id, раздел «Обоснование зависимостей мержа» есть.
-- В зоне 5 файлов, поэтому сработал сигнал деления: дано обоснование монолита (песочница неотделима от doctor gitlab), рамка $25.
+- Шаг 2 (возврат с гейта SPEC 27.10): все 5 пунктов причины внесены в SPEC.md; status: ready; guard ок.
+  1) Литералы "github"/"gitlab" и targets.FORGES: требования 1–2 запрещают их в check_base_branch и в функции строки срока токена; новый AC-6 проверяет это разбором ast; исключения сторожа А0 не правятся (строка в «Не входит»).
+  2) Н-4: ошибка запроса с токеном даёт skip с причиной адаптера; для github строки срока нет. AC-3 получил граничные значения: ровно 14 дней — warn; ровно 10 задач — warn, 9 — info; killed и задачи другого проекта не считаются.
+  3) AC-5 и матрица: подмена теста, поставленная до песочницы (`lab` раньше `gl_clone`→`real_git`), сохраняет приоритет.
+  4) test_non_github_forge_is_skipped: url file:///nonexistent/sled, адаптер отказывает по адресу раньше токена (gitlab_adapter.request: _address раньше hosting_token, :224-236).
+  5) forge-probe --job: отчёт берётся по sha из forge.branch_pipeline базовой ветки; если конвейера нет — именованная причина.
+- Бюджет $25 оставлен (6 AC, 5 файлов).
 
 ## Не сработало
-- `artel.py docs` недоступна роли; SPEC родителя читал через `git show refs/artifacts/<id>:tasks/<id>/SPEC.md`.
+- guard отклоняет голый путь каталога `orchestrator/doctor/` в тексте (непроклассифицированный путь); заменил его файлом misc_checks.py.
 
 ## Где остановился
 - Шаг закончен.
 
 ## Чего не хватило
-- Прямого чтения документов родителя: каталог документов чужой задачи закрыт, помог git show по refs/artifacts.
+- Ничего существенного.
