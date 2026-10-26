@@ -331,10 +331,34 @@ LOCAL_FIELDS = {
                "sandbox": False, WRAPPER_FIELD: False,
                "weakening_scope": False,
                "mutation_claim_scope": False, COMPONENTS_FIELD: False,
-               REF_REQUIRED_FIELD: False, REF_SYSTEMS_FIELD: False},
+               REF_REQUIRED_FIELD: False, REF_SYSTEMS_FIELD: False,
+               "branch_template": False, "ref_pattern": False,
+               "freshness": False, "squash_before_mr": False,
+               "commit_template": False, "co_author": False,
+               "push_options": False, "push_options_forbidden": False,
+               "ci_required_jobs": False, "mr_assignee": False,
+               "draft_mr": False, "max_in_flight": False},
     "machine": {"forge": True, "url": True, "token_slot": True,
-                "path": False, COMPONENTS_FIELD: False},
+                "path": False, COMPONENTS_FIELD: False,
+                "commit_author": False},
 }
+
+# Доставка через MR (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2, требование 1; ADR-0029
+# п. 4-6, 11, 13): поля только локального слоя. Значения по умолчанию в
+# плоскую запись не подставляются — их берут читатели через `.get`.
+DEFAULT_BRANCH_TEMPLATE = "task/{id}-{slug}"
+BRANCH_PLACEHOLDERS = ("{id}", "{slug}", "{ref}")
+DEFAULT_COMMIT_TEMPLATE = "{id}: {text}"
+COMMIT_PLACEHOLDERS = ("{id}", "{ref}", "{text}")
+FRESHNESS = ("merge", "rebase")
+CO_AUTHOR_PREFIX = "Co-authored-by: "
+PUSH_OPTION_CI_VARIABLE = "ci.variable="
+PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+DELIVERY_POLICY_FIELDS = (
+    "branch_template", "ref_pattern", "freshness", "squash_before_mr",
+    "commit_template", "co_author", "push_options", "push_options_forbidden",
+    "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight")
+DELIVERY_MACHINE_FIELDS = ("commit_author",)
 # Подполя профиля и компонента, которые живут в разделе `policy`.
 LOCAL_POLICY_SCOPES = ("weakening_scope", "mutation_claim_scope")
 LOCAL_MACHINE_COMPONENT_FIELDS = ("path",)
@@ -417,6 +441,7 @@ def merge_local(name: str, entry: object, source: Path | None = None) -> dict:
             raise TargetsError(f"{where}: раздел '{section}' — не набор полей")
     description, policy, machine = (entry[s] for s in LOCAL_SECTIONS)
     _check_local_sections(where, description, policy, machine)
+    _check_delivery(where, policy, machine)
     _check_local_values(name, where, entry)
     flat = _flatten(name, description, policy, machine)
     check(name, flat, source)
@@ -509,6 +534,129 @@ def _check_local_sections(where: str, description: dict, policy: dict,
             raise TargetsError(f"{where}: поле '{field}' — не непустая строка")
 
 
+def push_whitelisted(entry: dict) -> bool:
+    """Действует ли белый список отправок проекта с записью `entry`:
+    `merge_gate` отличен от `operator` (ADR-0029 п. 13; SPEC
+    01M5WDB7F14SQ30QVWJY2XYBG2, требование 3 (в)). Единственное место
+    сравнения — `gitcmd` зовёт предикат, а не литерал."""
+    return entry.get("merge_gate") != "operator"
+
+
+def push_option_error(option: object, forbidden: list | tuple = ()) -> str | None:
+    """Причина отказа опции отправки `option` — та же норма для элемента
+    `policy.push_options` при загрузке и для `-o` в argv отправки; None —
+    опция годна. Формы — `ci.variable=ИМЯ=значение` и `ИМЯ=значение`;
+    `ci.skip` и любая `merge_request.*` запрещены всегда."""
+    if not isinstance(option, str):
+        return f"{option!r} — не строка"
+    if option == "ci.skip" or option.startswith("ci.skip="):
+        return f"{option!r}: ci.skip запрещён"
+    if option.startswith("merge_request."):
+        return (f"{option!r}: merge_request.* запрещены — создание и слияние "
+                f"MR при отправке")
+    body = option.removeprefix(PUSH_OPTION_CI_VARIABLE)
+    var, sep, _value = body.partition("=")
+    if not sep or not PUSH_OPTION_NAME.fullmatch(var):
+        return (f"{option!r} — не вида ci.variable=ИМЯ=значение или "
+                f"ИМЯ=значение")
+    if var in forbidden:
+        return f"{option!r}: имя {var} в policy.push_options_forbidden"
+    return None
+
+
+def _string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _check_delivery(where: str, policy: dict, machine: dict) -> None:
+    """Поля доставки через MR (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2, требование
+    1): форма и связи между полями; отказ называет поле."""
+    def refuse(field: str, text: str):
+        section = "machine" if field in DELIVERY_MACHINE_FIELDS else "policy"
+        raise TargetsError(f"{where}: поле '{section}.{field}' — {text}")
+
+    template = policy.get("branch_template", DEFAULT_BRANCH_TEMPLATE)
+    if "branch_template" in policy:
+        if not isinstance(template, str) or not template.strip():
+            refuse("branch_template", "не непустая строка")
+        rest = template
+        for mark in BRANCH_PLACEHOLDERS:
+            rest = rest.replace(mark, "")
+        if "{" in rest or "}" in rest:
+            refuse("branch_template", f"{template!r}: подстановки — только "
+                                      f"{', '.join(BRANCH_PLACEHOLDERS)}")
+        if "{ref}" in template and REF_REQUIRED_FIELD not in policy:
+            refuse("branch_template", f"{template!r}: {{ref}} без "
+                                      f"policy.{REF_REQUIRED_FIELD}")
+    if "ref_pattern" in policy:
+        pattern = policy["ref_pattern"]
+        if not isinstance(pattern, str) or not pattern:
+            refuse("ref_pattern", "не непустая строка")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            refuse("ref_pattern", f"{pattern!r} не компилируется: {exc}")
+        if "{ref}" not in template:
+            refuse("ref_pattern", "задан при branch_template без {ref}")
+    squash = policy.get("squash_before_mr", False)
+    if not isinstance(squash, bool):
+        refuse("squash_before_mr", f"{squash!r}, не true/false")
+    freshness = policy.get("freshness", FRESHNESS[0])
+    if freshness not in FRESHNESS:
+        refuse("freshness", f"{freshness!r}, ожидается {' | '.join(FRESHNESS)}")
+    if freshness == "rebase" and not squash:
+        refuse("freshness", "rebase только при squash_before_mr: true")
+    if "commit_template" in policy:
+        commit = policy["commit_template"]
+        if not isinstance(commit, str) or not commit.strip():
+            refuse("commit_template", "не непустая строка")
+        rest = commit
+        for mark in COMMIT_PLACEHOLDERS:
+            rest = rest.replace(mark, "")
+        if "{" in rest or "}" in rest:
+            refuse("commit_template", f"{commit!r}: подстановки — только "
+                                      f"{', '.join(COMMIT_PLACEHOLDERS)}")
+        if commit != DEFAULT_COMMIT_TEMPLATE and not squash:
+            refuse("commit_template", "отличный от умолчания — только при "
+                                      "squash_before_mr: true")
+    if "commit_author" in machine:
+        author = machine["commit_author"]
+        if not (isinstance(author, dict) and set(author) == {"name", "email"}
+                and all(isinstance(v, str) and v.strip()
+                        for v in author.values())):
+            refuse("commit_author", "нужно {name, email} — обе непустые строки")
+    if "co_author" in policy:
+        co_author = policy["co_author"]
+        if not (isinstance(co_author, str)
+                and co_author.startswith(CO_AUTHOR_PREFIX)
+                and co_author[len(CO_AUTHOR_PREFIX):].strip()):
+            refuse("co_author", f"{co_author!r}: нужна строка, начинающаяся "
+                                f"с {CO_AUTHOR_PREFIX!r}")
+    forbidden = policy.get("push_options_forbidden", [])
+    if not _string_list(forbidden):
+        refuse("push_options_forbidden", "не список строк")
+    options = policy.get("push_options", [])
+    if not _string_list(options):
+        refuse("push_options", "не список строк")
+    for option in options:
+        reason = push_option_error(option, forbidden)
+        if reason is not None:
+            refuse("push_options", reason)
+    jobs = policy.get("ci_required_jobs", [])
+    if not _string_list(jobs):
+        refuse("ci_required_jobs", "не список строк")
+    if "mr_assignee" in policy:
+        assignee = policy["mr_assignee"]
+        if not isinstance(assignee, str) or not assignee.strip():
+            refuse("mr_assignee", "не непустая строка")
+    if not isinstance(policy.get("draft_mr", True), bool):
+        refuse("draft_mr", f"{policy['draft_mr']!r}, не true/false")
+    if "max_in_flight" in policy:
+        limit = policy["max_in_flight"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            refuse("max_in_flight", f"{limit!r}, не целое > 0")
+
+
 def _check_local_values(name: str, where: str, entry: dict) -> None:
     """`<cache>` — только в начале значения `env` раздела `description`;
     абсолютных путей в `description` и `policy` нет (требования 3-4)."""
@@ -583,9 +731,13 @@ def _flatten(name: str, description: dict, policy: dict,
     flat["base"] = description["base"]
     flat["token_slot"] = machine["token_slot"]
     for field in ("no_paths", "project_skills", "merge_gate", "sandbox",
-                  WRAPPER_FIELD, REF_REQUIRED_FIELD, REF_SYSTEMS_FIELD):
+                  WRAPPER_FIELD, REF_REQUIRED_FIELD, REF_SYSTEMS_FIELD,
+                  *DELIVERY_POLICY_FIELDS):
         if field in policy:
             flat[field] = policy[field]
+    for field in DELIVERY_MACHINE_FIELDS:
+        if field in machine:
+            flat[field] = machine[field]
     common = machine.get("path")
     if PROFILE_FIELD in description:
         profile = _with_env(description[PROFILE_FIELD], name, common)

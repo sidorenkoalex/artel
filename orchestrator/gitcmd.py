@@ -1,6 +1,7 @@
 """Вызовы git в корне репозитория, вопросы к ветке задачи и к произвольному
 репозиторию (артефактные git-репо внешних target, ADR-0003 3д, tasks/T021)."""
 import os
+import sqlite3
 import subprocess
 import threading
 import time
@@ -161,7 +162,351 @@ def hosting_env(env: dict, token: str) -> dict:
     return env
 
 
-def git(*args: str) -> subprocess.CompletedProcess:
+# Единая точка отправки (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2, требование 3;
+# ADR-0029 п. 13): через `_push_plan` проходят все пять точек запуска git
+# модуля. Любая отправка ветки задачи — запись «ветка отправлена» и опции
+# `policy.push_options`; проект под белым списком (`targets.push_whitelisted`)
+# — проверка argv, окружения и конфигурации клона до запуска процесса.
+PUSH_SENT_ACTION = "ветка отправлена"
+PUSH_REFUSED_ACTION = "отправка отказана"
+PUSH_WHITELIST_SOURCE = "branch_push_whitelist"
+PUSH_SUBCOMMANDS = ("push", "send-pack")
+PUSH_RESET_CONFIG = ("-c", "push.followTags=false", "-c", "push.pushOption=")
+PUSH_ALLOWED_FLAGS = ("-u", "--set-upstream", "-q", "--delete")
+PUSH_LEASE_FLAG = "--force-with-lease"
+PUSH_DEAD_STATES = ("killed", "done")
+ARTIFACT_REF_PREFIX = "refs/artifacts/"
+GIT_CONFIG_ENV_NAMES = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+# Глобальные опции git со значением отдельным словом.
+GIT_GLOBALS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                          "--config-env", "--super-prefix")
+# Встроенные подкоманды git: псевдоним их не перекрывает, конфигурацию
+# клона ради них не читаем. Прочие — кандидаты в псевдоним (`alias.*`).
+GIT_BUILTINS = frozenset((
+    "add", "am", "apply", "archive", "bisect", "blame", "branch", "bundle",
+    "cat-file", "check-attr", "check-ignore", "check-ref-format", "checkout",
+    "cherry", "cherry-pick", "clean", "clone", "commit", "commit-tree",
+    "config", "count-objects", "describe", "diff", "diff-files", "diff-index",
+    "diff-tree", "fetch", "for-each-ref", "format-patch", "fsck", "gc", "grep",
+    "hash-object", "help", "init", "log", "ls-files", "ls-remote", "ls-tree",
+    "merge", "merge-base", "merge-file", "merge-tree", "mktree", "mv",
+    "name-rev", "notes", "prune", "pull", "read-tree", "rebase", "reflog",
+    "remote", "repack", "replace", "reset", "restore", "rev-list", "rev-parse",
+    "revert", "rm", "shortlog", "show", "show-ref", "sparse-checkout", "stash",
+    "status", "switch", "symbolic-ref", "tag", "update-index", "update-ref",
+    "var", "verify-commit", "version", "worktree", "write-tree",
+))
+
+
+def _project_tasks(project: str) -> list:
+    """(id, ветка, состояние) задач проекта из БД пульта; БД нет — пусто."""
+    if not config.DB.exists():
+        return []
+    from . import store
+    return store.db().execute(
+        "SELECT id, branch, state FROM tasks WHERE COALESCE(target, ?)=?",
+        (config.DEFAULT_TARGET, project)).fetchall()
+
+
+def _last_sent_sha(task_id: str) -> str | None:
+    """sha последней записи «ветка отправлена» журнала задачи."""
+    if not config.DB.exists():
+        return None
+    from . import store
+    row = store.db().execute(
+        "SELECT detail FROM steps WHERE task_id=? AND action=? "
+        "ORDER BY id DESC LIMIT 1", (task_id, PUSH_SENT_ACTION)).fetchone()
+    return (row["detail"] or "").split(" ")[0] if row is not None else None
+
+
+def _raw_config(cwd: Path, *args: str) -> str:
+    """Вывод `git config <args>` клона `cwd`; пусто — ключа нет."""
+    try:
+        res = subprocess.run(["git", "-C", str(cwd), "config", *args],
+                             capture_output=True, text=True, env=pult_env())
+    except OSError:
+        return ""
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def _split_globals(args: list, cwd: Path) -> tuple[list, int | None, Path]:
+    """(глобальные опции, индекс подкоманды или None, рабочий каталог git
+    с учётом `-C`) argv git без ведущего `git`."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        word = args[i]
+        if word in GIT_GLOBALS_WITH_VALUE:
+            if word == "-C" and i + 1 < len(args):
+                cwd = cwd / args[i + 1]
+            i += 2
+        else:
+            i += 1
+    return args[:i], (i if i < len(args) else None), cwd
+
+
+def _push_words(rest: list) -> tuple[list, list, list]:
+    """(флаги, значения `-o`, позиционные) аргументов после `push`."""
+    flags, options, positional = [], [], []
+    i = 0
+    while i < len(rest):
+        word = rest[i]
+        if word in ("-o", "--push-option"):
+            options.append(rest[i + 1] if i + 1 < len(rest) else "")
+            i += 2
+            continue
+        if word.startswith("--push-option="):
+            options.append(word.split("=", 1)[1])
+        elif word.startswith("-o") and len(word) > 2:
+            options.append(word[2:])
+        elif word.startswith("-"):
+            flags.append(word)
+        else:
+            positional.append(word)
+        i += 1
+    return flags, options, positional
+
+
+def _is_url(dest: str) -> bool:
+    return "://" in dest or (":" in dest and "@" in dest.split(":", 1)[0])
+
+
+class _PushPlan:
+    """Решение точки отправки по одному вызову git: argv к запуску или
+    отказ; после успешного кода — записи «ветка отправлена»."""
+
+    def __init__(self, args: list, cwd: Path):
+        self.args = args
+        self.cwd = cwd
+        self.refusal: str | None = None
+        self.sent: list = []
+
+    def after(self, code: int) -> None:
+        """Записи «ветка отправлена: <sha>» после отправки с кодом 0."""
+        if code != 0 or not self.sent:
+            return
+        from . import store
+        try:
+            conn = store.db()
+            for task_id, src, branch in self.sent:
+                res = subprocess.run(
+                    ["git", "-C", str(self.cwd), "rev-parse", "--verify",
+                     f"{src}^{{commit}}"], capture_output=True, text=True,
+                    env=pult_env())
+                sha = res.stdout.strip() if res.returncode == 0 else ""
+                if sha:
+                    store.journal(conn, task_id, "orchestrator",
+                                  PUSH_SENT_ACTION, f"{sha} {branch}")
+        except (OSError, sqlite3.Error):
+            # Запись — след отправки, не её условие: отправка уже прошла.
+            pass
+
+
+def _refspecs(refspecs: list, tasks: list) -> list:
+    """Разбор refspec отправки: словарь на каждый — назначение, вид
+    (`branch`/`artifacts`/`ref`), форма (`+`, `:<ref>`) и задача проекта, к
+    ветке или ссылке документов которой он относится (`None` — нет такой)."""
+    by_branch: dict = {}
+    for row in tasks:
+        live = row["state"] not in PUSH_DEAD_STATES
+        if row["branch"] not in by_branch or live:
+            by_branch[row["branch"]] = row
+    ids = {row["id"]: row for row in tasks}
+    parsed = []
+    for spec in refspecs:
+        body = spec[1:] if spec.startswith("+") else spec
+        src, colon, dst = body.partition(":")
+        dst = dst if colon else src
+        if dst.startswith(ARTIFACT_REF_PREFIX):
+            kind, name = "artifacts", dst
+            row = ids.get(dst[len(ARTIFACT_REF_PREFIX):])
+        elif dst.startswith("refs/") and not dst.startswith("refs/heads/"):
+            kind, name, row = "ref", dst, None
+        else:
+            kind, name = "branch", dst.removeprefix("refs/heads/")
+            row = by_branch.get(name)
+        parsed.append({"spec": spec, "src": src or name, "name": name,
+                       "kind": kind, "plus": spec.startswith("+"),
+                       "colon": colon and not src, "task": row})
+    return parsed
+
+
+def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
+                       cwd: Path, env: dict, flags: list, options: list,
+                       positional: list, specs: list) -> str | None:
+    """Причина отказа отправки проекта под белым списком (требование 3
+    (в)); None — отправка разрешена."""
+    from . import targets
+    if sub != "push":
+        return f"подкоманда {sub} — отправка только через push"
+    i = 0
+    while i < len(globals_):
+        if globals_[i] != "-C":
+            return f"глобальная опция git {globals_[i]} перед push"
+        i += 2
+    if _project_of_path(cwd) != project:
+        return f"отправка не из клона проекта {project} ({cwd})"
+    names = sorted(n for n in env if n in GIT_CONFIG_ENV_NAMES
+                   or n.startswith(GIT_CONFIG_ENV_PREFIXES))
+    if names:
+        return f"переменные окружения {', '.join(names)}"
+    leases = []
+    for flag in flags:
+        if flag.startswith(PUSH_LEASE_FLAG + "="):
+            leases.append(flag.split("=", 1)[1])
+        elif flag not in PUSH_ALLOWED_FLAGS:
+            return f"флаг {flag} вне белого списка"
+    forbidden = entry.get("push_options_forbidden") or []
+    for option in options:
+        reason = targets.push_option_error(option, forbidden)
+        if reason is not None:
+            return f"опция -o {reason}"
+    if not positional or not specs:
+        return "отправка без явного refspec"
+    dest = positional[0]
+    if dest != "origin" and url_key(dest) != url_key(str(entry.get("url") or "")):
+        return f"назначение {dest} — не origin и не url записи проекта"
+    deleting = "--delete" in flags
+    for spec in specs:
+        if spec["plus"]:
+            return f"refspec {spec['spec']} с «+»"
+        if spec["colon"]:
+            return f"удаление формой {spec['spec']}"
+        if deleting:
+            if spec["kind"] != "artifacts" or spec["task"] is None:
+                return (f"--delete {spec['spec']} — удаление только "
+                        f"refs/artifacts/<id> задачи проекта")
+            continue
+        if spec["kind"] == "artifacts":
+            continue
+        if spec["kind"] == "ref":
+            return f"отправка ссылки {spec['name']} (теги и иные ссылки)"
+        if spec["name"] == entry.get("base"):
+            return f"отправка в base {spec['name']}"
+        task = spec["task"]
+        if task is None or task["state"] in PUSH_DEAD_STATES:
+            return f"ветка {spec['name']} — не ветка живой задачи проекта"
+    for lease in leases:
+        ref, colon, sha = lease.partition(":")
+        name = ref.removeprefix("refs/heads/")
+        own = [s for s in specs if s["kind"] == "branch" and s["name"] == name]
+        if not colon or not sha or not own:
+            return f"{PUSH_LEASE_FLAG}={lease} — нужна форма <своя ветка>:<sha>"
+        last = _last_sent_sha(own[0]["task"]["id"])
+        if last != sha:
+            return (f"{PUSH_LEASE_FLAG}={lease}: sha не последней записи "
+                    f"«{PUSH_SENT_ACTION}» ({last or 'записи нет'})")
+    for key in ("pushurl", "push", "mirror"):
+        if _raw_config(cwd, "--get-all", f"remote.origin.{key}"):
+            return f"в конфигурации клона задан remote.origin.{key}"
+    if _raw_config(cwd, "--local", "--get-all", "push.pushOption"):
+        return "в конфигурации клона задан push.pushOption"
+    return None
+
+
+def _refuse(plan: _PushPlan, project: str | None, related: str | None,
+            env: dict, task_id: str | None, reason: str) -> _PushPlan:
+    """Отказ отправки с записью: журнал задачи отправки, иначе задачи
+    контекста (`task_id`, `ARTEL_TASK`), иначе алерт `incident`."""
+    from . import alerts, store
+    plan.refusal = f"{PUSH_REFUSED_ACTION} (проект {project}): {reason}"
+    context = task_id or env.get(config.ARTEL_TASK_ENV) or os.environ.get(
+        config.ARTEL_TASK_ENV)
+    try:
+        conn = store.db()
+        target = related or (context if context and store.task_exists(
+            conn, context) else None)
+        if target is not None:
+            store.journal(conn, target, "orchestrator", PUSH_REFUSED_ACTION,
+                          plan.refusal)
+        else:
+            alerts.raise_alert(conn, project, "incident", PUSH_WHITELIST_SOURCE,
+                               plan.refusal)
+    except sqlite3.Error:
+        pass
+    return plan
+
+
+def _push_plan(args: list, cwd: Path, env: dict | None,
+               task_id: str | None) -> _PushPlan | None:
+    """Решение единой точки отправки по argv git `args` (без `git`),
+    запущенному в `cwd` с окружением `env` (None — окружение пульта).
+    None — вызов не отправка и не псевдоним в клоне проекта."""
+    globals_, index, cwd = _split_globals(args, cwd)
+    if index is None:
+        return None
+    sub = args[index]
+    if sub not in PUSH_SUBCOMMANDS and sub in GIT_BUILTINS:
+        return None
+    from . import targets
+    env = dict(os.environ if env is None else env)
+    plan = _PushPlan(list(args), cwd)
+    cwd_project = _project_of_path(cwd)
+    try:
+        entries = targets.load()
+    except targets.TargetsError:
+        entries = None
+    if sub not in PUSH_SUBCOMMANDS:
+        # Подкоманда вне встроенных — возможно, псевдоним клона.
+        if cwd_project is None:
+            return None
+        entry = (entries or {}).get(cwd_project)
+        if entry is not None and not targets.push_whitelisted(entry):
+            return None
+        alias = _raw_config(cwd, "--get", f"alias.{sub}")
+        if not alias:
+            return None
+        return _refuse(plan, cwd_project, None, env, task_id,
+                       f"подкоманда {sub} — псевдоним git ({alias})")
+    flags, options, positional = _push_words(args[index + 1:])
+    dest = positional[0] if positional else ""
+    project = cwd_project
+    if project is None and dest and not _is_url(dest):
+        project = _project_of_path(cwd / dest.removeprefix("file://"))
+    if project is None and dest and entries is not None:
+        found = project_by_url(dest, entries)
+        project = found[0] if found is not None else None
+    project = project or config.DEFAULT_TARGET
+    tasks = _project_tasks(project)
+    specs = _refspecs(positional[1:], tasks)
+    related = next((s["task"]["id"] for s in specs if s["task"] is not None),
+                   None)
+    entry = (entries or {}).get(project)
+    if project != config.DEFAULT_TARGET and entry is None:
+        why = ("targets.yaml не читается" if entries is None
+               else "записи проекта нет")
+        return _refuse(plan, project, related, env, task_id,
+                       f"гейт мержа неизвестен — {why}")
+    whitelisted = (project != config.DEFAULT_TARGET
+                   and targets.push_whitelisted(entry))
+    if whitelisted:
+        reason = _whitelist_refusal(project, entry, globals_, sub, cwd, env,
+                                    flags, options, positional, specs)
+        if reason is not None:
+            return _refuse(plan, project, related, env, task_id, reason)
+    deleting = "--delete" in flags or "-d" in flags or any(
+        s["colon"] for s in specs)
+    branches = [s for s in specs if s["kind"] == "branch"
+                and s["task"] is not None and not s["colon"]]
+    added = []
+    if branches and not deleting:
+        for option in (entry or {}).get("push_options") or []:
+            added += ["-o", option]
+    if sub == "push" and not deleting and "--dry-run" not in flags \
+            and "-n" not in flags:
+        plan.sent = [(s["task"]["id"], s["src"], s["name"]) for s in branches]
+    reset = list(PUSH_RESET_CONFIG) if whitelisted else []
+    plan.args = (globals_ + reset + [sub] + added + list(args[index + 1:]))
+    return plan
+
+
+def _refused(args, refusal: str, text: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(
+        list(args), 1, "" if text else b"",
+        refusal if text else refusal.encode())
+
+
+def git(*args: str, task_id: str | None = None) -> subprocess.CompletedProcess:
     """git в корне репозитория; исход разбирает вызывающий.
 
     Ошибка запуска (git не установлен) — такой же ненулевой код возврата,
@@ -174,8 +519,17 @@ def git(*args: str) -> subprocess.CompletedProcess:
     Хостинговая операция внешнего проекта (`_hosting_project`) идёт с
     токеном слота `token_slot` его записи (`hosting_env`) либо отказывает
     без запуска git (`hosting_token`; SPEC 01M545EDTHS47HSB59AKC1EZ9C).
+
+    Отправка проходит единую точку `_push_plan` (SPEC
+    01M5WDB7F14SQ30QVWJY2XYBG2, требование 3); `task_id` — задача, от имени
+    которой команда пульта отправляет (журнал отказа без своей задачи).
     """
     env = pult_env()
+    plan = _push_plan(list(args), Path(config.ROOT), env, task_id)
+    if plan is not None:
+        if plan.refusal is not None:
+            return _refused(args, plan.refusal)
+        args = tuple(plan.args)
     project = _hosting_project(args)
     if project is not None:
         token, refusal = hosting_token(*project)
@@ -184,10 +538,13 @@ def git(*args: str) -> subprocess.CompletedProcess:
         if token is not None:
             env = hosting_env(env, token)
     try:
-        return subprocess.run(["git", *args], cwd=config.ROOT, env=env,
-                              capture_output=True, text=True)
+        res = subprocess.run(["git", *args], cwd=config.ROOT, env=env,
+                             capture_output=True, text=True)
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
+    if plan is not None:
+        plan.after(res.returncode)
+    return res
 
 
 def current_branch(repo: Path | None = None) -> str:
@@ -339,8 +696,8 @@ def list_branches(prefix: str = "", repo: Path | None = None) -> list[str] | Non
 
 
 def carpentry(repo: Path, args: list, env: dict, *,
-             input: bytes | None = None, text: bool = True
-             ) -> subprocess.CompletedProcess:
+             input: bytes | None = None, text: bool = True,
+             task_id: str | None = None) -> subprocess.CompletedProcess:
     """Плотницкая git-команда (read-tree/hash-object/update-index/write-tree/
     commit-tree — `artifact_branch.write_commit`) в `repo` со своим
     окружением (`GIT_INDEX_FILE`, для `commit-tree` — ещё и `GIT_AUTHOR_*`/
@@ -365,15 +722,32 @@ def carpentry(repo: Path, args: list, env: dict, *,
     `git()`: запись в ссылку документов на переходе FSM (паспорт задачи) не
     имеет права ронять сам переход — kill switch срабатывает и без git.
     """
+    plan = _push_plan(list(args), Path(repo), env, task_id)
+    if plan is not None:
+        if plan.refusal is not None:
+            return _refused(["git", *args], plan.refusal, text)
+        args = plan.args
     try:
-        return subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
-                              capture_output=True, text=text, input=input)
+        res = subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
+                             capture_output=True, text=text, input=input)
     except OSError as exc:
         return subprocess.CompletedProcess(["git", *args], 1,
                                            "" if text else b"", str(exc))
+    if plan is not None:
+        plan.after(res.returncode)
+    return res
 
 
-def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def _point_plan(repo: Path, args: tuple, env: dict | None,
+                task_id: str | None) -> tuple[list, _PushPlan | None]:
+    """(argv после `git`, решение точки отправки) точек `read*` (`-C`)."""
+    argv = ["-C", str(repo), *args]
+    plan = _push_plan(argv, Path(config.ROOT), env, task_id)
+    return (plan.args if plan is not None else argv), plan
+
+
+def in_repo(repo: Path, *args: str,
+            task_id: str | None = None) -> subprocess.CompletedProcess:
     """git-команда в произвольном репозитории (не ROOT пульта) через `-C`.
 
     Не `subprocess.run(..., cwd=repo)` внутри `git()`: существующие тесты
@@ -383,8 +757,12 @@ def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
     `-C <repo>` остаётся обычным позиционным аргументом `git(*args)`, тем
     же вызовом, который заглушки уже умеют разобрать (tasks/T021 PLAN,
     «Подход»).
+
+    `task_id` уходит в `git` только заданным — те же заглушки его не знают.
     """
-    return git("-C", str(repo), *args)
+    if task_id is None:
+        return git("-C", str(repo), *args)
+    return git("-C", str(repo), *args, task_id=task_id)
 
 
 # Чтения git со сроком, байтами, своим окружением и потоком (SPEC
@@ -411,8 +789,8 @@ class LaunchFailed(Exception):
 
 
 def read(repo: Path, *args: str, timeout: float | None = None,
-         input: bytes | None = None,
-         text: bool = False) -> subprocess.CompletedProcess:
+         input: bytes | None = None, text: bool = False,
+         task_id: str | None = None) -> subprocess.CompletedProcess:
     """git-команда в `repo` (`-C`) через `subprocess.run`, вывод байтами
     (`text` — строкой), `input` — байтовый вход, `timeout` — срок.
 
@@ -430,16 +808,22 @@ def read(repo: Path, *args: str, timeout: float | None = None,
         kwargs["text"] = True
     if timeout is not None:
         kwargs["timeout"] = timeout
+    argv, plan = _point_plan(repo, args, None, task_id)
+    if plan is not None and plan.refusal is not None:
+        return _refused(["git", *argv], plan.refusal, text)
     try:
-        return subprocess.run(["git", "-C", str(repo), *args],
-                              capture_output=True, env=pult_env(), **kwargs)
+        res = subprocess.run(["git", *argv],
+                             capture_output=True, env=pult_env(), **kwargs)
     except subprocess.TimeoutExpired:
         raise Timeout(f"git {args[0] if args else ''}: срок {timeout} с "
                       f"истёк") from None
+    if plan is not None:
+        plan.after(res.returncode)
+    return res
 
 
-def read_env(repo: Path, env: dict, *args: str,
-             timeout: float) -> subprocess.CompletedProcess:
+def read_env(repo: Path, env: dict, *args: str, timeout: float,
+             task_id: str | None = None) -> subprocess.CompletedProcess:
     """git-команда в `repo` (`-C`, `cwd` — `config.ROOT`) со своим
     окружением `env` (`GIT_INDEX_FILE` временного индекса) поверх маркера
     пульта; вывод строкой.
@@ -448,7 +832,10 @@ def read_env(repo: Path, env: dict, *args: str,
     перехвата `subprocess.run` шпионом `SpyRun` (тот ответил бы фейковым
     sha на `write-tree`). По истечении срока процесс убивается и вывод
     дочитывается — `Timeout`; `OSError` запуска выходит наружу."""
-    process = subprocess.Popen(["git", "-C", str(repo), *args],
+    argv, plan = _point_plan(repo, args, env, task_id)
+    if plan is not None and plan.refusal is not None:
+        return _refused(["git", *argv], plan.refusal)
+    process = subprocess.Popen(["git", *argv],
                                cwd=config.ROOT, env=pult_env(env),
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True)
@@ -459,6 +846,8 @@ def read_env(repo: Path, env: dict, *args: str,
         process.communicate()
         raise Timeout(f"git {args[0] if args else ''}: срок {timeout} с "
                       f"истёк") from None
+    if plan is not None:
+        plan.after(process.returncode)
     return subprocess.CompletedProcess(process.args, process.returncode,
                                        stdout, stderr)
 
@@ -467,7 +856,8 @@ STREAM_CHUNK = 1 << 16
 
 
 def read_stream(repo: Path, *args: str, limit: int, timeout: float,
-                chunk: int = STREAM_CHUNK) -> subprocess.CompletedProcess:
+                chunk: int = STREAM_CHUNK,
+                task_id: str | None = None) -> subprocess.CompletedProcess:
     """Вывод git-команды в `repo` (`-C`), прочитанный потоком порциями
     `chunk` с пределом `limit` байт и сроком `timeout`; stderr отброшен.
 
@@ -476,9 +866,12 @@ def read_stream(repo: Path, *args: str, limit: int, timeout: float,
     копится), процесс не запустился — `LaunchFailed`. Ненулевой код
     возврата — не исключение: результат с этим кодом разбирает вызывающий.
     Процесс — `subprocess.Popen`: поток через `subprocess.run` не читается."""
+    argv, plan = _point_plan(repo, args, None, task_id)
+    if plan is not None and plan.refusal is not None:
+        return _refused(["git", *argv], plan.refusal, text=False)
     end = time.monotonic() + timeout
     try:
-        proc = subprocess.Popen(["git", "-C", str(repo), *args],
+        proc = subprocess.Popen(["git", *argv],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, env=pult_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -511,6 +904,8 @@ def read_stream(repo: Path, *args: str, limit: int, timeout: float,
         raise OverLimit(f"вывод git {args[0] if args else ''} > {limit} байт")
     if expired.is_set() or time.monotonic() > end:
         raise Timeout(f"git {args[0] if args else ''}: срок {timeout} с истёк")
+    if plan is not None:
+        plan.after(code)
     return subprocess.CompletedProcess(proc.args, code, b"".join(chunks), None)
 
 
