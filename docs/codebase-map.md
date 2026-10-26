@@ -1,5 +1,5 @@
 ---
-built_at_sha: 75de1986a74c88d8457d1c19b49dd81304793f12
+built_at_sha: c31508925f689bcc0a25bf0edc282e3d9380ea43
 ---
 
 # Codebase-map пульта
@@ -9644,9 +9644,16 @@ built_at_sha: 75de1986a74c88d8457d1c19b49dd81304793f12
 **Публичные функции:**
 - `calls`
 - `entry`
+- `server`
+- `test_allowed_pairs_exact_set`
 - `test_ci_by_pipeline_follows_registry`
+- `test_extra_query_key_and_non_ascii_number_refused`
 - `test_foreign_project_refused_before_transport`
+- `test_pipelines_without_x_total_unknown`
+- `test_plain_http_address_refused_before_transport`
+- `test_redirect_reply_is_named_refusal`
 - `test_scp_url_addresses_https_server`
+- `test_transport_does_not_follow_redirect`
 
 **Импортирует:** `orchestrator/forge.py`, `orchestrator/gitlab_adapter.py`, `orchestrator/targets.py`
 

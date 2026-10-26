@@ -65,7 +65,7 @@ QUERY_KEYS = {"sha", "ref", "page", "per_page", "order_by", "sort"}
 CREATE_MR_FIELDS = {"source_branch", "target_branch", "title", "description",
                     "assignee_id"}
 EDIT_MR_FIELDS = {"assignee_id", "title"}
-_MR_PATH_RE = re.compile(r"/projects/[^/]+/merge_requests/\d+")
+_MR_PATH_RE = re.compile(r"/projects/[^/]+/merge_requests/[0-9]+")
 
 PIPELINE_GREEN = {"success", "manual"}
 PIPELINE_RUNNING = {"running", "pending", "waiting_for_resource", "preparing",
@@ -91,10 +91,20 @@ def transport(method: str, url: str, headers: dict, body: bytes | None,
               timeout: float) -> tuple[int, dict, bytes]:
     """Один HTTP-обмен: (код, заголовки, тело). Ответ 4xx/5xx — числом, не
     исключением; отказ сети — `urllib.error.URLError`, таймаут —
-    `TimeoutError`. Единственное место сети модуля — подменяется тестами."""
+    `TimeoutError`. Единственное место сети модуля — подменяется тестами.
+
+    Перенаправлению не следует: ответ 3xx — числом. Стандартный обработчик
+    `urllib` повторил бы запрос по адресу из ответа вместе с `PRIVATE-TOKEN`,
+    мимо таблицы разрешённых пар и, возможно, на чужой хост."""
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    opener = urllib.request.build_opener(NoRedirect)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             return resp.status, dict(resp.headers.items()), resp.read()
     except urllib.error.HTTPError as exc:
         with exc:
@@ -116,8 +126,11 @@ def _address(entry: dict) -> tuple[str, str, str]:
         server, path = f"https://{scp.group(1)}", scp.group(2)
     else:
         parts = urllib.parse.urlsplit(url)
-        if parts.scheme not in ("https", "http") or not parts.netloc:
+        if not parts.scheme or not parts.netloc:
             return "", "", f"адрес проекта {url!r} не разобран"
+        if parts.scheme != "https":
+            return "", "", (f"адрес проекта {url!r} не https — токен ушёл бы "
+                            f"открытым текстом")
         server, path = f"{parts.scheme}://{parts.netloc}", parts.path
     path = path.strip("/")
     if path.endswith(".git"):
@@ -135,7 +148,7 @@ def _pair_refusal(method: str, path: str, body, project: str) -> str:
     allowed = False
     for allowed_method, template in ALLOWED_PAIRS:
         pattern = "/".join(re.escape(project) if part == ":id"
-                           else r"\d+" if part == ":n" else re.escape(part)
+                           else r"[0-9]+" if part == ":n" else re.escape(part)
                            for part in template.split("/"))
         if method == allowed_method and re.fullmatch(pattern, raw):
             allowed = True
@@ -182,6 +195,8 @@ def _header(headers: dict, name: str) -> str:
 
 
 def _status_reason(status: int, pair: str, attempts: int) -> str:
+    if 300 <= status < 400:
+        return f"перенаправление запрещено: {status} (ответ на {pair})"
     if status == 401:
         return f"GitLab не принял токен (401) на {pair}"
     if status == 403:
@@ -284,7 +299,7 @@ def _read_all(target: str, path: str, query: dict) -> tuple[list | None, str]:
     else:
         return None, (f"неполная выдача GET {path}: больше {MAX_PAGES} "
                       f"страниц по {PER_PAGE}")
-    if not total.isdigit():
+    if not re.fullmatch(r"[0-9]+", total):
         return None, (f"неполная выдача GET {path}: нет числа X-Total, "
                       f"полноту не сверить")
     if len(items) != int(total):
