@@ -8,8 +8,10 @@
   поддельный сервер GitLab API v4 (`https://localhost/api/v4`, проект
   `grp/proj`, адрес — `url` записи). Ответ — `(код, заголовки, тело
   bytes)`; сеть недоступна — `urllib.error.URLError`, таймаут —
-  `TimeoutError` (контракт транспорта — дефолт эскалации AC-1 планки
-  задачи). Списки конвейеров и заданий отдаются постранично по `page`/
+  `TimeoutError` (контракт транспорта и функции запроса
+  `gitlab_adapter.request(target, method, path, body)` — ответ Оператора
+  В-1, В-2; имена `forge.project_info`/`forge.branch_pipeline` — В-3).
+  Списки конвейеров и заданий отдаются постранично по `page`/
   `per_page` (по умолчанию 20, не больше 100) с заголовками `X-Total`,
   `X-Total-Pages`, `X-Next-Page`; конвейеры — по убыванию id, как у
   GitLab;
@@ -346,6 +348,8 @@ GL_CALLS = {
     "token_user": lambda: forge.token_user(GL),
     "token_expiry": lambda: forge.token_expiry(GL),
     "protections": lambda: forge.protections(GL),
+    "project_info": lambda: forge.project_info(GL),
+    "branch_pipeline": lambda: forge.branch_pipeline(GL, config.MAIN_BRANCH),
 }
 GL_CALL_NAMES = list(GL_CALLS)
 
@@ -361,7 +365,182 @@ GH_CALLS = {
     "token_user": lambda: forge.token_user(GH),
     "token_expiry": lambda: forge.token_expiry(GH),
     "protections": lambda: forge.protections(GH),
+    "project_info": lambda: forge.project_info(GH),
+    "branch_pipeline": lambda: forge.branch_pipeline(GH, config.MAIN_BRANCH),
 }
+
+
+# --- AC-1 ---
+
+def forbidden_pairs(gen: random.Random) -> dict:
+    """Запрещённые пары AC-1: (метод, путь под /api/v4, тело) со случайными id."""
+    iid, jid = gen.randrange(1, 9999), gen.randrange(10000, 99999)
+    branch = "feature-" + "".join(gen.choice("abcdefgh") for _ in range(5))
+    mr = f"/projects/{PID}/merge_requests/{iid}"
+    return {
+        "слияние MR": ("PUT", f"{mr}/merge", None),
+        "закрытие MR": ("PUT", mr, {"state_event": "close"}),
+        "комментарий": ("POST", f"{mr}/notes", {"body": "комментарий"}),
+        "запуск задания": ("POST", f"/projects/{PID}/jobs/{jid}/play", None),
+        "повтор задания": ("POST", f"/projects/{PID}/jobs/{jid}/retry", None),
+        "удаление ветки": ("DELETE", f"/projects/{PID}/repository/branches/{branch}", None),
+        "создание тега": ("POST", f"/projects/{PID}/repository/tags",
+                          {"tag_name": "v1.0", "ref": config.MAIN_BRANCH}),
+        "участники проекта": ("GET", f"/projects/{PID}/members", None),
+        "все участники проекта": ("GET", f"/projects/{PID}/members/all", None),
+    }
+
+
+FORBIDDEN = ["слияние MR", "закрытие MR", "комментарий", "запуск задания", "повтор задания",
+             "удаление ветки", "создание тега", "участники проекта", "все участники проекта"]
+
+
+@pytest.mark.parametrize("kind", FORBIDDEN)
+def test_ac1_forbidden_pair_refused_before_transport(lab, rng, kind):
+    """Запрещённая пара функции запроса — отказ без вызова транспорта, причина называет пару.
+
+    Сценарий: `gitlab_adapter.request("glproj", метод, путь, тело)` для
+    слияния MR, закрытия MR (`state_event`), комментария, запуска и
+    повтора задания, удаления ветки, создания тега, чтения участников
+    (`/members`, `/members/all`); номера MR и заданий, имя ветки —
+    случайны. Функция возвращает (не бросает), поддельный транспорт не
+    получил ни одного вызова, в тексте результата — метод и путь пары.
+
+    Ловит мутацию: таблица разрешённых пар сверяет шаблон по префиксу
+    (`/projects/:id/merge_requests/:iid` разрешает и `…/merge`,
+    `/projects/:id` — и `…/members`) — запрос уходит в транспорт.
+    """
+    gen, seed = rng
+    method, path, body = forbidden_pairs(gen)[kind]
+    res = gitlab_adapter.request(GL, method, path, body)
+    assert calls_of(lab) == [], f"зерно: {seed}; {kind}: транспорт вызван {calls_of(lab)}"
+    text = joined(res)
+    assert method in text, f"зерно: {seed}; {kind}: в причине нет метода: {res!r}"
+    assert path in text or urllib.parse.unquote(path) in text, \
+        f"зерно: {seed}; {kind}: в причине нет пути {path}: {res!r}"
+
+
+# --- AC-2 ---
+
+def allowed_reads(gen: random.Random) -> dict:
+    """Разрешённые пары чтения AC-2: (путь под /api/v4 со строкой запроса, путь, запрос)."""
+    pid, iid = gen.randrange(100, 9999), gen.randrange(1, 9999)
+    branch = "task/" + "".join(gen.choice("abcdefgh0123") for _ in range(8))
+    sha = "".join(gen.choice("0123456789abcdef") for _ in range(40))
+    project = f"/projects/{PID}"
+    plain = {
+        "проект": project,
+        "задания конвейера": f"{project}/pipelines/{pid}/jobs",
+        "отчёт тестов": f"{project}/pipelines/{pid}/test_report",
+        "MR": f"{project}/merge_requests/{iid}",
+        "пользователь токена": "/user",
+        "сведения о токене": "/personal_access_tokens/self",
+        "защищённые ветки": f"{project}/protected_branches",
+        "защищённые теги": f"{project}/protected_tags",
+    }
+    out = {k: (v, v, {}) for k, v in plain.items()}
+    out["конвейеры по sha"] = (f"{project}/pipelines?sha={sha}", f"{project}/pipelines",
+                               {"sha": sha})
+    out["конвейеры ветки"] = (f"{project}/pipelines?ref={urllib.parse.quote(branch, safe='')}",
+                              f"{project}/pipelines", {"ref": branch})
+    return out
+
+
+ALLOWED_READS = ["конвейеры по sha", "конвейеры ветки", "проект", "задания конвейера",
+                 "отчёт тестов", "MR", "пользователь токена", "сведения о токене",
+                 "защищённые ветки", "защищённые теги"]
+
+
+@pytest.mark.parametrize("kind", ALLOWED_READS)
+def test_ac2_allowed_read_reaches_transport(lab, rng, kind):
+    """Разрешённое чтение функции запроса доходит до транспорта той же парой.
+
+    Сценарий: `gitlab_adapter.request("glproj", "GET", путь)` для
+    конвейеров по sha и по ветке, проекта, заданий и отчёта тестов
+    конвейера, MR, пользователя токена, сведений о токене, защищённых
+    веток и тегов; номера, ветка и sha — случайны. Транспорт получил
+    `GET` этого пути, а строка запроса — `sha`/`ref` из пути.
+
+    Ловит мутацию: шаблон пары записан с опечаткой или не учитывает
+    строку запроса (`/pipelines?ref=…` не совпал с шаблоном) — чтение
+    отказано, транспорт не вызван.
+    """
+    gen, seed = rng
+    full, path, query = allowed_reads(gen)[kind]
+    gitlab_adapter.request(GL, "GET", full)
+    sent = [c for c in lab.calls if (c.method, c.path) == ("GET", path)]
+    assert sent, f"зерно: {seed}; {kind}: транспорт не получил GET {path}: {calls_of(lab)}"
+    for key, value in query.items():
+        assert any(c.query.get(key) == value for c in sent), \
+            f"зерно: {seed}; {kind}: в запросе нет {key}={value}: {[c.query for c in sent]}"
+
+
+def current_mr(fake: Lab, title: str) -> None:
+    fake.routes[("GET", MR_PATH)] = [(200, {"iid": MR, "title": title, "state": "opened",
+                                            "draft": title.startswith("Draft: ")})]
+    fake.routes[("PUT", MR_PATH)] = [(200, {"iid": MR, "title": title, "state": "opened"})]
+
+
+@pytest.mark.parametrize("kind", ["создание MR", "исполнитель", "добавить Draft", "снять Draft"])
+def test_ac2_allowed_write_reaches_transport(lab, rng, kind):
+    """Создание MR, правка исполнителя и смена префикса `Draft: ` доходят до транспорта.
+
+    Сценарий: текущий MR 37 — заголовок со случайным текстом (с
+    префиксом `Draft: ` для «снять Draft»). `request` зовётся с `POST
+    /projects/:id/merge_requests` (ветка, база, заголовок), с `PUT` MR
+    телом `{"assignee_id": 42}`, с `PUT` MR телом заголовка, которое
+    добавляет или снимает префикс. Транспорт получил эту пару и это
+    тело.
+
+    Ловит мутацию: сверка заголовка сравнивает новый заголовок с текущим
+    буквально (или требует наличия префикса) — законное снятие или
+    добавление `Draft: ` отказано, `PUT` не отправлен.
+    """
+    gen, seed = rng
+    text = "Правка " + "".join(gen.choice("абвгдежз") for _ in range(6))
+    if kind == "создание MR":
+        method, path = "POST", f"/projects/{PID}/merge_requests"
+        body = {"source_branch": "task/abc", "target_branch": config.MAIN_BRANCH, "title": text}
+    else:
+        method, path = "PUT", MR_PATH
+        current_mr(lab, f"Draft: {text}" if kind == "снять Draft" else text)
+        body = {"исполнитель": {"assignee_id": 42}, "добавить Draft": {"title": f"Draft: {text}"},
+                "снять Draft": {"title": text}}[kind]
+    gitlab_adapter.request(GL, method, path, body)
+    sent = [c for c in lab.calls if (c.method, c.path) == (method, path)]
+    assert sent, f"зерно: {seed}; {kind}: транспорт не получил {method} {path}: {calls_of(lab)}"
+    assert sent[-1].body == body, f"зерно: {seed}; {kind}: тело {sent[-1].body}"
+
+
+@pytest.mark.parametrize("kind", ["иной текст", "иной текст с Draft", "state_event",
+                                  "описание", "целевая ветка", "исполнитель и state_event"])
+def test_ac2_other_mr_edit_refused_without_put(lab, rng, kind):
+    """Правка заголовка с иной сменой текста или иным полем — отказ без `PUT`.
+
+    Сценарий: текущий MR 37 — заголовок со случайным текстом без
+    префикса. `request` зовётся с `PUT` MR телом: заголовок с другим
+    текстом (с префиксом `Draft: ` и без); `state_event: close`;
+    `description`; `target_branch`; исполнитель вместе с
+    `state_event`. Транспорт не получил ни одного `PUT` (чтение MR для
+    сверки заголовка допустимо), в результате есть текст отказа.
+
+    Ловит мутацию: сверка заголовка только снимает префикс с нового
+    заголовка, не сравнивая остаток с текущим, — либо поля тела не
+    проверяются, когда среди них есть разрешённое, — `PUT` уходит.
+    """
+    gen, seed = rng
+    text = "Правка " + "".join(gen.choice("абвгдежз") for _ in range(6))
+    current_mr(lab, text)
+    body = {"иной текст": {"title": text + " и ещё"},
+            "иной текст с Draft": {"title": f"Draft: {text}!"},
+            "state_event": {"state_event": "close"},
+            "описание": {"description": "Новое описание"},
+            "целевая ветка": {"target_branch": "release"},
+            "исполнитель и state_event": {"assignee_id": 42, "state_event": "close"}}[kind]
+    res = gitlab_adapter.request(GL, "PUT", MR_PATH, body)
+    assert [c for c in lab.calls if c.method != "GET"] == [], \
+        f"зерно: {seed}; {kind}: отправлено {calls_of(lab)}"
+    assert any(t.strip() for t in texts(res)), f"зерно: {seed}; {kind}: нет отказа в {res!r}"
 
 
 # --- AC-3 ---
@@ -1485,3 +1664,92 @@ def test_ac30_protections(lab):
                                   ("GET", f"/projects/{PID}/protected_tags")}, calls_of(lab)
     for name in ("main", "release/*", "v*"):
         assert name in texts(res), f"{name}: {res!r}"
+
+
+# --- AC-31 ---
+
+ACCESS_NAMES = {10: "guest", 20: "reporter", 30: "developer", 40: "maintainer", 50: "owner"}
+
+
+def test_ac31_project_info(lab, rng):
+    """`project_info` читает `GET /projects/:id` и отдаёт только ветку по умолчанию и уровень доступа.
+
+    Сценарий: ответ проекта — случайная ветка по умолчанию, случайный
+    уровень доступа в `permissions.project_access` и посторонние поля
+    (описание, адрес, имя, видимость, счётчики). Вызов один — `GET`
+    проекта `grp%2Fproj` из `url` записи; в результате — ветка и уровень
+    доступа (числом или его именем), а ни одного значения посторонних
+    полей нет.
+
+    Ловит мутацию: результат — весь словарь ответа (или `permissions`
+    ищутся в ином ключе) — посторонние поля попадают в результат либо
+    уровня доступа в нём нет.
+    """
+    gen, seed = rng
+    branch = "develop-" + "".join(gen.choice("abcdefgh") for _ in range(5))
+    level = gen.choice(sorted(ACCESS_NAMES))
+    extra = {"description": "ОПИСАНИЕ-ПРОЕКТА-ВНЕ-РЕЗУЛЬТАТА",
+             "web_url": "https://localhost/grp/proj-вне-результата",
+             "name_with_namespace": "ИМЯ-ВНЕ-РЕЗУЛЬТАТА", "star_count": 70913,
+             "forks_count": 80917, "visibility": "internal-вне-результата"}
+    project = ("GET", f"/projects/{PID}")
+    lab.routes[project] = [(200, {"id": 9, "default_branch": branch,
+                                  "permissions": {"project_access": {"access_level": level,
+                                                                     "notification_level": 3},
+                                                  "group_access": None}, **extra})]
+    res = forge.project_info(GL)
+    found = leaves(res)
+    assert calls_of(lab) == [project], f"зерно: {seed}; {calls_of(lab)}"
+    assert branch in found, f"зерно: {seed}; нет ветки {branch}: {res!r}"
+    names = {t.lower() for t in texts(res)}
+    assert level in found or str(level) in found or ACCESS_NAMES[level] in names, \
+        f"зерно: {seed}; нет уровня доступа {level}: {res!r}"
+    leaked = [v for v in extra.values() if v in found]
+    assert leaked == [], f"зерно: {seed}; в результате посторонние поля {leaked}: {res!r}"
+
+
+# --- AC-32 ---
+
+@pytest.mark.parametrize("last_status, other_status, expected", [
+    ("success", "failed", "green"), ("failed", "success", "red")])
+def test_ac32_branch_pipeline_last(lab, rng, last_status, other_status, expected):
+    """`branch_pipeline` берёт последний конвейер ветки: его sha, итог и задания по его id.
+
+    Сценарий: у ветки со случайным именем два конвейера с разными id и
+    sha (последний — с большим id), у другой ветки — конвейер с ещё
+    большим id. Список конвейеров спрошен `GET /projects/:id/pipelines`
+    с `ref=<ветка>`; задания прочитаны у последнего конвейера ветки и не
+    прочитаны у прежнего. В результате — sha последнего (не прежнего),
+    итог по нему и имена со статусами его заданий; имён заданий
+    прежнего и чужого конвейеров нет.
+
+    Ловит мутацию: берётся первый конвейер ветки по возрастанию id (или
+    первый в выдаче без фильтра `ref`) — в результате чужой sha, итог и
+    задания.
+    """
+    gen, seed = rng
+    branch = "task/" + "".join(gen.choice("abcdefgh0123") for _ in range(8))
+    old_id, last_id = sorted(gen.sample(range(4000, 4999), 2))
+    old_sha, last_sha, foreign_sha = ("".join(gen.choice("0123456789abcdef") for _ in range(40))
+                                      for _ in range(3))
+    lab.pipeline(old_id, other_status, [job(7001, "old-job", other_status)],
+                 sha=old_sha, ref=branch)
+    lab.pipeline(last_id, last_status, shuffled(gen, [
+        job(7101, "build", "success", "build"), job(7102, "test", last_status, "test")]),
+        sha=last_sha, ref=branch)
+    lab.pipeline(5500, "running", [job(7201, "foreign-job", "running")],
+                 sha=foreign_sha, ref="other-branch")
+    res = forge.branch_pipeline(GL, branch)
+    lists = [c for c in lab.calls if c.path == f"/projects/{PID}/pipelines"]
+    assert lists and all(c.query.get("ref") == branch for c in lists), \
+        f"зерно: {seed}; список конвейеров ветки: {[c.query for c in lists]}"
+    paths = [c.path for c in lab.calls]
+    assert f"/projects/{PID}/pipelines/{last_id}/jobs" in paths, f"зерно: {seed}; {paths}"
+    assert f"/projects/{PID}/pipelines/{old_id}/jobs" not in paths, f"зерно: {seed}; {paths}"
+    found = texts(res)
+    assert last_sha in found and old_sha not in found and foreign_sha not in found, \
+        f"зерно: {seed}; {res!r}"
+    assert {t for t in found if t in VERDICTS} == {expected}, f"зерно: {seed}; {res!r}"
+    for name, status in (("build", "success"), ("test", last_status)):
+        assert name in found and status in found, f"зерно: {seed}; нет {name}={status}: {res!r}"
+    assert "old-job" not in found and "foreign-job" not in found, f"зерно: {seed}; {res!r}"

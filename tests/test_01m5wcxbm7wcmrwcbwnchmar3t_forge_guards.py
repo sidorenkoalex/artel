@@ -12,8 +12,10 @@
 `<значение> not in <реестр>`), сторож пропускает.
 
 Функция транспорта — `gitlab_adapter.transport`, функция запроса —
-`gitlab_adapter.request` (имена — дефолт эскалации AC-1, см.
-`acceptance_tests/markers.py` планки задачи).
+`gitlab_adapter.request` (ответ Оператора В-1, В-2). По ответу В-5 вне
+транспорта законны `urllib.error` (исключения) и `urllib.parse` (разбор и
+кодирование адреса без сети); `urllib.request`, прочий `urllib`,
+`http.client` и `socket` — только в транспорте.
 
 Имена в мутациях (псевдоним импорта, имя функции-мутанта, вызываемая
 функция `forge`) порождаются модулем `random` при каждом запуске; зерно
@@ -52,13 +54,17 @@ def ident(rng: random.Random, prefix: str) -> str:
 
 # --- сторож AC-17: urllib/http.client только в транспорте ---
 
+NETWORK_FREE = ("urllib.error", "urllib.parse")
+NETWORK_MODULES = ("http.client", "socket")
+
+
 def _network_path(dotted: str) -> bool:
-    """Путь имени — сеть: всё из `urllib`, кроме `urllib.error`, и `http.client`."""
-    if dotted == "urllib.error" or dotted.startswith("urllib.error."):
+    """Путь имени — сеть: всё из `urllib`, кроме `urllib.error`/`urllib.parse`, `http.client`, `socket`."""
+    if any(dotted == free or dotted.startswith(free + ".") for free in NETWORK_FREE):
         return False
     if dotted.startswith("urllib."):
         return True
-    return dotted == "http.client" or dotted.startswith("http.client.")
+    return any(dotted == mod or dotted.startswith(mod + ".") for mod in NETWORK_MODULES)
 
 
 def _bind_imports(stmt: ast.stmt, env: dict) -> list:
@@ -181,6 +187,12 @@ def adapter_mutants(rng: random.Random) -> dict:
         "http.client-вне-транспорта":
             f"import http.client\n\ndef {fn}():\n"
             f"    return http.client.HTTPSConnection('localhost')\n",
+        "socket-вне-транспорта":
+            f"import socket\n\ndef {fn}():\n"
+            f"    return socket.create_connection(('localhost', 443))\n",
+        "urllib.request-рядом-с-parse":
+            f"import urllib.parse\nimport urllib.request\n\ndef {fn}(url):\n"
+            f"    return urllib.request.Request(urllib.parse.quote(url))\n",
         "транспорт-не-из-запроса":
             f"\ndef {fn}():\n    return {TRANSPORT}('GET', 'https://localhost/api/v4/user', "
             f"{{}}, None, 5)\n",
@@ -189,6 +201,7 @@ def adapter_mutants(rng: random.Random) -> dict:
 
 ADAPTER_MUTANTS = ["urlopen-вне-транспорта", "from-импорт-с-псевдонимом",
                    "from-импорт-без-псевдонима", "http.client-вне-транспорта",
+                   "socket-вне-транспорта", "urllib.request-рядом-с-parse",
                    "транспорт-не-из-запроса"]
 
 
@@ -243,16 +256,23 @@ def test_ac17_guard_catches_mutation(kind, rng):
     "import urllib.error\n\n"
     "def _not_mutant_b():\n    try:\n        return 1\n"
     "    except urllib.error.URLError:\n        return 0\n",
+    "import urllib.parse\n\n"
+    "def _not_mutant_c(path):\n    return urllib.parse.quote(path, safe='')\n",
+    "from urllib.parse import quote as _q, urlsplit\n\n"
+    "def _not_mutant_d(url):\n    return _q(urlsplit(url).path, safe='')\n",
 ])
 def test_ac17_exception_classes_are_not_violations(snippet):
-    """Ссылки на исключения `urllib.error` вне транспорта сторож не считает нарушением.
+    """Исключения `urllib.error` и разбор адреса `urllib.parse` вне транспорта — не нарушение.
 
     Сценарий: к настоящему `gitlab_adapter.py` дописывается импорт
     `URLError`/`HTTPError` из `urllib.error` и их ловля в `except` вне
-    транспорта; список нарушений не меняется.
+    транспорта, либо кодирование и разбор адреса `urllib.parse` (модулем
+    и `from`-импортом с псевдонимом) вне транспорта; список нарушений не
+    меняется.
 
     Ловит мутацию: сторож, считающий нарушением любое имя из `urllib`,
-    запретил бы законную ловлю исключений — список нарушений вырастет.
+    запретил бы законную ловлю исключений и кодирование пути проекта —
+    список нарушений вырастет.
     """
     adapter = module_text("gitlab_adapter.py")
     assert adapter_violations(adapter + "\n\n" + snippet) == adapter_violations(adapter)
