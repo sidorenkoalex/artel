@@ -1,18 +1,15 @@
-# Записка аналитика 01M5TBFH5VZ7GSRXX7VNKHFCCQ (Э4)
+# Записка аналитика 01M5TBFH5VZ7GSRXX7VNKHFCCQ (Э4), шаг 2 — возврат со spec_gate 26.10
 
 ## Выяснено
-- ТЗ достаточно — пишу SPEC, не QUESTIONS.
-- `orchestrator/board.py` в main нет: его вводит Э1 (01M5TBBDFS6DWQY6MS263T1KPY), в SPEC — `merge_after`.
-- Факты ТЗ сверены: `report.STATE_ORDER` `report.py:46`, `_board_html` `:598`, `cmd_report` `:1430`.
-- Тесты, зовущие внутренности отчёта напрямую: `tests/test_report.py:246,255,261` (`report._board_html(tasks)`), `tests/test_01m4mqagrwmwr0gfdm9086p3td_spec_audit_units.py:357` (`report.STATE_ORDER`). Смена сигнатуры `_board_html` — правка теста не по значению → только мандат Оператора (ТЗ: «ночной мандат 25.10 … через гейт SPEC; иное — эскалация»).
-- `external_refs`, `ref_required` в коде нет.
-
-## Не сработало
-- —
+- Причина возврата — решения Оператора (1)–(9); все переносятся в SPEC без вопросов.
+- Факты по origin/main (ветка задачи Э1 не содержит): `report.py:48` STATE_ORDER = fsm.STATES, `_tile_html` `:565`, `_board_html` `:596`, `cmd_report` `:1428` (всё на `store.all_tasks`, доска одна на все проекты). `board.py:39` `_card` — нет `review_iters`, `escalated_from`, проекта; `build_model(conn, project)` `:123`.
+- Внутренности доски в tests/ зовёт только `tests/test_report.py:213,220,230` (_tile_html), `:246,255,261` (_board_html); `spec_audit_units.py:357` — `report.STATE_ORDER`. Прочие ~10 файлов report-тестов идут через cmd_report/_render-вывод.
+- Части деления: `catalog.spawn_subtask` `:786`, зов `fsm.py:1070`.
+- `targets.py:289-294` LOCAL_SECTIONS/LOCAL_FIELDS — сюда `ref_required`, `ref_systems`.
 
 ## Где остановился
-- SPEC написан (status: ready, 9 AC, budget 60, merge_after Э1), guard: ок.
-- Сигналы объёма (≥5 файлов, budget ≥ $30) — в SPEC обоснование монолита + вариант деления на выбор Оператора.
+- SPEC переписан (status: ready, 13 AC, матрица неослабления по 6 методам test_report.py + строки «без правки», budget 60, монолит/деление — на выбор Оператора), guard: ок.
+- Пп. возврата → SPEC: (1)(4) треб. 2/AC-5,6; (2) AC-7; (3) треб. 3/AC-8; (5) AC-5; (6) матрица; (7) треб. 9/AC-13; (8) треб. 5/AC-12; (9) Контекст/Материалы, треб. 6-7/AC-9,10.
 
 ## Чего не хватило
-- Интерфейса модели `board.py` (Э1 ещё не смержен) — поля модели взяты из ADR-0028 п. 12.
+- Ветка задачи отстаёт от origin/main (нет Э1) — сверка только `git show origin/main:`.
