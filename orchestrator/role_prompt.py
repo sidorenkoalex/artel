@@ -44,15 +44,17 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
     package = None
     brief_text = None
     # Состав брифа задачи внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN,
-    # требование 10): конвенции проекта вместо карты кодовой базы пульта.
+    # требование 10): конвенции проекта вместо карты кодовой базы пульта —
+    # из файла пульта, не из файлов обвязки проекта (SPEC
+    # 01M5T18K1YFBYA7MM1BBRV869A, требование 10).
     artel = conn is None or brief.is_artel_task(conn, task_id)
     if role == "analyst":
         brief_line = (
             "Карта кодовой базы и шаблоны templates/SPEC.md и "
             "templates/QUESTIONS.md — в БРИФЕ РОЛИ ниже." if artel else
-            "Конвенции проекта (CLAUDE.md и AGENTS.md его базовой ветки) и "
-            "шаблоны templates/SPEC.md и templates/QUESTIONS.md — в БРИФЕ "
-            "РОЛИ ниже.")
+            "Конвенции проекта (файл пульта conventions.md, разобранный при "
+            "Операторе) и шаблоны templates/SPEC.md и templates/QUESTIONS.md "
+            "— в БРИФЕ РОЛИ ниже.")
         mission = (
             f"Роль: аналитик. Задача {task_id}, ветка {t['branch']} — уже "
             f"выписана в этом рабочем каталоге (собственный worktree "
@@ -118,10 +120,10 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
             "SPEC задачи, карта кодовой базы, конвенции проекта и шаблон "
             "templates/PLAN.md — целиком в БРИФЕ РОЛИ ниже, отдельно их "
             "читать не нужно." if artel else
-            "SPEC задачи, конвенции проекта (CLAUDE.md и AGENTS.md его "
-            "базовой ветки) и шаблон templates/PLAN.md — целиком в БРИФЕ "
-            "РОЛИ ниже, отдельно их читать не нужно; правила работы роли — "
-            "в скилах пульта (СКИЛЫ РОЛИ ниже).")
+            "SPEC задачи, конвенции проекта (файл пульта conventions.md, "
+            "разобранный при Операторе) и шаблон templates/PLAN.md — "
+            "целиком в БРИФЕ РОЛИ ниже, отдельно их читать не нужно; "
+            "правила работы роли — в скилах пульта (СКИЛЫ РОЛИ ниже).")
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
             f"уже выписана в этом рабочем каталоге (собственный worktree "

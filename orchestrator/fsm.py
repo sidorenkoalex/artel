@@ -20,6 +20,23 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
+# Один список состояний FSM (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 11;
+# ADR-0028 п. 17): `STATES` — все состояния в порядке показа (борд
+# `report`), `TERMINAL_STATES` — окончательные. Прочие модули пакета берут
+# значения отсюда, своих перечислений не держат (сторож —
+# tests/test_01m5tb6vdvv6am8dwpgvqe8cdw_terminal_literal_guard.py).
+#
+# Объявлены ДО импортов модулей пакета намеренно: `cleanup`, `watch` и
+# другие, импортирующие эти имена на уровне модуля, сами входят в граф
+# импортов `fsm` — на круговом импорте они получают частично загруженный
+# `fsm`, в котором обе константы уже есть.
+STATES = (
+    "spec_writing", "spec_audit", "spec_gate", "tests_writing", "in_dev",
+    "review", "verifying", "acceptance", "merge_gate", "escalated", "done",
+    "killed",
+)
+TERMINAL_STATES = ("done", "killed")
+
 from scripts import guard
 
 from . import (acceptance, appendix_tree, artifact_branch, artifact_source, artifacts, budget, checkpoint, ci,
@@ -955,15 +972,42 @@ def cmd_approve(task_id: str, sha: str | None = None,
                                  accept_audit_fail, during_canary))
 
 
+def _division_check(conn, task_id: str, t, subsections: list) -> tuple:
+    """(порядок частей `merge_after.DivisionOrder`, рамки частей, причина
+    отказа) заявки на деление — до первой записи `approve` (SPEC
+    01M5TB6VDVV6AM8DWPGVQE8CDW, требования 5, 6, 9). Рамка перепроверяется
+    здесь, а не только guard'ом на входе в гейт: SPEC мог быть поправлен
+    уже на гейте."""
+    frames, reasons = [], []
+    for number, sub in enumerate(subsections, 1):
+        value, refused = guard.division_frame(sub["budget"])
+        frames.append(value)
+        if refused:
+            reasons.append(f"часть {number} «{sub['title']}»: Рамка: {refused}")
+    order, order_reasons = merge_after.division_order(
+        conn, task_id, t["target"] or config.DEFAULT_TARGET,
+        [(sub["title"], sub["order"]) for sub in subsections])
+    reasons += order_reasons
+    if reasons:
+        return None, None, "деление: " + "; ".join(reasons)
+    return order, frames, ""
+
+
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
-                             subsections: list) -> None:
+                             subsections: list, order, frames: list) -> None:
     """Заводит по одной подзадаче на каждый подраздел секции «## Деление»
     (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3, AC-5/AC-6/AC-11) и
     переводит родителя в `killed` — единственное терминальное
     непродолжаемое состояние FSM, подходящее по смыслу «поделена»
-    (`orchestrator/config.py::AUTO_STOP`, требование 2 SPEC). Зависящие от
-    родителя задачи переходят на последнюю подзадачу
+    (`orchestrator/config.py::AUTO_STOP`, требование 2 SPEC) — с признаком
+    `closed_as='divided'`, отличающим деление от `kill` (SPEC
+    01M5TB6VDVV6AM8DWPGVQE8CDW, требование 1). Зависящие от родителя задачи
+    переходят на часть, которая мержится последней по графу частей
     (`merge_after.replace_divided`, SPEC 01M4JC58GZFHZ4PZHW254P22M2).
+
+    `order`/`frames` — уже проверенные `_division_check` порядок и рамки.
+    `merge_after` частей пишется после заведения ВСЕХ частей: «после
+    части N» может ссылаться на часть с бо́льшим номером (требование 4).
 
     Ленивый импорт `catalog` — тем же приёмом, что `_approve_merge_gate`
     выше зовёт `fsm_merge_gate`: `catalog.py` не импортирует `fsm.py` на
@@ -974,11 +1018,25 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
     new_ids = [catalog.spawn_subtask(task_id, t["title"], sub["title"],
                                      sub["body_raw"], target=t["target"])
               for sub in subsections]
+    for part_id, own in zip(new_ids, order.deps):
+        merge_after.record_declared(
+            conn, part_id,
+            [new_ids[d] if isinstance(d, int) else d for d in own])
+    for number, (part_id, frame) in enumerate(zip(new_ids, frames), 1):
+        if frame is not None:
+            budget.apply_division_frame(conn, part_id, frame, task_id, number)
+    if order.loose:
+        loose = ", ".join(
+            f"часть {n} «{subsections[n - 1]['title']}» ({new_ids[n - 1]})"
+            for n in order.loose)
+        print(f"[{task_id}] ВНИМАНИЕ: «Порядок:» без «после» — части не ждут "
+              f"мержа соседних частей: {loose}")
     ids_text = ", ".join(new_ids)
     store.set_state(conn, task_id, "killed", "operator",
-                    expected_state=state, detail=f"поделена на: {ids_text}")
-    if new_ids:
-        merge_after.replace_divided(conn, task_id, new_ids[-1])
+                    expected_state=state,
+                    detail=f"{store.DIVIDED_DETAIL_PREFIX} {ids_text}")
+    store.update_task(conn, task_id, closed_as=store.CLOSED_AS_DIVIDED)
+    merge_after.replace_divided(conn, task_id, new_ids[order.successor])
     _cleanup_divided_parent(conn, task_id, t["branch"])
 
 
@@ -1281,6 +1339,15 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
     if not reason:
         replaced, reason = _replaced_tests_declaration(conn, task_id, t,
                                                        declaration_text)
+    # Заявка на деление (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требования 5, 6,
+    # 9): порядок и рамка частей проверяются здесь, последним из отказов и
+    # до первой записи ниже — отказанное деление не оставляет ни zones, ни
+    # merge_after, ни потолка, ни записей о разделах SPEC и о принятии
+    # вердикта аудита.
+    subsections = guard.parse_division_subsections(spec_text)
+    if subsections and not reason:
+        division_order, division_frames, reason = _division_check(
+            conn, task_id, t, subsections)
     if reason:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
@@ -1324,15 +1391,15 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
     _print_spec_gate_calibration_hint(conn, task_id, t["budget_usd"] or 0.0,
                                       meta, spec_text)
     # Заявка на деление (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3):
-    # секция «## Деление» уже провалидирована guard'ом на переходе
-    # `spec_writing -> spec_gate` (`fsm_advance.spec_writing`) — здесь её
-    # достаточно распознать, не проверять заново. Ветвь срабатывает
+    # форму секции «## Деление» guard проверил на переходе
+    # `spec_writing -> spec_gate` (`fsm_advance.spec_writing`), порядок и
+    # рамку частей — `_division_check` выше. Ветвь срабатывает
     # ТОЛЬКО из состояния spec_gate (мы уже внутри этого обработчика) —
     # повторный approve того же родителя приходит уже из killed и здесь
     # не оказывается вовсе (диспетчер `_cmd_approve` ниже).
-    subsections = guard.parse_division_subsections(spec_text)
     if subsections:
-        _spawn_division_subtasks(conn, task_id, t, state, subsections)
+        _spawn_division_subtasks(conn, task_id, t, state, subsections,
+                                 division_order, division_frames)
         return
     skip_reason = meta.get("skip_tests")
     if skip_reason or not guard.requires_ac_markup(meta):

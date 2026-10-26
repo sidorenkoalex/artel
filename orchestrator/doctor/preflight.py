@@ -513,7 +513,11 @@ def check_target_layout(target: str) -> doctor.Check:
 # Маркеры агентской обвязки target'а (SPEC T069, требование 3; ADR-0003
 # п.14 — «агентская обвязка целевого не наследуется»); тот же список
 # путей, что и в docstring `runner.role_cwd` про cwd-вектор конфиг-инъекции.
-TARGET_WRAPPER_MARKERS = (".claude", ".mcp.json", "CLAUDE.md", "AGENTS.md")
+# Выводится из единой константы маркеров (SPEC 01M5T19041XE2KB6A52F0AT0NF,
+# требование 2): имя без `**/` и без завершающего `/`.
+TARGET_WRAPPER_MARKERS = tuple(
+    marker.removeprefix(doctor.config.PROTECTED_PATH_ANY_DIR_MASK).rstrip("/")
+    for marker in doctor.config.AGENT_WRAPPER_MARKERS)
 
 
 def check_target_wrapper(target: str) -> doctor.Check:
@@ -534,6 +538,43 @@ def check_target_wrapper(target: str) -> doctor.Check:
                      f"{', '.join(found)} (ADR-0003 п.14)")
     return doctor.Check("target-wrapper", "ok",
                  f"агентская обвязка target'а {target} не обнаружена")
+
+
+TARGET_WRAPPER_WORKTREES_CHECK = "target-wrapper-worktrees"
+
+
+def check_target_wrapper_worktrees(target: str) -> doctor.Check:
+    """Файлы агентской обвязки на диске рабочих копий задач проекта (SPEC
+    01M5T19041XE2KB6A52F0AT0NF, требование 10): `workspace.ensure`
+    выписывает копию внешнего проекта без путей действующего списка
+    обвязки, а копия, заведённая мимо него или до правки списка, может их
+    нести. Найден хоть один путь — `warn` с копией и путём; информационно,
+    шаг не блокирует. У артели — `ok`: её копии полные по замыслу."""
+    name = TARGET_WRAPPER_WORKTREES_CHECK
+    if doctor.repo_context.is_artel(target):
+        return doctor.Check(name, "ok", f"проект {target}: рабочие копии "
+                            f"артели полные по замыслу")
+    ctx = doctor.repo_context.resolve(target)
+    if ctx is None:
+        return doctor.Check(name, "warn",
+                            doctor.repo_context.unresolved_reason(target))
+    wrapper = doctor.repo_context.wrapper_paths(ctx)
+    listed = f"обвязка проекта {target}: {', '.join(wrapper)}"
+    root = doctor.repo_context.projects_root() / target / "worktrees"
+    copies = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+    found = []
+    for copy in copies:
+        rel = doctor.workspace.wrapper_file_on_disk(copy, wrapper)
+        if rel is not None:
+            found.append(f"{copy}: {rel}")
+    if found:
+        return doctor.Check(name, "warn",
+                            f"файлы обвязки на диске рабочих копий задач — "
+                            f"{'; '.join(found)}; приведёт `workspace.ensure` "
+                            f"(следующий шаг роли или artel.py workspace "
+                            f"<id>); {listed}")
+    return doctor.Check(name, "ok", f"на диске рабочих копий задач "
+                        f"({len(copies)}) файлов обвязки нет; {listed}")
 
 
 def agent_roles() -> list:

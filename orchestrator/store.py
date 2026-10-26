@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import config, session
 from .schema import SCHEMA, add_column, create_schema, migrate, table_columns
+from .schema import CLOSED_AS_DIVIDED, DIVIDED_DETAIL_PREFIX  # noqa: F401
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
 
@@ -1210,6 +1211,18 @@ def last_task_step_of(conn: sqlite3.Connection, task_id: str,
         f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE task_id=? "
         f"AND action IN ({marks}) ORDER BY id DESC LIMIT 1",
         (task_id, *actions)).fetchone()
+
+
+def journal_action_exists(conn: sqlite3.Connection, task_id: str,
+                          action: str, detail: str) -> bool:
+    """Есть ли в журнале задачи запись `action` с тем же `detail`.
+
+    Читатель — `workspace._note_unresolved_wrapper` (SPEC
+    01M5T19041XE2KB6A52F0AT0NF): `ensure` зовут каждый шаг и гейт, и
+    одинаковая пометка пишется в журнал один раз."""
+    return conn.execute(
+        "SELECT 1 FROM steps WHERE task_id = ? AND action = ? AND detail = ?"
+        " LIMIT 1", (task_id, action, detail)).fetchone() is not None
 
 
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "",

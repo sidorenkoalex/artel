@@ -1409,10 +1409,6 @@ def task_set_hint(task) -> str:
     return f"  [{SOURCE_TASK_SET}: {name}]" if name else ""
 
 
-#: Состояния закрытой задачи: её набор моделей больше ничего не запускает.
-_CLOSED_STATES = ("done", "killed")
-
-
 def live_task_set_providers() -> set:
     """Провайдеры моделей из наборов незакрытых задач — добавка к
     востребованным CLI манифеста стека (`stack.model_providers`): задача
@@ -1426,7 +1422,10 @@ def live_task_set_providers() -> set:
     именованный отказ самого шага."""
     import sqlite3
 
-    from . import store
+    # `fsm` — отложенно, как и `store`: `store` импортирует этот модуль на
+    # уровне модуля. Закрытая задача (`fsm.TERMINAL_STATES`) набором моделей
+    # больше ничего не запускает.
+    from . import fsm, store
     if not store.db_usable():
         return set()
     try:
@@ -1435,7 +1434,7 @@ def live_task_set_providers() -> set:
         return set()
     found = set()
     for row in rows:
-        if row["state"] in _CLOSED_STATES:
+        if row["state"] in fsm.TERMINAL_STATES:
             continue
         try:
             members = task_set_members(row)

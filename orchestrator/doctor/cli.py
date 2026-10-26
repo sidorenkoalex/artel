@@ -140,6 +140,7 @@ def all_checks(conn) -> list[doctor.Check]:
         checks.append(full_suite_timeout_check(name))
         checks.append(doctor.check_target_layout(name))
         checks.append(doctor.check_target_wrapper(name))
+        checks.append(doctor.check_target_wrapper_worktrees(name))
         checks.append(doctor.check_base_branch(name, entry))
         # Клон, пуш, CI, защита ветки, токен, no_paths и project_skills
         # записи проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7)
@@ -149,6 +150,9 @@ def all_checks(conn) -> list[doctor.Check]:
         # (SPEC 01M58PG72PG64GS790XM2EWS61, требования 2-8) — следом за
         # строками записи: предмет тот же, клон проекта.
         checks.extend(doctor.project_checks.component_checks(name, entry))
+        # Дрейф конвенций проекта (SPEC 01M5T18K1YFBYA7MM1BBRV869A,
+        # требование 8) — следом: предмет тот же, база клона проекта.
+        checks.extend(doctor.check_project_conventions(name))
         checks.extend(doctor.recovery_check(conn, name))
 
     checks.extend(doctor.check_orphans(conn))

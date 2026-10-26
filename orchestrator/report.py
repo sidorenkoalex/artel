@@ -30,6 +30,7 @@ from pathlib import Path
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
 from . import agent_log, alerts, config, explore_metric, retro, rounds, spend, store, targets  # noqa: F401
+from . import fsm
 from .advance_gates import test_integrity, two_sided
 from .providers import base as provider_base
 from .providers import claude as claude_provider
@@ -42,12 +43,9 @@ MANUAL_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
 
 # Порядок колонок борда для известных состояний FSM; состояние вне этого
 # списка (опечатка фикстуры, будущий FSM) уходит в конец отсортированным,
-# а не пропадает молча.
-STATE_ORDER = (
-    "spec_writing", "spec_audit", "spec_gate", "tests_writing", "in_dev",
-    "review", "verifying", "acceptance", "merge_gate", "escalated", "done",
-    "killed",
-)
+# а не пропадает молча. Сам список — `fsm.STATES` (SPEC
+# 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 11), имя остаётся для читателей.
+STATE_ORDER = fsm.STATES
 
 # Действие и пара акторов журнала на переходе acceptance -> merge_gate:
 # `autogate` — `fsm._maybe_autogate_acceptance`, `operator` — ручной путь

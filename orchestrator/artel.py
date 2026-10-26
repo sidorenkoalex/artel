@@ -178,7 +178,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | targets-migrate <проект> |
-  reference <проект> [--sha <sha>] |
+  reference <проект> [--sha <sha>] | conventions-stamp <проект> <файл>… |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
@@ -636,6 +636,10 @@ origin main или отставание ветки не определены; п
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
+  conventions команда `conventions-stamp <проект> <файл>…`: отметка разбора
+            конвенций внешнего проекта в `.artel/projects/<имя>/
+            conventions.md` по `refs/heads/<base>` клона, без сети (SPEC
+            01M5T18K1YFBYA7MM1BBRV869A)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
   models    каталог моделей, ярусы ролей, тариф — только чтение
             (01M3009Y9AGGY6ZCFA7H1HJ1TD)
@@ -796,7 +800,8 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           artifact_cleanup, auto,
-                          budget, canary, catalog, ci_rerun, cleanup, doctor,
+                          budget, canary, catalog, ci_rerun, cleanup,
+                          conventions, doctor,
                           docs_fetch, dry_run, explore_metric, fsm,
                           knowledge_cards, lease, liveness, models, mutation_run, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
@@ -2303,6 +2308,10 @@ def main() -> None:
         # Пишет кэш справочника и журнал пульта — команда Оператора, вне
         # белого списка ролей (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 4).
         "reference": lambda: projects.cmd_reference(rest),
+        # Пишет заголовок отметки в файл локального слоя пульта — команда
+        # Оператора, вне белого списка ролей (SPEC
+        # 01M5T18K1YFBYA7MM1BBRV869A, требование 7).
+        "conventions-stamp": lambda: conventions.cmd_conventions_stamp(rest),
         "doctor": lambda: doctor.cmd_doctor("--restore" in rest, "--fix" in rest),
         "alert-ack": lambda: _cmd_alert_ack(rest),
         "version": lambda: version.cmd_version(),

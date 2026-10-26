@@ -573,12 +573,11 @@ def _added_lines(repo: Path, base_sha: str, head_sha: str) -> dict:
     наследует `~/.gitconfig`): префиксы, `diff.relative` и textconv заданы
     явно, а заголовок `+++ ` неожиданной формы — тоже `_Prepare`, не
     молчаливый пропуск строк файла."""
-    argv = ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff",
-            "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative",
-            "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U0",
-            base_sha, head_sha]
     try:
-        res = subprocess.run(argv, capture_output=True, env=gitcmd.pult_env())
+        res = gitcmd.read(repo, "-c", "core.quotePath=false", "diff",
+                          "--no-color", "--no-ext-diff", "--no-textconv",
+                          "--no-relative", "--src-prefix=a/", "--dst-prefix=b/",
+                          "-M", "-U0", base_sha, head_sha)
     except OSError as exc:
         raise _Prepare(f"diff -M -U0 базы {base_sha[:12]} и головы "
                        f"{head_sha[:12]} не получен: {exc}") from exc

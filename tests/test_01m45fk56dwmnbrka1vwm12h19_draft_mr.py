@@ -55,6 +55,15 @@ ARTEL_PROFILE = """    test_profile:
 """
 
 
+def artel_only_entries() -> list[str]:
+    """Записи `config.PROTECTED_PATHS`, защищённые только у артели: без
+    покрытых маркерами обвязки `config.AGENT_WRAPPER_MARKERS` — их путь
+    защищён и у внешнего проекта (SPEC 01M5T19041XE2KB6A52F0AT0NF,
+    требование 6)."""
+    return [e for e in config.PROTECTED_PATHS
+            if not config.is_protected_path(e, config.AGENT_WRAPPER_MARKERS)]
+
+
 class DraftMrSandbox(RealGitSandbox):
     """Клон внешнего проекта и шпион форджа."""
 
@@ -104,7 +113,7 @@ class DraftMrSandbox(RealGitSandbox):
         return entry
 
     def artel_only_path(self) -> str:
-        return self.under(self.rng.choice(config.PROTECTED_PATHS))
+        return self.under(self.rng.choice(artel_only_entries()))
 
     def draft_for(self, files: list[str]) -> list[str]:
         """Задача внешнего проекта с кодом `files` в ветке; `ensure_draft_mr`;
@@ -164,7 +173,7 @@ class DraftMrHighlightTest(DraftMrSandbox):
         """
         ext_paths = [self.under(e) for e in
                      self.rng.sample(self.no_paths, self.rng.randint(1, 2))]
-        artel_paths = {e: self.under(e) for e in config.PROTECTED_PATHS}
+        artel_paths = {e: self.under(e) for e in artel_only_entries()}
         code = f"kod{self.word()}/{self.word()}.py"
         comments = self.draft_for([code, *artel_paths.values(), *ext_paths])
         named = self.highlighted(comments)
@@ -176,7 +185,7 @@ class DraftMrHighlightTest(DraftMrSandbox):
                 self.assertNotIn(artel_path, named, self.explain(
                     f"путь пульта {artel_path} подсвечен: {comments}"))
 
-        artel_paths = {e: self.under(e) for e in config.PROTECTED_PATHS}
+        artel_paths = {e: self.under(e) for e in artel_only_entries()}
         comments = self.draft_for([f"kod{self.word()}/{self.word()}.py",
                                    *artel_paths.values()])
         named = self.highlighted(comments)
