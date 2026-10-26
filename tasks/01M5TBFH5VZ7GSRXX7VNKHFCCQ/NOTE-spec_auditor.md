@@ -1,19 +1,19 @@
-# Записка spec_auditor — 01M5TBFH5VZ7GSRXX7VNKHFCCQ
+# Записка spec_auditor — 01M5TBFH5VZ7GSRXX7VNKHFCCQ (визит 2, SPEC sha e7bac3bf)
 
 ## Выяснено
-- Ветка задачи (HEAD 761b646e9 = локальный main) НЕ содержит Э1: мерж Э1 f909b7dd9 есть только в origin/main. `orchestrator/board.py`, `epics.py` — на origin/main; сверка фактов шла по `git show origin/main:<путь>`.
-- Борд `report` — один на все проекты (`report.py:1396` `_board_html(tasks)`, `:1440` `store.all_tasks`), метка проекта на плитке; `_by_project` `:765` — только метрики (`:782`, `:1215`). Модель `board.build_model(conn, project)` — на один проект (`board.py:123`, `store.project_tasks`).
-- В карточке модели (`board.py:39`) нет `review_iters`, `escalated_from`, `target`, нужных плитке (`report.py:565-593`).
-- Нет AC «report из модели» (подмена модели) — AC-5/AC-6 проходят без board.py.
-- Тесты внутренностей доски: `tests/test_report.py:213,220,230` (`_tile_html`) SPEC не назвал; назвал `:246,:255,:261`, `spec_audit_units.py:357`.
-- Части деления (`catalog.spawn_subtask` `:786`, `fsm.py:1070`) идут мимо `new` → мимо `ref_required`.
-- Э1 тест `test_01m5tbbdfs..._board_model.py:31` держит ключи верхнего уровня модели РОВНО — `refs` только внутри cards/epics.
+- Ветка задачи не содержит Э1; сверка по `git -C <wt> show|grep origin/main`.
+- Ссылки SPEC на строки origin/main верны: report.py:48/:565-593/:596/:1428, board.py:39/:123, targets.py:289-294, catalog.py:786, fsm.py:1070. Неточно: board_model.py «:130-135» (assert на :141), «:264-265» (assert на :269).
+- Прямые вызовы внутренностей доски в tests/ — только test_report.py:213,220,230,246,255,261 — перечень матрицы полон.
+- board.build_model → waiting_on → zone_lock.queue_wait → _occupies → store.task_steps на каждую in_dev-задачу с зонами (zone_lock.py:476-484): report из модели получает запросы к steps, растущие с числом задач; свойство SPEC 01M3GKJFN90ATK2KECNDZXPPP6 (test_report.py:1018) в матрице не названо, тесты зелёные (фикстуры без зон).
+- Множество проектов «на каждый проект» не определено; нынешняя доска — store.all_tasks (report.py:1440), включая незаявленные проекты.
+- canary_drive.py:54 зовёт cmd_new(canary=True) в артель — ref_required артели остановит канарейку; SPEC молчит.
+- Миграция external_refs на живой БД (schema.migrate :267) не требуется ни требованием, ни AC.
 
 ## Не сработало
-- Bash с `cd`/переменными/`ls` отклоняется правилами — только одиночные команды с абсолютными путями и `git show`.
+- Bash с перенаправлением/цепочками отклоняется; только одиночные git -C … show/grep.
 
 ## Где остановился
-- SPEC-AUDIT.md написан: verdict concerns, status ready.
+- SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Чего не хватило
-- Что ветка задачи отстаёт от origin/main с мержем зависимости — обнаружил только по отсутствию board.py.
+- Нет готового знания «какие тесты держат число запросов report к steps» — искал через set_trace_callback по tests/.
