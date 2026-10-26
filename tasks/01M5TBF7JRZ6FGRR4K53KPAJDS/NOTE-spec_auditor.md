@@ -1,14 +1,18 @@
 # NOTE spec_auditor
 
 ## Выяснено
-- Визит 2 (SPEC sha 32d21c89…, после возврата с гейта 26.10). Рабочий каталог старше Э1 — сверял по origin/main через `git show origin/main:<файл>` (Bash с `$VAR`/пайпами требует подтверждения — писать пути литералом, по одной команде).
-- Э2а на origin/main ещё нет (grep start_after пуст) — треб. 10 SPEC это учитывает.
-- auto пишет свои записи актором "operator" (auto.py:582,1008,183,228,854,649; artel.py:1027 detached launch); session_id общий через файл .artel/session-id (session.py) — «действие Оператора» (треб. 4) механически не отличимо.
-- _cmd_stop (artel.py:1396) сам журнал не пишет, только SIGTERM + disable_task_observation; add_observation_tasks (store.py:82) включает задачу обратно.
-- matching_observation (store.py:225) требует задачу в наборе — для эпика правило «как у auto <id>» буквально неприменимо; SPEC пересказал его без этого условия.
+- Визит 3 (SPEC sha f72c7470…). Рабочий каталог (HEAD 761b646) старше Э1 — сверка по `git show origin/main:<файл>` (литералом, без `$VAR`/`>`/`sed '/re/'`).
+- Факты SPEC подтверждены: zone_lock.py:157-159, stale_cycles.py:42, alerts.py:116, epics.py cmd_epic без parallel/stop, EPICS_DDL без колонки лимита.
+- alert-ack (doctor/cli.py:278 → alerts.ack:290 → store.ack_alert:1591) журнал НЕ пишет — треб. 4 «запись журнала … alert-ack» неисполнима в зонах.
+- resume на не-паузной задаче журнал не пишет (pause.py:95-116) — после stop/лимита шагов естественной команды «перезапусти» нет; после `epic stop` + новый `auto --epic` все остановленные дети ждут Оператора.
+- watch доставляет алерт только при target ∈ задачи набора/проекты (watch.py:300-315); raise_attention_alert(conn, epic_id) с target=id эпика в сессию не придёт. Журнал эпика (task_id=id эпика) тоже не доставляется (store.py:118).
+- Правило (б) треб. 8 без ограничения сессии; _launch_observation (artel.py:922) отказывает наблюдению чужой сессии.
+
+- Аварийный выход дочернего auto (CYCLE_ABORTED, auto.py:643-651) в треб. 5 не классифицирован — риск цикла перезапусков.
+- Тест миграции Э1 требует ровно одну запись журнала миграции (tests/test_01m5tbbdfs6dwqy6ms263t1kpy_migration.py:122).
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready; guard прогнан.
+- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-- Как отличить запись журнала «командой Оператора» от записи цикла auto — правила в коде нет.
+- Правила, какие команды Оператора пишут журнал задачи, нет — искал по `git grep "journal(" origin/main` по модулям команд.
