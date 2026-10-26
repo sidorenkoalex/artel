@@ -105,6 +105,23 @@ CREATE TABLE IF NOT EXISTS pair_suspensions (
 );
 """
 
+# Эпик — сущность пульта, объединяющая задачи одного проекта общей целью
+# (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 1; ADR-0028). Тем же
+# литералом в `SCHEMA` и в миграции `_migrate_epics` (см.
+# `MODEL_TARIFFS_DDL`). Индекс — по колонке `tasks.epic_id`, которую
+# миграция заводит в той же транзакции, поэтому он стоит отдельно.
+EPICS_DDL = """
+CREATE TABLE IF NOT EXISTS epics (
+  id TEXT PRIMARY KEY, project TEXT NOT NULL, title TEXT, goal TEXT,
+  envelope_usd REAL, state TEXT NOT NULL DEFAULT 'open', outcome TEXT,
+  created_at TEXT, closed_at TEXT
+);
+"""
+TASKS_EPIC_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);
+"""
+EPICS_MIGRATED_ACTION = "схема догнана: таблица epics и tasks.epic_id"
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -120,9 +137,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
-  merge_after TEXT, closed_as TEXT,
+  merge_after TEXT, closed_as TEXT, epic_id TEXT,
   created_at TEXT, updated_at TEXT
 );
+{EPICS_DDL}
+{TASKS_EPIC_INDEX_DDL}
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
@@ -208,6 +227,41 @@ def _mark_past_divisions(conn: sqlite3.Connection) -> None:
         store.journal(conn, row["id"], "orchestrator", CLOSED_AS_MIGRATED_ACTION,
                       f"{CLOSED_AS_DIVIDED} — по записи перехода в killed "
                       f"«{DIVIDED_DETAIL_PREFIX} …»")
+
+
+def _migrate_epics(conn: sqlite3.Connection) -> None:
+    """Таблица `epics` и колонка `tasks.epic_id` с одной записью журнала
+    системной записью (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 1).
+
+    Признак «догон нужен» — отсутствие колонки: догнанная БД заканчивает на
+    нём, без блокировки записи (`migrate` идёт на каждом `store.db()`).
+    Иначе проверка повторяется под `BEGIN IMMEDIATE` — второе соединение,
+    дождавшись чужой транзакции миграции, видит уже догнанную схему и
+    уходит без `ALTER` и без второй записи журнала (`add_column` проверку
+    и `ALTER` в одну транзакцию не сводит). Запись журнала — последней:
+    её `commit` и закрывает транзакцию. Без таблицы `steps` писать некуда —
+    транзакция закрывается явным `commit`."""
+    if "epic_id" in table_columns(conn, "tasks"):
+        return
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if "epic_id" in table_columns(conn, "tasks"):
+            conn.rollback()
+            return
+        conn.execute(EPICS_DDL)
+        conn.execute("ALTER TABLE tasks ADD COLUMN epic_id TEXT")
+        conn.execute(TASKS_EPIC_INDEX_DDL)
+        if not table_columns(conn, "steps"):
+            conn.commit()
+            return
+        from . import store  # отложенно — см. комментарий в `migrate`
+        store.journal(conn, config.EPICS_MIGRATION_JOURNAL_TASK_ID,
+                      "orchestrator", EPICS_MIGRATED_ACTION,
+                      target=config.DEFAULT_TARGET)
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -436,3 +490,6 @@ def migrate(conn: sqlite3.Connection) -> None:
     if table_columns(conn, "steps"):
         conn.executescript(STEPS_TASK_ID_INDEX_DDL)
     conn.commit()
+    # Последним: запись журнала о миграции требует уже догнанных колонок
+    # `steps` (`target`, `session_id`) выше.
+    _migrate_epics(conn)

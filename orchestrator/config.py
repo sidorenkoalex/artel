@@ -57,8 +57,9 @@ TEMPLATES = ROOT / "templates"
 PROJECTS = ROOT / ".artel" / "projects"
 # Каталоги области проекта (ADR-0021 п.1, этап 2): `worktrees/` — рабочие
 # копии задач; клон `repo/` заводит `workspace.ensure_clone`, общего
-# `workspace/` больше нет.
-PROJECT_DIRS = ("worktrees", "tasks", "knowledge", "logs")
+# `workspace/` больше нет. `epics/` — документы эпиков проекта (SPEC
+# 01M5TBBDFS6DWQY6MS263T1KPY, требование 1; ADR-0028).
+PROJECT_DIRS = ("worktrees", "tasks", "knowledge", "logs", "epics")
 # Target догфуда. Артель — обычный целевой проект начиная с A7; до него
 # её артефакты живут в tasks/ пульта (ADR-0003 3д, «особый случай»),
 # а в БД её задачи помечены этим именем.
@@ -311,6 +312,10 @@ PROGRAM_SPEND_RESEED_TASK_ID = "PROGRAM-SPEND-RESEED"
 # по границам слов через дефис) — дописана буква, чтобы граница слова
 # не совпала.
 PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"
+# Синтетический task_id записи журнала о догоне схемы под эпики (SPEC
+# 01M5TBBDFS6DWQY6MS263T1KPY, требование 1) — тот же приём, что
+# PIN_UPDATE_JOURNAL_TASK_ID выше: операция не привязана ни к одной задаче.
+EPICS_MIGRATION_JOURNAL_TASK_ID = "EPICS-MIGRATED"
 # Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
 BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"
