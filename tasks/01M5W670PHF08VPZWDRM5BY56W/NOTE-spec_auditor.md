@@ -1,16 +1,15 @@
-# Записка spec_auditor — 01M5W670PHF08VPZWDRM5BY56W (аудит 2, spec_sha cd9a29b6)
+# Записка spec_auditor — 01M5W670PHF08VPZWDRM5BY56W (аудит 3, spec_sha 4485faeb)
 
 ## Выяснено
-- Рабочий каталог (HEAD 58d9b72) позади origin/main: А0 только в origin/main (5705cfd) — сверять через `git show origin/main:…`.
-- Замечания первого аудита закрыты ANSWER-1 и редакцией SPEC (белый список с `GET /projects/:id` и pipelines?ref, head_sha локальный, «не запущен», unknown/X-Total, зоны части 2).
-- Новое: origin/main tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:411-520 (`test_ac9_no_support_literals_outside_targets`) — AST-сторож: сравнение `forge` с литералом "github"/"gitlab" вне targets.py и EXEMPT — красный. Диспетчер forge.py/ci.py по полю `forge` на `==` его заденет; SPEC сторож не упоминает. Обход — именованная константа или словарь (сторож ловит только ast.Constant).
-- test_doctor.py:670 (без token_slot) — skip остаётся: hosting_token → (None, None), SPEC треб. 4 трактует как «нет токена» — сходится.
-- A0 ac7: НЕ сходится — фикстура initialized_tmp_root → TmpRootTest → isolate_keychain_and_role (tests/sandbox.py:1619, :656-670) отдаёт `test-token-<слот>`; после части 2 doctor пойдёт живым HTTP на https://localhost (SPEC.md:463-465 неверен).
-- Статус конвейера не учитывается: мосты (`trigger:`) не видны в /jobs → конвейер failed с видимыми success = green по треб. 6.
-- github pipeline_status: отображение итогов не задано, AC-13 слабый.
+- Рабочий каталог (HEAD 58d9b72) позади origin/main: А0 (5705cfd) только в origin/main — сверять через `git show origin/main:…`.
+- Решения гейта О-1…О-6 и мелкие в SPEC внесены (треб. 1, 2, 5, 6, 9, 10, 11, 14, 15; AC-13, AC-19…AC-22; матрица 2 новые строки).
+- EXEMPT сторожа А0 — пары (файл, функция); сравнение на уровне модуля не исключается вовсе; реестр-словарь в Compare не попадает → запись EXEMPT ему не нужна. SPEC.md:59 не называет функцию.
+- Гейт неослабления (guard.changed_test_assertions) ловит только убыль утверждений; правки EXEMPT и isolate_keychain_and_role утверждений не убирают → строка мандата «Ослабление тестов разрешено:», скорее всего, не потребуется.
+- Новое: SPEC.md:131 «manual допустимо» безусловно, ТЗ — manual тоже не из ci_required_jobs; нет AC.
+- Новое: порядок стадий «по первому появлению в выдаче» (SPEC.md:133) — у API порядок по id, не по стадиям; фикстуры инверсию не поймают.
 
 ## Где остановился
-- Вердикт concerns (О-1…О-6), SPEC-AUDIT.md записан, guard ок.
+- Вердикт concerns, SPEC-AUDIT.md записан.
 
 ## Чего не хватило
-- Где А0 (не в рабочем каталоге, а в origin/main).
+- Где А0 (origin/main, не рабочий каталог); форма EXEMPT — (файл, функция).
