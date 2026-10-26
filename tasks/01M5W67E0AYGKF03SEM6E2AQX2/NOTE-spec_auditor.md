@@ -1,22 +1,18 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Пуши от клона (`repo_context.clone_path`), не от рабочей копии: `gitcmd.git` не знает задачу — «своя/чужая ветка» (AC-11 «feature/PROJ-8 — ветка чужой задачи») не различима без нового контекста у вызывающих (github_adapter.py:166/241, fsm_merge_gate.py:744 — только чтение).
-- coldstart сканирует ветки только для артели (coldstart.py:33) и только ради номера Tnnn (`_BRANCH_NUMBER_RE`, coldstart.py:24) — AC-10 по смыслу пуст.
-- В SPEC нет разделов «Меняемое поведение» и матрицы, хотя AC-21 на них ссылается.
-- Хук pre-push уже есть: scripts/git-hooks/pre-push; scripts/ не в зонах части 1.
-- Merge-коммиты подтяжки — идентичность Оператора (workspace.inherit_identity, workspace.py:78), не commit_author.
-- spawn_subtask: имя ветки строится в _new_task_row (catalog.py:912) ДО копирования ссылок (catalog.py:1032).
-- `push_options` — исполнитель (добавка `-o`) не назначен ни одной части.
-
-- Конфликт подтяжки сейчас — `escalated` + метка (pull.py:575,589), не прямой возврат в in_dev.
-- `_pull_main_or_escalate` зовут ещё fsm.py:1577 и fsm_merge_gate.py:727 — AC-20 их не покрывает.
+- Визит 2 (spec_sha 26748fcb…): все 11 решений гейта SPEC и ANSWER-1 в SPEC отражены.
+- Сжатие и rebase на fsm_advance.py:771 стоят раньше рубежа переделки ревью (fsm_advance.py:816). Рубеж смотрит на дату коммиттера %cI коммитов, кроме подтяжки (advance_gates/review.py:110-129). Переписанная ветка проходит его без шага developer — путь обхода.
+- Части деления заводятся циклом в fsm.py:1070; атомарность невозможна в зонах части 1 без fsm.py. При feature/{ref} имя части = имя родителя (родитель ещё в БД в spec_gate) — отказ гарантирован, AC-8 слабый.
+- ensure_head_in_origin состояние не меняет (github_adapter.py:226-229); эскалация AC-16 требует advance_gates/tests_writing.py:_origin_push_gate — не в зонах части 2.
+- В gitcmd пять точек запуска git (git, carpentry, read, read_env, read_stream); при нечитаемом targets.yaml _declared_targets → {} → белый список не включится (fail-open).
+- A0 уже на origin/main: targets.unsupported_reason отказывает new/run/auto/approve проектам target-human и gitlab.
 
 ## Не сработало
-- Составные bash-команды (`;`, `echo`, `cd`) песочница не пропускает — по одной команде.
+- Составные bash-команды и `for … $(…)` песочница не пропускает — построчные проверки делал через python3 -c.
 
 ## Где остановился
-SPEC-AUDIT.md сдан: verdict concerns, 11 отклонений, guard ок.
+SPEC-AUDIT.md сдан: verdict concerns, 11 отклонений.
 
 ## Чего не хватило
-Дольше всего искал место отправки на рубеже in_dev: advance_gates/tests_writing.py:_origin_push_gate → github_adapter.ensure_head_in_origin (общий для всех forge, не только github).
+Дольше всего искал, какие гейты опираются на историю ветки (затрагивает сжатие и rebase): advance_gates/review.py:_latest_developer_commit_iso_date.
