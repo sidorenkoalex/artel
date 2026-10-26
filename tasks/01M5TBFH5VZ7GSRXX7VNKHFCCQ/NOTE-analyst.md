@@ -1,20 +1,18 @@
-# Записка аналитика 01M5TBFH5VZ7GSRXX7VNKHFCCQ (Э4), шаг 5 — возврат со spec_gate (аудит 4), 26.10
+# Записка аналитика 01M5TBFH5VZ7GSRXX7VNKHFCCQ (Э4), шаг 6 — возврат со spec_gate (аудит 5), 26.10
 
 ## Выяснено
-- Причина возврата — решения Оператора (1)–(6) аудита 4; мандат ANSWER-1 в силе (6 методов tests/test_report.py).
-- tests/test_01m4rzayh3swjw4wfbw4qw15fp_command_report.py:417 — CommandReadOnlyTest::test_ac14_…_calls_git; гоняет `explore-stats` (self.explore), не cmd_report напрямую; в матрицу внесено формулировкой Оператора «report не меняет БД и не зовёт git», без правки теста.
+- Причина возврата — три решения Оператора аудита 5; мандат ANSWER-1 в силе (6 методов tests/test_report.py).
+- tests/test_01m4nz5w9ztkgtw7dgzqgmp2gp_test_author_report.py:185 — AuthorReportTest::test_ac12_… гоняет cmd_report, проверяет «ни одного git» (Popen + gitcmd). Подтверждено по origin/main.
+- tests/test_epics_board_units.py:9 — после migrate старой БД ровно одна запись steps (миграция эпиков).
 
 ## Где остановился
-- SPEC правлен, status: ready, 15 AC (число не выросло — новые проверки вложены в существующие AC), guard ок. Решения → SPEC:
-  (1) непустые система и ключ — треб. 6, AC-12;
-  (2) `link --remove` последней ссылки требуемой системы — треб. 7, AC-11;
-  (3) карточки в группе эпика по возрастанию id задачи — треб. 2, AC-6 (фикстура в обратном порядке заведения);
-  (4) «кто записал» = `operator` для new --ref/link, копия частям — автор и время родителя — треб. 5, 11, AC-9, AC-10, AC-13;
-  (5) разбор `--ref` по первому «:», без «:» — отказ — треб. 7, AC-9;
-  (6) строка матрицы command_report.py:417.
+- SPEC правлен, status: ready, 15 AC, guard ок. Решения → SPEC:
+  (1) строка матрицы: «report не зовёт git» — test_author_report.py:185; «не меняет БД» снято;
+  (2) треб. 5: догон external_refs записей журнала не пишет; новая строка матрицы test_epics_board_units.py:9 «тот же тест без правки»;
+  (3) треб. 10: любой отказ new по --ref (без «:», пустая система/ключ, ref_systems, ref_required) до catalog.py:738; AC-9 и AC-12 — «ссылки refs/artifacts/<id> нет».
 
 ## Не сработало
-- Составная bash-команда требует подтверждения — читать файлы через Read / `git show origin/main:<файл>`.
+- Составная bash-команда может требовать подтверждения — читать через Read / `git show origin/main:<файл>`.
 
 ## Чего не хватило
 - Ветка задачи без Э1 — сверка только `git show origin/main:<файл>`.
