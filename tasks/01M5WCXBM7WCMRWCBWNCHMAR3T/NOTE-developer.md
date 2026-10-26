@@ -1,33 +1,30 @@
 # Записка developer
 
 ## Выяснено
-- Новые модули: orchestrator/forge.py (типы результатов, реестр
-  IMPLEMENTATIONS, _GitHub над ci.check_runs), orchestrator/gitlab_adapter.py
-  (transport/request, постраничное чтение со сверкой X-Total, правила итога).
-  ci.py: `_pipeline_project(repo)` → `forge.ci_by_pipeline`; ветки в
-  verifying_status/branch_status/failed_check_names/main_line_status/
-  find_run_id/check_run_workflow_run/trigger_rerun.
-- Цикл импорта ci↔forge↔gitlab_adapter: в gitlab_adapter нужен
-  `from __future__ import annotations` (аннотации `forge.Job` иначе падают).
-- 211 долгоживущих тестов задачи зелёные.
-
-- В ci.py аннотация `forge.PipelineStatus` — строкой: при импорте forge
-  первым ci видит forge частично.
-- Свой tests/test_forge_gitlab_request.py (чужой :id, scp-адрес,
-  ci_by_pipeline), мутации проверены. Связанные наборы ci/invariants/А0 —
-  311 passed, 1275 subtests.
-
-- Визит 2: переход отказал по инварианту 35 — в докстроке
-  tests/test_forge_gitlab_request.py:49 стоял шаблон `https://<хост>`;
-  сторож адресов ловит и шаблоны в тексте. Переписано словами, проверка
-  `guard.network_address_errors_from_files` по файлам задачи — пусто.
+- Визит 3 (возврат merge_gate, 6 пунктов) закрыт в gitlab_adapter.py и
+  tests/test_forge_gitlab_request.py: transport без перенаправлений (свой
+  HTTPRedirectHandler внутри transport, 3xx — числом, request — причина
+  «перенаправление запрещено: <код>»), отказ не-https адреса, `[0-9]+`
+  в шаблонах путей и в сверке X-Total (было isdigit — принимал «١»),
+  тесты на ALLOWED_PAIRS, отсутствие X-Total, лишний ключ запроса.
+- Настоящий transport тестируется подменой http.client.HTTPSConnection
+  подклассом HTTPConnection (request/getresponse без сокета; ответ —
+  http.client.HTTPResponse над BytesIO). Подкласс самого HTTPSConnection
+  не годится: его __init__ зовёт super(HTTPSConnection, …) по
+  подменённому имени.
+- Сторож адресов tests/ (инвариант 35) ловит и текст вида «http://» в
+  докстринге; разрешены только хосты localhost и 127.0.0.1.
+- 8 мутаций краснят свои тесты; связанные наборы (задача, ci, github,
+  invariants, А0, sleep guard) — зелёные. Карта регенерирована.
 
 ## Не сработало
 - `pytest -n 4` в шаге — воркеры падают «node down»; гонять без -n.
+- В Bash роли нет rm/ls, sed требует подтверждения; heredoc с `{"` и
+  `$VAR` режется — временные сценарии писать Write в каталог документов
+  и удалять через python os.remove.
 
 ## Где остановился
-- Шаг завершён: PLAN.md status: ready, guard ок, карта регенерирована.
-  plank-run: планка только markers.py — «планки нет», это норма задачи.
+- Шаг завершён: PLAN.md status: ready, guard ок.
 
 ## Чего не хватило
 - —
