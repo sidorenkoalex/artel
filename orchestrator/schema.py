@@ -163,6 +163,21 @@ CREATE TABLE IF NOT EXISTS epic_children (
 );
 """
 
+# Внешние ссылки задач и эпиков — ключ во внешнем трекере (SPEC
+# 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требования 5-8; ADR-0028 п. 14). `kind` —
+# `task` | `epic`, `object_id` — id задачи или эпика; уникальность
+# (объект, система, ключ) — повторный `link` дубля не создаёт. Тем же
+# литералом в `SCHEMA` и `migrate()` (см. `MODEL_TARIFFS_DDL`): догон на
+# старой БД записей журнала не пишет.
+EXTERNAL_REFS_DDL = """
+CREATE TABLE IF NOT EXISTS external_refs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+  object_id TEXT NOT NULL, system TEXT NOT NULL, key TEXT NOT NULL,
+  url TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+  UNIQUE (kind, object_id, system, key)
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -185,6 +200,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 {TASKS_EPIC_INDEX_DDL}
 {EPIC_DRAFTS_DDL}
 {EPIC_SUPERVISION_DDL}
+{EXTERNAL_REFS_DDL}
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
@@ -522,6 +538,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(PAIR_SUSPENSION_DDL)
     conn.executescript(EPIC_DRAFTS_DDL)
     conn.executescript(EPIC_SUPERVISION_DDL)
+    conn.executescript(EXTERNAL_REFS_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:

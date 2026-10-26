@@ -681,6 +681,72 @@ def project_tasks(conn: sqlite3.Connection, project: str) -> list:
         (config.DEFAULT_TARGET, project)).fetchall()
 
 
+# ===== Внешние ссылки задач и эпиков (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ) =====
+
+REF_KIND_TASK = "task"
+REF_KIND_EPIC = "epic"
+REF_KINDS = (REF_KIND_TASK, REF_KIND_EPIC)
+# Порядок ссылок объекта — время записи (требование 8); копия части
+# деления несёт время родителя, поэтому за ним — порядок вставки.
+_REFS_ORDER = "ORDER BY created_at, id"
+
+
+def insert_external_ref(conn: sqlite3.Connection, kind: str, object_id: str,
+                        system: str, key: str, url: str | None, by: str,
+                        at: str | None = None) -> bool:
+    """Ссылка объекта; `False` — такая (объект, система, ключ) уже есть и
+    вторая строка не записана (требование 7)."""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO external_refs (kind, object_id, system, key,"
+        " url, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
+        (kind, object_id, system, key, url, by, at or now()))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_external_ref(conn: sqlite3.Connection, kind: str, object_id: str,
+                        system: str, key: str) -> bool:
+    """Снимает ссылку; `False` — её не было."""
+    cur = conn.execute(
+        "DELETE FROM external_refs WHERE kind=? AND object_id=? AND system=?"
+        " AND key=?", (kind, object_id, system, key))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def external_refs(conn: sqlite3.Connection, kind: str, object_id: str) -> list:
+    """Ссылки объекта в порядке записи."""
+    return conn.execute(
+        f"SELECT * FROM external_refs WHERE kind=? AND object_id=? {_REFS_ORDER}",
+        (kind, object_id)).fetchall()
+
+
+def project_external_refs(conn: sqlite3.Connection, kind: str,
+                          project: str) -> list:
+    """Ссылки задач (`kind='task'`) или эпиков проекта одним запросом, в
+    порядке записи — модель доски не читает ссылки на каждую карточку."""
+    owners = ("SELECT id FROM tasks WHERE COALESCE(target, ?)=?"
+              if kind == REF_KIND_TASK else
+              "SELECT id FROM epics WHERE project=?")
+    params = ((config.DEFAULT_TARGET, project) if kind == REF_KIND_TASK
+              else (project,))
+    return conn.execute(
+        f"SELECT * FROM external_refs WHERE kind=? AND object_id IN ({owners})"
+        f" {_REFS_ORDER}", (kind, *params)).fetchall()
+
+
+def copy_external_refs(conn: sqlite3.Connection, source_id: str,
+                       target_id: str) -> None:
+    """Ссылки задачи `source_id` — задаче `target_id` с прежними автором и
+    временем записи (часть деления, требование 11)."""
+    conn.execute(
+        "INSERT OR IGNORE INTO external_refs (kind, object_id, system, key,"
+        " url, created_by, created_at) SELECT kind, ?, system, key, url,"
+        " created_by, created_at FROM external_refs WHERE kind=? AND"
+        f" object_id=? {_REFS_ORDER}", (target_id, REF_KIND_TASK, source_id))
+    conn.commit()
+
+
 # ===== Надзор эпика `auto --epic` (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS) =====
 
 # Автор записей журнала надзирающего процесса эпика: по нему `watch`

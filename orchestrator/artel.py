@@ -158,8 +158,10 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] [--set <набор>] [--target <имя>]
              [--epic <id>] [--after <id>[,<id>…]]
-             [--start-after <id>[,<id>…]] |
+             [--start-after <id>[,<id>…]] [--ref <система>:<ключ>]… |
   status | show <id> |
+  board --project <имя> [--json | --md | --html] |
+  link [--remove] task|epic <id> <система> <ключ> [--url <url>] |
   epic new <проект> "<название>" --goal "<цель>" [--envelope N] |
   epic show|close <id> ["<итог>"] | epic edit <id> [--title …] [--goal …] |
   epic add|remove <id> <задача> | epic envelope <id> N |
@@ -812,7 +814,7 @@ def _ensure_supported_interpreter():
 _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
-                          artifact_cleanup, auto,
+                          artifact_cleanup, auto, board,
                           budget, canary, catalog, ci_rerun, cleanup,
                           conventions, doctor,
                           docs_fetch, dry_run, epics, explore_metric, fsm,
@@ -1626,7 +1628,8 @@ def _tz_arg(rest: list) -> str | None:
 
 _NEW_USAGE = ('new "<название>" [--tz <файл>] [--set <набор>] '
               '[--target <имя>] [--strict-tz] [--epic <id>] '
-              '[--after <id>[,<id>…]] [--start-after <id>[,<id>…]]')
+              '[--after <id>[,<id>…]] [--start-after <id>[,<id>…]] '
+              '[--ref <система>:<ключ>]…')
 
 
 def _parse_new_args(rest: list) -> tuple | None:
@@ -1968,7 +1971,28 @@ def _new_value_arg(rest: list, flag: str, what: str) -> tuple[list, str | None]:
     return rest[:idx] + rest[idx + 2:], rest[idx + 1]
 
 
+def _new_ref_args(rest: list) -> tuple[list, list]:
+    """(argv `new` без пар `--ref <значение>`, значения в порядке argv) —
+    флаг повторяется (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требование 7);
+    значение разбирает и проверяет `catalog.cmd_new` до побочных эффектов.
+    Флаг без значения — именованный отказ."""
+    kept, values = [], []
+    idx = 0
+    while idx < len(rest):
+        if rest[idx] != "--ref":
+            kept.append(rest[idx])
+            idx += 1
+            continue
+        if idx + 1 >= len(rest) or rest[idx + 1].startswith("-"):
+            sys.exit(f"--ref требует <система>:<ключ> следующим аргументом."
+                     f"\n{_NEW_USAGE}")
+        values.append(rest[idx + 1])
+        idx += 2
+    return kept, values
+
+
 def _cmd_new(rest: list) -> None:
+    rest, refs = _new_ref_args(rest)
     rest, strict_tz = _new_strict_tz_arg(rest)
     rest, model_set = _new_set_arg(rest)
     rest, target = _new_target_arg(rest)
@@ -1996,6 +2020,8 @@ def _cmd_new(rest: list) -> None:
         options["after"] = after
     if start_after is not None:
         options["start_after"] = start_after
+    if refs:
+        options["refs"] = refs
     catalog.cmd_new(title, tz_path=tz_path, model_set=model_set, **options)
 
 
@@ -2465,6 +2491,11 @@ def main() -> None:
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
         "epic": lambda: epics.cmd_epic(rest),
+        # Вывод модели доски — только чтение; внешние ссылки пишет
+        # Оператор. Обе вне белого списка ролей (SPEC
+        # 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требования 1, 7).
+        "board": lambda: board.cmd_board(rest),
+        "link": lambda: catalog.cmd_link(rest),
         "advance": lambda: fsm.cmd_advance(rest[0]),
         "workspace": lambda: workspace.cmd_workspace(rest[0]),
         # Инструмент Оператора: переносит файлы из рабочей копии задачи —

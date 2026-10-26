@@ -547,12 +547,140 @@ def _project_line_reasons(tz_raw: str, target: str) -> list[str]:
     return []
 
 
+# ===== Внешние ссылки (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требования 5-11) =====
+
+REF_AUTHOR = "operator"
+LINK_USAGE = ("link [--remove] <task|epic> <id> <система> <ключ> "
+              "[--url <url>]")
+
+
+def _ref_policy(project: str) -> tuple[str | None, list | None]:
+    """(`policy.ref_required`, `policy.ref_systems`) записи проекта; поля нет
+    — `None`. Нечитаемый `targets.yaml` — политики нет: проект `new` уже
+    сверен `_checked_target`, а у `link` объект уже заведён."""
+    try:
+        entry = targets.load().get(project) or {}
+    except targets.TargetsError:
+        entry = {}
+    return (entry.get(targets.REF_REQUIRED_FIELD),
+            entry.get(targets.REF_SYSTEMS_FIELD))
+
+
+def _ref_reason(system: str, key: str, project: str,
+                systems: list | None) -> str | None:
+    """Причина отказа ссылке (требование 6); `None` — годна."""
+    if not system.strip():
+        return "система ссылки пуста"
+    if not key.strip():
+        return "ключ ссылки пуст"
+    if systems is not None and system not in systems:
+        return (f"система {system} не из policy.{targets.REF_SYSTEMS_FIELD} "
+                f"проекта {project} (есть: {', '.join(systems)})")
+    return None
+
+
+def _new_refs(values: list, project: str, canary: bool) -> list[tuple]:
+    """Пары (система, ключ) флагов `new --ref`, проверенные до побочных
+    эффектов `new` (требование 10): значение делится по первому «:»
+    (требование 7), система и ключ непусты и из `ref_systems` (требование
+    6), есть ссылка системы `ref_required` (требование 9; учебной задаче
+    канарейки не применяется)."""
+    required, systems = _ref_policy(project)
+    pairs, reasons = [], []
+    for value in values:
+        if ":" not in value:
+            reasons.append(f"--ref {value!r}: нет «:» — нужно "
+                           f"<система>:<ключ>")
+            continue
+        system, key = value.split(":", 1)
+        reason = _ref_reason(system, key, project, systems)
+        if reason is not None:
+            reasons.append(f"--ref {value!r}: {reason}")
+            continue
+        pairs.append((system, key))
+    if (required and not canary and not reasons
+            and all(system != required for system, _key in pairs)):
+        reasons.append(f"проект {project} требует ссылку системы {required} "
+                       f"(policy.{targets.REF_REQUIRED_FIELD}): --ref "
+                       f"{required}:<ключ>")
+    if reasons:
+        sys.exit("\n".join(reasons + ["new: внешние ссылки не годны — "
+                                      "задача не заведена"]))
+    return pairs
+
+
+def _link_args(rest: list) -> tuple[bool, str | None, list]:
+    """(`--remove`, URL, позиционные) argv `link`; неизвестный флаг и
+    `--url` без значения — отказ с использованием."""
+    remove = "--remove" in rest
+    args = [arg for arg in rest if arg != "--remove"]
+    url = None
+    if "--url" in args:
+        idx = args.index("--url")
+        if idx + 1 >= len(args) or not args[idx + 1]:
+            sys.exit(f"link: --url требует адрес следующим аргументом\n"
+                     f"использование: {LINK_USAGE}")
+        url = args[idx + 1]
+        args = args[:idx] + args[idx + 2:]
+    flags = [arg for arg in args if arg.startswith("--")]
+    if flags or len(args) != 4:
+        sys.exit(f"использование: {LINK_USAGE}")
+    if remove and url is not None:
+        sys.exit(f"link --remove: --url не нужен — ссылку называют система и "
+                 f"ключ\nиспользование: {LINK_USAGE}")
+    return remove, url, args
+
+
+def cmd_link(rest: list) -> None:
+    """`link [--remove] <task|epic> <id> <система> <ключ> [--url …]`:
+    добавляет или снимает внешнюю ссылку задачи или эпика (требование 7).
+    Автор ссылки — `operator`; повторная ссылка дубля не создаёт;
+    последнюю ссылку системы `ref_required` у задачи снять нельзя."""
+    remove, url, (kind, obj, system, key) = _link_args(rest)
+    if kind not in store.REF_KINDS:
+        sys.exit(f"link: вид объекта {kind!r} — нужен task или epic\n"
+                 f"использование: {LINK_USAGE}")
+    conn = store.db()
+    if kind == store.REF_KIND_TASK:
+        obj = store.resolve_task_id(conn, obj)
+        if not store.task_exists(conn, obj):
+            sys.exit(f"link: задачи {obj} нет — ссылка не записана")
+        project = store.task_target(conn, obj)
+    else:
+        epic = store.get_epic(conn, obj)
+        if epic is None:
+            sys.exit(f"link: эпика {obj} нет — ссылка не записана")
+        project = epic["project"]
+    required, systems = _ref_policy(project)
+    if remove:
+        same_system = [r for r in store.external_refs(conn, kind, obj)
+                       if r["system"] == system]
+        if not any(r["key"] == key for r in same_system):
+            sys.exit(f"link --remove: у {kind} {obj} нет ссылки {system}:{key}")
+        if (kind == store.REF_KIND_TASK and system == required
+                and len(same_system) == 1):
+            sys.exit(f"link --remove: {system}:{key} — последняя ссылка "
+                     f"системы {system}, которую требует policy."
+                     f"{targets.REF_REQUIRED_FIELD} проекта {project}; "
+                     f"ссылка остаётся")
+        store.delete_external_ref(conn, kind, obj, system, key)
+        print(f"[{obj}] ссылка {system}:{key} снята")
+        return
+    reason = _ref_reason(system, key, project, systems)
+    if reason is not None:
+        sys.exit(f"link: {reason} — ссылка не записана")
+    if store.insert_external_ref(conn, kind, obj, system, key, url, REF_AUTHOR):
+        print(f"[{obj}] ссылка {system}:{key} записана")
+    else:
+        print(f"[{obj}] ссылка {system}:{key} уже есть — не дублируется")
+
+
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
            model_set: str | None = None, strict_tz: bool = False,
            epic_id: str | None = None, after: str | None = None,
            start_after: str | None = None,
-           tz_text: str | None = None) -> str:
+           tz_text: str | None = None, refs: list | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -616,10 +744,16 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     `tz_text` — текст ТЗ вместо чтения файла (`epic draft promote`, SPEC
     01M5TBFCVFNN95BHH0E9C6KBKB, требование 6): `tz_path` тогда — только
     подпись источника в отказах, проверки те же.
+
+    `refs` — значения `new --ref <система>:<ключ>` (SPEC
+    01M5TBFH5VZ7GSRXX7VNKHFCCQ, требования 7, 9-10): проверяются сразу за
+    проектом, до клона, id и ссылки документов; пишутся после строки
+    задачи и до заведения её ветки.
     """
     # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
     # 2): до ТЗ, клона, id, ссылки документов и строки БД.
     target = _checked_target(target)
+    ref_pairs = _new_refs(refs or [], target, canary)
     conn = store.db()
     if epic_id is not None:
         refusal = epics.binding_refusal(conn, epic_id, target)
@@ -712,6 +846,9 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     if tz_check_detail is not None:
         store.journal(conn, task_id, "operator", tz_check.ACTION,
                       tz_check_detail)
+    for system, key in ref_pairs:
+        store.insert_external_ref(conn, store.REF_KIND_TASK, task_id, system,
+                                  key, None, REF_AUTHOR)
     _ensure_task_worktree(conn, task_id, target)
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)
@@ -889,6 +1026,10 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
                  journal_detail=f"деление {parent_id}: {title}",
                  epic_id=epic_id)
     store.update_task(conn, task_id, parent_task_id=parent_id)
+    # Ссылки родителя — копией с его автором и временем (SPEC
+    # 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требование 11): `ref_required` делением
+    # не обходится.
+    store.copy_external_refs(conn, parent_id, task_id)
     _record_preliminary_zones(conn, task_id, tz_raw)
     print(f"[{task_id}] «{title}» создана делением {parent_id} (target "
          f"{target}, артефактная ветка пульта "

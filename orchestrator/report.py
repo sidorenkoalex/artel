@@ -30,7 +30,7 @@ from pathlib import Path
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
 from . import agent_log, alerts, config, explore_metric, retro, rounds, spend, store, targets  # noqa: F401
-from . import fsm
+from . import board, fsm
 from .advance_gates import test_integrity, two_sided
 from .providers import base as provider_base
 from .providers import claude as claude_provider
@@ -562,11 +562,15 @@ def _project_labels(tasks: list) -> dict:
     return {row["id"]: _project_label(row) for row in tasks}
 
 
-def _tile_html(row) -> str:
-    escalated = bool(row["escalated_from"]) or row["state"] == "escalated"
+def _tile_html(card) -> str:
+    """Плитка доски из карточки модели `board.py` (SPEC
+    01M5TBFH5VZ7GSRXX7VNKHFCCQ, требования 2, 4): всё, что она показывает,
+    — поля карточки. Карточка без `project` — задача артели, как у
+    `_project`."""
+    escalated = bool(card["escalated_from"]) or card["state"] == "escalated"
     escalation_line = ""
     if escalated:
-        source = row["escalated_from"] or "—"
+        source = card["escalated_from"] or "—"
         escalation_line = (
             f'<div class="tile-field tile-escalation">'
             f'Эскалация (из {_esc(source)})</div>')
@@ -574,36 +578,62 @@ def _tile_html(row) -> str:
     # 01M563E1SH9SB63S2MW4A9B82N, требование 7). Скобки — снаружи
     # элемента проекта (SPEC 01M57PMBHWK5EGQ8HPA5TQX72H, требование 1):
     # его собственный текст остаётся ровно именем проекта.
-    project = _project(row)
+    project = card.get("project") or config.DEFAULT_TARGET
     project_line = ""
     if project != config.DEFAULT_TARGET:
         project_line = f' [<span class="tile-project">{_esc(project)}</span>]'
     return (
         f'<div class="tile">'
-        f'<span class="tile-id">{_esc(row["id"])}</span>'
+        f'<span class="tile-id">{_esc(card["task"])}</span>'
         f'{project_line}'
-        f'<span class="tile-title">{_esc(row["title"])}</span>'
-        f'<div class="tile-field">Статус: {_esc(row["state"])}</div>'
-        f'<div class="tile-field">Бюджет: {_usd(row["budget_usd"])}'
-        f' · Расход: {_usd(row["spent_usd"])}</div>'
-        f'<div class="tile-field">Итерации ревью: {row["review_iters"]}'
+        f'<span class="tile-title">{_esc(card["title"])}</span>'
+        f'<div class="tile-field">Статус: {_esc(card["state"])}</div>'
+        f'<div class="tile-field">Бюджет: {_usd(card["budget_usd"])}'
+        f' · Расход: {_usd(card["spent_usd"])}</div>'
+        f'<div class="tile-field">Итерации ревью: {card["review_iters"]}'
         f'/{config.LIMIT_REVIEW_ITERS}</div>'
         f'{escalation_line}'
         f'</div>'
     )
 
 
-def _board_html(tasks: list) -> str:
+def _column_tiles_html(cards: list, epic_titles: dict) -> str:
+    """Плитки колонки: сначала группы эпиков по id эпика — заголовок «<id>
+    <название>», карточки по id задачи, — затем карточки без эпика прежним
+    порядком (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требование 2). Колонка без
+    эпиков — прежняя разметка."""
+    grouped: dict = {}
+    loose = []
+    for card in cards:
+        if card.get("epic"):
+            grouped.setdefault(card["epic"], []).append(card)
+        else:
+            loose.append(card)
+    groups = []
+    for epic_id in sorted(grouped):
+        title = epic_titles.get(epic_id) or ""
+        tiles = "".join(_tile_html(card) for card in
+                        sorted(grouped[epic_id], key=lambda c: c["task"]))
+        groups.append(
+            f'<div class="epic-group">'
+            f'<div class="epic-head">{_esc(epic_id)} {_esc(title)}</div>'
+            f'{tiles}</div>')
+    return "".join(groups) + "".join(_tile_html(card) for card in loose)
+
+
+def _board_html(cards: list, epic_titles: dict | None = None) -> str:
+    """Доска из карточек моделей `board.py`, сведённых по id задачи;
+    `epic_titles` — {id эпика: название} для заголовков групп."""
     by_state: dict = {}
-    for row in tasks:
-        by_state.setdefault(row["state"], []).append(row)
+    for card in cards:
+        by_state.setdefault(card["state"], []).append(card)
 
     ordered_states = [s for s in STATE_ORDER if s in by_state]
     ordered_states += sorted(s for s in by_state if s not in STATE_ORDER)
 
     columns = []
     for state in ordered_states:
-        tiles_html = "".join(_tile_html(row) for row in by_state[state])
+        tiles_html = _column_tiles_html(by_state[state], epic_titles or {})
         columns.append(
             f'<div class="col">'
             f'<div class="col-head"><span class="state-tag">'
@@ -1345,6 +1375,8 @@ _STYLE = """
   .tile .tile-title { display: block; margin: 2px 0 4px; color: var(--text); }
   .tile-field { color: var(--muted); font-size: 11px; }
   .tile-escalation { color: #c22b2b; font-weight: 600; }
+  .epic-group { margin-bottom: 8px; }
+  .epic-head { font-size: 11px; font-weight: 700; margin: 4px 0; }
   .metrics { font-size: 13px; }
   .metric-row { padding: 2px 0; }
   .closed-list { display: flex; flex-direction: column; gap: 6px; }
@@ -1374,7 +1406,12 @@ _STYLE = """
 
 def _render(tasks: list, steps: list, alerts: list, total_spent: float,
            total_estimate: float, divergence: dict | None = None,
-           map_growth_html: str = "", *, now: datetime) -> str:
+           map_growth_html: str = "", *, now: datetime,
+           board_models: list = ()) -> str:
+    cards = sorted((card for model in board_models for card in model["cards"]),
+                   key=lambda card: card["task"])
+    epic_titles = {epic["id"]: epic["title"]
+                   for model in board_models for epic in model["epics"]}
     projects = _declared_projects() | {_project(row) for row in tasks}
     task_ids = {row["id"] for row in tasks}
     return (
@@ -1393,7 +1430,7 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         '<section class="panel"><h2>Очередь ожиданий Оператора</h2>'
         f"{_gate_queue_html(tasks)}</section>\n"
         '<section class="panel"><h2>Борд задач — состояния FSM</h2>'
-        f"{_board_html(tasks)}</section>\n"
+        f"{_board_html(cards, epic_titles)}</section>\n"
         '<section class="panel"><h2>Закрытые задачи</h2>'
         f"{_closed_tasks_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
@@ -1452,9 +1489,16 @@ def cmd_report() -> None:
     # 2-3): read-only, ни одного вызова alerts.*/store-записи внутри —
     # единственный потребитель оценки этого блока, не FSM (AC-5).
     map_growth_html = _map_growth_html(conn, tasks)
+    # Доска — из модели `board.py` на каждый проект задач БД, включая не
+    # заявленные в `targets.yaml` (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ,
+    # требования 2-3): на соединении этой команды и без `waiting_on` —
+    # число запросов модели к `steps` не растёт с числом задач.
+    board_models = [board.build_model(conn, project, with_waiting=False)
+                    for project in sorted({_project(row) for row in tasks})]
 
     doc = _render(tasks, steps, open_alerts_, total_spent, total_estimate,
-                 divergence, map_growth_html, now=datetime.now(timezone.utc))
+                 divergence, map_growth_html, now=datetime.now(timezone.utc),
+                 board_models=board_models)
 
     path = config.ROOT / ".artel" / "report.html"
     path.parent.mkdir(parents=True, exist_ok=True)
