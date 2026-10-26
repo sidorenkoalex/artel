@@ -1,17 +1,18 @@
 # Записка аналитика
 
 ## Выяснено
-- Имя ветки строится только в catalog.py:912; префикс `task/` ищется только в coldstart.py:59 (_max_from_branches). test_coldstart ветки `task/t015-…` — при шаблоне по умолчанию правка, вероятно, не нужна.
-- Отправки (push): github_adapter.py:166,241 (ветка задачи на входе в verifying, forge github); fsm_merge_gate.py:744 (ветка), :1316 (в base!); cleanup.py:265,268 (--delete ветки задачи); artifact_branch.py:427, snapshot.py:297 (refs/artifacts); artifact_cleanup.py:103 (--delete); notes.py:1212,1421, pool_seal.py:303 (не проект); doctor/project_checks.py:98 (dry-run в refs/artifacts), doctor/artifact_branches.py:140.
-- Подтяжка на in_dev→verifying: fsm_advance.in_dev (:771) → fsm._pull_main_or_escalate (fsm.py:236) → pull.evaluate (pull.py:762), merge — pull._run_merge (:535), конфликт — pull._handle_merge_failure (:543). pull.py и fsm.py в зонах ТЗ нет.
-- А0 в origin/main (5705cfdf8), в рабочей копии ветки ещё нет: targets.unsupported_reason отказывает target-human → до Б2 живы только github+operator.
-- Главный конфликт: белый список при «шаблон ≠ умолчания ИЛИ gate ≠ operator» отказывает отправке в base (fsm_merge_gate.py:1316) и удалению ветки (cleanup.py) у operator-проекта с шаблоном; ADR-0029 п.13 — только target-human.
+- ANSWER-1: все дефолты-варианты A, кроме 2 — B. Деление на 2 части ($40, $45), белый список только при merge_gate != operator.
+- Имя ветки строится только в catalog.py:912; префикс `task/` ищется только в coldstart.py:59 (других "task/" в orchestrator/ нет).
+- Отправки: github_adapter.py:166,241; fsm_merge_gate.py:744,1316; cleanup.py:265,268; artifact_branch.py:427; snapshot.py:297; artifact_cleanup.py:103.
+- Подтяжка in_dev→verifying: fsm._pull_main_or_escalate (fsm.py:236) → pull.evaluate (pull.py:762), merge — pull._run_merge (:535), конфликт — pull._handle_merge_failure (:543).
+- Коммиты пульта с FIXATION_AUTHOR вне зон ТЗ: amend.py:799 (кодовая ветка, долгоживущие тесты), snapshot.py:272 (коммит закрытия в refs/artifacts) — внесены в зоны части 2 как следствие требования 3.
+- Части деления: зависимость родителя 01M5W27CY7K7NR9347NKD8F0NX перенесена в «Порядок:» части 1 (merge_after.division_order берёт зависимости части только из её поля).
 
 ## Не сработало
-- ls в Bash недоступен (eval: command not found) — использовать Read/grep.
+- `cd …; grep` в Bash требует подтверждения — использовать абсолютные пути.
 
 ## Где остановился
-- QUESTIONS.md записан (6 вопросов, guard ок), SPEC не писался. После ANSWER — писать SPEC и удалить QUESTIONS.md.
+- SPEC.md с делением записан (status: ready, 21 AC, budget 70, guard ок), QUESTIONS.md удалён. Раздел «Меняемое поведение» не заводился: правка test_coldstart — на усмотрение аналитика части 1 по коду.
 
 ## Чего не хватило
-- Где на самом деле живёт подтяжка входа в verifying (ТЗ называет fsm_advance, а merge — в pull.py/fsm.py).
+- Где живёт подтяжка входа в verifying (ТЗ называет fsm_advance, а merge — в pull.py/fsm.py).
