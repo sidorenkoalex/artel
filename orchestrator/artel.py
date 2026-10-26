@@ -157,11 +157,13 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 
 Команды:
   init | new "<название>" [--tz <файл>] [--set <набор>] [--target <имя>]
-             [--epic <id>] [--after <id>[,<id>…]] |
+             [--epic <id>] [--after <id>[,<id>…]]
+             [--start-after <id>[,<id>…]] |
   status | show <id> |
   epic new <проект> "<название>" --goal "<цель>" [--envelope N] |
   epic show|close <id> ["<итог>"] | epic edit <id> [--title …] [--goal …] |
-  epic add|remove <id> <задача> |
+  epic add|remove <id> <задача> | epic envelope <id> N |
+  epic start-after <задача> <id>…|нет |
   advance <id> | set-models <id> <набор>|--default |
   run <id> [--attach | [--observation <ID>] [--client codex|claude --chat <id>]] |
   auto <id> [--wait-zone] [--attach | [--observation <ID>]
@@ -1473,7 +1475,7 @@ def _tz_arg(rest: list) -> str | None:
 
 _NEW_USAGE = ('new "<название>" [--tz <файл>] [--set <набор>] '
               '[--target <имя>] [--strict-tz] [--epic <id>] '
-              '[--after <id>[,<id>…]]')
+              '[--after <id>[,<id>…]] [--start-after <id>[,<id>…]]')
 
 
 def _parse_new_args(rest: list) -> tuple | None:
@@ -1823,6 +1825,9 @@ def _cmd_new(rest: list) -> None:
     # требование 5) — тем же приёмом, в любом месте argv.
     rest, epic_id = _new_value_arg(rest, "--epic", "id эпика")
     rest, after = _new_value_arg(rest, "--after", "id задачи (через запятую)")
+    # Зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 11).
+    rest, start_after = _new_value_arg(rest, "--start-after",
+                                       "id задачи (через запятую)")
     parsed = _parse_new_args(rest)
     if parsed is None:
         return
@@ -1838,6 +1843,8 @@ def _cmd_new(rest: list) -> None:
         options["epic_id"] = epic_id
     if after is not None:
         options["after"] = after
+    if start_after is not None:
+        options["start_after"] = start_after
     catalog.cmd_new(title, tz_path=tz_path, model_set=model_set, **options)
 
 

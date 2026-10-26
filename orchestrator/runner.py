@@ -15,7 +15,8 @@ from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
-              liveness, models, parallel_limit, pause, project_profile,
+              liveness, merge_after, models, parallel_limit, pause,
+              project_profile,
               providers, repo_context, review, role_prompt, roles, spend, stack, store,
               targets, workspace, zone_lock)
 from scripts import guard
@@ -36,6 +37,12 @@ GIT_IDENTITY = (
 # стоп-крана — не по одновременному отказу бюджета/лимита/паузы/занятости
 # зоны (тот же приём отсечки, что уже несёт `pause.REFUSAL_ACTION`).
 WAVE_BREAKER_REFUSAL_ACTION = "run отклонён: стоп-кран волны"
+
+# Отказы первого шага роли (SPEC 01M5TBCY7WTN121S136XP2C6SR, требования 7,
+# 15-16) — тем же приёмом: по действию журнала ИМЕННО этого вызова `auto`
+# узнаёт причину и даёт свою подсказку (требование 18).
+ENVELOPE_REFUSAL_ACTION = "run отклонён: исчерпан конверт эпика"
+START_AFTER_REFUSAL_ACTION = "run отклонён: ждёт start_after"
 
 # Действие журнала предупреждения предполёта — литерал СЕГОДНЯШНЕГО журнала
 # (текст эта задача не меняет, SPEC 01M3HP7WAXKFK3GYZ3T6HX08M0 требование
@@ -320,6 +327,42 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> bool | None:
                              reason, failure_class)
 
 
+def _first_step_refusal(conn, task_id: str, t, role: str) -> str | None:
+    """Текст отказа первого шага роли по конверту эпика либо по
+    `start_after` (запись журнала сделана); `None` — шаг не держат."""
+    epic = store.get_epic(conn, t["epic_id"]) if t["epic_id"] else None
+    envelope = epic["envelope_usd"] if epic is not None else None
+    deps = merge_after.stored(t["start_after"])
+    if envelope is None and not deps:
+        return None
+    if merge_after.role_step_started(conn, task_id):
+        return None
+    if envelope is not None:
+        spent = budget.epic_spent(conn, epic["id"])
+        if spent >= envelope:
+            detail = (f"исчерпан конверт эпика {epic['id']}: потрачено "
+                      f"${spent:.2f} из ${envelope:.2f} — первый шаг роли "
+                      f"не начинается; подними конверт: artel.py epic "
+                      f"envelope {epic['id']} N")
+            store.journal(conn, task_id, role, ENVELOPE_REFUSAL_ACTION, detail)
+            return f"[{task_id}] run отклонён: {detail}"
+    waiting, dead = merge_after.start_after_pending(conn, t)
+    if dead:
+        listing = ", ".join(f"{dep} ({state})" for dep, state in dead)
+        detail = (f"зависимость запуска start_after не завершится: {listing} "
+                  f"— сними её: artel.py epic start-after {task_id} "
+                  f"<остальные id> (или «{merge_after.NONE_WORD}»)")
+        store.journal(conn, task_id, role, START_AFTER_REFUSAL_ACTION, detail)
+        return f"[{task_id}] run отклонён: {detail}"
+    if waiting:
+        listing = ", ".join(f"{dep} ({state})" for dep, state in waiting)
+        detail = (f"ждёт start_after: {listing} — первый шаг роли начнётся, "
+                  f"когда они будут в done")
+        store.journal(conn, task_id, role, START_AFTER_REFUSAL_ACTION, detail)
+        return f"[{task_id}] run отклонён: {detail}"
+    return None
+
+
 def _refuse_before_start(conn, task_id: str, t, role: str):
     """Отказы шага до старта агента: пауза, стоп-кран волны, чужая ветка
     worktree, pre-flight, инцидент целостности, скилы и модель роли (SPEC
@@ -360,6 +403,16 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
         store.journal(conn, task_id, role,
                       WAVE_BREAKER_REFUSAL_ACTION, detail)
         return "exit", f"[{task_id}] run отклонён: {detail}"
+
+    # Конверт эпика и зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR,
+    # требования 6-7, 15-16, 20) — тем же приёмом, что пауза и стоп-кран
+    # выше, и только перед ПЕРВЫМ шагом роли: задача, чей агент уже
+    # стартовал, идёт под своим потолком (требование 8), а `start_after`
+    # после первого шага не перепроверяется. Задача без эпика с конвертом
+    # и без `start_after` проходит мимо без записей.
+    refusal = _first_step_refusal(conn, task_id, t, role)
+    if refusal is not None:
+        return "exit", refusal
 
     # Проект задачи — явно, с отказом (SPEC 01M545EB0A9F191WTDSPCH36GA,
     # требование 9): откат на артель дал бы шагу внешнего проекта белый
@@ -1843,6 +1896,9 @@ def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
     budget.check_program_spend(conn, task_id,
                                _program_cost(conn, task_id, pump.cost,
                                              spent_before))
+    # Алерт 80 % конверта эпика (SPEC 01M5TBCY7WTN121S136XP2C6SR,
+    # требование 5) — тем же общим хвостом после обеих ветвей учёта.
+    budget.check_epic_alert(conn, task_id)
     return spent
 
 

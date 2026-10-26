@@ -21,9 +21,10 @@ EDGE_PARENT = "parent"
 def waiting_on(conn, t, terminal_states) -> str | None:
     """Кто держит задачу: первое сработавшее правило operator → ci →
     dependency → role; у окончательного состояния — `None`. Зависимость —
-    ожидание зоны (`zone_lock.queue_wait`, в том числе «ради зависимости»):
-    незакрытые `merge_after` держат задачу только на гейте мержа, где раньше
-    срабатывает operator."""
+    ожидание зоны (`zone_lock.queue_wait`, в том числе «ради зависимости»)
+    либо незакрытые `start_after` задачи без первого шага роли (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 19): незакрытые `merge_after`
+    держат задачу только на гейте мержа, где раньше срабатывает operator."""
     state = t["state"]
     if state in terminal_states:
         return None
@@ -32,6 +33,8 @@ def waiting_on(conn, t, terminal_states) -> str | None:
     if state in CI_STATES:
         return "ci"
     if zone_lock.queue_wait(conn, t["id"], t) is not None:
+        return "dependency"
+    if merge_after.start_after_blocks(conn, t):
         return "dependency"
     return "role"
 
@@ -79,8 +82,9 @@ def _ordered(nodes: list[str], edges: list[dict]) -> list[str]:
     return order
 
 
-def _epic_item(epic, tasks: list, cards: dict, terminal_states,
+def _epic_item(conn, epic, tasks: list, cards: dict, terminal_states,
                states) -> dict:
+    from . import budget  # отложенно — см. `build_model`
     members = [t for t in tasks if t["epic_id"] == epic["id"]]
     member_ids = {t["id"] for t in members}
     edges = [{"from": t["parent_task_id"], "to": t["id"], "kind": EDGE_PARENT}
@@ -100,12 +104,15 @@ def _epic_item(epic, tasks: list, cards: dict, terminal_states,
                  if e["kind"] == EDGE_PARENT and e["from"] == t["id"]]
         merged = sum(1 for p in parts if p in cards and cards[p]["state"] == "done")
         divisions.append({"task": t["id"], "merged": merged, "total": len(parts)})
+    spent = budget.epic_spent(conn, epic["id"])
     return {
         "id": epic["id"],
         "title": epic["title"],
         "goal": epic["goal"],
         "envelope_usd": epic["envelope_usd"],
-        "spent_usd": sum(t["spent_usd"] or 0.0 for t in members),
+        "spent_usd": spent,
+        "envelope_warning": budget.epic_envelope_warning(spent,
+                                                         epic["envelope_usd"]),
         "counts": counts,
         "nodes": _ordered(sorted(member_ids), edges),
         "edges": edges,
@@ -124,13 +131,16 @@ def build_model(conn, project: str) -> dict:
     """Модель доски проекта `project` (требование 10)."""
     # Отложенно: `fsm` и `watch` тянут граф модулей, импортирующий
     # `catalog`, а `catalog` строит `status` из этой модели.
+    # `budget` (в `_epic_item`) — тем же приёмом: потрачено по эпику
+    # считает одна функция `budget.epic_spent` (SPEC
+    # 01M5TBCY7WTN121S136XP2C6SR, требование 1).
     from . import fsm, watch
     terminal = fsm.TERMINAL_STATES
     tasks = store.project_tasks(conn, project)
     last_events = store.last_step_times(conn, project)
     cards = [_card(conn, t, last_events, terminal) for t in tasks]
     by_id = {c["task"]: c for c in cards}
-    epics = [_epic_item(e, tasks, by_id, terminal, fsm.STATES)
+    epics = [_epic_item(conn, e, tasks, by_id, terminal, fsm.STATES)
              for e in store.project_epics(conn, project)]
     return {
         "schema_version": SCHEMA_VERSION,

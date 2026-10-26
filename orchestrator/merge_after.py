@@ -92,6 +92,15 @@ MERGE_GATE_KILLED_ACTION = "approve отклонён: зависимость м�
 
 IMPACT_SECTION = "Влияние на систему"
 
+# Зависимость запуска `start_after` (SPEC 01M5TBCY7WTN121S136XP2C6SR,
+# требования 11-17): тот же формат колонки и те же правила элемента, что у
+# `merge_after`; исполняет её `runner` перед первым шагом роли задачи.
+START_AFTER = "start_after"
+START_AFTER_CHANGED_ACTION = "start_after изменён"
+# Маркер старта агента шага (`runner.py`): задача без этой записи ещё не
+# получала шага роли (требование 6).
+ROLE_STEP_STARTED_ACTION = "agent run started"
+
 
 def stored(value) -> list[str]:
     """Перечень id значения колонки (`None` — пустой)."""
@@ -130,8 +139,28 @@ def _cycle_path(graph: dict[str, list[str]], start: str,
     return None
 
 
+def _dependency_graph(conn, task_id: str | None, own: list[str],
+                      column: str) -> dict[str, list[str]]:
+    """Граф цикла — рёбра `merge_after` ∪ `start_after` всех задач (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 14); у `task_id` — проверяемое
+    значение `own` канала `column` плюс действующее значение другого
+    канала: цикл «A start_after B, B merge_after A» видят оба канала."""
+    rows = {r["id"]: r for r in store.all_tasks(conn)}
+    graph = {tid: _edges(r, FIELD) + _edges(r, START_AFTER)
+             for tid, r in rows.items()}
+    other = START_AFTER if column == FIELD else FIELD
+    row = rows.get(task_id)
+    graph[task_id] = own + (_edges(row, other) if row is not None else [])
+    return graph
+
+
+def _edges(row, column: str) -> list[str]:
+    return stored(row[column]) if column in row.keys() else []
+
+
 def check(conn, task_id: str | None, items: list[str], *,
-          target: str | None = None) -> tuple[list[str], list[str]]:
+          target: str | None = None,
+          column: str = FIELD) -> tuple[list[str], list[str]]:
     """(полные id в порядке `items`, причины отказа) — проверка значения
     `merge_after` задачи `task_id` правилами требований 1-2. Причины не
     пусты — перечень id не годен и не возвращается.
@@ -142,7 +171,19 @@ def check(conn, task_id: str | None, items: list[str], *,
 
     `task_id=None` с явным `target` — проверка для ещё не заведённой задачи
     (`new --tz`): строки БД нет, и `store.task_target` молча вернул бы
-    target по умолчанию вместо target'а заводимой задачи."""
+    target по умолчанию вместо target'а заводимой задачи.
+
+    `column` — канал значения: `merge_after` либо `start_after` (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требования 13-14): правила элемента те же,
+    граф цикла — общий по обеим колонкам; причины называют свой канал."""
+    ids, reasons = _checked(conn, task_id, items, target, column)
+    if column != FIELD:
+        reasons = [r.replace(f"{FIELD}:", f"{column}:", 1) for r in reasons]
+    return ids, reasons
+
+
+def _checked(conn, task_id: str | None, items: list[str], target: str | None,
+             column: str) -> tuple[list[str], list[str]]:
     reasons = guard.merge_after_form_errors(items, task_id)
     if reasons:
         return [], reasons
@@ -177,8 +218,8 @@ def check(conn, task_id: str | None, items: list[str], *,
         resolved.append((item, dep))
     if reasons:
         return [], reasons
-    graph = {r["id"]: stored(r["merge_after"]) for r in store.all_tasks(conn)}
-    graph[task_id] = [dep for _, dep in resolved]
+    graph = _dependency_graph(conn, task_id, [dep for _, dep in resolved],
+                              column)
     for item, dep in resolved:
         path = _cycle_path(graph, dep, task_id)
         if path is not None:
@@ -513,7 +554,11 @@ def replace_divided(conn, parent_id: str, successor_id: str) -> None:
 
     Проверки `check` здесь нет: значение отличается от уже принятого
     одним элементом, а цикл через преемника `division_order` уже искал на
-    виртуальном графе до заведения частей."""
+    виртуальном графе до заведения частей.
+
+    Тем же правилом — колонка `start_after` зависящих задач (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 17): та же позиция, запись
+    журнала зависящей задаче."""
     for row in store.all_tasks(conn):
         old = stored(row["merge_after"])
         if parent_id not in old:
@@ -522,6 +567,97 @@ def replace_divided(conn, parent_id: str, successor_id: str) -> None:
         # Канал без id родителя: правая часть записи «было → стало» —
         # новое значение, и родитель в ней не называется.
         rewrite(conn, row["id"], new_ids, "деление на гейте SPEC", "operator")
+    for row in store.all_tasks(conn):
+        old = _edges(row, START_AFTER)
+        if parent_id not in old:
+            continue
+        new_ids = [successor_id if dep == parent_id else dep for dep in old]
+        rewrite_start_after(conn, row["id"], new_ids, "деление на гейте SPEC",
+                            "operator")
+
+
+def rewrite_start_after(conn, task_id: str, new_ids: list[str], channel: str,
+                        actor: str) -> None:
+    """Записывает уже проверенное значение `start_after` и строку журнала
+    «было → стало» с названием канала — приём `rewrite`."""
+    old = stored(store.get_task(conn, task_id)[START_AFTER])
+    store.update_task(conn, task_id, start_after=column(new_ids))
+    detail = f"{_text(old)} → {_text(new_ids)} (канал: {channel})"
+    store.journal(conn, task_id, actor, START_AFTER_CHANGED_ACTION, detail)
+    print(f"[{task_id}] {START_AFTER_CHANGED_ACTION}: {detail}")
+
+
+def last_division_part(conn, task_id: str) -> str | None:
+    """Последний id записи журнала поделённой задачи «поделена на: …»
+    (`fsm.py`, переход родителя в `killed`); `None` — такой записи нет."""
+    parts: list[str] = []
+    for row in store.task_steps(conn, task_id):
+        detail = row["detail"] or ""
+        if detail.startswith(store.DIVIDED_DETAIL_PREFIX):
+            parts = guard.merge_after_items(
+                detail[len(store.DIVIDED_DETAIL_PREFIX):]) or parts
+    return parts[-1] if parts else None
+
+
+def _undivided(conn, item: str) -> str:
+    """Элемент записи `start_after` с подстановкой поделённой задачи её
+    последней частью по цепочке делений до неподелённой (требование 12).
+    Элемент, не разрешающийся ровно в одну задачу, остаётся как есть —
+    причину назовёт `check`."""
+    seen: set[str] = set()
+    current = item
+    while True:
+        matches = store.task_id_matches(conn, current)
+        if len(matches) != 1 or matches[0] in seen:
+            return current
+        task_id = matches[0]
+        seen.add(task_id)
+        if store.get_task(conn, task_id)["closed_as"] != store.CLOSED_AS_DIVIDED:
+            return current
+        part = last_division_part(conn, task_id)
+        if part is None:
+            return current
+        current = part
+
+
+def start_after_value(conn, task_id: str | None, items: list[str], *,
+                      target: str | None = None) -> tuple[list[str], list[str]]:
+    """(полные id, причины отказа) записи `start_after` задачи `task_id`
+    (требования 12-14): поделённые элементы заменяются последней частью
+    ДО проверки, затем — `check` канала `start_after` (существование, тот
+    же проект, не `killed`, цикл по объединённому графу)."""
+    return check(conn, task_id, [_undivided(conn, item) for item in items],
+                 target=target, column=START_AFTER)
+
+
+def role_step_started(conn, task_id: str) -> bool:
+    """Задача уже получала шаг роли — в журнале есть «agent run started»
+    (требование 6); записи отказов до старта агента шагом не считаются."""
+    return store.last_task_step_of(
+        conn, task_id, (ROLE_STEP_STARTED_ACTION,)) is not None
+
+
+def start_after_pending(conn, t) -> tuple[list, list]:
+    """(ожидаемые, мёртвые) — пары (id, состояние) зависимостей запуска
+    задачи не в `done`: мёртвые — `killed` или пропавшие из БД, их ждать
+    бессмысленно (требование 16); из БД на каждый вызов."""
+    waiting, dead = [], []
+    for dep in _edges(t, START_AFTER):
+        state = store.task_state(conn, dep) or MISSING_STATE
+        if state in ("killed", MISSING_STATE):
+            dead.append((dep, state))
+        elif state != "done":
+            waiting.append((dep, state))
+    return waiting, dead
+
+
+def start_after_blocks(conn, t) -> bool:
+    """Задача ждёт `start_after`: первого шага роли ещё не было, а среди
+    зависимостей запуска есть не `done` (требования 15, 19)."""
+    if not _edges(t, START_AFTER):
+        return False
+    waiting, dead = start_after_pending(conn, t)
+    return bool(waiting or dead) and not role_step_started(conn, t["id"])
 
 
 def apply_plan(conn, task_id: str, t, meta: dict, plan_text: str) -> None:
