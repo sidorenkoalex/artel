@@ -34,7 +34,6 @@ COLUMNS = ("задача", "родитель", "от чего зависит", "
 WORDS = ("Ольха", "Ясень", "Клён", "Вяз", "Липа", "Граб", "Осина", "Рябина",
          "Ива", "Бук", "Кедр", "Пихта")
 OTHER_PROJECTS = ("vega", "orion", "lyra", "draco")
-TASK_ID = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")
 
 
 @pytest.fixture
@@ -75,6 +74,14 @@ def words(stand, count: int = 2) -> str:
 
 def epics() -> dict:
     return {r["id"]: dict(r) for r in store.db().execute("SELECT * FROM epics")}
+
+
+def carries_id(line: str) -> bool:
+    """Строка несёт id заведённой фикстурой задачи или эпика — id берутся
+    из БД, не из формата: формат id знает только `orchestrator/idgen.py`."""
+    known = [r["id"] for r in store.all_tasks(store.db())]
+    known += list(epics())
+    return any(item in line for item in known)
 
 
 def epic_new(stand, project: str, *, title: str | None = None,
@@ -381,7 +388,7 @@ def block_header(lines: list[str], project: str) -> int:
     """Заголовок блока проекта: строка с именем проекта без id задачи."""
     return line_index(lines, lambda line: re.search(
         rf"(?<![\w-]){re.escape(project)}(?![\w-])", line)
-        and not TASK_ID.search(line))
+        and not carries_id(line))
 
 
 def test_ac28_status_project_blocks(stand):
@@ -403,7 +410,7 @@ def test_ac28_status_project_blocks(stand):
     a_head, b_head = block_header(lines, "a-proj"), block_header(lines, "b-proj")
     assert a_head < b_head, note(stand, "\n".join(lines))
     later = [i for i in range(len(lines)) if i > a_head and lines[i].strip()
-             and not TASK_ID.search(lines[i]) and not lines[i].startswith(" ")]
+             and not carries_id(lines[i]) and not lines[i].startswith(" ")]
     a_end = min([i for i in later if i <= b_head] or [b_head])
     assert not any(epic_id in line for line in lines[a_head:a_end]), note(
         stand, "группа эпика b-proj в блоке a-proj")
