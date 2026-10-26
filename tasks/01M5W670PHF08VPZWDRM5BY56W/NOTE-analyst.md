@@ -1,17 +1,16 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ достаточно; пишу SPEC с делением на 2 части (сигналы: 7 файлов зоны, рамка $70 ≥ $30).
-- Часть 1: forge.py, gitlab_adapter.py, ci.py, github_adapter.py (треб. 1–3). Часть 2: doctor/misc_checks.py, doctor/cli.py, artel.py (треб. 4) — после части 1.
-- `Порядок:` части деления принимает id задач (`merge_after.division_order_items`) — зависимость от А0 01M5W27CY7K7NR9347NKD8F0NX вписана в обе части.
-- `tests/test_doctor.py:670 test_non_github_forge_is_skipped`: url `file:///…` — адаптер не строит адрес → `skip` с причиной (как у GitHub при сбое `gh`), тест остаётся зелёным; в «Меняемое поведение» не внесён.
-- `tests/` — общая зона (`config.COMMON_ZONES`), в zones не вписана.
+- Аудит SPEC вернул fail. Причина — противоречия самого ТЗ: белый список против doctor/forge-probe, `head_sha`, GitHub-реализация новых функций forge. Их решает Оператор, поэтому написан батч QUESTIONS.md (13 вопросов). SPEC.md не тронут и остаётся прежним вариантом.
+- ADR-0029 п. 8 (origin/main): белый список — «чтение конвейеров» без «по sha»; правило «Неполный статус — не зелёный»; токен без срока — warn после порога задач.
+- `keychain.token` читает связку ключей через `subprocess.run`. Тест А0 (`tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py`) подменяет subprocess, поэтому без токена сети не будет, если адаптер не ходит в сеть без токена (вопрос 9).
+- `ci.rerun_started` проверяет подстроку «не запущен» (ci.py:1694).
 
 ## Не сработало
-- `ls`/`cd …;` в Bash требуют подтверждения — пользуйся Read/grep.
+- Составные Bash-команды (`ls; cat`) требуют подтверждения — пользуйся Read.
 
 ## Где остановился
-- SPEC написан (15 AC, 10 требований, деление на 2 части: $45 + $25), `scripts/guard.py` — ок, status: ready.
+- QUESTIONS.md записан, guard — ок. После ANSWER: переписать SPEC (дефолты: 1A, 2A, 3A, 4A, 5A, 6A, 7A, 8A, 9A, 10A, 11A, 12A, 13A) и удалить QUESTIONS.md.
 
 ## Чего не хватило
-- Как пульт переносит merge_after родителя на части деления — нашёл в `orchestrator/merge_after.py::division_order`.
+- Факты А0 есть только в origin/main (`git show origin/main:…`), рабочий каталог позади.
