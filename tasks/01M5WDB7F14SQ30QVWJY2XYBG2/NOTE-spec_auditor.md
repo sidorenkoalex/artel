@@ -1,18 +1,17 @@
-# Записка spec_auditor — 01M5WDB7F14SQ30QVWJY2XYBG2
+# Записка spec_auditor — 01M5WDB7F14SQ30QVWJY2XYBG2 (аудит 2, spec_sha e4c4ffd3)
 
 ## Выяснено
-- Факты SPEC сверены: catalog.py:918 (ветка), :1031-1038 (spawn_subtask: ветка до copy_external_refs), fsm.py:1037/1070 (_spawn_division_subtasks), gitcmd.py:37/86-118/164/341/413/441/469 — верно. Ещё один запуск git — gitcmd.py:549 (check_ignore, не push).
-- `policy.push_options_forbidden` нигде не объявлено (ни в коде, ни в ADR); targets._check_local_sections (:441) отказывает неизвестному полю policy — поле надо объявлять, SPEC его формы не задаёт.
-- Деление: _division_check (fsm.py:1403) — место отказа «до первой записи»; zones/merge_after/budget пишутся на :1431-1444, эпик `--as-epic` — fsm.py:1067 до частей. AC-5 не ловит отказ, поставленный позже этих записей.
-- Требование 3(г) «нечитаемая запись — отказ» противоречит 3 «operator — прежние» (merge_gate при нечитаемой записи неизвестен).
-- Журнал отказа для отправки, не связанной с задачей (в `main`), не определён — store.journal пишет по task_id.
-- Вердикт: concerns.
+- Факты SPEC верны: catalog.py:918, fsm.py:1037/1067 (эпик до частей), gitcmd.py:37/86-118/164/341/413/441/469. `_division_check` определён на fsm.py:1016, :1403 — место вызова в approve (до записей :1408-1444).
+- Места push: artifact_cleanup.py:103, github_adapter.py:166/241, artifact_branch.py:427, cleanup.py:265/268 (`_bounded` добавляет `-c http.lowSpeed*` перед push, :257), fsm_merge_gate.py:744/1316, snapshot.py:297, doctor/project_checks.py:98 (`push --dry-run` — белый список его отказывает для target-human), doctor/artifact_branches.py:140 (push по URL из `source`, может быть ROOT).
+- `_hosting_project` (gitcmd.py:94) распознаёт push только после пар `-C`/`-c`; URL-проект — через `project_by_url`, при нечитаемом targets — None.
+- ARTEL_TASK (config.py:103) ставится только в окружении роли (runner.py:1182) — «контекст задачи» для команд Оператора не определён.
+- Вердикт: concerns (11 пунктов).
 
 ## Не сработало
-- Bash с `cd …;` и переменными требует подтверждения — только одиночные команды с относительными путями.
+- `$(...)` в Bash требует подтверждения — только простые команды.
 
 ## Где остановился
-- SPEC-AUDIT.md записан (status: ready, verdict: concerns, 11 отклонений + мелкие), guard: ок. Шаг завершён.
+- SPEC-AUDIT.md записан (status: ready, verdict: concerns, 11 отклонений), guard: ок. Шаг завершён.
 
 ## Чего не хватило
-- Списка всех мест `push` в коде — собрал grep '"push"' orchestrator/ (16 мест, cleanup.py:268 уже шлёт --force-with-lease сам).
+- Перечня всех push-мест — grep '"push"' orchestrator/.
