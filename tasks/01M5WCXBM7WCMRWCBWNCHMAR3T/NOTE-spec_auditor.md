@@ -1,17 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Строки ci.py из SPEC сходятся (204/250/341-344/977/1074/1100/1115/1155/1247/1282/1422/1532/1609/1636/1679); targets.py:29 SUPPORTED_FORGES, :270 unsupported_reason — да.
-- `policy.ci_required_jobs` неизвестен загрузчику: targets.py:330-334 (LOCAL_FIELDS["policy"]) — merge_local отказывает «неизвестное поле» (:441), `_flatten` (:585-588) его не переносит. targets.py вне зон SPEC.
-- `token_slot` обязателен (targets.py:38, check :624-626; machine :335) — «запись без token_slot» из AC-3 через targets.target недостижима; gitcmd.hosting_token (:121) на записи без слота даёт (None, None) — «прежняя авторизация», не отказ.
-- Сторож А0 (tests/test_01m5w27…:453) ловит только Compare с литералом; сравнение с `targets.FORGES[1]` или выбор без реестра он не видит; у требования 1 (реестр) нет своего AC.
-- github: ci.verifying_status ставит running раньше red (ci.py:1034-1045), `action_required` там — red (GREEN :27); forge github по SPEC — red раньше running, action_required → unknown. Это из ТЗ, не отклонение.
+- Визит 2 (spec_sha 27e8217f…): решения гейта №1 (Д-1, Д-2, Д-3, Ф-2, AC-17, строка срока токена) в SPEC перенесены — AC-21, AC-22, «Не входит», req 3/AC-3.
+- Строки ci.py из SPEC снова сходятся (204/250/341-344/977/1074/1100/1115/1155/1247/1282/1422/1532/1609/1636/1679), targets.py:23 FORGES, :29, :270; gitcmd.py:121.
+- `targets.target()` отдаёт ПЛОСКУЮ запись (`_flatten`, targets.py:579-588): поля policy лежат на верхнем уровне, ключа `policy` нет. Ни SPEC А1.1, ни SPEC Б1 (refs/artifacts/01M5WDB7F1…, стр. 59, 194) не называют, по какому ключу плоской записи читать `ci_required_jobs` → главное отклонение (concerns).
+- Сторож А0 (tests/test_01m5w27…:453-471) и AC-21 не ловят `forge.<f>(target) == "gitlab"` в ci.py — путь обхода.
+- ci_rerun.py:274-308 — потребитель failed_check_names; для gitlab красный без упавших заданий даёт пустое множество, но trigger_rerun отказывает — мелочь.
 
 ## Не сработало
-- `cd … ;` в Bash требует подтверждения — работать относительными путями без cd.
+- Bash с `;`/переменными требует подтверждения — по одной команде.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict concerns (Д-1 реестр без AC, Д-2 ci_required_jobs вне схемы targets.py, Д-3 старшинство итогов, Ф-2 hosting_token (None,None), О-2 сторож AC-17 и импорты); guard.py — ок.
+- SPEC-AUDIT.md: status ready, verdict concerns; guard прогнан.
 
 ## Чего не хватило
-- Схемы полей `policy` записи проекта в карте — искал в targets.py LOCAL_FIELDS.
+- Формы записи, которую видит адаптер (плоская против разделов) — нашёл в targets._flatten.
