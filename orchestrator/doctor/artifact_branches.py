@@ -26,9 +26,12 @@ def _origin_artifact_refs(repo) -> tuple[dict | None, str]:
     if res.returncode != 0:
         return None, (res.stderr or "").strip()[:200] or "ls-remote не удался"
     refs = {}
+    epic_refs = "refs/artifacts/" + doctor.config.EPIC_REF_NAME_PREFIX
     for line in res.stdout.splitlines():
         sha, _, ref = line.partition("\t")
-        if sha and ref:
+        # Ссылка эпика `refs/artifacts/epic-<id>` — не задача (SPEC
+        # 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15).
+        if sha and ref and not ref.strip().startswith(epic_refs):
             refs[ref.strip()] = sha.strip()
     return refs, ""
 

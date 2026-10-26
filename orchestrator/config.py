@@ -316,6 +316,11 @@ PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"
 # 01M5TBBDFS6DWQY6MS263T1KPY, требование 1) — тот же приём, что
 # PIN_UPDATE_JOURNAL_TASK_ID выше: операция не привязана ни к одной задаче.
 EPICS_MIGRATION_JOURNAL_TASK_ID = "EPICS-MIGRATED"
+# Копия эпика — ссылка `refs/artifacts/epic-<id эпика>` в репозитории его
+# проекта (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требования 10, 15): имя под
+# `refs/artifacts/` с этой приставкой — не id задачи, и места, выводящие
+# id задачи из имени ссылки документов, его пропускают.
+EPIC_REF_NAME_PREFIX = "epic-"
 # Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
 BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"

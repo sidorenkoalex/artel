@@ -101,6 +101,29 @@ def branch_name(task_id: str) -> str:
     return f"refs/artifacts/{task_id}"
 
 
+def epic_ref_key(epic_id: str) -> str:
+    """Ключ ссылки копии эпика (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требование
+    10): `branch_name(epic_ref_key(id))` — `refs/artifacts/epic-<id>`. Узлы
+    записи и отправки принимают его на месте id задачи."""
+    return f"{config.EPIC_REF_NAME_PREFIX}{epic_id}"
+
+
+def is_epic_ref_key(name: str) -> bool:
+    """Имя под `refs/artifacts/` — ссылка эпика, не документы задачи."""
+    return name.startswith(config.EPIC_REF_NAME_PREFIX)
+
+
+def _journal_identity(key: str) -> tuple[str, str | None]:
+    """(id записи журнала, target) исхода отправки ссылки `key`: ссылка
+    эпика пишется в журнал под id эпика с проектом эпика (требование 12),
+    ссылка задачи — под id задачи, target по её строке, как прежде."""
+    if not is_epic_ref_key(key):
+        return key, None
+    epic_id = key[len(config.EPIC_REF_NAME_PREFIX):]
+    epic = store.get_epic(store.db(), epic_id) if store.db_usable() else None
+    return epic_id, (epic["project"] if epic is not None else None)
+
+
 # Репозиторий задачи не найден (клона нет): git не спрашивается вовсе.
 # `git -C` в каталоге под `config.ROOT` без своего `.git` молча ушёл бы
 # вверх и записал ссылку в git пульта.
@@ -422,16 +445,21 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
     что уже платят `answer.py`/`amend.py`/`catalog.py` в похожих местах,
     не имеющих под рукой чужого `conn`; циклического импорта не образует
     — `store.py` тянет `artifact_branch` только отложенным импортом
-    внутри функции (`store.record_fixation`), не на уровне модуля."""
+    внутри функции (`store.record_fixation`), не на уровне модуля.
+    Исход ссылки эпика — под id эпика (`_journal_identity`)."""
     conn = store.db()
+    task_id, target = _journal_identity(task_id)
+    where = {"target": target} if target is not None else {}
     if ok:
         retried = f" (попыток {attempts})" if attempts > 1 else ""
         store.journal(conn, task_id, "orchestrator", _PUSH_OK_ACTION,
-                      f"push артефактной ветки {branch} — успех{retried}")
+                      f"push артефактной ветки {branch} — успех{retried}",
+                      **where)
         return
     if reason == PUSH_REASON_SERVER:
         store.journal(conn, task_id, "orchestrator", _PUSH_FAILED_ACTION,
-                      f"{reason} (попыток {attempts}): {stderr[:300]}")
+                      f"{reason} (попыток {attempts}): {stderr[:300]}",
+                      **where)
         return
     detail = reason + (f": {stderr[:300]}" if stderr else "")
     if reason == PUSH_REASON_NON_FAST_FORWARD:
@@ -439,7 +467,8 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
         origin_sha = gitcmd.remote_branch_sha(branch, repo=repo)
         detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
                   f"— свести merge-коммитом")
-    store.journal(conn, task_id, "orchestrator", _PUSH_FAILED_ACTION, detail)
+    store.journal(conn, task_id, "orchestrator", _PUSH_FAILED_ACTION, detail,
+                  **where)
 
 
 def push(task_id: str) -> bool:
@@ -492,6 +521,7 @@ def _last_send_failed(task_id: str) -> bool:
     # не заводим (как `task_repo`).
     if not store.db_usable():
         return False
+    task_id, _target = _journal_identity(task_id)
     last = store.last_task_step_of(store.db(), task_id,
                                    (_PUSH_OK_ACTION, _PUSH_FAILED_ACTION))
     return last is not None and last["action"] == _PUSH_FAILED_ACTION
@@ -713,7 +743,12 @@ def fetch_all_from_origin(repo: Path) -> tuple[dict | None, str]:
     ОДНИМ `git fetch`: ({id: (исход `FETCH_*`, пояснение)}, "") либо
     (None, причина) — fetch или чтение ссылок не удались. Правило сдвига —
     то же, что у `fetch_from_origin`; досылка до `git fetch` — задач этого
-    репозитория."""
+    репозитория.
+
+    Ссылки эпиков `refs/artifacts/epic-<id>` (SPEC
+    01M5TBFCVFNN95BHH0E9C6KBKB, требования 14-15) сдвигаются тем же
+    правилом, но в исходы не входят: исходы — по задачам, и потребители
+    (`docs`, заведение клона) ищут и печатают по ним задачи."""
     send_pending(repo=repo)
     ns = f"{_FETCH_NS}/{os.getpid()}"
     res = _git(repo, "fetch", "-q", "--no-tags", "origin",
@@ -729,8 +764,10 @@ def fetch_all_from_origin(repo: Path) -> tuple[dict | None, str]:
         outcomes = {}
         for tmp, sha in sorted(fetched.items()):
             task_id = tmp[len(ns) + 1:]
-            outcomes[task_id] = _sync_local_ref(
+            outcome = _sync_local_ref(
                 repo, task_id, local.get(branch_name(task_id), ""), sha)
+            if not is_epic_ref_key(task_id):
+                outcomes[task_id] = outcome
         return outcomes, ""
     finally:
         _drop_fetch_refs(repo, list(fetched))

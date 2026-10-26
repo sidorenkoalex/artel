@@ -551,7 +551,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
            model_set: str | None = None, strict_tz: bool = False,
            epic_id: str | None = None, after: str | None = None,
-           start_after: str | None = None) -> str:
+           start_after: str | None = None,
+           tz_text: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -611,6 +612,10 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     проверенная `merge_after.start_after_value` до клона и id; отказ не
     оставляет задачи. При исчерпанном конверте эпика задача заводится с
     предупреждением (требование 9).
+
+    `tz_text` — текст ТЗ вместо чтения файла (`epic draft promote`, SPEC
+    01M5TBFCVFNN95BHH0E9C6KBKB, требование 6): `tz_path` тогда — только
+    подпись источника в отказах, проверки те же.
     """
     # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
     # 2): до ТЗ, клона, id, ссылки документов и строки БД.
@@ -632,7 +637,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     declared: list[str] = []
     if tz_path is not None:
         try:
-            tz_raw = Path(tz_path).read_text(encoding="utf-8")
+            tz_raw = (tz_text if tz_text is not None
+                      else Path(tz_path).read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as exc:
             sys.exit(f"ТЗ не прочитано из {tz_path}: {exc}")
         # Сверка путей ТЗ с зонами (01M2XJKQNFTWHYAY4KBBQ1NVY7, требования

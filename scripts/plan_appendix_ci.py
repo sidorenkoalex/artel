@@ -64,6 +64,7 @@ from pathlib import Path
 # plan_appendix_ci` в тестах), тем же приёмом, что `scripts/guard.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from orchestrator import config  # noqa: E402
 from scripts import guard  # noqa: E402
 
 TASK_BRANCH_PREFIX = "refs/heads/task/"
@@ -71,6 +72,10 @@ PROCESSED_EVENTS = ("push", "pull_request")
 # Пространство ссылок документов задачи — `artifact_branch.branch_name`;
 # модуль пульта сюда не тянется: сценарию нужен только префикс.
 DOCS_REF_PREFIX = "refs/artifacts/"
+# Ссылка копии эпика `refs/artifacts/epic-<id>` — не документы задачи
+# (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15); значение — то же, что
+# `config.EPIC_REF_NAME_PREFIX`.
+EPIC_REF_NAME_PREFIX = config.EPIC_REF_NAME_PREFIX
 WORKFLOW_REL = ".github/workflows/ci.yml"
 SCRIPT_REL = "scripts/plan_appendix_ci.py"
 WORKFLOW_JOBS = ("python", "python-min")
@@ -173,7 +178,9 @@ def remote_docs_refs() -> dict[str, str]:
     refs = {}
     for line in out.splitlines():
         sha, _, name = line.partition("\t")
-        if name.startswith(DOCS_REF_PREFIX):
+        if (name.startswith(DOCS_REF_PREFIX)
+                and not name[len(DOCS_REF_PREFIX):].startswith(
+                    EPIC_REF_NAME_PREFIX)):
             refs[name[len(DOCS_REF_PREFIX):]] = sha
     return refs
 
