@@ -1014,11 +1014,16 @@ def _as_epic_goal(conn, task_id: str) -> str:
 
 
 def _division_check(conn, task_id: str, t, subsections: list) -> tuple:
-    """(порядок частей `merge_after.DivisionOrder`, рамки частей, причина
-    отказа) заявки на деление — до первой записи `approve` (SPEC
-    01M5TB6VDVV6AM8DWPGVQE8CDW, требования 5, 6, 9). Рамка перепроверяется
-    здесь, а не только guard'ом на входе в гейт: SPEC мог быть поправлен
-    уже на гейте."""
+    """(порядок частей `merge_after.DivisionOrder`, рамки частей,
+    [(id части, ветка части)], причина отказа) заявки на деление — до
+    первой записи `approve` (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требования 5,
+    6, 9). Рамка перепроверяется здесь, а не только guard'ом на входе в
+    гейт: SPEC мог быть поправлен уже на гейте.
+
+    Имена веток частей по шаблону проекта (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2,
+    требование 2) — здесь же, последними: id частей выдаются до проверки, и
+    части заводятся именно с ними."""
+    from . import catalog
     frames, reasons = [], []
     for number, sub in enumerate(subsections, 1):
         value, refused = guard.division_frame(sub["budget"])
@@ -1029,14 +1034,22 @@ def _division_check(conn, task_id: str, t, subsections: list) -> tuple:
         conn, task_id, t["target"] or config.DEFAULT_TARGET,
         [(sub["title"], sub["order"]) for sub in subsections])
     reasons += order_reasons
+    parts = []
+    if not reasons:
+        parts, branch_reason = catalog.division_branches(
+            conn, t["target"] or config.DEFAULT_TARGET,
+            [sub["title"] for sub in subsections])
+        if branch_reason:
+            reasons.append(branch_reason)
     if reasons:
-        return None, None, "деление: " + "; ".join(reasons)
-    return order, frames, ""
+        return None, None, None, "деление: " + "; ".join(reasons)
+    return order, frames, parts, ""
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
                              subsections: list, order, frames: list,
-                             as_epic_goal: str | None = None) -> None:
+                             as_epic_goal: str | None = None,
+                             parts: list | None = None) -> None:
     """Заводит по одной подзадаче на каждый подраздел секции «## Деление»
     (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3, AC-5/AC-6/AC-11) и
     переводит родителя в `killed` — единственное терминальное
@@ -1060,6 +1073,9 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
     требование 7); `as_epic_goal` — `approve --as-epic`: эпик заводится
     здесь, перед частями, — только вместе с ними, мягкий отказ гейта сюда
     не доходит.
+
+    `parts` — (id, ветка) каждой части, проверенные `_division_check`;
+    None — id и ветки выдаёт `spawn_subtask` (шаблон по умолчанию).
     """
     from . import catalog, epics
     epic_id = t["epic_id"]
@@ -1067,10 +1083,12 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
         epic_id = epics.create_from_division(
             conn, task_id, t["title"], t["target"] or config.DEFAULT_TARGET,
             as_epic_goal)
+    parts = parts or [(None, None)] * len(subsections)
     new_ids = [catalog.spawn_subtask(task_id, t["title"], sub["title"],
                                      sub["body_raw"], target=t["target"],
-                                     epic_id=epic_id)
-              for sub in subsections]
+                                     epic_id=epic_id, task_id=part_id,
+                                     branch=branch)
+              for sub, (part_id, branch) in zip(subsections, parts)]
     for part_id, own in zip(new_ids, order.deps):
         merge_after.record_declared(
             conn, part_id,
@@ -1400,8 +1418,8 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
     # вердикта аудита.
     subsections = guard.parse_division_subsections(spec_text)
     if subsections and not reason:
-        division_order, division_frames, reason = _division_check(
-            conn, task_id, t, subsections)
+        division_order, division_frames, division_parts, reason = (
+            _division_check(conn, task_id, t, subsections))
     if reason:
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
@@ -1454,7 +1472,7 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
     if subsections:
         _spawn_division_subtasks(conn, task_id, t, state, subsections,
                                  division_order, division_frames,
-                                 as_epic_goal)
+                                 as_epic_goal, division_parts)
         return
     skip_reason = meta.get("skip_tests")
     if skip_reason or not guard.requires_ac_markup(meta):

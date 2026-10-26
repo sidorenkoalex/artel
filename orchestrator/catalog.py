@@ -609,6 +609,103 @@ def _new_refs(values: list, project: str, canary: bool) -> list[tuple]:
     return pairs
 
 
+# ===== Ветка задачи по шаблону (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2, требование 2) =====
+
+BRANCH_UNCHECKED = "имя ветки не проверено"
+REF_DIVISION_REFUSAL = "ветка по ключу трекера: делите задачу в трекере"
+
+
+def _project_entry(project: str) -> dict:
+    """Запись проекта; нечитаемый `targets.yaml` — пустая (поля по
+    умолчанию): проект `new` уже сверен `_checked_target`."""
+    try:
+        return targets.load().get(project) or {}
+    except targets.TargetsError:
+        return {}
+
+
+def branch_template(project: str) -> str:
+    """`policy.branch_template` проекта; поля нет — шаблон по умолчанию."""
+    return (_project_entry(project).get("branch_template")
+            or targets.DEFAULT_BRANCH_TEMPLATE)
+
+
+def branch_name(template: str, task_id: str, title: str,
+                ref: str | None = None) -> str:
+    """Имя ветки задачи по шаблону: `{id}` — в нижнем регистре, как было
+    всегда, `{ref}` — ключ ссылки как есть."""
+    return (template.replace("{id}", task_id.lower())
+            .replace("{slug}", slugify(title))
+            .replace("{ref}", ref or ""))
+
+
+def _branch_ref_key(project: str, template: str, ref_pairs: list) -> str | None:
+    """Ключ `{ref}` ветки `new`: ровно одна ссылка системы `ref_required`,
+    ключ полностью по `policy.ref_pattern`; иначе — отказ до заведения
+    задачи. Шаблон без `{ref}` — None."""
+    if "{ref}" not in template:
+        return None
+    entry = _project_entry(project)
+    required = entry.get(targets.REF_REQUIRED_FIELD)
+    keys = [key for system, key in ref_pairs if system == required]
+    if len(keys) != 1:
+        sys.exit(f"new: ветка проекта {project} строится по шаблону "
+                 f"{template!r} — нужна ровно одна ссылка системы {required} "
+                 f"(--ref {required}:<ключ>), задано {len(keys)} — задача не "
+                 f"заведена")
+    pattern = entry.get("ref_pattern")
+    if pattern and re.fullmatch(pattern, keys[0]) is None:
+        sys.exit(f"new: ключ {keys[0]!r} не по policy.ref_pattern {pattern!r} "
+                 f"проекта {project} — задача не заведена")
+    return keys[0]
+
+
+def branch_refusal(conn, project: str, names: list) -> str | None:
+    """Причина, по которой имена веток `names` проекта не годятся: имя уже
+    у задачи проекта в любом состоянии (БД) или на сервере (`ls-remote`
+    клона); сбой `ls-remote` — «имя ветки не проверено». None — имена
+    свободны. Зовётся только при шаблоне не по умолчанию."""
+    rows = store.project_branch_tasks(conn, project, names)
+    if rows:
+        return "; ".join(f"ветка {r['branch']} уже у задачи {r['id']} "
+                         f"({r['state']})" for r in rows)
+    res = gitcmd.in_repo(workspace.repo(project), "ls-remote", "--heads",
+                         "origin", *(f"refs/heads/{name}" for name in names))
+    if res is None or res.returncode != 0:
+        detail = (res.stderr or "").strip() if res is not None else ""
+        return (f"{BRANCH_UNCHECKED}: ls-remote origin проекта {project} не "
+                f"ответил" + (f" ({detail})" if detail else ""))
+    taken = set()
+    for line in res.stdout.splitlines():
+        _sha, _tab, ref = line.partition("\t")
+        taken.add(ref.strip().removeprefix("refs/heads/"))
+    busy = [name for name in names if name in taken]
+    if busy:
+        return "; ".join(f"ветка {name} уже есть на сервере" for name in busy)
+    return None
+
+
+def division_branches(conn, project: str, titles: list) -> tuple[list, str]:
+    """([(id части, ветка части)], причина отказа) деления проекта на части
+    с названиями `titles` — до заведения первой части: id выдаются здесь,
+    и части заводятся именно с ними (ветка части — проверенное имя)."""
+    template = branch_template(project)
+    if "{ref}" in template:
+        return [], REF_DIVISION_REFUSAL
+    parts = []
+    for title in titles:
+        part_id = idgen.new_task_id()
+        parts.append((part_id, branch_name(template, part_id, title)))
+    if template == targets.DEFAULT_BRANCH_TEMPLATE:
+        return parts, ""
+    names = [branch for _id, branch in parts]
+    twins = sorted({name for name in names if names.count(name) > 1})
+    if twins:
+        return [], f"имена веток частей совпадают: {', '.join(twins)}"
+    reason = branch_refusal(conn, project, names)
+    return ([], reason) if reason else (parts, "")
+
+
 def _link_args(rest: list) -> tuple[bool, str | None, list]:
     """(`--remove`, URL, позиционные) argv `link`; неизвестный флаг и
     `--url` без значения — отказ с использованием."""
@@ -760,6 +857,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     if unsupported is not None:
         sys.exit(f"new: проект {target}: {unsupported} — задача не заведена")
     ref_pairs = _new_refs(refs or [], target, canary)
+    template = branch_template(target)
+    ref_key = _branch_ref_key(target, template, ref_pairs)
     conn = store.db()
     if epic_id is not None:
         refusal = epics.binding_refusal(conn, epic_id, target)
@@ -842,13 +941,21 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     if tz_raw is not None and not canary:
         tz_check_detail = _tz_content_check(tz_raw, target, strict_tz)
     task_id = idgen.new_task_id()
+    # Имя ветки по шаблону — до ссылки документов и строки БД (SPEC
+    # 01M5WDB7F14SQ30QVWJY2XYBG2, требование 2): отказ не оставляет следов.
+    # Шаблон по умолчанию уникален по id — сетевой проверки нет.
+    branch = branch_name(template, task_id, title, ref_key)
+    if template != targets.DEFAULT_BRANCH_TEMPLATE:
+        refusal = branch_refusal(conn, target, [branch])
+        if refusal is not None:
+            sys.exit(f"new: {refusal} — задача не заведена")
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
     epic_note = f", эпик {epic_id}" if epic_id is not None else ""
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
                  journal_detail=f"{title} (проект {target}{epic_note})",
                  model_set=model_set,
-                 set_members=set_members, epic_id=epic_id)
+                 set_members=set_members, epic_id=epic_id, branch=branch)
     if tz_check_detail is not None:
         store.journal(conn, task_id, "operator", tz_check.ACTION,
                       tz_check_detail)
@@ -901,7 +1008,8 @@ def _new_task_row(conn, task_id: str, title: str, target: str,
                   tz_doc: str | None, *, is_canary: bool = False,
                   journal_detail: str, model_set: str | None = None,
                   set_members: dict | None = None,
-                  epic_id: str | None = None) -> None:
+                  epic_id: str | None = None,
+                  branch: str | None = None) -> None:
     """Общий скелет заведения строки задачи (R1-F4, REVIEW.md итерация 1):
     SPEC из шаблона, `TZ.md` (если есть), артефактная ветка пульта, строка
     в БД, запись в журнал — переиспользуется `cmd_new` (ТЗ Оператора) и
@@ -914,8 +1022,12 @@ def _new_task_row(conn, task_id: str, title: str, target: str,
     одна транзакция `BEGIN IMMEDIATE`, взаимно исключённая с `epic close`.
     Отказ в ней возможен только в окне гонки после предварительной
     проверки вызывающего — ссылка документов тогда остаётся без строки
-    задачи (решение Оператора на гейте SPEC, 26.10)."""
-    branch = f"task/{task_id.lower()}-{slugify(title)}"
+    задачи (решение Оператора на гейте SPEC, 26.10).
+
+    `branch` — имя ветки, построенное и проверенное вызывающим по шаблону
+    проекта (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2); None — шаблон по умолчанию."""
+    if branch is None:
+        branch = branch_name(targets.DEFAULT_BRANCH_TEMPLATE, task_id, title)
     spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
 
@@ -969,7 +1081,8 @@ def _ensure_task_worktree(conn, task_id: str, target: str) -> None:
 
 def spawn_subtask(parent_id: str, parent_title: str, title: str,
                   tz_body: str, *, target: str | None = None,
-                  epic_id: str | None = None) -> str:
+                  epic_id: str | None = None, task_id: str | None = None,
+                  branch: str | None = None) -> str:
     """Заводит одну подзадачу деления (01M1SHJZCE0Y4DXAAWQ2W585A7,
     требования 1-2) — та же механика, что `cmd_new` с ТЗ Оператора
     (общий скелет `_new_task_row`, R1-F4), только источник ТЗ — подраздел
@@ -1018,10 +1131,15 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
 
     `epic_id` — эпик родителя (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование
     7): часть наследует его той же привязкой, что `new --epic`.
+
+    `task_id`/`branch` — id и ветка части, выданные и проверенные до
+    заведения первой части (`division_branches`, SPEC
+    01M5WDB7F14SQ30QVWJY2XYBG2, требование 2); None — новый id и ветка по
+    шаблону по умолчанию.
     """
     conn = store.db()
     target = target or config.DEFAULT_TARGET
-    task_id = idgen.new_task_id()
+    task_id = task_id or idgen.new_task_id()
     link_line = f"Родительская задача: {parent_id} — {parent_title}"
     # Один текст на `TZ.md` и на разбор зон: разойдись они, колонка зон
     # описывала бы не тот документ, который читает роль.
@@ -1030,7 +1148,7 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
 
     _new_task_row(conn, task_id, title, target, tz_doc,
                  journal_detail=f"деление {parent_id}: {title}",
-                 epic_id=epic_id)
+                 epic_id=epic_id, branch=branch)
     store.update_task(conn, task_id, parent_task_id=parent_id)
     # Ссылки родителя — копией с его автором и временем (SPEC
     # 01M5TBFH5VZ7GSRXX7VNKHFCCQ, требование 11): `ref_required` делением
