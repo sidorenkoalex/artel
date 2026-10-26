@@ -282,6 +282,30 @@ def _alias_in_argv(globals_: list) -> str | None:
     return None
 
 
+def _alias_guarded_project(cwd_project: str | None, words: list, cwd: Path,
+                           entries: dict | None) -> str | None:
+    """Внешний проект под белым списком или с неизвестным гейтом, к клону
+    которого относится вызов с псевдонимом в argv: клон вызова либо слово
+    после подкоманды — путь, `file://`-адрес или `url` записи проекта.
+    None — псевдоним вызова белый список не касается."""
+    from . import targets
+    candidates = [cwd_project] if cwd_project else []
+    for word in words:
+        local = _local_dest_path(word)
+        if local:
+            candidates.append(_project_of_path(cwd / local))
+        elif entries is not None and _is_url(word):
+            found = project_by_url(word, entries)
+            candidates.append(found[0] if found is not None else None)
+    for project in candidates:
+        if project is None or project == config.DEFAULT_TARGET:
+            continue
+        entry = (entries or {}).get(project)
+        if entry is None or targets.push_whitelisted(entry):
+            return project
+    return None
+
+
 def _location_projects(globals_: list, cwd: Path, env: dict) -> set:
     """Внешние проекты, в клон которых ведут репозиторий и рабочее дерево
     вызова: `--git-dir` (иначе `GIT_DIR`, иначе рабочий каталог),
@@ -552,11 +576,6 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     plan = _PushPlan(list(args), cwd)
     located = _location_projects(globals_, cwd, env)
     cwd_project = next(iter(located)) if len(located) == 1 else None
-    if alias_argv is not None:
-        # Псевдоним, заданный самой командой, превращает любое имя в
-        # отправку мимо разбора подкоманды — отказ всегда.
-        return _refuse(plan, cwd_project or config.DEFAULT_TARGET, None, env,
-                       task_id, f"псевдоним git в команде ({alias_argv})")
     if len(located) > 1:
         return _refuse(plan, ", ".join(sorted(located)), None, env, task_id,
                        "проект вызова не определён — репозиторий и рабочее "
@@ -565,6 +584,17 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
         entries = targets.load()
     except targets.TargetsError:
         entries = None
+    if alias_argv is not None:
+        # Псевдоним, заданный самой командой, превращает любое имя в
+        # отправку мимо разбора подкоманды — под белым списком (и при
+        # неизвестном гейте) отказ при любой подкоманде; у артели и
+        # проектов `operator` вызов прежний.
+        guarded = _alias_guarded_project(cwd_project, args[index + 1:], cwd,
+                                         entries)
+        if guarded is None:
+            return None
+        return _refuse(plan, guarded, None, env, task_id,
+                       f"псевдоним git в команде ({alias_argv})")
     if sub not in PUSH_SUBCOMMANDS:
         # Подкоманда вне встроенных — возможно, псевдоним клона.
         if cwd_project is None:

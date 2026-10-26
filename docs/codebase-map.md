@@ -1,5 +1,5 @@
 ---
-built_at_sha: f8720e257f748de72d244f607edaa4d0289f7cbb
+built_at_sha: f7e040cde538e5dea91f171f1de36196369745ac
 ---
 
 # Codebase-map пульта
@@ -9870,6 +9870,7 @@ built_at_sha: f8720e257f748de72d244f607edaa4d0289f7cbb
 - `spy`
 - `task`
 - `test_alias_defined_in_command_refused`
+- `test_alias_in_command_into_whitelisted_clone_from_pult_root_refused`
 - `test_dest_into_project_clone_refused_as_path_or_file_url`
 - `test_git_dir_into_project_clone_from_pult_root_refused`
 - `test_global_option_before_unknown_subcommand_refused`

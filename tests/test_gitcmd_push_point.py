@@ -197,11 +197,12 @@ def alias_spy(initialized_tmp_root, monkeypatch):
 @pytest.mark.parametrize("gate", ["target-human", "operator"])
 @pytest.mark.parametrize("form", ["-c", "--config-env", "--config-env="])
 def test_alias_defined_in_command_refused(alias_spy, monkeypatch, form, gate):
-    """Псевдоним `push`, заданный самой командой (`-c alias.p=push`, `--config-env alias.p=VAR`, `--config-env=alias.p=VAR`), — отказ всегда, в том числе у проекта `operator`: до процесса, с записью алерта.
+    """Псевдоним `push`, заданный самой командой (`-c alias.p=push`, `--config-env alias.p=VAR`, `--config-env=alias.p=VAR`), в клоне проекта под белым списком — отказ до процесса, с записью алерта; у проекта `operator` вызов прежний и уходит в процесс.
 
     Ловит мутацию: псевдоним в argv не распознаётся (`_alias_in_argv`
-    всегда None) — у проекта `operator` вызов `p origin main` уходит в
-    процесс отправки в `main`.
+    всегда None) — у проекта `target-human` вызов `p origin main` уходит в
+    процесс отправки в `main`; и обратную: отказ псевдонима без условия
+    белого списка — вызов проекта `operator` не доходит до процесса.
     """
     clone = project("qalias", gate)
     monkeypatch.setenv("ALIAS_VALUE", "push")
@@ -209,10 +210,32 @@ def test_alias_defined_in_command_refused(alias_spy, monkeypatch, form, gate):
              "--config-env": ("--config-env", "alias.p=ALIAS_VALUE"),
              "--config-env=": ("--config-env=alias.p=ALIAS_VALUE",)}[form]
     res = gitcmd.in_repo(clone, *words, "p", "origin", config.MAIN_BRANCH)
+    if gate == "operator":
+        assert gitcmd.PUSH_REFUSED_ACTION not in res.stderr, res
+        assert len(alias_spy.pushes) == 1
+        return
     assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
     assert alias_spy.pushes == []
     sources = [r["source"] for r in alerts.open_alerts(store.db(), "incident")]
     assert gitcmd.PUSH_WHITELIST_SOURCE in sources
+
+
+@pytest.mark.parametrize("dest", ["path", "file-url"])
+def test_alias_in_command_into_whitelisted_clone_from_pult_root_refused(
+        alias_spy, dest):
+    """Псевдоним `push` в argv из корня пульта с назначением — путём или `file://`-адресом клона проекта под белым списком — отказ до процесса; тот же вызов без назначения в клон внешнего проекта (как у `repo_context.git` с `!`-псевдонимом) отказом не становится.
+
+    Ловит мутацию: для псевдонима в argv проект ищется только по рабочему
+    каталогу (`_alias_guarded_project` не смотрит слова после подкоманды)
+    — `-c alias.p=push p <клон> main` из корня пульта уходит в процесс.
+    """
+    clone = project("qaliasdest", "target-human")
+    target = clone.as_uri() if dest == "file-url" else str(clone)
+    res = gitcmd.git("-c", "alias.p=push", "p", target, config.MAIN_BRANCH)
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert alias_spy.pushes == []
+    res = gitcmd.git("-c", "alias.p=push", "p", "origin", config.MAIN_BRANCH)
+    assert gitcmd.PUSH_REFUSED_ACTION not in res.stderr, res
 
 
 def test_global_option_before_unknown_subcommand_refused(alias_spy):
