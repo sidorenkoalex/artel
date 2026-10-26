@@ -49,6 +49,12 @@ schema_version: 5
   сдвигает и ссылки эпиков, но в исходы задач их не отдаёт; явные фильтры в
   `retro_corpus`, `plan_appendix_ci.remote_docs_refs`, `artifact_cleanup`,
   `snapshot._history_pass`, `doctor._origin_artifact_refs`.
+  `scripts/plan_appendix_ci.py` пульт не импортирует (тест
+  `test_ac9_ci_script_does_not_import_orchestrator`): префикс там — свой
+  литерал `"epic-"`, как `DOCS_REF_PREFIX`; равенство с
+  `config.EPIC_REF_NAME_PREFIX` держит
+  `tests/test_epic_drafts_units.py::test_ci_script_epic_prefix_matches_config`
+  (возврат из verifying, прогон CI 40266189759).
 - **Готовность к закрытию** (требование 17): `board` считает черновики
   `draft`; `epic close` отказывает перечнем «адрес «название»».
 
@@ -108,10 +114,19 @@ schema_version: 5
   `catalog_*`, `retro_corpus`, `plan_appendix_ci*`, `snapshot_history`,
   `doctor_artifact_branch_sync`, миграции, `test_invariants.py`) — зелёные.
 - Свой тест `tests/test_epic_drafts_units.py` (строка данных ссылки, отказ
-  ссылки черновика на себя) покраснел на обеих заявленных мутациях.
+  ссылки черновика на себя) покраснел на обеих заявленных мутациях;
+  тест равенства префикса — красный на мутации литерала `"epic_"`.
+- После возврата из verifying: `test_01m4jd3srn66sd6bm63xaghb11_suite_tree_ci_in_base.py`,
+  все `tests/*plan_appendix*`, `…_ref_scans.py`, `…_drafts.py`,
+  `test_epic_drafts_units.py` — 84 passed. Полный набор в шаге разработчика
+  не запускается (сторож роли) — его гоняют CI и гейт приёмки.
 
 ## Предложения системе
 - Песочница роли отказывает Bash-heredoc с `{…"…"}` («brace with quote
   character») и `$var` в цикле — большой Python-код приходится вставлять
   Edit'ом; стоит упомянуть в `skills/coding-standards.md` рядом с правилом
   «по одной команде».
+- `tests/test_01m443hv9sjyvyqthjsq87qv68_plan_appendix_ci.py`, запущенный
+  первым/один, падает на сборке циклом импорта `checkpoint → fixation →
+  workspace → lease → artifact_branch → fixation.FIXATION_AUTHOR_NAME`
+  (воспроизводится и на origin/main); в полном наборе маскируется порядком.
