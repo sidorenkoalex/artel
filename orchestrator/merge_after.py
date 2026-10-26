@@ -38,10 +38,11 @@ SPEC 01M45D29BQJE8FJYJA4JQWSYFZ: зависимость, названная Оп
 разделе «## Обоснование зависимостей мержа».
 """
 import re
+from typing import NamedTuple
 
 from scripts import guard
 
-from . import store
+from . import idgen, store
 from .advance_gates.mandate import MERGE_AFTER_MANDATE_MARKER
 
 FIELD = guard.MERGE_AFTER_FIELD
@@ -65,6 +66,12 @@ ORDER_LINE = "Порядок: после"
 _ORDER_LINE_RE = re.compile(r"^Порядок:[ \t]+после(?!\w)(.*)$", re.M)
 _ORDER_LIST_END = re.compile(r"[(.]")
 
+# Поле «Порядок:» части деления (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+# требование 4): тот же перечень после слова «после», что у строки ТЗ, и
+# элемент «части N» — ссылка на N-й подраздел того же деления.
+_DIVISION_ORDER_RE = re.compile(r"^после(?!\w)(.*)$", re.S)
+_PART_ITEM_RE = re.compile(r"^части[ \t]+(\d+)$")
+
 DECLARED_ACTION = "merge_after заявлен Оператором"
 ADDED_ACTION = "merge_after: добавлено аналитиком"
 JUSTIFICATION_SECTION = "Обоснование зависимостей мержа"
@@ -84,6 +91,15 @@ MERGE_GATE_WAIT_ACTION = "approve отклонён: зависимости ме�
 MERGE_GATE_KILLED_ACTION = "approve отклонён: зависимость мержа убита"
 
 IMPACT_SECTION = "Влияние на систему"
+
+# Зависимость запуска `start_after` (SPEC 01M5TBCY7WTN121S136XP2C6SR,
+# требования 11-17): тот же формат колонки и те же правила элемента, что у
+# `merge_after`; исполняет её `runner` перед первым шагом роли задачи.
+START_AFTER = "start_after"
+START_AFTER_CHANGED_ACTION = "start_after изменён"
+# Маркер старта агента шага (`runner.py`): задача без этой записи ещё не
+# получала шага роли (требование 6).
+ROLE_STEP_STARTED_ACTION = "agent run started"
 
 
 def stored(value) -> list[str]:
@@ -123,8 +139,28 @@ def _cycle_path(graph: dict[str, list[str]], start: str,
     return None
 
 
+def _dependency_graph(conn, task_id: str | None, own: list[str],
+                      column: str) -> dict[str, list[str]]:
+    """Граф цикла — рёбра `merge_after` ∪ `start_after` всех задач (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 14); у `task_id` — проверяемое
+    значение `own` канала `column` плюс действующее значение другого
+    канала: цикл «A start_after B, B merge_after A» видят оба канала."""
+    rows = {r["id"]: r for r in store.all_tasks(conn)}
+    graph = {tid: _edges(r, FIELD) + _edges(r, START_AFTER)
+             for tid, r in rows.items()}
+    other = START_AFTER if column == FIELD else FIELD
+    row = rows.get(task_id)
+    graph[task_id] = own + (_edges(row, other) if row is not None else [])
+    return graph
+
+
+def _edges(row, column: str) -> list[str]:
+    return stored(row[column]) if column in row.keys() else []
+
+
 def check(conn, task_id: str | None, items: list[str], *,
-          target: str | None = None) -> tuple[list[str], list[str]]:
+          target: str | None = None,
+          column: str = FIELD) -> tuple[list[str], list[str]]:
     """(полные id в порядке `items`, причины отказа) — проверка значения
     `merge_after` задачи `task_id` правилами требований 1-2. Причины не
     пусты — перечень id не годен и не возвращается.
@@ -135,7 +171,19 @@ def check(conn, task_id: str | None, items: list[str], *,
 
     `task_id=None` с явным `target` — проверка для ещё не заведённой задачи
     (`new --tz`): строки БД нет, и `store.task_target` молча вернул бы
-    target по умолчанию вместо target'а заводимой задачи."""
+    target по умолчанию вместо target'а заводимой задачи.
+
+    `column` — канал значения: `merge_after` либо `start_after` (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требования 13-14): правила элемента те же,
+    граф цикла — общий по обеим колонкам; причины называют свой канал."""
+    ids, reasons = _checked(conn, task_id, items, target, column)
+    if column != FIELD:
+        reasons = [r.replace(f"{FIELD}:", f"{column}:", 1) for r in reasons]
+    return ids, reasons
+
+
+def _checked(conn, task_id: str | None, items: list[str], target: str | None,
+             column: str) -> tuple[list[str], list[str]]:
     reasons = guard.merge_after_form_errors(items, task_id)
     if reasons:
         return [], reasons
@@ -170,8 +218,8 @@ def check(conn, task_id: str | None, items: list[str], *,
         resolved.append((item, dep))
     if reasons:
         return [], reasons
-    graph = {r["id"]: stored(r["merge_after"]) for r in store.all_tasks(conn)}
-    graph[task_id] = [dep for _, dep in resolved]
+    graph = _dependency_graph(conn, task_id, [dep for _, dep in resolved],
+                              column)
     for item, dep in resolved:
         path = _cycle_path(graph, dep, task_id)
         if path is not None:
@@ -200,6 +248,15 @@ def declared_from_tz(conn, tz_raw: str,
     строки ТЗ «Порядок: после …» (SPEC 01M45D29BQJE8FJYJA4JQWSYFZ,
     требования 1-2). Строки нет — ([], []). Элементы проверяет `check` для
     ещё не заведённой задачи target'а `target`."""
+    items, reasons = _tz_order_items(tz_raw)
+    if reasons or not items:
+        return [], reasons
+    return check(conn, None, items, target=target)
+
+
+def _tz_order_items(tz_raw: str) -> tuple[list[str], list[str]]:
+    """(элементы строки ТЗ «Порядок: после …» как написаны, причины отказа
+    по форме строки). Строки нет — ([], [])."""
     tails = [m.group(1) for m in _ORDER_LINE_RE.finditer(tz_raw)]
     if not tails:
         return [], []
@@ -210,7 +267,39 @@ def declared_from_tz(conn, tz_raw: str,
     items = guard.merge_after_items(tail)
     if not items:
         return [], [f"в строке «{ORDER_LINE}» нет ни одного id задачи"]
-    return check(conn, None, items, target=target)
+    return items, []
+
+
+def declared_for_new(conn, tz_raw: str | None, after: str | None,
+                     target: str) -> tuple[list[str], list[str]]:
+    """(полные id, причины отказа `new`) из строки ТЗ «Порядок: после …» и
+    флага `--after` (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 5):
+    объединение — сначала элементы ТЗ, затем элементы `--after`, чей полный
+    id ещё не вошёл (префикс и полный id одной задачи — один элемент).
+    Дедупликация — до `check`: `check` отказывает на повторе, а проверяет
+    он уже объединённый перечень, так что непрошедший элемент любого
+    источника отказывает всему."""
+    items, reasons = _tz_order_items(tz_raw) if tz_raw is not None else ([], [])
+    if reasons:
+        return [], reasons
+
+    def full_id(item: str) -> str:
+        matches = store.task_id_matches(conn, item)
+        return matches[0] if len(matches) == 1 else item
+
+    # Повтор внутри самой строки ТЗ — по-прежнему отказ `check`: схлопываются
+    # только элементы `--after`, уже вошедшие в перечень.
+    merged = list(items)
+    seen = {full_id(item) for item in items}
+    for item in guard.merge_after_items(after):
+        key = full_id(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    if not merged:
+        return [], []
+    return check(conn, None, merged, target=target)
 
 
 def record_declared(conn, task_id: str, ids: list[str]) -> None:
@@ -296,17 +385,180 @@ def rewrite(conn, task_id: str, new_ids: list[str], channel: str,
     print(f"[{task_id}] {CHANGED_ACTION}: {detail}")
 
 
+class DivisionOrder(NamedTuple):
+    """Проверенный порядок частей деления (`division_order`). `deps` — по
+    части на элемент списка, в порядке подразделов: зависимости части в
+    порядке её «Порядок:» — индекс соседней части (`int`, с 0) или полный
+    id задачи (`str`). `successor` — индекс части-преемника родителя.
+    `loose` — номера частей (с 1), кроме первой, чей «Порядок:» не задаёт
+    зависимостей."""
+    deps: list
+    successor: int
+    loose: list
+
+
+def division_order_items(order: str | None) -> list[str] | None:
+    """Элементы поля «Порядок:» части деления — по правилам строки ТЗ
+    «Порядок: после …» (`declared_from_tz`: через запятую, перечень
+    кончается на «(» или «.»). `None` — значение не начинается словом
+    «после» и зависимостей не задаёт («первая, без зависимостей»)."""
+    m = _DIVISION_ORDER_RE.match((order or "").strip())
+    if m is None:
+        return None
+    return guard.merge_after_items(_ORDER_LIST_END.split(m.group(1),
+                                                         maxsplit=1)[0])
+
+
+def _part_label(number: int, title: str) -> str:
+    return f"часть {number} «{title}»"
+
+
+def _part_deps(conn, parent_id: str, target: str, number: int, count: int,
+               items: list[str]) -> tuple[list, list[str]]:
+    """(зависимости части `number` из `count`, причины отказа) по
+    элементам её «Порядок: после …» (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+    требования 4-5). «части N» — индекс соседней части; иначе элемент —
+    id задачи по правилам `check`, кроме самого родителя: он этим же
+    approve уходит в `killed`, а `check` видит его ещё живым."""
+    resolved: list = [None] * len(items)
+    reasons: list[str] = []
+    parts_seen: set[int] = set()
+    id_positions: list[int] = []
+    for i, item in enumerate(items):
+        m = _PART_ITEM_RE.match(item)
+        if m:
+            ref = int(m.group(1))
+            if not 1 <= ref <= count:
+                reasons.append(f"элемент «{item}» — номер части вне 1..{count}")
+            elif ref == number:
+                reasons.append(f"элемент «{item}» — ссылка части на саму себя")
+            elif ref in parts_seen:
+                reasons.append(f"элемент «{item}» указан повторно")
+            else:
+                parts_seen.add(ref)
+                resolved[i] = ref - 1
+            continue
+        if (idgen.is_task_id_form(item)
+                and store.task_id_matches(conn, item) == [parent_id]):
+            reasons.append(f"элемент «{item}» — мёртвая зависимость: сам "
+                           f"родитель {parent_id}, этим approve он уходит в "
+                           f"killed")
+            continue
+        id_positions.append(i)
+    ids, id_reasons = check(conn, None, [items[i] for i in id_positions],
+                            target=target)
+    reasons += id_reasons
+    for i, dep in zip(id_positions, ids):
+        resolved[i] = dep
+    return resolved, reasons
+
+
+def _part_reach(deps: list, start: int) -> set[int]:
+    """Части, от которых часть `start` зависит прямо или через другие
+    части."""
+    found: set[int] = set()
+    stack = [d for d in deps[start] if isinstance(d, int)]
+    while stack:
+        part = stack.pop()
+        if part in found:
+            continue
+        found.add(part)
+        stack += [d for d in deps[part] if isinstance(d, int)]
+    return found
+
+
+def _successor(deps: list) -> int:
+    """Часть, которая мержится последней по графу частей (требование 4):
+    никто не зависит от последней по номеру — она; иначе из частей,
+    зависящих от неё прямо или через другие, та, от которой не зависит
+    ни одна часть, а из таких — с наибольшим номером. Граф с циклом
+    преемника не имеет — его откажет проверка цикла, здесь — последняя."""
+    last = len(deps) - 1
+    reach = [_part_reach(deps, p) for p in range(len(deps))]
+    above = [p for p in range(len(deps)) if p != last and last in reach[p]]
+    if not above:
+        return last
+    tops = [p for p in above
+            if not any(p in reach[q] for q in range(len(deps)) if q != p)]
+    return max(tops) if tops else last
+
+
+def division_order(conn, parent_id: str, target: str,
+                   parts: list[tuple[str, str | None]]
+                   ) -> tuple[DivisionOrder | None, list[str]]:
+    """(порядок частей, причины отказа) деления `parent_id` на гейте SPEC
+    (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требования 4-5) — до заведения
+    первой части, без записей. `parts` — (название, «Порядок:») каждого
+    подраздела секции «## Деление». Причина называет часть.
+
+    Цикл ищется на виртуальном графе: части — узлы ещё не заведённых
+    задач, к ним — действующий `merge_after` всех задач БД, где ребро
+    зависящей от родителя задачи уже переставлено на преемника
+    (`replace_divided`): иначе цикл «часть → D → преемник» не виден."""
+    count = len(parts)
+    deps: list = []
+    loose: list[int] = []
+    reasons: list[str] = []
+    for number, (title, order) in enumerate(parts, 1):
+        items = division_order_items(order)
+        if items is None:
+            deps.append([])
+            if number > 1:
+                loose.append(number)
+            continue
+        if not items:
+            reasons.append(f"{_part_label(number, title)}: «Порядок: после» "
+                           f"без элементов")
+            deps.append([])
+            continue
+        own, why = _part_deps(conn, parent_id, target, number, count, items)
+        reasons += [f"{_part_label(number, title)}: Порядок: {r}" for r in why]
+        deps.append(own)
+    if reasons:
+        return None, reasons
+    successor = _successor(deps)
+
+    def node(part: int) -> str:
+        return f"#{part + 1}"
+
+    def name(key: str) -> str:
+        return f"часть {key[1:]}" if key.startswith("#") else key
+
+    graph = {r["id"]: [node(successor) if d == parent_id else d
+                       for d in stored(r["merge_after"])]
+             for r in store.all_tasks(conn)}
+    for part, own in enumerate(deps):
+        graph[node(part)] = [node(d) if isinstance(d, int) else d
+                             for d in own]
+    for part, (title, _) in enumerate(parts):
+        for dep in graph[node(part)]:
+            path = _cycle_path(graph, dep, node(part))
+            if path is not None:
+                reasons.append(
+                    f"{_part_label(part + 1, title)}: Порядок: цикл: "
+                    f"{' → '.join(name(k) for k in [node(part)] + path)}")
+                break
+    if reasons:
+        return None, reasons
+    return DivisionOrder(deps, successor, loose), []
+
+
 def replace_divided(conn, parent_id: str, successor_id: str) -> None:
     """Деление `parent_id` на гейте SPEC (SPEC 01M4JC58GZFHZ4PZHW254P22M2):
     в `merge_after` каждой задачи, зависящей от родителя, элемент-родитель
-    заменяется `successor_id` — последней подзадачей деления — на той же
-    позиции, прочие элементы остаются. Без замены родитель в `killed`
-    навсегда держал бы зависящую задачу отказом гейта мержа «зависимость
-    убита», снимаемым только ответом Оператора.
+    заменяется `successor_id` — частью, которая мержится последней по
+    графу частей (`division_order`, SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+    требование 4), — на той же позиции, прочие элементы остаются. Без
+    замены родитель в `killed` навсегда держал бы зависящую задачу отказом
+    гейта мержа «зависимость убита», снимаемым только ответом Оператора.
 
     Проверки `check` здесь нет: значение отличается от уже принятого
-    одним элементом, а подзадача только что заведена и сама ни от кого
-    из зависящих не зависит — цикла она не создаёт."""
+    одним элементом, а цикл через преемника `division_order` уже искал на
+    виртуальном графе до заведения частей.
+
+    Тем же правилом — колонка `start_after` зависящих задач (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 17): та же позиция, запись
+    журнала зависящей задаче."""
     for row in store.all_tasks(conn):
         old = stored(row["merge_after"])
         if parent_id not in old:
@@ -315,6 +567,97 @@ def replace_divided(conn, parent_id: str, successor_id: str) -> None:
         # Канал без id родителя: правая часть записи «было → стало» —
         # новое значение, и родитель в ней не называется.
         rewrite(conn, row["id"], new_ids, "деление на гейте SPEC", "operator")
+    for row in store.all_tasks(conn):
+        old = _edges(row, START_AFTER)
+        if parent_id not in old:
+            continue
+        new_ids = [successor_id if dep == parent_id else dep for dep in old]
+        rewrite_start_after(conn, row["id"], new_ids, "деление на гейте SPEC",
+                            "operator")
+
+
+def rewrite_start_after(conn, task_id: str, new_ids: list[str], channel: str,
+                        actor: str) -> None:
+    """Записывает уже проверенное значение `start_after` и строку журнала
+    «было → стало» с названием канала — приём `rewrite`."""
+    old = stored(store.get_task(conn, task_id)[START_AFTER])
+    store.update_task(conn, task_id, start_after=column(new_ids))
+    detail = f"{_text(old)} → {_text(new_ids)} (канал: {channel})"
+    store.journal(conn, task_id, actor, START_AFTER_CHANGED_ACTION, detail)
+    print(f"[{task_id}] {START_AFTER_CHANGED_ACTION}: {detail}")
+
+
+def last_division_part(conn, task_id: str) -> str | None:
+    """Последний id записи журнала поделённой задачи «поделена на: …»
+    (`fsm.py`, переход родителя в `killed`); `None` — такой записи нет."""
+    parts: list[str] = []
+    for row in store.task_steps(conn, task_id):
+        detail = row["detail"] or ""
+        if detail.startswith(store.DIVIDED_DETAIL_PREFIX):
+            parts = guard.merge_after_items(
+                detail[len(store.DIVIDED_DETAIL_PREFIX):]) or parts
+    return parts[-1] if parts else None
+
+
+def _undivided(conn, item: str) -> str:
+    """Элемент записи `start_after` с подстановкой поделённой задачи её
+    последней частью по цепочке делений до неподелённой (требование 12).
+    Элемент, не разрешающийся ровно в одну задачу, остаётся как есть —
+    причину назовёт `check`."""
+    seen: set[str] = set()
+    current = item
+    while True:
+        matches = store.task_id_matches(conn, current)
+        if len(matches) != 1 or matches[0] in seen:
+            return current
+        task_id = matches[0]
+        seen.add(task_id)
+        if store.get_task(conn, task_id)["closed_as"] != store.CLOSED_AS_DIVIDED:
+            return current
+        part = last_division_part(conn, task_id)
+        if part is None:
+            return current
+        current = part
+
+
+def start_after_value(conn, task_id: str | None, items: list[str], *,
+                      target: str | None = None) -> tuple[list[str], list[str]]:
+    """(полные id, причины отказа) записи `start_after` задачи `task_id`
+    (требования 12-14): поделённые элементы заменяются последней частью
+    ДО проверки, затем — `check` канала `start_after` (существование, тот
+    же проект, не `killed`, цикл по объединённому графу)."""
+    return check(conn, task_id, [_undivided(conn, item) for item in items],
+                 target=target, column=START_AFTER)
+
+
+def role_step_started(conn, task_id: str) -> bool:
+    """Задача уже получала шаг роли — в журнале есть «agent run started»
+    (требование 6); записи отказов до старта агента шагом не считаются."""
+    return store.last_task_step_of(
+        conn, task_id, (ROLE_STEP_STARTED_ACTION,)) is not None
+
+
+def start_after_pending(conn, t) -> tuple[list, list]:
+    """(ожидаемые, мёртвые) — пары (id, состояние) зависимостей запуска
+    задачи не в `done`: мёртвые — `killed` или пропавшие из БД, их ждать
+    бессмысленно (требование 16); из БД на каждый вызов."""
+    waiting, dead = [], []
+    for dep in _edges(t, START_AFTER):
+        state = store.task_state(conn, dep) or MISSING_STATE
+        if state in ("killed", MISSING_STATE):
+            dead.append((dep, state))
+        elif state != "done":
+            waiting.append((dep, state))
+    return waiting, dead
+
+
+def start_after_blocks(conn, t) -> bool:
+    """Задача ждёт `start_after`: первого шага роли ещё не было, а среди
+    зависимостей запуска есть не `done` (требования 15, 19)."""
+    if not _edges(t, START_AFTER):
+        return False
+    waiting, dead = start_after_pending(conn, t)
+    return bool(waiting or dead) and not role_step_started(conn, t["id"])
 
 
 def apply_plan(conn, task_id: str, t, meta: dict, plan_text: str) -> None:

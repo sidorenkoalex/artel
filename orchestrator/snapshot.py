@@ -348,7 +348,10 @@ def _history_pass(repo, main_ref: str, ns: str, fetched: dict,
     if dirs is None or local is None:
         sys.exit(f"{HISTORY_COMMAND}: origin/main или локальные ссылки "
                  f"документов не прочитаны — ссылки не созданы")
-    remote = {ref[len(ns) + 1:]: sha for ref, sha in fetched.items()}
+    # Ссылка эпика `epic-<id>` — не задача (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB,
+    # требование 15): перечень задач строится по каталогам main.
+    remote = {ref[len(ns) + 1:]: sha for ref, sha in fetched.items()
+              if not artifact_branch.is_epic_ref_key(ref[len(ns) + 1:])}
     candidates, newer, unread = [], [], []
     for path, tree in sorted(dirs.items()):
         task_id = path[len(_TASKS_DIR) + 1:]

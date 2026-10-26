@@ -71,6 +71,11 @@ PROCESSED_EVENTS = ("push", "pull_request")
 # Пространство ссылок документов задачи — `artifact_branch.branch_name`;
 # модуль пульта сюда не тянется: сценарию нужен только префикс.
 DOCS_REF_PREFIX = "refs/artifacts/"
+# Ссылка копии эпика `refs/artifacts/epic-<id>` — не документы задачи
+# (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15). Своя копия правила, как
+# `DOCS_REF_PREFIX`: CI-сценарий пульт не импортирует; литерал совпадает с
+# `config.EPIC_REF_NAME_PREFIX` — равенство держит тест задачи.
+EPIC_REF_NAME_PREFIX = "epic-"
 WORKFLOW_REL = ".github/workflows/ci.yml"
 SCRIPT_REL = "scripts/plan_appendix_ci.py"
 WORKFLOW_JOBS = ("python", "python-min")
@@ -173,7 +178,9 @@ def remote_docs_refs() -> dict[str, str]:
     refs = {}
     for line in out.splitlines():
         sha, _, name = line.partition("\t")
-        if name.startswith(DOCS_REF_PREFIX):
+        if (name.startswith(DOCS_REF_PREFIX)
+                and not name[len(DOCS_REF_PREFIX):].startswith(
+                    EPIC_REF_NAME_PREFIX)):
             refs[name[len(DOCS_REF_PREFIX):]] = sha
     return refs
 

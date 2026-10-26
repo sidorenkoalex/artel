@@ -27,7 +27,8 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import agent_log, ci, config, gitcmd, session, spend, store, workspace
+from . import (agent_log, ci, config, fsm, gitcmd, session, spend, store,
+               workspace)
 from .advance_gates import refusal_classes
 from .providers.claude import TOOL_CALL_LINE_PREFIX
 
@@ -38,7 +39,7 @@ _DEFAULT_EVENTS = ("transitions", "refusals", "gates", "steps", "stops", "ci",
                    "pytest")
 _GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
 _GATE_ACTIONS = tuple(f"state -> {state}" for state in _GATE_STATES)
-_TERMINAL_STATES = ("done", "killed")
+_TERMINAL_STATES = fsm.TERMINAL_STATES
 
 # Действие журнала остановки цикла `auto` (`auto.auto_stop`, `orchestrator/
 # auto.py:421`) — любой `actor`, любая причина (SPEC 01M290PP4KBTG1KYS1PWKQJH6T,
@@ -77,6 +78,11 @@ _TS_FORMAT = "%Y-%m-%d %H:%M:%SZ"
 # Путь лога в detail «agent run started» (`runner.py`): «…, лог: <path>,
 # промпт: <path>, …».
 _STEP_LOG_RE = re.compile(r"лог: (.+?)(?:, промпт: |$)")
+# События начисления стоимости шага для строки предупреждения 80 %
+# конверта эпика (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 4): LOST,
+# UNKNOWN и UNCHARGED денег в потраченное не вносят.
+_CHARGE_ACTIONS = (spend.KNOWN_COST_JOURNAL_ACTION, "agent cost PARTIAL",
+                   "agent cost ESTIMATED")
 _LAST_CALLS = 3
 _CALL_CHARS = 40
 _PROGRESS_LINE_CHARS = 240
@@ -283,10 +289,20 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
     top_step, top_alert = store.journal_maxima(conn)
     steps = store.observation_steps_since(conn, row["id"], start_step, top_step)
     task_ids = set(store.observation_tasks(conn, row["id"]))
+    # Надзор эпика (SPEC 01M5TBF7JRZ6FGRR4K53KPAJDS, требование 10): его
+    # записи (`task_id` = id эпика) и алерты по эпику доходят, если в
+    # наборе есть задача этого эпика; записи надзора — без фильтра классов.
+    epic_ids = {epic_id for epic_id in (store.task_epic_id(conn, t)
+                                        for t in task_ids) if epic_id}
+    supervisor_steps = store.epic_supervisor_steps_since(
+        conn, epic_ids, start_step, top_step)
+    if supervisor_steps:
+        steps = sorted([*steps, *supervisor_steps], key=lambda item: item["id"])
     next_step = max(start_step, top_step)
     for item in steps:
         action, detail = item["action"], item["detail"] or ""
-        if _matches_class(action, detail, events):
+        if (item["task_id"] in epic_ids
+                or _matches_class(action, detail, events)):
             if (budget is not None
                     and action in _TEST_RUN_ACTIONS
                     and not budget.take(item["task_id"])):
@@ -309,7 +325,7 @@ def _observation_events(conn, row, start_step: int, start_alert: int,
         # «Оповещено» — позиция самого наблюдения (`next_alert`), так что
         # отметка одного наблюдения доставку другому не снимает.
         targets = (task_ids | {store.task_target(conn, t) for t in task_ids}
-                   | {row["target"], config.DEFAULT_TARGET, None})
+                   | {row["target"], config.DEFAULT_TARGET, None} | epic_ids)
         for item in alerts:
             if item["target"] in targets:
                 _print_line(item["ts"], item["target"] or "-", item["source"],
@@ -439,8 +455,44 @@ def _watch_observation(opts: dict, conn, observed) -> None:
         store.release_observation(store.db(), observation_id, pid, started_at)
 
 
+class _EpicWarnings:
+    """Память сессии `watch` о конвертах эпиков (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 4): «потрачено до события» —
+    `budget.epic_spent` при предыдущем событии начисления того же эпика в
+    этой сессии; строка — при пересечении порога 80 %, один раз на эпик.
+    Первое событие эпика в сессии предыдущего не имеет и строки не даёт.
+    Только чтение БД."""
+
+    def __init__(self):
+        self.previous: dict = {}
+        self.warned: set = set()
+
+    def observe(self, conn, task_id: str, action: str) -> None:
+        if action not in _CHARGE_ACTIONS:
+            return
+        # Отложенно: `budget` тянет граф модулей через `runner`.
+        from . import budget
+        epic_id = store.task_epic_id(conn, task_id)
+        epic = store.get_epic(conn, epic_id) if epic_id else None
+        if epic is None or epic["envelope_usd"] is None:
+            return
+        envelope = epic["envelope_usd"]
+        after = budget.epic_spent(conn, epic_id)
+        before = self.previous.get(epic_id)
+        self.previous[epic_id] = after
+        if (before is None or epic_id in self.warned
+                or budget.epic_envelope_warning(before, envelope)
+                or not budget.epic_envelope_warning(after, envelope)):
+            return
+        self.warned.add(epic_id)
+        _print_line(datetime.now(timezone.utc).strftime(_TS_FORMAT), task_id,
+                    _WATCH_ACTOR, _WARNING_ACTION,
+                    f"{budget.epic_warning_text(epic_id, after, envelope)} "
+                    f"(«{epic['title']}»)")
+
+
 def _emit_steps(conn, task_id: str, events: set, known_step_id: dict,
-                exit_on: set | None, budget=None) -> bool:
+                exit_on: set | None, budget=None, epic_warnings=None) -> bool:
     """Печатает новые строки `steps` этой задачи; `True` — среди них была
     строка класса из `exit_on` (SPEC 01M290PP4KBTG1KYS1PWKQJH6T, требование
     4) и вызывающий обязан остановиться НЕМЕДЛЕННО, той же итерацией, не
@@ -460,6 +512,8 @@ def _emit_steps(conn, task_id: str, events: set, known_step_id: dict,
         return False
     known_step_id[task_id] = new_rows[-1]["id"]
     for row in new_rows:
+        if epic_warnings is not None:
+            epic_warnings.observe(conn, task_id, row["action"])
         if _matches_class(row["action"], row["detail"], events):
             if (budget is not None
                     and row["action"] in _TEST_RUN_ACTIONS
@@ -773,6 +827,7 @@ def cmd_watch(argv: list) -> None:
     known_alert_id = None
     live_steps: dict = {}
     budget = _LineBudget()
+    epic_warnings = _EpicWarnings()
 
     while True:
         conn = store.db()  # свежее чтение на каждой итерации (AC-8)
@@ -805,7 +860,7 @@ def cmd_watch(argv: list) -> None:
                 known_state[task_id] = row["state"]
                 print(f"STATE={row['state']}", flush=True)
             if _emit_steps(conn, task_id, opts["events"], known_step_id,
-                          exit_on, budget):
+                          exit_on, budget, epic_warnings):
                 return
             _emit_progress(conn, row, live_steps, budget)
 
