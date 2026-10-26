@@ -207,6 +207,15 @@ def declared_from_tz(conn, tz_raw: str,
     строки ТЗ «Порядок: после …» (SPEC 01M45D29BQJE8FJYJA4JQWSYFZ,
     требования 1-2). Строки нет — ([], []). Элементы проверяет `check` для
     ещё не заведённой задачи target'а `target`."""
+    items, reasons = _tz_order_items(tz_raw)
+    if reasons or not items:
+        return [], reasons
+    return check(conn, None, items, target=target)
+
+
+def _tz_order_items(tz_raw: str) -> tuple[list[str], list[str]]:
+    """(элементы строки ТЗ «Порядок: после …» как написаны, причины отказа
+    по форме строки). Строки нет — ([], [])."""
     tails = [m.group(1) for m in _ORDER_LINE_RE.finditer(tz_raw)]
     if not tails:
         return [], []
@@ -217,7 +226,39 @@ def declared_from_tz(conn, tz_raw: str,
     items = guard.merge_after_items(tail)
     if not items:
         return [], [f"в строке «{ORDER_LINE}» нет ни одного id задачи"]
-    return check(conn, None, items, target=target)
+    return items, []
+
+
+def declared_for_new(conn, tz_raw: str | None, after: str | None,
+                     target: str) -> tuple[list[str], list[str]]:
+    """(полные id, причины отказа `new`) из строки ТЗ «Порядок: после …» и
+    флага `--after` (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 5):
+    объединение — сначала элементы ТЗ, затем элементы `--after`, чей полный
+    id ещё не вошёл (префикс и полный id одной задачи — один элемент).
+    Дедупликация — до `check`: `check` отказывает на повторе, а проверяет
+    он уже объединённый перечень, так что непрошедший элемент любого
+    источника отказывает всему."""
+    items, reasons = _tz_order_items(tz_raw) if tz_raw is not None else ([], [])
+    if reasons:
+        return [], reasons
+
+    def full_id(item: str) -> str:
+        matches = store.task_id_matches(conn, item)
+        return matches[0] if len(matches) == 1 else item
+
+    # Повтор внутри самой строки ТЗ — по-прежнему отказ `check`: схлопываются
+    # только элементы `--after`, уже вошедшие в перечень.
+    merged = list(items)
+    seen = {full_id(item) for item in items}
+    for item in guard.merge_after_items(after):
+        key = full_id(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    if not merged:
+        return [], []
+    return check(conn, None, merged, target=target)
 
 
 def record_declared(conn, task_id: str, ids: list[str]) -> None:

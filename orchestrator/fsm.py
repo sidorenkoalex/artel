@@ -101,6 +101,9 @@ ROLE_STEP_REQUIRED_MARKERS = (pull.PULL_CONFLICT_ROLE_STEP_MARKER,
 ANSWER_CREATED_ACTION_PREFIX = "ANSWER создан"
 
 NO_ANSWER_FLAG = "--no-answer"
+# Эпик из поделённого родителя на гейте SPEC (SPEC
+# 01M5TBBDFS6DWQY6MS263T1KPY, требование 7).
+AS_EPIC_FLAG = "--as-epic"
 # Мерж и запись в main при живом прогоне канарейки (SPEC
 # 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6); здесь, а не в `canary`:
 # `canary` импортирует этот модуль.
@@ -932,7 +935,8 @@ def cmd_approve(task_id: str, sha: str | None = None,
                no_answer: bool = False,
                fresh_suite: bool = False,
                accept_audit_fail: bool = False,
-               during_canary: str | None = None) -> None:
+               during_canary: str | None = None,
+               as_epic: bool = False) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -962,14 +966,51 @@ def cmd_approve(task_id: str, sha: str | None = None,
     `during_canary` (SPEC 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6) —
     основание флага `approve <id> [sha] --during-canary "<основание>"`:
     мерж при живом прогоне канарейки набора по умолчанию; допустим только
-    на `merge_gate`."""
+    на `merge_gate`.
+
+    `as_epic` (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 7) — флаг
+    `approve <id> [sha] --as-epic`: эпик из поделённого родителя на гейте
+    SPEC. Отказы флага — до `lease.run_locked` и без записей."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    as_epic_goal = _as_epic_goal(conn, task_id) if as_epic else None
     lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
                                  fixes_main, no_answer, fresh_suite,
-                                 accept_audit_fail, during_canary))
+                                 accept_audit_fail, during_canary,
+                                 as_epic_goal))
+
+
+def _as_epic_state_refusal(t) -> str:
+    if t["state"] != "spec_gate":
+        return (f"флаг {AS_EPIC_FLAG} допустим только в состоянии spec_gate, "
+                f"задача в {t['state']}")
+    return f"флаг {AS_EPIC_FLAG}: задача уже в эпике {t['epic_id']}"
+
+
+def _as_epic_goal(conn, task_id: str) -> str:
+    """Цель эпика `--as-epic` — первый абзац «Контекст» SPEC родителя —
+    либо отказ до lease без единой записи (требование 7): задача не на
+    гейте SPEC или уже в эпике, SPEC не прочитан, деления нет. SPEC
+    читается напрямую, не узлом гейта `_read_branch_text_or_refuse`: тот
+    свой отказ журналирует."""
+    t = store.get_task(conn, task_id)
+    if t["state"] != "spec_gate" or t["epic_id"]:
+        sys.exit(f"[{task_id}] approve отклонён: {_as_epic_state_refusal(t)}")
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/SPEC.md")
+    if text is None:
+        sys.exit(f"[{task_id}] approve отклонён: флаг {AS_EPIC_FLAG}: SPEC "
+                 f"родителя не прочитан ({reason})")
+    if not guard.parse_division_subsections(text):
+        sys.exit(f"[{task_id}] approve отклонён: флаг {AS_EPIC_FLAG}: у задачи "
+                 f"нет деления — в SPEC нет секции «## Деление» с частями")
+    context = guard.section_body(text, "Контекст").strip()
+    paragraphs = [p.strip() for p in re.split(r"\n[ \t]*\n", context)
+                  if p.strip()]
+    return paragraphs[0] if paragraphs else t["title"]
 
 
 def _division_check(conn, task_id: str, t, subsections: list) -> tuple:
@@ -994,7 +1035,8 @@ def _division_check(conn, task_id: str, t, subsections: list) -> tuple:
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
-                             subsections: list, order, frames: list) -> None:
+                             subsections: list, order, frames: list,
+                             as_epic_goal: str | None = None) -> None:
     """Заводит по одной подзадаче на каждый подраздел секции «## Деление»
     (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3, AC-5/AC-6/AC-11) и
     переводит родителя в `killed` — единственное терминальное
@@ -1013,10 +1055,21 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
     выше зовёт `fsm_merge_gate`: `catalog.py` не импортирует `fsm.py` на
     уровне модуля, цикла нет, но локальный импорт держит связку явной
     только там, где она нужна.
+
+    Части наследуют эпик родителя (SPEC 01M5TBBDFS6DWQY6MS263T1KPY,
+    требование 7); `as_epic_goal` — `approve --as-epic`: эпик заводится
+    здесь, перед частями, — только вместе с ними, мягкий отказ гейта сюда
+    не доходит.
     """
-    from . import catalog
+    from . import catalog, epics
+    epic_id = t["epic_id"]
+    if as_epic_goal is not None:
+        epic_id = epics.create_from_division(
+            conn, task_id, t["title"], t["target"] or config.DEFAULT_TARGET,
+            as_epic_goal)
     new_ids = [catalog.spawn_subtask(task_id, t["title"], sub["title"],
-                                     sub["body_raw"], target=t["target"])
+                                     sub["body_raw"], target=t["target"],
+                                     epic_id=epic_id)
               for sub in subsections]
     for part_id, own in zip(new_ids, order.deps):
         merge_after.record_declared(
@@ -1250,7 +1303,8 @@ def _spec_protected_zones_refusal(conn, task_id: str, meta: dict) -> str:
 
 
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
-                       accept_audit_fail: bool = False) -> None:
+                       accept_audit_fail: bool = False,
+                       as_epic_goal: str | None = None) -> None:
     # Последний вердикт аудита SPEC `fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
     # требование 16) проходит гейт только явным флагом Оператора — раньше
     # всех прочих сверок: без флага решать здесь нечего. Вердикт — из
@@ -1399,7 +1453,8 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
     # не оказывается вовсе (диспетчер `_cmd_approve` ниже).
     if subsections:
         _spawn_division_subtasks(conn, task_id, t, state, subsections,
-                                 division_order, division_frames)
+                                 division_order, division_frames,
+                                 as_epic_goal)
         return
     skip_reason = meta.get("skip_tests")
     if skip_reason or not guard.requires_ac_markup(meta):
@@ -1692,9 +1747,14 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                 no_answer: bool = False,
                  fresh_suite: bool = False,
                  accept_audit_fail: bool = False,
-                 during_canary: str | None = None) -> None:
+                 during_canary: str | None = None,
+                 as_epic_goal: str | None = None) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
+    # Повтор предварительной проверки `--as-epic` уже под lease: эпик мог
+    # появиться у задачи между проверкой и lease.
+    if as_epic_goal is not None and (state != "spec_gate" or t["epic_id"]):
+        sys.exit(f"[{task_id}] approve отклонён: {_as_epic_state_refusal(t)}")
     if no_answer and state != "escalated":
         sys.exit(f"[{task_id}] approve отклонён: флаг {NO_ANSWER_FLAG} "
                  f"допустим только в состоянии escalated, задача в {state}")
@@ -1728,7 +1788,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # `accept_audit_fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD) — для `spec_gate`.
     handler = {
         "spec_gate": partial(_approve_spec_gate,
-                             accept_audit_fail=accept_audit_fail),
+                             accept_audit_fail=accept_audit_fail,
+                             as_epic_goal=as_epic_goal),
         "acceptance": partial(_approve_acceptance, accept_red=accept_red,
                               fresh_suite=fresh_suite),
         "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main,
