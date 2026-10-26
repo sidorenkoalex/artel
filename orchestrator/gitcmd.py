@@ -1,6 +1,7 @@
 """Вызовы git в корне репозитория, вопросы к ветке задачи и к произвольному
 репозиторию (артефактные git-репо внешних target, ADR-0003 3д, tasks/T021)."""
 import os
+import re
 import sqlite3
 import subprocess
 import threading
@@ -178,6 +179,9 @@ PUSH_LEASE_FLAG = "--force-with-lease"
 ARTIFACT_REF_PREFIX = "refs/artifacts/"
 GIT_CONFIG_ENV_NAMES = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
 GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+# Переменные, переносящие репозиторий вызова: под белым списком отправка
+# идёт только из клона проекта рабочим каталогом.
+GIT_LOCATION_ENV_NAMES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")
 # Глобальные опции git со значением отдельным словом.
 GIT_GLOBALS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
                           "--config-env", "--super-prefix")
@@ -241,9 +245,63 @@ def _split_globals(args: list, cwd: Path) -> tuple[list, int | None, Path]:
     return args[:i], (i if i < len(args) else None), cwd
 
 
-def _push_words(rest: list) -> tuple[list, list, list]:
-    """(флаги, значения `-o`, позиционные) аргументов после `push`."""
-    flags, options, positional = [], [], []
+def _global_values(globals_: list, name: str) -> list:
+    """Значения глобальной опции `name` (`<name> <значение>` и
+    `<name>=<значение>`) среди глобальных опций git."""
+    values = []
+    i = 0
+    while i < len(globals_):
+        word = globals_[i]
+        if word == name and i + 1 < len(globals_):
+            values.append(globals_[i + 1])
+            i += 2
+            continue
+        if word.startswith(name + "="):
+            values.append(word.split("=", 1)[1])
+        i += 1 if word not in GIT_GLOBALS_WITH_VALUE else 2
+    return values
+
+
+def _option_words(globals_: list) -> list:
+    """Имена глобальных опций git без их значений."""
+    words = []
+    i = 0
+    while i < len(globals_):
+        words.append(globals_[i])
+        i += 2 if globals_[i] in GIT_GLOBALS_WITH_VALUE else 1
+    return words
+
+
+def _alias_in_argv(globals_: list) -> str | None:
+    """Определение псевдонима в самой команде (`-c alias.*`,
+    `--config-env=alias.*`); ключ конфигурации git регистронезависим."""
+    for name in ("-c", "--config-env"):
+        for value in _global_values(globals_, name):
+            if value.lower().startswith("alias."):
+                return f"{name} {value}"
+    return None
+
+
+def _location_projects(globals_: list, cwd: Path, env: dict) -> set:
+    """Внешние проекты, в клон которых ведут репозиторий и рабочее дерево
+    вызова: `--git-dir` (иначе `GIT_DIR`, иначе рабочий каталог),
+    `--work-tree`/`GIT_WORK_TREE`, `GIT_COMMON_DIR`; путь вне области
+    проектов и клон артели — не проект."""
+    git_dirs = _global_values(globals_, "--git-dir") or [
+        v for v in (env.get("GIT_DIR"),) if v]
+    paths = [cwd / p for p in git_dirs] or [cwd]
+    for value in (_global_values(globals_, "--work-tree")
+                  or [v for v in (env.get("GIT_WORK_TREE"),) if v]):
+        paths.append(cwd / value)
+    if env.get("GIT_COMMON_DIR"):
+        paths.append(cwd / env["GIT_COMMON_DIR"])
+    return {p for p in map(_project_of_path, paths) if p is not None}
+
+
+def _push_words(rest: list) -> tuple[list, list, list, list]:
+    """(флаги, значения `-o`, позиционные, индексы позиционных в `rest`)
+    аргументов после `push`."""
+    flags, options, positional, indexes = [], [], [], []
     i = 0
     while i < len(rest):
         word = rest[i]
@@ -259,8 +317,9 @@ def _push_words(rest: list) -> tuple[list, list, list]:
             flags.append(word)
         else:
             positional.append(word)
+            indexes.append(i)
         i += 1
-    return flags, options, positional
+    return flags, options, positional, indexes
 
 
 def _is_url(dest: str) -> bool:
@@ -345,6 +404,32 @@ def _refspecs(refspecs: list, tasks: list) -> list:
     return parsed
 
 
+def _resolves(cwd: Path, rev: str) -> bool:
+    """`rev` клона `cwd` — коммит (`rev-parse --verify`)."""
+    try:
+        res = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--quiet",
+                              "--verify", f"{rev}^{{commit}}"],
+                             capture_output=True, text=True, env=pult_env())
+    except OSError:
+        return False
+    return res.returncode == 0
+
+
+def _explicit_source(cwd: Path, src: str) -> str | None:
+    """Источник refspec ветки под белым списком в явном виде: `HEAD`,
+    полный sha коммита или `refs/heads/<ветка>` клона; None — иное (тег,
+    иная ссылка, выражение ревизии). Короткое имя git ищет и среди тегов
+    раньше веток — оттого подставляется полное имя ветки."""
+    if src == "HEAD":
+        return src if _resolves(cwd, src) else None
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", src):
+        return src if _resolves(cwd, src) else None
+    if src.startswith("refs/") and not src.startswith("refs/heads/"):
+        return None
+    full = "refs/heads/" + src.removeprefix("refs/heads/")
+    return full if _resolves(cwd, full) else None
+
+
 def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
                        cwd: Path, env: dict, flags: list, options: list,
                        positional: list, specs: list) -> str | None:
@@ -360,8 +445,9 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         i += 2
     if _project_of_path(cwd) != project:
         return f"отправка не из клона проекта {project} ({cwd})"
-    names = sorted(n for n in env if n in GIT_CONFIG_ENV_NAMES
-                   or n.startswith(GIT_CONFIG_ENV_PREFIXES))
+    names = sorted(n for n in env if (n in GIT_CONFIG_ENV_NAMES
+                   or n in GIT_LOCATION_ENV_NAMES
+                   or n.startswith(GIT_CONFIG_ENV_PREFIXES)))
     if names:
         return f"переменные окружения {', '.join(names)}"
     leases = []
@@ -400,6 +486,14 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         task = spec["task"]
         if task is None or task["state"] in _dead_states():
             return f"ветка {spec['name']} — не ветка живой задачи проекта"
+        src = _explicit_source(cwd, spec["src"])
+        if src is None:
+            return (f"источник {spec['src']} refspec {spec['spec']} — не "
+                    f"ветка, не HEAD и не sha коммита")
+        # Назначение — всегда явное `refs/heads/<имя>`: иначе git выводит
+        # вид назначения из источника, и тег уходит в refs/tags/<имя>.
+        spec["src"] = src
+        spec["explicit"] = f"{src}:refs/heads/{spec['name']}"
     for lease in leases:
         ref, colon, sha = lease.partition(":")
         name = ref.removeprefix("refs/heads/")
@@ -450,12 +544,23 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     if index is None:
         return None
     sub = args[index]
-    if sub not in PUSH_SUBCOMMANDS and sub in GIT_BUILTINS:
+    alias_argv = _alias_in_argv(globals_) if globals_ else None
+    if alias_argv is None and sub not in PUSH_SUBCOMMANDS and sub in GIT_BUILTINS:
         return None
     from . import targets
     env = dict(os.environ if env is None else env)
     plan = _PushPlan(list(args), cwd)
-    cwd_project = _project_of_path(cwd)
+    located = _location_projects(globals_, cwd, env)
+    cwd_project = next(iter(located)) if len(located) == 1 else None
+    if alias_argv is not None:
+        # Псевдоним, заданный самой командой, превращает любое имя в
+        # отправку мимо разбора подкоманды — отказ всегда.
+        return _refuse(plan, cwd_project or config.DEFAULT_TARGET, None, env,
+                       task_id, f"псевдоним git в команде ({alias_argv})")
+    if len(located) > 1:
+        return _refuse(plan, ", ".join(sorted(located)), None, env, task_id,
+                       "проект вызова не определён — репозиторий и рабочее "
+                       "дерево в клонах разных проектов")
     try:
         entries = targets.load()
     except targets.TargetsError:
@@ -467,12 +572,19 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
         entry = (entries or {}).get(cwd_project)
         if entry is not None and not targets.push_whitelisted(entry):
             return None
+        # Глобальная опция перед псевдонимом может подложить его определение
+        # (`-c include.path=…`, `--git-dir` в чужой репозиторий).
+        foreign = [w for w in _option_words(globals_) if w != "-C"]
+        if foreign:
+            return _refuse(plan, cwd_project, None, env, task_id,
+                           f"глобальная опция git {foreign[0]} перед "
+                           f"подкомандой {sub}")
         alias = _raw_config(cwd, "--get", f"alias.{sub}")
         if not alias:
             return None
         return _refuse(plan, cwd_project, None, env, task_id,
                        f"подкоманда {sub} — псевдоним git ({alias})")
-    flags, options, positional = _push_words(args[index + 1:])
+    flags, options, positional, positions = _push_words(args[index + 1:])
     dest = positional[0] if positional else ""
     project = cwd_project
     local = _local_dest_path(dest) if dest else None
@@ -511,7 +623,11 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
             and "-n" not in flags:
         plan.sent = [(s["task"]["id"], s["src"], s["name"]) for s in branches]
     reset = list(PUSH_RESET_CONFIG) if whitelisted else []
-    plan.args = (globals_ + reset + [sub] + added + list(args[index + 1:]))
+    rest = list(args[index + 1:])
+    for spec, pos in zip(specs, positions[1:]):
+        if "explicit" in spec:
+            rest[pos] = spec["explicit"]
+    plan.args = (globals_ + reset + [sub] + added + rest)
     return plan
 
 

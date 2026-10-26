@@ -688,8 +688,9 @@ def project_branch_tasks(conn: sqlite3.Connection, project: str,
     01M5WDB7F14SQ30QVWJY2XYBG2, требование 2)."""
     marks = ",".join("?" * len(names))
     return conn.execute(
-        f"SELECT id, branch, state FROM tasks WHERE target=? AND branch IN "
-        f"({marks})", (project, *names)).fetchall()
+        f"SELECT id, branch, state FROM tasks WHERE COALESCE(target, ?)=? "
+        f"AND branch IN ({marks})",
+        (config.DEFAULT_TARGET, project, *names)).fetchall()
 
 
 # ===== Внешние ссылки задач и эпиков (SPEC 01M5TBFH5VZ7GSRXX7VNKHFCCQ) =====

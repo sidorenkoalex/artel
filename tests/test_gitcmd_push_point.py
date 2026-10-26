@@ -172,3 +172,108 @@ def test_dest_into_project_clone_refused_as_path_or_file_url(spy, form, layer):
     res = gitcmd.git("push", dest, config.MAIN_BRANCH)
     assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
     assert spy.pushes == []
+
+
+class AliasSpy(Spy):
+    """Отправкой считается и вызов подкоманды `p` — псевдонима `push`."""
+
+    @staticmethod
+    def is_push(argv) -> bool:
+        return (isinstance(argv, list) and argv[0] == "git"
+                and ("push" in argv or "p" in argv))
+
+
+@pytest.fixture
+def alias_spy(initialized_tmp_root, monkeypatch):
+    monkeypatch.delenv(config.ARTEL_TASK_ENV, raising=False)
+    for name in gitcmd.GIT_LOCATION_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    s = AliasSpy()
+    monkeypatch.setattr(subprocess, "run", s.run)
+    monkeypatch.setattr(subprocess, "Popen", s.popen)
+    return s
+
+
+@pytest.mark.parametrize("gate", ["target-human", "operator"])
+@pytest.mark.parametrize("form", ["-c", "--config-env", "--config-env="])
+def test_alias_defined_in_command_refused(alias_spy, monkeypatch, form, gate):
+    """Псевдоним `push`, заданный самой командой (`-c alias.p=push`, `--config-env alias.p=VAR`, `--config-env=alias.p=VAR`), — отказ всегда, в том числе у проекта `operator`: до процесса, с записью алерта.
+
+    Ловит мутацию: псевдоним в argv не распознаётся (`_alias_in_argv`
+    всегда None) — у проекта `operator` вызов `p origin main` уходит в
+    процесс отправки в `main`.
+    """
+    clone = project("qalias", gate)
+    monkeypatch.setenv("ALIAS_VALUE", "push")
+    words = {"-c": ("-c", "alias.p=push"),
+             "--config-env": ("--config-env", "alias.p=ALIAS_VALUE"),
+             "--config-env=": ("--config-env=alias.p=ALIAS_VALUE",)}[form]
+    res = gitcmd.in_repo(clone, *words, "p", "origin", config.MAIN_BRANCH)
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert alias_spy.pushes == []
+    sources = [r["source"] for r in alerts.open_alerts(store.db(), "incident")]
+    assert gitcmd.PUSH_WHITELIST_SOURCE in sources
+
+
+def test_global_option_before_unknown_subcommand_refused(alias_spy):
+    """Проект `target-human`: глобальная опция, кроме `-C`, перед подкомандой не из встроенных (`-c include.path=…` подкладывает псевдоним) — отказ до процесса.
+
+    Ловит мутацию: для подкоманды вне встроенных глобальные опции не
+    проверяются — псевдоним из подключённого файла конфигурации уходит в
+    процесс отправки.
+    """
+    clone = project("qinclude", "target-human")
+    extra = clone.parent / "alias.cfg"
+    extra.write_text("[alias]\n\tp = push\n", encoding="utf-8")
+    res = gitcmd.in_repo(clone, "-c", f"include.path={extra}", "p", "origin",
+                         config.MAIN_BRANCH)
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert alias_spy.pushes == []
+
+
+@pytest.mark.parametrize("route", ["option", "option=", "env"])
+@pytest.mark.parametrize("layer", ["target-human", "broken"])
+def test_git_dir_into_project_clone_from_pult_root_refused(alias_spy, monkeypatch,
+                                                           route, layer):
+    """Отправка из корня пульта с `--git-dir <клон>/.git`, `--git-dir=<клон>/.git` или `GIT_DIR` — проект определяется по клону: отказ до процесса под белым списком и при нечитаемом `targets.yaml`.
+
+    Ловит мутацию: проект вызова определяется только по `-C`/рабочему
+    каталогу (`_location_projects` не читает `--git-dir`/`GIT_DIR`) —
+    отправка в `main` клона считается отправкой артели и уходит в процесс.
+    """
+    clone = project("qgitdir", "target-human")
+    if layer == "broken":
+        targets.local_path().write_text("targets: [не запись\n", encoding="utf-8")
+    git_dir = str(clone / ".git")
+    if route == "env":
+        monkeypatch.setenv("GIT_DIR", git_dir)
+        args = ()
+    else:
+        args = (("--git-dir", git_dir) if route == "option"
+                else (f"--git-dir={git_dir}",))
+    res = gitcmd.git(*args, "push", "origin", config.MAIN_BRANCH)
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert alias_spy.pushes == []
+
+
+def test_tag_source_into_own_branch_refused_and_branch_made_explicit(spy):
+    """Проект `target-human`: refspec `<тег>:<своя ветка>` — отказ до процесса с записью в журнале задачи; разрешённая отправка своей ветки уходит с явным `refs/heads/<ветка>:refs/heads/<ветка>`.
+
+    Ловит мутацию: источник refspec не проверяется (тег проходит и git
+    создаёт refs/tags/<ветка>); назначение не подставляется явным
+    `refs/heads/<имя>` — тег с именем ветки перехватил бы короткий источник.
+    """
+    clone = project("qtag", "target-human")
+    own = task("qtag")
+    git_in(clone, "tag", "v9")
+    res = gitcmd.in_repo(clone, "push", "origin", "v9:feature/x")
+    assert res.returncode != 0 and gitcmd.PUSH_REFUSED_ACTION in res.stderr, res
+    assert spy.pushes == []
+    refused = [r["detail"] for r in store.task_steps(store.db(), own)
+               if r["action"] == gitcmd.PUSH_REFUSED_ACTION]
+    assert any("v9" in d for d in refused), refused
+    git_in(clone, "tag", "feature/x")
+    assert gitcmd.in_repo(clone, "push", "origin", "feature/x").returncode == 0
+    assert spy.pushes[-1][-1] == "refs/heads/feature/x:refs/heads/feature/x"
+    sha = git_in(clone, "rev-parse", "refs/heads/feature/x")
+    assert any(d.startswith(sha) for d in sent(own)), sent(own)
