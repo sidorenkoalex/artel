@@ -1,18 +1,16 @@
-# Записка spec_auditor — 01M5WDB7F14SQ30QVWJY2XYBG2 (аудит 3, spec_sha 57f5bdf4)
+# Записка spec_auditor — 01M5WDB7F14SQ30QVWJY2XYBG2 (аудит 4, spec_sha cc2c05a7)
 
 ## Выяснено
-- Факты SPEC верны: catalog.py:918/844/1024, fsm.py:1016/1403 (до записей :1414/:1431/:1444), gitcmd.py:37/86/94/164/341/413/441/469; шестой subprocess.run — check_ignore gitcmd.py:549 (не push).
-- Внутренние противоречия SPEC: AC-9 `push_options: [X, Y]` и AC-6 `-o X` против нормы формы `ИМЯ=значение` (AC-1); `--delete` вне белого списка флагов при разрешённом удалении refs/artifacts/<id>.
-- Долгоживущий тест А0 tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:474 запрещает сравнение merge_gate с "operator" вне targets.py — предикат белого списка только в targets.py.
-- Обход: общий config клона (push.pushOption, remote.origin.pushurl/push/mirror), --config-env, GIT_CONFIG_* в env, send-pack.
-- artifact_cleanup.py:103 удаляет refs/heads/artifact/* артели, не refs/artifacts/<id> (ТЗ ошибался, SPEC не перенёс).
-- Вердикт: concerns, 9 отклонений; guard ок.
+- Все 9 отклонений аудита 3 и ANSWER-1 п. 1–2 внесены в SPEC; факты кода прежние: catalog.py:844/900/918/1024/1031/1038, fsm.py:1016/1037(def)/1067/1070/1403, gitcmd.py:37/86/94/145/164/341/413/441/469.
+- Новый класс находки: подставы конфигурации клона закрыты не полностью — `remote.origin.url` не сверяется с `url` записи, `url.*.insteadOf`/`pushInsteadOf`, `core.sshCommand` в config (в argv отказ, в config нет), `core.hooksPath` (хук получает ARTEL_HOSTING_TOKEN, gitcmd.py:160); в env — GIT_DIR/GIT_SSH_COMMAND/GIT_CONFIG_GLOBAL при отказе только GIT_CONFIG_COUNT/KEY/VALUE/PARAMETERS.
+- targets.check (targets.py:616) не отвергает неизвестные поля — запись слоя репозитория с новыми полями пройдёт без проверки, если проверка только в merge_local.
+- Вердикт: concerns.
 
 ## Не сработало
-- `ls`, `cd … && git`, heredoc с `$` в Bash — отказ/подтверждение; только простые команды.
+- `ls`, `xargs` в Bash — отказ/подтверждение; только простые grep/sed.
 
 ## Где остановился
-- SPEC-AUDIT.md записан (status: ready, verdict: concerns). Шаг завершён.
+- SPEC-AUDIT.md записан (status: ready, verdict: concerns, 3 отклонения), guard ок. Шаг завершён.
 
 ## Чего не хватило
-- Перечня push-мест: `grep -rn '"push"' orchestrator/`.
+- Списка тестов, считающих журнал после отправки (для (а) у артели) — не проверено поимённо.
