@@ -2,7 +2,7 @@
 task: 01M5TBBDFS6DWQY6MS263T1KPY
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -130,41 +130,16 @@ schema_version: 5
   запрещает замок сумм — круг через эскалацию и `amend-tests`.
   Предложение: гнать тот же grep в `preflight`/гейте выхода из `tests_writing`.
 
-## Эскалация
-Код причины: `правка-зафиксированного-теста`.
-
-**Вопросы** (один батч):
-1. (блокирующий) Причина возврата из `verifying` требует убрать
-   `TASK_ID = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")` из
-   `tests/test_01m5tbbdfs6dwqy6ms263t1kpy_views.py:37`. Это долгоживущий
-   файл задачи под замком сумм
-   (`acceptance_tests/long_lived.sha256.txt`, строка 5, `dc342c1c…3138`):
-   правка разработчиком запрещена и будет отказана гейтом замка на выходе
-   из `in_dev`. Варианты:
-   (а) Оператор применяет готовый патч `amend-views-task-id.diff` (каталог
-   документов задачи) командой `amend-tests`; затем задача идёт в
-   `verifying` без нового шага разработчика — код менять не нужно;
-   (б) мандат разработчику на правку этого файла в ANSWER (тогда я применю
-   тот же патч, больше ничего не меняя).
-   Дефолт при молчании: (а).
-
-**Контекст**:
-- Линт на чистой ветке (`git diff origin/main...HEAD -- '*.py'
-  ':!orchestrator/idgen.py' | grep -E '^\+' | grep -Ef
-  scripts/id_format_patterns.txt`) находит ровно одну строку — эту; код
-  задачи (`orchestrator/`, мои тесты) линт не нарушает.
-- Патч `amend-views-task-id.diff`: удаляет регулярное выражение и заводит
-  помощник `carries_id(line)` — id берутся из фикстуры (`store.all_tasks`
-  + таблица `epics`), не из формата; две точки использования
-  (`block_header`, отбор `later` в `test_ac28_status_project_blocks`)
-  переходят на него. Прежнее выражение ловило и id эпика (`E` + 26 знаков),
-  поэтому эпики включены в перечень — поведение теста то же. Утверждения
-  тестов не меняются.
-- Проверено: `git apply --check` на чистом дереве — применяется; с
-  временно применённым патчем `python3 -m pytest
-  tests/test_01m5tbbdfs6dwqy6ms263t1kpy_views.py` — 7 passed, линт
-  пуст; файл затем возвращён `git checkout --` к зафиксированным байтам,
-  дерево чистое.
-
-**Блокирует**: повторный вход в `verifying` (джоб CI «Линт — новый парсинг
-формата id задачи вне генератора» красный, пока строка в файле).
+## Итерация после ANSWER-2
+- Причина возврата (CI-линт формата id в
+  `tests/test_01m5tbbdfs6dwqy6ms263t1kpy_views.py`) закрыта правкой Оператора
+  `amend-tests` (лок 46d02a5b → 5682b804, коммит af114957): регулярное
+  выражение удалено, id берутся из БД фикстуры (`carries_id`). Код задачи не
+  менялся, тест не правился.
+- Линт локально на ветке (`git diff origin/main...HEAD -- '*.py'
+  ':!orchestrator/idgen.py'`, строки `+` против
+  `scripts/id_format_patterns.txt`) — попаданий нет.
+- Долгоживущие тесты задачи + `tests/test_epics_board_units.py` +
+  `tests/test_multitarget.py` — 109 passed; `plank-run` — 1 passed (AC-29).
+- Полный набор `tests/` из ANSWER-2 в шаге разработчика не запускался:
+  `suite-run` роли developer отказывает — его прогоняют CI и гейт приёмки.
