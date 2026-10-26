@@ -1,18 +1,18 @@
 # Записка аналитика
 
 ## Выяснено
-- ANSWER-1: все дефолты-варианты A, кроме 2 — B. Деление на 2 части ($40, $45), белый список только при merge_gate != operator.
-- Имя ветки строится только в catalog.py:912; префикс `task/` ищется только в coldstart.py:59 (других "task/" в orchestrator/ нет).
-- Отправки: github_adapter.py:166,241; fsm_merge_gate.py:744,1316; cleanup.py:265,268; artifact_branch.py:427; snapshot.py:297; artifact_cleanup.py:103.
-- Подтяжка in_dev→verifying: fsm._pull_main_or_escalate (fsm.py:236) → pull.evaluate (pull.py:762), merge — pull._run_merge (:535), конфликт — pull._handle_merge_failure (:543).
-- Коммиты пульта с FIXATION_AUTHOR вне зон ТЗ: amend.py:799 (кодовая ветка, долгоживущие тесты), snapshot.py:272 (коммит закрытия в refs/artifacts) — внесены в зоны части 2 как следствие требования 3.
-- Части деления: зависимость родителя 01M5W27CY7K7NR9347NKD8F0NX перенесена в «Порядок:» части 1 (merge_after.division_order берёт зависимости части только из её поля).
+- Возврат с гейта SPEC 26.10: 11 решений Оператора применены в SPEC.md (23 AC, budget 70, части $40/$45, guard ок).
+- Сняты: coldstart (зона, AC-10, test_coldstart), хук pre-push (→ Б2). Добавлены: журнал «ветка отправлена: <sha>» и `-o` push_options в gitcmd (часть 1), атомарность деления, «своя ветка» = ветка живой (не killed/done) задачи проекта из БД, отправка без refspec — отказ.
+- Конфликт rebase — прежний путь: escalated + PULL_CONFLICT_ROLE_STEP_MARKER (pull.py:575,589; PULL_CONFLICT_MARKED_STATES pull.py:87 включает in_dev).
+- Вызовы fsm._pull_main_or_escalate: fsm_advance.py:771 (in_dev→verifying, единственное место freshness), runner.py:643, pull_main.py:66, fsm.py:1577, fsm_merge_gate.py:727, canary.py:1384.
+- ensure_head_in_origin (github_adapter.py:211, push :241) общий для всех forge; вызовы fsm_advance.py:478, pull_main.py:93, fsm_merge_gate.py:701, amend.py:826, tests_writing.py:62.
+- Merge-коммит подтяжки — идентичность клона (workspace.inherit_identity, workspace.py:78); workspace.py в зоны не внесён, правка — через pull.py.
 
 ## Не сработало
-- `cd …; grep` в Bash требует подтверждения — использовать абсолютные пути.
+- `ls` в Bash недоступен (command not found) — читать каталоги через Read/grep.
 
 ## Где остановился
-- SPEC.md с делением записан (status: ready, 21 AC, budget 70, guard ок), QUESTIONS.md удалён. Раздел «Меняемое поведение» не заводился: правка test_coldstart — на усмотрение аналитика части 1 по коду.
+- SPEC.md переписан, status: ready, guard ок. «Меняемое поведение» не заводилось — правок существующих тестов не ожидается.
 
 ## Чего не хватило
-- Где живёт подтяжка входа в verifying (ТЗ называет fsm_advance, а merge — в pull.py/fsm.py).
+- Риск: запись журнала при каждой отправке ветки (и у артели) может задеть тесты, сверяющие журнал целиком — не проверял.
