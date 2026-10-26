@@ -1,30 +1,28 @@
 # Записка test_author
 
 ## Выяснено
-- SPEC не называет функцию запроса и функцию транспорта `gitlab_adapter`
-  (имя, параметры, форма ответа), функции «сведения проекта» (AC-31) и
-  «последний конвейер ветки» (AC-32), форму «без срока» (AC-29). AC-1, AC-2,
-  AC-31, AC-32 — escalate; батч В-1…В-5 с дефолтами — в
-  acceptance_tests/markers.py.
-- Остальные AC — долгоживущие файлы tests/test_01m5wcxbm7wcmrwcbwnchmar3t_
-  gitlab_forge.py (AC-3…16, 18…20, 22…30) и …_forge_guards.py (AC-17, 21),
-  написаны под дефолты. Временный стаб forge/gitlab_adapter/правки ci дал
-  165 зелёных; 10 мутаций стаба (страницы, X-Total, порядок стадий,
-  старшинство, токен, ключ отчёта и др.) — каждую ловит свой тест. Стаб
-  удалён, ci.py восстановлен через `git checkout`.
-- Клон для ci-тестов — `real_git` + `make_project_repo` (у `tmp_root` шпион
-  `SpyRun` глушит `rev-parse refs/heads/*`); sha — из файла ссылки клона.
-- Импорт `orchestrator.gitcmd` в долгоживущем файле = признак «git-модуль»:
-  `hosting_token` подменяется строкой `"orchestrator.gitcmd.hosting_token"`.
-- AC-12 нужна БД со схемой — `initialized_tmp_root`.
+- Визит 2 (после ANSWER-1, В-1…В-4: A, В-5: B). Дописаны в
+  tests/test_01m5wcxbm7wcmrwcbwnchmar3t_gitlab_forge.py: AC-1 (9 запрещённых
+  пар через `gitlab_adapter.request`), AC-2 (10 чтений, 4 записи, 6 отказов
+  правки MR без PUT), AC-31 (`forge.project_info`), AC-32
+  (`forge.branch_pipeline`); обе новые функции добавлены в GL_CALLS (AC-3,
+  AC-18) и GH_CALLS (AC-13).
+- Сторож AC-17 (…_forge_guards.py): `urllib.parse` вне транспорта законен,
+  `socket` — сеть; добавлены мутанты socket и urllib.request рядом с parse.
+- Временный стаб forge/gitlab_adapter под новые тесты: 42+12 зелёных;
+  6 мутаций стаба (префикс пары, заголовок без сверки, sort=asc, без ref,
+  весь ответ проекта, github→gitlab) пойманы. Стаб удалён.
+- markers.py — без пометок, только докстрока со ссылкой на файлы tests/.
 
 ## Не сработало
-- `ls`/`cat`/`rm` в оболочке шага нет — `python3 -c`; heredoc с `{'` отклоняется.
-- `plank-run`: «нет файлов test_*.py» — в планке только markers.py (тесты долгоживущие).
+- heredoc/команды с `{"` отклоняет песочница — скрипт писать файлом и удалять.
 
 ## Где остановился
-- preflight пройдена. Ждём ответ Оператора на В-1…В-5; затем дописать
-  AC-1/2/31/32 (и отказ github этих двух функций в AC-13), поправить под ответ.
+- Шаг завершён: preflight пройдена; оба файла tests/ красны по верной
+  причине (ImportError `forge` / FileNotFoundError модулей). plank-run
+  отвечает «нет файлов test_*.py» — планка состоит только из markers.py.
+- Карту `scripts/codebase_map.py` не регенерировал: правка вне файлов с
+  префиксом задачи у test_author откатывается.
 
 ## Чего не хватило
-- Контракта интерфейса адаптера в SPEC (имена/формы функций).
+- Ничего нового: контракт пришёл в ANSWER-1.
