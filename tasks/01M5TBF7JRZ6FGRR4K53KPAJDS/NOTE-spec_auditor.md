@@ -1,14 +1,14 @@
 # NOTE spec_auditor
 
 ## Выяснено
-- Рабочий каталог старше Э1: orchestrator/epics.py нет на HEAD ветки; сверял по origin/main (Э1 смержен, f909b7dd). MAX_PARALLEL_TASKS на origin/main — config.py:414 (в worktree :409).
-- epics.cmd_epic (origin/main epics.py:359) — new/show/edit/close/add/remove; EPICS_DDL (schema.py:113) без колонки лимита — подтверждено.
-- _launch_detached (artel.py:977) делает sys.exit при живом lease/отказе наблюдения; _launch_observation (artel.py:922) требует задачу в наборе названного наблюдения и свежую связь watch.
-- auto останавливается в агентских состояниях (пауза, стоп-кран, бюджет, лимит шагов, отказ advance) — auto.py:714,889,902,944-967; SPEC готовность (треб. 3) таких не исключает → перезапуск по кругу.
+- Визит 2 (SPEC sha 32d21c89…, после возврата с гейта 26.10). Рабочий каталог старше Э1 — сверял по origin/main через `git show origin/main:<файл>` (Bash с `$VAR`/пайпами требует подтверждения — писать пути литералом, по одной команде).
+- Э2а на origin/main ещё нет (grep start_after пуст) — треб. 10 SPEC это учитывает.
+- auto пишет свои записи актором "operator" (auto.py:582,1008,183,228,854,649; artel.py:1027 detached launch); session_id общий через файл .artel/session-id (session.py) — «действие Оператора» (треб. 4) механически не отличимо.
+- _cmd_stop (artel.py:1396) сам журнал не пишет, только SIGTERM + disable_task_observation; add_observation_tasks (store.py:82) включает задачу обратно.
+- matching_observation (store.py:225) требует задачу в наборе — для эпика правило «как у auto <id>» буквально неприменимо; SPEC пересказал его без этого условия.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict concerns, 8 отклонений; guard ок.
-- Главные: перезапуск по кругу после не-гейтовой остановки auto; место блокировки/журнала надзора; счёт MAX_PARALLEL_TASKS; гонка epic stop; порядок разработки после Э2а.
+- SPEC-AUDIT.md: verdict concerns, status ready; guard прогнан.
 
 ## Чего не хватило
-- Факт, что ветка задачи до мержа Э1, — пришлось искать merge в origin/main.
+- Как отличить запись журнала «командой Оператора» от записи цикла auto — правила в коде нет.
