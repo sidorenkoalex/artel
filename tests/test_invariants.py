@@ -35,9 +35,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (artel, artifact_branch, budget, catalog,  # noqa: E402
-                          ci, cleanup, config, fsm, fsm_advance, gitcmd,
-                          runner, stack, store)
+from orchestrator import (artel, artifact_branch, board, budget,  # noqa: E402
+                          catalog, ci, cleanup, config, epics, fsm,
+                          fsm_advance, gitcmd, idgen, merge_after, runner,
+                          stack, store)
 from orchestrator.advance_gates import test_integrity  # noqa: E402
 from orchestrator import test_lint  # noqa: E402
 from scripts import guard  # noqa: E402
@@ -407,7 +408,181 @@ class FsmTest(unittest.TestCase):
             ("status", catalog.cmd_status),
             ("show", lambda: catalog.cmd_show(self.TASK)),
             ("log", lambda: catalog.cmd_log(self.TASK)),
+            # Эпики, доска и внешние ссылки (ADR-0028 п. 17, операторский
+            # коммит после мержа Э4). Каждая команда — с годными аргументами
+            # и предусловием, которого она ждёт (`epic_call`): отказ на
+            # разборе аргументов или на «задача не в эпике» ничего бы не
+            # доказал. Вне свипа: `epic restore` — читает только git-ссылку
+            # клона проекта, которого в песочнице нет, задачу не трогает;
+            # `epic draft promote` — заводит НОВУЮ задачу путём `cmd_new`,
+            # исключённого здесь так же, как `new`; `auto --epic` — надзор,
+            # отвязанный процесс ОС и цикл опроса, как и сам `auto` вне
+            # свипа (его запреты — собственные тесты надзора).
+            ("epic new", lambda: epics.cmd_epic(
+                ["new", store.task_target(store.db(), self.TASK),
+                 "Ещё эпик", "--goal", "цель"])),
+            ("epic show", self.epic_call(
+                lambda e: ["show", e], bound=True)),
+            ("epic edit", self.epic_call(
+                lambda e: ["edit", e, "--title", "Эпик свипа",
+                           "--goal", "новая цель"], bound=True)),
+            ("epic close", self.epic_call(
+                lambda e: ["close", e, "итог"], bound=True)),
+            ("epic add", self.epic_call(
+                lambda e: ["add", e, self.TASK], bound=False)),
+            ("epic remove", self.epic_call(
+                lambda e: ["remove", e, self.TASK], bound=True)),
+            ("epic envelope", self.epic_call(
+                lambda e: ["envelope", e, "5"], bound=True)),
+            ("epic start-after", self.epic_call(
+                lambda e: ["start-after", self.TASK, self.epic_dep],
+                bound=True)),
+            ("epic start-after нет", self.epic_call(
+                lambda e: ["start-after", self.TASK, merge_after.NONE_WORD],
+                bound=True, start_after=True)),
+            ("epic draft add", self.epic_call(
+                lambda e: ["draft", "add", e, "--tz", str(self.epic_tz),
+                           "--start-after", self.TASK, "--budget", "3"],
+                bound=True)),
+            ("epic draft edit", self.epic_call(
+                lambda e: ["draft", "edit", self.sweep_draft(e),
+                           "--start-after", self.TASK, "--after", self.TASK,
+                           "--budget", "4"], bound=True)),
+            ("epic draft drop", self.epic_call(
+                lambda e: ["draft", "drop", self.sweep_draft(e)],
+                bound=True)),
+            ("epic decision", self.epic_call(
+                lambda e: ["decision", e, "решение", "--for", self.TASK],
+                bound=True)),
+            ("epic export", self.epic_call(
+                lambda e: ["export", e], bound=True)),
+            ("epic parallel", self.epic_call(
+                lambda e: ["parallel", e, "2"], bound=True)),
+            ("epic stop", self.epic_call(
+                lambda e: ["stop", e], bound=True, supervisor=True)),
+            ("epic retry", self.epic_call(
+                lambda e: ["retry", e, self.TASK], bound=True)),
+            ("board --json", lambda: board.cmd_board(
+                ["--project", store.task_target(store.db(), self.TASK),
+                 "--json"])),
+            ("board --md", lambda: board.cmd_board(
+                ["--project", store.task_target(store.db(), self.TASK),
+                 "--md"])),
+            ("board --html", lambda: board.cmd_board(
+                ["--project", store.task_target(store.db(), self.TASK),
+                 "--html"])),
+            ("link task", lambda: self.link_add(
+                store.REF_KIND_TASK, self.TASK)),
+            ("link --remove task", lambda: self.link_remove(
+                store.REF_KIND_TASK, self.TASK)),
+            ("link epic", lambda: self.link_add(
+                store.REF_KIND_EPIC, self.sweep_epic())),
+            ("link --remove epic", lambda: self.link_remove(
+                store.REF_KIND_EPIC, self.sweep_epic())),
         ]
+
+    # ------------------------------------- эпик свипа (ADR-0028 п. 17)
+
+    def sweep_epic(self) -> str:
+        """Открытый эпик проекта задачи для команд `epic …` и `link epic`.
+
+        Заводится один раз на тест теми же функциями `store`, что и
+        `epic new`; при каждом вызове снова открыт (его мог закрыть `epic
+        close` в окончательном состоянии задачи). Здесь же — задача того
+        же проекта в `done`: годная зависимость `epic start-after`, которая
+        запуск не держит (`merge_after.start_after_blocks`), — и файл ТЗ
+        для `epic draft add`.
+        """
+        conn = store.db()
+        if getattr(self, "_sweep_epic_id", None) is None:
+            project = store.task_target(conn, self.TASK)
+            self._sweep_epic_id = epics.new_epic_id()
+            store.begin_immediate(conn)
+            store.insert_epic(conn, self._sweep_epic_id, project,
+                              "Эпик свипа", "цель свипа", None)
+            conn.commit()
+            self.epic_dep = idgen.new_task_id()
+            store.insert_task(conn, self.epic_dep, "Зависимость свипа",
+                              "done", f"task/{self.epic_dep.lower()}-dep",
+                              project, 1.0)
+            self.epic_tz = config.TASKS.parent / "epic-draft-tz.md"
+            self.epic_tz.write_text("# Черновик свипа\n\nТекст ТЗ.\n",
+                                    encoding="utf-8")
+        store.update_epic(conn, self._sweep_epic_id, state="open",
+                          outcome=None, closed_at=None)
+        conn.commit()
+        return self._sweep_epic_id
+
+    def sweep_draft(self, epic_id: str) -> str:
+        """Свежий черновик в `draft` — вход `epic draft edit|drop`."""
+        conn = store.db()
+        store.begin_immediate(conn)
+        number = store.insert_draft(conn, epic_id, "Черновик свипа",
+                                    "# Черновик свипа\n", None, None, None)
+        conn.commit()
+        return epics.draft_address(epic_id, number)
+
+    def epic_call(self, argv, *, bound: bool, start_after: bool = False,
+                  supervisor: bool = False):
+        """Вызов `epic <argv(id эпика)>` точкой входа CLI (`cmd_epic`).
+
+        До вызова — предусловие команды: задача в эпике или без него
+        (`bound`), с зависимостью запуска (`start_after`), с мёртвой
+        блокировкой надзора и мёртвым дочерним `auto` на чужом хосте
+        (`supervisor`: `epic stop` идёт по пути снятия блокировки, а живых
+        процессов для сигнала нет — `os.kill` подменён отказом теста).
+        После — задача снова без эпика и без `start_after`: прежние команды
+        свипа идут по той же задаче, что и до его расширения; черновики,
+        оставшиеся в `draft`, отброшены — иначе `epic close` в окончательном
+        состоянии задачи отказывал бы из-за них, не дойдя до закрытия.
+        """
+        def call():
+            conn = store.db()
+            epic_id = self.sweep_epic()
+            store.set_task_epic(conn, self.TASK, epic_id if bound else None)
+            conn.commit()
+            if start_after:
+                store.update_task(conn, self.TASK,
+                                  start_after=merge_after.column(
+                                      [self.epic_dep]))
+            if supervisor:
+                store.delete_epic_supervisor(conn, epic_id)
+                store.insert_epic_supervisor(
+                    conn, epic_id, 1, "нет-такого-хоста-свипа",
+                    store.now(), "sweep")
+                conn.commit()
+                store.insert_epic_child(conn, epic_id, self.TASK, 1,
+                                        "нет-такого-хоста-свипа",
+                                        store.now(), 0)
+            try:
+                with mock.patch.object(
+                        epics.os, "kill",
+                        side_effect=AssertionError("epic stop послал сигнал")):
+                    epics.cmd_epic(argv(epic_id))
+            finally:
+                store.set_task_epic(conn, self.TASK, None)
+                for draft in store.epic_drafts(conn, epic_id):
+                    if draft["state"] == epics.DRAFT:
+                        store.update_draft(conn, epic_id, draft["number"],
+                                           state=epics.DROPPED)
+                conn.commit()
+                store.update_task(conn, self.TASK, start_after=None)
+        return call
+
+    def link_add(self, kind: str, obj: str) -> None:
+        """`link` новой ссылки: прежняя снята заранее — иначе со второго
+        состояния свипа команда отвечала бы «уже есть», не записывая."""
+        conn = store.db()
+        store.delete_external_ref(conn, kind, obj, "tracker", "SWEEP-1")
+        conn.commit()
+        catalog.cmd_link([kind, obj, "tracker", "SWEEP-1"])
+
+    def link_remove(self, kind: str, obj: str) -> None:
+        """`link --remove` по ссылке, которая есть: без неё команда
+        отказала бы «нет ссылки», не дойдя до снятия."""
+        store.insert_external_ref(store.db(), kind, obj, "tracker",
+                                  "SWEEP-2", None, "operator")
+        catalog.cmd_link(["--remove", kind, obj, "tracker", "SWEEP-2"])
 
     def run_command(self, call) -> tuple[str, mock.Mock]:
         """Прогон команды с подменённым агентом; SystemExit — тоже исход."""
