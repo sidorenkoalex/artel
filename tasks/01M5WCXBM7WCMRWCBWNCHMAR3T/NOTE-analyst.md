@@ -1,28 +1,33 @@
 # Записка analyst — 01M5WCXBM7WCMRWCBWNCHMAR3T
 
 ## Выяснено
-- ТЗ — часть 1 деления родителя 01M5W670PHF08VPZWDRM5BY56W; SPEC родителя
-  (refs/artifacts/01M5W670PHF08VPZWDRM5BY56W:tasks/.../SPEC.md) — полный
-  источник формулировок, таблица требования 10 перенесена в требование 8.
-- AC перенумерованы сквозь: AC-16←19, AC-17←20, AC-18←22, AC-19←23,
-  AC-20←24 родителя (соответствие — в «Материалах» SPEC).
-- Якоря ci.py сверены по коду: verifying_status :977, failed_check_names
-  :1115, branch_status :1155, status_kind :1247, MAIN_UNKNOWN :1282,
-  trigger_rerun :1636, rerun_started :1679; check_runs :250.
-- Входы ci берут (branch|sha, repo), не target — запись проекта для
-  выбора forge придётся получать из repo/контекста (дело разработчика).
-- forge.py и gitlab_adapter.py в worktree ещё нет.
-- SPEC: status ready, budget 50 (рамка Оператора), merge_after А0;
-  сигналы объёма (20 AC, $50, инвариант 19) — дан материал о монолите,
-  решение за Оператором. guard: ок.
+- Возврат с spec_gate (6 решений) закрыт правкой SPEC:
+  - Д-2 (б): `policy.ci_required_jobs` читается как необязательное (нет
+    поля — пусто); targets.py не трогаем; в «Не входит» — объявление поля
+    у Б1 = 01M5WDB7F14SQ30QVWJY2XYBG2 и условие не открывать
+    SUPPORTED_FORGES для gitlab до его мержа.
+  - Д-1: новый AC-21 (ast: ci.py читает поле forge только как аргумент
+    вызова forge; forge.py — индекс реестра, без сравнений).
+  - Д-3: старшинство red → unknown → running → none → green в требовании
+    5; failed без права падать — red при любом статусе конвейера, кроме
+    неполной выдачи (unknown); created не за manual → running, skipped
+    не за manual → unknown (AC-5 переписан); новый AC-22 на сочетания.
+  - Ф-2: (None, None) из gitcmd.hosting_token (gitcmd.py:121) для gitlab
+    — «токен не получен», запроса нет; target — имя проекта (str); AC-3.
+  - AC-17: ловит ImportFrom из urllib/http.client и вызов по псевдониму
+    вне транспорта; urllib.error-исключения разрешены.
+  - Строка срока токена (часть 2): skip при ошибке HTTP/сети, для github
+    строки нет — в «Не входит».
+- В ci.py сейчас нет ни одного упоминания `forge`.
+- created/skipped из ci_required_jobs оставлены «не green» — решение гейта
+  называло только случай «не за ручным».
 
 ## Не сработало
-- Bash с `$W`/`cd` в составной команде отклоняется песочницей — нужны
-  абсолютные пути без переменных.
+- `ls` в Bash недоступен; составные команды с `cd` — нет.
 
 ## Где остановился
-- SPEC.md написан и проходит guard; шаг завершён.
+- SPEC.md: 22 AC, status ready, budget 50, guard: ок. Шаг завершён.
 
 ## Чего не хватило
-- Таблица требования 10 не была в ТЗ — пришлось читать SPEC родителя из
-  его ссылки документов.
+- Полный id Б1 по префиксу: нашёлся через
+  `git for-each-ref 'refs/artifacts/01M5WDB7F1*'`.
