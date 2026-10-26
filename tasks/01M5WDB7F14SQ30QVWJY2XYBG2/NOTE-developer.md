@@ -1,21 +1,21 @@
 # Записка developer — 01M5WDB7F14SQ30QVWJY2XYBG2
 
 ## Выяснено
-- Возврат из verifying (CI 40384230945): `test_git_hooks.py::...test_repo_context_git_reaches_a_real_child_with_the_marker`
-  падал — `-c alias.probe=!echo` во временном репо (не проект) отказывался «псевдоним git в команде».
-- Уточнение гейта: отказ `-c alias.*`/`--config-env alias.*` при любой подкоманде, но только для клона под белым списком.
-- Исправлено (шаг 8 PLAN): в `gitcmd._push_plan` отказ псевдонима после `targets.load()`, через новую
-  `_alias_guarded_project` (клон вызова или слово после подкоманды — путь/`file://`/url записи;
-  отказ при внешнем проекте под белым списком или с неизвестным гейтом).
-- Тесты: `test_alias_defined_in_command_refused` — у `operator` теперь проходит; новый
-  `test_alias_in_command_into_whitelisted_clone_from_pult_root_refused`. Мутации красные (6 и 2).
-- Прогоны: 163 passed (push_point, git_hooks, multitarget, файлы задачи, А0, store), 20 passed соседние, планка 75 passed.
+- Ревью итерации 3 (R3-F1): назначение в теле псевдонима из argv (`-c alias.p=push <клон> main`,
+  `!git -C <клон> push …`, через `--config-env`) обходило `_alias_guarded_project`.
+- Исправлено (шаг 9 PLAN): `gitcmd._alias_body_words` — слова тел `alias.*` (`!` снят, `$VAR` из env,
+  `shlex`, значение `--опция=`) + имена проектов из `.artel/projects/<имя>/` в тексте тела; передаются
+  в `_alias_guarded_project`. Артель/`operator` прежние.
+- Тест `test_alias_body_into_whitelisted_clone_from_pult_root_refused` (12 случаев) — мутация «пусто» 12 failed.
+- Прогоны: 175 passed (push_point, git_hooks, multitarget, файлы задачи, А0, store), 106 passed соседние git, планка 75.
+- REVIEW.md: R3-F1 размечена `fixed`.
 
 ## Не сработало
-- heredoc/`cp` в Bash роли требуют подтверждения — мутации только через Edit.
+- `$(...)` в Bash роли запрещён — файлы тестов перечислял явно (`git ls-files tests | grep`).
 
 ## Где остановился
 - Шаг завершён: PLAN.md status: ready, карта регенерирована.
+- Остаточный риск записан в PLAN «Риски»: вычисляемый путь в `!`-псевдониме (`$(…)`) разбором не ловится.
 
 ## Чего не хватило
 - Ничего существенного.
