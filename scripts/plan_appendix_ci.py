@@ -64,7 +64,6 @@ from pathlib import Path
 # plan_appendix_ci` в тестах), тем же приёмом, что `scripts/guard.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config  # noqa: E402
 from scripts import guard  # noqa: E402
 
 TASK_BRANCH_PREFIX = "refs/heads/task/"
@@ -73,9 +72,10 @@ PROCESSED_EVENTS = ("push", "pull_request")
 # модуль пульта сюда не тянется: сценарию нужен только префикс.
 DOCS_REF_PREFIX = "refs/artifacts/"
 # Ссылка копии эпика `refs/artifacts/epic-<id>` — не документы задачи
-# (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15); значение — то же, что
-# `config.EPIC_REF_NAME_PREFIX`.
-EPIC_REF_NAME_PREFIX = config.EPIC_REF_NAME_PREFIX
+# (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15). Своя копия правила, как
+# `DOCS_REF_PREFIX`: CI-сценарий пульт не импортирует; литерал совпадает с
+# `config.EPIC_REF_NAME_PREFIX` — равенство держит тест задачи.
+EPIC_REF_NAME_PREFIX = "epic-"
 WORKFLOW_REL = ".github/workflows/ci.yml"
 SCRIPT_REL = "scripts/plan_appendix_ci.py"
 WORKFLOW_JOBS = ("python", "python-min")

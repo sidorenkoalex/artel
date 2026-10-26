@@ -1,6 +1,6 @@
 """Черновики эпика: свойства вне долгоживущих файлов задачи
 01M5TBFCVFNN95BHH0E9C6KBKB — строка данных файла ссылки и отказ перечня,
-ссылающегося на сам черновик."""
+ссылающегося на сам черновик, копия префикса ссылки эпика в CI-сценарии."""
 import contextlib
 import io
 import sys
@@ -61,3 +61,14 @@ def test_draft_edit_refuses_self_reference(light_transition):
     assert code != 0 and "ссылается на себя" in out, out
     draft = store.get_draft(store.db(), epic_id, 1)
     assert draft["merge_after"] is None and draft["start_after"] is None
+
+
+def test_ci_script_epic_prefix_matches_config():
+    """Префикс ссылки эпика в CI-сценарии (своя копия правила, без импорта пульта) равен `config.EPIC_REF_NAME_PREFIX`.
+
+    Ловит мутацию: литерал `EPIC_REF_NAME_PREFIX` в `scripts/plan_appendix_ci.py`
+    расходится с префиксом пульта — CI принимает ссылку эпика за задачу.
+    """
+    from scripts import plan_appendix_ci
+
+    assert plan_appendix_ci.EPIC_REF_NAME_PREFIX == config.EPIC_REF_NAME_PREFIX
