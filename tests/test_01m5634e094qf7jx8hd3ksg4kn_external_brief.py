@@ -1,5 +1,7 @@
-"""Бриф роли задачи внешнего проекта: конвенции проекта с его базовой ветки
-вместо карты кодовой базы и `CLAUDE.md` пульта; пометки «файла нет» и
+"""Бриф роли задачи внешнего проекта: конвенции проекта из файла пульта
+`.artel/projects/<проект>/conventions.md` вместо карты кодовой базы и
+`CLAUDE.md` пульта, `CLAUDE.md`/`AGENTS.md` проекта в бриф не идут (SPEC
+01M5T18K1YFBYA7MM1BBRV869A); пометки «конвенции проекта не разобраны» и
 «конвенции проекта не прочитаны»; сборка без сверки свежести и регенерации
 карты пульта и без алертов карты; миссии ролей о составе брифа.
 
@@ -23,9 +25,12 @@ git-репозиторий с `main`, на котором лежат карта 
 `built_at_sha` правился `orchestrator/*.py`, регенератора в песочнице нет),
 `CLAUDE.md` и шаблоны пульта. Учебный внешний проект — клон
 `make_project_repo` в области проектов песочницы, его запись в
-`config.TARGETS` песочницы со своей базовой веткой; файлы конвенций лежат
-в корне этой ветки клона. Документы задачи (SPEC.md, TZ.md) — коммит ссылки
-документов `refs/artifacts/<id>` в клоне проекта.
+`config.TARGETS` песочницы со своей базовой веткой; `CLAUDE.md`/`AGENTS.md`
+проекта лежат в корне этой ветки клона, `conventions.md` с уникальным
+текстом — в области проекта песочницы (`config.PROJECTS / <проект>`); в
+сценариях AC-9 у записи — компонент с элементом `knowledge`, читаемым из
+базы клона (ANSWER-2, У5). Документы задачи (SPEC.md, TZ.md) — коммит
+ссылки документов `refs/artifacts/<id>` в клоне проекта.
 
 Сценарии сбоя чтения базы: «клона нет» — клон удалён, «ветки базы нет» —
 ветка базы удалена из клона, «git не ответил» — подменённый
@@ -34,9 +39,9 @@ git-репозиторий с `main`, на котором лежат карта 
 нет в `config.TARGETS`. В сценариях «клона нет» и «контекст не разрешён»
 документы задачи читаются из копии клона подменой
 `orchestrator.artifact_branch.task_repo`: так подменяется только чтение
-базовой ветки проекта, SPEC.md задачи читается (AC-9). Сбой чтения файла
-при прочитанной базе (AC-10) — тот же `OSError` на git-вызовы вне корня
-пульта, где упомянут `CLAUDE.md`.
+базовой ветки проекта, SPEC.md задачи читается (AC-9). Сбой чтения
+`conventions.md` пульта (AC-10) — подменённый `os.open` отвечает
+`OSError` только для его пути.
 
 Имена проекта и базовой ветки, тексты файлов конвенций и карты выбираются
 модулем `random`; зерно печатается и входит в текст провала.
@@ -77,6 +82,7 @@ MANIFEST_ROLES = ("developer", "spec_auditor")
 
 ABSENT_MARK = "файла нет"
 UNREAD_MARK = "конвенции проекта не прочитаны:"
+UNPARSED_MARK = "конвенции проекта не разобраны:"
 STALE_MARK = "КАРТА НЕАКТУАЛЬНА"
 DOCS_REF_PREFIX = "refs/artifacts/"
 TASK_REPO = "orchestrator.artifact_branch.task_repo"
@@ -91,6 +97,13 @@ PROJECT_ENTRY = """  {name}:
     project_skills: []
     merge_gate: operator
 """
+COMPONENT_FIELDS = (
+    ("command", "[python3, -m, pytest]"),
+    ("long_lived_dir", "tests"),
+    ("long_lived_name", "test_<id>_<name>.py"),
+    ("weakening_scope", "[tests/**/*.py]"),
+    ("mutation_claim_scope", "[tests/test_*.py]"),
+)
 
 
 def word(rng: random.Random, k: int = 8) -> str:
@@ -173,14 +186,23 @@ class ExternalBriefSandbox(RealGitSandbox):
                          "orchestrator/*.py")
         self.assertTrue(stale.strip(), self.note("фикстура: карта не стухла"))
 
-    def prepare(self, files: dict, big_map: bool = False) -> None:
+    def prepare(self, files: dict, big_map: bool = False,
+                pult_text: str | None = None, with_pult: bool = True,
+                knowledge: list | None = None) -> None:
         """Новый учебный проект: файлы `files` в корне его базовой ветки
         клона (клон стоит на `main`, где их нет), задача проекта со SPEC.md
-        и TZ.md в ссылке документов клона."""
+        и TZ.md в ссылке документов клона; `conventions.md` пульта с текстом
+        `pult_text` (по умолчанию — уникальным), если `with_pult`; запись с
+        компонентом и элементами `knowledge`, если они заданы."""
         self.seed_pult(big_map)
         self.project = f"uchebny{word(self.rng)}"
         self.base = f"osnova-{word(self.rng)}"
         self.entry = PROJECT_ENTRY.format(name=self.project, base=self.base)
+        if knowledge is not None:
+            fields = [*COMPONENT_FIELDS,
+                      ("knowledge", "[" + ", ".join(knowledge) + "]")]
+            self.entry += (f"    components:\n      komp{word(self.rng, 5)}:\n"
+                           + "".join(f"        {k}: {v}\n" for k, v in fields))
         text = config.TARGETS.read_text(encoding="utf-8")
         config.TARGETS.write_text(text.rstrip("\n") + "\n" + self.entry,
                                   encoding="utf-8")
@@ -202,6 +224,13 @@ class ExternalBriefSandbox(RealGitSandbox):
         self.commit_docs({
             "SPEC.md": f"# SPEC\n\n{self.spec_nonce}\n",
             "TZ.md": f"# ТЗ\n\nТЗ учебной задачи {word(self.rng)}.\n"})
+        self.pult_rel = f".artel/projects/{self.project}/conventions.md"
+        self.pult_path = config.PROJECTS / self.project / "conventions.md"
+        self.pult_text = None
+        if with_pult:
+            self.pult_text = (pult_text if pult_text is not None
+                              else self.conventions("conventions.md пульта"))
+            self.pult_path.write_text(self.pult_text, encoding="utf-8")
 
     def commit_docs(self, files: dict) -> None:
         """Коммит документов задачи в ссылку `refs/artifacts/<id>` клона —
@@ -261,6 +290,19 @@ class ExternalBriefSandbox(RealGitSandbox):
         return (self.is_project_git(argv, kwargs)
                 and "CLAUDE.md" in call_text(argv, kwargs))
 
+    def fail_pult_read(self, message: str):
+        """Подмена `os.open`: открытие `conventions.md` пульта отвечает
+        `OSError` с текстом `message`, прочие пути открываются как прежде."""
+        real = os.open
+        target = os.path.realpath(self.pult_path)
+
+        def fake_open(path, *args, **kwargs):
+            if os.path.realpath(os.fspath(path)) == target:
+                raise OSError(message)
+            return real(path, *args, **kwargs)
+
+        return mock.patch.object(os, "open", fake_open)
+
     # ------------------------------------------------------------- сборка
 
     def build(self, role: str) -> dict:
@@ -313,14 +355,15 @@ class ExternalBriefSandbox(RealGitSandbox):
     def mark_lines(self, text: str, mark: str) -> list:
         return [line for line in text.splitlines() if mark in line]
 
-    def assert_reason_journaled(self, role: str, text: str, rows: list) -> None:
-        """У каждой пометки «не прочитаны: <причина>» — запись журнала
-        задачи с той же причиной."""
+    def assert_reason_journaled(self, role: str, text: str, rows: list,
+                                mark: str = UNREAD_MARK) -> None:
+        """У каждой пометки `mark` («не прочитаны» или «не разобраны»):
+        <причина>» — запись журнала задачи с той же причиной."""
         journal = [f"{r['action']}: {r['detail'] or ''}" for r in rows]
-        lines = self.mark_lines(text, UNREAD_MARK)
-        self.assertTrue(lines, self.note(f"{role}: нет пометки «{UNREAD_MARK}»"))
+        lines = self.mark_lines(text, mark)
+        self.assertTrue(lines, self.note(f"{role}: нет пометки «{mark}»"))
         for line in lines:
-            reason = line.split(UNREAD_MARK, 1)[1].split(" — ")[0].strip()
+            reason = line.split(mark, 1)[1].split(" — ")[0].strip()
             reason = reason.rstrip(" .;)»")
             self.assertTrue(reason, self.note(f"{role}: пометка без причины: {line}"))
             self.assertTrue(any(reason in entry for entry in journal), self.note(
@@ -333,88 +376,105 @@ class ExternalBriefSandbox(RealGitSandbox):
 
 
 class ProjectConventionsInBriefTest(ExternalBriefSandbox):
-    """AC-2–AC-5: `CLAUDE.md` базы проекта в брифе, карты и `CLAUDE.md`
-    пульта в нём нет."""
+    """AC-2–AC-5: `conventions.md` пульта в брифе; `CLAUDE.md` базы
+    проекта, карты и `CLAUDE.md` пульта в нём нет."""
 
     def check_role(self, role: str) -> None:
-        claude = self.conventions("CLAUDE.md")
-        self.prepare({"CLAUDE.md": claude})
+        claude = self.conventions("conventions.md")
+        base_claude = self.conventions("CLAUDE.md")
+        self.prepare({"CLAUDE.md": base_claude}, pult_text=claude)
         text = self.built_text(role, self.build(role))
         self.assertIn(claude.strip(), text, self.note(
-            f"{role}: в брифе нет текста CLAUDE.md проекта"))
+            f"{role}: в брифе нет текста conventions.md пульта"))
         self.assert_no_pult(role, text)
+        self.assertNotIn(base_claude.strip(), text, self.note(
+            f"{role}: в брифе текст CLAUDE.md базы проекта"))
 
     def test_ac2_developer_brief_carries_project_claude_not_pult_map(self):
-        """Бриф developer задачи учебного проекта с `CLAUDE.md` в базе.
+        """Бриф developer задачи учебного проекта с `CLAUDE.md` в базе и
+        `conventions.md` пульта.
 
-        Бриф несёт текст `CLAUDE.md` базовой ветки проекта и не несёт ни
-        проекции карты пульта, ни её пометки свежести, ни
-        `MAP_PROJECTION_NOTE`, ни текста `CLAUDE.md` пульта.
+        Бриф несёт текст `conventions.md` пульта и не несёт ни текста
+        `CLAUDE.md` базовой ветки проекта, ни проекции карты пульта, ни её
+        пометки свежести, ни `MAP_PROJECTION_NOTE`, ни текста `CLAUDE.md`
+        пульта.
 
         Ловит мутацию: развилка «проект задачи — артель или внешний» в
         `developer_brief` не сделана — бриф по-прежнему кладёт проекцию
-        карты и `CLAUDE.md` с main пульта, текста `CLAUDE.md` проекта в нём
-        нет."""
+        карты и `CLAUDE.md` с main пульта, конвенций проекта в нём нет;
+        либо бриф по-прежнему читает `CLAUDE.md` базы проекта."""
         self.check_role("developer")
 
     def test_ac3_analyst_brief_carries_project_claude_not_pult_map(self):
-        """Добавка analyst задачи учебного проекта с `CLAUDE.md` в базе.
+        """Добавка analyst задачи учебного проекта с `CLAUDE.md` в базе и
+        `conventions.md` пульта.
 
-        Текст `CLAUDE.md` проекта есть; проекции карты, пометки свежести,
-        `MAP_PROJECTION_NOTE` и `CLAUDE.md` пульта нет.
+        Текст `conventions.md` пульта есть; текста `CLAUDE.md` базы,
+        проекции карты, пометки свежести, `MAP_PROJECTION_NOTE` и
+        `CLAUDE.md` пульта нет.
 
         Ловит мутацию: развилка сделана только в `developer_brief`, а
         `analyst_map_component` по-прежнему кладёт карту пульта и не несёт
-        конвенций проекта."""
+        конвенций проекта; либо несёт `CLAUDE.md` базы проекта."""
         self.check_role("analyst")
 
     def test_ac4_spec_auditor_brief_carries_project_claude_not_pult_map(self):
-        """Бриф spec_auditor задачи учебного проекта с `CLAUDE.md` в базе.
+        """Бриф spec_auditor задачи учебного проекта с `CLAUDE.md` в базе и
+        `conventions.md` пульта.
 
-        Текст `CLAUDE.md` проекта есть; проекции карты, пометки свежести,
-        `MAP_PROJECTION_NOTE` и `CLAUDE.md` пульта нет.
+        Текст `conventions.md` пульта есть; текста `CLAUDE.md` базы,
+        проекции карты, пометки свежести, `MAP_PROJECTION_NOTE` и
+        `CLAUDE.md` пульта нет.
 
         Ловит мутацию: `spec_auditor_brief` оставлен без развилки — карта
-        пульта с `MAP_PROJECTION_NOTE` в брифе, конвенций проекта нет."""
+        пульта с `MAP_PROJECTION_NOTE` в брифе, конвенций проекта нет; либо
+        в брифе текст `CLAUDE.md` базы проекта."""
         self.check_role("spec_auditor")
 
     def test_ac5_test_author_addition_exists_without_answer(self):
         """Добавка test_author задачи учебного проекта без ANSWER, причины
         возврата и справочника ядра.
 
-        Добавка не `None`, несёт текст `CLAUDE.md` проекта и ничего от
-        карты и `CLAUDE.md` пульта.
+        Добавка не `None`, несёт текст `conventions.md` пульта, не несёт
+        текста `CLAUDE.md` базы проекта и ничего от карты и `CLAUDE.md`
+        пульта.
 
         Ловит мутацию: `test_author_answer_component` по-прежнему отдаёт
         `None`, когда нет ANSWER, причины возврата и справочника, — бриф
-        test_author внешнего проекта остаётся без конвенций."""
+        test_author внешнего проекта остаётся без конвенций; либо добавка
+        несёт `CLAUDE.md` базы проекта."""
         self.check_role("test_author")
 
 
 class BothConventionFilesTest(ExternalBriefSandbox):
-    """AC-6: `CLAUDE.md` и `AGENTS.md` базы — отдельными компонентами,
-    версии базовой ветки, опись — как у соседей роли."""
+    """AC-6: конвенции проекта — один компонент `conventions.md` пульта,
+    опись — как у соседей роли; `CLAUDE.md` и `AGENTS.md` проекта ни одной
+    версии в брифе нет (SPEC 01M5T18K1YFBYA7MM1BBRV869A, ANSWER-1 У4,
+    ANSWER-2 У6)."""
 
     def test_ac6_both_files_from_base_branch_as_separate_components(self):
         """Учебный проект с `CLAUDE.md` и `AGENTS.md` в базе; их другие
         версии — в рабочем дереве клона, на ветке задачи и в её рабочей
-        копии.
+        копии; `conventions.md` пульта с уникальным текстом.
 
-        Бриф каждой из четырёх ролей несёт тексты версий базовой ветки,
-        каждый под своим заголовком компонента, и ни одного текста других
-        версий. У developer/spec_auditor заголовок несёт путь, размер в
-        байтах и sha256 текста базы; у analyst/test_author — без размера и
-        sha256.
+        Бриф каждой из четырёх ролей несёт текст `conventions.md` под
+        заголовком компонента, называющим файл; строка заголовка
+        `### conventions.md (.artel/projects/<проект>/conventions.md)` в
+        брифе ровно одна, и текст стоит под ней. У developer/spec_auditor
+        заголовок несёт размер в байтах и sha256 текста; у
+        analyst/test_author — без размера и sha256. Ни одного текста
+        `CLAUDE.md`/`AGENTS.md` проекта — ни базы, ни других версий.
 
-        Ловит мутацию: файлы конвенций читаются с диска рабочей копии
-        задачи (или рабочего дерева клона, или ветки задачи), а не с
-        `refs/heads/<база>` клона, — в брифе текст другой версии; либо
-        оба файла склеены одним компонентом; либо у analyst/test_author
-        компонент оформлен описью developer (`— N байт, sha256=…`)."""
+        Ловит мутацию: файлы конвенций по-прежнему читаются из проекта — с
+        базы, диска рабочей копии задачи, рабочего дерева клона или ветки
+        задачи — в брифе их текст; либо компонент `conventions.md` задвоен
+        или слит с другим (строк заголовка не одна, текст не под ней); либо
+        у analyst/test_author компонент оформлен описью developer
+        (`— N байт, sha256=…`)."""
         base = {"CLAUDE.md": self.conventions("CLAUDE.md"),
                 "AGENTS.md": self.conventions("AGENTS.md")}
         self.prepare(base)
-        others = []
+        others = list(base.values())
         # Рабочее дерево клона (стоит на main, где файлов нет).
         for name in base:
             text = self.conventions(f"{name} рабочего дерева клона")
@@ -433,82 +493,96 @@ class BothConventionFilesTest(ExternalBriefSandbox):
             (wt / name).write_text(text, encoding="utf-8")
             others.append(text)
 
+        name, body = "conventions.md", self.pult_text
+        label = f"### {name} ({self.pult_rel})"
         for role in ROLES:
             with self.subTest(role=role):
                 text = self.built_text(role, self.build(role))
-                headers = {}
-                for name, body in base.items():
-                    self.assertIn(body.strip(), text, self.note(
-                        f"{role}: нет текста {name} базовой ветки"))
-                    header = self.header_of(text, body.strip())
-                    headers[name] = header
-                    self.assertIn(name, header, self.note(
-                        f"{role}: заголовок компонента {name}: {header}"))
-                    size = len(body.encode("utf-8"))
-                    sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
-                    if role in MANIFEST_ROLES:
-                        self.assertIn(f"{size} байт", header, self.note(
-                            f"{role}: в описи {name} нет размера: {header}"))
-                        self.assertIn(f"sha256={sha}", header, self.note(
-                            f"{role}: в описи {name} нет sha256: {header}"))
-                    else:
-                        self.assertNotIn("sha256", header, self.note(
-                            f"{role}: у {name} опись: {header}"))
-                        self.assertNotIn(" байт", header, self.note(
-                            f"{role}: у {name} размер в заголовке: {header}"))
-                self.assertNotEqual(headers["CLAUDE.md"], headers["AGENTS.md"],
-                                    self.note(f"{role}: один компонент на оба"))
+                self.assertIn(body.strip(), text, self.note(
+                    f"{role}: нет текста {name} пульта"))
+                header = self.header_of(text, body.strip())
+                self.assertIn(name, header, self.note(
+                    f"{role}: заголовок компонента {name}: {header}"))
+                size = len(body.encode("utf-8"))
+                sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                if role in MANIFEST_ROLES:
+                    self.assertIn(f"{size} байт", header, self.note(
+                        f"{role}: в описи {name} нет размера: {header}"))
+                    self.assertIn(f"sha256={sha}", header, self.note(
+                        f"{role}: в описи {name} нет sha256: {header}"))
+                else:
+                    self.assertNotIn("sha256", header, self.note(
+                        f"{role}: у {name} опись: {header}"))
+                    self.assertNotIn(" байт", header, self.note(
+                        f"{role}: у {name} размер в заголовке: {header}"))
+                label_lines = [line for line in text.splitlines()
+                               if line == label or line.startswith(f"{label} — ")]
+                self.assertEqual(len(label_lines), 1, self.note(
+                    f"{role}: строк заголовка {label}: {label_lines}"))
+                self.assertEqual(header, label_lines[0], self.note(
+                    f"{role}: текст {name} не под своим заголовком: {header}"))
                 for other in others:
                     self.assertNotIn(other.strip(), text, self.note(
-                        f"{role}: в брифе не версия базы: {other.splitlines()[0]}"))
+                        f"{role}: в брифе файл проекта: {other.splitlines()[0]}"))
 
 
 class AbsentFileMarkTest(ExternalBriefSandbox):
-    """AC-7, AC-8: пометка «файла нет» с именем файла."""
+    """AC-7, AC-8: пометка «конвенции проекта не разобраны: файла нет —
+    <путь conventions.md>» (SPEC 01M5T18K1YFBYA7MM1BBRV869A, требование
+    4)."""
 
-    def check_absent(self, files: dict, missing: str) -> None:
-        self.prepare(files)
+    def check_absent(self, files: dict) -> None:
+        self.prepare(files, with_pult=False)
+        missing = self.pult_rel
         for role in ROLES:
             with self.subTest(role=role):
                 text = self.built_text(role, self.build(role))
                 lines = [line for line in self.mark_lines(text, ABSENT_MARK)
-                         if missing in line]
+                         if f"{UNPARSED_MARK} {ABSENT_MARK} — {missing}" in line]
                 self.assertTrue(lines, self.note(
-                    f"{role}: нет пометки «{ABSENT_MARK}» с именем {missing}"))
+                    f"{role}: нет пометки «{UNPARSED_MARK} {ABSENT_MARK} — "
+                    f"{missing}»"))
 
     def test_ac7_missing_claude_md_marked_absent(self):
-        """Учебный проект без `CLAUDE.md` в прочитанной базе.
+        """Учебный проект без `conventions.md` пульта; в базе — `AGENTS.md`
+        или ничего из конвенций.
 
         Бриф каждой из четырёх ролей собирается без отказа и несёт
-        пометку «файла нет» с именем `CLAUDE.md`.
+        пометку «конвенции проекта не разобраны: файла нет —
+        .artel/projects/<проект>/conventions.md».
 
-        Ловит мутацию: отсутствие файла в базе роняет сборку (`sys.exit`,
+        Ловит мутацию: отсутствие файла пульта роняет сборку (`sys.exit`,
         как `_main_branch_text`) либо молча пропускает компонент без
         пометки."""
         files = {}
         if self.rng.random() < 0.5:
             files["AGENTS.md"] = self.conventions("AGENTS.md")
-        self.check_absent(files, "CLAUDE.md")
+        self.check_absent(files)
 
     def test_ac8_missing_agents_md_marked_absent(self):
-        """Учебный проект с `CLAUDE.md`, но без `AGENTS.md` в прочитанной
-        базе.
+        """Учебный проект с `CLAUDE.md` в базе, но без `conventions.md`
+        пульта.
 
-        Бриф каждой из четырёх ролей несёт пометку «файла нет» с именем
-        `AGENTS.md`.
+        Бриф каждой из четырёх ролей несёт пометку «конвенции проекта не
+        разобраны: файла нет — .artel/projects/<проект>/conventions.md».
 
-        Ловит мутацию: в список конвенций попал только `CLAUDE.md` —
-        отсутствие `AGENTS.md` ничем не помечено."""
-        self.check_absent({"CLAUDE.md": self.conventions("CLAUDE.md")},
-                          "AGENTS.md")
+        Ловит мутацию: при отсутствии файла пульта бриф откатывается к
+        `CLAUDE.md` базы — пометки нет."""
+        self.check_absent({"CLAUDE.md": self.conventions("CLAUDE.md")})
 
 
 class UnreadConventionsTest(ExternalBriefSandbox):
-    """AC-9, AC-10: базу или файл прочитать нельзя — пометка «конвенции
-    проекта не прочитаны: <причина>», запись журнала, шаг не отказывает."""
+    """AC-9, AC-10: базу прочитать нельзя — пометка «конвенции проекта не
+    прочитаны: <причина>»; `conventions.md` пульта прочитать нельзя —
+    «конвенции проекта не разобраны: <причина>»; запись журнала, шаг не
+    отказывает."""
 
     def run_scenario(self, scenario: str) -> None:
-        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md")})
+        # У записи — элемент `knowledge`, ради которого база и читается
+        # (ANSWER-2, У5); `conventions.md` пульта — на месте.
+        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md"),
+                      "guide.md": self.conventions("guide.md")},
+                     knowledge=["guide.md"])
         with contextlib.ExitStack() as stack:
             fail = None
             if scenario == "клона нет":
@@ -537,7 +611,8 @@ class UnreadConventionsTest(ExternalBriefSandbox):
 
     def test_ac9_unreadable_base_marked_unread_and_journaled(self):
         """Базу учебного проекта прочитать нельзя: клона нет, ветки базы
-        нет, git не ответил, контекст проекта не разрешён.
+        нет, git не ответил, контекст проекта не разрешён; у записи —
+        элемент `knowledge` из базы, `conventions.md` пульта на месте.
 
         В каждом сценарии бриф каждой из четырёх ролей собирается без
         `SystemExit`, несёт пометку «конвенции проекта не прочитаны:
@@ -552,28 +627,32 @@ class UnreadConventionsTest(ExternalBriefSandbox):
             self.run_scenario(scenario)
 
     def test_ac10_failed_file_read_marked_unread_not_absent(self):
-        """База учебного проекта прочитана, `CLAUDE.md` в ней есть, но
-        git-чтение, упоминающее `CLAUDE.md`, отвечает `OSError`.
+        """`conventions.md` пульта есть, но его открытие отвечает `OSError`
+        (подмена `os.open` только для его пути).
 
         Бриф каждой из четырёх ролей собирается без `SystemExit`, на месте
-        `CLAUDE.md` несёт пометку «конвенции проекта не прочитаны:
-        <причина>», а не «файла нет» с именем `CLAUDE.md`; в журнале задачи —
-        запись с той же причиной.
+        компонента несёт пометку «конвенции проекта не разобраны: <текст
+        ошибки ОС>», а не «файла нет»; в журнале задачи — запись с той же
+        причиной (решение гейта 10).
 
-        Ловит мутацию: чтение файла базы через `gitcmd.show`, чей `None`
-        одинаков для «файла нет» и сбоя git, — сбой чтения помечен «файла
-        нет»."""
+        Ловит мутацию: любой сбой чтения файла пульта помечается «файла
+        нет»; либо `OSError` вне перехвата роняет сборку."""
         self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md")})
-        with self.spy(self.fail_claude_reads):
+        message = f"сбой чтения {word(self.rng, 10)}"
+        with self.fail_pult_read(message):
             results = {role: self.build(role) for role in ROLES}
         for role, built in results.items():
             with self.subTest(role=role):
                 text = self.built_text(role, built)
                 absent = [line for line in self.mark_lines(text, ABSENT_MARK)
-                          if "CLAUDE.md" in line]
+                          if "conventions.md" in line]
                 self.assertEqual(absent, [], self.note(
-                    f"{role}: сбой чтения CLAUDE.md помечен «{ABSENT_MARK}»"))
-                self.assert_reason_journaled(role, text, built["rows"])
+                    f"{role}: сбой чтения conventions.md помечен «{ABSENT_MARK}»"))
+                self.assertTrue(any(message in line for line in
+                                    self.mark_lines(text, UNPARSED_MARK)),
+                                self.note(f"{role}: пометка без текста ошибки ОС"))
+                self.assert_reason_journaled(role, text, built["rows"],
+                                             UNPARSED_MARK)
 
 
 class PultMapUntouchedTest(ExternalBriefSandbox):

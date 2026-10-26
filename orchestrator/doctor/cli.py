@@ -150,6 +150,9 @@ def all_checks(conn) -> list[doctor.Check]:
         # (SPEC 01M58PG72PG64GS790XM2EWS61, требования 2-8) — следом за
         # строками записи: предмет тот же, клон проекта.
         checks.extend(doctor.project_checks.component_checks(name, entry))
+        # Дрейф конвенций проекта (SPEC 01M5T18K1YFBYA7MM1BBRV869A,
+        # требование 8) — следом: предмет тот же, база клона проекта.
+        checks.extend(doctor.check_project_conventions(name))
         checks.extend(doctor.recovery_check(conn, name))
 
     checks.extend(doctor.check_orphans(conn))
