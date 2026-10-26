@@ -2,6 +2,8 @@
 репозиторию (артефактные git-репо внешних target, ADR-0003 3д, tasks/T021)."""
 import os
 import subprocess
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -383,6 +385,133 @@ def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
     «Подход»).
     """
     return git("-C", str(repo), *args)
+
+
+# Чтения git со сроком, байтами, своим окружением и потоком (SPEC
+# 01M5T79C5GFJGQ9XCTH8W0PDFQ): у мест, которые раньше звали `subprocess`
+# сами, одна точка запуска git — сюда повесит память чтений git 4.
+# `subprocess.TimeoutExpired` из этих функций наружу не выходит: истечение
+# срока — `Timeout`, вызывающий отличает его от прочих отказов.
+
+class Timeout(Exception):
+    """Срок git-команды истёк; процесс git остановлен."""
+
+
+class OverLimit(Exception):
+    """Поток вывода git превысил предел байт; процесс git остановлен."""
+
+
+class LaunchFailed(Exception):
+    """Процесс потока не запустился; `error` — исключение запуска как есть
+    (`OSError` либо `TimeoutExpired` конструктора процесса)."""
+
+    def __init__(self, error: BaseException):
+        super().__init__(str(error))
+        self.error = error
+
+
+def read(repo: Path, *args: str, timeout: float | None = None,
+         input: bytes | None = None,
+         text: bool = False) -> subprocess.CompletedProcess:
+    """git-команда в `repo` (`-C`) через `subprocess.run`, вывод байтами
+    (`text` — строкой), `input` — байтовый вход, `timeout` — срок.
+
+    Не `in_repo`: подмены `gitcmd.git` тестов (`fake_git`) отвечают
+    фейком, а этим чтениям нужен настоящий git. Путь — глобальный
+    `subprocess.run`, как раньше у мест: его по-прежнему видят `SpyRun` и
+    шпионы `subprocess.run` существующих тестов. Ключевые аргументы, не
+    заданные вызывающим, в `subprocess.run` не передаются — вызов тот же,
+    что был у места. `OSError` запуска выходит наружу: каждое место
+    разбирает его по-своему; истечение срока — `Timeout`."""
+    kwargs = {}
+    if input is not None:
+        kwargs["input"] = input
+    if text:
+        kwargs["text"] = True
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    try:
+        return subprocess.run(["git", "-C", str(repo), *args],
+                              capture_output=True, env=pult_env(), **kwargs)
+    except subprocess.TimeoutExpired:
+        raise Timeout(f"git {args[0] if args else ''}: срок {timeout} с "
+                      f"истёк") from None
+
+
+def read_env(repo: Path, env: dict, *args: str,
+             timeout: float) -> subprocess.CompletedProcess:
+    """git-команда в `repo` (`-C`, `cwd` — `config.ROOT`) со своим
+    окружением `env` (`GIT_INDEX_FILE` временного индекса) поверх маркера
+    пульта; вывод строкой.
+
+    Не `carpentry`: процесс — `subprocess.Popen` со сроком, мимо
+    перехвата `subprocess.run` шпионом `SpyRun` (тот ответил бы фейковым
+    sha на `write-tree`). По истечении срока процесс убивается и вывод
+    дочитывается — `Timeout`; `OSError` запуска выходит наружу."""
+    process = subprocess.Popen(["git", "-C", str(repo), *args],
+                               cwd=config.ROOT, env=pult_env(env),
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        raise Timeout(f"git {args[0] if args else ''}: срок {timeout} с "
+                      f"истёк") from None
+    return subprocess.CompletedProcess(process.args, process.returncode,
+                                       stdout, stderr)
+
+
+STREAM_CHUNK = 1 << 16
+
+
+def read_stream(repo: Path, *args: str, limit: int, timeout: float,
+                chunk: int = STREAM_CHUNK) -> subprocess.CompletedProcess:
+    """Вывод git-команды в `repo` (`-C`), прочитанный потоком порциями
+    `chunk` с пределом `limit` байт и сроком `timeout`; stderr отброшен.
+
+    Три различимых отказа: перебор предела — `OverLimit`, истечение срока
+    — `Timeout` (процесс в обоих случаях убит, вывод сверх предела не
+    копится), процесс не запустился — `LaunchFailed`. Ненулевой код
+    возврата — не исключение: результат с этим кодом разбирает вызывающий.
+    Процесс — `subprocess.Popen`: поток через `subprocess.run` не читается."""
+    end = time.monotonic() + timeout
+    try:
+        proc = subprocess.Popen(["git", "-C", str(repo), *args],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=pult_env())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LaunchFailed(exc) from exc
+    expired = threading.Event()
+
+    def kill_on_deadline():
+        expired.set()
+        proc.kill()
+
+    timer = threading.Timer(timeout, kill_on_deadline)
+    timer.start()
+    chunks, total, over = [], 0, False
+    try:
+        while True:
+            data = proc.stdout.read(chunk)
+            if not data:
+                break
+            total += len(data)
+            if total > limit:
+                over = True
+                proc.kill()
+                break
+            chunks.append(data)
+        proc.stdout.close()
+        code = proc.wait()
+    finally:
+        timer.cancel()
+    if over:
+        raise OverLimit(f"вывод git {args[0] if args else ''} > {limit} байт")
+    if expired.is_set() or time.monotonic() > end:
+        raise Timeout(f"git {args[0] if args else ''}: срок {timeout} с истёк")
+    return subprocess.CompletedProcess(proc.args, code, b"".join(chunks), None)
 
 
 def head_sha(repo: Path | None = None) -> str:

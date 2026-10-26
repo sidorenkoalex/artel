@@ -105,6 +105,23 @@ CREATE TABLE IF NOT EXISTS pair_suspensions (
 );
 """
 
+# Эпик — сущность пульта, объединяющая задачи одного проекта общей целью
+# (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 1; ADR-0028). Тем же
+# литералом в `SCHEMA` и в миграции `_migrate_epics` (см.
+# `MODEL_TARIFFS_DDL`). Индекс — по колонке `tasks.epic_id`, которую
+# миграция заводит в той же транзакции, поэтому он стоит отдельно.
+EPICS_DDL = """
+CREATE TABLE IF NOT EXISTS epics (
+  id TEXT PRIMARY KEY, project TEXT NOT NULL, title TEXT, goal TEXT,
+  envelope_usd REAL, state TEXT NOT NULL DEFAULT 'open', outcome TEXT,
+  created_at TEXT, closed_at TEXT
+);
+"""
+TASKS_EPIC_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);
+"""
+EPICS_MIGRATED_ACTION = "схема догнана: таблица epics и tasks.epic_id"
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -120,9 +137,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
-  merge_after TEXT,
+  merge_after TEXT, closed_as TEXT, epic_id TEXT, start_after TEXT,
   created_at TEXT, updated_at TEXT
 );
+{EPICS_DDL}
+{TASKS_EPIC_INDEX_DDL}
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
@@ -159,6 +178,14 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 """
 
 
+# Признак поделённого родителя `tasks.closed_as` (SPEC
+# 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 1) и текст перехода родителя в
+# `killed`, по которому миграция узнаёт деления, сделанные до колонки.
+CLOSED_AS_DIVIDED = "divided"
+DIVIDED_DETAIL_PREFIX = "поделена на:"
+CLOSED_AS_MIGRATED_ACTION = "closed_as заполнен миграцией"
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
     """Создаёт схему БД (команда `init`); повторный вызов ничего не ломает."""
     conn.executescript(SCHEMA)
@@ -178,6 +205,63 @@ def add_column(conn: sqlite3.Connection, table: str, column: str,
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     conn.commit()
+
+
+def _mark_past_divisions(conn: sqlite3.Connection) -> None:
+    """`closed_as='divided'` каждой `killed`, чей переход в `killed` в
+    журнале несёт «поделена на: …», с одной записью журнала на строку
+    (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 2). Таблицы `steps` нет —
+    сверять не с чем."""
+    if not table_columns(conn, "steps"):
+        return
+    rows = conn.execute(
+        "SELECT id FROM tasks WHERE state='killed' AND closed_as IS NULL "
+        "AND EXISTS (SELECT 1 FROM steps WHERE steps.task_id=tasks.id "
+        "AND steps.action='state -> killed' AND steps.detail LIKE ?) "
+        "ORDER BY id", (f"{DIVIDED_DETAIL_PREFIX}%",)).fetchall()
+    if not rows:
+        return
+    from . import store  # отложенно — см. комментарий в `migrate`
+    for row in rows:
+        store.update_task(conn, row["id"], closed_as=CLOSED_AS_DIVIDED)
+        store.journal(conn, row["id"], "orchestrator", CLOSED_AS_MIGRATED_ACTION,
+                      f"{CLOSED_AS_DIVIDED} — по записи перехода в killed "
+                      f"«{DIVIDED_DETAIL_PREFIX} …»")
+
+
+def _migrate_epics(conn: sqlite3.Connection) -> None:
+    """Таблица `epics` и колонка `tasks.epic_id` с одной записью журнала
+    системной записью (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 1).
+
+    Признак «догон нужен» — отсутствие колонки: догнанная БД заканчивает на
+    нём, без блокировки записи (`migrate` идёт на каждом `store.db()`).
+    Иначе проверка повторяется под `BEGIN IMMEDIATE` — второе соединение,
+    дождавшись чужой транзакции миграции, видит уже догнанную схему и
+    уходит без `ALTER` и без второй записи журнала (`add_column` проверку
+    и `ALTER` в одну транзакцию не сводит). Запись журнала — последней:
+    её `commit` и закрывает транзакцию. Без таблицы `steps` писать некуда —
+    транзакция закрывается явным `commit`."""
+    if "epic_id" in table_columns(conn, "tasks"):
+        return
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if "epic_id" in table_columns(conn, "tasks"):
+            conn.rollback()
+            return
+        conn.execute(EPICS_DDL)
+        conn.execute("ALTER TABLE tasks ADD COLUMN epic_id TEXT")
+        conn.execute(TASKS_EPIC_INDEX_DDL)
+        if not table_columns(conn, "steps"):
+            conn.commit()
+            return
+        from . import store  # отложенно — см. комментарий в `migrate`
+        store.journal(conn, config.EPICS_MIGRATION_JOURNAL_TASK_ID,
+                      "orchestrator", EPICS_MIGRATED_ACTION,
+                      target=config.DEFAULT_TARGET)
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -272,9 +356,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     # Связь родитель -> подзадача деления (01M29284PTCJXGERV5262E9XMM,
     # требование 1): NULL — задача не подзадача деления. «Родитель
-    # поделён» вычисляется каждый раз заново — наличием хотя бы одной
-    # строки с parent_task_id = <id родителя> при её состоянии killed,
-    # отдельный флаг на строке родителя не заводится.
+    # поделён» — колонка `closed_as` ниже (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW).
     add_column(conn, "tasks", "parent_task_id", "TEXT")
     # Набор моделей задачи (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 1):
     # имя набора из `model_sets.yaml` и его состав «роль -> модель» (JSON)
@@ -288,6 +370,19 @@ def migrate(conn: sqlite3.Connection) -> None:
     # SPEC и каналами переписывания (`orchestrator/merge_after.py`). NULL —
     # зависимостей нет.
     add_column(conn, "tasks", "merge_after", "TEXT")
+    # Признак поделённого родителя (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW,
+    # требования 1-2): `divided` — задача ушла в `killed` делением на гейте
+    # SPEC, а не ликвидацией `kill`; NULL — признака нет. Прежние деления
+    # различимы только текстом перехода в журнале — их колонка получает
+    # один раз, в тот проход миграции, который её заводит: дальше
+    # `closed_as` пишет только само деление, и повторный проход ничего не
+    # меняет.
+    if "closed_as" not in table_columns(conn, "tasks"):
+        add_column(conn, "tasks", "closed_as", "TEXT")
+        _mark_past_divisions(conn)
+    # Зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 11):
+    # тот же формат, что `merge_after`; NULL — зависимостей запуска нет.
+    add_column(conn, "tasks", "start_after", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -398,3 +493,6 @@ def migrate(conn: sqlite3.Connection) -> None:
     if table_columns(conn, "steps"):
         conn.executescript(STEPS_TASK_ID_INDEX_DDL)
     conn.commit()
+    # Последним: запись журнала о миграции требует уже догнанных колонок
+    # `steps` (`target`, `session_id`) выше.
+    _migrate_epics(conn)

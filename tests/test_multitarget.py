@@ -286,7 +286,7 @@ class TargetInitTest(TmpRootTest):
         self.assertEqual(self.dirs(),
                          sorted(config.PROJECT_DIRS))
         self.assertEqual(sorted(config.PROJECT_DIRS),
-                         ["knowledge", "logs", "tasks", "worktrees"])
+                         ["epics", "knowledge", "logs", "tasks", "worktrees"])
 
     def test_second_call_is_idempotent(self):
         """Ловит мутацию: повторный `target-init` пересоздаёт каталог и

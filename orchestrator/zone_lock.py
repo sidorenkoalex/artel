@@ -534,10 +534,6 @@ def _dependencies(row) -> list[str]:
     return merge_after.stored(row["merge_after"])
 
 
-# Состояния завершённой зависимости: она старт последователя не держит.
-_FINISHED_STATES = ("done", "killed")
-
-
 def _waiting_dependency(conn, t, own: set[str]) -> tuple[str, str, str] | None:
     """(путь, id, состояние) — незавершённая зависимость `merge_after`
     задачи, прямая или транзитивная, чьи зоны пересекаются с `own` (SPEC
@@ -547,12 +543,16 @@ def _waiting_dependency(conn, t, own: set[str]) -> tuple[str, str, str] | None:
     последователя в зону, и тот держал её до мержа, который сам ждёт мержа
     зависимости. Зависимости нет в БД — старт не держит; `None` — такой
     нет."""
+    # Завершённая зависимость (`fsm.TERMINAL_STATES`) старт последователя не
+    # держит. `fsm` — отложенно: `scripts/guard` импортирует этот модуль, а
+    # `fsm` — `scripts/guard`.
+    from . import fsm
     deps = _ancestors(conn, t)
     if not deps:
         return None
     project = _project(t)
     for row in store.all_tasks(conn):
-        if row["id"] not in deps or row["state"] in _FINISHED_STATES:
+        if row["id"] not in deps or row["state"] in fsm.TERMINAL_STATES:
             continue
         if _project(row) != project:
             continue

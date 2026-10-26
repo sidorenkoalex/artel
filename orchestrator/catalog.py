@@ -8,8 +8,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (alerts, artifact_branch, budget, config, cycle_hint,
-              gitcmd, idgen, liveness, merge_after, merge_queue, models,
+from . import (alerts, artifact_branch, board, budget, config, cycle_hint,
+              epics, gitcmd, idgen, liveness, merge_after, merge_queue, models,
               providers, repo_context, retro, runner,
               store, targets, tz_check, workspace, zone_lock)
 from .advance_gates import spec_audit
@@ -549,7 +549,9 @@ def _project_line_reasons(tz_raw: str, target: str) -> list[str]:
 
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
-           model_set: str | None = None, strict_tz: bool = False) -> str:
+           model_set: str | None = None, strict_tz: bool = False,
+           epic_id: str | None = None, after: str | None = None,
+           start_after: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -597,11 +599,27 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     `strict_tz` — `new --strict-tz` (SPEC 01M598KY8V2P2GRD5Q67DRAZNA,
     требование 6): предупреждения проверки содержания ТЗ становятся
     отказом.
+
+    `epic_id` — `new --epic` (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование
+    5): эпик существует, открыт и того же проекта — проверка до ТЗ, клона,
+    id и ссылки документов; та же проверка повторяется в транзакции вставки
+    строки (`_new_task_row`) как защита от гонки с `epic close`.
+    `after` — `new --after <id>[,<id>…]`: зависимости мержа той же
+    проверкой, что строка ТЗ «Порядок: после …», объединённые с ней.
+    `start_after` — `new --start-after <id>[,<id>…]` (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требования 11-13): зависимость запуска,
+    проверенная `merge_after.start_after_value` до клона и id; отказ не
+    оставляет задачи. При исчерпанном конверте эпика задача заводится с
+    предупреждением (требование 9).
     """
     # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
     # 2): до ТЗ, клона, id, ссылки документов и строки БД.
     target = _checked_target(target)
     conn = store.db()
+    if epic_id is not None:
+        refusal = epics.binding_refusal(conn, epic_id, target)
+        if refusal is not None:
+            sys.exit(f"new: {refusal} — задача не заведена")
     set_members = None
     if model_set is not None:
         try:
@@ -628,16 +646,17 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         order_reasons: list[str] = []
         project_reasons: list[str] = []
         if not canary:
-            declared, order_reasons = merge_after.declared_from_tz(
-                conn, tz_raw, target)
+            declared, order_reasons = merge_after.declared_for_new(
+                conn, tz_raw, after, target)
             # Строка «Проект:» (требование 4) — тем же рубежом, до клона;
             # канарейка её не разбирает, как и «Порядок:».
             project_reasons = _project_line_reasons(tz_raw, target)
         if order_reasons:
+            source = f"ТЗ {tz_path}: «{merge_after.ORDER_LINE}»" + (
+                " и --after" if after is not None else "")
             refusal = "\n".join(
                 ([refusal] if refusal else [])
-                + [f"ТЗ {tz_path}: «{merge_after.ORDER_LINE}»: {r}"
-                   for r in order_reasons]
+                + [f"{source}: {r}" for r in order_reasons]
                 + ["new: зависимости мержа ТЗ не годны — задача не заведена"])
         if project_reasons:
             refusal = "\n".join(
@@ -646,6 +665,23 @@ def cmd_new(title: str, tz_path: str | None = None, *,
                 + ["new: проект ТЗ не совпадает — задача не заведена"])
         if refusal is not None:
             sys.exit(refusal)
+    elif after is not None:
+        declared, order_reasons = merge_after.declared_for_new(
+            conn, None, after, target)
+        if order_reasons:
+            sys.exit("\n".join(
+                [f"--after: {r}" for r in order_reasons]
+                + ["new: зависимости мержа --after не годны — задача не "
+                   "заведена"]))
+    start_ids: list[str] = []
+    if start_after is not None:
+        start_ids, start_reasons = merge_after.start_after_value(
+            conn, None, guard.merge_after_items(start_after), target=target)
+        if start_reasons:
+            sys.exit("\n".join(
+                [f"--start-after: {r}" for r in start_reasons]
+                + ["new: зависимости запуска --start-after не годны — задача "
+                   "не заведена"]))
 
     # Клон проекта — до id, ссылки документов и строки БД (SPEC
     # 01M42PENCS26D0656X8FR7DFA7, требование 1, AC-3): не завёлся — отказ
@@ -662,10 +698,11 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     task_id = idgen.new_task_id()
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
+    epic_note = f", эпик {epic_id}" if epic_id is not None else ""
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
-                 journal_detail=f"{title} (проект {target})",
+                 journal_detail=f"{title} (проект {target}{epic_note})",
                  model_set=model_set,
-                 set_members=set_members)
+                 set_members=set_members, epic_id=epic_id)
     if tz_check_detail is not None:
         store.journal(conn, task_id, "operator", tz_check.ACTION,
                       tz_check_detail)
@@ -673,8 +710,13 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)
     merge_after.record_declared(conn, task_id, declared)
+    if start_ids:
+        merge_after.rewrite_start_after(conn, task_id, start_ids,
+                                        "new --start-after", "operator")
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
+    if epic_id is not None:
+        _warn_exhausted_envelope(conn, epic_id)
     if model_set is not None:
         print(f"  набор задачи: {model_set} "
               f"({models.members_text(set_members)}); приёмка — ручной "
@@ -691,16 +733,39 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     return task_id
 
 
+def _warn_exhausted_envelope(conn, epic_id: str) -> None:
+    """`new --epic` при исчерпанном конверте не отказывает, а предупреждает
+    (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 9): первый шаг роли новой
+    задачи откажет проверка конверта `runner`."""
+    envelope = store.get_epic(conn, epic_id)["envelope_usd"]
+    if envelope is None:
+        return
+    spent = budget.epic_spent(conn, epic_id)
+    if spent >= envelope:
+        print(f"  ВНИМАНИЕ: конверт эпика {epic_id} исчерпан (потрачено "
+              f"${spent:.2f} из ${envelope:.2f}) — первый шаг роли задачи не "
+              f"начнётся, пока конверт не поднят: artel.py epic envelope "
+              f"{epic_id} N")
+
+
 def _new_task_row(conn, task_id: str, title: str, target: str,
                   tz_doc: str | None, *, is_canary: bool = False,
                   journal_detail: str, model_set: str | None = None,
-                  set_members: dict | None = None) -> None:
+                  set_members: dict | None = None,
+                  epic_id: str | None = None) -> None:
     """Общий скелет заведения строки задачи (R1-F4, REVIEW.md итерация 1):
     SPEC из шаблона, `TZ.md` (если есть), артефактная ветка пульта, строка
     в БД, запись в журнал — переиспользуется `cmd_new` (ТЗ Оператора) и
     `spawn_subtask` (подраздел секции «## Деление»), отличающимися только
-    источником `tz_doc`, пометкой `is_canary`, набором моделей и текстом
-    записи журнала."""
+    источником `tz_doc`, пометкой `is_canary`, набором моделей, эпиком и
+    текстом записи журнала.
+
+    Эпик (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 4): проверка «эпик
+    открыт, проект эпика — проект задачи» и вставка строки с `epic_id` —
+    одна транзакция `BEGIN IMMEDIATE`, взаимно исключённая с `epic close`.
+    Отказ в ней возможен только в окне гонки после предварительной
+    проверки вызывающего — ссылка документов тогда остаётся без строки
+    задачи (решение Оператора на гейте SPEC, 26.10)."""
     branch = f"task/{task_id.lower()}-{slugify(title)}"
     spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
@@ -709,10 +774,31 @@ def _new_task_row(conn, task_id: str, title: str, target: str,
 
     members_json = (json.dumps(set_members, ensure_ascii=False)
                     if model_set is not None else None)
-    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
-                      config.DEFAULT_BUDGET_USD, is_canary=is_canary,
-                      model_set=model_set, model_set_members=members_json)
+
+    def insert() -> None:
+        store.insert_task(conn, task_id, title, "spec_writing", branch, target,
+                          config.DEFAULT_BUDGET_USD, is_canary=is_canary,
+                          model_set=model_set, model_set_members=members_json,
+                          epic_id=epic_id)
+
+    if epic_id is None:
+        insert()
+    else:
+        store.begin_immediate(conn)
+        try:
+            refusal = epics.binding_refusal(conn, epic_id, target)
+            if refusal is None:
+                insert()  # её `commit` закрывает транзакцию привязки
+        except BaseException:
+            conn.rollback()
+            raise
+        if refusal is not None:
+            conn.rollback()
+            sys.exit(f"[{task_id}] new: {refusal} — задача не заведена")
     store.journal(conn, task_id, "operator", "created", journal_detail)
+    if epic_id is not None:
+        store.journal(conn, epic_id, "operator", epics.ADD_ACTION, task_id,
+                      target=target)
     if model_set is not None:
         store.journal(conn, task_id, "operator", "набор моделей задачи",
                       f"{model_set}: {models.members_text(set_members)}")
@@ -733,7 +819,8 @@ def _ensure_task_worktree(conn, task_id: str, target: str) -> None:
 
 
 def spawn_subtask(parent_id: str, parent_title: str, title: str,
-                  tz_body: str, *, target: str | None = None) -> str:
+                  tz_body: str, *, target: str | None = None,
+                  epic_id: str | None = None) -> str:
     """Заводит одну подзадачу деления (01M1SHJZCE0Y4DXAAWQ2W585A7,
     требования 1-2) — та же механика, что `cmd_new` с ТЗ Оператора
     (общий скелет `_new_task_row`, R1-F4), только источник ТЗ — подраздел
@@ -779,6 +866,9 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
     заведении деления — не публичный CLI-путь, поэтому не печатает
     подсказку калибровки/следующей команды `cmd_new` (эти подсказки
     ведут к `analyst`, к которому подзадача и так придёт своим ходом).
+
+    `epic_id` — эпик родителя (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование
+    7): часть наследует его той же привязкой, что `new --epic`.
     """
     conn = store.db()
     target = target or config.DEFAULT_TARGET
@@ -790,7 +880,8 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
     tz_doc = _tz_document(task_id, title, tz_raw)
 
     _new_task_row(conn, task_id, title, target, tz_doc,
-                 journal_detail=f"деление {parent_id}: {title}")
+                 journal_detail=f"деление {parent_id}: {title}",
+                 epic_id=epic_id)
     store.update_task(conn, task_id, parent_task_id=parent_id)
     _record_preliminary_zones(conn, task_id, tz_raw)
     print(f"[{task_id}] «{title}» создана делением {parent_id} (target "
@@ -934,15 +1025,21 @@ def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
 
 
 def _division_suffix(rows, r) -> str:
-    """Добавка «[поделена: <id1>, <id2>]»/«[часть N/M родителя <id>]»
-    (01M29284PTCJXGERV5262E9XMM, требование 2) — ДОБАВКОЙ в конец строки,
-    тем же приёмом, что и `_lease_holder_suffix`/`_zone_wait_suffix`.
-    `rows` — уже прочитанный `store.all_tasks(conn)` (по возрастанию id),
-    отдельного запроса на строку не делается: подзадачи — те же строки,
-    отфильтрованные по `parent_task_id`."""
-    subtask_ids = [x["id"] for x in rows if x["parent_task_id"] == r["id"]]
-    if subtask_ids:
-        return f"  [поделена: {', '.join(subtask_ids)}]"
+    """Добавка «[поделена: части слиты N/M (<id1>, …)]»/«[часть N/M
+    родителя <id>]» (01M29284PTCJXGERV5262E9XMM, требование 2) — ДОБАВКОЙ
+    в конец строки, тем же приёмом, что и `_lease_holder_suffix`/
+    `_zone_wait_suffix`. `rows` — уже прочитанный `store.all_tasks(conn)`
+    (по возрастанию id), отдельного запроса на строку не делается:
+    подзадачи — те же строки, отфильтрованные по `parent_task_id`.
+
+    Родитель узнаётся по `closed_as='divided'`, а не по наличию частей
+    (SPEC 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 3); N — части в `done`
+    по их состоянию на этот вызов `status`."""
+    if r["closed_as"] == store.CLOSED_AS_DIVIDED:
+        subtasks = [x for x in rows if x["parent_task_id"] == r["id"]]
+        merged = sum(1 for x in subtasks if x["state"] == "done")
+        ids = ", ".join(x["id"] for x in subtasks)
+        return f"  [поделена: части слиты {merged}/{len(subtasks)} ({ids})]"
     parent_id = r["parent_task_id"]
     if not parent_id:
         return ""
@@ -979,6 +1076,101 @@ def _tokens_field(conn, task_id: str) -> str:
     return f"{retro.total_tokens_text(total):>10}"
 
 
+def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
+    """Строка задачи `status`: одна и та же в группе эпика и вне её (SPEC
+    01M5TBBDFS6DWQY6MS263T1KPY, требование 13)."""
+    flag = (" <- ЖДЁТ ОПЕРАТОРА" if r["state"] in board.OPERATOR_STATES
+            else "")
+    # Пометка canary — ТОЛЬКО здесь и в RETRO (tasks/T065/SPEC.md,
+    # требование 6), не в `title` самой задачи: строка `status` видна
+    # Оператору, не роли внутри промпта шага.
+    mark = "  [canary]" if r["is_canary"] else ""
+    holder = _lease_holder_suffix(conn, r["id"])
+    zone = _zone_wait_suffix(conn, r) + _zone_forecast_suffix(conn, r)
+    merge_wait = merge_queue.wait_suffix(conn, r)
+    wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
+    division = _division_suffix(rows, r)
+    tokens = _tokens_field(conn, r["id"])
+    # Ожидание зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
+    # требование 5) — последней добавкой строки, заново из БД.
+    deps_wait = merge_after.status_suffix(conn, r)
+    # Вердикт аудита SPEC у задачи на гейте SPEC (SPEC
+    # 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) — из журнала.
+    audit = spec_audit.status_suffix(conn, r)
+    # Набор моделей задачи — сразу за бюджетом (SPEC
+    # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
+    # модели шагов, и тариф, по которому тратится этот бюджет.
+    model_set = models.task_set_name(r)
+    set_field = f"  набор {model_set}" if model_set else ""
+    # Метка проекта — сразу за id и только у задачи внешнего проекта
+    # (SPEC 01M563E1SH9SB63S2MW4A9B82N, требование 6): строка артели
+    # и задачи с `target` NULL прежняя.
+    project = r["target"] or config.DEFAULT_TARGET
+    label = f" [{project}]" if project != config.DEFAULT_TARGET else ""
+    return (
+        f"{r['id']}{label}  {r['state']:<13} "
+        f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
+        f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
+        f"  токенов {tokens}  {r['title']}"
+        f"{flag}{audit}{mark}{holder}{zone}{wave_breaker}{division}"
+        f"{merge_wait}{deps_wait}"
+    )
+
+
+def _epic_group_header(item: dict, cards: dict) -> str:
+    """Заголовок группы эпика `status` — из элемента модели доски:
+    потрачено и конверт, счётчики по состояниям, «части слиты N/M»
+    поделённых задач эпика, кто держит задачи, готовность к закрытию."""
+    envelope = item["envelope_usd"]
+    parts = [f"потрачено ${item['spent_usd']:.2f} / "
+             + (f"конверт ${envelope:.2f}" if envelope is not None
+                else "без конверта"),
+             epics.counts_text(item["counts"])]
+    if item.get("envelope_warning"):
+        parts.insert(1, f"ВНИМАНИЕ: {epics.envelope_warning_text(item)}")
+    parts += [f"{d['task']}: части слиты {d['merged']}/{d['total']}"
+              for d in item.get("divisions", [])]
+    holders: dict = {}
+    for task_id in item["nodes"]:
+        who = cards[task_id]["waiting_on"] if task_id in cards else None
+        if who:
+            holders[who] = holders.get(who, 0) + 1
+    if holders:
+        parts.append("держит: " + ", ".join(f"{who} {n}"
+                                            for who, n in holders.items()))
+    if item.get("state") == "closed":
+        parts.append("закрыт")
+    if item.get("ready_to_close"):
+        parts.append(epics.READY_TEXT)
+    return f"{item['id']} {item['title']} — {'; '.join(parts)}"
+
+
+def _print_status_blocks(conn, rows, line) -> None:
+    """Блоки проектов по возрастанию имени: группы эпиков проекта (порядок
+    задач — требование 8, из модели доски), затем задачи без эпика прежними
+    строками в прежнем порядке. Закрытый эпик без задач группы не даёт."""
+    by_project: dict = {}
+    for r in rows:
+        by_project.setdefault(r["target"] or config.DEFAULT_TARGET, []).append(r)
+    for project in sorted(by_project):
+        print(f"Проект {project}")
+        own = {r["id"]: r for r in by_project[project]}
+        model = board.build_model(conn, project)
+        cards = {c["task"]: c for c in model["cards"]}
+        grouped = set()
+        for item in model["epics"]:
+            if item.get("state") == "closed" and not item["nodes"]:
+                continue
+            print(_epic_group_header(item, cards))
+            for task_id in item["nodes"]:
+                if task_id in own:
+                    print("  " + line(own[task_id]))
+                    grouped.add(task_id)
+        for r in by_project[project]:
+            if r["id"] not in grouped:
+                print(line(r))
+
+
 def cmd_status() -> None:
     conn = store.db()
     rows = store.all_tasks(conn)
@@ -988,43 +1180,17 @@ def cmd_status() -> None:
     # один запрос на весь вывод, не по строке на задачу — критерий «алерт
     # открыт» не меняется между строками одного вызова `status`.
     wave_breaker_open = bool(runner.wave_breaker_alerts_open(conn))
-    for r in rows:
-        flag = " <- ЖДЁТ ОПЕРАТОРА" if r["state"] in (
-            "spec_gate", "acceptance", "merge_gate", "escalated") else ""
-        # Пометка canary — ТОЛЬКО здесь и в RETRO (tasks/T065/SPEC.md,
-        # требование 6), не в `title` самой задачи: строка `status` видна
-        # Оператору, не роли внутри промпта шага.
-        mark = "  [canary]" if r["is_canary"] else ""
-        holder = _lease_holder_suffix(conn, r["id"])
-        zone = _zone_wait_suffix(conn, r) + _zone_forecast_suffix(conn, r)
-        merge_wait = merge_queue.wait_suffix(conn, r)
-        wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
-        division = _division_suffix(rows, r)
-        tokens = _tokens_field(conn, r["id"])
-        # Ожидание зависимостей мержа (SPEC 01M44EP0D47F498TEE08MNGBYT,
-        # требование 5) — последней добавкой строки, заново из БД.
-        deps_wait = merge_after.status_suffix(conn, r)
-        # Вердикт аудита SPEC у задачи на гейте SPEC (SPEC
-        # 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) — из журнала.
-        audit = spec_audit.status_suffix(conn, r)
-        # Набор моделей задачи — сразу за бюджетом (SPEC
-        # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
-        # модели шагов, и тариф, по которому тратится этот бюджет.
-        model_set = models.task_set_name(r)
-        set_field = f"  набор {model_set}" if model_set else ""
-        # Метка проекта — сразу за id и только у задачи внешнего проекта
-        # (SPEC 01M563E1SH9SB63S2MW4A9B82N, требование 6): строка артели
-        # и задачи с `target` NULL прежняя.
-        project = r["target"] or config.DEFAULT_TARGET
-        label = f" [{project}]" if project != config.DEFAULT_TARGET else ""
-        print(
-            f"{r['id']}{label}  {r['state']:<13} "
-            f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
-            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
-            f"  токенов {tokens}  {r['title']}"
-            f"{flag}{audit}{mark}{holder}{zone}{wave_breaker}{division}"
-            f"{merge_wait}{deps_wait}"
-        )
+
+    def line(r) -> str:
+        return _status_line(conn, rows, r, wave_breaker_open)
+
+    # Группы эпиков (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 13) — только
+    # когда эпик есть хотя бы у одной задачи; иначе вывод прежний.
+    if store.any_task_in_epic(conn):
+        _print_status_blocks(conn, rows, line)
+    else:
+        for r in rows:
+            print(line(r))
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
     # в status/doctor, не смешиваются с задачами и остальными алертами.

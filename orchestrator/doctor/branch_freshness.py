@@ -4,7 +4,7 @@
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
 
-from orchestrator import doctor
+from orchestrator import doctor, fsm
 
 
 # --- свежесть ветки (SPEC T051, требование 8) -----------------------------
@@ -37,7 +37,7 @@ def check_branch_freshness(conn) -> list[doctor.Check]:
     stale = []
     fetched: dict = {}
     for t in doctor.store.all_tasks(conn):
-        if t["state"] in ("done", "killed") or not t["branch"]:
+        if t["state"] in fsm.TERMINAL_STATES or not t["branch"]:
             continue
         ctx = doctor.repo_context.resolve(
             t["target"] or doctor.config.DEFAULT_TARGET)

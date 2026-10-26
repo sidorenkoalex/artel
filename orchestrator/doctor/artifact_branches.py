@@ -8,7 +8,7 @@
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
 
-from orchestrator import doctor
+from orchestrator import doctor, fsm
 
 ARTIFACT_REF_SYNC_CHECK = "artifact-ref-sync"
 _ARTIFACT_REFS_GLOB = "refs/artifacts/*"
@@ -82,7 +82,7 @@ def _closed_with_closing_sha(conn, tasks) -> list:
     """[(id, коммит закрытия)] закрытых задач с записью о коммите закрытия."""
     closed = []
     for t in tasks:
-        if t["state"] in ("done", "killed"):
+        if t["state"] in fsm.TERMINAL_STATES:
             closing = doctor.snapshot.closing_sha(conn, t["id"])
             if closing:
                 closed.append((t["id"], closing))
@@ -94,7 +94,7 @@ def _historical_snapshots(conn, tasks, closed: dict, target_of: dict) -> dict:
     правилу закрытой ссылки: без записи о коммите закрытия и не живые.
     `target_of` дополняется артелью — у задачи T-серии строки `tasks` нет,
     а снимки команда пишет только в клоне артели."""
-    live_ids = {t["id"] for t in tasks if t["state"] not in ("done", "killed")}
+    live_ids = {t["id"] for t in tasks if t["state"] not in fsm.TERMINAL_STATES}
     historical = {}
     for task_id, sha in doctor.snapshot.history_snapshots(conn).items():
         if task_id in closed or task_id in live_ids:
@@ -227,7 +227,7 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
     target_of = {t["id"]: t["target"] for t in tasks}
     closed = dict(_closed_with_closing_sha(conn, tasks))
     live = [t["id"] for t in tasks
-            if t["state"] not in ("done", "killed")
+            if t["state"] not in fsm.TERMINAL_STATES
             and _local_head(t["id"], t["target"])]
     historical = _historical_snapshots(conn, tasks, closed, target_of)
     if not live and not closed and not historical:

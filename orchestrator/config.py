@@ -57,8 +57,9 @@ TEMPLATES = ROOT / "templates"
 PROJECTS = ROOT / ".artel" / "projects"
 # Каталоги области проекта (ADR-0021 п.1, этап 2): `worktrees/` — рабочие
 # копии задач; клон `repo/` заводит `workspace.ensure_clone`, общего
-# `workspace/` больше нет.
-PROJECT_DIRS = ("worktrees", "tasks", "knowledge", "logs")
+# `workspace/` больше нет. `epics/` — документы эпиков проекта (SPEC
+# 01M5TBBDFS6DWQY6MS263T1KPY, требование 1; ADR-0028).
+PROJECT_DIRS = ("worktrees", "tasks", "knowledge", "logs", "epics")
 # Target догфуда. Артель — обычный целевой проект начиная с A7; до него
 # её артефакты живут в tasks/ пульта (ADR-0003 3д, «особый случай»),
 # а в БД её задачи помечены этим именем.
@@ -311,6 +312,10 @@ PROGRAM_SPEND_RESEED_TASK_ID = "PROGRAM-SPEND-RESEED"
 # по границам слов через дефис) — дописана буква, чтобы граница слова
 # не совпала.
 PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"
+# Синтетический task_id записи журнала о догоне схемы под эпики (SPEC
+# 01M5TBBDFS6DWQY6MS263T1KPY, требование 1) — тот же приём, что
+# PIN_UPDATE_JOURNAL_TASK_ID выше: операция не привязана ни к одной задаче.
+EPICS_MIGRATION_JOURNAL_TASK_ID = "EPICS-MIGRATED"
 # Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
 BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"
@@ -782,8 +787,18 @@ PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/",
                    "setup.cfg", "tox.ini", "knowledge/")
 
 # Префикс записи-маски: `**/<имя файла>` покрывает путь, чей последний
-# компонент — ровно `<имя файла>`, в любом каталоге (включая корень).
+# компонент — ровно `<имя файла>`, в любом каталоге (включая корень);
+# `**/<каталог>/` — путь, в котором `<каталог>` стоит компонентом-каталогом
+# на любой глубине (SPEC 01M5T19041XE2KB6A52F0AT0NF, требование 3).
 PROTECTED_PATH_ANY_DIR_MASK = "**/"
+
+# Стандартные маркеры агентской обвязки внешнего проекта (ADR-0003 п.14;
+# SPEC 01M5T19041XE2KB6A52F0AT0NF, требование 1): входят в перечень
+# защищённых путей внешнего проекта (`repo_context.protected_paths`) и
+# исключаются с диска его рабочих копий (`workspace.ensure`). В
+# `PROTECTED_PATHS` не входят: у пульта свой перечень.
+AGENT_WRAPPER_MARKERS = ("**/.claude/", ".mcp.json", "**/CLAUDE.md",
+                         "**/AGENTS.md")
 
 
 def is_protected_path(path: str, protected=None) -> bool:
@@ -791,9 +806,11 @@ def is_protected_path(path: str, protected=None) -> bool:
     всех мест сверки (гейт зон, гейт диффа на мерже, джоб CI, допуск
     приложения PLAN, пометка зон SPEC, подсветка Draft MR).
 
-    Запись-маска `**/<имя>` сверяется по последнему компоненту пути;
-    любая другая — префиксом: путь равен записи либо начинается с неё
-    (записи-каталоги несут завершающий `/`).
+    Запись-маска `**/<имя>` сверяется по последнему компоненту пути,
+    `**/<каталог>/` — по компонентам, за которыми в пути идёт `/` (файл
+    `a/<каталог>` без вложения не покрыт); любая другая — префиксом: путь
+    равен записи либо начинается с неё (записи-каталоги несут завершающий
+    `/`).
 
     `protected=None` — `PROTECTED_PATHS`, прочитанный в момент вызова, не
     снимком при определении функции: подмена перечня (тесты, следующая
@@ -804,14 +821,35 @@ def is_protected_path(path: str, protected=None) -> bool:
     скрипты (`scripts/guard.py`, `scripts/ci_protected_paths.py`): этот
     модуль не импортирует ни одного модуля пульта."""
     entries = PROTECTED_PATHS if protected is None else protected
-    name = path.rsplit("/", 1)[-1]
+    parts = path.split("/")
     for entry in entries:
         if entry.startswith(PROTECTED_PATH_ANY_DIR_MASK):
-            if name == entry[len(PROTECTED_PATH_ANY_DIR_MASK):]:
+            rest = entry[len(PROTECTED_PATH_ANY_DIR_MASK):]
+            if rest.endswith("/"):
+                if rest[:-1] in parts[:-1]:
+                    return True
+            elif parts[-1] == rest:
                 return True
         elif path == entry or path.startswith(entry):
             return True
     return False
+
+
+def is_protected_zone(zone: str, protected=None) -> bool:
+    """Элемент зон (ТЗ, SPEC) попадает под перечень: формулой путей
+    `is_protected_path` либо — для записей `**/<каталог>/` — как сам
+    каталог, названный с завершающим `/` или без него (`sub/.claude`;
+    SPEC 01M5T19041XE2KB6A52F0AT0NF, требование 7). Прочие записи сверяются
+    с зоной прежней формулой: зона `skills` без `/` под `skills/` не
+    защищена, как и до этого правила."""
+    entries = PROTECTED_PATHS if protected is None else protected
+    if is_protected_path(zone, entries):
+        return True
+    dir_masks = tuple(e for e in entries
+                      if e.startswith(PROTECTED_PATH_ANY_DIR_MASK)
+                      and e.endswith("/"))
+    return bool(dir_masks) and is_protected_path(zone.rstrip("/") + "/",
+                                                 dir_masks)
 
 # Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
 # AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
