@@ -3,63 +3,66 @@ task: 01M5W27CY7K7NR9347NKD8F0NX
 type: review
 author_role: reviewer
 status: approved
-iteration: 1
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: GitLab А0 — неподдержанный хостинг или гейт людей проекта: именованный отказ до первой задачи
 
 ## Фаза A — план
-Таблица покрытия PLAN полна (требования 1–7 → шаги 1–3). Шаги размера MR.
-Подход (одна функция в `targets.py`, вызовы внутри тел `_cmd_*` под
-lease-обвязкой) не конфликтует с архитектурой: линтер
-`tests/test_lease_run_task_command.py` зелёный. «Влияние на систему»
-соответствует diff: 6 файлов `orchestrator/` из зон SPEC + карта, `tests/`
-не тронут, защищённые пути не тронуты.
+Таблица покрытия PLAN полна (требования 1–7 → шаги 1–3). PLAN дополнен
+итерацией 3 (возврат с merge_gate: решение гейта SPEC «проверка в
+`catalog.cmd_new`, чтобы её не обходил `epic draft promote`» не было
+закреплено тестом). Код `orchestrator/` с итерации 1 не менялся; добавлен
+только `tests/test_epic_draft_promote_unsupported_project.py`. Почему он
+отдельным файлом, а не в долгоживущем файле задачи, обосновано: тот файл
+под локом сумм, правка — только через `amend-tests`. «Влияние на систему»
+соответствует diff: 6 файлов `orchestrator/` из зон SPEC + новый тест + карта;
+защищённые пути не тронуты, существующие тесты не изменены (планка AC-8
+зелёная).
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `targets.py:29-30` константы; `unsupported_reason` (`targets.py:270`) — тексты причин совпадают с SPEC дословно; списки только в константах. Нечитаемый слой/необъявленный проект → `None` — их отказ даёт `_checked_target`/`target`, разумно. |
-| 2 | OK | `targets.target`/`check` не изменены; существующие тесты с записями `gitlab`/`target-human` (`test_doctor.py`, `test_multitarget.py` и др.) не правлены и зелёные. |
-| 3 | OK | `catalog.py:759-761` — сразу за `_checked_target`, до `_new_refs`, `store.db()`, `ensure_clone`, `new_task_id`; `sys.exit` → ненулевой код. AC-2 зелёный (нет клона, git, строк). |
-| 4 | OK | `runner._cmd_run` первым действием; `auto._cmd_auto` до `_auto_cycle`. Обёртка `lease.run_task_command`/`run_locked` git не зовёт (`lease.py:383-396`); AC-3/AC-4 зелёные. |
-| 5 | OK | `fsm._cmd_approve` первым действием, до `store.get_task`/таблицы состояний — в любом состоянии. AC-5/AC-6 зелёные. |
-| 6 | OK | `doctor/cli.py:36` `project_support_check`, вызов первой строкой цикла записей `all_checks` (вкл. артель). |
-| 7 | OK | Для поддержанного проекта функция возвращает `None` и вызывающие идут прежним путём; AC-8 (позитивный `new`) зелёный, существующие тесты не изменены. |
+| 1 | OK | `targets.py` — `SUPPORTED_FORGES`/`SUPPORTED_MERGE_GATES`, `unsupported_reason`; тексты причин дословно как в SPEC. |
+| 2 | OK | `target`/`check` не тронуты; тесты, заводящие записи `gitlab`/`target-human`, не правлены. |
+| 3 | OK | `catalog.py:759-761` — сразу за `_checked_target`, до `_new_refs`/клона/id. Новый тест подтверждает: путь `epic draft promote` (зовёт `cmd_new` в обход CLI-обёртки) тоже получает отказ. |
+| 4 | OK | `runner._cmd_run` и `auto._cmd_auto` вызывают проверку первым действием под lease-обвязкой (обвязка git не зовёт). |
+| 5 | OK | `fsm._cmd_approve` вызывает проверку первым действием, до таблицы состояний, — значит в любом состоянии. |
+| 6 | OK | `doctor/cli.py` — `project_support_check` первой в цикле записей `all_checks`, артель в цикл входит. |
+| 7 | OK | Для поддержанного проекта — `None`, путь прежний; AC-8 зелёный. |
 
 ## Замечания
-Блокирующих и major нет. Наблюдения уровня ниже minor (на вердикт не
-влияют, в реестр не заведены):
+Блокирующих и major нет. Новый тест: в докстринге есть сценарий и заявка
+«Ловит мутацию: …» с наблюдаемыми расхождениями (git у шпиона, строки
+`tasks`, состояние черновика, текст причины). Заявка проверена временной
+мутацией (см. ниже). Долгоживущий тест он не повторяет: файл задачи
+путь `epic draft promote` не проверяет.
 
-- `orchestrator/runner.py:180` — докстринг `refuse_unsupported_project`
-  говорит «до lease», а вызов после итерации 2 стоит под lease (внутри
-  `_cmd_*`). Неточность текста, поведение верное.
-- `orchestrator/auto.py:673-681` — отказ `auto` (`SystemExit`) ловится
-  внешним `except BaseException` `cmd_auto`, и в журнал дополнительно
-  попадает запись `CYCLE_ABORTED_ACTION` «SystemExit: … отклонён …». Это
-  общий путь любого `sys.exit` в цикле `auto` (не новое поведение), и
-  запись с причиной `unsupported_reason` всё равно есть первой.
-- `runner.py:183` — повторный `store.resolve_task_id` при уже полном id
-  от обвязки; безвреден.
+Не влияет на вердикт (как и в итерации 1, в реестр не заведено):
+- `orchestrator/runner.py:180` — в докстринге `refuse_unsupported_project`
+  написано «до lease», но вызов стоит под lease. Неточен только текст.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
 
-Записей нет: замечаний уровня minor и выше не заведено.
+Записей нет: ни в итерации 1, ни в итерации 2 замечаний уровня minor и
+выше не заведено.
 
 ## Вердикт
 approved.
 
 ## Проверено исполнением
-- `python3 -m pytest -q -p no:cacheprovider tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py tests/test_lease_run_task_command.py tests/test_01m5mhvrs39cdp5v4hbwy4k7wk_run_task_command.py tests/test_doctor.py tests/test_multitarget.py` — 190 passed, 54 subtests passed (15.5 с).
+- `python3 -m pytest -q -p no:cacheprovider tests/test_epic_draft_promote_unsupported_project.py tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py tests/test_01m5tbfcvfnn95bhh0e9c6kbkb_drafts.py tests/test_lease_run_task_command.py` — 37 passed, 14 subtests passed.
 - `artel.py plank-run 01M5W27CY7K7NR9347NKD8F0NX` — 1 passed, код выхода pytest 0.
-- `grep` вызывателей `_cmd_run`/`_cmd_auto`/`_cmd_approve`/`unsupported_reason` по `orchestrator/`: тела вызываются только через обвязку (`runner.py:170`, `auto.py:671`, `fsm.py:979`), других обходов отказа нет.
-- Чтение `lease.run_task_command` (`lease.py:383`) и `auto.cmd_auto` (`auto.py:660-681`) — проверка, что до тела нет git, и как обрабатывается `SystemExit` в `auto`.
-- Временная мутация (снять вызов в `_cmd_auto`, прогнать AC-4) не выполнена: составная команда отклонена правами Bash шага. Заявки «Ловит мутацию» долгоживущего файла сверены глазами — все наблюдаемы (вызов шпиона `cmd_advance`/`spawn_agent`/git, текст причины в выводе, запись журнала).
+- Временная мутация: в `catalog.py:760` условие `unsupported is not None` заменено на `False` (проверка снята) → `tests/test_epic_draft_promote_unsupported_project.py`: 2 failed (оба параметра). Код возвращён, `git status --porcelain` пуст.
+- `git grep -c test_epic_draft_promote_unsupported_project -- docs/codebase-map.md` → 8: новый файл в карте есть.
 
 ## Предложения системе
-- Bash шага ревьювера отклоняет составные команды (`sed -i … && pytest …; git checkout`), из-за чего приём «временная мутация» из review-checklist в шаге не исполним одним вызовом; стоит либо разрешить его, либо описать в скиле пошаговый вариант.
+- Пакет ревью итерации 2 не смог определить базу инкрементального diff
+  («sha предыдущего вердикта не распознан») и показал полный diff от main.
+  Изменение итерации пришлось выделять сличением с PLAN. Стоит,
+  чтобы журнал фиксации надёжно нёс sha вердикта.
