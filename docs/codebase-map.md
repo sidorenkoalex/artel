@@ -1,5 +1,5 @@
 ---
-built_at_sha: 97c9ff02d8c0490fa39fec968693a24e1aa67a2c
+built_at_sha: d2522e20a3a31615ddd10b52feac038c682810ec
 ---
 
 # Codebase-map пульта
@@ -438,7 +438,7 @@ built_at_sha: 97c9ff02d8c0490fa39fec968693a24e1aa67a2c
 
 **Импортирует:** `orchestrator/advance_gates/refusal_classes.py`, `orchestrator/advance_gates/spec_audit.py`, `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/amend.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/ci_rerun.py`, `orchestrator/config.py`, `orchestrator/cycle_hint.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/merge_after.py`, `orchestrator/models.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/pull.py`, `orchestrator/rounds.py`, `orchestrator/runner.py`, `orchestrator/session.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`
 
-**Импортируется:** `orchestrator/advance_gates/review.py`, `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/epics.py`, `orchestrator/fsm_advance.py`, `tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py`, `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`, `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py`, `tests/test_01m3xtfjcc5tg63fhw907gqm4d_launch_hint.py`, `tests/test_01m3ychs4f08vtv6xx10vf92h3_task_model_set.py`, `tests/test_01m446wevjxarr5cded8re9ccr_auto_refusal_class.py`, `tests/test_01m446wevjxarr5cded8re9ccr_run_advances.py`, `tests/test_01m44enw1b73z80pr73hp1c9cg_answer_args_no_answer.py`, `tests/test_01m4c954hbjwegd3azs7q3eha4_watch.py`, `tests/test_01m4kaymw2yrfb7g0442wfvsha_answer_in_dev_gate.py`, `tests/test_01m4mqagrwmwr0gfdm9086p3td_spec_audit_flow.py`, `tests/test_01m59dp2gv3san54m562cqy42r_rounds.py`, `tests/test_01m5aqh8m2dkbv30nby86j34a7_refusal_classes.py`, `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_refusal_classes.py`, `tests/test_01m5fghnb29qa254fm07qr55ab_zone_wait_exit.py`, `tests/test_01m5tbcy7wtn121s136xp2c6sr_auto_stop.py`, `tests/test_analyst_role.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_auto_escalated_return_rework_gate.py`, `tests/test_git_fixation.py`, `tests/test_plan_appendix.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_runner_model_preflight.py`, `tests/test_spec_audit_gate.py`, `tests/test_stall_alerts.py`
+**Импортируется:** `orchestrator/advance_gates/review.py`, `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/epics.py`, `orchestrator/fsm_advance.py`, `tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py`, `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`, `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py`, `tests/test_01m3xtfjcc5tg63fhw907gqm4d_launch_hint.py`, `tests/test_01m3ychs4f08vtv6xx10vf92h3_task_model_set.py`, `tests/test_01m446wevjxarr5cded8re9ccr_auto_refusal_class.py`, `tests/test_01m446wevjxarr5cded8re9ccr_run_advances.py`, `tests/test_01m44enw1b73z80pr73hp1c9cg_answer_args_no_answer.py`, `tests/test_01m4c954hbjwegd3azs7q3eha4_watch.py`, `tests/test_01m4kaymw2yrfb7g0442wfvsha_answer_in_dev_gate.py`, `tests/test_01m4mqagrwmwr0gfdm9086p3td_spec_audit_flow.py`, `tests/test_01m59dp2gv3san54m562cqy42r_rounds.py`, `tests/test_01m5aqh8m2dkbv30nby86j34a7_refusal_classes.py`, `tests/test_01m5cjvb5b5v55pqqvr2qrhwzn_refusal_classes.py`, `tests/test_01m5fghnb29qa254fm07qr55ab_zone_wait_exit.py`, `tests/test_01m5tbcy7wtn121s136xp2c6sr_auto_stop.py`, `tests/test_analyst_role.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_auto_escalated_return_rework_gate.py`, `tests/test_epic_supervisor_units.py`, `tests/test_git_fixation.py`, `tests/test_plan_appendix.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_runner_model_preflight.py`, `tests/test_spec_audit_gate.py`, `tests/test_stall_alerts.py`
 
 ## orchestrator/board.py
 
@@ -9217,7 +9217,7 @@ built_at_sha: 97c9ff02d8c0490fa39fec968693a24e1aa67a2c
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/artel.py`, `orchestrator/config.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/config.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
