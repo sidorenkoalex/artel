@@ -52,7 +52,11 @@ def _local_artifact_refs(target: str) -> list[str]:
                          "refs/artifacts/")
     if res is None or res.returncode != 0:
         return []
-    return [ref for ref in res.stdout.splitlines() if ref]
+    # Ссылка эпика `refs/artifacts/epic-<id>` — не документы задачи (SPEC
+    # 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15): строки корпуса по ней нет.
+    return [ref for ref in res.stdout.splitlines() if ref
+            and not ref[len("refs/artifacts/"):].startswith(
+                config.EPIC_REF_NAME_PREFIX)]
 
 
 def _retro_entry(target: str, ref: str) -> dict | None:

@@ -164,6 +164,11 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   epic show|close <id> ["<итог>"] | epic edit <id> [--title …] [--goal …] |
   epic add|remove <id> <задача> | epic envelope <id> N |
   epic start-after <задача> <id>…|нет |
+  epic draft add <id> --tz <файл> [--start-after …] [--after …] [--budget N] |
+  epic draft edit <id>/<n> [--tz …] [--start-after …] [--after …] [--budget N] |
+  epic draft drop|promote <id>/<n> |
+  epic decision <id> "<дословно>" [--for <id>/<n>|<задача>|envelope] |
+  epic export <id> | epic restore <проект> <id> |
   advance <id> | set-models <id> <набор>|--default |
   run <id> [--attach | [--observation <ID>] [--client codex|claude --chat <id>]] |
   auto <id> [--wait-zone] [--attach | [--observation <ID>]

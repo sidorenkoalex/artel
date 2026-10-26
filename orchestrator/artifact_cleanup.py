@@ -66,8 +66,12 @@ def _inventory() -> tuple[list[str], list[str], list[str]]:
     if refs is None:
         sys.exit(f"artifact-branches-cleanup: ссылки документов origin не "
                  f"прочитаны — {reason}")
+    # Ссылка эпика `refs/artifacts/epic-<id>` — не задача (SPEC
+    # 01M5TBFCVFNN95BHH0E9C6KBKB, требование 15).
     have = {r[len(_ARTIFACT_REFS):].lower() for r in refs
-            if r.startswith(_ARTIFACT_REFS)}
+            if r.startswith(_ARTIFACT_REFS)
+            and not r[len(_ARTIFACT_REFS):].startswith(
+                config.EPIC_REF_NAME_PREFIX)}
     keys = sorted({_task_key(b) for b in origin_branches + local_branches})
     missing = [k for k in keys if k not in have]
     return origin_branches, local_branches, missing

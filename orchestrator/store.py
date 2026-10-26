@@ -681,6 +681,93 @@ def project_tasks(conn: sqlite3.Connection, project: str) -> list:
         (config.DEFAULT_TARGET, project)).fetchall()
 
 
+# ===== Черновики и решения эпика (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB) =====
+
+# Таблицы эпика, которые воссоздаёт `epic restore`, и их ключ строки.
+EPIC_ROW_KEYS = {"epics": ("id",), "epic_drafts": ("epic_id", "number"),
+                 "epic_decisions": ("epic_id", "number")}
+
+
+def _next_epic_number(conn: sqlite3.Connection, table: str,
+                      epic_id: str) -> int:
+    """Наибольший номер эпика в `table` плюс один: номер отброшенного
+    черновика не переиспользуется (требование 2)."""
+    row = conn.execute(f"SELECT MAX(number) AS n FROM {table} WHERE epic_id=?",
+                       (epic_id,)).fetchone()
+    return (row["n"] or 0) + 1
+
+
+def insert_draft(conn: sqlite3.Connection, epic_id: str, title: str, tz: str,
+                 budget_usd: float | None, start_after: str | None,
+                 merge_after: str | None) -> int:
+    """Заводит черновик `draft` со следующим номером эпика; номер — ответ.
+    Зовётся в транзакции `BEGIN IMMEDIATE`: номер и вставка не разойдутся."""
+    number = _next_epic_number(conn, "epic_drafts", epic_id)
+    conn.execute(
+        "INSERT INTO epic_drafts (epic_id, number, title, tz, budget_usd, "
+        "start_after, merge_after, state) VALUES (?,?,?,?,?,?,?,'draft')",
+        (epic_id, number, title, tz, budget_usd, start_after, merge_after))
+    return number
+
+
+def get_draft(conn: sqlite3.Connection, epic_id: str,
+              number: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM epic_drafts WHERE epic_id=? AND number=?",
+        (epic_id, number)).fetchone()
+
+
+def epic_drafts(conn: sqlite3.Connection, epic_id: str) -> list:
+    """Черновики эпика по возрастанию номера."""
+    return conn.execute(
+        "SELECT * FROM epic_drafts WHERE epic_id=? ORDER BY number",
+        (epic_id,)).fetchall()
+
+
+def update_draft(conn: sqlite3.Connection, epic_id: str, number: int,
+                 **fields) -> None:
+    if not fields:
+        return
+    unknown = fields.keys() - table_columns(conn, "epic_drafts")
+    if unknown:
+        raise ValueError(f"epic_drafts: нет колонок {', '.join(sorted(unknown))}")
+    assignments = ", ".join(f"{name}=?" for name in fields)
+    conn.execute(f"UPDATE epic_drafts SET {assignments} WHERE epic_id=? "
+                 f"AND number=?", (*fields.values(), epic_id, number))
+
+
+def insert_decision(conn: sqlite3.Connection, epic_id: str, text: str,
+                    for_kind: str, for_ref: str | None) -> int:
+    """Строка решения эпика с текстом как есть; номер — ответ."""
+    number = _next_epic_number(conn, "epic_decisions", epic_id)
+    conn.execute(
+        "INSERT INTO epic_decisions (epic_id, number, created_at, text, "
+        "for_kind, for_ref) VALUES (?,?,?,?,?,?)",
+        (epic_id, number, now(), text, for_kind, for_ref))
+    return number
+
+
+def epic_decisions(conn: sqlite3.Connection, epic_id: str) -> list:
+    """Решения эпика по возрастанию номера."""
+    return conn.execute(
+        "SELECT * FROM epic_decisions WHERE epic_id=? ORDER BY number",
+        (epic_id,)).fetchall()
+
+
+def insert_epic_row(conn: sqlite3.Connection, table: str, row: dict) -> None:
+    """Строка `epics`/`epic_drafts`/`epic_decisions` со всеми полями как есть
+    (`epic restore`); имена полей сверяются со схемой."""
+    if table not in EPIC_ROW_KEYS:
+        raise ValueError(f"insert_epic_row: таблица {table} не таблица эпика")
+    unknown = row.keys() - table_columns(conn, table)
+    if unknown:
+        raise ValueError(f"{table}: нет колонок {', '.join(sorted(unknown))}")
+    names = ", ".join(row)
+    marks = ", ".join("?" for _ in row)
+    conn.execute(f"INSERT INTO {table} ({names}) VALUES ({marks})",
+                 tuple(row.values()))
+
+
 def any_task_in_epic(conn: sqlite3.Connection) -> bool:
     return conn.execute(
         "SELECT 1 FROM tasks WHERE epic_id IS NOT NULL LIMIT 1").fetchone() is not None

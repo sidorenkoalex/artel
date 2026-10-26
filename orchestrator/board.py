@@ -120,10 +120,14 @@ def _epic_item(conn, epic, tasks: list, cards: dict, terminal_states,
         "outcome": epic["outcome"],
         "divisions": divisions,
         # Эпик без задач готовым не считается (требование 9); сам эпик
-        # пульт не закрывает — только показывает.
+        # пульт не закрывает — только показывает. Черновик в `draft` —
+        # будущая задача эпика: с ним эпик не готов (SPEC
+        # 01M5TBFCVFNN95BHH0E9C6KBKB, требование 17).
         "ready_to_close": (epic["state"] == "open" and bool(members)
                            and all(t["state"] in terminal_states
-                                   for t in members)),
+                                   for t in members)
+                           and not any(d["state"] == "draft" for d in
+                                       store.epic_drafts(conn, epic["id"]))),
     }
 
 

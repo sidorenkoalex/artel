@@ -122,6 +122,28 @@ CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);
 """
 EPICS_MIGRATED_ACTION = "схема догнана: таблица epics и tasks.epic_id"
 
+# Черновики и решения эпика (SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требования
+# 1-2, 9; ADR-0028 уровень 3, п. 11). Ключ обеих — номер в эпике: адрес
+# черновика `<id эпика>/<n>`, а у решения он — естественный ключ, по
+# которому `epic restore` сверяет строку со ссылкой и не дублирует её.
+# `start_after`/`merge_after` черновика — элементы через запятую: полные id
+# задач и адреса черновиков. `for_kind` решения — `epic` | `draft` |
+# `task` | `envelope`, `for_ref` — адрес черновика или id задачи. Тем же
+# литералом в `SCHEMA` и `migrate()` (см. `MODEL_TARIFFS_DDL`).
+EPIC_DRAFTS_DDL = """
+CREATE TABLE IF NOT EXISTS epic_drafts (
+  epic_id TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL,
+  tz TEXT NOT NULL, budget_usd REAL, start_after TEXT, merge_after TEXT,
+  state TEXT NOT NULL DEFAULT 'draft', task_id TEXT,
+  PRIMARY KEY (epic_id, number)
+);
+CREATE TABLE IF NOT EXISTS epic_decisions (
+  epic_id TEXT NOT NULL, number INTEGER NOT NULL, created_at TEXT NOT NULL,
+  text TEXT NOT NULL, for_kind TEXT NOT NULL, for_ref TEXT,
+  PRIMARY KEY (epic_id, number)
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -142,6 +164,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 {EPICS_DDL}
 {TASKS_EPIC_INDEX_DDL}
+{EPIC_DRAFTS_DDL}
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
@@ -477,6 +500,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             "WHERE notified_step_id IS NULL OR acknowledged_step_id IS NULL "
             "OR notified_alert_id IS NULL OR acknowledged_alert_id IS NULL")
     conn.executescript(PAIR_SUSPENSION_DDL)
+    conn.executescript(EPIC_DRAFTS_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:

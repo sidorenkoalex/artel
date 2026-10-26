@@ -196,6 +196,7 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
 
 
 DIVISION_FRAME_ACTION = "потолок из рамки деления"
+DRAFT_FRAME_ACTION = "потолок из рамки черновика эпика"
 
 
 def apply_division_frame(conn, task_id: str, value: float, parent_id: str,
@@ -205,14 +206,23 @@ def apply_division_frame(conn, task_id: str, value: float, parent_id: str,
     требование 10): рамку утвердил Оператор, и `budget_usd` из SPEC части
     её не перебивает (`apply_spec_budget`); поднять её можно командой
     `budget`."""
+    apply_operator_frame(conn, task_id, value, DIVISION_FRAME_ACTION,
+                         f"рамка части {number} деления {parent_id}")
+
+
+def apply_operator_frame(conn, task_id: str, value: float, action: str,
+                         source: str) -> None:
+    """Потолок задачи из рамки, утверждённой Оператором (часть деления,
+    черновик эпика — SPEC 01M5TBFCVFNN95BHH0E9C6KBKB, требование 6):
+    источник `operator`, запись журнала `action` с происхождением
+    `source` и прежним потолком."""
     old = store.get_task(conn, task_id)["budget_usd"] or 0.0
     store.update_task(conn, task_id, budget_usd=value,
                       budget_source=config.BUDGET_SOURCE_OPERATOR,
                       updated_at=store.now())
-    detail = (f"${value:.2f} — рамка части {number} деления {parent_id} "
-              f"(прежний потолок ${old:.2f})")
-    store.journal(conn, task_id, "operator", DIVISION_FRAME_ACTION, detail)
-    print(f"[{task_id}] {DIVISION_FRAME_ACTION}: {detail}")
+    detail = f"${value:.2f} — {source} (прежний потолок ${old:.2f})"
+    store.journal(conn, task_id, "operator", action, detail)
+    print(f"[{task_id}] {action}: {detail}")
 
 
 def recommended_budget_usd(ac_count: int, zone_files: int) -> float:
