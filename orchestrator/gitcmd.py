@@ -305,6 +305,18 @@ AUTHOR_CHECK_REFUSAL = "сверка автора"
 AUTHOR_CHECK_SKIPPED_ACTION = "сверка автора — после адаптера"
 
 
+def _token_user_unimplemented(forge, project: str, reason: str) -> bool:
+    """Ответ `reason` — именованный отказ реестра forge «у реализации
+    хостинга проекта нет функции token_user». Признак берётся из реестра, не
+    из сравнения значения `forge` с литералом: текст «не реализовано»,
+    пришедший от хостинга, у которого функция есть, пропуском не считается."""
+    hosting = forge.hosting(project)
+    implementation = forge.IMPLEMENTATIONS.get(hosting)
+    if implementation is None or hasattr(implementation, "token_user"):
+        return False
+    return reason == f"token_user: не реализовано для {hosting}"
+
+
 def _author_check_refusal(project: str, entry: dict, task_id: str) -> str | None:
     """Причина отказа отправки ветки задачи `task_id` по сверке автора;
     None — отправка идёт (совпадение, проекта без `commit_author`, ветка уже
@@ -319,14 +331,14 @@ def _author_check_refusal(project: str, entry: dict, task_id: str) -> str | None
     user = forge.token_user(project)
     reason = getattr(user, "reason", "") or ""
     if reason:
-        if (entry.get("forge") == "github"
-                and reason.endswith("не реализовано для github")):
+        if _token_user_unimplemented(forge, project, reason):
             from . import store
             try:
                 store.journal(store.db(), task_id, "orchestrator",
                               AUTHOR_CHECK_SKIPPED_ACTION,
                               f"commit_author {name}: {reason} — сверка с "
-                              f"владельцем токена отложена до адаптера github")
+                              f"владельцем токена отложена до адаптера "
+                              f"{forge.hosting(project)}")
             except sqlite3.Error:
                 pass
             return None
