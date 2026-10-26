@@ -220,6 +220,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
            --wait-ci: ждать завершения CI коммита вместо отказа |
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
   knowledge <id> <путь>[::<символ>]|::<символ> |
+  forge-probe <проект> [--job <имя>] |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
@@ -817,12 +818,12 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           artifact_cleanup, auto, board,
                           budget, canary, catalog, ci_rerun, cleanup,
                           conventions, doctor,
-                          docs_fetch, dry_run, epics, explore_metric, fsm,
+                          docs_fetch, dry_run, epics, explore_metric, forge, fsm,
                           knowledge_cards, lease, liveness, models, mutation_run, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
-                          venv, version, watch, workspace, zone_lock)
+                          targets, venv, version, watch, workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
 from scripts import guard as artifact_guard  # noqa: E402
 
@@ -2351,6 +2352,96 @@ def _cmd_pause(rest: list) -> None:
     pause.cmd_pause(rest[0])
 
 
+_FORGE_PROBE_USAGE = "forge-probe <проект> [--job <имя>]"
+
+# Уровни доступа участника проекта GitLab API v4 — подпись к числу.
+_ACCESS_LEVELS = {10: "guest", 20: "reporter", 30: "developer",
+                  40: "maintainer", 50: "owner"}
+
+
+def _forge_probe_args(rest: list) -> tuple[str, str | None]:
+    """(проект, имя задания или None) из аргументов `forge-probe`."""
+    positional, job = [], None
+    args = iter(rest)
+    for arg in args:
+        if arg == "--job":
+            job = next(args, None)
+            if not job:
+                sys.exit(f"{_FORGE_PROBE_USAGE}: --job требует имя задания")
+        elif arg.startswith("-"):
+            sys.exit(f"неизвестный флаг {arg!r}; использование: {_FORGE_PROBE_USAGE}")
+        else:
+            positional.append(arg)
+    if len(positional) != 1:
+        sys.exit(f"использование: {_FORGE_PROBE_USAGE}")
+    return positional[0], job
+
+
+def _cmd_forge_probe(rest: list) -> None:
+    """`forge-probe <проект> [--job <имя>]`: сведения хостинга проекта —
+    только чтение через `forge` (SPEC 01M5WCXBR9K8CN586W1AP3ZN6Q, требования
+    3-4). Печатает пользователя токена и его уровень доступа, срок токена,
+    защищённые ветки и теги, последний конвейер базовой ветки; с `--job` —
+    сводку отчёта тестов задания в этом конвейере. Работает и для записи
+    хостинга вне `SUPPORTED_FORGES`. Печатаются только поля результатов
+    `forge` и причины адаптера — токен в них не попадает. Ошибка отдельного
+    запроса — его причина в строке, не отказ команды."""
+    name, job = _forge_probe_args(rest)
+    try:
+        entry = targets.target(name)
+    except targets.TargetsError as exc:
+        sys.exit(f"forge-probe: {exc}")
+    base = entry.get("base") or config.MAIN_BRANCH
+    print(f"forge-probe {name}: хостинг {entry.get('forge')}, база {base}")
+
+    user = forge.token_user(name)
+    print(f"  пользователь токена: {user.reason or user.username}")
+    info = forge.project_info(name)
+    if info.reason:
+        print(f"  уровень доступа в проекте: {info.reason}")
+    else:
+        label = _ACCESS_LEVELS.get(info.access_level, "")
+        print(f"  уровень доступа в проекте: {info.access_level}"
+              + (f" ({label})" if label else ""))
+    expiry = forge.token_expiry(name)
+    if expiry.reason:
+        print(f"  срок токена: {expiry.reason}")
+    elif expiry.expires_at is None:
+        print(f"  срок токена: {expiry.note or 'без срока'}")
+    else:
+        print(f"  срок токена: {expiry.expires_at.isoformat()}")
+    protected = forge.protections(name)
+    if protected.reason:
+        print(f"  защиты: {protected.reason}")
+    else:
+        print(f"  защищённые ветки: {', '.join(protected.branches) or '(нет)'}")
+        print(f"  защищённые теги: {', '.join(protected.tags) or '(нет)'}")
+
+    pipeline = forge.branch_pipeline(name, base)
+    if not pipeline.sha:
+        print(f"  последний конвейер {base}: {pipeline.reason}")
+    else:
+        print(f"  последний конвейер {base}: sha {pipeline.sha}, итог "
+              f"{pipeline.verdict}" + (f" — {pipeline.reason}" if pipeline.reason else ""))
+        for item in pipeline.jobs:
+            print(f"    задание {item.name}: {item.status}")
+    if job is None:
+        return
+    if not pipeline.sha:
+        print(f"  отчёт тестов задания {job}: нет конвейера базы — {pipeline.reason}")
+        return
+    report = forge.job_test_report(name, pipeline.sha, job)
+    if report.reason:
+        print(f"  отчёт тестов задания {job}: {report.reason}")
+        return
+    counts: dict = {}
+    for outcome in report.outcomes.values():
+        counts[outcome] = counts.get(outcome, 0) + 1
+    summary = ", ".join(f"{outcome}: {n}" for outcome, n in sorted(counts.items()))
+    print(f"  отчёт тестов задания {job} (sha {pipeline.sha[:8]}): "
+          f"тестов {len(report.outcomes)} — {summary or 'пусто'}")
+
+
 def _cmd_guard(rest: list) -> None:
     """`guard <id> [<файл>]`: проверка артефактов каталога документов задачи
     правилом `scripts/guard.py` (SPEC 01M56G23ZQDHV2BKEVWWC22R96,
@@ -2566,6 +2657,10 @@ def main() -> None:
         "preflight": lambda: preflight.cmd_preflight(rest[0]),
         "guard": lambda: _cmd_guard(rest),
         "knowledge": lambda: knowledge_cards.cmd_knowledge(rest),
+        # Ходит в API хостинга с токеном проекта — вне белого списка ролей
+        # (токен хостинга роли не выдаётся); только чтение (SPEC
+        # 01M5WCXBR9K8CN586W1AP3ZN6Q, требование 3).
+        "forge-probe": lambda: _cmd_forge_probe(rest),
         # `docs` и `artifact-branches-cleanup` ходят в сеть и переписывают
         # локальные ссылки — вне белого списка ролей.
         "docs": lambda: docs_fetch.cmd_docs(rest),

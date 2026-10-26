@@ -76,14 +76,15 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (catalog, config, fsm, gitcmd, keychain, models,
-                          runner, stack, store, workspace)
+from orchestrator import (catalog, config, fsm, gitcmd, gitlab_adapter,
+                          keychain, models, runner, stack, store, workspace)
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -660,16 +661,39 @@ def fake_keychain_token(slot: str) -> str:
     return f"test-token-{slot}"
 
 
+# Транспорт адаптера GitLab до подмен тестами — снимок при импорте песочницы.
+_GITLAB_TRANSPORT = gitlab_adapter.transport
+
+
+def refused_gitlab_transport(method, url, headers, body, timeout):
+    """Транспорт `gitlab_adapter` песочницы (SPEC 01M5WCXBR9K8CN586W1AP3ZN6Q,
+    требование 5): в сеть не ходит, отвечает отказом соединения — адаптер
+    превращает его в именованную причину «сеть недоступна»."""
+    raise urllib.error.URLError(ConnectionRefusedError(
+        errno.ECONNREFUSED, "песочница тестов: живой HTTP к GitLab запрещён"))
+
+
 def isolate_keychain_and_role(testcase: unittest.TestCase) -> None:
     """Слот связки ключей — `fake_keychain_token`; признак процесса роли
     (`runner.in_role_environment`) снят: `ARTEL_ROLE` убран, `HOME`, равный
     дому роли, заменён временным каталогом теста (SPEC
     01M545EDTHS47HSB59AKC1EZ9C, требование 9). Тест, которому нужен процесс
     роли, выставляет признак сам. Зовётся после подмены путей `config`:
-    дом роли — `config.ROLE_HOME` песочницы."""
+    дом роли — `config.ROLE_HOME` песочницы.
+
+    Транспорт `gitlab_adapter` — `refused_gitlab_transport` (SPEC
+    01M5WCXBR9K8CN586W1AP3ZN6Q, требование 5): токен песочницы непуст, и
+    без подмены запрос адаптера ушёл бы в сеть. Транспорт, который тест
+    подменил раньше песочницы (фикстура, запрошенная до неё), не
+    перекрывается; подмена теста после песочницы перекрывает её сама."""
     patcher = mock.patch.object(keychain, "token", fake_keychain_token)
     patcher.start()
     testcase.addCleanup(patcher.stop)
+    if gitlab_adapter.transport is _GITLAB_TRANSPORT:
+        transport = mock.patch.object(gitlab_adapter, "transport",
+                                      refused_gitlab_transport)
+        transport.start()
+        testcase.addCleanup(transport.stop)
     env = mock.patch.dict(os.environ)
     env.start()
     testcase.addCleanup(env.stop)
