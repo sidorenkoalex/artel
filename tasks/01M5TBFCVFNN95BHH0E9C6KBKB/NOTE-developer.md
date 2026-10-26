@@ -1,17 +1,16 @@
 # Записка developer — 01M5TBFCVFNN95BHH0E9C6KBKB
 
 ## Выяснено
-- Возврат из verifying (CI 40266189759): `scripts/plan_appendix_ci.py` импортировал `orchestrator.config` — запрещено тестом `test_ac9_ci_script_does_not_import_orchestrator`. Исправлено: литерал `EPIC_REF_NAME_PREFIX = "epic-"`, равенство с config держит `tests/test_epic_drafts_units.py::test_ci_script_epic_prefix_matches_config` (красный на мутации). Карта перегенерирована.
-- Дизайн в PLAN.md: таблицы `epic_drafts`/`epic_decisions` с ключом (epic_id, number); файлы ссылки — Markdown + первая строка `<!-- artel-epic-…: JSON -->`; запись `epics._write_ref` → `artifact_branch.commit_files("epic-<id>", …, target=project)`; `cmd_epic` в `deferred_sends()`.
-- Прогон после правки: 84 passed (ci_in_base, все plan_appendix*, ref_scans, drafts, свой файл).
+- Возврат из merge_gate 26.10: фильтры `epic-` в doctor/snapshot/cleanup на реальных данных вывод не меняют — ссылки ищутся по id задачи, а id задачи не бывает `epic-…`. Видимы они только при имени `epic-…` на стороне задачи.
+- Новый файл `tests/test_epic_ref_scan_filters.py` (3 теста; песочницу `stand` импортирует из долгоживущего `…_ref_scans.py`): doctor `_origin_artifact_refs` без `epic-…`; snapshot — каталог `tasks/epic-<id>/` без ссылки; cleanup `--execute` не удаляет ветку `artifact/epic-<id>`. Все три красные на мутации «убрать фильтр», код возвращён. Карта перегенерирована. Обоснование — в PLAN «Подход».
+- Раньше: CI-скрипты не импортируют пульт (литерал `"epic-"` в `scripts/plan_appendix_ci.py`).
 
 ## Не сработало
-- `pytest -n` — сторож роли считает полным прогоном; гонять с `-p no:xdist`.
-- `tests/test_01m443hv9sjyvyqthjsq87qv68_plan_appendix_ci.py` первым в прогоне падает циклом импорта (checkpoint→fixation→…→artifact_branch); есть и на origin/main — ставить после другого файла.
-- sed/heredoc/`$(…)` в Bash отклоняются — правки Edit'ом.
+- `$?` и `$var` в Bash отклоняются песочницей («simple_expansion»).
+- `guard.py` на файле тестов требует frontmatter — гонять только на артефактах.
 
 ## Где остановился
 - Готово, PLAN status: ready.
 
 ## Чего не хватило
-- Правила «CI-скрипты не импортируют пульт» не было в брифе — узнал только из красного CI.
+- Как устроены места перебора, пришлось читать по коду; карточек знаний нет.

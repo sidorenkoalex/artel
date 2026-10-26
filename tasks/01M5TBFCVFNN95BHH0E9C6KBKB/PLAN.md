@@ -55,6 +55,24 @@ schema_version: 5
   `config.EPIC_REF_NAME_PREFIX` держит
   `tests/test_epic_drafts_units.py::test_ci_script_epic_prefix_matches_config`
   (возврат из verifying, прогон CI 40266189759).
+- **Сторожа фильтров `epic-` (возврат из merge_gate 26.10).** Код фильтров
+  не менялся. Долгоживущий `…_ref_scans.py` сверяет вывод «со ссылкой
+  эпика = без неё», а на реальных данных фильтры doctor, snapshot и
+  cleanup на вывод не влияют: ссылки там ищутся по id задачи
+  (`remote.get(branch_name(id))`, `remote.get(<каталог main>)`, ключ ветки
+  `artifact/<id>`), а имя `epic-…` таким id не бывает. Фильтр становится
+  видимым, только если на стороне задачи есть имя `epic-…`. Новый файл
+  `tests/test_epic_ref_scan_filters.py` (существующие тесты не тронуты)
+  проверяет ровно это:
+  - doctor: `_origin_artifact_refs` (через фасад doctor) при обеих ссылках
+    в origin не несёт `epic-…`, но несёт ссылку задачи с её головой;
+  - snapshot: каталог main `tasks/epic-<id>/` не получает ссылку эпика
+    в качестве своего снимка («со ссылкой 1, без ссылки 1»);
+  - artifact_cleanup: ветку `artifact/epic-<id>`, за которой стоит только
+    ссылка эпика, `--execute` не удаляет (отказ, ветка в origin цела).
+    Без фильтра опись сочла бы `refs/artifacts/epic-<id>` ссылкой
+    документов и удалила бы ветку. Значит, фильтр не косметический: на
+    этом входе он и есть защита от удаления, и его надо оставить.
 - **Готовность к закрытию** (требование 17): `board` считает черновики
   `draft`; `epic close` отказывает перечнем «адрес «название»».
 
@@ -118,10 +136,21 @@ schema_version: 5
   тест равенства префикса — красный на мутации литерала `"epic_"`.
 - После возврата из verifying: `test_01m4jd3srn66sd6bm63xaghb11_suite_tree_ci_in_base.py`,
   все `tests/*plan_appendix*`, `…_ref_scans.py`, `…_drafts.py`,
-  `test_epic_drafts_units.py` — 84 passed. Полный набор в шаге разработчика
+  `test_epic_drafts_units.py` — 84 passed.
+- После возврата из merge_gate: `pytest tests/test_epic_ref_scan_filters.py
+  tests/test_01m5tbfcvfnn95bhh0e9c6kbkb_ref_scans.py` — 10 passed. Временная
+  мутация «убрать фильтр `epic-`» в `doctor/artifact_branches.py:34`,
+  `snapshot.py:354` и `artifact_cleanup.py:71-74`: все три новых теста
+  красные (каждый идёт через свой модуль), 7 долгоживущих зелёные; код
+  возвращён `git checkout`, карта перегенерирована. Полный набор в шаге разработчика
   не запускается (сторож роли) — его гоняют CI и гейт приёмки.
 
 ## Предложения системе
+- Тест-сторож вида «вывод с X равен выводу без X» не может покраснеть на
+  фильтре X, если на реальных данных X на вывод не влияет: ни
+  test_author, ни ревью этого не заметили, поймал только гейт мержа.
+  Предлагаю добавить в `skills/test-authoring.md` правило: заявку «Ловит
+  мутацию» проверять самой мутацией ещё на шаге test_author.
 - Песочница роли отказывает Bash-heredoc с `{…"…"}` («brace with quote
   character») и `$var` в цикле — большой Python-код приходится вставлять
   Edit'ом; стоит упомянуть в `skills/coding-standards.md` рядом с правилом
