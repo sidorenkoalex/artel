@@ -23,38 +23,6 @@ import re
 from orchestrator import config, report, store
 from tests.sandbox import declare_target
 
-# AC-14: escalate — «cmd_report на 2 и на 7 задачах делает одинаковое число запросов к steps» недостижимо в зонах задачи: уже на main `report.token_rate_divergence` → `spend.known_cost_pairs` (orchestrator/spend.py:658, файл вне зон) читает `store.task_steps` на КАЖДУЮ задачу; переформулировать критерий (вариант а) или расширить зоны (вариант б)?
-#
-# Батч вопросов Оператору (по блокирующести; дефолт — на случай молчания):
-# 1. [блокирует AC-14] Как читать «одинаковое число запросов к steps»?
-#    Наблюдение: стаб корректной реализации (модель для report без
-#    waiting_on, один store.last_step_times на проект, один store.db(),
-#    zone_lock.queue_wait не зовётся) даёт 7 запросов на 2 задачах и 12 на
-#    7 задачах; разница 5 — ровно запросы `SELECT * FROM steps WHERE
-#    task_id=?` из `spend.known_cost_pairs` (через `token_rate_divergence`
-#    в `cmd_report`, report.py). С этой функцией, заглушённой в стабе,
-#    числа равны (7 и 7) и тест AC-14 зелёный.
-#    а) (дефолт) Свойство — «доска не добавляет запросов, растущих с числом
-#       задач»: на 2 и на 7 задачах число запросов к steps прогона cmd_report
-#       с настоящей `board.build_model` равно числу при `build_model`,
-#       подменённой заглушкой без чтения журнала (приём
-#       tests/test_01m4rzayh3swjw4wfbw4qw15fp_command_report.py:550);
-#       прочие утверждения AC-14 без изменений.
-#    б) Абсолютное равенство остаётся; в зоны добавляется
-#       orchestrator/spend.py и требование пакетного чтения журнала в
-#       `known_cost_pairs` (правка вне ADR-0028 Э4).
-#    в) Из счёта исключаются запросы, которые делает `spend.known_cost_pairs`
-#       (подмена её заглушкой на обоих прогонах), остальное — абсолютное
-#       равенство.
-# Контекст: тест AC-14 уже написан под буквальную формулировку —
-# tests/test_01m5tbfh5vz7gsrxx7vnkhfccq_report_model.py::
-# test_ac14_report_steps_queries_do_not_grow_with_tasks (красен и на
-# стабе только последним утверждением); часть AC-14 про `board --json` —
-# tests/test_01m5tbfh5vz7gsrxx7vnkhfccq_board_command.py::
-# test_ac14_board_json_waiting_on_from_zone_queue (на стабе зелёный).
-# Блокирует: фиксацию планки AC-14; остальные 14 критериев покрыты
-# тестами, проверенными стабом.
-
 # Эталоны вносит `amend-tests` (SPEC AC-5): раздел доски между заголовком
 # «Борд задач — состояния FSM» и закрывающим `</section>`.
 GOLDEN_BOARD = None
