@@ -1,17 +1,17 @@
 # Записка developer — 01M5TBBDFS6DWQY6MS263T1KPY
 
 ## Выяснено
-- Э0 уже в ветке (подтяжка main dbbc8fb71): `fsm.STATES`, `fsm.TERMINAL_STATES`, `tasks.closed_as` есть.
-- Реализация: `orchestrator/epics.py` (команды, `binding_refusal`, `create_from_division`, вид `epic show`), `orchestrator/board.py` (`build_model`, `_ordered`), SQL эпиков — `store.py` (`begin_immediate`, `get_epic`, `insert_epic`, `update_epic`, `set_task_epic`, `project_tasks`, …), миграция `schema._migrate_epics` (последней в `migrate`), `catalog._status_line`/`_print_status_blocks`, `fsm._as_epic_goal`, `merge_after.declared_for_new`.
-- `artifact_source.resolve` всегда (ветка документов, True) — предчтение SPEC для `--as-epic` через `artifact_branch.show`, без журнала.
-- `store.journal`/`insert_task` сами делают commit — в транзакциях BEGIN IMMEDIATE журнал последним.
+- Возврат из verifying: CI-линт формата id ловит `TASK_ID = re.compile(...)` в tests/test_01m5tbbdfs6dwqy6ms263t1kpy_views.py:37. Это единственное попадание линта по ветке; код задачи чист.
+- Файл — долгоживущий, под замком сумм (acceptance_tests/long_lived.sha256.txt, строка 5) — разработчику править нельзя.
+- Готов патч amend-views-task-id.diff (каталог документов): помощник `carries_id` (id из store.all_tasks + epics) вместо регулярного выражения. `git apply --check` ок; применённый временно — 7 passed, линт пуст; файл возвращён `git checkout --`.
+- Реализация Э1 прежняя (см. PLAN.md «Подход»): epics.py, board.py, SQL в store.py, schema._migrate_epics, catalog._status_line.
 
 ## Не сработало
-- Дедупликация всех элементов (ТЗ + --after) сломала `test_merge_after_module.py::test_ac6_…` (повтор внутри строки ТЗ должен отказывать) — схлопываю только элементы `--after`.
-- `pytest -n` в этом окружении падает (node down) — гонял без xdist.
+- Первая версия диффа: неверный счётчик хунка (-77,6 вместо -77,4) — поймал `git apply --check`.
 
 ## Где остановился
-- Готово: 56 долгоживущих + планка AC-29 + ~45 файлов затронутых модулей зелёные; свой tests/test_epics_board_units.py (2 теста, мутации проверены); карта регенерирована; PLAN.md status: ready, guard ок.
+- PLAN.md status: escalate (вопрос: amend-tests патчем — дефолт, либо мандат на правку). guard ок. Код не менялся, дерево чистое.
+- После amend-tests новый шаг разработчика, скорее всего, не нужен: задача может идти в verifying.
 
 ## Чего не хватило
-- Формат заголовка группы/таблицы `epic show` SPEC не задаёт — подогнан под разбор долгоживущих тестов (`|`-таблица).
+- Причина возврата требовала править тест, замок его запрещает — противоречие видно только при сверке с long_lived.sha256.txt.
