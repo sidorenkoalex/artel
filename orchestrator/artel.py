@@ -156,8 +156,19 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 и падение любого другого агентского шага.
 
 Команды:
-  init | new "<название>" [--tz <файл>] [--set <набор>] [--target <имя>] |
+  init | new "<название>" [--tz <файл>] [--set <набор>] [--target <имя>]
+             [--epic <id>] [--after <id>[,<id>…]]
+             [--start-after <id>[,<id>…]] |
   status | show <id> |
+  epic new <проект> "<название>" --goal "<цель>" [--envelope N] |
+  epic show|close <id> ["<итог>"] | epic edit <id> [--title …] [--goal …] |
+  epic add|remove <id> <задача> | epic envelope <id> N |
+  epic start-after <задача> <id>…|нет |
+  epic draft add <id> --tz <файл> [--start-after …] [--after …] [--budget N] |
+  epic draft edit <id>/<n> [--tz …] [--start-after …] [--after …] [--budget N] |
+  epic draft drop|promote <id>/<n> |
+  epic decision <id> "<дословно>" [--for <id>/<n>|<задача>|envelope] |
+  epic export <id> | epic restore <проект> <id> |
   advance <id> | set-models <id> <набор>|--default |
   run <id> [--attach | [--observation <ID>] [--client codex|claude --chat <id>]] |
   auto <id> [--wait-zone] [--attach | [--observation <ID>]
@@ -171,14 +182,14 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
                [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
            [--fresh-suite] [--no-answer] [--accept-audit-fail]
-           [--during-canary "<основание>"] |
+           [--during-canary "<основание>"] [--as-epic] |
   reject <id> "<причина>" | spec-audit <id> |
   answer <id> <файл-с-ответом> |
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
   kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | targets-migrate <проект> |
-  reference <проект> [--sha <sha>] |
+  reference <проект> [--sha <sha>] | conventions-stamp <проект> <файл>… |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
@@ -636,6 +647,10 @@ origin main или отставание ветки не определены; п
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
+  conventions команда `conventions-stamp <проект> <файл>…`: отметка разбора
+            конвенций внешнего проекта в `.artel/projects/<имя>/
+            conventions.md` по `refs/heads/<base>` клона, без сети (SPEC
+            01M5T18K1YFBYA7MM1BBRV869A)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
   models    каталог моделей, ярусы ролей, тариф — только чтение
             (01M3009Y9AGGY6ZCFA7H1HJ1TD)
@@ -796,8 +811,9 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           artifact_cleanup, auto,
-                          budget, canary, catalog, ci_rerun, cleanup, doctor,
-                          docs_fetch, dry_run, explore_metric, fsm,
+                          budget, canary, catalog, ci_rerun, cleanup,
+                          conventions, doctor,
+                          docs_fetch, dry_run, epics, explore_metric, fsm,
                           knowledge_cards, lease, liveness, models, mutation_run, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
@@ -1463,7 +1479,8 @@ def _tz_arg(rest: list) -> str | None:
 
 
 _NEW_USAGE = ('new "<название>" [--tz <файл>] [--set <набор>] '
-              '[--target <имя>] [--strict-tz]')
+              '[--target <имя>] [--strict-tz] [--epic <id>] '
+              '[--after <id>[,<id>…]] [--start-after <id>[,<id>…]]')
 
 
 def _parse_new_args(rest: list) -> tuple | None:
@@ -1794,10 +1811,28 @@ def _new_strict_tz_arg(rest: list) -> tuple[list, bool]:
     return [arg for arg in rest if arg != "--strict-tz"], True
 
 
+def _new_value_arg(rest: list, flag: str, what: str) -> tuple[list, str | None]:
+    """(argv `new` без пары `<flag> <значение>`, значение либо `None`) —
+    приём `_new_target_arg`: флаг без значения — именованный отказ."""
+    if flag not in rest:
+        return rest, None
+    idx = rest.index(flag)
+    if idx + 1 >= len(rest) or rest[idx + 1].startswith("-"):
+        sys.exit(f"{flag} требует {what} следующим аргументом.\n{_NEW_USAGE}")
+    return rest[:idx] + rest[idx + 2:], rest[idx + 1]
+
+
 def _cmd_new(rest: list) -> None:
     rest, strict_tz = _new_strict_tz_arg(rest)
     rest, model_set = _new_set_arg(rest)
     rest, target = _new_target_arg(rest)
+    # Эпик и зависимости мержа (SPEC 01M5TBBDFS6DWQY6MS263T1KPY,
+    # требование 5) — тем же приёмом, в любом месте argv.
+    rest, epic_id = _new_value_arg(rest, "--epic", "id эпика")
+    rest, after = _new_value_arg(rest, "--after", "id задачи (через запятую)")
+    # Зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 11).
+    rest, start_after = _new_value_arg(rest, "--start-after",
+                                       "id задачи (через запятую)")
     parsed = _parse_new_args(rest)
     if parsed is None:
         return
@@ -1809,6 +1844,12 @@ def _cmd_new(rest: list) -> None:
     options = {} if target is None else {"target": target}
     if strict_tz:
         options["strict_tz"] = True
+    if epic_id is not None:
+        options["epic_id"] = epic_id
+    if after is not None:
+        options["after"] = after
+    if start_after is not None:
+        options["start_after"] = start_after
     catalog.cmd_new(title, tz_path=tz_path, model_set=model_set, **options)
 
 
@@ -2014,10 +2055,20 @@ def _approve_sha_arg(rest: list) -> str | None:
     skipped = _approve_reason_indices(rest)
     for i, arg in enumerate(rest[1:], start=1):
         if i in skipped or arg in (NO_ANSWER_FLAG, FRESH_SUITE_FLAG,
-                                   ACCEPT_AUDIT_FAIL_FLAG):
+                                   ACCEPT_AUDIT_FAIL_FLAG, AS_EPIC_FLAG):
             continue
         return arg
     return None
+
+
+AS_EPIC_FLAG = fsm.AS_EPIC_FLAG
+
+
+def _approve_as_epic_kwargs(rest: list) -> dict:
+    """Флаг `approve <id> [sha] --as-epic` (SPEC 01M5TBBDFS6DWQY6MS263T1KPY,
+    требование 7) — эпик из поделённого родителя на гейте SPEC. Без флага —
+    прежний вызов `fsm.cmd_approve` без нового параметра."""
+    return {"as_epic": True} if _approve_bool_flag(rest, AS_EPIC_FLAG) else {}
 
 
 _ANSWER_SYNTAX = "artel.py answer {id} <файл-с-ответом>"
@@ -2266,6 +2317,7 @@ def main() -> None:
         "new": lambda: _cmd_new(rest),
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
+        "epic": lambda: epics.cmd_epic(rest),
         "advance": lambda: fsm.cmd_advance(rest[0]),
         "workspace": lambda: workspace.cmd_workspace(rest[0]),
         # Инструмент Оператора: переносит файлы из рабочей копии задачи —
@@ -2282,7 +2334,8 @@ def main() -> None:
             fresh_suite=FRESH_SUITE_FLAG in rest[1:],
             no_answer=_approve_no_answer_arg(rest),
             accept_audit_fail=_approve_accept_audit_fail_arg(rest),
-            **_approve_during_canary_kwargs(rest)),
+            **_approve_during_canary_kwargs(rest),
+            **_approve_as_epic_kwargs(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
@@ -2303,6 +2356,10 @@ def main() -> None:
         # Пишет кэш справочника и журнал пульта — команда Оператора, вне
         # белого списка ролей (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 4).
         "reference": lambda: projects.cmd_reference(rest),
+        # Пишет заголовок отметки в файл локального слоя пульта — команда
+        # Оператора, вне белого списка ролей (SPEC
+        # 01M5T18K1YFBYA7MM1BBRV869A, требование 7).
+        "conventions-stamp": lambda: conventions.cmd_conventions_stamp(rest),
         "doctor": lambda: doctor.cmd_doctor("--restore" in rest, "--fix" in rest),
         "alert-ack": lambda: _cmd_alert_ack(rest),
         "version": lambda: version.cmd_version(),

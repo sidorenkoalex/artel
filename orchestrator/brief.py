@@ -22,7 +22,8 @@ from pathlib import Path
 
 from scripts import codebase_map
 
-from . import (alerts, artifact_branch, config, context_package, gitcmd,
+from . import (alerts, artifact_branch, config, context_package, conventions,
+               gitcmd,
                reference_cache, repo_context, store, targets)
 from .advance_gates import refusal_classes
 
@@ -39,16 +40,20 @@ MAP_PROJECTION_NOTE = (
     f"«Импортируется» лежит в {MAP_REL} рабочего каталога и читается "
     "адресно.\n\n")
 CONVENTIONS_REL = "CLAUDE.md"
-# Конвенции задачи внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN,
-# требования 4-9; ANSWER-1 п.2): фиксированный список файлов корня базовой
-# ветки проекта — вместо `CLAUDE.md` пульта и карты кодовой базы пульта.
-PROJECT_CONVENTIONS = ("CLAUDE.md", "AGENTS.md")
+# Конвенции задачи внешнего проекта — вместо `CLAUDE.md` пульта и карты
+# кодовой базы пульта (SPEC 01M5634E094QF7JX8HD3KSG4KN): файл пульта
+# `.artel/projects/<имя>/conventions.md`, разобранный при Операторе, а не
+# ИИ-настройки самого проекта (SPEC 01M5T18K1YFBYA7MM1BBRV869A, требование
+# 1). «Не разобраны» — файл пульта не годится; «не прочитаны» — не читается
+# проект (контекст или база клона).
 PROJECT_CONVENTIONS_ABSENT_MARK = "файла нет"
 PROJECT_CONVENTIONS_UNREAD_MARK = "конвенции проекта не прочитаны"
 PROJECT_CONVENTIONS_UNREAD_ACTION = "бриф: конвенции проекта не прочитаны"
+PROJECT_CONVENTIONS_UNPARSED_MARK = "конвенции проекта не разобраны"
+PROJECT_CONVENTIONS_UNPARSED_ACTION = "бриф: конвенции проекта не разобраны"
 # Документы `knowledge` единственного компонента записи `components:`
 # (SPEC 01M5ENWB2XHZFRNQ3Q3PZSAH2T; ADR-0026 «Решение» п. 11) — дополнение
-# к `PROJECT_CONVENTIONS`; предел — на один элемент-каталог.
+# к конвенциям проекта; предел — на один элемент-каталог.
 KNOWLEDGE_DIR_MAX_FILES = 20
 KNOWLEDGE_TRUNCATED_ACTION = "бриф: документы knowledge сокращены"
 # Режимы обычного файла в дереве git; 120000 — символьная ссылка, 160000 —
@@ -549,10 +554,11 @@ def _clone_git(clone: Path, *args: str,
     маска."""
     opts = ["--literal-pathspecs"] if literal else []
     try:
-        res = subprocess.run(["git", "-C", str(clone), *opts, *args],
-                             capture_output=True, env=gitcmd.pult_env(),
-                             timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        res = gitcmd.read(clone, *opts, *args,
+                          timeout=config.CORE_REFERENCE_GIT_TIMEOUT_SEC)
+    except gitcmd.Timeout:
+        return None, "git не ответил (TimeoutExpired)"
+    except OSError as exc:
         return None, f"git не ответил ({type(exc).__name__})"
     if res.returncode != 0:
         err = " ".join(res.stderr.decode("utf-8", "replace").split())
@@ -597,33 +603,6 @@ def _read_blob(clone: Path, sha: str, rel: str) -> tuple[str | None, str]:
 
 
 _NOT_UTF8 = "текст не в UTF-8"
-
-
-def _read_project_conventions(ctx) -> tuple[list, str | None, str]:
-    """([(файл, текст | None, причина)], sha базы, "") — файлы
-    `PROJECT_CONVENTIONS` корня `refs/heads/<base>` клона проекта
-    (требование 4): текст `None` с пустой причиной — файла в корне нет
-    (требование 7), с причиной — файл есть, а чтение не удалось
-    (требование 9). ([], None, причина) — базу прочитать не удалось
-    (требование 8).
-
-    Состав корня — `ls-tree` коммита базы, а не `gitcmd.show`: тот отвечает
-    `None` одинаково на «файла нет» и на сбой git."""
-    sha, reason = reference_cache.branch_commit(ctx.path, ctx.base)
-    if sha is None:
-        return [], None, reason
-    listing, reason = _tree_entries(ctx.path, sha)
-    if listing is None:
-        return [], None, f"корень ветки {ctx.base} не прочитан: {reason}"
-    blobs = {name for _mode, kind, name in listing if kind == "blob"}
-    entries = []
-    for rel in PROJECT_CONVENTIONS:
-        if rel not in blobs:
-            entries.append((rel, None, ""))
-            continue
-        text, reason = _read_blob(ctx.path, sha, rel)
-        entries.append((rel, text, f"{rel}: {reason}" if reason else ""))
-    return entries, sha, ""
 
 
 def _knowledge_of(target: str, conn=None,
@@ -672,11 +651,18 @@ def _knowledge_parts(conn, task_id: str, role: str, run_id: str, render,
     в него не попадают."""
     where = (f"knowledge компонента {component}, ветка {ctx.base} проекта "
              f"{ctx.target}")
+    wrapper = repo_context.wrapper_paths(ctx)
     parts = []
     for element in elements:
         is_dir = element.endswith("/")
         rel = posixpath.normpath(element)
         rel = "" if rel == "." else rel
+        if rel and _is_wrapper(rel, is_dir, wrapper):
+            # Обвязка проекта (SPEC 01M5T18K1YFBYA7MM1BBRV869A, требование
+            # 11) не читается и в показанные не заносится.
+            parts.append(f"документы knowledge: {element} — путь обвязки, "
+                         f"пропущен\n")
+            continue
         if rel and rel in shown and not is_dir:
             continue
         own, reason = (_tree_entries(ctx.path, sha, rel) if rel
@@ -700,7 +686,8 @@ def _knowledge_parts(conn, task_id: str, role: str, run_id: str, render,
                 continue
             parts.extend(_knowledge_dir_parts(conn, task_id, role, run_id,
                                               render, ctx, sha, component,
-                                              element, rel, shown, where))
+                                              element, rel, shown, where,
+                                              wrapper))
             continue
         if kind == "tree":
             parts.append(_unread_mark(
@@ -723,14 +710,26 @@ def _knowledge_parts(conn, task_id: str, role: str, run_id: str, render,
     return parts
 
 
+def _is_wrapper(rel: str, is_dir: bool, wrapper: tuple) -> bool:
+    """Путь дерева проекта покрыт списком обвязки той же формулой, что у
+    остальных мест сверки; элемент-каталог — и как каталог (`sub/.claude/`
+    под записью `**/.claude/`)."""
+    return (config.is_protected_path(rel, wrapper)
+            or (is_dir and config.is_protected_path(f"{rel}/", wrapper)))
+
+
 def _knowledge_dir_parts(conn, task_id: str, role: str, run_id: str, render,
                          ctx, sha: str, component: str, element: str,
-                         rel: str, shown: set, where: str) -> list[str]:
+                         rel: str, shown: set, where: str,
+                         wrapper: tuple = ()) -> list[str]:
     """Куски элемента-каталога: обычные `*.md` под ним по пути, без уже
-    показанных, не больше `KNOWLEDGE_DIR_MAX_FILES` (требование 5). Имена
+    показанных и без файлов обвязки `wrapper`, не больше
+    `KNOWLEDGE_DIR_MAX_FILES` (требование 5). Имена
     файлов листинга — чужой репозиторий — только внутри границы
     недоверенных данных, первой строкой тела (требование 7): в подписи,
-    строках, пометках и журнале — элемент записи и номер документа."""
+    строках, пометках и журнале — элемент записи и номер документа; файлы
+    обвязки — только числом (SPEC 01M5T18K1YFBYA7MM1BBRV869A, требование
+    11)."""
     listing, reason = _tree_entries(ctx.path, sha, rel, recursive=True)
     if listing is None:
         return [_unread_mark(conn, task_id, role, f"{element}: {reason}",
@@ -743,7 +742,10 @@ def _knowledge_dir_parts(conn, task_id: str, role: str, run_id: str, render,
     if not docs:
         lines.append(f"документы knowledge: каталог {element} — файлов *.md "
                      f"нет\n")
-    docs = [name for name in docs if name not in shown]
+    # Обвязка отсекается до предела: в нумерацию и в предел она не входит.
+    wrapped = sum(1 for name in docs if config.is_protected_path(name, wrapper))
+    docs = [name for name in docs if name not in shown
+            and not config.is_protected_path(name, wrapper)]
     total = len(docs)
     docs = docs[:KNOWLEDGE_DIR_MAX_FILES]
     parts = []
@@ -768,59 +770,69 @@ def _knowledge_dir_parts(conn, task_id: str, role: str, run_id: str, render,
                       f"файлов из {total}")
         lines.append(f"документы knowledge: каталог {element} — показаны "
                      f"первые {len(docs)} файлов из {total}\n")
+    if wrapped:
+        lines.append(f"документы knowledge: каталог {element} — пропущено "
+                     f"файлов обвязки: {wrapped}\n")
     if irregular:
         lines.append(f"документы knowledge: каталог {element} — пропущено "
                      f"не обычных файлов: {irregular}\n")
     return parts + lines
 
 
+def _pult_conventions_part(conn, task_id: str, role: str, run_id: str,
+                           render, target: str) -> str:
+    """Компонент `conventions.md` области проекта (SPEC
+    01M5T18K1YFBYA7MM1BBRV869A, требования 1, 2, 4, 5): текст без заголовка
+    отметки, оформленный `render` соседей роли — опись и предел размера
+    те же, что у прежнего файла конвенций, и считаются по показанному
+    тексту. Файл не годится — строка «не разобраны» с причиной и запись
+    журнала; сборку брифа это не останавливает. От состояния клона
+    проекта компонент не зависит."""
+    where = conventions.rel(target)
+    text, reason = conventions.brief_text(target)
+    if text is None:
+        store.journal(conn, task_id, role,
+                      PROJECT_CONVENTIONS_UNPARSED_ACTION, reason)
+        return f"{PROJECT_CONVENTIONS_UNPARSED_MARK}: {reason} — {where}\n"
+    return render(conn, task_id, role, f"{conventions.FILE_NAME} ({where})",
+                  text, run_id)
+
+
 def _project_conventions_parts(conn, task_id: str, role: str, run_id: str,
                                render) -> list[str]:
-    """Конвенции проекта задачи внешнего проекта — куски брифа роли (SPEC
-    01M5634E094QF7JX8HD3KSG4KN, требования 4-9): по компоненту на
-    найденный файл, оформленному `render` соседей роли (требование 5);
-    пометка «файла нет» на месте отсутствующего; пометка «конвенции проекта
-    не прочитаны: <причина>» и запись журнала с той же причиной на месте
-    нечитаемого файла или вместо всех, если не прочитана база. Сборку брифа
-    сбой не останавливает.
+    """Конвенции проекта задачи внешнего проекта — куски брифа роли:
+    компонент файла пульта `conventions.md` (`_pult_conventions_part`), за
+    ним — документы `knowledge` единственного компонента записи
+    `components:` (SPEC 01M5ENWB2XHZFRNQ3Q3PZSAH2T) с базовой ветки клона:
+    `_knowledge_parts`. `CLAUDE.md`/`AGENTS.md` проекта блоком конвенций не
+    читаются (SPEC 01M5T18K1YFBYA7MM1BBRV869A, требование 1).
 
-    За ними — документы `knowledge` единственного компонента записи
-    `components:` (SPEC 01M5ENWB2XHZFRNQ3Q3PZSAH2T): `_knowledge_parts`."""
+    Контекст проекта не разрешён — пометка «не прочитаны» с причиной и
+    запись журнала всегда; база клона не читается — та же пометка с
+    перечнем элементов `knowledge`, только если они есть (требование 3).
+    Сборку брифа сбой не останавливает."""
     target = store.task_target(conn, task_id)
+    parts = [_pult_conventions_part(conn, task_id, role, run_id, render,
+                                    target)]
     ctx = repo_context.resolve(target)
-    knowledge = None
     if ctx is None:
-        entries, sha, reason = [], None, repo_context.unresolved_reason(target)
-        where = f"проекта {target}"
-    else:
-        knowledge = _knowledge_of(target, conn, task_id)
-        entries, sha, reason = _read_project_conventions(ctx)
-        where = f"корень ветки {ctx.base} проекта {target}"
-    names = ", ".join([*PROJECT_CONVENTIONS,
-                       *(knowledge[1] if knowledge else ())])
-    if reason:
+        parts.append(_unread_mark(conn, task_id, role,
+                                  repo_context.unresolved_reason(target),
+                                  f"проекта {target}"))
+        return parts
+    knowledge = _knowledge_of(target, conn, task_id)
+    if not knowledge:
+        return parts
+    sha, reason = reference_cache.branch_commit(ctx.path, ctx.base)
+    if sha is None:
         store.journal(conn, task_id, role, PROJECT_CONVENTIONS_UNREAD_ACTION,
                       reason)
-        return [f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {reason} — {names}, "
-                f"{where}\n"]
-    parts = []
-    shown = set()
-    for rel, text, why in entries:
-        if text is not None:
-            shown.add(rel)
-            parts.append(render(conn, task_id, role, f"{rel} ({where})", text,
-                                run_id))
-        elif why:
-            store.journal(conn, task_id, role,
-                          PROJECT_CONVENTIONS_UNREAD_ACTION, why)
-            parts.append(f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {why} — "
-                         f"{where}\n")
-        else:
-            parts.append(f"конвенции проекта: {rel} — "
-                         f"{PROJECT_CONVENTIONS_ABSENT_MARK} ({where})\n")
-    if knowledge:
-        parts.extend(_knowledge_parts(conn, task_id, role, run_id, render,
-                                      ctx, sha, *knowledge, shown))
+        parts.append(f"{PROJECT_CONVENTIONS_UNREAD_MARK}: {reason} — "
+                     f"{', '.join(knowledge[1])}, корень ветки {ctx.base} "
+                     f"проекта {target}\n")
+        return parts
+    parts.extend(_knowledge_parts(conn, task_id, role, run_id, render, ctx,
+                                  sha, *knowledge, set()))
     return parts
 
 

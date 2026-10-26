@@ -1,7 +1,8 @@
-"""Ревью-пакет задачи внешнего проекта: конвенции проекта с базовой ветки
-его клона, пометки «файла нет» и «конвенции проекта не прочитаны», абзац
-об исключениях из diff без карты пульта; пакет задачи артели — побайтно
-прежний; без сети.
+"""Ревью-пакет задачи внешнего проекта: конвенции проекта из файла пульта
+`.artel/projects/<проект>/conventions.md` (SPEC 01M5T18K1YFBYA7MM1BBRV869A),
+документы `knowledge` с базовой ветки клона, пометки «конвенции проекта не
+разобраны» и «конвенции проекта не прочитаны», абзац об исключениях из diff
+без карты пульта; пакет задачи артели — побайтно прежний; без сети.
 
 Группа: долгоживущий
 
@@ -16,8 +17,10 @@
 Окружение — `tests.sandbox.RealGitSandbox`: корень пульта — настоящий
 git-репозиторий, он же клон артели. Учебный внешний проект — клон
 `make_project_repo` в области проектов песочницы (без `origin`), его запись
-в `config.TARGETS` песочницы со своей базовой веткой; файлы конвенций — в
-корне этой ветки клона, ветка задачи отведена от неё же. Документы задачи
+в `config.TARGETS` песочницы со своей базовой веткой; `CLAUDE.md`/
+`AGENTS.md` и документы `knowledge` — в корне этой ветки клона, ветка задачи
+отведена от неё же; `conventions.md` — в области проекта песочницы
+(`config.PROJECTS / <проект>`). Документы задачи
 (SPEC.md, PLAN.md) — коммит ссылки документов `refs/artifacts/<id>` в
 репозитории задачи. Имена проекта и ветки, тексты конвенций и задачи
 внешних сценариев выбираются модулем `random`; зерно печатается и входит в
@@ -53,6 +56,7 @@ from tests.sandbox import RealGitSandbox, make_project_repo
 
 ABSENT_MARK = brief.PROJECT_CONVENTIONS_ABSENT_MARK
 UNREAD_MARK = brief.PROJECT_CONVENTIONS_UNREAD_MARK
+UNPARSED_MARK = brief.PROJECT_CONVENTIONS_UNPARSED_MARK
 MAP_REL = brief.MAP_REL
 MAP_COMMAND = "scripts/codebase_map.py"
 MAP_JOB = "Карта кодовой базы генерируется и свежа"
@@ -69,6 +73,13 @@ PROJECT_ENTRY = """  {name}:
     project_skills: []
     merge_gate: operator
 """
+COMPONENT_FIELDS = (
+    ("command", "[python3, -m, pytest]"),
+    ("long_lived_dir", "tests"),
+    ("long_lived_name", "test_<id>_<name>.py"),
+    ("weakening_scope", "[tests/**/*.py]"),
+    ("mutation_claim_scope", "[tests/test_*.py]"),
+)
 
 
 def word(rng: random.Random, k: int = 8) -> str:
@@ -115,13 +126,21 @@ class ExternalReviewSandbox(ReviewPackageSandbox):
         return (f"# {tag} учебного проекта {word(self.rng, 12)}\n\n"
                 f"Правило проекта {word(self.rng, 16)}.\n")
 
-    def prepare(self, files: dict) -> None:
+    def prepare(self, files: dict, pult=None, with_pult: bool = True,
+                knowledge: list | None = None) -> None:
         """Файлы `files` (имя -> str или bytes) — в корне базовой ветки
         клона; ветка задачи отведена от базы и несёт правку кода; SPEC.md и
-        PLAN.md задачи — в ссылке документов клона."""
+        PLAN.md задачи — в ссылке документов клона; `conventions.md` пульта
+        (str или bytes; по умолчанию — уникальный текст), если `with_pult`;
+        запись с компонентом и элементами `knowledge`, если они заданы."""
         self.project = f"uchebny{word(self.rng)}"
         self.base = f"osnova-{word(self.rng)}"
         self.entry = PROJECT_ENTRY.format(name=self.project, base=self.base)
+        if knowledge is not None:
+            fields = [*COMPONENT_FIELDS,
+                      ("knowledge", "[" + ", ".join(knowledge) + "]")]
+            self.entry += (f"    components:\n      komp{word(self.rng, 5)}:\n"
+                           + "".join(f"        {k}: {v}\n" for k, v in fields))
         text = config.TARGETS.read_text(encoding="utf-8")
         config.TARGETS.write_text(text.rstrip("\n") + "\n" + self.entry,
                                   encoding="utf-8")
@@ -153,6 +172,16 @@ class ExternalReviewSandbox(ReviewPackageSandbox):
         commit_docs(self, self.clone, self.task, {
             "SPEC.md": f"# SPEC\n\n{self.spec_nonce}\n",
             "PLAN.md": f"# PLAN\n\nПлан учебной задачи {word(self.rng)}.\n"})
+        self.pult_rel = f".artel/projects/{self.project}/conventions.md"
+        self.pult = None
+        if with_pult:
+            self.pult = (pult if pult is not None
+                         else self.conventions("conventions.md пульта"))
+            path = config.PROJECTS / self.project / "conventions.md"
+            if isinstance(self.pult, bytes):
+                path.write_bytes(self.pult)
+            else:
+                path.write_text(self.pult, encoding="utf-8")
 
     def build(self) -> str:
         return self.package(self.task, self.branch)
@@ -160,11 +189,12 @@ class ExternalReviewSandbox(ReviewPackageSandbox):
     def mark_lines(self, text: str, mark: str) -> list:
         return [line for line in text.splitlines() if mark in line]
 
-    def unread_reasons(self, text: str) -> list:
-        """Причины пометок «конвенции проекта не прочитаны: <причина>»."""
+    def unread_reasons(self, text: str, mark: str = UNREAD_MARK) -> list:
+        """Причины пометок `mark` («конвенции проекта не прочитаны» или «не
+        разобраны»): <причина>»."""
         reasons = []
-        for line in self.mark_lines(text, UNREAD_MARK):
-            reason = line.split(UNREAD_MARK, 1)[1].lstrip(" :").strip()
+        for line in self.mark_lines(text, mark):
+            reason = line.split(mark, 1)[1].lstrip(" :").strip()
             reasons.append(reason)
         return reasons
 
@@ -189,63 +219,103 @@ def commit_docs(case: RealGitSandbox, repo: Path, task: str, files: dict,
 
 
 class ProjectConventionsInPackageTest(ExternalReviewSandbox):
-    """AC-1, AC-2: тексты `CLAUDE.md` и `AGENTS.md` базы — в пакете,
-    компонентом с описью и в границах `run_id` пакета."""
+    """AC-1, AC-2: текст `conventions.md` пульта — в пакете, одним
+    компонентом с описью и в границах `run_id` пакета; `CLAUDE.md` и
+    `AGENTS.md` базы проекта в пакете нет."""
+
+    def assert_component(self, text: str, body: str) -> None:
+        """Текст `body` — внутри границ `run_id` пакета, под заголовком
+        компонента `conventions.md` с размером и sha256 текста."""
+        opener, closer = boundary_markers(self.run_id)
+        pos = text.find(body.strip())
+        self.assertGreaterEqual(pos, 0, self.note(
+            "в пакете нет текста conventions.md"))
+        start = text.rfind(opener, 0, pos)
+        self.assertGreaterEqual(start, 0, self.note(
+            "перед текстом conventions.md нет открывающего маркера run_id "
+            "пакета"))
+        between = text[start + len(opener):pos]
+        self.assertNotIn(closer, between, self.note(
+            "граница run_id закрыта до текста conventions.md"))
+        end = text.find(closer, pos)
+        self.assertGreater(end, pos, self.note(
+            "после текста conventions.md нет закрывающего маркера run_id "
+            "пакета"))
+        self.assertNotIn(opener, text[pos:end], self.note(
+            "между текстом conventions.md и закрывающим маркером — чужая "
+            "граница"))
+        before = text[:start].rstrip("\n").rsplit("\n", 1)[-1]
+        self.assertTrue(before.startswith("### "), self.note(
+            f"перед маркером не заголовок компонента: {before!r}"))
+        raw = body.encode("utf-8")
+        self.assertIn("conventions.md", before, self.note(f"заголовок: {before}"))
+        self.assertIn(f"{len(raw)} байт", before, self.note(
+            f"в заголовке нет размера: {before}"))
+        self.assertIn(hashlib.sha256(raw).hexdigest(), before, self.note(
+            f"в заголовке нет sha256 текста: {before}"))
 
     def test_ac1_package_carries_both_convention_files(self):
-        """Учебный проект с `CLAUDE.md` и `AGENTS.md` в корне базовой ветки.
+        """Учебный проект с `CLAUDE.md` и `AGENTS.md` в корне базовой ветки
+        и `conventions.md` пульта.
 
-        Текст пакета ревьювера задачи проекта содержит текст обоих файлов.
+        Пакет ревьювера задачи проекта несёт текст `conventions.md` одним
+        компонентом — внутри границ `run_id` пакета, под заголовком с
+        размером и sha256; текстов `CLAUDE.md` и `AGENTS.md` базы в нём нет.
 
         Ловит мутацию: развилки «артель или внешний проект» в
-        `review_package` нет, либо из списка конвенций взят один
-        `CLAUDE.md` — в пакете нет текста `CLAUDE.md` или `AGENTS.md`."""
+        `review_package` нет — конвенций проекта в пакете нет; либо пакет
+        по-прежнему читает `CLAUDE.md`/`AGENTS.md` базы проекта."""
         files = {"CLAUDE.md": self.conventions("CLAUDE.md"),
                  "AGENTS.md": self.conventions("AGENTS.md")}
         self.prepare(files)
         text = self.build()
+        self.assert_component(text, self.pult)
         for name, body in files.items():
             with self.subTest(файл=name):
-                self.assertIn(body.strip(), text, self.note(
-                    f"в пакете нет текста {name} базовой ветки"))
+                self.assertNotIn(body.strip(), text, self.note(
+                    f"в пакете текст {name} базовой ветки"))
 
     def test_ac2_claude_md_inside_package_boundaries_with_manifest_header(self):
-        """Учебный проект с `CLAUDE.md` в базе; `run_id` пакета задан
-        подменой `brief.new_run_id`.
+        """`conventions.md` пульта (с кириллицей в начале — по зерну);
+        `run_id` пакета задан подменой `brief.new_run_id`.
 
-        Текст `CLAUDE.md` стоит между открывающим и закрывающим маркерами
-        `brief.wrap_boundary` с `run_id` этого пакета; строка заголовка
-        компонента перед открывающим маркером несёт `CLAUDE.md`, размер
-        текста в байтах и его sha256.
+        Текст `conventions.md` стоит между открывающим и закрывающим
+        маркерами `brief.wrap_boundary` с `run_id` этого пакета; строка
+        заголовка компонента перед открывающим маркером несёт
+        `conventions.md`, размер текста в байтах и его sha256.
 
         Ловит мутацию: компонент конвенций добавлен в пакет без
         `wrap_boundary` (или со своим `brief.new_run_id()` вместо общего
         `run_id` пакета), либо оформлен заголовком без описи
         `— N байт, sha256=…`."""
-        body = self.conventions("CLAUDE.md")
+        body = self.conventions("conventions.md")
         if self.rng.random() < 0.5:
             body = "Кириллица и ёмкость: " + body
-        self.prepare({"CLAUDE.md": body})
+        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md")}, pult=body)
         text = self.build()
         opener, closer = boundary_markers(self.run_id)
         pos = text.find(body.strip())
-        self.assertGreaterEqual(pos, 0, self.note("в пакете нет текста CLAUDE.md"))
+        self.assertGreaterEqual(pos, 0, self.note(
+            "в пакете нет текста conventions.md"))
         start = text.rfind(opener, 0, pos)
         self.assertGreaterEqual(start, 0, self.note(
-            "перед текстом CLAUDE.md нет открывающего маркера run_id пакета"))
+            "перед текстом conventions.md нет открывающего маркера run_id "
+            "пакета"))
         between = text[start + len(opener):pos]
         self.assertNotIn(closer, between, self.note(
-            "граница run_id закрыта до текста CLAUDE.md"))
+            "граница run_id закрыта до текста conventions.md"))
         end = text.find(closer, pos)
         self.assertGreater(end, pos, self.note(
-            "после текста CLAUDE.md нет закрывающего маркера run_id пакета"))
+            "после текста conventions.md нет закрывающего маркера run_id "
+            "пакета"))
         self.assertNotIn(opener, text[pos:end], self.note(
-            "между текстом CLAUDE.md и закрывающим маркером — чужая граница"))
+            "между текстом conventions.md и закрывающим маркером — чужая "
+            "граница"))
         before = text[:start].rstrip("\n").rsplit("\n", 1)[-1]
         self.assertTrue(before.startswith("### "), self.note(
             f"перед маркером не заголовок компонента: {before!r}"))
         raw = body.encode("utf-8")
-        self.assertIn("CLAUDE.md", before, self.note(f"заголовок: {before}"))
+        self.assertIn("conventions.md", before, self.note(f"заголовок: {before}"))
         self.assertIn(f"{len(raw)} байт", before, self.note(
             f"в заголовке нет размера: {before}"))
         self.assertIn(hashlib.sha256(raw).hexdigest(), before, self.note(
@@ -253,40 +323,44 @@ class ProjectConventionsInPackageTest(ExternalReviewSandbox):
 
 
 class ConventionMarksInPackageTest(ExternalReviewSandbox):
-    """AC-3–AC-5: файла нет, базу не прочитать, файл не в UTF-8."""
+    """AC-3–AC-5: файла пульта нет, базу не прочитать, файл пульта не в
+    UTF-8."""
 
     def test_ac3_missing_claude_md_marked_absent(self):
-        """Учебный проект без `CLAUDE.md` в корне базовой ветки (`AGENTS.md`
+        """Учебный проект без `conventions.md` пульта (`AGENTS.md` в базе
         есть или нет — по зерну).
 
-        В пакете есть строка с пометкой `brief.PROJECT_CONVENTIONS_ABSENT_MARK`
-        и именем `CLAUDE.md`.
+        В пакете есть строка «конвенции проекта не разобраны» с пометкой
+        `brief.PROJECT_CONVENTIONS_ABSENT_MARK` и путём `conventions.md`.
 
-        Ловит мутацию: компонент собран своим чтением файлов, которое
+        Ловит мутацию: компонент собран своим чтением файла, которое
         пропускает отсутствующий файл молча, — пометки «файла нет» для
-        `CLAUDE.md` в пакете нет."""
+        `conventions.md` в пакете нет."""
         files = {}
         if self.rng.random() < 0.5:
             files["AGENTS.md"] = self.conventions("AGENTS.md")
-        self.prepare(files)
+        self.prepare(files, with_pult=False)
         text = self.build()
         lines = [line for line in self.mark_lines(text, ABSENT_MARK)
-                 if "CLAUDE.md" in line]
+                 if UNPARSED_MARK in line and self.pult_rel in line]
         self.assertTrue(lines, self.note(
-            f"нет пометки «{ABSENT_MARK}» с именем CLAUDE.md"))
+            f"нет пометки «{UNPARSED_MARK}: {ABSENT_MARK}» с путём "
+            f"{self.pult_rel}"))
 
     def test_ac4_unreadable_base_marked_unread_without_crash(self):
-        """Учебный проект, чья базовая ветка удалена из клона после
-        отведения от неё ветки задачи.
+        """Учебный проект с элементом `knowledge` из базы, чья базовая ветка
+        удалена из клона после отведения от неё ветки задачи.
 
         Сборка пакета не бросает исключения и не выходит `SystemExit`;
         в пакете есть пометка `brief.PROJECT_CONVENTIONS_UNREAD_MARK` с
         непустой причиной.
 
         Ловит мутацию: сбой чтения базы роняет сборку пакета (исключение
-        наружу, `sys.exit`) либо даёт пакет без пометки — конвенции молча
-        пропущены."""
-        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md")})
+        наружу, `sys.exit`) либо даёт пакет без пометки — документы
+        `knowledge` молча пропущены."""
+        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md"),
+                      "guide.md": self.conventions("guide.md")},
+                     knowledge=["guide.md"])
         self.cgit("branch", "-D", self.base)
         try:
             text = self.build()
@@ -298,30 +372,31 @@ class ConventionMarksInPackageTest(ExternalReviewSandbox):
             f"пометка «{UNREAD_MARK}» без причины: {reasons}"))
 
     def test_ac5_non_utf8_claude_md_marked_unread_naming_file(self):
-        """Учебный проект, чей `CLAUDE.md` в базе — байты не в UTF-8
+        """Учебный проект, чей `conventions.md` пульта — байты не в UTF-8
         (cp1251 или latin-1 по зерну).
 
-        Сборка пакета не падает; в пакете есть пометка
-        `brief.PROJECT_CONVENTIONS_UNREAD_MARK`, причина которой называет
-        `CLAUDE.md`.
+        Сборка пакета не падает; в пакете есть пометка «конвенции проекта
+        не разобраны», причина которой называет «текст не в UTF-8» и путь
+        `conventions.md`.
 
         Ловит мутацию: текст файла декодируется строго вне перехвата —
         `UnicodeDecodeError` роняет сборку; либо нечитаемый файл помечен
-        «файла нет» или пропущен — пометки с именем `CLAUDE.md` нет."""
+        «файла нет» или пропущен — пометки с путём `conventions.md` нет."""
         codec = self.rng.choice(("cp1251", "latin-1"))
         sample = "Правило проекта" if codec == "cp1251" else "Règle du café"
         raw = f"# {sample} {word(self.rng)}\n".encode(codec)
         with self.assertRaises(UnicodeDecodeError):
             raw.decode("utf-8")
-        self.prepare({"CLAUDE.md": raw})
+        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md")}, pult=raw)
         try:
             text = self.build()
         except SystemExit as exc:
             self.fail(self.note(f"сборка пакета отказала: {exc.code}"))
-        reasons = self.unread_reasons(text)
-        self.assertTrue(any("CLAUDE.md" in reason for reason in reasons),
-                        self.note(f"нет пометки «{UNREAD_MARK}» с причиной о "
-                                  f"CLAUDE.md: {reasons}"))
+        reasons = self.unread_reasons(text, UNPARSED_MARK)
+        self.assertTrue(any("conventions.md" in reason
+                            and "UTF-8" in reason for reason in reasons),
+                        self.note(f"нет пометки «{UNPARSED_MARK}» с причиной о "
+                                  f"conventions.md: {reasons}"))
 
 
 class ExclusionParagraphTest(ExternalReviewSandbox):
@@ -530,12 +605,13 @@ class NoNetworkTest(ExternalReviewSandbox):
         подменённых `subprocess.run` (запись вызовов) и
         `socket.socket.connect`/`socket.create_connection` (отказ).
 
-        Пакет собран, в нём текст `CLAUDE.md` базы; ни одного сетевого
+        Пакет собран, в нём текст `conventions.md` пульта и текст элемента
+        `knowledge`, прочитанного с базы клона; ни одного сетевого
         git-вызова (`fetch`/`pull`/`push`/`clone`/`ls-remote`), ни одной
         попытки сокет-соединения; клон проекта — каталог области проектов
         песочницы.
 
-        Ловит мутацию: перед чтением конвенций базовая ветка
+        Ловит мутацию: перед чтением базы для `knowledge` базовая ветка
         освежается `git fetch` из `origin` проекта — в записи вызовов
         появляется сетевой git-вызов."""
         calls: list = []
@@ -552,8 +628,10 @@ class NoNetworkTest(ExternalReviewSandbox):
             connects.append(args)
             raise OSError("сеть в тесте запрещена")
 
-        body = self.conventions("CLAUDE.md")
-        self.prepare({"CLAUDE.md": body})
+        body = self.conventions("conventions.md")
+        guide = self.conventions("guide.md")
+        self.prepare({"CLAUDE.md": self.conventions("CLAUDE.md"),
+                      "guide.md": guide}, pult=body, knowledge=["guide.md"])
         self.assertTrue(self.clone.resolve().is_relative_to(self.root),
                         self.note(f"клон вне песочницы: {self.clone}"))
         with contextlib.ExitStack() as stack:
@@ -563,7 +641,10 @@ class NoNetworkTest(ExternalReviewSandbox):
             stack.enter_context(mock.patch.object(socket, "create_connection",
                                                   refuse))
             text = self.build()
-        self.assertIn(body.strip(), text, self.note("в пакете нет CLAUDE.md"))
+        self.assertIn(body.strip(), text, self.note(
+            "в пакете нет conventions.md"))
+        self.assertIn(guide.strip(), text, self.note(
+            "в пакете нет текста элемента knowledge"))
         network = [argv for argv in calls
                    if argv and Path(argv[0]).name == "git"
                    and any(part in NETWORK_GIT for part in argv[1:])]

@@ -145,8 +145,11 @@ PROVIDER_TOOLS = _provider_tools()
 #: {имя инструмента: имя провайдера} необязательной части манифеста.
 OPTIONAL_TOOL_PROVIDERS = _optional_tool_providers()
 
+# git 2.35 — sparse-checkout рабочей копии задачи внешнего проекта только
+# для неё (`extensions.worktreeConfig`) и `git add --sparse` (SPEC
+# 01M5T19041XE2KB6A52F0AT0NF, требование 12).
 REQUIRED_TOOLS = {
-    "git": ToolRequirement((2, 30, 0), ("git", "--version")),
+    "git": ToolRequirement((2, 35, 0), ("git", "--version")),
     "gh": ToolRequirement((2, 0, 0), ("gh", "--version")),
 }
 # Инструмент провайдера по умолчанию — после общих: порядок ключей задаёт

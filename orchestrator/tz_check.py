@@ -148,8 +148,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     """git в `repo` с выводом байтами: содержимое файла дерева может быть
     не текстом, а `gitcmd.git` декодирует вывод строго."""
     try:
-        return subprocess.run(["git", "-C", str(repo), *args],
-                              capture_output=True, env=gitcmd.pult_env())
+        return gitcmd.read(repo, *args)
     except OSError as exc:
         return subprocess.CompletedProcess(args, 127, b"", str(exc).encode())
 

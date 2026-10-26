@@ -75,8 +75,8 @@ TRUNCATED_CI = json.dumps({
 # spec_gate и in_dev. spec_audit — аудит SPEC между spec_writing и
 # spec_gate (SPEC 01M4MQAGRWMWR0GFDM9086P3TD).
 FSM_STATES = ("spec_writing", "spec_audit", "spec_gate", "tests_writing",
-              "in_dev", "review", "acceptance", "merge_gate", "done",
-              "escalated", "killed")
+              "in_dev", "verifying", "review", "acceptance", "merge_gate",
+              "done", "escalated", "killed")
 
 # Заготовки артефактов — валидные по guard: с T017 он вызывается кодом на
 # каждом переходе `advance`, и артефакт без обязательных секций задачу не
@@ -431,6 +431,14 @@ class FsmStatesCoverTheCodeTest(unittest.TestCase):
 
     def test_every_working_state_is_swept(self):
         self.assertLessEqual(set(config.STATE_ROLE), set(FSM_STATES))
+
+    def test_swept_states_are_exactly_the_fsm_states(self):
+        """Ловит мутацию: состояние добавлено в `fsm.STATES` (единый список
+        состояний, ADR-0028 п. 17) и забыто здесь — или наоборот; свипы
+        модуля тогда молча его пропускают. Список здесь остаётся литералом,
+        сверка — по множеству."""
+        from orchestrator import fsm
+        self.assertEqual(set(fsm.STATES), set(FSM_STATES))
 
 
 class FsmSandboxKeepsRunRootTasksCleanTest(FsmTest):
