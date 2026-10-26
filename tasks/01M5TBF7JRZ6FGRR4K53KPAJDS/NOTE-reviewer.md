@@ -1,16 +1,17 @@
-# NOTE-reviewer (итерация 1)
+# NOTE-reviewer (итерация 2)
 
 ## Выяснено
-- Итерация 1: approved, реестр пуст. Тесты задачи (долгоживущий + units) 49/49 зелёные.
-- Перечень действий Оператора (`auto._operator_actions`) сверен с реальными записями команд: fsm/budget `state -> …` актором operator, answer «ANSWER создан…», amend/ci_rerun константы, pause/resume.
-- Остановка на зоне не удерживает: `AUTO_WAIT_ZONE_DEFAULT=True`.
+- Итерация 2 — повтор вердикта: итерация 1 approved учтена, advance ждал iteration: 2.
+- С 71c496229 изменилось: подтяжка main (правка оператора test_ac4 Э0-задачи — из origin/main, не разработчика), PriorGenerationChildTest в tests/test_epic_supervisor_units.py, карта.
+- Реальный diff — `git diff origin/main...HEAD` (локальный main устарел, пакет показывает Э1/Э2а/Э3 лишними): 7 модулей зон + 2 теста.
+- Тесты задачи 50/50 зелёные.
 
 ## Не сработало
-- `plank-run`: планки в refs/artifacts нет (долгоживущий файл уже в tests/).
-- Временная мутация через `sed -i` потребовала подтверждения — не прошла.
+- (итерация 1) sed-мутация требовала подтверждения.
 
 ## Где остановился
-- REVIEW.md записан, вердикт approved.
+- REVIEW.md iteration 2 записан, approved, реестр пуст.
+- Временную мутацию для PriorGenerationChildTest запустить снова не удалось: правка `auto.py` требует подтверждения.
 
 ## Чего не хватило
-- Формат детали «auto остановлен» искал в auto.py:601 (`auto_stop`) — нигде не задокументирован как контракт.
+- Пакет строит diff от устаревшего локального main — сверял по origin/main.
