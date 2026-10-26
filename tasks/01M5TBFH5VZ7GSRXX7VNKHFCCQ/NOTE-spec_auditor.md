@@ -1,15 +1,14 @@
-# Записка spec_auditor — 01M5TBFH5VZ7GSRXX7VNKHFCCQ (визит 3, SPEC sha 183c611b)
+# Записка spec_auditor — 01M5TBFH5VZ7GSRXX7VNKHFCCQ (визит 4, SPEC sha 5a7c3572)
 
 ## Выяснено
-- Ветка задачи не содержит Э1; сверка по `git -C <wt> show origin/main:<файл>` и `git -C <wt> grep -n -A<n> <шаблон> origin/main -- <файл>`.
-- Требование 3 (пакетное чтение steps для waiting_on): queue_wait (zone_lock.py:850) → _waiting/_occupies/_stay_since_id/_occupier/_waiting_dependency/queue_order — пакетирование требует правки zone_lock.py (нет в зонах) или копии логики в board.py; плитка report waiting_on не показывает.
-- E1-тест board_model.py:222 (ac23) подменяет zone_lock.queue_wait(conn, task_id, t=None) и ждёт dependency; :202 (ac22) — на None. В матрице SPEC строки нет, мандат только на test_report.py.
-- test_report.py:1018 и command_report:524/:550 доску не покрывают.
-- store.db() открывает новое соединение на каждый вызов (store.py:403) — AC-3 по total_changes «уже открытого» соединения не ловит запись своим соединением.
-- Строки: catalog.py:694 _ensure_task_worktree, board.py:130 last_step_times (один запрос steps на проект), artel.py:2233 белый список ролей закрыт по умолчанию.
+- Ветка задачи по-прежнему без Э1 (нет orchestrator/board.py): сверка по `git -C <wt> show origin/main:<файл>`; main = 7f37c6dd7 (Э1 смержен).
+- Все ссылки SPEC на строки main подтвердились: report.py:48/565/596/1378/1428/1440, board.py:34/39/123, catalog.py:694 (вызов _ensure_task_worktree)/738/786, fsm.py:1070, canary_drive.py:54, targets.py:289-294, test_report.py:208..260, board_model.py:141/202/222/266/269.
+- E1 ac21 проверяет ключи карточки подмножеством (`CARD_KEYS <=`) — расширение карточки его не красит.
+- watch._pin_head читает .git файлами, не subprocess — report из модели не нарушит command_report.py:417 (без git).
+- canary=True в CLI не выставлен — обхода ref_required через `new` нет.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
+- SPEC-AUDIT.md: verdict concerns (пустой ключ `--ref kaiten:` проходит ref_required; `link --remove` снимает обязательную ссылку; мелочи: порядок карточек в группе эпика, «кто записал», разбор `--ref`), status ready.
 
 ## Чего не хватило
-- Знания «какие тесты держат zone_lock.queue_wait как источник waiting_on» — нашёл чтением E1-теста целиком.
+- Ничего существенного.
