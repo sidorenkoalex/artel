@@ -18,7 +18,7 @@
 - `targets.target` — загрузчик записи проекта (плоская запись, как у
   `targets._flatten`); `gitcmd.hosting_token` — токен записи;
 - `ci.check_runs` — чтение check runs GitHub; `ci.gh` — шпион `gh`;
-- `time.sleep` — пауза повтора не ждёт.
+- ссылка адаптера на `time` (`TimeWithSleep`) — пауза повтора не ждёт.
 
 Ветка `ci` (AC-14…AC-16) идёт через клон проекта
 `tests.sandbox.make_project_repo` под `real_git` (песочница без шпиона
@@ -46,7 +46,6 @@ import math
 import random
 import re
 import subprocess
-import time
 import urllib.error
 import urllib.parse
 from typing import NamedTuple
@@ -54,7 +53,7 @@ from typing import NamedTuple
 import pytest
 
 from orchestrator import ci, config, store, targets
-from tests.sandbox import make_project_repo
+from tests.sandbox import TimeWithSleep, make_project_repo
 
 
 def forge():
@@ -231,7 +230,9 @@ def lab(monkeypatch):
     monkeypatch.setattr("orchestrator.gitcmd.hosting_token", fake.hosting_token)
     monkeypatch.setattr(ci, "check_runs", fake.check_runs)
     monkeypatch.setattr(ci, "gh", fake.gh)
-    monkeypatch.setattr(time, "sleep", fake.sleep)
+    # Пауза подменяется ссылкой адаптера на `time`, не модулем `time` целиком
+    # (сторож tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py).
+    monkeypatch.setattr(gitlab_adapter(), "time", TimeWithSleep(fake.sleep))
     return fake
 
 
