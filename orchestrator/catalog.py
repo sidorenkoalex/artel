@@ -550,7 +550,8 @@ def _project_line_reasons(tz_raw: str, target: str) -> list[str]:
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
            model_set: str | None = None, strict_tz: bool = False,
-           epic_id: str | None = None, after: str | None = None) -> str:
+           epic_id: str | None = None, after: str | None = None,
+           start_after: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -605,6 +606,11 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     строки (`_new_task_row`) как защита от гонки с `epic close`.
     `after` — `new --after <id>[,<id>…]`: зависимости мержа той же
     проверкой, что строка ТЗ «Порядок: после …», объединённые с ней.
+    `start_after` — `new --start-after <id>[,<id>…]` (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требования 11-13): зависимость запуска,
+    проверенная `merge_after.start_after_value` до клона и id; отказ не
+    оставляет задачи. При исчерпанном конверте эпика задача заводится с
+    предупреждением (требование 9).
     """
     # Проект — первым рубежом (SPEC 01M4RRW7FT1EE77EY9Y462AZKC, требование
     # 2): до ТЗ, клона, id, ссылки документов и строки БД.
@@ -667,6 +673,15 @@ def cmd_new(title: str, tz_path: str | None = None, *,
                 [f"--after: {r}" for r in order_reasons]
                 + ["new: зависимости мержа --after не годны — задача не "
                    "заведена"]))
+    start_ids: list[str] = []
+    if start_after is not None:
+        start_ids, start_reasons = merge_after.start_after_value(
+            conn, None, guard.merge_after_items(start_after), target=target)
+        if start_reasons:
+            sys.exit("\n".join(
+                [f"--start-after: {r}" for r in start_reasons]
+                + ["new: зависимости запуска --start-after не годны — задача "
+                   "не заведена"]))
 
     # Клон проекта — до id, ссылки документов и строки БД (SPEC
     # 01M42PENCS26D0656X8FR7DFA7, требование 1, AC-3): не завёлся — отказ
@@ -695,8 +710,13 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)
     merge_after.record_declared(conn, task_id, declared)
+    if start_ids:
+        merge_after.rewrite_start_after(conn, task_id, start_ids,
+                                        "new --start-after", "operator")
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
+    if epic_id is not None:
+        _warn_exhausted_envelope(conn, epic_id)
     if model_set is not None:
         print(f"  набор задачи: {model_set} "
               f"({models.members_text(set_members)}); приёмка — ручной "
@@ -711,6 +731,21 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     else:
         print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
     return task_id
+
+
+def _warn_exhausted_envelope(conn, epic_id: str) -> None:
+    """`new --epic` при исчерпанном конверте не отказывает, а предупреждает
+    (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 9): первый шаг роли новой
+    задачи откажет проверка конверта `runner`."""
+    envelope = store.get_epic(conn, epic_id)["envelope_usd"]
+    if envelope is None:
+        return
+    spent = budget.epic_spent(conn, epic_id)
+    if spent >= envelope:
+        print(f"  ВНИМАНИЕ: конверт эпика {epic_id} исчерпан (потрачено "
+              f"${spent:.2f} из ${envelope:.2f}) — первый шаг роли задачи не "
+              f"начнётся, пока конверт не поднят: artel.py epic envelope "
+              f"{epic_id} N")
 
 
 def _new_task_row(conn, task_id: str, title: str, target: str,
@@ -1091,6 +1126,8 @@ def _epic_group_header(item: dict, cards: dict) -> str:
              + (f"конверт ${envelope:.2f}" if envelope is not None
                 else "без конверта"),
              epics.counts_text(item["counts"])]
+    if item.get("envelope_warning"):
+        parts.insert(1, f"ВНИМАНИЕ: {epics.envelope_warning_text(item)}")
     parts += [f"{d['task']}: части слиты {d['merged']}/{d['total']}"
               for d in item.get("divisions", [])]
     holders: dict = {}

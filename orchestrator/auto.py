@@ -9,8 +9,8 @@ import time
 from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
-              fsm, lease, models, pause, pull, rounds, runner, store,
-              zone_lock)
+              fsm, lease, merge_after, models, pause, pull, rounds, runner,
+              store, zone_lock)
 from .advance_gates import refusal_classes, spec_audit
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -239,6 +239,30 @@ def _run_wave_breaker_refusal(conn, task_id: str, journaled_before: int) -> bool
         if row["action"] == runner.WAVE_BREAKER_REFUSAL_ACTION:
             return True
     return False
+
+
+def _run_first_step_refusal(conn, task_id: str,
+                            journaled_before: int) -> tuple | None:
+    """(причина, подсказка) остановки, если `run` отказал ИМЕННО этим
+    вызовом по конверту эпика или по `start_after` (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требование 18); иначе `None`. Тот же приём
+    отсечки, что `_run_wave_breaker_refusal`."""
+    actions = {row["action"]
+               for row in store.task_steps(conn, task_id)[journaled_before:]}
+    t = store.get_task(conn, task_id)
+    if runner.ENVELOPE_REFUSAL_ACTION in actions:
+        return ("исчерпан конверт эпика — первый шаг роли не начат",
+                f"artel.py epic envelope {t['epic_id']} N")
+    if runner.START_AFTER_REFUSAL_ACTION in actions:
+        waiting, dead = merge_after.start_after_pending(conn, t)
+        ids = ", ".join(dep for dep, _ in waiting + dead)
+        hint = f"ждёт start_after: {ids}"
+        if dead:
+            hint += (f" — убитую зависимость сними: artel.py epic start-after "
+                     f"{task_id} <остальные id> (или "
+                     f"«{merge_after.NONE_WORD}»)")
+        return "зависимость запуска start_after не в done", hint
+    return None
 
 
 def _advance_refusal(conn, task_id: str, journaled_before: int) -> str | None:
@@ -963,6 +987,15 @@ def _role_run_step(conn, task_id: str, session_id: str, role: str,
             if _run_wave_breaker_refusal(conn, task_id, run_journaled_before):
                 reason, hint = config.AUTO_STOP_WAVE_BREAKER
                 return Stop(state, reason, hint.format(id=task_id), False)
+            # Конверт эпика и `start_after` (SPEC 01M5TBCY7WTN121S136XP2C6SR,
+            # требование 18) — причина в решении Оператора (поднять конверт)
+            # или в другой задаче, не буксование агента: своя подсказка,
+            # без алерта `attention`.
+            first_step = _run_first_step_refusal(conn, task_id,
+                                                 run_journaled_before)
+            if first_step is not None:
+                reason, hint = first_step
+                return Stop(state, reason, hint, False)
             return Stop(state, "run отказался стартовать",
                         f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
                         True)

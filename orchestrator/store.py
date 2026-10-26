@@ -652,6 +652,15 @@ def set_task_epic(conn: sqlite3.Connection, task_id: str,
                  (epic_id, now(), task_id))
 
 
+def task_epic_id(conn: sqlite3.Connection, task_id: str) -> str | None:
+    """Эпик задачи; `None` — задачи нет или она без эпика. Без отказа
+    `get_task`: алерт конверта после начисления (SPEC
+    01M5TBCY7WTN121S136XP2C6SR) не завершает шаг из-за пропавшей строки."""
+    row = conn.execute("SELECT epic_id FROM tasks WHERE id=?",
+                       (task_id,)).fetchone()
+    return row["epic_id"] if row is not None else None
+
+
 def epic_tasks(conn: sqlite3.Connection, epic_id: str) -> list:
     """Задачи эпика по возрастанию id."""
     return conn.execute("SELECT * FROM tasks WHERE epic_id=? ORDER BY id",

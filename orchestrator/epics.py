@@ -15,7 +15,10 @@
 """
 import sys
 
-from . import board, config, idgen, lease, store, targets
+from scripts import guard
+
+from . import (board, budget, config, idgen, lease, merge_after, spend, store,
+               targets)
 
 EPIC_PREFIX = "E"
 NEW_ACTION = "эпик заведён"
@@ -35,7 +38,9 @@ epic show <id>
 epic edit <id> [--title "<название>"] [--goal "<цель>"]
 epic close <id> "<итог>"
 epic add <id> <задача>
-epic remove <id> <задача>"""
+epic remove <id> <задача>
+epic envelope <id> N
+epic start-after <задача> <id>…|нет"""
 
 
 def new_epic_id() -> str:
@@ -266,6 +271,69 @@ def cmd_remove(args: list) -> None:
     _bind(args, "remove", body, "убрана из эпика")
 
 
+def cmd_envelope(args: list) -> None:
+    """Конверт эпика (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 3): годно
+    только число > 0 (`spend.cli_number`); подъём и понижение разрешены,
+    каждое изменение — запись журнала эпика, с которой счёт алерта 80 %
+    начинается заново (требование 5)."""
+    if len(args) != 2:
+        sys.exit(f"epic envelope: нужны id эпика и сумма\n{USAGE}")
+    epic_id, raw = args
+    value = spend.cli_number(raw)
+    if value is None:
+        sys.exit(f"epic envelope: сумма {raw!r} не число — конверт не изменён")
+    if value <= 0:
+        sys.exit(f"epic envelope: сумма должна быть больше нуля, получено "
+                 f"{raw!r} — конверт не изменён")
+    conn = store.db()
+    _existing(conn, epic_id)
+
+    def body():
+        epic = store.get_epic(conn, epic_id)
+        store.update_epic(conn, epic_id, envelope_usd=value)
+        store.journal(conn, epic_id, "operator", budget.EPIC_ENVELOPE_ACTION,
+                      f"{_envelope_text(epic['envelope_usd'])} → "
+                      f"{_envelope_text(value)}", target=epic["project"])
+
+    _transaction(conn, body)
+    spent = budget.epic_spent(conn, epic_id)
+    print(f"[{epic_id}] конверт эпика: {_envelope_text(value)}; потрачено "
+          f"${spent:.2f}")
+
+
+def cmd_start_after(args: list) -> None:
+    """Зависимость запуска задачи (SPEC 01M5TBCY7WTN121S136XP2C6SR,
+    требования 11-14): значение целиком — id через пробел или запятую;
+    «нет» снимает все. Поделённые элементы заменяются последней частью,
+    затем проверка `merge_after.start_after_value`; отказ — значение
+    прежнее. Под lease задачи, как `epic add|remove`."""
+    if len(args) < 2:
+        sys.exit(f"epic start-after: нужны id задачи и зависимости\n{USAGE}")
+    task_ref, raw_items = args[0], args[1:]
+    items = guard.merge_after_items(",".join(raw_items))
+    conn = store.db()
+    task_id = store.get_task(conn, task_ref)["id"]
+
+    def locked(_sid):
+        if items == [merge_after.NONE_WORD]:
+            ids = []
+        else:
+            ids, reasons = merge_after.start_after_value(conn, task_id, items)
+            if reasons:
+                sys.exit("epic start-after: " + "; ".join(reasons)
+                         + " — start_after не изменён")
+        old = merge_after.stored(store.get_task(conn, task_id)["start_after"])
+        if ids == old:
+            print(f"[{task_id}] start_after без изменений: "
+                  f"{', '.join(ids) or '—'}")
+            return True
+        merge_after.rewrite_start_after(conn, task_id, ids, "epic start-after",
+                                        "operator")
+        return True
+
+    lease.run_locked(conn, task_id, None, locked)
+
+
 def create_from_division(conn, parent_id: str, title: str, project: str,
                          goal: str) -> str:
     """Эпик из поделённого родителя (`approve --as-epic`, требование 7):
@@ -308,6 +376,17 @@ def _task_outcome(card: dict) -> str:
     return "—"
 
 
+def envelope_warning_text(item: dict) -> str:
+    """Предупреждение 80 % конверта элемента эпика модели доски (SPEC
+    01M5TBCY7WTN121S136XP2C6SR, требования 4, 19) — общее для `status` и
+    `epic show`; при исчерпанном конверте называет и отказ первого шага."""
+    if item["spent_usd"] >= item["envelope_usd"]:
+        return (f"конверт исчерпан — первый шаг роли новых задач эпика не "
+                f"начнётся; подними: artel.py epic envelope {item['id']} N")
+    return (f"потрачено не ниже {int(budget.EPIC_ALERT_RATIO * 100)} % "
+            f"конверта")
+
+
 def counts_text(counts: dict) -> str:
     return ", ".join(f"{state} {n}" for state, n in counts.items()) or "задач нет"
 
@@ -321,6 +400,8 @@ def show_lines(item: dict, cards: dict) -> list[str]:
              f"Потрачено ${item['spent_usd']:.2f} / конверт "
              f"{_envelope_text(item['envelope_usd'])}; "
              f"{counts_text(item['counts'])}"]
+    if item.get("envelope_warning"):
+        lines.append(f"ВНИМАНИЕ: {envelope_warning_text(item)}")
     if item.get("outcome"):
         lines.append(f"Итог: {item['outcome']}")
     if not item["nodes"]:
@@ -358,7 +439,8 @@ def cmd_show(args: list) -> None:
 
 def cmd_epic(rest: list) -> None:
     commands = {"new": cmd_new, "show": cmd_show, "edit": cmd_edit,
-                "close": cmd_close, "add": cmd_add, "remove": cmd_remove}
+                "close": cmd_close, "add": cmd_add, "remove": cmd_remove,
+                "envelope": cmd_envelope, "start-after": cmd_start_after}
     if not rest or rest[0] not in commands:
         sys.exit(f"epic: нужна подкоманда\n{USAGE}")
     commands[rest[0]](rest[1:])

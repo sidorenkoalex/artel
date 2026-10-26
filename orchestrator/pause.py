@@ -153,6 +153,11 @@ def _account_partial_cost(conn, task_id: str, role: str) -> None:
         tokens, saw_usage = spend.partial_tokens_from_log(Path(log_path))
     spend.charge_missing_result(conn, task_id, role, "pause --now",
                                 "шаг прерван pause --now", tokens, saw_usage)
+    # Алерт 80 % конверта эпика после этого начисления (SPEC
+    # 01M5TBCY7WTN121S136XP2C6SR, требование 5); отложенный импорт — тот же
+    # цикл через `runner`, что описан у `cmd_pause_now`.
+    from . import budget
+    budget.check_epic_alert(conn, task_id)
 
 
 def cmd_pause_now(task_id: str) -> None:

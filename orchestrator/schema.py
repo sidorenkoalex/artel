@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
-  merge_after TEXT, closed_as TEXT, epic_id TEXT,
+  merge_after TEXT, closed_as TEXT, epic_id TEXT, start_after TEXT,
   created_at TEXT, updated_at TEXT
 );
 {EPICS_DDL}
@@ -380,6 +380,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if "closed_as" not in table_columns(conn, "tasks"):
         add_column(conn, "tasks", "closed_as", "TEXT")
         _mark_past_divisions(conn)
+    # Зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 11):
+    # тот же формат, что `merge_after`; NULL — зависимостей запуска нет.
+    add_column(conn, "tasks", "start_after", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

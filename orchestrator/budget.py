@@ -277,6 +277,72 @@ def spent_with_estimate(t: sqlite3.Row) -> float:
     return (t["spent_usd"] or 0.0) + (t["spent_estimate_usd"] or 0.0)
 
 
+# Конверт бюджета эпика (SPEC 01M5TBCY7WTN121S136XP2C6SR, требования 1-5;
+# ADR-0028 п. 8). Порог предупреждения и алерта — своя константа, не
+# `config.BUDGET_ALERT_RATIO` потолка задачи (требование 2).
+EPIC_ALERT_RATIO = 0.8
+# Записи журнала ЭПИКА (`task_id` = id эпика, как у команд `epic …`):
+# изменение конверта начинает счёт алерта 80 % заново, запись алерта —
+# признак «при этом конверте алерт уже был» (требование 5).
+EPIC_ENVELOPE_ACTION = "конверт эпика изменён"
+EPIC_ALERT_ACTION = "алерт 80 % конверта эпика"
+EPIC_ALERT_SOURCE = "budget.epic_envelope"
+
+
+def epic_spent(conn, epic_id: str) -> float:
+    """Потрачено по эпику — сумма `spent_with_estimate` его задач.
+    Единственная формула (требование 1): её зовут проверка запуска
+    `runner`, алерт 80 %, модель доски и строка `watch`."""
+    return sum(spent_with_estimate(t) for t in store.epic_tasks(conn, epic_id))
+
+
+def epic_envelope_warning(spent: float, envelope) -> bool:
+    """Потрачено по эпику не ниже порога 80 % конверта; эпик без конверта
+    порога не имеет (требование 10)."""
+    return envelope is not None and spent >= EPIC_ALERT_RATIO * envelope
+
+
+def epic_warning_text(epic_id: str, spent: float, envelope: float) -> str:
+    return (f"эпик {epic_id}: потрачено ${spent:.2f} из конверта "
+            f"${envelope:.2f} — не ниже {int(EPIC_ALERT_RATIO * 100)} % "
+            f"конверта")
+
+
+def check_epic_alert(conn, task_id: str) -> None:
+    """Алерт Оператору после начисления стоимости шага задачи эпика
+    (требование 5): потрачено по эпику не ниже порога — один алерт на
+    значение конверта, в том числе после его `alert-ack`.
+
+    Признак «уже поднят» — журнал эпика: последняя из записей «конверт
+    изменён»/«алерт» — алерт. `BEGIN IMMEDIATE` до чтения признака, запись
+    журнала алерта закрывает транзакцию: два одновременных начисления
+    одного эпика алерт не удвоят."""
+    epic_id = store.task_epic_id(conn, task_id)
+    if not epic_id:
+        return
+    epic = store.get_epic(conn, epic_id)
+    if epic is None or epic["envelope_usd"] is None:
+        return
+    spent = epic_spent(conn, epic_id)
+    if not epic_envelope_warning(spent, epic["envelope_usd"]):
+        return
+    text = epic_warning_text(epic_id, spent, epic["envelope_usd"])
+    store.begin_immediate(conn)
+    try:
+        last = store.last_task_step_of(
+            conn, epic_id, (EPIC_ENVELOPE_ACTION, EPIC_ALERT_ACTION))
+        if last is not None and last["action"] == EPIC_ALERT_ACTION:
+            conn.rollback()
+            return
+        store.journal(conn, epic_id, "orchestrator", EPIC_ALERT_ACTION,
+                      f"{text} (задача {task_id})", target=epic["project"])
+    except BaseException:
+        conn.rollback()
+        raise
+    alerts.raise_alert(conn, epic_id, "threshold", EPIC_ALERT_SOURCE, text)
+    print(f"[{task_id}] ВНИМАНИЕ: {text}")
+
+
 def budget_block(t: sqlite3.Row) -> str | None:
     """Сообщение, почему `run` не стартует по бюджету, или None.
 
