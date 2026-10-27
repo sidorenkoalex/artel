@@ -1,21 +1,19 @@
 # Записка analyst — 01M5XZ9Z68V75VXF5Z66C708T4
 
 ## Выяснено
-- ТЗ — часть 1 деления родителя 01M5XXA2HY73D3WTXDR19Z5SWW; полный SPEC родителя
-  (адреса строк, матрица неослабления) — `git show refs/artifacts/01M5XXA2HY73D3WTXDR19Z5SWW:tasks/01M5XXA2HY73D3WTXDR19Z5SWW/SPEC.md`.
-- Адреса сверены на HEAD ветки: `fsm.py:33-37` STATES, `auto.py:1150`/`:1168`,
-  `doctor/branch_freshness.py:40`, `tests/test_auto_cycle.py:64-66`,
-  `tests/test_01m5tbbdfs6dwqy6ms263t1kpy_board_model.py:192-199`, `tests/test_invariants.py:78`/`:611` — совпадают.
-- Бюджет: рамка части $45 утверждена Оператором (`budget.apply_division_frame`, источник operator — SPEC её не перебивает), в SPEC 45.
+- ТЗ — часть 1 деления родителя 01M5XXA2HY73D3WTXDR19Z5SWW; SPEC родителя — в refs/artifacts родителя.
+- Возврат из spec_gate 27.10 (п. 1–8) закрыт в SPEC: mr_assignee целым (треб. 3, строка матрицы),
+  `targets.delivery_policy` + столбцы `mr_iid`/`mr_url` (треб. 2, 16), формы отправки — AC-5…AC-8,
+  amend-tests в amend.py (треб. 19, AC-9; amend.py добавлен в zones), kill с in_dev после первой отправки (AC-18),
+  AC-12/AC-17 названы «защита от регрессии», мандат на перечни тестов (треб. 22, вкл. tests/test_report.py),
+  AC-14 показ ссылки MR на доске/status, AC-20 зелёные operator-тесты.
+- Адрес merge_after исправлен: `merge_after.py:769` (гейт мержа, `s != "done"`) и `:792` (status); `:55` — это STATUS_WAIT_STATES.
 
 ## Не сработало
-- `ls`/`cd && grep` в Bash недоступны (отказ песочницы) — читать абсолютными путями.
+- Составные Bash-команды (`;`, переменные, heredoc с `{`) требуют подтверждения — только одиночные grep/скрипты по абсолютным путям.
 
 ## Где остановился
-- SPEC.md написан (19 требований, AC-1…AC-14, budget 45, merge_after 01M5WDB7JY…), status: ready; `scripts/guard.py` — ок.
-- AC взяты строго из блока «Критерии приёмки» ТЗ; приложение к test_invariants, предикат merge_gate, MAX_PARALLEL_TASKS,
-  хранение рабочей копии — только требованиями (в критериях ТЗ их нет). «Зелёные operator-тесты кроме мандата» — в «Не входит» (держит пульт).
-- Секция деления: сигналы сработали, дан материал для монолита (задача уже часть 1 деления родителя); строку «монолит принят» вписывает Оператор.
+- SPEC.md переписан: 22 требования, AC-1…AC-20, budget 45, status ready; guard — ок.
 
 ## Чего не хватило
-- Ничего существенного: ТЗ ссылается на SPEC родителя, он в refs/artifacts.
+- Ничего существенного.
