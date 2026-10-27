@@ -1,17 +1,17 @@
 # Записка аналитика — 01M5XZ9Z68XE2EKPDHYCAK25KF
 
 ## Выяснено
-- ТЗ = подраздел «Деление» SPEC родителя 01M5XXA2HY73D3WTXDR19Z5SWW (refs/artifacts/01M5XXA2HY73D3WTXDR19Z5SWW); требования/AC взяты из требований 4–7, 10 и AC родителя.
-- «Порядок: после части 1» = 01M5XZ9Z68V75VXF5Z66C708T4 (в БД уже заявлено) → merge_after.
-- Сдвиг строк на main a6af742bf: код 409 в `gitlab_adapter.py:211` (не 209); мьютекс захватывается в `fsm_merge_gate.py:1650` внутри `_cmd_approve_merge_gate_cycle` (:1581); `_refuse_during_canary` стоит на :1541 ПОСЛЕ слияния в scratch — для target-human его надо вызывать до open_mr.
-- `awaiting_human` в orchestrator/ на main ещё нет — придёт с частью 1.
-- SPEC написан, status: ready, guard ок; 19 AC, budget 45 (рамка ТЗ), монолит-обоснование + вариант разреза для Оператора.
+- ТЗ = подраздел «Деление» SPEC родителя 01M5XXA2HY73D3WTXDR19Z5SWW; merge_after = часть 1 01M5XZ9Z68V75VXF5Z66C708T4.
+- Шаг 2 (возврат с spec_gate): применены все 9 решений Оператора. Новые требование 2 (сдвиг base → in_dev, без подтяжки на гейте), AC-20 (max_awaiting под мьютексом, два параллельных approve), AC-21 (отказ open_mr(draft) → in_dev), AC-22 (PUSH_SENT_LEGACY_ACTION — не первая отправка). Нумерация требований сдвинута на +1 начиная с 2.
+- Переход merge_gate -> in_dev уже есть (fsm_merge_gate.py:283, :1006; fsm.py:1858) — нового состояния FSM нет.
+- В forge нет метода правки описания MR (undraft_mr меняет только title, gitlab_adapter.py:527-535), forge.py/gitlab_adapter.py read-only — отмечено в «Материалах» как факт для PLAN.
+- Отказ ensure_draft_mr сегодня — инцидент (github_adapter.py:67, :168, :181).
 
 ## Не сработало
-- `cd … ; sed` в Bash требует подтверждения — использовать абсолютные пути.
+- `cd … ; sed` в Bash требует подтверждения — абсолютные пути.
 
 ## Где остановился
-- Готово.
+- SPEC переписан, status: ready; guard прогнан.
 
 ## Чего не хватило
-- Номера строк ТЗ уже частично устарели; сверял grep по символам.
+- Способа обновить описание MR в пределах зон (forge его не даёт).
