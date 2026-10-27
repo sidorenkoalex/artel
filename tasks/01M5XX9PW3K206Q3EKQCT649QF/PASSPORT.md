@@ -15,3 +15,4 @@
 2026-10-27 06:04:47Z  spec_writing  actor=operator
 2026-10-27 06:07:41Z  spec_audit  actor=fsm
 2026-10-27 06:11:25Z  spec_gate  actor=fsm
+2026-10-27 06:12:08Z  killed  actor=operator
