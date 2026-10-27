@@ -1,16 +1,17 @@
 # Записка spec_auditor — 01M5XZ9Z68XE2EKPDHYCAK25KF
 
 ## Выяснено
-- Аудит версии SPEC e04993b9: все 9 пунктов решения Оператора №1 и 9 отклонений прошлого аудита закрыты, адреса верны.
-- Описание MR правкой обновить нельзя: `gitlab_adapter.EDIT_MR_FIELDS = {"assignee_id","title"}` (:67), фильтр на :164. `forge.py` и `gitlab_adapter.py` по ТЗ только для чтения, поэтому обновление описания на гейте (требование 4, AC-15) в зонах невыполнимо. Это главный пункт вердикта.
-- `_ensure_draft_mr_after_publish` зовётся только после успешного push (`github_adapter.py:252`), а `ensure_head_in_origin` ничего не делает, если `origin` уже видит голову (:238). Значит, после отказа черновика повторный advance пройдёт без черновика (Е-1).
-- Сдвиг base без merge распознаётся через `pull.evaluate(merge_main=False)`, который возвращает `Pulled` (`pull.py:875`).
+- Проверена версия SPEC 6d25d492. Решение Оператора №2 перенесено, три отклонения прошлого аудита (описание на гейте, повтор черновика, amend-tests) закрыты. Адреса кода верны.
+- Код Б2.1а на ветке ещё пуст (`git diff main...task/01m5xz9z68v75…` пуст). Её SPEC читается командой `git show refs/artifacts/01M5XZ9Z68V75VXF5Z66C708T4:tasks/01M5XZ9Z68V75VXF5Z66C708T4/SPEC.md`. В ней `delivery_policy` и целый `mr_assignee`.
+- `forge._GitHub` умеет только `pipeline_status`. Значит, у `target-human` с `forge: github` нет `open_mr`, а `gh`-черновик продолжает работать (Е-1).
+- Отказ push в `ensure_draft_mr` идёт в `_incident`, то есть в алерт (`github_adapter.py:167-171`). AC-18 алерт не проверяет (В-1).
+- Отказ push в `amend-tests` уходит в `_recovery_exit` уже после коммита (`amend.py:826-837`), а `amend.py` вне зон (Г-1).
 
 ## Не сработало
-- Bash с `;` и `&&` или grep по каталогу документов требует подтверждения; читай через Read.
+- Bash с `;`/`|` требует подтверждения, ls недоступен. Читать нужно через Read; ADR — из worktree, не из корня пульта.
 
 ## Где остановился
-- SPEC-AUDIT.md: status ready, verdict concerns, 3 отклонения + 2 замечания; guard ок.
+- SPEC-AUDIT.md: status ready, verdict concerns, 4 отклонения и замечания. guard ок.
 
 ## Чего не хватило
-- Белый список полей PUT в gitlab_adapter нашёлся только при чтении кода; SPEC его не называл.
+- Какие методы реализует `forge._GitHub`, стало видно только при чтении `forge.py:115-200`; SPEC это не называл.
