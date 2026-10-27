@@ -1,10 +1,10 @@
-<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 380.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 3} -->
+<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 500.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 3} -->
 # Эпик E01M5W66QH7MNY4XWVRTP4TAWRP: Проект на GitLab с гейтом людей проекта (ADR-0029)
 
 - Проект: artel
 - Состояние: open
 - Цель: Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2
-- Конверт: $380.00
+- Конверт: $500.00
 - Итог: —
 - Заведён: 2026-10-26 13:25:40Z
 - Закрыт: —
@@ -17,6 +17,6 @@
 | 01M5W670PHF08VPZWDRM5BY56W | GitLab А1: адаптер хостинга — общий интерфейс, реализация GitLab, проверочная команда только на чтение | killed | divided |
 | 01M5W67E0AYGKF03SEM6E2AQX2 | GitLab Б1: ветка по ключу трекера, автор и шаблон коммита, сжатие и перебазирование, единая точка отправки | killed | divided |
 | 01M5WCXBM7WCMRWCBWNCHMAR3T | GitLab А1.1: интерфейс адаптера, реализация GitLab, подключение ci | done | — |
-| 01M5WCXBR9K8CN586W1AP3ZN6Q | GitLab А1.2: doctor, проверочная команда forge-probe и песочница без живого HTTP | spec_writing | — |
-| 01M5WDB7F14SQ30QVWJY2XYBG2 | GitLab Б1.1: поля записи, ветка по шаблону, единая точка отправки с журналом и белым списком | verifying | — |
-| 01M5WDB7JY0VJGHVKCABA2QC5T | GitLab Б1.2: автор, соавтор и трейлер пульта, сжатие и перебазирование на входе в verifying, перезапись своей ветки | in_dev | — |
+| 01M5WCXBR9K8CN586W1AP3ZN6Q | GitLab А1.2: doctor, проверочная команда forge-probe и песочница без живого HTTP | done | — |
+| 01M5WDB7F14SQ30QVWJY2XYBG2 | GitLab Б1.1: поля записи, ветка по шаблону, единая точка отправки с журналом и белым списком | done | — |
+| 01M5WDB7JY0VJGHVKCABA2QC5T | GitLab Б1.2: автор, соавтор и трейлер пульта, сжатие и перебазирование на входе в verifying, перезапись своей ветки | done | — |
