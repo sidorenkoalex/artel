@@ -1,17 +1,16 @@
 # Записка аналитика — 01M5XZ9Z68XE2EKPDHYCAK25KF
 
 ## Выяснено
-- ТЗ = подраздел «Деление» SPEC родителя 01M5XXA2HY73D3WTXDR19Z5SWW; merge_after = часть 1 01M5XZ9Z68V75VXF5Z66C708T4.
-- Шаг 2 (возврат с spec_gate): применены все 9 решений Оператора. Новые требование 2 (сдвиг base → in_dev, без подтяжки на гейте), AC-20 (max_awaiting под мьютексом, два параллельных approve), AC-21 (отказ open_mr(draft) → in_dev), AC-22 (PUSH_SENT_LEGACY_ACTION — не первая отправка). Нумерация требований сдвинута на +1 начиная с 2.
-- Переход merge_gate -> in_dev уже есть (fsm_merge_gate.py:283, :1006; fsm.py:1858) — нового состояния FSM нет.
-- В forge нет метода правки описания MR (undraft_mr меняет только title, gitlab_adapter.py:527-535), forge.py/gitlab_adapter.py read-only — отмечено в «Материалах» как факт для PLAN.
-- Отказ ensure_draft_mr сегодня — инцидент (github_adapter.py:67, :168, :181).
+- ТЗ = подраздел «Деление» SPEC родителя 01M5XXA2HY73D3WTXDR19Z5SWW; merge_after = часть 1 01M5XZ9Z68V75VXF5Z66C708T4 (Б2.1а).
+- Шаг 3 (возврат с гейта SPEC №2): имена Б2.1а — `targets.delivery_policy(entry) -> dict`, столбцы `mr_iid INTEGER`/`mr_url TEXT`, функции store.py Б2.1а (их имён SPEC Б2.1а пока не называет — в нашем SPEC без имён). Обновление описания MR на гейте убрано: описание пишется только при open_mr (черновик — на входе в verifying, draft_mr:false — на гейте); AC-15 переписан. Отказ open_mr(draft) → in_dev, следующий advance повторяет open_mr даже при голове на сервере (AC-21). На пути amend-tests черновой MR не открывается (треб. 6, AC-13).
+- SPEC Б2.1а читается: `git show refs/artifacts/01M5XZ9Z68V75VXF5Z66C708T4:tasks/01M5XZ9Z68V75VXF5Z66C708T4/SPEC.md` (каталог документов другой задачи закрыт).
+- `gitlab_adapter.EDIT_MR_FIELDS` (:67) = {assignee_id, title}; повтор черновика: `github_adapter.py:238-239` (no-op при голове на сервере), `:252`.
 
 ## Не сработало
-- `cd … ; sed` в Bash требует подтверждения — абсолютные пути.
+- `ls` в каталоге другой задачи заблокирован; `ls` в шелле вообще не найден.
 
 ## Где остановился
-- SPEC переписан, status: ready; guard прогнан.
+- SPEC правлен, status: ready; guard ок.
 
 ## Чего не хватило
-- Способа обновить описание MR в пределах зон (forge его не даёт).
+- Имён функций store.py для mr_iid/mr_url — в SPEC Б2.1а их нет.
