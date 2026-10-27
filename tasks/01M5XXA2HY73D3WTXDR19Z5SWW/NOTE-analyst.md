@@ -1,17 +1,18 @@
 # Записка analyst — 01M5XXA2HY73D3WTXDR19Z5SWW
 
 ## Выяснено
-- Возврат из spec_gate 27.10 (14 решений Оператора по SPEC-AUDIT) внесён в SPEC целиком: 29 AC (было 20), зоны + `orchestrator/gitcmd.py`, `orchestrator/doctor/branch_freshness.py`; деление на 2 части с Рамкой $45 каждая; раздел «Матрица неослабления» таблицей.
-- `gitcmd.py` в ТЗ стоял «только чтение» — решение Оператора 2 его перекрывает (запрет отправки в awaiting_human в единой точке отправки); `amend.py` в «Не входит» как только чтение.
-- Запись «ветка отправлена» уже есть: `gitcmd.PUSH_SENT_ACTION` (`gitcmd.py:176`), чтение `:220-230` — на неё опирается счёт max_in_flight.
-- Мандат на тесты сужен до двух мест: `tests/test_auto_cycle.py:64-66` (FSM_STATES), `board_model.py:192-199` (expected_waiting → "human"). OPERATOR_STATES `:37` не меняется.
-- Критерий «существующие тесты operator-проектов зелёные без правки» возвращён как AC-29 по прямому решению Оператора 13 (вопреки общему правилу скила «проверки пульта — в Не входит»).
+- Возврат с гейта SPEC №2 (8 пунктов) внесён точечно: AC 29 → 32 (новые AC-30 перечни APPROVE_NEEDS_SHA/SET_MODELS_STATES/STATE_ROLE без awaiting_human; AC-31 max_in_flight на amend-tests; AC-32 на входе в in_dev через черновой MR GitHub).
+- mr_assignee: загрузка как в Б1.1 (record_fields.py:169 держит "alice"); нечисловое — MR без исполнителя + журнал «исполнитель не числовой id — не назначен».
+- 409: forge.MergeRequest (forge.py:67-74) без кода; текст адаптера gitlab_adapter.py:209 «GitLab ответил кодом {status} на …» — разбор в fsm_merge_gate.py (AC-11, плюс отрицательный случай 403).
+- Шаги гейта: :1513 публикация, :1541 канарейка, :1581-1601 мьютекс — исполняются; :1545 коммит закрытия — нет (AC-3/AC-4).
+- max_in_flight перенесён в gitcmd._push_plan (`gitcmd.py:730`) перед первой отправкой; gitcmd.py добавлен в зоны части 2.
+- Ссылка на MR — пара (iid, web_url), undraft/assign по iid.
 
 ## Не сработало
-- `ls` в шелле нет; составные команды с `head` после `;` требуют подтверждения — по одной команде.
+- —
 
 ## Где остановился
-- SPEC.md переписан, status: ready, budget 70, merge_after 01M5WDB7JY0VJGHVKCABA2QC5T; guard — ок.
+- SPEC.md обновлён, status: ready, guard ок. Бюджет 70, деление 2×$45 без изменений.
 
 ## Чего не хватило
-- Нет перечня «все пути отправки ветки задачи» — аудитор искал вызовы ensure_head_in_origin грепом; решение Оператора свело это к одной точке в gitcmd.py.
+- —
