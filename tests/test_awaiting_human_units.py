@@ -100,6 +100,30 @@ def test_in_repo_refuses_awaiting_push_before_git(initialized_tmp_root,
     assert len(calls) == 1 and other in calls[0], calls
 
 
+def test_in_repo_passes_non_push_call_untouched(initialized_tmp_root,
+                                                monkeypatch):
+    """Не-push вызов `gitcmd.in_repo` (fetch без ссылок отслеживания, как у
+    `workspace.ensure`) — рядом с веткой задачи в `awaiting_human` — уходит
+    в `gitcmd.git` с прежним argv, без разбора отправки на входе.
+
+    Ловит мутацию: проверку отправки на входе `in_repo` зовут для любого
+    вызова (или она правит argv) — подменённый разбор сработает на fetch,
+    либо `git` получит не тот argv.
+    """
+    calls = []
+    monkeypatch.setattr(gitcmd, "git", lambda *a, **k: calls.append(a))
+
+    def parsed(*_a, **_k):
+        raise AssertionError("разбор отправки на не-push вызове")
+
+    monkeypatch.setattr(gitcmd, "_awaiting_human_refusal", parsed)
+    _task, branch = insert(STATE)
+    args = ("fetch", "--refmap=", "origin",
+            f"+refs/heads/{branch}:refs/artel/fetch/x")
+    gitcmd.in_repo(config.ROOT, *args)
+    assert calls == [("-C", str(config.ROOT), *args)], calls
+
+
 def test_kill_leaves_server_only_for_target_human_after_push(initialized_tmp_root,
                                                              monkeypatch):
     """Признак «сервер оставлен людям проекта» уборки `kill`: `target-human`

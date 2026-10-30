@@ -1170,13 +1170,16 @@ def in_repo(repo: Path, *args: str,
     Отправка ветки задачи в `awaiting_human` отказывается уже здесь, до
     `git` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 18; ANSWER-1 п. 5).
     """
-    argv = ["-C", str(repo), *args]
-    try:
-        refusal = _awaiting_human_refusal(argv, task_id)
-    except sqlite3.Error:
-        refusal = None
-    if refusal is not None:
-        return _refused(["git", *argv], refusal)
+    # Не-push вызов (fetch, worktree, rev-parse…) проверку не проходит
+    # вовсе: argv и поведение такого вызова — ровно прежние.
+    if any(word in PUSH_SUBCOMMANDS for word in args):
+        argv = ["-C", str(repo), *args]
+        try:
+            refusal = _awaiting_human_refusal(argv, task_id)
+        except sqlite3.Error:
+            refusal = None
+        if refusal is not None:
+            return _refused(["git", *argv], refusal)
     if task_id is None:
         return git("-C", str(repo), *args)
     return git("-C", str(repo), *args, task_id=task_id)

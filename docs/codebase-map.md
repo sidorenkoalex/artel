@@ -1,5 +1,5 @@
 ---
-built_at_sha: a68279a97df3dc71528f9e50e82cc11b3e2b066b
+built_at_sha: 19047332ae9cd472bdf5abafd3e8baff576a47d7
 ---
 
 # Codebase-map пульта
@@ -8844,6 +8844,7 @@ built_at_sha: a68279a97df3dc71528f9e50e82cc11b3e2b066b
 - `declare`
 - `insert`
 - `test_forecast_skips_awaiting_zone_only_when_not_held`
+- `test_in_repo_passes_non_push_call_untouched`
 - `test_in_repo_refuses_awaiting_push_before_git`
 - `test_kill_leaves_server_only_for_target_human_after_push`
 - `test_mr_link_text_reads_row_columns`
