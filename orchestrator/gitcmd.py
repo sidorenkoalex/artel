@@ -567,6 +567,22 @@ def _dead_states() -> tuple:
     return fsm.TERMINAL_STATES
 
 
+def _awaiting_state() -> str:
+    """Состояние ожидания людей проекта — `fsm.AWAITING_HUMAN`; импорт
+    отложен по той же причине, что в `_dead_states`."""
+    from . import fsm
+    return fsm.AWAITING_HUMAN
+
+
+def _awaiting_human_spec(specs: list) -> dict | None:
+    """Первый refspec отправки, ведущий в ветку задачи в `awaiting_human`
+    (отправляемую или удаляемую); None — такого нет."""
+    state = _awaiting_state()
+    return next((s for s in specs if s["kind"] == "branch"
+                 and s["task"] is not None and s["task"]["state"] == state),
+                None)
+
+
 def _refspecs(refspecs: list, tasks: list) -> list:
     """Разбор refspec отправки: словарь на каждый — назначение, вид
     (`branch`/`artifacts`/`ref`), форма (`+`, `:<ref>`) и задача проекта, к
@@ -727,6 +743,66 @@ def _refuse(plan: _PushPlan, project: str | None, related: str | None,
     return plan
 
 
+def _push_destination(args: list, index: int, cwd: Path,
+                      cwd_project: str | None, entries: dict | None) -> tuple:
+    """(флаги, опции, позиционные слова, их позиции, проект, разбор
+    refspec) отправки `args[index]` — проект по месту вызова, иначе по
+    локальному пути или адресу назначения, иначе артель."""
+    flags, options, positional, positions = _push_words(args[index + 1:])
+    dest = positional[0] if positional else ""
+    project = cwd_project
+    local = _local_dest_path(dest) if dest else None
+    if project is None and local:
+        project = _project_of_path(cwd / local)
+    if project is None and dest and entries is not None:
+        found = project_by_url(dest, entries)
+        project = found[0] if found is not None else None
+    project = project or config.DEFAULT_TARGET
+    specs = _refspecs(positional[1:], _project_tasks(project))
+    return flags, options, positional, positions, project, specs
+
+
+def _refuse_awaiting_human(plan: _PushPlan, project: str, specs: list,
+                           env: dict, task_id: str | None) -> bool:
+    """Ветку задачи в `awaiting_human` ведут люди проекта (SPEC
+    01M5XZ9Z68V75VXF5Z66C708T4, требование 18): отказ при любой форме —
+    отправка, явный refspec, `--delete`, `:<ветка>` — и при любом гейте.
+    True — отказ записан в `plan`."""
+    waiting = _awaiting_human_spec(specs)
+    if waiting is None:
+        return False
+    _refuse(plan, project, waiting["task"]["id"], env, task_id,
+            f"ветка {waiting['name']} задачи {waiting['task']['id']} в "
+            f"{_awaiting_state()} — ждёт людей проекта, пульт её не "
+            f"отправляет")
+    return True
+
+
+def _awaiting_human_refusal(argv: list, task_id: str | None) -> str | None:
+    """Отказ отправки ветки задачи в `awaiting_human` для argv `in_repo`
+    (`-C <клон> …`) — до `git()`, который тесты и вызыватели подменяют
+    (ответ Оператора ANSWER-1 п. 5). Прочие отказы единой точки здесь не
+    решаются: их выносит `_push_plan` внутри `git()`, один раз."""
+    globals_, index, cwd = _split_globals(argv, Path(config.ROOT))
+    if index is None or argv[index] not in PUSH_SUBCOMMANDS:
+        return None
+    from . import targets
+    env = dict(os.environ)
+    located = _location_projects(globals_, cwd, env)
+    if len(located) > 1:
+        return None
+    try:
+        entries = targets.load()
+    except targets.TargetsError:
+        entries = None
+    *_, project, specs = _push_destination(
+        argv, index, cwd, next(iter(located), None), entries)
+    plan = _PushPlan(list(argv), cwd)
+    if _refuse_awaiting_human(plan, project, specs, env, task_id):
+        return plan.refusal
+    return None
+
+
 def _push_plan(args: list, cwd: Path, env: dict | None,
                task_id: str | None) -> _PushPlan | None:
     """Решение единой точки отправки по argv git `args` (без `git`),
@@ -786,20 +862,12 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
             return None
         return _refuse(plan, cwd_project, None, env, task_id,
                        f"подкоманда {sub} — псевдоним git ({alias})")
-    flags, options, positional, positions = _push_words(args[index + 1:])
-    dest = positional[0] if positional else ""
-    project = cwd_project
-    local = _local_dest_path(dest) if dest else None
-    if project is None and local:
-        project = _project_of_path(cwd / local)
-    if project is None and dest and entries is not None:
-        found = project_by_url(dest, entries)
-        project = found[0] if found is not None else None
-    project = project or config.DEFAULT_TARGET
-    tasks = _project_tasks(project)
-    specs = _refspecs(positional[1:], tasks)
+    flags, options, positional, positions, project, specs = _push_destination(
+        args, index, cwd, cwd_project, entries)
     related = next((s["task"]["id"] for s in specs if s["task"] is not None),
                    None)
+    if _refuse_awaiting_human(plan, project, specs, env, task_id):
+        return plan
     entry = (entries or {}).get(project)
     if project != config.DEFAULT_TARGET and entry is None:
         why = ("targets.yaml не читается" if entries is None
@@ -1098,7 +1166,20 @@ def in_repo(repo: Path, *args: str,
     «Подход»).
 
     `task_id` уходит в `git` только заданным — те же заглушки его не знают.
+
+    Отправка ветки задачи в `awaiting_human` отказывается уже здесь, до
+    `git` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 18; ANSWER-1 п. 5).
     """
+    # Не-push вызов (fetch, worktree, rev-parse…) проверку не проходит
+    # вовсе: argv и поведение такого вызова — ровно прежние.
+    if any(word in PUSH_SUBCOMMANDS for word in args):
+        argv = ["-C", str(repo), *args]
+        try:
+            refusal = _awaiting_human_refusal(argv, task_id)
+        except sqlite3.Error:
+            refusal = None
+        if refusal is not None:
+            return _refused(["git", *argv], refusal)
     if task_id is None:
         return git("-C", str(repo), *args)
     return git("-C", str(repo), *args, task_id=task_id)

@@ -35,7 +35,7 @@ record_fixation`): это запись пульта по команде Опер
 import sys
 from pathlib import Path
 
-from . import (artifact_branch, artifact_source, cycle_hint, fixation,
+from . import (artifact_branch, artifact_source, cycle_hint, fixation, fsm,
                fsm_advance, gitcmd, lease, merge_after, runner, store,
                workspace)
 from .advance_gates import mandate
@@ -393,6 +393,8 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     SPEC пройти сверку фиксации."""
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if state == fsm.AWAITING_HUMAN:
+        sys.exit(f"[{task_id}] answer отклонён: {fsm.AWAITING_HUMAN_HINT}")
     mandate_paths: list[str] = []
     test_elements: list[str] = []
     test_ids: list[str] = []

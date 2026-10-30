@@ -196,6 +196,8 @@ def expected_waiting(state: str):
         return "operator"
     if state == "verifying":
         return "ci"
+    if state == "awaiting_human":
+        return "human"
     return "role"
 
 
