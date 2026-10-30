@@ -1,0 +1,169 @@
+---
+task: 01M5XZ9Z68V75VXF5Z66C708T4
+type: plan
+author_role: developer
+status: ready
+schema_version: 5
+---
+
+# PLAN: Б2.1а — состояние `awaiting_human` и его учёт в перечнях пульта
+
+## Подход
+Одно новое значение `awaiting_human` в `fsm.STATES` (сразу после
+`merge_gate`, не окончательное, без роли и гейта Оператора) и его учёт во
+всех перечнях пульта одним изменением — иначе сверки
+`tests/test_invariants.py:611` и свипы `tests/test_auto_cycle.py` красные.
+Константы `fsm.AWAITING_HUMAN` и `fsm.AWAITING_HUMAN_HINT` («состояние ждёт
+людей проекта — mr-sync (шаг Б2.2)») — единственный адрес литерала
+подсказки для `approve`/`reject`/`answer`/`amend-tests`.
+
+Ключевые решения:
+- **Поля доставки** — `max_awaiting`/`awaiting_holds_zones` объявлены в
+  `targets.LOCAL_FIELDS["policy"]` и `DELIVERY_POLICY_FIELDS` (переносятся в
+  плоскую запись), проверка — в `_check_delivery` рядом с `max_in_flight`/
+  `draft_mr`. Умолчания — `targets.DELIVERY_DEFAULTS`, отдаёт их только
+  `targets.delivery_policy(entry)`; строка цифр в `mr_assignee` там же
+  толкуется целым id. Предикат `targets.merged_by_project_people(entry)` —
+  по образцу `push_whitelisted`.
+- **Запрет отправки** — в `gitcmd._push_plan` сразу после разбора refspec
+  (`_refspecs`), до белого списка и до записи «ветка отправлена»:
+  `_awaiting_human_spec` ищет refspec вида `branch` (в том числе с
+  `colon` — удаление `:<ветка>`) на ветку задачи в `awaiting_human`;
+  `--delete <ветка>` разбирается тем же refspec. Отказ — `_refuse` с
+  записью «отправка отказана» в журнал задачи, процесс git не запускается.
+- **Зоны** — `awaiting_human` в `zone_lock.BLOCKING_STATES`; поле записи
+  проекта читает `zone_lock._holds_zones(row)` (через `delivery_policy`) в
+  отказе старта (`_occupier`) и в прогнозе (`forecast_overlaps`).
+- **Надзор эпика** — статус `_AWAITING` «ждёт людей проекта» раньше
+  остальных правил `_epic_view`, задача исключена из `view.running` (не
+  занимает место лимита), `awaiting_human` — в `_NOT_HOLDING_STOP_STATES`.
+- **Ссылка на MR** — столбцы `tasks.mr_iid INTEGER`, `tasks.mr_url TEXT`
+  (DDL + `add_column`), функции `store.set_mr_link`/`mr_link`/
+  `mr_link_text`. Показ: карточка доски (`mr_iid`/`mr_url`, виды `--md`,
+  `--html`, `--json`), плитка `report`, строка `status`, строка `watch` при
+  переходе в `awaiting_human` (`watch._print_state`).
+- **`kill`** — `cleanup._server_left_to_project_people`: `target-human` и
+  запись «ветка отправлена» (`PUSH_SENT_ACTION` или старый вид) в журнале —
+  `cleanup_project_remote` не закрывает PR/MR и не удаляет ветку в
+  `origin`, пишет запись «уборка» со ссылкой на MR; локальная уборка
+  (`cleanup_killed_task`) прежняя.
+
+Бюджет SPEC ($45) не пересматриваю.
+
+## Шаги
+1. `targets.py`: поля, проверка, `delivery_policy`, `merged_by_project_people`,
+   `mr_assignee` целым.
+2. `fsm.py`: состояние, константы, отказ `approve`/`reject`; `answer.py`,
+   `amend.py` (`_refuse_awaiting_human` первым действием обоих путей).
+3. `gitcmd.py`: отказ отправки ветки задачи в `awaiting_human`.
+4. `schema.py`/`store.py`: ссылка на MR.
+5. Перечни: `zone_lock`, `config.AUTO_STOP`, `auto` (`_NO_ALERT_FINAL_STATES`,
+   надзор эпика), `board` (`HUMAN_STATES` → `waiting_on: human`, ссылка MR),
+   `report`, `watch._GATE_STATES`, `catalog` (`status`),
+   `doctor/branch_freshness.py`.
+6. `cleanup.py`: `kill` проекта `target-human` после отправки.
+7. Тесты: мандатные правки перечней (требование 22), новый
+   `tests/test_awaiting_human_units.py`, приложение к
+   `tests/test_invariants.py`, регенерация `docs/codebase-map.md`.
+
+## Покрытие требований
+
+| Требование | Шаг |
+|---|---|
+| 1 | 1 |
+| 2 | 1 |
+| 3 | 1 |
+| 4 | 1 (используется в 6) |
+| 5 | 2 |
+| 6 | 5 (`board.HUMAN_STATES`) |
+| 7 | 5 (`zone_lock.BLOCKING_STATES`, `_holds_zones`) |
+| 8 | 5 (`config.AUTO_STOP`, `auto._NO_ALERT_FINAL_STATES`) |
+| 9 | 5 (`auto._epic_view`, `_NOT_HOLDING_STOP_STATES`) |
+| 10 | 5 (`report.STATE_ORDER` = `fsm.STATES`, `MANUAL_GATE_STATES` без него, `watch._GATE_STATES`, `catalog._status_line`) |
+| 11 | без новой механики: `merge_after.py:769` (`s != "done"`); держит AC-12 |
+| 12 | 2 (в перечни не добавлено; AC-3) |
+| 13 | без новой механики: `fsm._approve_escalated` (`escalated_from`); держит AC-17 |
+| 14 | рабочая копия не трогается нигде, кроме `kill`/`done`; lease в `awaiting_human` не берётся — `parallel_limit` его не считает; надзор — шаг 5 |
+| 15 | 5 (`doctor/branch_freshness.py`) |
+| 16 | 4, 5 |
+| 17 | 2 |
+| 18 | 3 |
+| 19 | 2 |
+| 20 | 6 |
+| 21 | 7 (приложение ниже) |
+| 22 | 7 |
+
+## Влияние на систему
+- **Гейты/guard'ы не ослабляются.** Белый список отправок
+  (`gitcmd._whitelist_refusal`) не тронут — новый отказ стоит перед ним и
+  только добавляет запрет. `mr_assignee` — расширение допустимых значений
+  целым (решение гейта SPEC п. 1); пустая строка, bool и прочие типы — по
+  прежнему отказ, `tests/test_01m5wdb7f14sq30qvwjy2xybg2_record_fields.py:169`
+  зелёный без правки.
+- **Ослабления по ADR-0029** (матрица SPEC): `awaiting_holds_zones: false`
+  отпускает зону; `kill` проекта `target-human` после отправки не трогает
+  сервер; `doctor` не сверяет свежесть ветки в `awaiting_human`. Для
+  проектов `operator` поведение прежнее: `awaiting_human` штатно
+  недостижимо (`targets.SUPPORTED_MERGE_GATES = ("operator",)`, вход с гейта
+  мержа — часть 2).
+- **Инварианты.** `tests/test_invariants.py` — защищённый путь; его
+  `FSM_STATES` расширяется приложением ниже (свипы покрывают новое
+  состояние — строже). Локально с приложением: `85 passed, 1121 subtests
+  passed`; без приложения на ветке красен
+  `test_swept_states_are_exactly_the_fsm_states` — ожидаемо, его закрывает
+  приложение на дереве прогона.
+- **Существующие тесты** изменены только по мандату требования 22:
+  `tests/test_auto_cycle.py` (кортеж `FSM_STATES` + `awaiting_human`),
+  `tests/test_01m5tbbdfs6dwqy6ms263t1kpy_board_model.py` (ветка
+  `awaiting_human` → `"human"` в `expected_waiting`). `tests/test_report.py`
+  перечней состояний не несёт — не тронут. Утверждения методов не менялись.
+- **Схема БД** — два новых столбца с NULL по умолчанию, миграция
+  `add_column` идемпотентна; `tests/test_store_schema_migration_parity.py`
+  зелёный.
+- **Прогоны:** планка `plank-run` — `26 passed`; долгоживущие файлы задачи —
+  `33 passed`; тесты затронутых модулей (auto_cycle, board_model, report,
+  zone_lock*, kill_cleanup, gitcmd_push_point, record_fields, epic_view/
+  supervisor, watch, answer, amend, git_fixation, catalog и др.) —
+  `61 + 468 + 93 + 26 passed`; новые юнит-тесты — `5 passed`, каждый
+  краснеет на своей заявленной мутации (проверено временной правкой кода).
+- **Откат** — revert merge-коммита задачи; столбцы `mr_iid`/`mr_url`
+  останутся в БД пустыми и никому не мешают.
+
+## Риски
+- `awaiting_human` длиннее ширины колонки `status` (`{state:<13}`) на один
+  символ — строка сдвигается только у задач в этом состоянии.
+- Строка `watch` со ссылкой MR — дополнительная строка после `STATE=…`;
+  разбор `STATE=` не меняется.
+
+## Приложение 1: `tests/test_invariants.py` — `FSM_STATES` с `awaiting_human` (требование 21)
+Патч проверен `git apply --check` на чистом дереве ветки (`APPLY_OK`).
+
+```diff
+diff --git a/tests/test_invariants.py b/tests/test_invariants.py
+index cba5831a8..887e2c28e 100644
+--- a/tests/test_invariants.py
++++ b/tests/test_invariants.py
+@@ -74,10 +74,11 @@ TRUNCATED_CI = json.dumps({
+ # Все состояния FSM (docs/design.md §6 в срезе Фазы 0, artel.py docstring).
+ # tests_writing — A4 (tasks/T023): приёмочные тесты до кода, между
+ # spec_gate и in_dev. spec_audit — аудит SPEC между spec_writing и
+-# spec_gate (SPEC 01M4MQAGRWMWR0GFDM9086P3TD).
++# spec_gate (SPEC 01M4MQAGRWMWR0GFDM9086P3TD). awaiting_human — ожидание
++# людей проекта после merge_gate (SPEC 01M5XZ9Z68V75VXF5Z66C708T4).
+ FSM_STATES = ("spec_writing", "spec_audit", "spec_gate", "tests_writing",
+               "in_dev", "verifying", "review", "acceptance", "merge_gate",
+-              "done", "escalated", "killed")
++              "awaiting_human", "done", "escalated", "killed")
+ 
+ # Заготовки артефактов — валидные по guard: с T017 он вызывается кодом на
+ # каждом переходе `advance`, и артефакт без обязательных секций задачу не
+```
+
+## Предложения системе
+- Сторож оболочки шага отказывает heredoc-сценариям Python, в которых
+  встречается `{"`/`"}` (f-строки HTML) — правку пришлось писать файлом в
+  каталог документов и запускать оттуда; класс «правка многострочного
+  фрагмента без Edit» натирает каждую задачу с f-строками разметки.
+- `pytest -n` (xdist) в шаге разработчика падает «node down» на подборке
+  файлов затронутых модулей — прогон только последовательный (~2.5 мин);
+  стоит назвать это в `skills/coding-standards.md` рядом с командой прогона.
