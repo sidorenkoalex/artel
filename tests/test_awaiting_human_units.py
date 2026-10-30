@@ -80,6 +80,26 @@ def test_push_plan_ignores_awaiting_task_of_other_branch(initialized_tmp_root):
     assert plan is not None and STATE not in (plan.refusal or ""), plan.refusal
 
 
+def test_in_repo_refuses_awaiting_push_before_git(initialized_tmp_root,
+                                                  monkeypatch):
+    """Вход `gitcmd.in_repo` сам отказывает отправке ветки задачи в
+    `awaiting_human` (ANSWER-1 п. 5): подменённый `gitcmd.git` вызова не
+    видит, причина называет состояние; отправка ветки задачи в `in_dev`
+    доходит до `gitcmd.git` как прежде.
+
+    Ловит мутацию: проверку на входе `in_repo` убрали (отказ остался только
+    в `_push_plan` внутри `git`) — подменённый `git` увидит отправку.
+    """
+    calls = []
+    monkeypatch.setattr(gitcmd, "git", lambda *a, **k: calls.append(a))
+    _task, branch = insert(STATE)
+    res = gitcmd.in_repo(config.ROOT, "push", "origin", branch)
+    assert calls == [] and res.returncode != 0 and STATE in res.stderr, res
+    _other, other = insert("in_dev")
+    gitcmd.in_repo(config.ROOT, "push", "origin", other)
+    assert len(calls) == 1 and other in calls[0], calls
+
+
 def test_kill_leaves_server_only_for_target_human_after_push(initialized_tmp_root,
                                                              monkeypatch):
     """Признак «сервер оставлен людям проекта» уборки `kill`: `target-human`
