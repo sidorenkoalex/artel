@@ -1368,6 +1368,10 @@ def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
     # Вердикт аудита SPEC у задачи на гейте SPEC (SPEC
     # 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) — из журнала.
     audit = spec_audit.status_suffix(conn, r)
+    # Ссылка на MR задачи из БД (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требования
+    # 10, 16) — сразу за названием: в `awaiting_human` это главное сведение.
+    mr_text = store.mr_link_text(r)
+    mr = f"  [{mr_text}]" if mr_text else ""
     # Набор моделей задачи — сразу за бюджетом (SPEC
     # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
     # модели шагов, и тариф, по которому тратится этот бюджет.
@@ -1382,7 +1386,7 @@ def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
         f"{r['id']}{label}  {r['state']:<13} "
         f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
         f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
-        f"  токенов {tokens}  {r['title']}"
+        f"  токенов {tokens}  {r['title']}{mr}"
         f"{flag}{audit}{mark}{holder}{zone}{wave_breaker}{division}"
         f"{merge_wait}{deps_wait}"
     )

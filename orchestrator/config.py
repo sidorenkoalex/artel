@@ -936,6 +936,11 @@ AUTO_STOP = {
                    "или artel.py reject {id} \"причина\"; " + _BOTH_COMMANDS),
     "merge_gate": ("гейт merge — решение Оператора",
                    "artel.py approve {id}{sha}  (выполнит merge); " + _BOTH_COMMANDS),
+    # Ожидание людей проекта (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование
+    # 8): ни роли, ни решения Оператора — `auto` встаёт без алерта.
+    "awaiting_human": ("MR вливают люди проекта — ждём их",
+                       "состояние ждёт людей проекта — mr-sync (шаг Б2.2); "
+                       + _BOTH_COMMANDS),
     "escalated": ("эскалация — нужен Оператор",
                   "разберись: artel.py log {id}, затем artel.py approve {id}{sha}; "
                   + _BOTH_COMMANDS),

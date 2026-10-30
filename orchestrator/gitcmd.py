@@ -567,6 +567,22 @@ def _dead_states() -> tuple:
     return fsm.TERMINAL_STATES
 
 
+def _awaiting_state() -> str:
+    """Состояние ожидания людей проекта — `fsm.AWAITING_HUMAN`; импорт
+    отложен по той же причине, что в `_dead_states`."""
+    from . import fsm
+    return fsm.AWAITING_HUMAN
+
+
+def _awaiting_human_spec(specs: list) -> dict | None:
+    """Первый refspec отправки, ведущий в ветку задачи в `awaiting_human`
+    (отправляемую или удаляемую); None — такого нет."""
+    state = _awaiting_state()
+    return next((s for s in specs if s["kind"] == "branch"
+                 and s["task"] is not None and s["task"]["state"] == state),
+                None)
+
+
 def _refspecs(refspecs: list, tasks: list) -> list:
     """Разбор refspec отправки: словарь на каждый — назначение, вид
     (`branch`/`artifacts`/`ref`), форма (`+`, `:<ref>`) и задача проекта, к
@@ -800,6 +816,15 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     specs = _refspecs(positional[1:], tasks)
     related = next((s["task"]["id"] for s in specs if s["task"] is not None),
                    None)
+    # Ветку задачи в `awaiting_human` ведут люди проекта (SPEC
+    # 01M5XZ9Z68V75VXF5Z66C708T4, требование 18): отказ при любой форме —
+    # отправка, явный refspec, `--delete`, `:<ветка>` — и при любом гейте.
+    waiting = _awaiting_human_spec(specs)
+    if waiting is not None:
+        return _refuse(plan, project, waiting["task"]["id"], env, task_id,
+                       f"ветка {waiting['name']} задачи "
+                       f"{waiting['task']['id']} в {_awaiting_state()} — "
+                       f"ждёт людей проекта, пульт её не отправляет")
     entry = (entries or {}).get(project)
     if project != config.DEFAULT_TARGET and entry is None:
         why = ("targets.yaml не читается" if entries is None
