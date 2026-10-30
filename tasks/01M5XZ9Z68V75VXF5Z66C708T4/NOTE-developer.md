@@ -10,6 +10,9 @@
 - Bash: нет cat/ls/rm; heredoc python с `{"` блокируется сторожем — правки писал скриптом в каталог документов (потом удалил через os.remove).
 - pytest -n (xdist) падает «node down» — гонял последовательно.
 
+- Шаг 2 (ANSWER-1): п. 1-4, 6 уже были закрыты — сверка в PLAN «Подход». П. 5: добавлен отказ на входе gitcmd.in_repo (_awaiting_human_refusal; общий разбор _push_destination, отказ _refuse_awaiting_human) + тест test_in_repo_refuses_awaiting_push_before_git (мутация проверена). Отказ _refused кладёт причину в stderr, не stdout.
+- Прогоны шага 2: планка 26/26; долгоживущие+юнит+push/kill/gitcmd/multitarget — 276 passed. Карта регенерирована.
+
 ## Где остановился
 - Готово: PLAN.md status: ready, guard ок. Код не закоммичен — коммитит пульт.
 

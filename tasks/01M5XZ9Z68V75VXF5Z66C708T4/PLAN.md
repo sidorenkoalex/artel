@@ -31,6 +31,12 @@ schema_version: 5
   `colon` — удаление `:<ветка>`) на ветку задачи в `awaiting_human`;
   `--delete <ветка>` разбирается тем же refspec. Отказ — `_refuse` с
   записью «отправка отказана» в журнал задачи, процесс git не запускается.
+  По ANSWER-1 п. 5 тот же отказ стоит и на входе `gitcmd.in_repo`
+  (`_awaiting_human_refusal`, до вызова `gitcmd.git`, который подменяют
+  тесты и вызыватели): общий разбор назначения вынесен в
+  `_push_destination`, отказ — `_refuse_awaiting_human`; прочие отказы
+  единой точки решает по-прежнему только `_push_plan` внутри `git`, так что
+  отказ не журналируется дважды.
 - **Зоны** — `awaiting_human` в `zone_lock.BLOCKING_STATES`; поле записи
   проекта читает `zone_lock._holds_zones(row)` (через `delivery_policy`) в
   отказе старта (`_occupier`) и в прогнозе (`forecast_overlaps`).
@@ -47,6 +53,22 @@ schema_version: 5
   `cleanup_project_remote` не закрывает PR/MR и не удаляет ветку в
   `origin`, пишет запись «уборка» со ссылкой на MR; локальная уборка
   (`cleanup_killed_task`) прежняя.
+
+Сверка с ANSWER-1 Оператора:
+1. `delivery_policy` отдаёт `mr_assignee` как `int | str | None`; целое и
+   строка цифр — id (целое) — так и реализовано.
+2. Вход в `escalated` из `awaiting_human` — только существующими путями
+   (`fixation.py:239`, `store.py:1281`, `budget.py:384` пишут
+   `escalated_from` = текущее состояние); новых путей не добавлено, возврат
+   — механика `escalated_from` (AC-17).
+3. `kill` `target-human`: `_commit_closing` (`cleanup.py:669`) досылает
+   коммит закрытия в `refs/artifacts/<id>` как прежде; ранний выход
+   `cleanup_project_remote` пропускает только закрытие PR/MR и удаление
+   ветки в `origin`.
+4. `max_awaiting` — целое > 0, `bool` отказан (`_check_delivery`).
+5. Отказ на входе `gitcmd.in_repo` — добавлен в этом шаге (см. выше).
+6. `awaiting_human` не занимает место в лимите параллельности эпика —
+   исключение из `view.running` в `auto._epic_view` (AC-16).
 
 Бюджет SPEC ($45) не пересматриваю.
 
@@ -126,6 +148,11 @@ schema_version: 5
   supervisor, watch, answer, amend, git_fixation, catalog и др.) —
   `61 + 468 + 93 + 26 passed`; новые юнит-тесты — `5 passed`, каждый
   краснеет на своей заявленной мутации (проверено временной правкой кода).
+- **Итерация ANSWER-1:** новый тест
+  `test_in_repo_refuses_awaiting_push_before_git` (краснеет при снятой
+  проверке на входе `in_repo` — проверено); после правки — планка
+  `26 passed`, долгоживущие + юнит-тесты + модули отправки/kill/gitcmd/
+  multitarget — `276 passed`; карта регенерирована.
 - **Откат** — revert merge-коммита задачи; столбцы `mr_iid`/`mr_url`
   останутся в БД пустыми и никому не мешают.
 
