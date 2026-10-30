@@ -20,3 +20,9 @@
 | 01M5WCXBR9K8CN586W1AP3ZN6Q | GitLab А1.2: doctor, проверочная команда forge-probe и песочница без живого HTTP | done | — |
 | 01M5WDB7F14SQ30QVWJY2XYBG2 | GitLab Б1.1: поля записи, ветка по шаблону, единая точка отправки с журналом и белым списком | done | — |
 | 01M5WDB7JY0VJGHVKCABA2QC5T | GitLab Б1.2: автор, соавтор и трейлер пульта, сжатие и перебазирование на входе в verifying, перезапись своей ветки | done | — |
+| 01M5XX9PW3K206Q3EKQCT649QF | GitLab В1: источник полного набора full_suite (local\|ci\|both), исходы из отчёта задания CI | killed | divided |
+| 01M5XXA2HY73D3WTXDR19Z5SWW | GitLab Б2.1: гейт мержа target-human — MR вместо слияния, состояние awaiting_human | killed | divided |
+| 01M5XZ9Z68V75VXF5Z66C708T4 | Б2.1а: состояние awaiting_human и его учёт в перечнях пульта | in_dev | — |
+| 01M5XZ9Z68XE2EKPDHYCAK25KF | Б2.1б: гейт мержа target-human открывает MR, черновой MR и max_in_flight через forge | in_dev | — |
+| 01M5XZSKK8GZTECA2KWAFHE029 | GitLab В1.1: источник полного набора full_suite (local\|ci\|both) на приёмке | tests_writing | — |
+| 01M5XZSKK8H096FD3CPN05BQNM | GitLab В1.2: гейт неослабления по исходам из отчётов задания CI | in_dev | — |
