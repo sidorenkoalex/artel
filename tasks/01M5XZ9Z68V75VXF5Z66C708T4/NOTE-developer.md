@@ -13,8 +13,15 @@
 - Шаг 2 (ANSWER-1): п. 1-4, 6 уже были закрыты — сверка в PLAN «Подход». П. 5: добавлен отказ на входе gitcmd.in_repo (_awaiting_human_refusal; общий разбор _push_destination, отказ _refuse_awaiting_human) + тест test_in_repo_refuses_awaiting_push_before_git (мутация проверена). Отказ _refused кладёт причину в stderr, не stdout.
 - Прогоны шага 2: планка 26/26; долгоживущие+юнит+push/kill/gitcmd/multitarget — 276 passed. Карта регенерирована.
 
+- Шаг 3 (возврат CI 40992949348, pull_request): упали tests/test_01m42nbcadgsgtcbzb8nkbvdvh_workspace_fetch.py AC-3/AC-4 (ссылка отслеживания сдвинута). Локально (macOS, git 2.50.1) файл зелёный один, вместе с тестами задачи, с push_point/git_hooks. Статически: для fetch вход in_repo возвращает None сразу после _split_globals (без побочных эффектов), argv в git не меняется. gh run view недоступен (нужно подтверждение) — лог CI не видел.
+
+- Подсказка: в том же CI tracking_refs=False через путь git() (test_gitcmd_fetch_ref_sha) не упал — расхождение только у in_repo. Правка: проверка на входе in_repo только при push-подкоманде в argv (иначе вызов как на main) + тест test_in_repo_passes_non_push_call_untouched (мутация проверена). 134 passed, планка 26/26, карта регенерирована.
+
+## Не сработало (шаг 3)
+- Воспроизвести провал локально не удалось ни поодиночке, ни вместе с тестами задачи; xdist в шаге не работает. Если CI снова упадёт — нужен лог CI; запасной вариант: fetch по URL remote (git remote get-url) вместо имени при tracking_refs=False (workspace.py вне зон задачи).
+
 ## Где остановился
-- Готово: PLAN.md status: ready, guard ок. Код не закоммичен — коммитит пульт.
+- Шаг 3 готов: PLAN ready, guard прогнан.
 
 ## Чего не хватило
 - Формат записи проекта для локального слоя в тесте (без long_lived_dir/weakening_scope запись молча не грузилась → TargetsError → признак False) — искал по провалу теста.
