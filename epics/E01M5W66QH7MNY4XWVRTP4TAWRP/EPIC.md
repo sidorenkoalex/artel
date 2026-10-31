@@ -1,10 +1,10 @@
-<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 500.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 3} -->
+<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 600.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 3} -->
 # Эпик E01M5W66QH7MNY4XWVRTP4TAWRP: Проект на GitLab с гейтом людей проекта (ADR-0029)
 
 - Проект: artel
 - Состояние: open
 - Цель: Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2
-- Конверт: $500.00
+- Конверт: $600.00
 - Итог: —
 - Заведён: 2026-10-26 13:25:40Z
 - Закрыт: —
@@ -22,7 +22,7 @@
 | 01M5WDB7JY0VJGHVKCABA2QC5T | GitLab Б1.2: автор, соавтор и трейлер пульта, сжатие и перебазирование на входе в verifying, перезапись своей ветки | done | — |
 | 01M5XX9PW3K206Q3EKQCT649QF | GitLab В1: источник полного набора full_suite (local\|ci\|both), исходы из отчёта задания CI | killed | divided |
 | 01M5XXA2HY73D3WTXDR19Z5SWW | GitLab Б2.1: гейт мержа target-human — MR вместо слияния, состояние awaiting_human | killed | divided |
-| 01M5XZ9Z68V75VXF5Z66C708T4 | Б2.1а: состояние awaiting_human и его учёт в перечнях пульта | in_dev | — |
+| 01M5XZ9Z68V75VXF5Z66C708T4 | Б2.1а: состояние awaiting_human и его учёт в перечнях пульта | escalated | — |
 | 01M5XZ9Z68XE2EKPDHYCAK25KF | Б2.1б: гейт мержа target-human открывает MR, черновой MR и max_in_flight через forge | in_dev | — |
-| 01M5XZSKK8GZTECA2KWAFHE029 | GitLab В1.1: источник полного набора full_suite (local\|ci\|both) на приёмке | tests_writing | — |
+| 01M5XZSKK8GZTECA2KWAFHE029 | GitLab В1.1: источник полного набора full_suite (local\|ci\|both) на приёмке | in_dev | — |
 | 01M5XZSKK8H096FD3CPN05BQNM | GitLab В1.2: гейт неослабления по исходам из отчётов задания CI | in_dev | — |
