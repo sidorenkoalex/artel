@@ -837,7 +837,17 @@ def _push_code_head(conn, t, task_id: str) -> None:
                        f"origin не удалась ({why}); почини доступ к origin")
 
 
+def _refuse_awaiting_human(conn, task_id: str) -> None:
+    """Отказ первым действием команды (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+    требование 19): в `awaiting_human` ветку и MR ведут люди проекта —
+    ни коммита планки, ни отправки."""
+    from . import fsm
+    if store.get_task(conn, task_id)["state"] == fsm.AWAITING_HUMAN:
+        sys.exit(f"[{task_id}] amend-tests: отказ — {fsm.AWAITING_HUMAN_HINT}")
+
+
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
+    _refuse_awaiting_human(conn, task_id)
     profile = _profile_or_exit(conn, task_id)
     rule = _plank_rule_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
@@ -1225,6 +1235,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
 
     Голова, сдвинутая мимо пульта, лок не получает: правку планки ролью
     узаконивает не эта команда, а `approve <id> <sha>`."""
+    _refuse_awaiting_human(conn, task_id)
     profile = _profile_or_exit(conn, task_id)
     rule = _plank_rule_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")

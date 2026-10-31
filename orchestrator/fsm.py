@@ -32,10 +32,15 @@ from pathlib import Path
 # `fsm`, в котором обе константы уже есть.
 STATES = (
     "spec_writing", "spec_audit", "spec_gate", "tests_writing", "in_dev",
-    "review", "verifying", "acceptance", "merge_gate", "escalated", "done",
-    "killed",
+    "review", "verifying", "acceptance", "merge_gate", "awaiting_human",
+    "escalated", "done", "killed",
 )
 TERMINAL_STATES = ("done", "killed")
+# Ожидание людей проекта (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требования 5,
+# 17): MR вливают люди проекта `target-human`, у состояния нет ни роли, ни
+# гейта Оператора; команды Оператора в нём отказывают этой подсказкой.
+AWAITING_HUMAN = "awaiting_human"
+AWAITING_HUMAN_HINT = "состояние ждёт людей проекта — mr-sync (шаг Б2.2)"
 
 from scripts import guard
 
@@ -1784,6 +1789,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     runner.refuse_unsupported_project(conn, task_id, "approve")
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if state == AWAITING_HUMAN:
+        sys.exit(f"[{task_id}] approve отклонён: {AWAITING_HUMAN_HINT}")
     # Повтор предварительной проверки `--as-epic` уже под lease: эпик мог
     # появиться у задачи между проверкой и lease.
     if as_epic_goal is not None and (state != "spec_gate" or t["epic_id"]):
@@ -1850,6 +1857,8 @@ def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None
 def _cmd_reject(conn, task_id: str, reason: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if state == AWAITING_HUMAN:
+        sys.exit(f"[{task_id}] reject отклонён: {AWAITING_HUMAN_HINT}")
     if state == "merge_gate":
         # Возврат из merge_gate (SPEC T052, требование 1, AC-1): один
         # переход в in_dev с причиной Оператора в журнале — не гейт

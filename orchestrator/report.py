@@ -39,6 +39,8 @@ from .providers import claude as claude_provider
 # `gates.yaml` (`orchestrator/gates.py` применяет её ТОЛЬКО к acceptance;
 # spec_gate/merge_gate ручные безусловно) — тот же список состояний, что
 # уже даёт флаг «ЖДЁТ ОПЕРАТОРА» `catalog.cmd_status`.
+# `awaiting_human` сюда не входит (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+# требование 10): MR вливают люди проекта, не Оператор.
 MANUAL_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
 
 # Порядок колонок борда для известных состояний FSM; состояние вне этого
@@ -582,6 +584,12 @@ def _tile_html(card) -> str:
     project_line = ""
     if project != config.DEFAULT_TARGET:
         project_line = f' [<span class="tile-project">{_esc(project)}</span>]'
+    # Ссылка на MR задачи из БД (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование
+    # 16) — только у карточки, у которой она есть.
+    mr_line = ""
+    if card.get("mr_url"):
+        mr_line = (f'<div class="tile-field tile-mr">MR: <a href="'
+                   f'{_esc(card["mr_url"])}">{_esc(card["mr_url"])}</a></div>')
     return (
         f'<div class="tile">'
         f'<span class="tile-id">{_esc(card["task"])}</span>'
@@ -593,6 +601,7 @@ def _tile_html(card) -> str:
         f'<div class="tile-field">Итерации ревью: {card["review_iters"]}'
         f'/{config.LIMIT_REVIEW_ITERS}</div>'
         f'{escalation_line}'
+        f'{mr_line}'
         f'</div>'
     )
 

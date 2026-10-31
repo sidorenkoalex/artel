@@ -37,7 +37,10 @@ _EVENT_CLASSES = {"transitions", "refusals", "gates", "steps", "budget",
                   "alerts", "stops", "ci", "pytest"}
 _DEFAULT_EVENTS = ("transitions", "refusals", "gates", "steps", "stops", "ci",
                    "pytest")
-_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
+# `awaiting_human` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 10) —
+# остановка, о которой Оператору надо знать: MR ждёт людей проекта.
+_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", fsm.AWAITING_HUMAN,
+                "escalated")
 _GATE_ACTIONS = tuple(f"state -> {state}" for state in _GATE_STATES)
 _TERMINAL_STATES = fsm.TERMINAL_STATES
 
@@ -208,6 +211,17 @@ def _select_tasks(conn, opts: dict, session_id: str) -> list:
                 if _owner_session_id(conn, row["id"]) == session_id]
     return [row["id"] for row in store.all_tasks(conn)
             if row["state"] not in _TERMINAL_STATES]
+
+
+def _print_state(row) -> None:
+    """Строка смены состояния `STATE=…`; у задачи, перешедшей в
+    `awaiting_human`, — ещё строка со ссылкой на MR из БД (SPEC
+    01M5XZ9Z68V75VXF5Z66C708T4, требование 16)."""
+    print(f"STATE={row['state']}", flush=True)
+    if row["state"] == fsm.AWAITING_HUMAN:
+        mr = store.mr_link_text(row) or "ссылки на MR в БД нет"
+        print(f"{safe_text(row['id'])}  {fsm.AWAITING_HUMAN} — ждёт людей "
+              f"проекта: {safe_text(mr)}", flush=True)
 
 
 def _matches_class(action: str, detail: str, events: set) -> bool:
@@ -434,7 +448,7 @@ def _watch_observation(opts: dict, conn, observed) -> None:
             for task in task_rows:
                 previous_state = known_state.get(task["id"])
                 if previous_state is not None and previous_state != task["state"]:
-                    print(f"STATE={task['state']}", flush=True)
+                    _print_state(task)
                 known_state[task["id"]] = task["state"]
             step_id, alert_id = _observation_events(
                 conn, row, row["notified_step_id"], row["notified_alert_id"],
@@ -858,7 +872,7 @@ def cmd_watch(argv: list) -> None:
                 continue
             if row["state"] != known_state[task_id]:
                 known_state[task_id] = row["state"]
-                print(f"STATE={row['state']}", flush=True)
+                _print_state(row)
             if _emit_steps(conn, task_id, opts["events"], known_step_id,
                           exit_on, budget, epic_warnings):
                 return

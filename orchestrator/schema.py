@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
   merge_after TEXT, closed_as TEXT, epic_id TEXT, start_after TEXT,
+  mr_iid INTEGER, mr_url TEXT,
   created_at TEXT, updated_at TEXT
 );
 {EPICS_DDL}
@@ -442,6 +443,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # Зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 11):
     # тот же формат, что `merge_after`; NULL — зависимостей запуска нет.
     add_column(conn, "tasks", "start_after", "TEXT")
+    # Ссылка на MR задачи (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 16):
+    # номер и адрес MR в репозитории проекта — источник истины о MR; пишет
+    # и читает `store.set_mr_link`/`store.mr_link`. NULL — MR нет.
+    add_column(conn, "tasks", "mr_iid", "INTEGER")
+    add_column(conn, "tasks", "mr_url", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

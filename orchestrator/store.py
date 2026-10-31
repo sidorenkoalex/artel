@@ -958,6 +958,31 @@ def update_task(conn: sqlite3.Connection, task_id: str, **fields) -> None:
     conn.commit()
 
 
+def set_mr_link(conn: sqlite3.Connection, task_id: str, iid: int | None,
+                url: str | None) -> None:
+    """Пишет ссылку на MR задачи — номер `mr_iid` и адрес `mr_url` (SPEC
+    01M5XZ9Z68V75VXF5Z66C708T4, требование 16)."""
+    update_task(conn, task_id, mr_iid=iid, mr_url=url)
+
+
+def mr_link(row) -> tuple[int | None, str | None]:
+    """(номер, адрес) MR из строки задачи; (None, None) — ссылки нет или
+    строка из БД без столбцов ссылки."""
+    keys = row.keys()
+    return (row["mr_iid"] if "mr_iid" in keys else None,
+            row["mr_url"] if "mr_url" in keys else None)
+
+
+def mr_link_text(row) -> str:
+    """Ссылка на MR задачи для показа: «MR !<номер> <адрес>»; пусто — MR
+    нет."""
+    iid, url = mr_link(row)
+    if not url and iid is None:
+        return ""
+    return " ".join(part for part in (
+        f"MR !{iid}" if iid is not None else "MR", url or "") if part)
+
+
 def charge(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
     """Прибавляет стоимость шага к израсходованному задачей."""
     conn.execute("UPDATE tasks SET spent_usd=spent_usd+?, updated_at=? "
