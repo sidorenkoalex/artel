@@ -1,15 +1,13 @@
 ## Выяснено
-- ТЗ достаточно: SPEC.md написан (5 AC, status: ready), guard — ок.
-- Падает предпосылка `advance_origin` (`tests/test_01m42nbcadgsgtcbzb8nkbvdvh_workspace_fetch.py:56-70`): сейчас commit-tree в git пульта + `git push <путь origin>`. По ТЗ — commit-tree/update-ref с `--git-dir <origin>`; дерево MAIN_BRANCH в bare есть (add_synced_origin).
-- budget_usd: 15 — рамка Оператора из ТЗ (ниже калибровки $25; budget.calibration_warning — только предупреждение).
-- skip_tests выставлен: ТЗ не ожидает новых тестов, правится сам долгоживущий файл (мандат 31.10).
-- Раздела «Меняемое поведение» нет: литералы утверждений не меняются; добавлена «Матрица неослабления» по требованию ТЗ.
+- Возврат с spec_gate (К1): у bare origin нет user.name/email; CI глобальную идентичность не задаёт → commit-tree с --git-dir <origin> падает. Закрыто: требование 6 SPEC (явные `-c user.name='artel tests' -c user.email=artel@example.invalid`, значения tests/sandbox.py:1276-1277), AC-2 дополнен, AC-1 — проверка в окружении HOME=пустой каталог, GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1, без EMAIL.
+- Остальное SPEC без изменений (5 AC, budget_usd 15 — рамка ТЗ, skip_tests, матрица неослабления). guard — ок.
+- advance_origin сейчас — :56-70 файла; push по пути :63-64.
 
 ## Не сработало
-- Ничего.
+- `echo rc=$?` в Bash отклоняется (simple_expansion) — звать guard без него.
 
 ## Где остановился
-- Шаг завершён.
+- Шаг завершён, SPEC status: ready.
 
 ## Чего не хватило
-- Нет явного правила, как совмещать «Рамка: $N» ТЗ ниже пола $25 скила; взято значение Оператора.
+- Явного места, где CI задаёт git identity (его нет) — нашлось только в причине возврата.
