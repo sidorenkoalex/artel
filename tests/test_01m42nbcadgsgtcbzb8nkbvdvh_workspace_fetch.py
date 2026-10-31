@@ -8,9 +8,10 @@
 Сценарий на настоящем git: пульт — `self.root` с bare-репозиторием
 `origin`, синхронным с `MAIN_BRANCH` (`add_synced_origin`); ссылка
 отслеживания `refs/remotes/origin/<MAIN_BRANCH>` заведена пушем. Голова
-`origin` уходит вперёд коммитом, запушенным ПО ПУТИ bare-репозитория (не по
-имени `origin`), — так ссылка отслеживания пульта остаётся на прежнем
-коммите. Затем `workspace.ensure` для задачи, ветки которой ещё нет.
+`origin` уходит вперёд коммитами, созданными и поставленными на
+`refs/heads/<MAIN_BRANCH>` в самом bare-репозитории (`git --git-dir <origin>
+commit-tree` / `update-ref`, git пульта ничего не отправляет), — так ссылка
+отслеживания пульта остаётся на прежнем коммите. Затем `workspace.ensure` для задачи, ветки которой ещё нет.
 Номер задачи, имя ветки и число коммитов, на которые `origin` ушёл вперёд,
 — из `random`, зерно печатается и входит в текст провала.
 """
@@ -54,19 +55,28 @@ class WorkspaceFetchSandbox(RealGitSandbox):
         return out.split()[0] if out.split() else ""
 
     def advance_origin(self) -> str:
-        """Голова `origin` уходит вперёд на 1–3 коммита пушем по пути
-        bare-репозитория: ссылка отслеживания пульта не обновляется."""
-        sha = self.git("rev-parse", config.MAIN_BRANCH).strip()
+        """Голова `origin` уходит вперёд на 1–3 коммита, созданных
+        `commit-tree` и поставленных `update-ref` в самом bare-репозитории
+        (`git --git-dir <origin>`): git пульта ничего не отправляет, ссылка
+        отслеживания пульта не обновляется."""
+        # У bare-репозитория своей идентичности нет, а раннер CI глобальную
+        # не задаёт — без явной `commit-tree` падает «unable to auto-detect
+        # email»; значения — те же, что у git пульта в песочнице.
+        origin_git = ("--git-dir", str(self.origin),
+                      "-c", "user.name=artel tests",
+                      "-c", "user.email=artel@example.invalid")
+        ref = f"refs/heads/{config.MAIN_BRANCH}"
+        old = sha = self.git(*origin_git, "rev-parse", ref).strip()
         for n in range(self.rng.randint(1, 3)):
-            sha = self.git("commit-tree", f"{sha}^{{tree}}", "-p", sha, "-m",
+            sha = self.git(*origin_git, "commit-tree", f"{sha}^{{tree}}",
+                           "-p", sha, "-m",
                            f"origin впереди {n} ({self.seed})").strip()
-        self.git("push", "-q", str(self.origin),
-                 f"{sha}:refs/heads/{config.MAIN_BRANCH}")
+        self.git(*origin_git, "update-ref", ref, sha, old)
         self.assertEqual(self.origin_head(), sha, self.note(
             "предпосылка: голова origin не сдвинута"))
         self.assertEqual(self.rev(self.tracking), self.tracking_before,
-                         self.note("предпосылка: пуш по пути сдвинул ссылку "
-                                   "отслеживания"))
+                         self.note("предпосылка: сдвиг головы origin сдвинул "
+                                   "ссылку отслеживания"))
         return sha
 
     def lock_tracking_ref(self) -> Path:
