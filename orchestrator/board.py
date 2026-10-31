@@ -18,13 +18,15 @@ SCHEMA_VERSION = 1
 # Состояния, которым `status` ставит отметку «ЖДЁТ ОПЕРАТОРА» (требование 11).
 OPERATOR_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
 CI_STATES = ("verifying",)
+# MR вливают люди проекта (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 6).
+HUMAN_STATES = ("awaiting_human",)
 EDGE_MERGE_AFTER = "merge_after"
 EDGE_PARENT = "parent"
 
 
 def waiting_on(conn, t, terminal_states) -> str | None:
-    """Кто держит задачу: первое сработавшее правило operator → ci →
-    dependency → role; у окончательного состояния — `None`. Зависимость —
+    """Кто держит задачу: первое сработавшее правило operator → ci → human
+    → dependency → role; у окончательного состояния — `None`. Зависимость —
     ожидание зоны (`zone_lock.queue_wait`, в том числе «ради зависимости»)
     либо незакрытые `start_after` задачи без первого шага роли (SPEC
     01M5TBCY7WTN121S136XP2C6SR, требование 19): незакрытые `merge_after`
@@ -36,6 +38,8 @@ def waiting_on(conn, t, terminal_states) -> str | None:
         return "operator"
     if state in CI_STATES:
         return "ci"
+    if state in HUMAN_STATES:
+        return "human"
     if zone_lock.queue_wait(conn, t["id"], t) is not None:
         return "dependency"
     if merge_after.start_after_blocks(conn, t):
@@ -82,6 +86,9 @@ def _card(conn, t, last_events: dict, terminal_states, refs: dict,
         "escalated_from": t["escalated_from"],
         "project": t["target"] or config.DEFAULT_TARGET,
         "refs": refs.get(t["id"], []),
+        # Ссылка на MR задачи (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 16).
+        "mr_iid": store.mr_link(t)[0],
+        "mr_url": store.mr_link(t)[1],
     }
 
 
@@ -236,11 +243,12 @@ def render_md(model: dict) -> str:
         lines.append("Задач нет.")
         return "\n".join(lines) + "\n"
     lines += [_md_row(("Задача", "Название", "Эпик", "Состояние", "Ждёт",
-                       "Бюджет", "Расход", "Ссылки")),
-              _md_row(("---",) * 8)]
+                       "Бюджет", "Расход", "Ссылки", "MR")),
+              _md_row(("---",) * 9)]
     lines += [_md_row((c["task"], c["title"], c["epic"], c["state"],
                        c["waiting_on"], _usd(c["budget_usd"]),
-                       _usd(c["spent_usd"]), _refs_text(c["refs"])))
+                       _usd(c["spent_usd"]), _refs_text(c["refs"]),
+                       c.get("mr_url")))
               for c in model["cards"]]
     return "\n".join(lines) + "\n"
 
@@ -260,10 +268,12 @@ def _html_card(c: dict) -> str:
             if c["refs"] else "")
     epic = (f'<div class="card-epic">эпик {html.escape(c["epic"])}</div>'
             if c["epic"] else "")
+    mr = (f'<div class="card-mr"><a href="{html.escape(c["mr_url"])}">MR '
+          f'{html.escape(c["mr_url"])}</a></div>' if c.get("mr_url") else "")
     return (f'<div class="card"><span class="card-id">{html.escape(c["task"])}'
             f'</span> <span class="card-title">{html.escape(c["title"] or "")}'
             f'</span>{epic}<div class="card-wait">ждёт: '
-            f'{html.escape(c["waiting_on"] or "—")}</div>{refs}</div>')
+            f'{html.escape(c["waiting_on"] or "—")}</div>{refs}{mr}</div>')
 
 
 def _html_epic(e: dict) -> str:

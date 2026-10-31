@@ -88,7 +88,7 @@ import sys
 from datetime import datetime
 from typing import NamedTuple
 
-from . import config, store
+from . import config, store, targets
 
 # SPEC требование 1: диапазон фаз FSM, в которых занятость зоны другой
 # задачи блокирует первый шаг developer этой — `in_dev`…`merge_gate`
@@ -107,8 +107,13 @@ from . import config, store
 # `escalated`-кандидату ТАК ЖЕ, как и к остальным — держит зону, только
 # если код уже начат в текущем пребывании; эскалация ДО первого шага
 # developer зону не держит и здесь (AC-7 второй сценарий).
+#
+# `awaiting_human` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 7; ADR-0029
+# п. 2): код задачи ждёт людей проекта и ещё может вернуться в работу —
+# зона держится, пока `policy.awaiting_holds_zones` записи проекта не
+# `false` (`_holds_zones`).
 BLOCKING_STATES = ("in_dev", "review", "verifying", "acceptance",
-                   "merge_gate", "escalated")
+                   "merge_gate", "awaiting_human", "escalated")
 
 # Состояния, которые зону ещё НЕ занимают, но займут позже (SPEC
 # 01M3GKJ84XM5QPC6TK5EE307Q9, требование 1): задача, чей SPEC пишется или
@@ -326,6 +331,20 @@ def _project(row) -> str:
     return row["target"] or config.DEFAULT_TARGET
 
 
+def _holds_zones(row) -> bool:
+    """Держит ли задача строки `row` зоны своим состоянием: задача в
+    `awaiting_human` — по `policy.awaiting_holds_zones` записи её проекта
+    (`targets.delivery_policy`; запись не читается — держит, как по
+    умолчанию), прочие — да."""
+    if row["state"] != "awaiting_human":
+        return True
+    try:
+        entry = targets.target(_project(row))
+    except targets.TargetsError:
+        return True
+    return targets.delivery_policy(entry)["awaiting_holds_zones"]
+
+
 def forecast_overlaps(conn, own: set[str], *, exclude_task_id: str | None = None,
                       states=FORECAST_STATES,
                       target: str | None = None) -> list[tuple[str, str, str]]:
@@ -359,7 +378,7 @@ def forecast_overlaps(conn, own: set[str], *, exclude_task_id: str | None = None
             continue
         if _project(row) != project:
             continue
-        if row["state"] not in states:
+        if row["state"] not in states or not _holds_zones(row):
             continue
         shared = _shared_zone(own, task_zone_paths(row))
         if shared is not None:
@@ -491,7 +510,7 @@ def _occupier(conn, task_id: str, t, own: set[str]) -> tuple[str, str, str] | No
     for row in store.all_tasks(conn):
         if row["id"] == task_id or _project(row) != project:
             continue
-        if row["state"] not in BLOCKING_STATES:
+        if row["state"] not in BLOCKING_STATES or not _holds_zones(row):
             continue
         if not _occupies(conn, row["id"]):
             continue

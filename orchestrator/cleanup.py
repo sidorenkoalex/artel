@@ -293,6 +293,13 @@ def cleanup_project_remote(conn, task_id: str, branch: str) -> None:
     if repo_context.is_artel(t) or not branch:
         return
     target = t["target"]
+    if _server_left_to_project_people(conn, task_id, target):
+        mr = store.mr_link_text(t) or "ссылки на MR в БД нет"
+        note = (f"сервер проекта не тронут: ветка {branch} отправлена, MR "
+                f"вливают люди проекта — ветка origin и MR оставлены ({mr})")
+        store.journal(conn, task_id, "orchestrator", "уборка", note)
+        print(f"  {note}")
+        return
     ctx = repo_context.resolve(target)
     if ctx is None:
         notes = [f"PR {branch}: оставлено — {repo_context.unresolved_reason(target)}",
@@ -307,6 +314,23 @@ def cleanup_project_remote(conn, task_id: str, branch: str) -> None:
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
     for note in notes:
         print(f"  {note}")
+
+
+def _server_left_to_project_people(conn, task_id: str, target: str) -> bool:
+    """Сервер проекта `kill` не трогает (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+    требование 20; ADR-0029, ADR-0003 п. 7): MR проекта вливают люди
+    проекта (`targets.merged_by_project_people`), а ветка задачи уже
+    отправлена — в журнале есть запись «ветка отправлена» нового или
+    старого вида, в каком бы состоянии задача ни была."""
+    try:
+        entry = targets.target(target)
+    except targets.TargetsError:
+        return False
+    if not targets.merged_by_project_people(entry):
+        return False
+    return store.last_task_step_of(
+        conn, task_id,
+        (gitcmd.PUSH_SENT_ACTION, gitcmd.PUSH_SENT_LEGACY_ACTION)) is not None
 
 
 def _origin_branch_head(repo, branch: str) -> tuple[str, str]:

@@ -33,11 +33,16 @@ def check_branch_freshness(conn) -> list[doctor.Check]:
     Fetch — один на клон за проверку. Контекст не читается (targets.yaml
     сломан/неизвестный проект) или fetch не удался — задача молча
     пропускается, тем же вырожденным случаем, что и неответивший git выше.
+
+    Задача в `awaiting_human` не сверяется (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+    требование 15; ADR-0029 п. 2): её ветку ведут люди проекта, пульт её не
+    подтягивает.
     """
     stale = []
     fetched: dict = {}
     for t in doctor.store.all_tasks(conn):
-        if t["state"] in fsm.TERMINAL_STATES or not t["branch"]:
+        if (t["state"] in fsm.TERMINAL_STATES or t["state"] == fsm.AWAITING_HUMAN
+                or not t["branch"]):
             continue
         ctx = doctor.repo_context.resolve(
             t["target"] or doctor.config.DEFAULT_TARGET)
