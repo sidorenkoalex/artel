@@ -2,7 +2,7 @@
 task: 01M5XZ9Z68XE2EKPDHYCAK25KF
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -60,6 +60,14 @@ schema_version: 5
    `_refuse` с журналом задачи, без алерта (у отказа всегда есть своя
    задача). `ensure_draft_mr` GitHub узнаёт отказ по
    `gitcmd.IN_FLIGHT_LIMIT_REASON` и не поднимает инцидент (ANSWER-2 п. 4).
+   Путь `amend-tests` (ANSWER-2 п. 2, ANSWER-3 — зона `orchestrator/amend.py`
+   добавлена): публичная `gitcmd.in_flight_refusal(task_id)` тем же
+   `_in_flight_refusal` отвечает, откажет ли точка отправки первой отправке;
+   `amend._refuse_in_flight` зовёт её первым действием обоих путей
+   (`_cmd_amend_tests`, `_cmd_amend_tests_from_branch`) сразу за отказом
+   `awaiting_human` — отказ до коммита правки, запись «amend-tests
+   отклонён» с причиной предела в журнале. Канарейку (origin не трогает)
+   предел не касается. Отказ в точке отправки остаётся вторым рубежом.
 5. **`status`** — `catalog._delivery_suffix`: последний отказ доставки
    после последней смены состояния или успешной отправки —
    «[очередь: предел awaiting_human]», «[очередь: предел max_in_flight]»,
@@ -74,7 +82,8 @@ schema_version: 5
    `gh` для `target-human`; отказ пределом на черновике GitHub — не
    инцидент.
 2. `gitcmd.py`: `IN_FLIGHT_LIMIT_REASON`, `_in_flight_refusal`, вызов в
-   `_push_plan`.
+   `_push_plan`; публичная `in_flight_refusal(task_id)`; `amend.py`:
+   `_refuse_in_flight` первым действием обоих путей `amend-tests`.
 3. `advance_gates/tests_writing.py`: `_publish_head_gate` +
    `_forge_draft_mr_gate` в `_origin_push_gate`.
 4. `fsm_merge_gate.py`: `_approve_for_project_people` и помощники.
@@ -99,8 +108,13 @@ schema_version: 5
 Проверено исполнением: долгоживущий
 `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py` — 36 passed (до
 кода — 27 failed); планка `plank-run` `test_ac3_await_main_ci_not_called.py`
-— 1 passed; `tests/test_mr_delivery_units.py` — 10 passed, каждая заявка
-мутации проверена временной мутацией (7 мутаций — красные); тесты
+— 1 passed; `tests/test_mr_delivery_units.py` — 11 passed, каждая заявка
+мутации проверена временной мутацией (8 мутаций — красные; новая —
+`AmendInFlightBeforeCommitTest`: без вызова `_refuse_in_flight` голова
+ветки сдвигается коммитом правки). После правки `amend.py` — тесты
+`amend-tests` (test_amend, test_amend_long_lived, test_amend_remove и
+шесть долгоживущих `*_amend_*`), test_gitcmd_push_point, долгоживущий
+файл задачи, test_invariants, test_multitarget_invariants — 283 passed;
 затронутых модулей (github_adapter, gitcmd_push_point, catalog_status,
 rewrite_flow, draft_mr*, merge_gate*, fsm_advance*, amend*, awaiting*,
 invariants, multitarget_invariants и др.) — 252 + 171 + 218 passed.
@@ -127,6 +141,11 @@ invariants, multitarget_invariants и др.) — 252 + 171 + 218 passed.
   отменены только шаги механизма мержа, который пульт для этого проекта
   не выполняет (матрица неослабления SPEC). Сверка sha строже: добавлены
   голова ветки и голова на сервере.
+- `amend-tests`: новый отказ только при заданном `policy.max_in_flight`
+  и первой отправке ветки задачи; артель и проекты без предела —
+  прежний путь (`in_flight_refusal` -> None), тесты `amend-tests` без
+  правки зелёные. `tests_locked_sha` по-прежнему сдвигается только после
+  успешной отправки (ANSWER-3, матрица).
 - Откат — revert одного merge-коммита задачи; схема БД не меняется.
 
 ## Риски
@@ -290,39 +309,3 @@ index 887e2c28e..2b6f9c51a 100644
 +                    self.assertEqual(len(stand.fake.named("open_mr")), 1,
 +                                     where)
 ```
-
-## Эскалация
-
-**Вопросы**
-
-1. ANSWER-2 п. 2 требует отказа пределом `max_in_flight` на пути
-   `amend-tests` в начале команды, до коммита правки. Для этого нужен
-   вызов проверки первым действием `amend._cmd_amend_tests` — файл
-   `orchestrator/amend.py` вне зон SPEC («Не входит»: «`orchestrator/amend.py`
-   вне зон (предел `max_in_flight` на его пути — в `gitcmd.py`)»); гейт
-   зон откажет такой правке. Сейчас реализован отказ в единой точке
-   отправки `gitcmd` (AC-17 зелёный): `amend-tests` коммитит правку в
-   кодовую ветку, отправка отказывается пределом, команда выходит
-   recovery-путём (`amend._recovery_exit`, «tests_locked_sha не сдвинут»),
-   локальный коммит остаётся неотправленным.
-   Варианты:
-   (а) `zones-extend 01M5XZ9Z68XE2EKPDHYCAK25KF orchestrator/amend.py` —
-   добавлю публичную `gitcmd.in_flight_refusal(task_id)` и её вызов первым
-   действием `_cmd_amend_tests` (отказ до коммита, без отправки), плюс
-   юнит-тест;
-   (б) оставить отказ только в точке отправки `gitcmd` (как сейчас),
-   отказ «в начале команды» — отдельной задачей.
-   **Дефолт при молчании: (б).**
-
-**Контекст**
-
-Реализация остальных требований закончена и проверена (раздел «Покрытие
-требований»): долгоживущий файл 36/36, планка зелёная, приложение к
-инвариантам применяется. Вызов `github_adapter.ensure_head_in_origin` на
-пути `amend-tests` — `amend.py:834`; коммит правки идёт раньше
-(`_amend_with_long_lived`/`_amend_plank_only`).
-
-**Блокирует**
-
-Только п. 2 ANSWER-2 (момент отказа на пути `amend-tests`); остальной
-код готов к ревью в нынешнем виде.
