@@ -755,6 +755,27 @@ def _in_flight_refusal(project: str, entry: dict,
                       f"одна из них закроется")
 
 
+def in_flight_refusal(task_id: str) -> str | None:
+    """Причина, по которой единая точка отправки откажет первой отправке
+    ветки задачи `task_id` пределом `policy.max_in_flight`; None — не
+    откажет. Для команды, которая коммитит до отправки (`amend-tests`,
+    ответ Оператора ANSWER-3 задачи 01M5XZ9Z68XE2EKPDHYCAK25KF): отказ до
+    коммита, без неотправленного хвоста. Запись проекта не прочитана —
+    None: решает сама точка отправки, она при этом отказывает."""
+    from . import store, targets
+    if not config.DB.exists():
+        return None
+    try:
+        project = store.task_target(store.db(), task_id)
+        entry = targets.load().get(project)
+        if entry is None:
+            return None
+        found = _in_flight_refusal(project, entry, [task_id])
+    except (targets.TargetsError, sqlite3.Error):
+        return None
+    return found[1] if found is not None else None
+
+
 def _refuse(plan: _PushPlan, project: str | None, related: str | None,
             env: dict, task_id: str | None, reason: str) -> _PushPlan:
     """Отказ отправки с записью: журнал задачи отправки, иначе задачи

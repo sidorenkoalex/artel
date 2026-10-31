@@ -250,5 +250,48 @@ class ConfirmedHeadTest(unittest.TestCase):
                              head)
 
 
+class AmendInFlightBeforeCommitTest(unittest.TestCase):
+    """Предел `max_in_flight` на пути `amend-tests` — первым действием
+    команды, до коммита правки (ANSWER-3). Стенд — `Stand` долгоживущего
+    файла задачи."""
+
+    def setUp(self):
+        from tests.sandbox import RealGitSandbox
+        from tests import test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery as delivery
+        self.delivery = delivery
+        self.sb = RealGitSandbox()
+        self.sb.setUp()
+        self.addCleanup(self.sb.doCleanups)
+        self.stand = delivery.Stand(self.sb)
+
+    def test_refused_before_commit_head_and_lock_unchanged(self):
+        """`amend-tests` при достигнутом пределе: ни коммита в ветку, ни сдвига `tests_locked_sha`, причина предела в журнале.
+
+        Ловит мутацию: проверка предела первым действием `amend-tests` снята
+        (отказ остаётся только в точке отправки `gitcmd`) — правка уже
+        закоммичена в кодовую ветку, голова ветки сдвинулась.
+        """
+        from orchestrator import store
+        stand = self.stand
+        limit = stand.pick(1, 3)
+        stand.record(draft_mr="false", max_in_flight=str(limit))
+        for _ in range(limit):
+            stand.ghost(stand.rng.choice(self.delivery.IN_FLIGHT_STATES))
+        task = stand.new_task()
+        rel = stand.with_long_lived(task)
+        head = stand.head(task)
+        locked = store.get_task(stand.conn, task)["tests_locked_sha"]
+        out = stand.amend(task, rel)
+        where = stand.context(task, out)
+        self.assertEqual(stand.head(task), head, where)
+        self.assertEqual(store.get_task(stand.conn, task)["tests_locked_sha"],
+                         locked, where)
+        self.assertFalse([c for c in stand.git_calls
+                          if self.delivery.git_sub(c) == "commit"], where)
+        self.assertEqual(stand.branch_pushes(task), [], where)
+        self.assertIn(gitcmd.IN_FLIGHT_LIMIT_REASON, stand.new_journal(task),
+                      where)
+
+
 if __name__ == "__main__":
     unittest.main()
