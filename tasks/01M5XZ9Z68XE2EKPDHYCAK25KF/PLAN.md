@@ -148,6 +148,17 @@ invariants, multitarget_invariants и др.) — 252 + 171 + 218 passed.
   успешной отправки (ANSWER-3, матрица).
 - Откат — revert одного merge-коммита задачи; схема БД не меняется.
 
+## Расширение зон
+
+Пути: orchestrator/amend.py
+
+Обоснование: ANSWER-2 п. 2 требует отказа пределом `max_in_flight` на
+пути `amend-tests` в начале команды, до коммита правки планки; это вызов
+`gitcmd.in_flight_refusal(task_id)` первым действием `_cmd_amend_tests`
+и `_cmd_amend_tests_from_branch` (`amend._refuse_in_flight`). Мандат
+Оператора — ANSWER-3 («Расширение зон разрешено: orchestrator/amend.py»),
+матрица неослабления там же.
+
 ## Риски
 
 - Подтверждённая голова кода берётся из записи фиксации: `approve` с
