@@ -63,7 +63,32 @@ def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
     Проект со сжатием (`squash_before_mr: true`) — перезапись своей ветки
     `_rewrite_push_gate` (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования
     15-16). Отказ сверки автора в точке отправки — эскалация задачи
-    (требование 6)."""
+    (требование 6).
+
+    Голова на сервере — черновой MR через `forge` у проекта с гейтом людей
+    проекта и `draft_mr: true` (`_forge_draft_mr_gate`, SPEC
+    01M5XZ9Z68XE2EKPDHYCAK25KF, требование 6)."""
+    refusal = _publish_head_gate(conn, task_id, t)
+    if refusal is not None:
+        return refusal
+    return _forge_draft_mr_gate(conn, task_id, t)
+
+
+def _forge_draft_mr_gate(conn, task_id: str, t) -> GateRefusal | None:
+    """Черновой MR на входе в `verifying` — только здесь, не в общей точке
+    публикации (`ensure_head_in_origin` зовут и `amend-tests`, и гейт
+    мержа): отказ хостинга оставляет задачу в `in_dev` с причиной, и
+    следующий `advance` повторяет открытие и при голове уже на сервере."""
+    reason = github_adapter.ensure_forge_draft_mr(conn, task_id, t)
+    if reason is None:
+        return None
+    return GateRefusal(github_adapter.DRAFT_MR_REFUSAL_ACTION,
+                       f"черновой MR не открыт: {reason}",
+                       f"почини доступ к хостингу и повтори artel.py advance "
+                       f"{task_id}")
+
+
+def _publish_head_gate(conn, task_id: str, t) -> GateRefusal | None:
     if _squashes(t):
         return _rewrite_push_gate(conn, task_id, t)
     push_ok, push_detail = github_adapter.ensure_head_in_origin(
