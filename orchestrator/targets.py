@@ -110,9 +110,22 @@ COMPONENT_FIELDS = dict(PROFILE_FIELDS, **{
     "paths_source": "paths_source",
     "depends_on": "depends_on",
     "tools": "tools",
+    # Источник полного набора на приёмке и имя задания CI с его итогом
+    # (SPEC 01M5XZSKK8GZTECA2KWAFHE029, требование 1).
+    "full_suite": "full_suite",
+    "ci_job": "ci_job",
 })
 # `pult-vitest` только допустим: отчётчик появится в G1б.
 COMPONENT_REPORTS = ("junit-xml", "pult-vitest")
+FULL_SUITE_LOCAL = "local"
+FULL_SUITE_CI = "ci"
+FULL_SUITE_BOTH = "both"
+COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
+# Реестр реализаций хостинга (`forge.IMPLEMENTATIONS`) отдаёт сюда сам
+# `forge` при своём импорте: `forge` импортирует этот модуль, обратный
+# импорт был бы циклом. `None` — `forge` не загружен; тогда хостинг без
+# чтения отчёта задания ловит приёмка при использовании.
+hosting_registry = None
 COMPONENT_TEMPLATE_MARKS = ("<id>", "<dir>", "<name>")
 COMPONENT_DEPENDS_VIA = ("paths", "files", "contract")
 COMPONENT_PATHS_SOURCE = ("file", "key")
@@ -867,7 +880,8 @@ def check(name: str, entry: object, source: Path | None = None) -> None:
             raise TargetsError(f"{where}: поля '{PROFILE_FIELD}' и "
                                f"'{COMPONENTS_FIELD}' вместе недопустимы — "
                                f"оставь одно")
-        _check_components(name, where, entry[COMPONENTS_FIELD])
+        _check_components(name, where, entry[COMPONENTS_FIELD],
+                          hosting=entry["forge"])
         if name != config.DEFAULT_TARGET:
             _check_knowledge_outside_wrapper(where, entry)
     if KNOWLEDGE_FIELD in entry:
@@ -1031,9 +1045,11 @@ def _check_profile(where: str, profile: object) -> None:
                     f"'{runner}')")
 
 
-def _check_components(name: str, where: str, comps: object) -> None:
+def _check_components(name: str, where: str, comps: object,
+                      hosting: str = "") -> None:
     """Проверка поля `components:` записи: отказ называет проект,
-    компонент и поле (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 2-3)."""
+    компонент и поле (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 2-3).
+    `hosting` — значение `forge` записи для правила `full_suite`."""
     if not isinstance(comps, dict) or not comps:
         raise TargetsError(f"{where}: поле '{COMPONENTS_FIELD}' — не непустое "
                            f"отображение «имя компонента → поля»")
@@ -1056,7 +1072,35 @@ def _check_components(name: str, where: str, comps: object) -> None:
             if reason:
                 raise TargetsError(f"{here}: поле '{field}' — {reason}")
         _check_component_rules(name, here, fields, single)
+        _check_full_suite_source(here, fields, hosting)
         _check_rerun_ban(here, fields)
+
+
+def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
+    """Источник полного набора компонента (SPEC 01M5XZSKK8GZTECA2KWAFHE029,
+    требование 1): `ci_job` — ровно при `ci`/`both`; `ci`/`both` — только с
+    `report` и у хостинга, реализация которого в реестре `forge` читает
+    отчёт задания. Реестр, а не литерал значения `forge`."""
+    mode = fields.get("full_suite", FULL_SUITE_LOCAL)
+    if mode == FULL_SUITE_LOCAL:
+        if "ci_job" in fields:
+            raise TargetsError(f"{here}: поле 'ci_job' — допустимо только при "
+                               f"'full_suite: {FULL_SUITE_CI}' или "
+                               f"'{FULL_SUITE_BOTH}' (full_suite — "
+                               f"'{FULL_SUITE_LOCAL}')")
+        return
+    if "ci_job" not in fields:
+        raise TargetsError(f"{here}: поле 'ci_job' — нет: обязательно при "
+                           f"'full_suite: {mode}'")
+    if "report" not in fields:
+        raise TargetsError(f"{here}: поле 'report' — нет: обязательно при "
+                           f"'full_suite: {mode}' (граница гейта исходов)")
+    registry = hosting_registry() if hosting_registry is not None else None
+    if registry is not None and getattr(registry.get(hosting),
+                                        "job_test_report", None) is None:
+        raise TargetsError(f"{here}: поле 'full_suite' — '{mode}': реализация "
+                           f"хостинга '{hosting}' не читает отчёт тестов "
+                           f"задания CI")
 
 
 # Плагины повторов pytest и их аргументы (SPEC 01M5FRYVP4NF81VT00FYPHPWJH,
@@ -1285,6 +1329,13 @@ def _component_value_error(kind: str, value: object, comp: str,
         return ""
     if kind == "regexes":
         return _regexes_error(value)
+    if kind == "full_suite":
+        if value not in COMPONENT_FULL_SUITES:
+            return f"{value!r}, ожидается {' | '.join(COMPONENT_FULL_SUITES)}"
+        return ""
+    if kind == "ci_job":
+        return "" if isinstance(value, str) and value.strip() else (
+            "не непустая строка — имя задания CI")
     if kind == "paths_source":
         return _exact_strings_error(value, COMPONENT_PATHS_SOURCE)
     if kind == "depends_on":
