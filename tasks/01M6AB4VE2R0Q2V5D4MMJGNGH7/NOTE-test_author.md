@@ -1,27 +1,23 @@
-# NOTE test_author (визит 2)
+# NOTE test_author (визит 3, после ANSWER-1)
 
 ## Выяснено
-- Стенд target-human скопирован из tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py (Stand, FakeForge); задача доходит до awaiting_human настоящим approve.
-- CLI `mr-sync` вызывается через `artel.main` с подменой sys.argv.
-- На approve target-human origin/base — предок головы (`_base_moved_returns`), поэтому точка ответвления = голова origin/base на момент approve.
-- «MR не найден» в тестах — пустой mr_iid в БД (404 — отказ forge, по строке 1 таблицы это «неизвестно»).
-- Несинхрон ссылки документов: хук pre-receive bare, отвергающий refs/artifacts/*, + локальный коммит в ссылку.
-- Подсказка `config.AUTO_STOP["awaiting_human"]` в `status` не печатается — её показывает `auto.auto_stop_advice`; тест проверяет её там.
-- Токен GitLab в тесте AC-1 — подмена keychain.token (без gitcmd).
+- ANSWER-1 п. 5: опрос по `policy.mr_sync_interval_min` — только надзор эпика (`auto.cmd_auto_epic`); `auto <id>` в awaiting_human не живёт.
+- Надзор эпика гоняется прямо `auto.cmd_auto_epic(epic, obs, launch)`; цикл обрывается исключением из подменённого `auto.time.sleep` (cmd_auto_epic журналирует abort и пробрасывает). Часы: заместитель `auto.time` (sleep/time/monotonic) + `store.now`. Сверка в опросе = рост журнала задачи.
+- Эпик: `epics.new_epic_id()` + `store.insert_epic` + `conn.commit()` + `update_task(epic_id=…)`; наблюдение — `store.register_observation` (позиция с текущего max steps).
+- `watch --observation` требует сессию наблюдения (`ARTEL_SESSION_ID`); на darwin `_notify` зовёт osascript — тест подменяет `sys.platform` на linux, считает строки «уведомление: …».
+- ANSWER п. 1: «MR не найден» = отказ mr_status с причиной «не найдено (404): …» (форма адаптера); AC-8/AC-9 переведены с пустого mr_iid на 404 (`Stand.not_found`).
 
-## Написано
-- tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_fields.py — AC-1.
-- tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py — AC-2..AC-16, AC-19 (показ итога и времени, store.now подменён).
-- tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_awaiting_hint.py — AC-19 (подсказки без «(шаг Б2.2)»).
-- acceptance_tests/test_ac20_invariants_appendix.py — AC-20; там же пометки `escalate` для AC-17 и AC-18 (вопросы Б-4: жить ли циклу `auto <id>` в awaiting_human, какие часы и какой сон подменять; что считать уведомлением watch).
-- Валидация стабом: все 36 методов основного файла + AC-1 + подсказки зелёные; 5 мутаций стаба пойманы. Стаб удалён, `git status` — только три новых файла tests/.
-- preflight: всё «пройдена». На чистом коде все файлы красны по своей причине («Неизвестная команда mr-sync», нет полей MergeRequest, «(шаг Б2.2)» в подсказке, нет PLAN).
+## Написано (этот визит)
+- tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py: AC-17 (3 метода: без поля не сверяют `auto <id>`/надзор; с полем — интервал и не закрывает при трёх итогах; отказ загрузки 0/отриц./не целое), AC-18 (одно уведомление на смену, ни одного на повтор).
+- Пометки escalate AC-17/AC-18 сняты из acceptance_tests/test_ac20_invariants_appendix.py.
+- Валидация стабом (опрос в `_supervise`, поле в targets, значимое действие в watch, поля MergeRequest): 11 методов зелёные; мутации «без интервала», «каждая сверка значима», «опрос по умолчанию», «0 принят» пойманы. Стаб откатан `git checkout`, в дереве только правка своего tests-файла.
+- preflight — всё «пройдена»; plank-run красен по причине «нет PLAN».
 
 ## Не сработало
-- `cd X && …`, `ls`, `rm`, запись в /tmp — недоступны; удаление файлов — через python pathlib.
+- shell-функции и `${…}` в Bash отклоняются; мутации — по одной python-heredoc правке на вызов.
 
 ## Где остановился
-Шаг сдан с эскалацией AC-17/AC-18. После ANSWER: дописать тесты AC-17 (опрос надзора + проверка загрузки поля mr_sync_interval_min) и AC-18, снять обе пометки escalate.
+Шаг сдаётся: все AC покрыты, escalate-пометок нет.
 
 ## Чего не хватило
-Где показывается подсказка config.AUTO_STOP (не в status, а в auto.auto_stop_advice) — SPEC называл status.
+Как оборвать цикл надзора эпика без закрытых имён — нашлось: исключение из подменённого `auto.time.sleep`.

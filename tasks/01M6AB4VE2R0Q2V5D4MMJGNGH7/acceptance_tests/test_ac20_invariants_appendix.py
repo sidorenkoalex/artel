@@ -24,10 +24,6 @@ from _pult import apply_check, artifact_text  # noqa: E402
 TARGET = "tests/test_invariants.py"
 DIFF_BLOCK = re.compile(r"```diff\n(.*?)```", re.S)
 
-# AC-17: escalate — «надзор `auto` … раз в N минут» не исполним тестом без решения Оператора: `auto <id>` в `awaiting_human` сегодня останавливается (auto.py:72-73; держит это долгоживущий tests/test_01m5xz9z68v75vxf5z66c708t4_awaiting_holds.py::test_ac10_auto_stops_on_awaiting_human_without_alert), а SPEC не говорит, должен ли цикл задачи жить в `awaiting_human` при заданном `policy.mr_sync_interval_min` (аудит Б-4). Вопросы: (1) опрашивает только надзор эпика (`auto --epic`), а `auto <id>` по-прежнему останавливается — или `auto <id>` при заданном поле остаётся жить и опрашивает? (2) какие часы тест подменяет для «не чаще раза в N минут» — `store.now()` (секундная строка) или иной публичный источник времени, и какую паузу цикла (`time.sleep` модуля `auto`) тест обрывает, чтобы цикл кончился? Дефолт при молчании: опрос только в надзоре эпика, интервал по `store.now()`, сон — `time.sleep` модуля `auto`, проверка загрузки поля — `targets.target` с отказом `targets.TargetsError`, называющим `mr_sync_interval_min`.
-# AC-18: escalate — уведомление `watch` о смене итога зависит от того же механизма опроса надзора (AC-17); не задано и что считать «уведомлением `watch`»: строку `уведомление: …` из `watch --notify` по записи журнала сверки (тогда нужна значимая запись — какое действие журнала) или иной канал. Дефолт при молчании: запись журнала сверки со сменой итога значима для `watch._significant`, `watch --notify` печатает одну строку «уведомление: …» на смену и ни одной на повтор того же итога.
-
-
 def appendix() -> str | None:
     """Дифф приложения PLAN к `tests/test_invariants.py`; None — его нет."""
     plan = artifact_text("PLAN.md")
