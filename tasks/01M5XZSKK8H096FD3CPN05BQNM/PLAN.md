@@ -2,51 +2,71 @@
 task: 01M5XZSKK8H096FD3CPN05BQNM
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
 # PLAN: GitLab В1.2: гейт неослабления по исходам из отчётов задания CI
 
 ## Подход
-Режим `ci` включается только в `merge_gate_escalates`
-(`orchestrator/advance_gates/outcome_integrity.py:1153`) для компонента с
-`full_suite: ci`; `_outcome_integrity_gate_refuses` (`:1143`) не меняется
-(требования 1, 9). Ветка режима `ci` — отдельная функция `_judge_ci` рядом с
-`_judge`: вместо `_checkouts`/`_rerun`/`_prior_checkout`/`_proven` она читает
-отчёты `forge.job_test_report` головы (ровно sha головы) и базы (точка
-ответвления `_merge_base_of`, затем родитель с тем же деревом по
-`git rev-list --parents -n1` и `git rev-parse <c>^{tree}`), проверяет
-годность по `forge.pipeline_status(sha).jobs` (последняя попытка, номер до
-и после чтения отчёта — ANSWER-1 п. 2), переводит отчёт в `CaseResult` и
-отдаёт исходы прежним `compare`/`_replacement_findings`; находки G3б-2
-(`_strict_findings`/`_code_exception_findings`) — по диффу git без выписок.
-Сбои годности/неоднозначности базы — `_Prepare` с именованной причиной
-(`MERGE_PREPARE_ACTION`). Ключ `PASSED_ACTION` в `ci` —
-`ci:<компонент>:<дерево головы>:<job головы>:<job базы>` без пробелов, чтобы
-`PROOF_LINE` (`:88-89`) разбирал строку.
+Эскалация снята по ANSWER-2 (ответ A): часть 1 (01M5XZSKK8GZTECA2KWAFHE029)
+влита и подтянута в ветку (27e37361f) — `Profile.full_suite`/`ci_job`
+(`orchestrator/project_profile.py:127-128`) и `targets.FULL_SUITE_CI` есть.
 
-Перевод отчёта (требование 8) — новая публичная функция
-`reporters/outcome.py` (`parse_forge_report(report, profile, tree_files)`):
-деление ключа по первому `::`, путь из `classname` с `/` либо самый длинный
-префикс точечного `classname`, файл которого есть в дереве коммита под
-`workdir`; путь от корня — через `_root_path` (`:80`); неоднозначные записи —
-отдельный признак «неизвестно».
+Режим `ci` включается в одной точке — `_gate`
+(`orchestrator/advance_gates/outcome_integrity.py`) при `merge=True` и
+`profile.full_suite == ci`: ветка `_gate_ci` → `_judge_ci`, без каталога
+выписок. `merge=False` (выход из `in_dev`) идёт прежним `_judge` с
+выписками — требования 1 и 9; сигнатуры `_outcome_integrity_gate_refuses` и
+`merge_gate_escalates` не меняются. Многокомпонентная запись проходит тем
+же `_gate` из `_components_gate`.
 
-**Реализация не начата — блокер ниже.** Поля компонента `full_suite`/`ci_job`
-вводит часть 1 (01M5XZSKK8GZTECA2KWAFHE029) в `orchestrator/project_profile.py`
-и `orchestrator/targets.py`; по SPEC («Контекст», последний абзац; «Не
-входит») эти файлы здесь только читаются, а код задачи начинается после
-влития части 1 в main.
+`_judge_ci`:
+- годность отчёта стороны — `_ci_report`: последняя попытка `ci_job` по
+  наибольшему `id` из `forge.pipeline_status(sha).jobs`, статус
+  `forge.job_result` — `success` либо `failed` без `allow_failure`, отчёт
+  `forge.job_test_report` разобран; номер попытки до и после чтения отчёта
+  совпадает (тот же приём, что `ci.job_full_suite` части 1);
+- голова — только ровно её sha, иначе `_Prepare` «нет отчёта головы: …»;
+- база — `_ci_base_report`: точка ответвления (`_merge_base_of`), иначе
+  родители из `git rev-list --parents -n1` с тем же `^{tree}`; найден у
+  родителя — запись журнала «отчёт базы: задание <id> коммита <sha> (дерево
+  совпадает с <точка>)»; не найден — `_Prepare` «нет отчёта базы: …»;
+- перевод — `outcome.parse_forge_report` по файлам дерева коммита отчёта
+  (`git ls-tree -r -z` под `workdir`, без выписки); любая неоднозначная
+  запись базы — `_Prepare` «отчёт базы неоднозначен: <id|ключ>»;
+- находки: тест `PASS_TO_PASS` базы, красный или «неизвестно» в голове, —
+  BROKEN (снимается мандатом как BROKEN); прочее — прежний `compare`;
+  замены — `_ci_replacement_findings` (REPLACED_MISSING / REPLACED_NOT_GREEN
+  / новая находка «замена теста не проверяема в режиме ci» → отказ, не сбой);
+  G3б-2 — прежние `_strict_findings`/`_code_exception_findings` по диффу git;
+- `_proven` не зовётся; запись `PASSED_ACTION` — ключ
+  `ci:<компонент>:<дерево головы>:<job головы>:<job базы>` (без пробелов,
+  `PROOF_LINE` разбирает), без сумм файлов блокировки.
+
+Перевод отчёта (требование 8) — `parse_forge_report` в
+`orchestrator/reporters/outcome.py`: деление по первому `::`; `classname` с
+`/` — путь; иначе самый длинный префикс точечного пути, чей `.py` есть в
+дереве под `workdir`; класс — остаток с `::`; путь к корню — `_root_path`.
+Статус вне перечня и два ключа одного идентификатора — запись с исходом
+`UNKNOWN`; ключ без `::` или с ненайденным модулем — в списке неразобранных.
 
 ## Шаги
-1. `reporters/outcome.py`: перевод отчёта `forge.TestReport` в `CaseResult`
-   + признак «неизвестно» (требование 8), юнит-тесты на правило перевода.
-2. `outcome_integrity.py`: источник исходов режима `ci` на гейте мержа —
-   годность отчётов, поиск базы у родителя того же дерева, сбои подготовки,
-   находки, замены, G3б-2, ключ `PASSED_ACTION` (требования 1–7, 9).
-3. Прогон `tests/test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate.py` и
-   тестов гейта исходов (`tests/test_*outcome_integrity*`), карта кода.
+1. `reporters/outcome.py`: `FORGE_OUTCOMES`, `_forge_location`,
+   `parse_forge_report` + юнит-тест
+   `tests/test_report_outcome_module.py::test_forge_report_key_without_separator_and_record_shape`
+   (проверен мутацией «ключ без `::` переводится» — красный).
+2. `outcome_integrity.py`: `_ci_report`, `_ci_base_report`, `_ci_cases`,
+   `_ci_replacement_findings`, `_judge_ci`, `_gate_ci`, ветка в `_gate`,
+   вид `REPLACED_UNCHECKABLE` в `_RANK`/`_KINDS`.
+3. Прогоны и карта: `tests/test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate.py`
+   — 46 passed; тесты гейта исходов и соседей
+   (`test_01m5fryvp4nf81vt00fyphpwjh_outcome_action_texts`,
+   `test_01m5j0jyw3gzsshhk3tycytq3j_outcome_prior`,
+   `test_merge_outcome_module`, `test_outcome_components_module`,
+   `test_outcome_gate_module`, `test_refusal_classes`,
+   `test_report_outcome_module`, `test_gate_owner_marker`,
+   `test_mandate_test_id`) — 172 passed; `python3 scripts/codebase_map.py`.
 
 ## Покрытие требований
 
@@ -63,54 +83,22 @@ schema_version: 5
 | 9 | 2, 3 |
 
 ## Влияние на систему
-Затрагивается только ветка `full_suite: ci` гейта мержа; для `local` и
-артели путь `merge_gate_escalates` не меняется (требование 9), прежние
-выписки, перепрогон и `_proven` на `in_dev` остаются. Инвариант 41:
-«неизвестно» не считается зелёным ни на одной стороне. Откат — revert
-одного merge-коммита. Пока код не написан, система не меняется.
+Меняется только ветка гейта мержа для компонента `full_suite: ci`; `local`,
+`both`, артель и выход из `in_dev` идут прежним `_judge` (существующие тесты
+гейта исходов зелёные без правки). Fail-closed сохранён: любой сбой чтения
+`forge`/git в режиме `ci` — `PREPARE_REFUSAL_ACTION` → `MERGE_PREPARE_ACTION`,
+задача на `merge_gate`, не пропуск; «неизвестно» нигде не засчитывается
+зелёным (инвариант 41), неоднозначная база не сужает `PASS_TO_PASS`.
+Ослабления по матрице SPEC (нет перепрогона и третьей выписки на мерже в
+`ci`) — решения ТЗ/ANSWER родителя, не этой правки. Новое действие журнала
+`гейт исходов: отчёт базы` — информационное, не отказ. Откат — revert одного
+merge-коммита.
 
 ## Риски
-- Делать код по угаданным именам полей части 1 (`profile.full_suite`,
-  `profile.ci_job`) до её влития — риск расхождения с её фактическим
-  интерфейсом и конфликта по зоне `project_profile.py`/`targets.py`.
+- `full_suite: both` на мерже судится локально (SPEC говорит только о `ci`);
+  если Оператор захочет и для `both` отчёты CI — отдельная правка условия в
+  `_gate`.
 
 ## Предложения системе
-- `start_after` не удержал шаг разработчика: у задачи `start_after =
-  01M5XZSKK8GZTECA2KWAFHE029`, а та в `in_dev` (ждёт зону
-  `orchestrator/targets.py`), но шаг developer этой задачи 30.10 03:02
-  стартовал (`merge_after.start_after_blocks`/`role_step_started` —
-  вероятно, первым шагом роли считается уже прошедший шаг test_author).
-  Класс: предусловие порядка проверяется по «первому шагу роли», а не по
-  «первому шагу кода».
-
-## Эскалация
-
-**Вопросы** (по блокирующести):
-
-1. Часть 1 (01M5XZSKK8GZTECA2KWAFHE029) не влита в main — она в `in_dev` и
-   ждёт зону `orchestrator/targets.py`; поля `full_suite`/`ci_job`
-   компонента в `project_profile.py`/`targets.py` отсутствуют, все 46
-   методов долгоживущего файла красные на загрузке записи (записка
-   test_author). Как продолжать?
-   - A) Вернуть задачу на паузу до влития части 1; после подтяжки main
-     разработчик реализует по этому PLAN.
-   - B) Разрешить реализовать сейчас поверх ветки части 1 (подтянуть её
-     код в ветку задачи), с мержем строго после неё (`merge_after` уже
-     стоит).
-   - C) Расширить зону задачи на `project_profile.py`/`targets.py` и ввести
-     поля здесь (дублирует часть 1 — не рекомендую).
-   - **Дефолт при молчании:** A.
-
-2. (не блокирует, к сведению) `start_after` не остановил шаг разработчика —
-   см. «Предложения системе»; нужна ли отдельная задача на это?
-   - A) Да, строка бэклога. B) Нет, известное поведение.
-   - **Дефолт:** A.
-
-**Контекст.** `git log main` — без коммитов части 1;
-`origin/task/01m5xzskk8gzteca2kwafhe029-…` несёт только её долгоживущие
-тесты (89482cb90), кода нет. `grep full_suite orchestrator/project_profile.py`
-— только `full_suite_timeout_sec`. Подход и шаги выше готовы; код не
-написан, чтобы не строить его на угаданном интерфейсе части 1.
-
-**Блокирует.** Шаги 1–3 целиком: без полей профиля гейт не распознаёт
-компонент `ci`, долгоживущие тесты задачи не загружают запись проекта.
+- `start_after` не удержал шаг разработчика при невлитой части 1 (записано
+  сессией Оператора по ANSWER-2, п. 2).
