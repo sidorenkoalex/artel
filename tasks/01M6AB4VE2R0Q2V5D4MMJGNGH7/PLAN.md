@@ -2,7 +2,7 @@
 task: 01M6AB4VE2R0Q2V5D4MMJGNGH7
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -124,7 +124,10 @@ done`, `closed_as` (`merged_upstream` по (а), `merged_upstream_other` по
   ANSWER-2 п. 1 (множество + `mr_status`, предел одного чтения, строка
   документации). Отказ при сбое краснил ещё четыре теста того же файла —
   их подделка хостинга отвечала на `mr_status` отказом; подделке добавлен
-  метод `mr_status` (открытый невлитый MR) — см. «Эскалация», вопрос 1.
+  метод `mr_status` (открытый невлитый MR; отказ при `fail["mr_status"]`) —
+  принят ANSWER-3 п. 1, вариант (а), утверждения тестов не менялись.
+  Строка мандата ANSWER-3:
+  `Ослабление тестов разрешено: tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac9_existing_link_undrafts_and_assigns, tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac11_undraft_or_assign_refusal_no_second_mr, tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac13_draft_on_verifying_undraft_on_gate`.
 - Схема БД: три новых столбца `add_column` (идемпотентно), прежние данные не
   меняются. `delivery_policy` отдаёт ещё ключ `mr_sync_interval_min`.
 - `watch`: новое значимое действие только «mr-sync: итог сменился».
@@ -302,45 +305,9 @@ index 2b6f9c51a..1728829c5 100644
 +        self.assertIsNotNone(stand.retro(task), where)
 ```
 
-## Эскалация
+## Ответ Оператора (ANSWER-3)
 
-**Вопросы** (по блокирующести):
-
-1. **Правка подделки хостинга вне мандата (блокирует сдачу).** Решение
-   ANSWER-2 п. 2 (б) краснит ещё четыре существующих теста того же файла —
-   их общая подделка `FakeForge` на `mr_status` отвечала отказом
-   («подделка хостинга: mr_status не отвечает», `__getattr__`), а теперь
-   отказ останавливает гейт:
-   `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac9_existing_link_undrafts_and_assigns`,
-   `::test_ac11_undraft_or_assign_refusal_no_second_mr[undraft_mr]`,
-   `::test_ac11_undraft_or_assign_refusal_no_second_mr[assign_mr]`,
-   `::test_ac13_draft_on_verifying_undraft_on_gate` (вывод: «approve
-   отклонён: статус MR не прочитан — MR !…: подделка хостинга: mr_status не
-   отвечает»). В рабочей копии классу `FakeForge` добавлен метод
-   `mr_status` по образцу `undraft_mr`/`assign_mr`: запись вызова, отказ при
-   `fail["mr_status"]`, иначе открытый невлитый MR с `target_branch` =
-   `main`. Утверждения тестов не менялись, ни один метод не удалён; с ним
-   файл зелёный (36 passed). SPEC («Существующие тесты») велит иную правку
-   существующих тестов эскалировать. Варианты: (а) принять метод подделки
-   как есть, строка мандата:
-   `Ослабление тестов разрешено: tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac9_existing_link_undrafts_and_assigns, tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac11_undraft_or_assign_refusal_no_second_mr, tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac13_draft_on_verifying_undraft_on_gate`;
-   (б) вернуть п. 2 к варианту (а) вопроса 2 прошлой эскалации (сбой —
-   запись журнала, гейт идёт дальше) и убрать метод подделки.
-   **Дефолт: (а)** — код и тесты уже под него; подделка лишь отвечает так,
-   как отвечает настоящий хостинг.
-
-**Контекст.** ANSWER-2 закрыт в коде. П. 1 — `test_ac15_…` правлен по
-мандату (множество `{"undraft_mr", "assign_mr", "mr_status"}`, подделка
-`mr_status` в тесте отвечает открытым невлитым MR,
-`len(stand.fake.named("mr_status")) <= 1`, `mr_status` убран из «ловимых
-мутаций» строки документации; `MR_CALLS` и проверка состояния не тронуты);
-гейт читает статус MR один раз за `approve` (`_mr_incident_checked`). П. 2 —
-сбой `mr_status` отказывает `approve`, задача на `merge_gate`
-(`_mr_incident_stops`), тест
-`tests/test_mr_sync_units.py::test_gate_refuses_when_mr_status_unread`. П. 3 —
-первая сверка уведомляет `watch` (`mr_sync.sync_task`, `FIRST_SYNC`), тест
-`tests/test_mr_sync_units.py::FirstSyncNotifiesTest::test_first_sync_is_a_change_repeat_is_not`.
-Карта регенерирована. Прогоны — во «Влиянии на систему».
-
-**Блокирует.** Выход из `in_dev` со `status: ready`: правка четырёх тестов
-вне мандата. При ответе (а) PLAN сдаётся без изменения кода.
+Вариант (а): метод `mr_status` подделки `FakeForge` принят как есть, код не
+менялся. После ответа прогнаны долгоживущие файлы задачи,
+`test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py` и `test_mr_sync_units.py` —
+97 passed.
