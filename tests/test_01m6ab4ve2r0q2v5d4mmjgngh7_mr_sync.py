@@ -1,7 +1,7 @@
 """Команда `mr-sync`: сверка MR и нахождения правки в `base`, закрытие `done` по `--confirm`, инциденты на `approve` и в сверке, показ итога.
 
 Группа: долгоживущий
-Красен до реализации: команды `mr-sync` нет — `artel.main` выходит «Неизвестная команда mr-sync», итога сверки нет ни в выводе, ни в журнале, `--confirm` не закрывает задачу; `approve` гейта мержа не читает статус MR и не сверяет голову ветки на сервере с последней своей отправкой — снимает черновик и переводит задачу в `awaiting_human`; переход в `awaiting_human` не записывает точку ответвления.
+Красен до реализации: команды `mr-sync` нет — `artel.main` выходит «Неизвестная команда mr-sync», итога сверки нет ни в выводе, ни в журнале, `--confirm` не закрывает задачу; `approve` гейта мержа не читает статус MR и не сверяет голову ветки на сервере с последней своей отправкой — снимает черновик и переводит задачу в `awaiting_human`; переход в `awaiting_human` не записывает точку ответвления; загрузчик записи не знает поля `policy.mr_sync_interval_min` (отказ «неизвестное поле» и для целого > 0), надзор эпика `mr-sync` не зовёт, итога сверки в журнале нет и `watch` не уведомляет.
 
 Связка «команда пульта — FSM — база — git»: каждый сценарий доходит до
 поведения через публичный вход (`artel.main` с `sys.argv` команды
@@ -26,9 +26,16 @@
 git наблюдаются обёрткой `subprocess.run`, которая зовёт настоящий
 `subprocess.run`.
 
-«MR не найден» разыгрывается задачей без ссылки на MR в БД (`mr_iid`
-пуст): ответ хостинга 404 — это отказ `forge`, а он по строке 1 таблицы
-итогов SPEC даёт «неизвестно».
+«MR не найден» разыгрывается ответом хостинга 404 на `GET` MR — отказом
+`mr_status` с причиной в форме адаптера GitLab «не найдено (404): …»
+(ANSWER-1 п. 1); прочие отказы `forge` дают «неизвестно».
+
+Надзор эпика (`auto.cmd_auto_epic`) гоняется на подменённых часах: пауза
+опроса (`time.sleep` модуля `auto`) сдвигает часы пульта (`store.now`,
+`time.time`/`time.monotonic` модуля `auto`) на запрошенные секунды, а по
+исчерпании отрезка сценария обрывает цикл исключением теста. Опрос
+`mr-sync` по `policy.mr_sync_interval_min` — только в надзоре эпика;
+`auto <id>` в `awaiting_human` его не заводит (ANSWER-1 п. 5).
 
 Имена, файлы задачи и причины отказа — из `random`, зерно печатается и
 входит в текст каждого провала.
@@ -41,24 +48,34 @@ git наблюдаются обёрткой `subprocess.run`, которая з�
 рабочей копии) и показ итога в `status`/доске — все методы зелёные;
 мутации «точка пересчитывается в сверке», «принятая голова не читается»,
 «`--confirm` без `--by-content` по (в)», «пометка ставится всегда»,
-«статус merged сам даёт «влит этим MR»» краснят свои методы.
+«статус merged сам даёт «влит этим MR»» краснят свои методы. Методы
+AC-17/AC-18 провалидированы отдельным временным стабом (удалён, не
+закоммичен): поле `mr_sync_interval_min` с проверкой загрузчика, опрос в
+надзоре эпика по `time.time` модуля `auto`, запись смены итога, значимая
+для `watch`, — все зелёные; мутации «интервал не соблюдается», «каждая
+сверка значима для `watch`», «опрос без поля по умолчанию», «0 принят»
+краснят свои методы. Вариант «MR не найден» по 404 (ANSWER-1 п. 1) после
+этой правки стабом не перепрогонялся.
 """
 import contextlib
 import io
 import os
 import random
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from orchestrator import (acceptance, answer, artel, board, catalog,
-                          checkpoint, ci, config, forge, fsm, idgen, keychain,
-                          merge_after, store, targets, workspace, zone_lock)
+from orchestrator import (acceptance, answer, artel, auto, board, catalog,
+                          checkpoint, ci, config, epics, forge, fsm, idgen,
+                          keychain, merge_after, store, targets, watch,
+                          workspace, zone_lock)
 from orchestrator.advance_gates import two_sided
-from tests.sandbox import make_project_repo
+from tests.sandbox import make_project_repo, patch_sleep
 
 REAL_RUN = subprocess.run
 REAL_POPEN = subprocess.Popen
@@ -528,6 +545,12 @@ class Stand:
     def reply(self, task: str, **fields) -> None:
         """Правка ответа `mr_status` для MR задачи."""
         self.fake.replies[self.iid(task)].update(fields)
+
+    def not_found(self, task: str) -> None:
+        """`mr_status` отвечает 404 — причиной в форме адаптера GitLab."""
+        self.fake.fail["mr_status"] = (
+            f"не найдено (404): GET /projects/grp%2F{self.ext}"
+            f"/merge_requests/{self.iid(task)}")
 
     def branch(self, task: str) -> str:
         return store.get_task(self.conn, task)["branch"]
@@ -1100,7 +1123,7 @@ def arrange_outcome(stand, case: str) -> tuple:
         stand.reply(task, state=stand.rng.choice(["opened", "closed"]))
         return task, ABSENT, reason
     if case == "не найден":
-        store.update_task(stand.conn, task, mr_iid=None, mr_url=None)
+        stand.not_found(task)
         return task, NOT_FOUND, reason
     if case == "другая ветка":
         stand.reply(task, target_branch=f"release-{stand.word()}")
@@ -1117,7 +1140,7 @@ def test_ac8_non_closing_outcomes_named_and_refuse_confirm(stand, case):
 
     Сценарий по параметру: «частично» — из 2–3 коммитов задачи в `base`
     перенесён только первый, MR закрыт; «нет в базе» — правки в `base`
-    нет, MR открыт или закрыт; «не найден» — ссылки на MR в БД нет;
+    нет, MR открыт или закрыт; «не найден» — `mr_status` отвечает 404;
     «другая ветка» — `target_branch` MR не `base`; «отказ forge» —
     `mr_status` отвечает отказом 5xx. `mr-sync <id>`: вывод несёт текст
     своего итога (при отказе — «неизвестно» и причину хостинга).
@@ -1127,7 +1150,8 @@ def test_ac8_non_closing_outcomes_named_and_refuse_confirm(stand, case):
 
     Ловит мутацию: два итога печатаются одним текстом (например
     «частично» как «нет в базе»); либо отказ `forge` даёт зелёный итог
-    или молчит о причине; либо `--confirm` закрывает задачу при одном из
+    или молчит о причине; либо 404 хостинга не отличён от прочих
+    отказов (итог «неизвестно»); либо `--confirm` закрывает задачу при одном из
     этих итогов; либо отказ без подсказки.
     """
     task, text, reason = arrange_outcome(stand, case)
@@ -1152,7 +1176,7 @@ def test_ac9_outcome_order_follows_table(stand, case):
     """Порядок итогов по таблице требования 3: верхняя подошедшая строка решает итог и исход `--confirm`.
 
     Сценарий по параметру: «не найден при (б)» — коммиты задачи
-    перенесены в `base`, ссылки на MR в БД нет → «MR не найден», `--confirm`
+    перенесены в `base`, `mr_status` отвечает 404 → «MR не найден», `--confirm`
     отказывает; «другая ветка при (а)» — коммит слияния в `base`, но
     `target_branch` MR не `base` → «MR переведён на другую ветку»,
     `--confirm` отказывает; «влит, только (б)» — MR «merged» без коммитов
@@ -1170,7 +1194,7 @@ def test_ac9_outcome_order_follows_table(stand, case):
     task = stand.to_awaiting()
     if case == "не найден при (б)":
         stand.cherry(task)
-        store.update_task(stand.conn, task, mr_iid=None, mr_url=None)
+        stand.not_found(task)
         text = NOT_FOUND
     elif case == "другая ветка при (а)":
         merge = stand.merge_commit(task)
@@ -1526,3 +1550,302 @@ def test_ac19_status_and_board_show_last_outcome_and_time(stand, view):
     where = stand.context(task, out) + f"\n--- показ ({view}):\n{text}\nвремя {fixed}"
     assert MERGED_THIS in text, where
     assert f"{hour:02d}:{minute:02d}" in text or f"2031-07-{day:02d}" in text, where
+
+
+# ------------------------------------------------------------ AC-17, AC-18
+
+
+class Halt(Exception):
+    """Конец отрезка сценария: часы надзора ушли за его границу."""
+
+
+class WatchDone(Exception):
+    """Конец одного опроса `watch`."""
+
+
+class Clock:
+    """Часы пульта на время надзора: заместитель ссылки модуля `auto` на
+    `time` и `store.now`. `sleep` сдвигает часы на запрошенные секунды и
+    отмечает время опроса, в котором журнал задачи вырос (сверка); за
+    границей отрезка — `Halt`."""
+
+    def __init__(self, stand, task: str):
+        self.stand, self.task = stand, task
+        self.t = float(int(time.time()) + 3600)
+        self.end = self.t
+        self.sleeps = 0
+        self.sync_times: list = []
+        self.seen = len(stand.rows(task))
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self) -> float:
+        return self.t
+
+    def monotonic(self) -> float:
+        return self.t
+
+    def now(self) -> str:
+        return time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(self.t))
+
+    def note_sync(self) -> None:
+        count = len(self.stand.rows(self.task))
+        if count > self.seen:
+            self.sync_times.append(self.t)
+            self.seen = count
+
+    def sleep(self, seconds) -> None:
+        self.note_sync()
+        self.sleeps += 1
+        self.t += float(seconds)
+        if self.t >= self.end or self.sleeps > 5000:
+            raise Halt()
+
+
+def epic_of(stand, task: str) -> tuple:
+    """Эпик своего проекта с одной задачей `task` и наблюдение текущей
+    сессии над ней; (эпик, наблюдение, сессия)."""
+    epic = epics.new_epic_id()
+    store.insert_epic(stand.conn, epic, stand.ext, f"Эпик {stand.word()}",
+                      "Цель сценария", None)
+    stand.conn.commit()
+    store.update_task(stand.conn, task, epic_id=epic)
+    session_id = f"s-{stand.word()}"
+    obs = store.register_observation(stand.conn, stand.ext, "", "", session_id,
+                                     [task])
+    return epic, obs, session_id
+
+
+def supervise(stand, clock: Clock, epic: str, obs: str, span_sec: float) -> str:
+    """Надзор эпика (`auto.cmd_auto_epic`) на часах `clock` до конца
+    отрезка `span_sec`; вывод. Дочерних запусков быть не должно: задача
+    эпика ждёт людей проекта."""
+
+    def launch(conn, task_id, observation_id):
+        raise AssertionError(f"надзор запустил дочерний auto {task_id}")
+
+    clock.end = clock.t + span_sec
+    stand.mark()
+    previous = signal.getsignal(signal.SIGTERM)
+    buf = io.StringIO()
+    try:
+        with mock.patch.object(auto, "time", clock), \
+                mock.patch.object(store, "now", clock.now), stand.spy(), \
+                contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            try:
+                auto.cmd_auto_epic(epic, obs, launch)
+            except Halt:
+                pass
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    clock.note_sync()
+    return buf.getvalue()
+
+
+def task_auto(stand, clock: Clock, task: str) -> str:
+    """`auto <id>` на часах `clock`; вывод."""
+    clock.end = clock.t + 3600
+    stand.mark()
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        with mock.patch.object(auto, "time", clock), \
+                mock.patch.object(store, "now", clock.now), stand.spy():
+            try:
+                return capture_out(auto.cmd_auto, task)
+            except Halt:
+                return "(цикл оборван границей отрезка)"
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def arrange_supervised(stand, case: str) -> tuple:
+    """Задача в `awaiting_human` под итог `case`; (задача, текст итога)."""
+    task = stand.to_awaiting()
+    if case == MERGED_THIS:
+        merge = stand.merge_commit(task)
+        stand.reply(task, state="merged", merge_commit_sha=merge)
+    elif case == OTHER_WAY:
+        stand.cherry(task)
+        stand.reply(task, state="closed")
+    else:
+        stand.reply(task, state="opened")
+    return task, case
+
+
+@pytest.mark.parametrize("supervisor", ["auto <id>", "auto --epic"])
+def test_ac17_no_interval_field_no_supervised_sync(stand, supervisor):
+    """Без `policy.mr_sync_interval_min` ни `auto <id>`, ни надзор эпика не сверяют задачу в `awaiting_human`.
+
+    Сценарий: задача своего проекта в `awaiting_human` влита людьми
+    коммитом слияния (`mr_status` — «merged»); поля в записи проекта нет.
+    По параметру: `auto <id>` либо надзор эпика задачи на подменённых
+    часах за случайный отрезок 20–40 минут опросов. Подделка хостинга не
+    видит ни одного `mr_status`, журнал задачи за прогон не несёт итога
+    «влит этим MR», задача в `awaiting_human`.
+
+    Ловит мутацию: опрос включён по умолчанию (поле отсутствует — берётся
+    интервал-умолчание) — `mr_status` зван, итог в журнале; либо
+    `auto <id>` сверяет задачу при каждом запуске.
+    """
+    task, _ = arrange_supervised(stand, MERGED_THIS)
+    clock = Clock(stand, task)
+    if supervisor == "auto <id>":
+        out = task_auto(stand, clock, task)
+    else:
+        epic, obs, _ = epic_of(stand, task)
+        out = supervise(stand, clock, epic, obs,
+                        stand.rng.randint(20, 40) * 60)
+    where = stand.context(task, out)
+    assert "mr_status" not in stand.fake.names(), where
+    assert MERGED_THIS not in stand.new_journal(task), where
+    assert stand.state(task) == STATE, where
+
+
+@pytest.mark.parametrize("case", [MERGED_THIS, OTHER_WAY, ABSENT])
+def test_ac17_epic_supervisor_syncs_by_interval_never_closes(stand, case):
+    """С `policy.mr_sync_interval_min: N` надзор эпика сверяет задачу не чаще раза в N минут и не закрывает её ни при каком итоге.
+
+    Сценарий: задача своего проекта и своего эпика в `awaiting_human`
+    под итог по параметру — «влит этим MR» (коммит слияния, MR «merged»),
+    «в базе, влит иначе» (коммиты перенесены, MR «closed»), «нет в базе»
+    (MR открыт). В записи проекта `mr_sync_interval_min: N`, N — случайное
+    1–3. Надзор эпика на подменённых часах проходит отрезок 3,5·N минут:
+    сверок (опросов, в которых вырос журнал задачи) не меньше двух, любые
+    две соседние — не ближе N минут по часам пульта; журнал задачи несёт
+    итог параметра. После надзора задача в `awaiting_human`, `closed_as`
+    пуст, RETRO в `refs/artifacts/<id>` нет; дочерний `auto` не запущен.
+
+    Ловит мутацию: интервал не соблюдён (сверка на каждом опросе, раз в
+    `EPIC_POLL_SEC`) — соседние сверки ближе N минут; интервал читается в
+    секундах или часах — сверок меньше двух либо они чаще; надзор зовёт
+    `mr-sync --confirm` или закрывает по итогу «влит этим MR»/«в базе,
+    влит иначе» — задача `done`, `closed_as` заполнен, RETRO есть; опрос
+    не пишет итог в журнал.
+    """
+    task, text = arrange_supervised(stand, case)
+    n = stand.rng.randint(1, 3)
+    stand.record(mr_sync_interval_min=str(n))
+    epic, obs, _ = epic_of(stand, task)
+    clock = Clock(stand, task)
+    out = supervise(stand, clock, epic, obs, 3.5 * n * 60)
+    where = stand.context(task, out) + (
+        f"\nN = {n} мин; сверки (с начала отрезка, с): "
+        f"{[t - (clock.end - 3.5 * n * 60) for t in clock.sync_times]}")
+    assert len(clock.sync_times) >= 2, where
+    gaps = [b - a for a, b in zip(clock.sync_times, clock.sync_times[1:])]
+    assert all(gap >= n * 60 for gap in gaps), where + f"\nпромежутки {gaps}"
+    assert text in stand.new_journal(task), where
+    confirm_refused(stand, task, out)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "-15", "2.5", "пять"])
+def test_ac17_bad_interval_refuses_record_naming_field(tmp_root, monkeypatch, value):
+    """`mr_sync_interval_min` 0, отрицательное или не целое — отказ загрузки записи с именем поля; целое > 0 загружается.
+
+    Сценарий: запись проекта `target-human` локального слоя со случайным
+    именем и полем `policy.mr_sync_interval_min: <value>` —
+    `targets.target(имя)` бросает `targets.TargetsError`, текст называет
+    `mr_sync_interval_min`. Контроль: та же запись со случайным целым
+    1–120 загружается без отказа.
+
+    Ловит мутацию: проверка `> 0` заменена на `>= 0` (ноль принят);
+    отрицательное не отсекается; дробное `2.5` или строка приняты (нет
+    проверки типа); отказ без имени поля; поле вовсе неизвестно загрузчику
+    (контроль с целым отказывает).
+    """
+    monkeypatch.setattr(targets, "SUPPORTED_FORGES", ("github", "gitlab"))
+    monkeypatch.setattr(targets, "SUPPORTED_MERGE_GATES",
+                        ("operator", "target-human"))
+    seed = random.randrange(1 << 30)
+    print(f"зерно: {seed}")
+    rng = random.Random(seed)
+    name = "p" + "".join(rng.choice(ALPHABET) for _ in range(7))
+
+    def write(raw: str) -> None:
+        local = targets.local_path()
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_text("targets:\n" + ENTRY.format(
+            name=name, base=MAIN, gate="target-human",
+            policy=f"      draft_mr: false\n      mr_sync_interval_min: {raw}\n"),
+            encoding="utf-8")
+
+    good = rng.randint(1, 120)
+    write(str(good))
+    targets.target(name)
+    write(value)
+    with pytest.raises(targets.TargetsError, match="mr_sync_interval_min"):
+        targets.target(name)
+
+
+def watch_once(session_id: str, obs: str) -> str:
+    """Один опрос `watch --observation <obs> --notify` от сессии
+    наблюдения; уведомления — строками «уведомление: …» (платформа без
+    `osascript`)."""
+    buf = io.StringIO()
+
+    def stop(_seconds):
+        raise WatchDone()
+
+    with patch_sleep(watch, stop), \
+            mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": session_id}), \
+            mock.patch.object(sys, "platform", "linux"), \
+            contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        try:
+            watch.cmd_watch(["--observation", obs, "--notify"])
+        except WatchDone:
+            pass
+    return buf.getvalue()
+
+
+def test_ac18_watch_notifies_once_on_outcome_change(stand):
+    """Смена итога в опросе надзора даёт одно уведомление `watch`; повторная сверка с тем же итогом — ни одного.
+
+    Сценарий: задача своего проекта и эпика в `awaiting_human`, MR открыт,
+    правки в `base` нет; `mr_sync_interval_min: N` (N — 1–2). Надзор
+    эпика на подменённых часах проходит отрезок N минут с запасом — итог
+    «нет в базе»; опрос `watch --observation … --notify` выбирает накопленное.
+    Люди вливают ветку коммитом слияния, MR «merged»; надзор — следующий
+    отрезок: итог сменился на «влит этим MR», и следующий опрос `watch`
+    печатает ровно одну строку «уведомление: …», называющую задачу и
+    «влит этим MR». Третий отрезок надзора (сверка была — журнал вырос)
+    с тем же итогом: опрос `watch` не печатает ни одного уведомления,
+    называющего задачу.
+
+    Ловит мутацию: запись сверки со сменой итога не значима для `watch`
+    (уведомления нет); значима каждая запись сверки (уведомление на
+    повтор того же итога); смена сравнивается не с прошлой сверкой, а с
+    чем-то иным (уведомлений на смене два или ни одного).
+    """
+    task, _ = arrange_supervised(stand, ABSENT)
+    n = stand.rng.randint(1, 2)
+    stand.record(mr_sync_interval_min=str(n))
+    epic, obs, session_id = epic_of(stand, task)
+    clock = Clock(stand, task)
+    span = n * 60 + 4 * auto.EPIC_POLL_SEC
+
+    def notices(text: str) -> list:
+        return [line for line in text.splitlines()
+                if line.startswith("уведомление:") and task in line]
+
+    out = supervise(stand, clock, epic, obs, span)
+    assert clock.sync_times, stand.note(f"стенд: надзор не сверил\n{stand.context(task, out)}")
+    assert ABSENT in stand.new_journal(task), stand.context(task, out)
+    watch_once(session_id, obs)
+
+    merge = stand.merge_commit(task)
+    stand.reply(task, state="merged", merge_commit_sha=merge)
+    out = supervise(stand, clock, epic, obs, span)
+    seen = watch_once(session_id, obs)
+    where = stand.context(task, out) + f"\n--- watch:\n{seen}"
+    assert MERGED_THIS in stand.new_journal(task), where
+    changed = notices(seen)
+    assert len(changed) == 1, where
+    assert MERGED_THIS in changed[0], where
+
+    synced = len(clock.sync_times)
+    out = supervise(stand, clock, epic, obs, span)
+    seen = watch_once(session_id, obs)
+    where = stand.context(task, out) + f"\n--- watch:\n{seen}"
+    assert len(clock.sync_times) > synced, stand.note(f"стенд: третьей сверки нет\n{where}")
+    assert notices(seen) == [], where
