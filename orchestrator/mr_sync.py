@@ -58,6 +58,7 @@ SYNC_ACTION = "mr-sync: сверка"
 # Смена итога относительно прошлой сверки — значима для `watch`
 # (требование 6).
 OUTCOME_CHANGED_ACTION = "mr-sync: итог сменился"
+FIRST_SYNC = "(первая сверка)"
 FORK_POINT_ACTION = "точка ответвления записана"
 ACCEPTED_HEAD_ACTION = "голова ветки на сервере принята"
 CONFIRM_REFUSED_ACTION = "mr-sync --confirm отклонён"
@@ -375,9 +376,11 @@ def sync_task(conn, task_id: str, actor: str = "operator") -> Sync:
     previous = store.get_task(conn, task_id)["mr_sync_outcome"]
     store.update_task(conn, task_id, mr_sync_outcome=result.text(),
                       mr_sync_at=store.now())
-    if previous and previous != result.text():
+    # Первая сверка — тоже смена (ANSWER-2 п. 3): иначе вливание MR до
+    # первой сверки осталось бы без уведомления `watch`.
+    if previous != result.text():
         store.journal(conn, task_id, actor, OUTCOME_CHANGED_ACTION,
-                      f"{previous} → {result.text()}")
+                      f"{previous or FIRST_SYNC} → {result.text()}")
     if result.incident:
         _escalate(conn, task_id, result.incident)
     return result

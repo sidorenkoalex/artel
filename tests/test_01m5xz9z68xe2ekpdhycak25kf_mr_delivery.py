@@ -377,6 +377,15 @@ class FakeForge:
             return forge.MergeRequest(reason=self.fail["assign_mr"])
         return forge.MergeRequest(iid=mr, state="opened", assignee=str(assignee))
 
+    def mr_status(self, target, mr):
+        # Чтение статуса MR на гейте — проверка инцидента MR (SPEC
+        # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 5): MR открыт, не влит.
+        self._record("mr_status", (target, mr))
+        if "mr_status" in self.fail:
+            return forge.MergeRequest(reason=self.fail["mr_status"])
+        return forge.MergeRequest(iid=mr, state="opened", draft=True,
+                                  target_branch=config.MAIN_BRANCH)
+
     def __getattr__(self, name):
         if name.startswith("__") or name not in forge.RESULT_TYPES:
             raise AttributeError(name)
@@ -1310,23 +1319,32 @@ def test_ac15_gate_with_link_talks_to_mr_only_by_undraft_and_assign(stand):
 
     Сценарий: запись `target-human` с `mr_assignee: "42"`, ссылка на MR
     в БД. За весь `approve` подделка хостинга не видит ни одного вызова о
-    MR (функции интерфейса `forge` с «mr» в имени), кроме `undraft_mr` и
-    `assign_mr`; задача в `awaiting_human`.
+    MR (функции интерфейса `forge` с «mr» в имени), кроме `undraft_mr`,
+    `assign_mr` и одного чтения `mr_status` (проверка инцидента MR, SPEC
+    01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 5; подделка отвечает открытым
+    невлитым MR); задача в `awaiting_human`.
 
-    Ловит мутацию: гейт перечитывает или правит MR (`mr_status`, повторный
-    `open_mr` ради обновления описания) — в журнале подделки вызов вне
-    `undraft_mr`/`assign_mr`.
+    Ловит мутацию: гейт правит MR (повторный `open_mr` ради обновления
+    описания) — в журнале подделки вызов вне `undraft_mr`/`assign_mr`/
+    `mr_status`; либо читает статус MR больше одного раза.
     """
     stand.record(mr_assignee='"42"')
     task = stand.new_task(state="merge_gate", published=True)
     iid = stand.rng.randrange(100, 10 ** 6)
     store.update_task(stand.conn, task, mr_iid=iid,
                       mr_url=f"https://localhost/mr/{iid}")
+
+    def mr_status(target, mr):
+        stand.fake._record("mr_status", (target, mr))
+        return forge.MergeRequest(iid=mr, state="opened", draft=True,
+                                  target_branch=config.MAIN_BRANCH)
+    stand.fake.mr_status = mr_status
     out = stand.approve(task)
     where = stand.context(task, out)
     assert stand.state(task) == "awaiting_human", where
     talked = {c["name"] for c in stand.fake.calls if c["name"] in MR_CALLS}
-    assert talked <= {"undraft_mr", "assign_mr"}, where
+    assert talked <= {"undraft_mr", "assign_mr", "mr_status"}, where
+    assert len(stand.fake.named("mr_status")) <= 1, where
 
 
 # ------------------------------------------------------------------ AC-16

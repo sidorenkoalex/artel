@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import board, mr_sync, store  # noqa: E402
 from tests.sandbox import TaskSeededTmpRootTest  # noqa: E402
+from tests.test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery import stand  # noqa: E402,F401  (фикстура стенда доставки)
 
 SERVER_HEAD = "f" * 40
 
@@ -73,6 +74,27 @@ class DueTest(unittest.TestCase):
             self.assertTrue(mr_sync.due({"mr_sync_at": "2031-07-05 12:08:00Z"}, 2))
 
 
+class FirstSyncNotifiesTest(TaskSeededTmpRootTest):
+
+    def changes(self, outcome: str) -> list:
+        with mock.patch.object(mr_sync, "evaluate",
+                               lambda conn, task_id: mr_sync.Sync(outcome)):
+            mr_sync.sync_task(store.db(), self.TASK)
+        return [r["detail"] for r in store.task_steps(store.db(), self.TASK)
+                if r["action"] == mr_sync.OUTCOME_CHANGED_ACTION]
+
+    def test_first_sync_is_a_change_repeat_is_not(self):
+        """Первая сверка задачи даёт запись смены итога (уведомление `watch`), повтор того же итога — нет (ANSWER-2 п. 3).
+
+        Ловит мутацию: смена считается только относительно прошлого итога —
+        первая сверка (например сразу «влит этим MR») без записи смены;
+        либо каждая сверка пишется сменой.
+        """
+        self.assertEqual(self.changes(mr_sync.MERGED_THIS),
+                         [f"{mr_sync.FIRST_SYNC} → {mr_sync.MERGED_THIS}"])
+        self.assertEqual(len(self.changes(mr_sync.MERGED_THIS)), 1)
+
+
 class BoardMrSyncTest(unittest.TestCase):
 
     @staticmethod
@@ -93,6 +115,33 @@ class BoardMrSyncTest(unittest.TestCase):
         self.assertEqual(shown, {"outcome": mr_sync.MERGED_THIS,
                                  "at": "2031-07-05 12:10:00Z"})
         self.assertIsNone(board.mr_sync_shown(self.row("done")))
+
+
+def test_gate_refuses_when_mr_status_unread(stand):
+    """Отказ `forge.mr_status` на `approve` гейта мержа задачи с `mr_iid` — отказ `approve`, задача на гейте (ANSWER-2 п. 2).
+
+    Сценарий: стенд доставки Б2.1б, запись `target-human`, ссылка на MR в
+    БД, подделка хостинга отвечает на `mr_status` отказом. `approve`:
+    задача в `merge_gate`, причина хостинга в выводе, `undraft_mr` и
+    `assign_mr` не званы.
+
+    Ловит мутацию: сбой чтения статуса MR пропускает проверку инцидента —
+    гейт снимает черновик, назначает исполнителя и переводит задачу в
+    `awaiting_human`.
+    """
+    stand.record(mr_assignee='"42"')
+    task = stand.new_task(state="merge_gate", published=True)
+    iid = stand.rng.randrange(100, 10 ** 6)
+    store.update_task(stand.conn, task, mr_iid=iid,
+                      mr_url=f"https://localhost/mr/{iid}")
+    reason = f"GitLab ответил кодом 503 на GET merge_requests/{iid}"
+    stand.fake.fail["mr_status"] = reason
+    out = stand.approve(task)
+    where = stand.context(task, out)
+    assert stand.state(task) == "merge_gate", where
+    assert reason in out, where
+    assert stand.fake.named("undraft_mr") == [], where
+    assert stand.fake.named("assign_mr") == [], where
 
 
 if __name__ == "__main__":

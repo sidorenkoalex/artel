@@ -1,5 +1,5 @@
 ---
-built_at_sha: 6bacd6cff73ab3468f0596e78033a37311e9a7a3
+built_at_sha: b8c87eebeafc12c133d5cb0ba627a1f1875b27c3
 ---
 
 # Codebase-map пульта
@@ -8473,7 +8473,7 @@ built_at_sha: 6bacd6cff73ab3468f0596e78033a37311e9a7a3
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/two_sided.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/forge.py`, `orchestrator/fsm.py`, `orchestrator/github_adapter.py`, `orchestrator/idgen.py`, `orchestrator/keychain.py`, `orchestrator/merge_lock.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `scripts/guard.py`, `tests/sandbox.py`
 
-**Импортируется:** `tests/test_invariants.py`, `tests/test_mr_delivery_units.py`
+**Импортируется:** `tests/test_invariants.py`, `tests/test_mr_delivery_units.py`, `tests/test_mr_sync_units.py`
 
 ## tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_awaiting_hint.py
 
@@ -11354,9 +11354,10 @@ built_at_sha: 6bacd6cff73ab3468f0596e78033a37311e9a7a3
 
 **Назначение:** Юнит-тесты сверки MR `mr-sync` (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7): свойства вне долгоживущих файлов задачи.
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `test_gate_refuses_when_mr_status_unread`
 
-**Импортирует:** `orchestrator/board.py`, `orchestrator/mr_sync.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/board.py`, `orchestrator/mr_sync.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py`
 
 **Импортируется:** —
 
