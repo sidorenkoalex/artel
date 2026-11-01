@@ -1109,8 +1109,9 @@ def _ci_base_report(conn, task_id: str, repo: Path, target: str,
 
 
 def _ci_cases(repo: Path, profile, report: _CiReport) -> tuple:
-    """(записи `CaseResult`, неразобранные ключи) отчёта: модули ищутся в
-    дереве коммита отчёта под `workdir` чтением git, без выписки."""
+    """(записи `CaseResult`, неразобранные ключи, {ключ отчёта:
+    идентификатор}) отчёта: модули ищутся в дереве коммита отчёта под
+    `workdir` чтением git, без выписки."""
     args = ["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only",
             "-z", report.sha]
     if profile.workdir:
@@ -1120,8 +1121,11 @@ def _ci_cases(repo: Path, profile, report: _CiReport) -> tuple:
         raise _Prepare(f"дерево коммита {report.sha[:12]} отчёта задания CI "
                        f"не прочитано: {_git_reason(res)}")
     files = {p for p in res.stdout.split("\0") if p}
-    return outcome.parse_forge_report(report.outcomes, profile.component,
-                                      profile.workdir, files)
+    records, unresolved = outcome.parse_forge_report(
+        report.outcomes, profile.component, profile.workdir, files)
+    key_ids, _unresolved = outcome.forge_key_ids(
+        report.outcomes, profile.component, profile.workdir, files)
+    return records, unresolved, key_ids
 
 
 def _ci_replacement_findings(replacements: dict, base_map: dict) -> list:
@@ -1157,19 +1161,27 @@ def _judge_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
         raise _Prepare(f"{NO_HEAD_REPORT}: голова {head_sha[:12]}: {why}")
     base_report, parent_line = _ci_base_report(conn, task_id, repo, target,
                                                base_sha, job)
-    base, unresolved = _ci_cases(repo, profile, base_report)
+    base, unresolved, base_ids = _ci_cases(repo, profile, base_report)
     odd = [key for key, _why in unresolved] + \
         [c.id for c in base if c.outcome == outcome.UNKNOWN]
     if odd:
         raise _Prepare(BASE_AMBIGUOUS.format(ids=", ".join(odd)))
-    # Неразобранный ключ головы идентификатора не имеет: тест базы под ним
-    # «исчез» по сравнению, совпадением он не засчитывается.
-    head, _unresolved = _ci_cases(repo, profile, head_report)
+    head, head_unresolved, _head_ids = _ci_cases(repo, profile, head_report)
     head_map = {c.id: c for c in head}
+    # Запись головы сопоставляется с тестом базы по ключу отчёта (ANSWER-1
+    # п. 1): ключ зелёного теста базы, модуль которого в дереве головы не
+    # найден, — «сломан правкой», не «исчез».
+    lost = {base_ids[key]: why for key, why in head_unresolved
+            if key in base_ids}
     senior = []
     for b in base:
         h = head_map.get(b.id)
-        if in_pass_to_pass(b) and h is not None and \
+        if not in_pass_to_pass(b):
+            continue
+        if h is None and b.id in lost:
+            senior.append(Finding(BROKEN, b.id, f"ветка: {lost[b.id]}; база: "
+                                                f"{describe(b)}"))
+        elif h is not None and \
                 (red_on_branch(h) or h.outcome == outcome.UNKNOWN):
             text = describe(h) + (f" ({h.failure})" if h.outcome ==
                                   outcome.UNKNOWN else "")

@@ -268,6 +268,27 @@ def _forge_location(classname: str, name: str, workdir: str,
     return None, ""
 
 
+def forge_key_ids(outcomes: dict, component: str, workdir: str,
+                  tree_files) -> tuple[dict, list]:
+    """({ключ отчёта задания CI: идентификатор}, неразобранные ключи
+    [(ключ, причина)]): ключ без `::` или с модулем, не найденным в дереве
+    коммита отчёта, идентификатора не получает (требование 8)."""
+    from .. import project_profile  # project_profile -> store -> … -> acceptance
+    ids: dict = {}
+    unresolved = []
+    for key in sorted(outcomes):
+        classname, sep, name = key.partition("::")
+        path, full = (_forge_location(classname, name, workdir, tree_files)
+                      if sep else (None, ""))
+        if path is None:
+            unresolved.append((key, f"модуль «{classname}» не найден в дереве "
+                                    f"коммита отчёта"))
+            continue
+        ids[key] = project_profile.test_id(
+            component, _root_path(workdir, path), full)
+    return ids, unresolved
+
+
 def parse_forge_report(outcomes: dict, component: str, workdir: str,
                        tree_files) -> tuple[list, list]:
     """(записи `CaseResult`, неразобранные ключи) отчёта задания CI
@@ -279,19 +300,9 @@ def parse_forge_report(outcomes: dict, component: str, workdir: str,
     исходом `UNKNOWN` и причиной в `failure`; ключ без `::` или с
     модулем, не найденным в дереве, идентификатора не получает — он в
     списке [(ключ, причина)]."""
-    from .. import project_profile  # project_profile -> store -> … -> acceptance
+    ids, unresolved = forge_key_ids(outcomes, component, workdir, tree_files)
     located: dict = {}
-    unresolved = []
-    for key in sorted(outcomes):
-        classname, sep, name = key.partition("::")
-        path, full = (_forge_location(classname, name, workdir, tree_files)
-                      if sep else (None, ""))
-        if path is None:
-            unresolved.append((key, f"модуль «{classname}» не найден в дереве "
-                                    f"коммита отчёта"))
-            continue
-        cid = project_profile.test_id(component, _root_path(workdir, path),
-                                      full)
+    for key, cid in ids.items():
         located.setdefault(cid, []).append(key)
     records = []
     for cid, keys in located.items():

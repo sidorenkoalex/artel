@@ -1,5 +1,5 @@
 ---
-built_at_sha: 27e37361f52b6a4f237b72b587274db93969f293
+built_at_sha: 813dd5b84006cf263cd0df38ad4b66af4fcb1a05
 ---
 
 # Codebase-map пульта
@@ -157,7 +157,7 @@ built_at_sha: 27e37361f52b6a4f237b72b587274db93969f293
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/_base.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/advance_gates/refusal_classes.py`, `orchestrator/advance_gates/zones.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/forge.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/liveness.py`, `orchestrator/project_profile.py`, `orchestrator/reporters/outcome.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/review.py`, `tests/components_outcome_sandbox.py`, `tests/test_01m5edw6kd1escevrsv2wpnxap_file_level.py`, `tests/test_01m5fryvp4nf81vt00fyphpwjh_outcome_action_texts.py`, `tests/test_01m5t79c5gfjgq9xcth8w0pdfq_git_guard.py`, `tests/test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate.py`, `tests/test_gate_owner_marker.py`, `tests/test_mandate_test_id.py`, `tests/test_outcome_components_module.py`, `tests/test_outcome_gate_module.py`, `tests/test_refusal_classes.py`
+**Импортируется:** `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/review.py`, `tests/components_outcome_sandbox.py`, `tests/test_01m5edw6kd1escevrsv2wpnxap_file_level.py`, `tests/test_01m5fryvp4nf81vt00fyphpwjh_outcome_action_texts.py`, `tests/test_01m5t79c5gfjgq9xcth8w0pdfq_git_guard.py`, `tests/test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate.py`, `tests/test_gate_owner_marker.py`, `tests/test_mandate_test_id.py`, `tests/test_outcome_ci_head_key_module.py`, `tests/test_outcome_components_module.py`, `tests/test_outcome_gate_module.py`, `tests/test_refusal_classes.py`
 
 ## orchestrator/advance_gates/plan_appendix.py
 
@@ -1999,6 +1999,7 @@ built_at_sha: 27e37361f52b6a4f237b72b587274db93969f293
 **Назначение:** Итог прогона компонента из его отчёта (SPEC 01M590GJAF0EDV4NBC4C99MFVH, требования 1, 3, 5, 6, 18).
 
 **Публичные функции:**
+- `forge_key_ids`
 - `parse_forge_report`
 - `parse_junit`
 - `parse_vitest`
@@ -8565,7 +8566,7 @@ built_at_sha: 27e37361f52b6a4f237b72b587274db93969f293
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/advance_gates/outcome_integrity.py`, `orchestrator/config.py`, `orchestrator/forge.py`, `orchestrator/project_profile.py`, `orchestrator/reporters/outcome.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/fixtures.py`, `tests/merge_outcome_sandbox.py`, `tests/outcome_gate_sandbox.py`, `tests/sandbox.py`
 
-**Импортируется:** —
+**Импортируется:** `tests/test_outcome_ci_head_key_module.py`
 
 ## tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_awaiting_hint.py
 
@@ -11687,6 +11688,17 @@ built_at_sha: 27e37361f52b6a4f237b72b587274db93969f293
 - `test_terminal_control_bytes_are_rendered_inert`
 
 **Импортирует:** `orchestrator/artel.py`, `orchestrator/store.py`, `orchestrator/watch.py`
+
+**Импортируется:** —
+
+## tests/test_outcome_ci_head_key_module.py
+
+**Назначение:** Гейт исходов мержа в режиме `ci`: запись отчёта головы сопоставляется с тестом базы по ключу отчёта (ANSWER-1 п. 1 задачи 01M5XZSKK8H096FD3CPN05BQNM).
+
+**Публичные функции:**
+- `test_module_missing_in_head_tree_is_broken_not_gone`
+
+**Импортирует:** `orchestrator/advance_gates/outcome_integrity.py`, `tests/test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate.py`
 
 **Импортируется:** —
 

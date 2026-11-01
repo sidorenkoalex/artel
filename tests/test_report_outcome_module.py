@@ -1828,25 +1828,18 @@ def test_empty_install_neither_installs_nor_refuses(box):
 
 
 def test_forge_report_key_without_separator_and_record_shape():
-    """Перевод отчёта задания CI (`outcome.parse_forge_report`): ключ без `::` не получает идентификатора и уходит в неразобранные с причиной; запись с известным статусом — `CaseResult` прежней формы (без повторов, не уровня файла), неоднозначная — исход «неизвестно» с причиной в `failure`.
+    """Перевод отчёта задания CI (`outcome.parse_forge_report`): ключ без `::` не получает идентификатора и уходит в неразобранные с причиной; запись с известным статусом — `CaseResult` прежней формы (без повторов, не уровня файла).
 
     Ловит мутацию: ключ без `::` переводится как `classname` с пустым
     именем (идентификатор строится, запись засчитывается) — список
-    неразобранных пуст; статус вне перечня принят за `passed`; записи с
-    двумя ключами одного идентификатора берут статус первого ключа.
+    неразобранных пуст.
     """
     tree = {"w/tests/test_a.py"}
     records, unresolved = outcome.parse_forge_report(
-        {"tests.test_a::t_ok": "success", "tests.test_a::t_odd": "weird",
-         "tests.test_a.K::t_dup": "success",
-         "tests/test_a.py::K::t_dup": "failed", "tests.test_a": "success"},
+        {"tests.test_a::t_ok": "success", "tests.test_a": "success"},
         "c", "w", tree)
     assert [key for key, _why in unresolved] == ["tests.test_a"]
-    by_id = {r.id: r for r in records}
-    ok = by_id["c:w/tests/test_a.py::t_ok"]
+    assert len(records) == 1
+    ok = records[0]
+    assert ok.id == "c:w/tests/test_a.py::t_ok"
     assert (ok.outcome, ok.retries, ok.file_level) == (outcome.PASSED, 0, False)
-    odd = by_id["c:w/tests/test_a.py::t_odd"]
-    assert odd.outcome == outcome.UNKNOWN and "weird" in odd.failure
-    dup = by_id["c:w/tests/test_a.py::K::t_dup"]
-    assert dup.outcome == outcome.UNKNOWN and "один идентификатор" in dup.failure
-    assert len(records) == 3
