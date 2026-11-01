@@ -1825,3 +1825,21 @@ def test_empty_install_neither_installs_nor_refuses(box):
     assert acceptance.INSTALL_WITHOUT_LOCK not in f"{run.detail}\n{out}"
     assert not (config.PROJECTS / name / "deps").exists()
     assert acceptance._install(prof, clone / workdir) == (None, [], "")
+
+
+def test_forge_report_key_without_separator_and_record_shape():
+    """Перевод отчёта задания CI (`outcome.parse_forge_report`): ключ без `::` не получает идентификатора и уходит в неразобранные с причиной; запись с известным статусом — `CaseResult` прежней формы (без повторов, не уровня файла).
+
+    Ловит мутацию: ключ без `::` переводится как `classname` с пустым
+    именем (идентификатор строится, запись засчитывается) — список
+    неразобранных пуст.
+    """
+    tree = {"w/tests/test_a.py"}
+    records, unresolved = outcome.parse_forge_report(
+        {"tests.test_a::t_ok": "success", "tests.test_a": "success"},
+        "c", "w", tree)
+    assert [key for key, _why in unresolved] == ["tests.test_a"]
+    assert len(records) == 1
+    ok = records[0]
+    assert ok.id == "c:w/tests/test_a.py::t_ok"
+    assert (ok.outcome, ok.retries, ok.file_level) == (outcome.PASSED, 0, False)
