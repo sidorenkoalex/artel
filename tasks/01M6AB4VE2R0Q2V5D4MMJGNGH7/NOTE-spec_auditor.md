@@ -1,21 +1,20 @@
-# NOTE spec_auditor
+# NOTE spec_auditor (визит 2, SPEC ea47b343)
 
 ## Выяснено
-- Факты SPEC о коде в основном верны (fsm.py:43, config.py:942, forge.MergeRequest, gitlab_adapter.py:497/545, schema.py:244, fsm_merge_gate.py:1337/1367/1549-1552/1576, cleanup.py:718/736, snapshot.py:96, retro.py:551/571, gitcmd.py:233, targets.py:559).
-- config.py (подсказка :942) — не в zones SPEC, а требование 6 её меняет.
-- Подтверждённая голова — `fsm_merge_gate._confirmed_code_head` (поле `код=` записи фиксации), а не sha approve; SPEC называет «sha approve».
-- `gitcmd.diff_base` после вливания merge-коммитом = голова задачи: «точка ответвления» SPEC не определена.
-- Инцидент «чужой коммит» по `last_sent_sha`: ветку на сервере GitLab может удалить/переписать (rebase) при вливании — SPEC не говорит, что тогда.
-- ANSWER-файлов нет; мандат на правку HINT отсутствует.
-
-- Путь --confirm теряет сверку refs/artifacts с origin (fsm_merge_gate.py:1596, cleanup.py:700-715) — в матрице нет.
-- Свип commands() test_invariants идёт на песочнице artel (operator) — mr-sync там пусто отказывает.
+- Решения гейта №1 (А1, А2, Б1, Б2/В1, Г1, Д1, Е1–Е4) в SPEC внесены.
+- Мандат HINT записан в SPEC, но гейт неослабления читает мандат только из ANSWER-n.md (test_integrity.py:1061-1085); ANSWER-файлов у задачи нет.
+- gitlab 404 -> reason «не найдено (404)» (gitlab_adapter.py:204, :498): строка 1 таблицы («отказ forge» -> неизвестно) поглощает строку 2 «MR не найден».
+- `git cherry` печатает коммиты ветки задачи, не базы: «найденный в базе коммит» (треб. 4, AC-6) им не получить.
+- merge-base(голова, origin/base) не меняется от чужих коммитов в base — AC-3 не ловит пересчёт; меняется после вливания (= голова).
+- `auto <id>` выходит в awaiting_human (auto.py:72-73, _final_stop_raises_alert) — «надзор auto раз в N минут» не определён.
+- Approve из escalated (fsm.py:1705-1770) не идёт через гейт мержа — запись «принятой головы» требует правки _approve_escalated.
+- `_docs_ref_unsynced` (def :1351; :1596 — вызов в target-human, done-путь :1512) печатает подсказку `approve`.
 
 ## Не сработало
-- Составные bash-команды с `cd`/переменными требуют подтверждения — только одиночные grep/find по абсолютным путям.
+- `ls` в shell недоступен — использовать find.
 
 ## Где остановился
-SPEC-AUDIT.md написан (verdict: concerns, status: ready), guard ок. Шаг завершён.
+SPEC-AUDIT.md написан (concerns, ready), guard прогнан.
 
 ## Чего не хватило
-Где живёт механика «эскалация из awaiting_human возвращается туда же» — нашлась в тесте awaiting_commands.py:144 (escalated_from + approve), не в answer.py.
+Где пульт читает строку мандата ослабления — нашлось в advance_gates/test_integrity.py::_answer_mandate.
