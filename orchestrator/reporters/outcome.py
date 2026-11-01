@@ -247,6 +247,67 @@ def parse_vitest(report: Path, component: str, workdir: str,
     return records, ""
 
 
+# Статус теста отчёта задания CI (`forge.TestReport`) → исход записи (SPEC
+# 01M5XZSKK8H096FD3CPN05BQNM, требование 8); иной статус — «неизвестно».
+FORGE_OUTCOMES = {"success": PASSED, "failed": FAILED, "skipped": SKIPPED,
+                  "error": ERROR}
+
+
+def _forge_location(classname: str, name: str, workdir: str,
+                    tree_files) -> tuple[str | None, str]:
+    """(путь файла от `workdir`, полное имя) записи отчёта задания CI;
+    путь `None` — модуль точечного `classname` не найден в дереве: самый
+    длинный префикс частей, чей `.py` есть файлом под `workdir`."""
+    if "/" in classname:
+        return classname, name
+    parts = classname.split(".")
+    for size in range(len(parts), 0, -1):
+        candidate = "/".join(parts[:size]) + ".py"
+        if _root_path(workdir, candidate) in tree_files:
+            return candidate, "::".join([*parts[size:], name])
+    return None, ""
+
+
+def parse_forge_report(outcomes: dict, component: str, workdir: str,
+                       tree_files) -> tuple[list, list]:
+    """(записи `CaseResult`, неразобранные ключи) отчёта задания CI
+    `<classname>::<name>` → статус (требование 8). `tree_files` — пути от
+    корня репозитория файлов дерева коммита отчёта.
+
+    Неоднозначный перевод не зелёный (инвариант 41): статус вне
+    `FORGE_OUTCOMES` и два ключа с одним идентификатором дают запись с
+    исходом `UNKNOWN` и причиной в `failure`; ключ без `::` или с
+    модулем, не найденным в дереве, идентификатора не получает — он в
+    списке [(ключ, причина)]."""
+    from .. import project_profile  # project_profile -> store -> … -> acceptance
+    located: dict = {}
+    unresolved = []
+    for key in sorted(outcomes):
+        classname, sep, name = key.partition("::")
+        path, full = (_forge_location(classname, name, workdir, tree_files)
+                      if sep else (None, ""))
+        if path is None:
+            unresolved.append((key, f"модуль «{classname}» не найден в дереве "
+                                    f"коммита отчёта"))
+            continue
+        cid = project_profile.test_id(component, _root_path(workdir, path),
+                                      full)
+        located.setdefault(cid, []).append(key)
+    records = []
+    for cid, keys in located.items():
+        status = outcomes[keys[0]]
+        if len(keys) > 1:
+            records.append(CaseResult(cid, UNKNOWN, f"ключи отчёта "
+                                                    f"{', '.join(keys)} дают "
+                                                    f"один идентификатор"))
+        elif status not in FORGE_OUTCOMES:
+            records.append(CaseResult(cid, UNKNOWN, f"статус {status!r} вне "
+                                                    f"{' | '.join(FORGE_OUTCOMES)}"))
+        else:
+            records.append(CaseResult(cid, FORGE_OUTCOMES[status]))
+    return records, unresolved
+
+
 def verdict(records: list | None, returncode: int | None,
             reason: str = "") -> tuple[str, str]:
     """(вердикт `GREEN`/`RED`/`UNKNOWN`, причина) прогона по записям отчёта

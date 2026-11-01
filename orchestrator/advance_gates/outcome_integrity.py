@@ -44,6 +44,14 @@ G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J; ADR-0026, «Решение» пп. 6-7)
 поддержки — находка строгого режима; добавленная строка кода с подстрокой
 `CODE_EXCEPTION_TOKENS` — находка «исключение в коде». Обе снимает только
 мандат на путь файла.
+
+Режим `ci` (SPEC 01M5XZSKK8H096FD3CPN05BQNM): на гейте мержа у компонента
+`full_suite: ci` исходы головы и базы — отчёты задания `ci_job`
+(`forge.job_test_report`), без выписок, перепрогонов, третьей выписки и
+доказательства `_proven` (`_judge_ci`). Отчёт головы — ровно её sha; отчёт
+базы — точки ответвления, иначе её родителя с тем же деревом. Нет годного
+отчёта стороны или отчёт базы неоднозначен — сбой подготовки. На выходе из
+`in_dev` компонент `ci` судится локальными выписками, как прежде.
 """
 import hashlib
 import os
@@ -57,8 +65,8 @@ from typing import NamedTuple
 
 from .. import acceptance
 from .. import artifact_branch as docs_ref
-from .. import (artifact_source, config, gitcmd, liveness, project_profile,
-               store, workspace)
+from .. import (artifact_source, config, forge, gitcmd, liveness,
+               project_profile, store, targets, workspace)
 from ..reporters import outcome
 from . import refusal_classes
 from ._base import GateRefusal, _run_gates
@@ -108,9 +116,12 @@ REPLACED_NOT_GREEN = "заменяемый тест не зелёный на б�
 REPLACED_NEEDLESS = "замена не нужна: прежняя версия зелёная на коде ветки"
 STRICT_EDIT = "строгий режим — правка существующего файла"
 CODE_EXCEPTION = "исключение в коде"
+# Режим `ci` (SPEC 01M5XZSKK8H096FD3CPN05BQNM, требование 6): прежнюю
+# версию зелёного в базе заменяемого теста проверить негде.
+REPLACED_UNCHECKABLE = "замена теста не проверяема в режиме ci"
 _RANK = {GONE: 0, BROKEN: 1, UNSTABLE: 2, PRIOR_RED: 4, PRIOR_UNSTABLE: 5,
          REPLACED_MISSING: 6, REPLACED_NOT_GREEN: 7, REPLACED_NEEDLESS: 8,
-         STRICT_EDIT: 9, CODE_EXCEPTION: 10}
+         STRICT_EDIT: 9, CODE_EXCEPTION: 10, REPLACED_UNCHECKABLE: 11}
 _OTHER_RANK = 3
 # Находки, идентификатор которых — путь файла, а не тест: снимает их только
 # мандат на путь (`_path_covering`).
@@ -837,7 +848,8 @@ def proof_fields(detail: str):
 
 
 _KINDS = (GONE, BROKEN, UNSTABLE, BECAME_SKIPPED, TODO_APPEARED,
-          FAILS_APPEARED, NEW_SKIPPED, NEW_TODO, NEW_FAILS, *_NEW_KINDS)
+          FAILS_APPEARED, NEW_SKIPPED, NEW_TODO, NEW_FAILS, *_NEW_KINDS,
+          REPLACED_UNCHECKABLE)
 
 
 def _runs_marker(kind: str) -> str:
@@ -1011,6 +1023,206 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
     return None
 
 
+# Режим `ci` на гейте мержа (SPEC 01M5XZSKK8H096FD3CPN05BQNM, требования
+# 1-8): годные статусы последней попытки задания `ci_job`.
+_CI_FIT_STATUSES = ("success", "failed")
+BASE_REPORT_ACTION = "гейт исходов: отчёт базы"
+BASE_REPORT_LINE = "отчёт базы: задание {job} коммита {sha} (дерево совпадает с {point})"
+NO_BASE_REPORT = "нет отчёта базы"
+NO_HEAD_REPORT = "нет отчёта головы"
+BASE_AMBIGUOUS = "отчёт базы неоднозначен: {ids}"
+
+
+class _CiReport(NamedTuple):
+    """Годный отчёт задания `ci_job`: коммит, `id` последней попытки,
+    исходы `<classname>::<name>` → статус."""
+    sha: str
+    job_id: int
+    outcomes: dict
+
+
+def _ci_report(target: str, sha: str, job: str):
+    """(`_CiReport` ровно `sha`, "") либо (`None`, причина негодности) —
+    требование 2. Попытка — наибольший `id` заданий `job` в
+    `forge.pipeline_status(sha).jobs`; номер до и после чтения отчёта
+    совпадает, иначе статус и отчёт могли быть от разных попыток."""
+    def last_attempt():
+        res = forge.pipeline_status(target, sha)
+        mine = [j for j in res.jobs if j.name == job]
+        why = f" ({res.reason})" if res.reason else ""
+        return (max(mine, key=lambda j: j.id or 0) if mine else None,
+                f"задания CI «{job}» нет в конвейере коммита {sha[:12]}{why}")
+    last, why = last_attempt()
+    if last is None:
+        return None, why
+    where = f"задание CI «{job}» {last.id} коммита {sha[:12]}"
+    result = forge.job_result(target, sha, job)
+    report = forge.job_test_report(target, sha, job)
+    again, _why = last_attempt()
+    if again is None or again.id != last.id:
+        return None, f"{where} перезапущено во время чтения"
+    status = result.status
+    if status is None:
+        return None, f"{where}: статус не прочитан — {result.reason}"
+    if status not in _CI_FIT_STATUSES:
+        return None, f"{where} в статусе {status}"
+    if status == "failed" and last.allow_failure:
+        return None, f"{where} упало с правом падать (allow_failure)"
+    if report.outcomes is None:
+        return None, f"{where}: отчёт не разобран — {report.reason}"
+    return _CiReport(sha, last.id, dict(report.outcomes)), ""
+
+
+def _rev(repo: Path, *args: str) -> str:
+    """Вывод `git <args>` в `repo`; сбой — `_Prepare`."""
+    res = gitcmd.in_repo(repo, *args)
+    if res is None or res.returncode != 0:
+        raise _Prepare(f"git {' '.join(args)} не выполнен: {_git_reason(res)}")
+    return res.stdout.strip()
+
+
+def _ci_base_report(conn, task_id: str, repo: Path, target: str,
+                    point: str, job: str) -> tuple:
+    """(`_CiReport` базы, строка о родителе или "") — требование 4: отчёт
+    точки ответвления, иначе родителя (`rev-list --parents`) с тем же
+    деревом; поиск только чтением git и `forge`. Не найден — `_Prepare`
+    «нет отчёта базы»."""
+    found, why = _ci_report(target, point, job)
+    if found is not None:
+        return found, ""
+    reasons = [f"точка ответвления {point[:12]}: {why}"]
+    parents = _rev(repo, "rev-list", "--parents", "-n1", point).split()[1:]
+    point_tree = _rev(repo, "rev-parse", f"{point}^{{tree}}")
+    for parent in parents:
+        if _rev(repo, "rev-parse", f"{parent}^{{tree}}") != point_tree:
+            reasons.append(f"родитель {parent[:12]}: дерево другое")
+            continue
+        found, why = _ci_report(target, parent, job)
+        if found is None:
+            reasons.append(f"родитель {parent[:12]}: {why}")
+            continue
+        line = BASE_REPORT_LINE.format(job=found.job_id, sha=parent,
+                                       point=point)
+        store.journal(conn, task_id, "fsm", BASE_REPORT_ACTION, line)
+        return found, line
+    raise _Prepare(f"{NO_BASE_REPORT}: {'; '.join(reasons)}")
+
+
+def _ci_cases(repo: Path, profile, report: _CiReport) -> tuple:
+    """(записи `CaseResult`, неразобранные ключи) отчёта: модули ищутся в
+    дереве коммита отчёта под `workdir` чтением git, без выписки."""
+    args = ["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only",
+            "-z", report.sha]
+    if profile.workdir:
+        args += ["--", profile.workdir.strip("/") + "/"]
+    res = gitcmd.in_repo(repo, *args)
+    if res is None or res.returncode != 0:
+        raise _Prepare(f"дерево коммита {report.sha[:12]} отчёта задания CI "
+                       f"не прочитано: {_git_reason(res)}")
+    files = {p for p in res.stdout.split("\0") if p}
+    return outcome.parse_forge_report(report.outcomes, profile.component,
+                                      profile.workdir, files)
+
+
+def _ci_replacement_findings(replacements: dict, base_map: dict) -> list:
+    """Находки утверждённых замен в режиме `ci` (требование 6): прежней
+    версии зелёного в базе теста проверить негде — отказ, не сбой."""
+    found = []
+    for cid, _n in sorted(replacements.items()):
+        b = base_map.get(cid)
+        if b is None:
+            found.append(Finding(REPLACED_MISSING, cid, "база: нет записи"))
+        elif not in_pass_to_pass(b):
+            found.append(Finding(REPLACED_NOT_GREEN, cid,
+                                 f"база: {describe(b)}"))
+        else:
+            found.append(Finding(REPLACED_UNCHECKABLE, cid,
+                                 f"база: {describe(b)}"))
+    return found
+
+
+def _judge_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
+              repo: Path, base_of, extra: tuple = ()) -> GateRefusal | None:
+    """Ядро гейта мержа компонента `full_suite: ci` (требования 1-8):
+    исходы — отчёты задания `ci_job` головы и базы, читаются заново при
+    каждом прогоне; находки G3б-2 — по диффу git без выписок."""
+    head_sha = gitcmd.branch_head_sha(branch, repo=repo)
+    if not head_sha:
+        raise _Prepare(f"голова кодовой ветки {branch} не прочитана")
+    base_sha = base_of(repo, branch, head_sha)
+    target = store.task_target(conn, task_id)
+    job = profile.ci_job
+    head_report, why = _ci_report(target, head_sha, job)
+    if head_report is None:
+        raise _Prepare(f"{NO_HEAD_REPORT}: голова {head_sha[:12]}: {why}")
+    base_report, parent_line = _ci_base_report(conn, task_id, repo, target,
+                                               base_sha, job)
+    base, unresolved = _ci_cases(repo, profile, base_report)
+    odd = [key for key, _why in unresolved] + \
+        [c.id for c in base if c.outcome == outcome.UNKNOWN]
+    if odd:
+        raise _Prepare(BASE_AMBIGUOUS.format(ids=", ".join(odd)))
+    # Неразобранный ключ головы идентификатора не имеет: тест базы под ним
+    # «исчез» по сравнению, совпадением он не засчитывается.
+    head, _unresolved = _ci_cases(repo, profile, head_report)
+    head_map = {c.id: c for c in head}
+    senior = []
+    for b in base:
+        h = head_map.get(b.id)
+        if in_pass_to_pass(b) and h is not None and \
+                (red_on_branch(h) or h.outcome == outcome.UNKNOWN):
+            text = describe(h) + (f" ({h.failure})" if h.outcome ==
+                                  outcome.UNKNOWN else "")
+            senior.append(Finding(BROKEN, b.id, f"ветка: {text}; база: "
+                                                f"{describe(b)}"))
+    taken = {f.id for f in senior}
+    findings = senior + [f for f in compare(base, head) if f.id not in taken]
+
+    entries = _name_status(repo, base_sha, head_sha)
+    added = _added_lines(repo, base_sha, head_sha)
+    files = _Files(profile, _record_paths(base), _record_paths(head))
+    replacements = _replacements(conn, task_id, profile)
+    base_map = {c.id: c for c in base if not c.file_level}
+    findings = ordered(findings
+                       + _ci_replacement_findings(replacements, base_map)
+                       + _strict_findings(profile, files, entries)
+                       + _code_exception_findings(files, entries, added))
+
+    mandate, id_mandate = (_answer_mandates(artifact_branch, task_id)
+                           if findings else ({}, {}))
+    covered = [(f, _cover(f, mandate, id_mandate, replacements))
+               for f in findings]
+    uncovered = [f for f, pair in covered if pair is None]
+    covered = [(f, pair) for f, pair in covered if pair is not None]
+    if uncovered:
+        lines = [f.line for f in uncovered]
+        growth = skip_growth(base, head)
+        if growth:
+            lines.append(growth)
+        action = (BROKEN_REFUSAL_ACTION
+                  if all(f.kind == BROKEN for f in uncovered)
+                  else OUTCOME_REFUSAL_ACTION)
+        return GateRefusal(action, "\n".join(lines), _mandate_hint(
+            task_id, any(f.kind in _NEW_KINDS for f in uncovered)))
+    tree = _rev(repo, "rev-parse", f"{head_sha}^{{tree}}")
+    # Ключ — без пробельных символов (`PROOF_LINE`), с именем компонента:
+    # компоненты одного дерева головы различимы.
+    key = (f"ci:{profile.component}:{tree}:{head_report.job_id}:"
+           f"{base_report.job_id}")
+    counts = (f"тестов базы {len(base)}; тестов ветки {len(head)}; задание "
+              f"CI {job}: голова {head_report.job_id}, база "
+              f"{base_report.job_id}; находок, покрытых мандатом, "
+              f"{len(covered)}")
+    used = [element for _f, (element, _s) in covered]
+    proof = (f"голова {head_sha}; база {base_sha}; ключ {key}; мандат "
+             f"{fingerprint(used + _replacement_elements(replacements))}")
+    store.journal(conn, task_id, "fsm", PASSED_ACTION, "\n".join(
+        [counts, proof, *([parent_line] if parent_line else []),
+         *(f"{f.line}{COVERED_MARK}{source}" for f, (_e, source) in covered),
+         *extra]))
+    return None
+
+
 def _bounds(is_canary, target: str):
     """Профиль задачи в границе гейта (`in_outcome_bounds` профиля
     решения `decide`, не канарейка); `None` — вне границы."""
@@ -1116,6 +1328,9 @@ def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
     `PREPARE_REFUSAL_ACTION`, не пропуск. `extra` — строки, дописываемые в
     запись пройденного гейта (компоненты вне границы)."""
     repo = workspace.task_repo(task_id)
+    if merge and profile.full_suite == targets.FULL_SUITE_CI:
+        return _gate_ci(conn, task_id, branch, artifact_branch, profile,
+                        repo, base_of, extra)
     # `resolve()`: временный каталог macOS — символическая ссылка, а пути
     # отчёта раннер считает от реального корня выписки.
     scratch = Path(tempfile.mkdtemp(prefix="artel-outcome-")).resolve()
@@ -1138,6 +1353,22 @@ def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
     return GateRefusal(PREPARE_REFUSAL_ACTION, reason,
                        f"разберись с подготовкой прогона и повтори artel.py "
                        f"advance {task_id}")
+
+
+def _gate_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
+             repo: Path, base_of, extra: tuple) -> GateRefusal | None:
+    """Ядро гейта мержа в режиме `ci` (`_judge_ci`) без выписок; сбой
+    подготовки — отказ `PREPARE_REFUSAL_ACTION`, не пропуск."""
+    try:
+        return _judge_ci(conn, task_id, branch, artifact_branch, profile,
+                         repo, base_of, extra)
+    except _Prepare as exc:
+        reason = str(exc)
+    except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
+        reason = f"сбой {exc!r}"
+    return GateRefusal(PREPARE_REFUSAL_ACTION, reason,
+                       f"разберись с подготовкой и повтори artel.py approve "
+                       f"{task_id}")
 
 
 def _outcome_integrity_gate_refuses(conn, task_id: str, t,
