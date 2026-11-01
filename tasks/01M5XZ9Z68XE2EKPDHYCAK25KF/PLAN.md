@@ -105,6 +105,13 @@ schema_version: 5
 | 7 (`max_in_flight` в единой точке отправки) | 2, 1, 5 |
 | 8 (инварианты — приложение к `tests/test_invariants.py`) | 6 |
 
+Возврат из `verifying` (линт формата id, прогон CI 41253368653):
+`_HOSTING_CODE` в `fsm_merge_gate.py` — `\d{3}` заменён на `[0-9]{3}`
+(смысл тот же — код ответа HTTP, не id задачи); образцы
+`scripts/id_format_patterns.txt` по файлу больше не срабатывают;
+долгоживущий файл задачи и `tests/test_mr_delivery_units.py` — 47 passed;
+карта регенерирована.
+
 Проверено исполнением: долгоживущий
 `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py` — 36 passed (до
 кода — 27 failed); планка `plank-run` `test_ac3_await_main_ci_not_called.py`
