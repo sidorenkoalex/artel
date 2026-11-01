@@ -121,8 +121,8 @@ FULL_SUITE_LOCAL = "local"
 FULL_SUITE_CI = "ci"
 FULL_SUITE_BOTH = "both"
 COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
-# Реестр реализаций хостинга (`forge.IMPLEMENTATIONS`) отдаёт сюда сам
-# `forge` при своём импорте: `forge` импортирует этот модуль, обратный
+# Реестр реализаций хостинга (`forge.IMPLEMENTATIONS`) выставляет сюда
+# `ci` при своём импорте: `forge` импортирует этот модуль, обратный
 # импорт был бы циклом. `None` — `forge` не загружен; тогда хостинг без
 # чтения отчёта задания ловит приёмка при использовании.
 hosting_registry = None
