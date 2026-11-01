@@ -72,6 +72,13 @@ class MergeRequest:
     draft: bool | None = None
     assignee: str | None = None
     reason: str = ""
+    # Ветки и коммиты MR (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 1):
+    # по ним `mr-sync` ищет правку задачи в `base`.
+    target_branch: str | None = None
+    source_branch: str | None = None
+    sha: str | None = None
+    merge_commit_sha: str | None = None
+    squash_commit_sha: str | None = None
 
 
 @dataclass

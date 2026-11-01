@@ -27,8 +27,8 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import (agent_log, ci, config, fsm, gitcmd, session, spend, store,
-               workspace)
+from . import (agent_log, ci, config, fsm, gitcmd, mr_sync, session, spend,
+               store, workspace)
 from .advance_gates import refusal_classes
 from .providers.claude import TOOL_CALL_LINE_PREFIX
 
@@ -227,7 +227,11 @@ def _print_state(row) -> None:
 def _matches_class(action: str, detail: str, events: set) -> bool:
     if "transitions" in events and action.startswith("state -> "):
         return True
-    if "gates" in events and action in _GATE_ACTIONS:
+    # Смена итога сверки MR задачи в `awaiting_human` (SPEC
+    # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 6) — событие класса `gates`:
+    # повтор того же итога записью смены не бывает.
+    if "gates" in events and (action in _GATE_ACTIONS
+                              or action == mr_sync.OUTCOME_CHANGED_ACTION):
         return True
     if ("refusals" in events and action.startswith(store.REFUSAL_ACTION_PREFIX)
             and action not in _PRE_ADVANCE_REFUSAL_ACTIONS):
@@ -286,6 +290,7 @@ def _notify(message: str) -> None:
 
 def _significant(action: str) -> bool:
     return (action in _GATE_ACTIONS or action == _AUTO_STOP_ACTION or
+            action == mr_sync.OUTCOME_CHANGED_ACTION or
             (action.startswith(store.REFUSAL_ACTION_PREFIX) and
              action not in _PRE_ADVANCE_REFUSAL_ACTIONS))
 

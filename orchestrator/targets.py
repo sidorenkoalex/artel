@@ -338,7 +338,8 @@ LOCAL_FIELDS = {
                "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
                "draft_mr": False, "max_in_flight": False,
-               "max_awaiting": False, "awaiting_holds_zones": False},
+               "max_awaiting": False, "awaiting_holds_zones": False,
+               "mr_sync_interval_min": False},
     "machine": {"forge": True, "url": True, "token_slot": True,
                 "path": False, COMPONENTS_FIELD: False,
                 "commit_author": False},
@@ -359,12 +360,12 @@ DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
     "commit_template", "co_author", "push_options", "push_options_forbidden",
     "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
-    "max_awaiting", "awaiting_holds_zones")
+    "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
 # Умолчания полей доставки, которые читает `delivery_policy` (SPEC
 # 01M5XZ9Z68V75VXF5Z66C708T4, требование 2): отдаёт их только она.
 DELIVERY_DEFAULTS = {"max_awaiting": 3, "awaiting_holds_zones": True,
                      "draft_mr": True, "max_in_flight": None,
-                     "mr_assignee": None}
+                     "mr_assignee": None, "mr_sync_interval_min": None}
 DELIVERY_MACHINE_FIELDS = ("commit_author",)
 # Подполя профиля и компонента, которые живут в разделе `policy`.
 LOCAL_POLICY_SCOPES = ("weakening_scope", "mutation_claim_scope")
@@ -693,6 +694,13 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
     if not isinstance(policy.get("awaiting_holds_zones", True), bool):
         refuse("awaiting_holds_zones",
                f"{policy['awaiting_holds_zones']!r}, не true/false")
+    # Опрос `mr-sync` надзором эпика (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    # требование 6): поля нет — опрос выключен.
+    if "mr_sync_interval_min" in policy:
+        interval = policy["mr_sync_interval_min"]
+        if (isinstance(interval, bool) or not isinstance(interval, int)
+                or interval <= 0):
+            refuse("mr_sync_interval_min", f"{interval!r}, не целое > 0")
 
 
 def _check_local_values(name: str, where: str, entry: dict) -> None:

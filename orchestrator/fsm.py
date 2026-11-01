@@ -40,7 +40,7 @@ TERMINAL_STATES = ("done", "killed")
 # 17): MR вливают люди проекта `target-human`, у состояния нет ни роли, ни
 # гейта Оператора; команды Оператора в нём отказывают этой подсказкой.
 AWAITING_HUMAN = "awaiting_human"
-AWAITING_HUMAN_HINT = "состояние ждёт людей проекта — mr-sync (шаг Б2.2)"
+AWAITING_HUMAN_HINT = "состояние ждёт людей проекта — artel.py mr-sync <id> [--confirm]"
 
 from scripts import guard
 
@@ -1760,6 +1760,11 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str,
     # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
     # раньше, уходят в in_dev: там работа и продолжается.
     back = t["escalated_from"] or "in_dev"
+    # Эскалация «чужой коммит» (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование
+    # 5; ANSWER-1 п. 6): голова ветки на сервере на момент этого `approve`
+    # становится принятой.
+    from . import mr_sync
+    mr_sync.accept_server_head(conn, task_id)
     store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
     store.set_state(conn, task_id, back, "operator",
                     expected_state=state, detail="эскалация разрешена, продолжаем")

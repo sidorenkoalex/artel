@@ -219,6 +219,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pin-update <sha main артели> [--wait-ci] |
            --wait-ci: ждать завершения CI коммита вместо отказа |
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
+  mr-sync [<id>…] | mr-sync <id> --confirm [--by-content] |
   knowledge <id> <путь>[::<символ>]|::<символ> |
   forge-probe <проект> [--job <имя>] |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
@@ -614,6 +615,19 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
 красная главная ветка 22-26.09). Неизвестный статус вершины главной ветки
 — тоже отказ, а не повтор (инвариант 19).
 
+`mr-sync [<id>…]` (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7) — сверка MR задач
+проектов `merge_gate: target-human` в `awaiting_human` (без id — всех) и
+нахождения правки задачи в `base`: статус MR, признаки (а) коммит вливания —
+предок `origin/<base>`, (б) коммиты задачи в базе по содержимому, (в)
+обратное наложение диффа задачи по файлам; итог — в вывод, журнал и строку
+задачи. Только чтение: `fetch` базы и `forge.mr_status`. Чужой коммит в ветке
+при открытом MR — эскалация без перезаписи ветки. `mr-sync <id> --confirm`
+— закрытие `done` (`closed_as` `merged_upstream`/`merged_upstream_other`)
+при итоге «влит этим MR» или «в базе, влит иначе», пересчитанном в момент
+подтверждения; итог только по (в) — с `--by-content`. Ветку задачи на
+сервере и MR закрытие не трогает. Надзор эпика сверяет без `--confirm` раз в
+`policy.mr_sync_interval_min` минут.
+
 `pull-main <id>` (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V) — подтяжка main в ветку
 задачи, стоящей в `verifying`, без возврата к роли: тот же узел подтяжки,
 что на переходах автомата (`fsm._pull_main_or_escalate`, планка после
@@ -699,6 +713,8 @@ origin main или отставание ветки не определены; п
   amend    штатная правка зафиксированной планки приёмки: коммит,
             лок, журнал, порог «планка девальвируется» (ADR-0012,
             SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
+  mr_sync   команда `mr-sync`: сверка MR и нахождения правки в base,
+            закрытие done по --confirm (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7)
   pull_main команда `pull-main <id>`: подтяжка main в ветку задачи на
             verifying без возврата к роли (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V)
   zone_lock занятость зоны на старте кода: предусловие первого шага
@@ -819,7 +835,7 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           budget, canary, catalog, ci_rerun, cleanup,
                           conventions, doctor,
                           docs_fetch, dry_run, epics, explore_metric, forge, fsm,
-                          knowledge_cards, lease, liveness, models, mutation_run, notes, pause, pin, plank_run,
+                          knowledge_cards, lease, liveness, models, mr_sync, mutation_run, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
@@ -2677,6 +2693,10 @@ def main() -> None:
         # Подтягивает main в ветку задачи и отправляет её в origin — вне
         # белого списка ролей (SPEC 01M4PMR5EVFK4KQDPWB1KEGM7V, требование 14).
         "pull-main": lambda: pull_main.cmd_pull_main(rest[0]),
+        # Пишет журнал и строку задачи, ходит в хостинг, `--confirm`
+        # закрывает задачу — вне белого списка ролей (SPEC
+        # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требования 3-4).
+        "mr-sync": lambda: mr_sync.cmd_mr_sync(rest),
         "pin-update": lambda: _cmd_pin_update(rest),
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),

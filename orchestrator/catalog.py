@@ -1392,6 +1392,11 @@ def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
     # 10, 16) — сразу за названием: в `awaiting_human` это главное сведение.
     mr_text = store.mr_link_text(r)
     mr = f"  [{mr_text}]" if mr_text else ""
+    # Последний итог `mr-sync` и время сверки (SPEC
+    # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 7) — рядом со ссылкой на MR.
+    synced = board.mr_sync_shown(r)
+    if synced is not None:
+        mr += f"  [mr-sync {synced['at']}: {synced['outcome']}]"
     delivery = _delivery_suffix(conn, r)
     # Набор моделей задачи — сразу за бюджетом (SPEC
     # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и

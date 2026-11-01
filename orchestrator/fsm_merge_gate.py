@@ -1601,6 +1601,8 @@ def _approve_for_project_people(conn, task_id: str, state: str, t,
         return ("stopped",)
     if _appendices_refuse(conn, task_id, ctx):
         return ("stopped",)
+    if _mr_incident_stops(conn, task_id, state, ctx):
+        return ("stopped",)
     head = _confirmed_code_head(conn, task_id)
     if _local_head_unconfirmed(conn, task_id, branch, head, ctx):
         return ("stopped",)
@@ -1643,6 +1645,47 @@ def _appendices_refuse(conn, task_id: str,
     _people_refusal(conn, task_id, PEOPLE_REFUSED_ACTION,
                     f"{APPENDIX_REFUSAL_DETAIL}"
                     + (f" ({', '.join(paths)})" if paths else ""))
+    return True
+
+
+MR_STATUS_UNREAD_ACTION = "статус MR не прочитан"
+
+
+def _mr_incident_stops(conn, task_id: str, state: str,
+                       ctx: repo_context.RepoContext) -> bool:
+    """Инциденты MR, заведённого раньше (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    требование 5), — до публикации головы и до снятия черновика: MR уже
+    влит или закрыт — эскалация; MR открыт, а голова ветки на сервере не
+    своя (`mr_sync.foreign_commit`) — эскалация без перезаписи ветки.
+    Ссылки на MR в БД нет — проверять нечего. Статус MR не прочитан —
+    запись журнала, гейт идёт дальше: снятие черновика спросит хостинг
+    само. `True` — гейт остановлен."""
+    from . import mr_sync
+    row = store.get_task(conn, task_id)
+    iid, _url = store.mr_link(row)
+    if iid is None:
+        return False
+    mr = forge.mr_status(ctx.target, iid)
+    if mr.reason:
+        store.journal(conn, task_id, "fsm", MR_STATUS_UNREAD_ACTION,
+                      f"MR !{iid}: {mr.reason}")
+        return False
+    detail = ""
+    if mr.state in ("merged", "closed"):
+        detail = (f"{mr_sync.MR_DONE_EARLY_DETAIL}: MR !{iid} {mr.state}; "
+                  f"черновик не снят, исполнитель не назначен")
+    elif mr.state == "opened":
+        try:
+            detail = mr_sync.foreign_commit(conn, task_id, row["branch"],
+                                            ctx.path)
+        except mr_sync.GitFailure as exc:
+            _people_refusal(conn, task_id, MR_REFUSED_ACTION, str(exc))
+            return True
+    if not detail:
+        return False
+    store.update_task(conn, task_id, escalated_from=state)
+    store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
+                    detail=detail)
     return True
 
 
@@ -1776,6 +1819,8 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
         iid, url = result.iid, result.url
     elif not _ready_existing_mr(conn, task_id, ctx.target, iid):
         return ("stopped",)
+    from . import mr_sync
+    mr_sync.record_fork_point(conn, task_id, head, ctx)
     store.set_state(conn, task_id, fsm.AWAITING_HUMAN, "operator",
                     expected_state=state,
                     detail=f"MR !{iid} {url or ''} — вливают люди проекта")

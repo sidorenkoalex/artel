@@ -503,7 +503,11 @@ def _merge_request(reply: Reply) -> forge.MergeRequest:
     return forge.MergeRequest(
         iid=data.get("iid"), url=data.get("web_url"), title=data.get("title"),
         state=data.get("state"), draft=draft is True,
-        assignee=assignee.get("username") if isinstance(assignee, dict) else None)
+        assignee=assignee.get("username") if isinstance(assignee, dict) else None,
+        target_branch=data.get("target_branch"),
+        source_branch=data.get("source_branch"), sha=data.get("sha"),
+        merge_commit_sha=data.get("merge_commit_sha"),
+        squash_commit_sha=data.get("squash_commit_sha"))
 
 
 def _mr_path(target: str, mr) -> tuple[str, str]:
