@@ -36,7 +36,10 @@ schema_version: 5
   (`git ls-tree -r -z` под `workdir`, без выписки); любая неоднозначная
   запись базы — `_Prepare` «отчёт базы неоднозначен: <id|ключ>»;
 - находки: тест `PASS_TO_PASS` базы, красный или «неизвестно» в голове, —
-  BROKEN (снимается мандатом как BROKEN); прочее — прежний `compare`;
+  BROKEN (снимается мандатом как BROKEN); запись головы сопоставляется с
+  тестом базы и по ключу отчёта (ANSWER-1 п. 1): ключ зелёного теста базы,
+  модуль которого в дереве головы не найден, — BROKEN по id базы, не GONE
+  (`outcome.forge_key_ids`); прочее — прежний `compare`;
   замены — `_ci_replacement_findings` (REPLACED_MISSING / REPLACED_NOT_GREEN
   / новая находка «замена теста не проверяема в режиме ci» → отказ, не сбой);
   G3б-2 — прежние `_strict_findings`/`_code_exception_findings` по диффу git;
@@ -67,6 +70,14 @@ schema_version: 5
    `test_outcome_gate_module`, `test_refusal_classes`,
    `test_report_outcome_module`, `test_gate_owner_marker`,
    `test_mandate_test_id`) — 172 passed; `python3 scripts/codebase_map.py`.
+4. Итерация ревью 1: R1-F1 — `forge_key_ids` в `reporters/outcome.py`,
+   `_ci_cases` отдаёт карту ключ → id, `_judge_ci` даёт BROKEN по ключу
+   базы для неразобранного ключа головы; тест
+   `tests/test_outcome_ci_head_key_module.py::test_module_missing_in_head_tree_is_broken_not_gone`
+   (мутация «ключ отброшен» — красный); R1-F2 — юнит-тест сужен до ключа
+   без `::` и формы записи; R1-F3 — rejected (см. REVIEW). Прогоны:
+   долгоживущий + `test_report_outcome_module` + новый — 89 passed; соседи
+   гейта исходов — 131 passed, 42 subtests; карта регенерирована.
 
 ## Покрытие требований
 
@@ -76,7 +87,7 @@ schema_version: 5
 | 2 | 2 |
 | 3 | 2 |
 | 4 | 2 |
-| 5 | 2 |
+| 5 | 2, 4 |
 | 6 | 2 |
 | 7 | 2 |
 | 8 | 1, 2 |

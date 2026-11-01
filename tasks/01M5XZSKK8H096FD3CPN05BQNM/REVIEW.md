@@ -73,9 +73,9 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/advance_gates/outcome_integrity.py, `_judge_ci` (отброс `_unresolved` головы) | модуль записи головы не найден в дереве головы → GONE вместо BROKEN, сопоставление не по ключу записи (ANSWER-1 п.1) | вид находки и действие отказа расходятся с решением Оператора; мандат как на BROKEN — не тот вид | сопоставлять неразобранный ключ головы с ключом зелёной записи базы → BROKEN по id базы; тест в `tests/` на вид |
-| R1-F2 | open | tests/test_report_outcome_module.py::test_forge_report_key_without_separator_and_record_shape | частичный повтор свойств долгоживущего файла (статус вне перечня, два ключа) | дублирующий сторож | оставить только ключ без `::` и форму записи (minor) |
-| R1-F3 | open | orchestrator/advance_gates/outcome_integrity.py, `_judge_ci` хвост | дублирование хвоста `_judge` | два места правки одной логики | вынести общий помощник (minor) |
+| R1-F1 | fixed | orchestrator/advance_gates/outcome_integrity.py, `_judge_ci` (отброс `_unresolved` головы) | модуль записи головы не найден в дереве головы → GONE вместо BROKEN, сопоставление не по ключу записи (ANSWER-1 п.1) | вид находки и действие отказа расходятся с решением Оператора; мандат как на BROKEN — не тот вид | fixed: `outcome.forge_key_ids` (ключ → id, на нём же `parse_forge_report`); `_ci_cases` отдаёт карту ключей; в `_judge_ci` неразобранный ключ головы, совпавший с ключом зелёного теста базы, — BROKEN по id базы (GONE из `compare` им вытесняется). Тест `tests/test_outcome_ci_head_key_module.py::test_module_missing_in_head_tree_is_broken_not_gone`, мутация «ключ отброшен» — красный |
+| R1-F2 | fixed | tests/test_report_outcome_module.py::test_forge_report_key_without_separator_and_record_shape | частичный повтор свойств долгоживущего файла (статус вне перечня, два ключа) | дублирующий сторож | fixed: оставлены только ключ без `::` и форма записи (метод новый на ветке, в базе его нет) |
+| R1-F3 | rejected | orchestrator/advance_gates/outcome_integrity.py, `_judge_ci` хвост | дублирование хвоста `_judge` | два места правки одной логики | rejected: хвосты не побайтно одинаковы (у `_judge` — `flaky_lines`, `prior_line`, `replaced_lines`, иные счётчики); общий помощник потребовал бы правки `_judge` локального пути, который требование 9 держит прежним, — рефакторинг вне зоны, отдельная задача |
 
 ## Вердикт
 changes_requested — исправить R1-F1 (major): толкование ANSWER-1 п.1 —
