@@ -1569,7 +1569,7 @@ MR_DURING_CANARY_REFUSED_ACTION = "MR не открыт: идёт канарей
 _FIXATION_ACTION = "sha зафиксирован"
 # Код ответа хостинга в причине `forge` — текст адаптера GitLab
 # (`gitlab_adapter.py:211`, «GitLab ответил кодом 409 на …»).
-_HOSTING_CODE = re.compile(r"ответил кодом (\d{3}) на")
+_HOSTING_CODE = re.compile(r"ответил кодом ([0-9]{3}) на")
 _CONFLICT_CODE = "409"
 
 
