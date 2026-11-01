@@ -480,6 +480,10 @@ class FsmTest(unittest.TestCase):
                 store.REF_KIND_EPIC, self.sweep_epic())),
             ("link --remove epic", lambda: self.link_remove(
                 store.REF_KIND_EPIC, self.sweep_epic())),
+            # Сверка MR (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 8): без
+            # id — по задаче проекта `target-human` в `awaiting_human`
+            # песочницы (`mr_sync_call`), а не пустым отказом.
+            ("mr-sync", self.mr_sync_call),
         ]
 
     # ------------------------------------- эпик свипа (ADR-0028 п. 17)
@@ -584,6 +588,51 @@ class FsmTest(unittest.TestCase):
         store.insert_external_ref(store.db(), kind, obj, "tracker",
                                   "SWEEP-2", None, "operator")
         catalog.cmd_link(["--remove", kind, obj, "tracker", "SWEEP-2"])
+
+    MR_SYNC_PROJECT = "sweephuman"
+
+    def mr_sync_call(self) -> None:
+        """`mr-sync` без id по песочнице, где есть проект `merge_gate:
+        target-human` и его задача в `awaiting_human` (SPEC
+        01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 8): сверка обязана пройти по
+        ней — запись сверки в её журнале, — а не отказать пустым набором.
+        Задача свипа — артели: её `mr-sync` не сверяет ни в одном
+        состоянии. Запись проекта и хостинг (`mr_status`: MR открыт) —
+        подмены на время вызова, git — шпион класса."""
+        from orchestrator import forge, mr_sync, targets
+        conn = store.db()
+        human = getattr(self, "_mr_sync_task", None)
+        if human is None:
+            human = self._mr_sync_task = idgen.new_task_id()
+            store.insert_task(conn, human, "Задача людей проекта",
+                              "awaiting_human", f"task/{human.lower()}-mr",
+                              self.MR_SYNC_PROJECT, 1.0)
+            store.update_task(conn, human, mr_iid=7,
+                              mr_url="https://localhost/mr/7")
+        entry = {"forge": "gitlab", "base": config.MAIN_BRANCH,
+                 "url": f"https://localhost/grp/{self.MR_SYNC_PROJECT}",
+                 "token_slot": "sweep-token", "no_paths": [],
+                 "project_skills": [], "merge_gate": "target-human"}
+        real_target = targets.target
+
+        def target(name):
+            return dict(entry) if name == self.MR_SYNC_PROJECT else real_target(name)
+
+        class Hosting:
+            CI_BY_PIPELINE = True
+
+            @staticmethod
+            def mr_status(project, mr):
+                return forge.MergeRequest(iid=mr, state="opened",
+                                          target_branch=config.MAIN_BRANCH)
+
+        before = len(store.task_steps(conn, human))
+        with mock.patch.object(targets, "target", target), \
+                mock.patch.dict(forge.IMPLEMENTATIONS, {"gitlab": Hosting}):
+            mr_sync.cmd_mr_sync([])
+        synced = [r for r in store.task_steps(conn, human)[before:]
+                  if r["action"] == mr_sync.SYNC_ACTION]
+        assert synced, f"mr-sync не сверил задачу {human} проекта target-human"
 
     def run_command(self, call) -> tuple[str, mock.Mock]:
         """Прогон команды с подменённым агентом; SystemExit — тоже исход."""
@@ -3559,3 +3608,64 @@ class TargetHumanDeliveryInvariantTest(unittest.TestCase):
                 else:
                     self.assertEqual(len(stand.fake.named("open_mr")), 1,
                                      where)
+
+
+class MrSyncConfirmIsOperatorOnlyInvariantTest(unittest.TestCase):
+    """Инвариант 18 (`docs/invariants.md:48`) для закрытия задачи проекта
+    `target-human`: `mr-sync <id> --confirm` — команда Оператора, ни
+    `auto <id>`, ни надзор эпика (`auto --epic`) её не зовут и задачу из
+    `awaiting_human` сами не закрывают (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    требование 8). Наблюдается исход, а не аргументы вызова: состояние,
+    коммит закрытия с RETRO в `refs/artifacts/<id>` и `closed_as`.
+
+    Стенд — настоящий git песочницы с bare `origin`, подменённый хостинг и
+    часы надзора: `Stand` долгоживущего файла задачи
+    (`tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py`).
+    """
+
+    def setUp(self):
+        from tests.sandbox import RealGitSandbox
+        from tests import test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync as mr
+        self.mr = mr
+        self.sb = RealGitSandbox()
+        self.sb.setUp()
+        self.addCleanup(self.sb.doCleanups)
+        self.stand = mr.Stand(self.sb)
+
+    def test_auto_and_epic_supervisor_never_confirm_mr_sync(self):
+        """`auto` и надзор эпика не закрывают задачу `mr-sync --confirm` даже при итоге «влит этим MR».
+
+        Сценарий: задача `target-human` в `awaiting_human`, люди влили её
+        коммитом слияния (`mr_status` — «merged»), в записи проекта
+        `policy.mr_sync_interval_min: 1`. `auto <id>`, затем надзор эпика
+        задачи на подменённых часах (5 минут опросов): надзор сверил задачу
+        — итог «влит этим MR» в журнале, — но задача в `awaiting_human`,
+        `closed_as` пуст, RETRO в `refs/artifacts/<id>` нет. Контроль:
+        `mr-sync <id> --confirm` Оператора закрывает её — `done`,
+        `closed_as` `merged_upstream`, RETRO в ссылке документов есть.
+
+        Ловит мутацию: надзор эпика или `auto` зовёт `mr-sync --confirm`
+        (или закрывает задачу по итогу сверки сам) — задача `done`,
+        `closed_as` заполнен, RETRO в `refs/artifacts/<id>`; либо надзор не
+        сверяет вовсе — итога в журнале нет, и свойство доказано пустым.
+        """
+        mr, stand = self.mr, self.stand
+        task = stand.to_awaiting()
+        merge = stand.merge_commit(task)
+        stand.reply(task, state="merged", merge_commit_sha=merge)
+        stand.record(mr_sync_interval_min="1")
+        epic, obs, _session = mr.epic_of(stand, task)
+        clock = mr.Clock(stand, task)
+        out = mr.task_auto(stand, clock, task)
+        out += mr.supervise(stand, clock, epic, obs, 5 * 60)
+        where = stand.context(task, out)
+        self.assertIn(mr.MERGED_THIS, stand.journal(task), where)
+        self.assertEqual(stand.state(task), "awaiting_human", where)
+        self.assertIn(stand.closed_as(task), (None, ""), where)
+        self.assertIsNone(stand.retro(task), where)
+        out = stand.mr_sync(task, "--confirm")
+        where = stand.context(task, out)
+        self.assertEqual(stand.state(task), "done", where)
+        self.assertEqual(stand.closed_as(task), store.CLOSED_AS_MERGED_UPSTREAM,
+                         where)
+        self.assertIsNotNone(stand.retro(task), where)
