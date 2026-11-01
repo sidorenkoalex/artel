@@ -549,14 +549,18 @@ def _cost_block(steps, spent_usd: float,
 
 
 def build_done(conn, task_id: str, merge_sha: str,
-               address: str | None = None) -> str:
+               address: str | None = None, note: str = "") -> str:
     """RETRO задачи, дошедшей до `done` (требования 4, 5, 8).
 
     `address` (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требование 3) — строка
     «Адрес артефактов», когда у вызывающего он свой. По умолчанию — ссылка
     документов `refs/artifacts/<id>` (SPEC 01M4M67SGNEYMN9F1C7XVX24XE,
     требование 9): с ADR-0021 п.4 каталога задачи в main нет, и
-    контент-адресный `<sha мержа>:tasks/<id>/` указывал бы в пустоту."""
+    контент-адресный `<sha мержа>:tasks/<id>/` указывал бы в пустоту.
+
+    `note` — строка «Закрытие: …» сразу за итогом, когда задачу закрыл не
+    мерж пульта, а `mr-sync --confirm` (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    требование 4): `merge_sha` тогда — sha доказательства."""
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
     files = _artifact_branch_files(task_id)
@@ -569,6 +573,7 @@ def build_done(conn, task_id: str, merge_sha: str,
         f"# RETRO: {task_id} — {t['title']}",
         "",
         f"Итог: done, sha {merge_sha}",
+        *([f"Закрытие: {note}"] if note else []),
         f"Адрес артефактов: {artifacts_address}",
         f"Суть: {_gist(t['title'], context_line)}",
         *(["Канареечная задача: да"] if t["is_canary"] else []),

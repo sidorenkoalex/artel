@@ -43,7 +43,7 @@ def _model_identifier() -> str:
 
 def _retro_with_frontmatter(conn, task_id: str, outcome: str,
                             merge_sha: str = "",
-                            applied_appendices=None) -> str:
+                            applied_appendices=None, note: str = "") -> str:
     """Ретроспектива коммита закрытия: `outcome` — ФАКТИЧЕСКИЙ исход
     задачи, не литерал (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 1-4). У
     смерженной задачи это «Итог: done, sha …» и вечный адрес
@@ -63,7 +63,8 @@ def _retro_with_frontmatter(conn, task_id: str, outcome: str,
     else:
         body = fsm_postmerge._with_appendices_line(
             retro.build_done(conn, task_id, merge_sha or gitcmd.head_sha(),
-                             address=SNAPSHOT_REF_TMPL.format(task_id=task_id)),
+                             address=SNAPSHOT_REF_TMPL.format(task_id=task_id),
+                             note=note),
             applied_appendices)
     header = (
         "---\n"
@@ -94,7 +95,7 @@ def _closing_failed(conn, task_id: str, note: str) -> str:
 
 
 def commit_closing(conn, task_id: str, outcome: str, merge_sha: str = "",
-                   applied_appendices=None) -> str:
+                   applied_appendices=None, note: str = "") -> str:
     """Коммит `tasks/<id>/RETRO.md` поверх головы ссылки документов;
     строка — что вышло. `outcome` — фактическое состояние закрытой задачи
     из БД (`done`/`killed`): его называют и ретроспектива, и сообщение
@@ -128,7 +129,7 @@ def commit_closing(conn, task_id: str, outcome: str, merge_sha: str = "",
         return _closing_failed(conn, task_id, f"{what}: {drift.text()}")
     try:
         text = _retro_with_frontmatter(conn, task_id, outcome, merge_sha,
-                                       applied_appendices)
+                                       applied_appendices, note)
     except Exception as exc:  # noqa: BLE001 — см. докстринг: сбой не отменяет закрытие
         note = (f"коммит закрытия {task_id} не записан: RETRO не построено: "
                 f"{exc}")

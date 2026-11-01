@@ -27,8 +27,8 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import (agent_log, ci, config, fsm, gitcmd, session, spend, store,
-               workspace)
+from . import (agent_log, ci, config, fsm, gitcmd, mr_sync, session, spend,
+               store, workspace)
 from .advance_gates import refusal_classes
 from .providers.claude import TOOL_CALL_LINE_PREFIX
 
@@ -37,7 +37,10 @@ _EVENT_CLASSES = {"transitions", "refusals", "gates", "steps", "budget",
                   "alerts", "stops", "ci", "pytest"}
 _DEFAULT_EVENTS = ("transitions", "refusals", "gates", "steps", "stops", "ci",
                    "pytest")
-_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
+# `awaiting_human` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 10) —
+# остановка, о которой Оператору надо знать: MR ждёт людей проекта.
+_GATE_STATES = ("spec_gate", "acceptance", "merge_gate", fsm.AWAITING_HUMAN,
+                "escalated")
 _GATE_ACTIONS = tuple(f"state -> {state}" for state in _GATE_STATES)
 _TERMINAL_STATES = fsm.TERMINAL_STATES
 
@@ -210,10 +213,25 @@ def _select_tasks(conn, opts: dict, session_id: str) -> list:
             if row["state"] not in _TERMINAL_STATES]
 
 
+def _print_state(row) -> None:
+    """Строка смены состояния `STATE=…`; у задачи, перешедшей в
+    `awaiting_human`, — ещё строка со ссылкой на MR из БД (SPEC
+    01M5XZ9Z68V75VXF5Z66C708T4, требование 16)."""
+    print(f"STATE={row['state']}", flush=True)
+    if row["state"] == fsm.AWAITING_HUMAN:
+        mr = store.mr_link_text(row) or "ссылки на MR в БД нет"
+        print(f"{safe_text(row['id'])}  {fsm.AWAITING_HUMAN} — ждёт людей "
+              f"проекта: {safe_text(mr)}", flush=True)
+
+
 def _matches_class(action: str, detail: str, events: set) -> bool:
     if "transitions" in events and action.startswith("state -> "):
         return True
-    if "gates" in events and action in _GATE_ACTIONS:
+    # Смена итога сверки MR задачи в `awaiting_human` (SPEC
+    # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 6) — событие класса `gates`:
+    # повтор того же итога записью смены не бывает.
+    if "gates" in events and (action in _GATE_ACTIONS
+                              or action == mr_sync.OUTCOME_CHANGED_ACTION):
         return True
     if ("refusals" in events and action.startswith(store.REFUSAL_ACTION_PREFIX)
             and action not in _PRE_ADVANCE_REFUSAL_ACTIONS):
@@ -272,6 +290,7 @@ def _notify(message: str) -> None:
 
 def _significant(action: str) -> bool:
     return (action in _GATE_ACTIONS or action == _AUTO_STOP_ACTION or
+            action == mr_sync.OUTCOME_CHANGED_ACTION or
             (action.startswith(store.REFUSAL_ACTION_PREFIX) and
              action not in _PRE_ADVANCE_REFUSAL_ACTIONS))
 
@@ -434,7 +453,7 @@ def _watch_observation(opts: dict, conn, observed) -> None:
             for task in task_rows:
                 previous_state = known_state.get(task["id"])
                 if previous_state is not None and previous_state != task["state"]:
-                    print(f"STATE={task['state']}", flush=True)
+                    _print_state(task)
                 known_state[task["id"]] = task["state"]
             step_id, alert_id = _observation_events(
                 conn, row, row["notified_step_id"], row["notified_alert_id"],
@@ -858,7 +877,7 @@ def cmd_watch(argv: list) -> None:
                 continue
             if row["state"] != known_state[task_id]:
                 known_state[task_id] = row["state"]
-                print(f"STATE={row['state']}", flush=True)
+                _print_state(row)
             if _emit_steps(conn, task_id, opts["events"], known_step_id,
                           exit_on, budget, epic_warnings):
                 return

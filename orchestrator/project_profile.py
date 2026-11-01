@@ -121,6 +121,11 @@ class Profile:
     # 01M5JGSAANR1NZYQD4FCSVE48Y, требование 7): `layers: []` у pytest —
     # строгий режим, а не `python-ast` по умолчанию.
     layers_declared: bool = field(default=False, compare=False)
+    # Источник полного набора на приёмке и задание CI с его итогом (SPEC
+    # 01M5XZSKK8GZTECA2KWAFHE029, требование 1); вне сравнения по той же
+    # причине, что поля выше.
+    full_suite: str = field(default=targets.FULL_SUITE_LOCAL, compare=False)
+    ci_job: str = field(default="", compare=False)
 
     @classmethod
     def from_values(cls, values: dict) -> "Profile":
@@ -446,7 +451,9 @@ def _with_component_fields(profile: Profile, comp: Component) -> Profile:
         test_support=tuple(fields.get("test_support") or ()),
         layers=tuple(fields.get("layers") or ()),
         layers_declared=fields.get("layers") is not None,
-        paths=tuple(_regexes(fields.get("paths"))))
+        paths=tuple(_regexes(fields.get("paths"))),
+        full_suite=fields.get("full_suite") or targets.FULL_SUITE_LOCAL,
+        ci_job=fields.get("ci_job") or "")
 
 
 def layers_of(profile) -> tuple:

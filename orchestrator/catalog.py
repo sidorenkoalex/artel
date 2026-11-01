@@ -9,7 +9,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, board, budget, config, cycle_hint,
-              epics, gitcmd, idgen, liveness, merge_after, merge_queue, models,
+              epics, github_adapter, gitcmd, idgen, liveness, merge_after, merge_queue, models,
               providers, repo_context, retro, runner,
               store, targets, tz_check, workspace, zone_lock)
 from .advance_gates import spec_audit
@@ -1347,6 +1347,26 @@ def _tokens_field(conn, task_id: str) -> str:
     return f"{retro.total_tokens_text(total):>10}"
 
 
+def _delivery_suffix(conn, r) -> str:
+    """Добавка о задержке доставки через MR (SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF,
+    требования 5-7): последний отказ после последней смены состояния —
+    предел `max_awaiting` на гейте мержа, предел `max_in_flight` первой
+    отправки, отказ чернового MR. Отказ раньше смены состояния или успешной
+    отправки — уже не текущий."""
+    for row in reversed(store.task_steps(conn, r["id"])):
+        action, detail = row["action"], row["detail"] or ""
+        if action.startswith("state -> ") or action == gitcmd.PUSH_SENT_ACTION:
+            return ""
+        if action == github_adapter.AWAITING_LIMIT_ACTION:
+            return "  [очередь: предел awaiting_human]"
+        if (action == gitcmd.PUSH_REFUSED_ACTION
+                and gitcmd.IN_FLIGHT_LIMIT_REASON in detail):
+            return f"  [очередь: {gitcmd.IN_FLIGHT_LIMIT_REASON}]"
+        if action == github_adapter.DRAFT_MR_REFUSAL_ACTION:
+            return f"  [{detail[:160]}]"
+    return ""
+
+
 def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
     """Строка задачи `status`: одна и та же в группе эпика и вне её (SPEC
     01M5TBBDFS6DWQY6MS263T1KPY, требование 13)."""
@@ -1368,6 +1388,16 @@ def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
     # Вердикт аудита SPEC у задачи на гейте SPEC (SPEC
     # 01M4MQAGRWMWR0GFDM9086P3TD, требование 16) — из журнала.
     audit = spec_audit.status_suffix(conn, r)
+    # Ссылка на MR задачи из БД (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требования
+    # 10, 16) — сразу за названием: в `awaiting_human` это главное сведение.
+    mr_text = store.mr_link_text(r)
+    mr = f"  [{mr_text}]" if mr_text else ""
+    # Последний итог `mr-sync` и время сверки (SPEC
+    # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 7) — рядом со ссылкой на MR.
+    synced = board.mr_sync_shown(r)
+    if synced is not None:
+        mr += f"  [mr-sync {synced['at']}: {synced['outcome']}]"
+    delivery = _delivery_suffix(conn, r)
     # Набор моделей задачи — сразу за бюджетом (SPEC
     # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
     # модели шагов, и тариф, по которому тратится этот бюджет.
@@ -1382,9 +1412,9 @@ def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
         f"{r['id']}{label}  {r['state']:<13} "
         f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
         f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
-        f"  токенов {tokens}  {r['title']}"
+        f"  токенов {tokens}  {r['title']}{mr}"
         f"{flag}{audit}{mark}{holder}{zone}{wave_breaker}{division}"
-        f"{merge_wait}{deps_wait}"
+        f"{merge_wait}{deps_wait}{delivery}"
     )
 
 

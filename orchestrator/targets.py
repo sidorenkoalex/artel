@@ -110,9 +110,22 @@ COMPONENT_FIELDS = dict(PROFILE_FIELDS, **{
     "paths_source": "paths_source",
     "depends_on": "depends_on",
     "tools": "tools",
+    # Источник полного набора на приёмке и имя задания CI с его итогом
+    # (SPEC 01M5XZSKK8GZTECA2KWAFHE029, требование 1).
+    "full_suite": "full_suite",
+    "ci_job": "ci_job",
 })
 # `pult-vitest` только допустим: отчётчик появится в G1б.
 COMPONENT_REPORTS = ("junit-xml", "pult-vitest")
+FULL_SUITE_LOCAL = "local"
+FULL_SUITE_CI = "ci"
+FULL_SUITE_BOTH = "both"
+COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
+# Реестр реализаций хостинга (`forge.IMPLEMENTATIONS`) выставляет сюда
+# `ci` при своём импорте: `forge` импортирует этот модуль, обратный
+# импорт был бы циклом. `None` — `forge` не загружен; тогда хостинг без
+# чтения отчёта задания ловит приёмка при использовании.
+hosting_registry = None
 COMPONENT_TEMPLATE_MARKS = ("<id>", "<dir>", "<name>")
 COMPONENT_DEPENDS_VIA = ("paths", "files", "contract")
 COMPONENT_PATHS_SOURCE = ("file", "key")
@@ -337,7 +350,9 @@ LOCAL_FIELDS = {
                "commit_template": False, "co_author": False,
                "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
-               "draft_mr": False, "max_in_flight": False},
+               "draft_mr": False, "max_in_flight": False,
+               "max_awaiting": False, "awaiting_holds_zones": False,
+               "mr_sync_interval_min": False},
     "machine": {"forge": True, "url": True, "token_slot": True,
                 "path": False, COMPONENTS_FIELD: False,
                 "commit_author": False},
@@ -357,7 +372,13 @@ PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
     "commit_template", "co_author", "push_options", "push_options_forbidden",
-    "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight")
+    "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
+    "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
+# Умолчания полей доставки, которые читает `delivery_policy` (SPEC
+# 01M5XZ9Z68V75VXF5Z66C708T4, требование 2): отдаёт их только она.
+DELIVERY_DEFAULTS = {"max_awaiting": 3, "awaiting_holds_zones": True,
+                     "draft_mr": True, "max_in_flight": None,
+                     "mr_assignee": None, "mr_sync_interval_min": None}
 DELIVERY_MACHINE_FIELDS = ("commit_author",)
 # Подполя профиля и компонента, которые живут в разделе `policy`.
 LOCAL_POLICY_SCOPES = ("weakening_scope", "mutation_claim_scope")
@@ -542,6 +563,26 @@ def push_whitelisted(entry: dict) -> bool:
     return entry.get("merge_gate") != "operator"
 
 
+def merged_by_project_people(entry: dict) -> bool:
+    """Вливают ли MR проекта с записью `entry` люди проекта: `merge_gate`
+    — `target-human` (ADR-0029 п. 1; SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+    требование 4). Сравнение с литералом — только здесь."""
+    return entry.get("merge_gate") == "target-human"
+
+
+def delivery_policy(entry: dict) -> dict:
+    """Поля доставки плоской записи `entry` с умолчаниями
+    `DELIVERY_DEFAULTS` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требования 2-3).
+    `mr_assignee` целым или строкой цифр — id исполнителя (целое), иной
+    строкой — имя как есть."""
+    policy = {field: entry.get(field, default)
+              for field, default in DELIVERY_DEFAULTS.items()}
+    assignee = policy["mr_assignee"]
+    if isinstance(assignee, str) and assignee.strip().isdigit():
+        policy["mr_assignee"] = int(assignee.strip())
+    return policy
+
+
 def push_option_error(option: object, forbidden: list | tuple = ()) -> str | None:
     """Причина отказа опции отправки `option` — та же норма для элемента
     `policy.push_options` при загрузке и для `-o` в argv отправки; None —
@@ -647,14 +688,32 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
         refuse("ci_required_jobs", "не список строк")
     if "mr_assignee" in policy:
         assignee = policy["mr_assignee"]
-        if not isinstance(assignee, str) or not assignee.strip():
-            refuse("mr_assignee", "не непустая строка")
+        # Целое (не bool) — id исполнителя (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+        # требование 3); прочее — по-прежнему только непустая строка.
+        if isinstance(assignee, bool) or not (
+                isinstance(assignee, int)
+                or (isinstance(assignee, str) and assignee.strip())):
+            refuse("mr_assignee", "не непустая строка и не целое")
     if not isinstance(policy.get("draft_mr", True), bool):
         refuse("draft_mr", f"{policy['draft_mr']!r}, не true/false")
     if "max_in_flight" in policy:
         limit = policy["max_in_flight"]
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             refuse("max_in_flight", f"{limit!r}, не целое > 0")
+    if "max_awaiting" in policy:
+        limit = policy["max_awaiting"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            refuse("max_awaiting", f"{limit!r}, не целое > 0")
+    if not isinstance(policy.get("awaiting_holds_zones", True), bool):
+        refuse("awaiting_holds_zones",
+               f"{policy['awaiting_holds_zones']!r}, не true/false")
+    # Опрос `mr-sync` надзором эпика (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    # требование 6): поля нет — опрос выключен.
+    if "mr_sync_interval_min" in policy:
+        interval = policy["mr_sync_interval_min"]
+        if (isinstance(interval, bool) or not isinstance(interval, int)
+                or interval <= 0):
+            refuse("mr_sync_interval_min", f"{interval!r}, не целое > 0")
 
 
 def _check_local_values(name: str, where: str, entry: dict) -> None:
@@ -821,7 +880,8 @@ def check(name: str, entry: object, source: Path | None = None) -> None:
             raise TargetsError(f"{where}: поля '{PROFILE_FIELD}' и "
                                f"'{COMPONENTS_FIELD}' вместе недопустимы — "
                                f"оставь одно")
-        _check_components(name, where, entry[COMPONENTS_FIELD])
+        _check_components(name, where, entry[COMPONENTS_FIELD],
+                          hosting=entry["forge"])
         if name != config.DEFAULT_TARGET:
             _check_knowledge_outside_wrapper(where, entry)
     if KNOWLEDGE_FIELD in entry:
@@ -985,9 +1045,11 @@ def _check_profile(where: str, profile: object) -> None:
                     f"'{runner}')")
 
 
-def _check_components(name: str, where: str, comps: object) -> None:
+def _check_components(name: str, where: str, comps: object,
+                      hosting: str = "") -> None:
     """Проверка поля `components:` записи: отказ называет проект,
-    компонент и поле (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 2-3)."""
+    компонент и поле (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 2-3).
+    `hosting` — значение `forge` записи для правила `full_suite`."""
     if not isinstance(comps, dict) or not comps:
         raise TargetsError(f"{where}: поле '{COMPONENTS_FIELD}' — не непустое "
                            f"отображение «имя компонента → поля»")
@@ -1010,7 +1072,35 @@ def _check_components(name: str, where: str, comps: object) -> None:
             if reason:
                 raise TargetsError(f"{here}: поле '{field}' — {reason}")
         _check_component_rules(name, here, fields, single)
+        _check_full_suite_source(here, fields, hosting)
         _check_rerun_ban(here, fields)
+
+
+def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
+    """Источник полного набора компонента (SPEC 01M5XZSKK8GZTECA2KWAFHE029,
+    требование 1): `ci_job` — ровно при `ci`/`both`; `ci`/`both` — только с
+    `report` и у хостинга, реализация которого в реестре `forge` читает
+    отчёт задания. Реестр, а не литерал значения `forge`."""
+    mode = fields.get("full_suite", FULL_SUITE_LOCAL)
+    if mode == FULL_SUITE_LOCAL:
+        if "ci_job" in fields:
+            raise TargetsError(f"{here}: поле 'ci_job' — допустимо только при "
+                               f"'full_suite: {FULL_SUITE_CI}' или "
+                               f"'{FULL_SUITE_BOTH}' (full_suite — "
+                               f"'{FULL_SUITE_LOCAL}')")
+        return
+    if "ci_job" not in fields:
+        raise TargetsError(f"{here}: поле 'ci_job' — нет: обязательно при "
+                           f"'full_suite: {mode}'")
+    if "report" not in fields:
+        raise TargetsError(f"{here}: поле 'report' — нет: обязательно при "
+                           f"'full_suite: {mode}' (граница гейта исходов)")
+    registry = hosting_registry() if hosting_registry is not None else None
+    if registry is not None and getattr(registry.get(hosting),
+                                        "job_test_report", None) is None:
+        raise TargetsError(f"{here}: поле 'full_suite' — '{mode}': реализация "
+                           f"хостинга '{hosting}' не читает отчёт тестов "
+                           f"задания CI")
 
 
 # Плагины повторов pytest и их аргументы (SPEC 01M5FRYVP4NF81VT00FYPHPWJH,
@@ -1239,6 +1329,13 @@ def _component_value_error(kind: str, value: object, comp: str,
         return ""
     if kind == "regexes":
         return _regexes_error(value)
+    if kind == "full_suite":
+        if value not in COMPONENT_FULL_SUITES:
+            return f"{value!r}, ожидается {' | '.join(COMPONENT_FULL_SUITES)}"
+        return ""
+    if kind == "ci_job":
+        return "" if isinstance(value, str) and value.strip() else (
+            "не непустая строка — имя задания CI")
     if kind == "paths_source":
         return _exact_strings_error(value, COMPONENT_PATHS_SOURCE)
     if kind == "depends_on":

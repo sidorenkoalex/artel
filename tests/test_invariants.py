@@ -74,10 +74,11 @@ TRUNCATED_CI = json.dumps({
 # Все состояния FSM (docs/design.md §6 в срезе Фазы 0, artel.py docstring).
 # tests_writing — A4 (tasks/T023): приёмочные тесты до кода, между
 # spec_gate и in_dev. spec_audit — аудит SPEC между spec_writing и
-# spec_gate (SPEC 01M4MQAGRWMWR0GFDM9086P3TD).
+# spec_gate (SPEC 01M4MQAGRWMWR0GFDM9086P3TD). awaiting_human — ожидание
+# людей проекта после merge_gate (SPEC 01M5XZ9Z68V75VXF5Z66C708T4).
 FSM_STATES = ("spec_writing", "spec_audit", "spec_gate", "tests_writing",
               "in_dev", "verifying", "review", "acceptance", "merge_gate",
-              "done", "escalated", "killed")
+              "awaiting_human", "done", "escalated", "killed")
 
 # Заготовки артефактов — валидные по guard: с T017 он вызывается кодом на
 # каждом переходе `advance`, и артефакт без обязательных секций задачу не
@@ -479,6 +480,10 @@ class FsmTest(unittest.TestCase):
                 store.REF_KIND_EPIC, self.sweep_epic())),
             ("link --remove epic", lambda: self.link_remove(
                 store.REF_KIND_EPIC, self.sweep_epic())),
+            # Сверка MR (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 8): без
+            # id — по задаче проекта `target-human` в `awaiting_human`
+            # песочницы (`mr_sync_call`), а не пустым отказом.
+            ("mr-sync", self.mr_sync_call),
         ]
 
     # ------------------------------------- эпик свипа (ADR-0028 п. 17)
@@ -583,6 +588,51 @@ class FsmTest(unittest.TestCase):
         store.insert_external_ref(store.db(), kind, obj, "tracker",
                                   "SWEEP-2", None, "operator")
         catalog.cmd_link(["--remove", kind, obj, "tracker", "SWEEP-2"])
+
+    MR_SYNC_PROJECT = "sweephuman"
+
+    def mr_sync_call(self) -> None:
+        """`mr-sync` без id по песочнице, где есть проект `merge_gate:
+        target-human` и его задача в `awaiting_human` (SPEC
+        01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 8): сверка обязана пройти по
+        ней — запись сверки в её журнале, — а не отказать пустым набором.
+        Задача свипа — артели: её `mr-sync` не сверяет ни в одном
+        состоянии. Запись проекта и хостинг (`mr_status`: MR открыт) —
+        подмены на время вызова, git — шпион класса."""
+        from orchestrator import forge, mr_sync, targets
+        conn = store.db()
+        human = getattr(self, "_mr_sync_task", None)
+        if human is None:
+            human = self._mr_sync_task = idgen.new_task_id()
+            store.insert_task(conn, human, "Задача людей проекта",
+                              "awaiting_human", f"task/{human.lower()}-mr",
+                              self.MR_SYNC_PROJECT, 1.0)
+            store.update_task(conn, human, mr_iid=7,
+                              mr_url="https://localhost/mr/7")
+        entry = {"forge": "gitlab", "base": config.MAIN_BRANCH,
+                 "url": f"https://localhost/grp/{self.MR_SYNC_PROJECT}",
+                 "token_slot": "sweep-token", "no_paths": [],
+                 "project_skills": [], "merge_gate": "target-human"}
+        real_target = targets.target
+
+        def target(name):
+            return dict(entry) if name == self.MR_SYNC_PROJECT else real_target(name)
+
+        class Hosting:
+            CI_BY_PIPELINE = True
+
+            @staticmethod
+            def mr_status(project, mr):
+                return forge.MergeRequest(iid=mr, state="opened",
+                                          target_branch=config.MAIN_BRANCH)
+
+        before = len(store.task_steps(conn, human))
+        with mock.patch.object(targets, "target", target), \
+                mock.patch.dict(forge.IMPLEMENTATIONS, {"gitlab": Hosting}):
+            mr_sync.cmd_mr_sync([])
+        synced = [r for r in store.task_steps(conn, human)[before:]
+                  if r["action"] == mr_sync.SYNC_ACTION]
+        assert synced, f"mr-sync не сверил задачу {human} проекта target-human"
 
     def run_command(self, call) -> tuple[str, mock.Mock]:
         """Прогон команды с подменённым агентом; SystemExit — тоже исход."""
@@ -3428,3 +3478,194 @@ class SharedFixturesWrapSandboxClassesInvariantTest(unittest.TestCase):
                     issubclass(cls, (sandbox.TmpDirTest, sandbox.TmpRootTest)),
                     f"{node.name}: {cls.__name__} — не песочница")
         self.assertTrue(fixtures, "в tests/fixtures.py нет фикстур")
+
+
+class TargetHumanDeliveryInvariantTest(unittest.TestCase):
+    """Инварианты доставки через MR проекта с `merge_gate: target-human`
+    (SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 8; ADR-0029 п. 1, 7).
+
+    Пульт такого проекта не вливает ветку задачи и не отправляет `base`:
+    MR вливают люди проекта, и ветка задачи в `awaiting_human` — их. MR
+    (нечерновой, гейта мержа) открывается или снимается с черновика только
+    для головы, подтверждённой Оператором, с зелёным CI. Черновой MR на
+    входе в `verifying` открывается до CI (требование 6) — его этот
+    инвариант не касается.
+
+    Стенд — настоящий git песочницы с bare `origin` и подменённым
+    хостингом: `Stand` долгоживущего файла задачи
+    (`tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py`), образец
+    свипа — `MergeOnlyFromMergeGateTest`.
+    """
+
+    def setUp(self):
+        from tests.sandbox import RealGitSandbox
+        from tests import test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery as delivery
+        self.delivery = delivery
+        self.sb = RealGitSandbox()
+        self.sb.setUp()
+        self.addCleanup(self.sb.doCleanups)
+        self.stand = delivery.Stand(self.sb)
+
+    def _base_pushes(self) -> list:
+        return [p for p in self.stand.pushes
+                if any(a.endswith(f":{config.MAIN_BRANCH}")
+                       or a.endswith(f"refs/heads/{config.MAIN_BRANCH}")
+                       for a in p)]
+
+    def test_target_human_never_merges_pushes_base_or_awaiting_branch(self):
+        """Пульт не сливает, не отправляет `base` и не отправляет ветку задачи в `awaiting_human`.
+
+        Сценарий: `approve` гейта мержа записи `target-human` уводит задачу
+        в `awaiting_human` — без единого `git merge` и отправки `base`,
+        голова `base` на сервере прежняя. Затем в ветку задачи ложится
+        коммит, и команды пульта, публикующие голову ветки (`advance`,
+        `approve`, `ensure_head_in_origin`), её не отправляют: голова
+        ветки на сервере прежняя, шпион отправок её не видит.
+
+        Ловит мутацию: ветвь `target-human` гейта мержа проходит
+        плотницкое слияние и отправку `base` прежнего пути; либо точка
+        отправки пропускает ветку задачи в `awaiting_human`.
+        """
+        from orchestrator import github_adapter
+        stand = self.stand
+        stand.record(draft_mr="false")
+        task = stand.new_task(state="merge_gate", published=True)
+        base_before = stand.main_sha()
+        out = stand.approve(task)
+        where = stand.context(task, out)
+        self.assertEqual(stand.state(task), "awaiting_human", where)
+        self.assertFalse([c for c in stand.git_calls
+                          if self.delivery.git_sub(c) == "merge"], where)
+        self.assertEqual(self._base_pushes(), [], where)
+        self.assertEqual(stand.main_sha(), base_before, where)
+        served = stand.origin_head(task)
+        stand.commit_code(task, {"kod/posle.py": "P = 1\n"})
+        stand.reset_spies()
+        with stand.spy():
+            self.delivery.capture_out(fsm.cmd_advance, task)
+            self.delivery.capture_out(fsm.cmd_approve, task)
+            github_adapter.ensure_head_in_origin(stand.conn, task,
+                                                 stand.branch(task))
+        where = stand.context(task)
+        self.assertEqual(stand.branch_pushes(task), [], where)
+        self.assertEqual(stand.origin_head(task), served, where)
+        self.assertEqual(self._base_pushes(), [], where)
+        self.assertEqual(stand.state(task), "awaiting_human", where)
+
+    def test_mr_opens_or_undrafts_only_for_confirmed_green_head(self):
+        """MR гейта мержа открывается или снимается с черновика только для подтверждённой головы с зелёным CI.
+
+        Сценарий: запись `target-human`. Красный CI подтверждённой головы —
+        ни `open_mr`, ни `undraft_mr` (у задачи с черновым MR в БД).
+        Голова ветки после фиксации ушла вперёд — `open_mr` не зван.
+        Зелёный CI подтверждённой головы — `open_mr` зван один раз, голова
+        ветки на сервере — подтверждённая; у задачи с черновым MR —
+        `undraft_mr` один раз, `open_mr` не зван.
+
+        Ловит мутацию: CI головы ветки не требуется перед MR (MR открыт или
+        черновик снят при красной голове); либо в MR уходит голова, не
+        сверенная с подтверждённой фиксацией.
+        """
+        stand = self.stand
+        stand.record(draft_mr="false")
+        cases = []
+        for linked in (False, True):
+            task = stand.new_task(state="merge_gate", published=True)
+            if linked:
+                iid = stand.rng.randrange(100, 10 ** 6)
+                store.update_task(stand.conn, task, mr_iid=iid,
+                                  mr_url=f"https://localhost/mr/{iid}")
+            cases.append((task, linked))
+        for task, linked in cases:
+            with self.subTest(черновик_в_бд=linked, ci="красный"):
+                stand.fake.red.add(stand.head(task))
+                out = stand.approve(task)
+                where = stand.context(task, out)
+                self.assertEqual(stand.fake.named("open_mr"), [], where)
+                self.assertEqual(stand.fake.named("undraft_mr"), [], where)
+                self.assertEqual(stand.state(task), "merge_gate", where)
+                stand.fake.red.discard(stand.head(task))
+        task, _linked = cases[0]
+        with self.subTest(голова="не подтверждена"):
+            store.record_fixation(stand.conn, task)
+            sha = store.get_task(stand.conn, task)["fixed_sha"]
+            stand.commit_code(task, {"kod/lishniy.py": "L = 1\n"})
+            out = stand.approve(task, sha, refix=False)
+            where = stand.context(task, out)
+            self.assertEqual(stand.fake.named("open_mr"), [], where)
+            self.assertEqual(stand.state(task), "merge_gate", where)
+        for task, linked in cases:
+            with self.subTest(черновик_в_бд=linked, ci="зелёный"):
+                out = stand.approve(task)
+                where = stand.context(task, out)
+                self.assertEqual(stand.state(task), "awaiting_human", where)
+                self.assertEqual(stand.origin_head(task), stand.head(task),
+                                 where)
+                if linked:
+                    self.assertEqual(stand.fake.named("open_mr"), [], where)
+                    self.assertEqual(len(stand.fake.named("undraft_mr")), 1,
+                                     where)
+                else:
+                    self.assertEqual(len(stand.fake.named("open_mr")), 1,
+                                     where)
+
+
+class MrSyncConfirmIsOperatorOnlyInvariantTest(unittest.TestCase):
+    """Инвариант 18 (`docs/invariants.md:48`) для закрытия задачи проекта
+    `target-human`: `mr-sync <id> --confirm` — команда Оператора, ни
+    `auto <id>`, ни надзор эпика (`auto --epic`) её не зовут и задачу из
+    `awaiting_human` сами не закрывают (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    требование 8). Наблюдается исход, а не аргументы вызова: состояние,
+    коммит закрытия с RETRO в `refs/artifacts/<id>` и `closed_as`.
+
+    Стенд — настоящий git песочницы с bare `origin`, подменённый хостинг и
+    часы надзора: `Stand` долгоживущего файла задачи
+    (`tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py`).
+    """
+
+    def setUp(self):
+        from tests.sandbox import RealGitSandbox
+        from tests import test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync as mr
+        self.mr = mr
+        self.sb = RealGitSandbox()
+        self.sb.setUp()
+        self.addCleanup(self.sb.doCleanups)
+        self.stand = mr.Stand(self.sb)
+
+    def test_auto_and_epic_supervisor_never_confirm_mr_sync(self):
+        """`auto` и надзор эпика не закрывают задачу `mr-sync --confirm` даже при итоге «влит этим MR».
+
+        Сценарий: задача `target-human` в `awaiting_human`, люди влили её
+        коммитом слияния (`mr_status` — «merged»), в записи проекта
+        `policy.mr_sync_interval_min: 1`. `auto <id>`, затем надзор эпика
+        задачи на подменённых часах (5 минут опросов): надзор сверил задачу
+        — итог «влит этим MR» в журнале, — но задача в `awaiting_human`,
+        `closed_as` пуст, RETRO в `refs/artifacts/<id>` нет. Контроль:
+        `mr-sync <id> --confirm` Оператора закрывает её — `done`,
+        `closed_as` `merged_upstream`, RETRO в ссылке документов есть.
+
+        Ловит мутацию: надзор эпика или `auto` зовёт `mr-sync --confirm`
+        (или закрывает задачу по итогу сверки сам) — задача `done`,
+        `closed_as` заполнен, RETRO в `refs/artifacts/<id>`; либо надзор не
+        сверяет вовсе — итога в журнале нет, и свойство доказано пустым.
+        """
+        mr, stand = self.mr, self.stand
+        task = stand.to_awaiting()
+        merge = stand.merge_commit(task)
+        stand.reply(task, state="merged", merge_commit_sha=merge)
+        stand.record(mr_sync_interval_min="1")
+        epic, obs, _session = mr.epic_of(stand, task)
+        clock = mr.Clock(stand, task)
+        out = mr.task_auto(stand, clock, task)
+        out += mr.supervise(stand, clock, epic, obs, 5 * 60)
+        where = stand.context(task, out)
+        self.assertIn(mr.MERGED_THIS, stand.journal(task), where)
+        self.assertEqual(stand.state(task), "awaiting_human", where)
+        self.assertIn(stand.closed_as(task), (None, ""), where)
+        self.assertIsNone(stand.retro(task), where)
+        out = stand.mr_sync(task, "--confirm")
+        where = stand.context(task, out)
+        self.assertEqual(stand.state(task), "done", where)
+        self.assertEqual(stand.closed_as(task), store.CLOSED_AS_MERGED_UPSTREAM,
+                         where)
+        self.assertIsNotNone(stand.retro(task), where)

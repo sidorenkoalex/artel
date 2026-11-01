@@ -67,8 +67,10 @@ REFUSAL_ACTION_PREFIX = "переход отклонён"
 # откручивать нечего. `escalated` сюда НЕ входит: SPEC требует алерт «любой
 # причины» эскалации, в т.ч. когда задача уже была в ней до вызова (ANSWER-1,
 # вопрос 2; AC-7, AC-17).
+# `awaiting_human` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 8) — тоже
+# штатное ожидание: MR вливают люди проекта.
 _NO_ALERT_FINAL_STATES = ("spec_gate", "acceptance", "merge_gate",
-                         "done", "killed")
+                         "awaiting_human", "done", "killed")
 
 
 def _run_paused_refusal(conn, task_id: str, journaled_before: int) -> bool:
@@ -1165,7 +1167,8 @@ EPIC_RETRY_ACTION = "epic retry: перезапуск разрешён"
 _GLOBAL_LIMIT_REFUSAL_ACTION = "run отклонён: лимит параллельных задач"
 # Остановка дочернего `auto` в этих состояниях — не «не на гейте»: из гейта
 # и эскалации задачу выводит сам Оператор, окончательная не продолжается.
-_NOT_HOLDING_STOP_STATES = EPIC_GATE_STATES + ("escalated", "done", "killed")
+_NOT_HOLDING_STOP_STATES = EPIC_GATE_STATES + ("awaiting_human", "escalated",
+                                               "done", "killed")
 # Записи, от которых считается «новое действие Оператора после остановки».
 _CHILD_END_ACTIONS = (zone_lock.AUTO_STOPPED_ACTION,
                       zone_lock.CYCLE_ABORTED_ACTION, EPIC_CHILD_LOST_ACTION)
@@ -1253,6 +1256,9 @@ def _child_holds(conn, epic_id: str, child) -> bool:
                    for row in rows[anchor + 1:])
 
 
+# Ожидание людей проекта (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 9):
+# остановка без удержания места — не перезапуск, не лимит эпика, не Оператор.
+_AWAITING = "ждёт людей проекта"
 _RUNNING, _WAITING, _HELD, _BUSY, _READY, _DEPENDS, _BLOCKED = (
     "под дочерним auto", "ждёт Оператора на гейте или в эскалации",
     "ждёт действия Оператора после остановки не на гейте",
@@ -1279,9 +1285,11 @@ def _epic_view(conn, epic) -> _EpicView:
     epic_id = epic["id"]
     tasks = store.epic_tasks(conn, epic_id)
     children = store.last_epic_children(conn, epic_id)
+    awaiting = {t["id"] for t in tasks if t["state"] == "awaiting_human"}
     view.running = {task_id for task_id, child in children.items()
-                    if lease.process_alive(child["pid"], child["host"],
-                                           child["started_at"])}
+                    if task_id not in awaiting
+                    and lease.process_alive(child["pid"], child["host"],
+                                            child["started_at"])}
     # Живые lease пульта — тем же счётом, что `parallel_limit` (задачи с
     # пустым id нет — в счёт идут все строки).
     busy = {row["task_id"] for row in parallel_limit.busy_other_tasks(conn, "")}
@@ -1293,7 +1301,9 @@ def _epic_view(conn, epic) -> _EpicView:
         task_id, state = t["id"], t["state"]
         if state in fsm.TERMINAL_STATES:
             continue
-        if task_id in view.running:
+        if task_id in awaiting:
+            status = _AWAITING
+        elif task_id in view.running:
             status = _RUNNING
         elif state in EPIC_GATE_STATES or state == "escalated":
             status = _WAITING
@@ -1414,7 +1424,22 @@ def _supervise(conn, epic_id: str, observation_id: str, launch_child) -> None:
                 return
             procs.append(proc)
             print(f"[{epic_id}] запущен дочерний auto {task_id}: pid {proc.pid}")
+        _poll_mr_sync(conn, view)
         _epic_sleep()
+
+
+def _poll_mr_sync(conn, view: _EpicView) -> None:
+    """Опрос `mr-sync` задач эпика, ждущих людей проекта (SPEC
+    01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 6; ANSWER-1 п. 5): только
+    сверка без `--confirm` и не чаще `policy.mr_sync_interval_min` минут —
+    закрытие остаётся командой Оператора (требование 8 надзора). Отложенный
+    импорт: `mr_sync` тянет гейт мержа."""
+    awaiting = [task_id for task_id, status in view.status.items()
+                if status == _AWAITING]
+    if not awaiting:
+        return
+    from . import mr_sync
+    mr_sync.supervised(conn, awaiting)
 
 
 def drop_dead_supervisor_lock(conn, epic, row, by: str) -> bool:

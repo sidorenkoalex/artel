@@ -194,6 +194,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
   merge_after TEXT, closed_as TEXT, epic_id TEXT, start_after TEXT,
+  mr_iid INTEGER, mr_url TEXT,
+  fork_point TEXT, mr_sync_outcome TEXT, mr_sync_at TEXT,
   created_at TEXT, updated_at TEXT
 );
 {EPICS_DDL}
@@ -241,6 +243,11 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 # 01M5TB6VDVV6AM8DWPGVQE8CDW, требование 1) и текст перехода родителя в
 # `killed`, по которому миграция узнаёт деления, сделанные до колонки.
 CLOSED_AS_DIVIDED = "divided"
+# Закрытие `done` по `mr-sync --confirm` (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+# требование 4): правку влил MR задачи (признак (а)) — либо она в `base`
+# иным путём (признаки (б)/(в)).
+CLOSED_AS_MERGED_UPSTREAM = "merged_upstream"
+CLOSED_AS_MERGED_UPSTREAM_OTHER = "merged_upstream_other"
 DIVIDED_DETAIL_PREFIX = "поделена на:"
 CLOSED_AS_MIGRATED_ACTION = "closed_as заполнен миграцией"
 
@@ -442,6 +449,18 @@ def migrate(conn: sqlite3.Connection) -> None:
     # Зависимость запуска (SPEC 01M5TBCY7WTN121S136XP2C6SR, требование 11):
     # тот же формат, что `merge_after`; NULL — зависимостей запуска нет.
     add_column(conn, "tasks", "start_after", "TEXT")
+    # Ссылка на MR задачи (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 16):
+    # номер и адрес MR в репозитории проекта — источник истины о MR; пишет
+    # и читает `store.set_mr_link`/`store.mr_link`. NULL — MR нет.
+    add_column(conn, "tasks", "mr_iid", "INTEGER")
+    add_column(conn, "tasks", "mr_url", "TEXT")
+    # Сверка MR людьми проекта (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7, требования
+    # 2-3): точка ответвления, записанная `approve` гейта мержа на переходе
+    # в `awaiting_human`, и последний итог `mr-sync` со временем сверки.
+    # NULL — точки нет / сверки не было.
+    add_column(conn, "tasks", "fork_point", "TEXT")
+    add_column(conn, "tasks", "mr_sync_outcome", "TEXT")
+    add_column(conn, "tasks", "mr_sync_at", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

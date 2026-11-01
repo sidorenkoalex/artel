@@ -3355,10 +3355,7 @@ def components_full_suite(root: Path, task_id: str, profiles: tuple,
         return FullSuiteRun(True, FULL_SUITE_GREEN,
                             "\n".join(run.digest for _p, run in runs),
                             runs[-1][1].log_path, "\n".join(lines), tests)
-    order = (FULL_SUITE_NOT_STARTED, FULL_SUITE_TIMEOUT, FULL_SUITE_NO_TESTS,
-             FULL_SUITE_RED)
-    p, run = min(bad, key=lambda item: order.index(item[1].outcome)
-                 if item[1].outcome in order else len(order))
+    p, run = min(bad, key=lambda item: _not_green_rank(item[1]))
     rest = [line for (q, _r), line in zip(runs, lines) if q is not p]
     detail = "\n".join([f"{run.detail} [компонент {p.component}]", *rest])
     return FullSuiteRun(False, run.outcome, run.digest, run.log_path, detail,
@@ -3418,34 +3415,28 @@ def _acceptance_suite_run(conn, root: Path, task_id: str, branch: str,
     `checks_local`."""
     from . import store
 
+    try:
+        profile = _task_profile(conn, task_id)
+    except targets.ComponentsPending:
+        # Отказ выбора компонента поднимет прежний путь ниже.
+        profile = None
+    mode = getattr(profile, "full_suite", targets.FULL_SUITE_LOCAL)
+    if mode in (targets.FULL_SUITE_CI, targets.FULL_SUITE_BOTH):
+        return _ci_job_suite_run(conn, root, task_id, branch, repo, profile,
+                                 actor=actor, fresh=fresh)
     reason = "запрошен свежий локальный прогон" if fresh else ""
     if not reason:
-        sha, _ = ci.head_sha(branch, repo=repo)
-        if not sha:
-            reason = "голова ветки не прочитана"
-        else:
-            try:
-                gate_tree = suite_tree_hash(root)
-                head_tree = suite_tree_hash(root, ref=sha, worktree=False)
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                gate_tree = head_tree = None
-            if not head_tree or not gate_tree:
-                reason = "дерево гейта или головного коммита не прочитано"
-            elif gate_tree != head_tree:
-                reason = "дерево гейта отличается от дерева головного коммита"
-            elif not gitcmd.is_ancestor(
-                    f"refs/remotes/origin/{config.MAIN_BRANCH}", sha,
-                    repo=repo):
-                reason = f"ветка не свежа относительно origin/{config.MAIN_BRANCH}"
-            else:
-                run_id, reason = ci.accepted_full_suite(sha, repo=repo)
-                if run_id:
-                    detail = f"полный набор: принят итог CI {sha}, прогон {run_id}"
-                    if isinstance(conn, sqlite3.Connection):
-                        store.journal(conn, task_id, actor,
-                                      "приёмка: полный набор принят из CI", detail)
-                    return FullSuiteRun(True, FULL_SUITE_GREEN, detail, None,
-                                        detail)
+        sha, reason = _ci_result_conditions(root, branch, repo,
+                                            config.MAIN_BRANCH)
+        if not reason:
+            run_id, reason = ci.accepted_full_suite(sha, repo=repo)
+            if run_id:
+                detail = f"полный набор: принят итог CI {sha}, прогон {run_id}"
+                if isinstance(conn, sqlite3.Connection):
+                    store.journal(conn, task_id, actor,
+                                  "приёмка: полный набор принят из CI", detail)
+                return FullSuiteRun(True, FULL_SUITE_GREEN, detail, None,
+                                    detail)
     if isinstance(conn, sqlite3.Connection):
         store.journal(conn, task_id, actor, "полный набор локально",
                       " ".join(reason.splitlines()))
@@ -3455,6 +3446,121 @@ def _acceptance_suite_run(conn, root: Path, task_id: str, branch: str,
                 else full_suite(root, task_id, command=own))
     return (full_suite(root, task_id, fresh=True) if fresh
             else full_suite(root, task_id))
+
+
+def _ci_result_conditions(root: Path, branch: str, repo: Path,
+                          base: str) -> tuple[str, str]:
+    """(sha головы, причина): три условия принятия итога CI — дерево гейта
+    равно дереву головного коммита, голова свежа относительно
+    `origin/<base>`. Пустая причина — условия выполнены."""
+    sha, _ = ci.head_sha(branch, repo=repo)
+    if not sha:
+        return "", "голова ветки не прочитана"
+    try:
+        gate_tree = suite_tree_hash(root)
+        head_tree = suite_tree_hash(root, ref=sha, worktree=False)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        gate_tree = head_tree = None
+    if not head_tree or not gate_tree:
+        return sha, "дерево гейта или головного коммита не прочитано"
+    if gate_tree != head_tree:
+        return sha, "дерево гейта отличается от дерева головного коммита"
+    if not gitcmd.is_ancestor(f"refs/remotes/origin/{base}", sha, repo=repo):
+        return sha, f"ветка не свежа относительно origin/{base}"
+    return sha, ""
+
+
+# Начало записи журнала зелёного итога задания CI (SPEC
+# 01M5XZSKK8GZTECA2KWAFHE029, требование 2) — по нему автогейт узнаёт итог
+# CI (требование 4).
+CI_JOB_RECORD = "полный набор: итог задания CI "
+CI_JOB_ACCEPTED_ACTION = "приёмка: полный набор принят из задания CI"
+CI_JOB_RED_ACTION = "приёмка: итог задания CI красный"
+CI_JOB_UNKNOWN_ACTION = "приёмка: итог задания CI неизвестен"
+# Старшинство незелёных итогов (левее — старше), общее у компонентов и
+# режима `both`.
+_NOT_GREEN_ORDER = (FULL_SUITE_NOT_STARTED, FULL_SUITE_TIMEOUT,
+                    FULL_SUITE_NO_TESTS, FULL_SUITE_RED)
+
+
+def is_ci_result(run) -> bool:
+    """Зелёный итог взят из CI: итог CI артели или итог задания CI."""
+    return "принят итог CI" in run.detail or run.detail.startswith(
+        CI_JOB_RECORD)
+
+
+def _not_green_rank(run) -> int:
+    return (_NOT_GREEN_ORDER.index(run.outcome)
+            if run.outcome in _NOT_GREEN_ORDER else len(_NOT_GREEN_ORDER))
+
+
+def _ci_job_suite_run(conn, root: Path, task_id: str, branch: str,
+                      repo: Path, profile, *, actor: str,
+                      fresh: bool) -> FullSuiteRun:
+    """Итог полного набора компонента `full_suite: ci | both` (SPEC
+    01M5XZSKK8GZTECA2KWAFHE029, требования 2-3). Итог задания CI читается
+    через `forge` при каждом вызове, и при `fresh` тоже; локального
+    прогона у `ci` нет, у `both` он идёт всегда."""
+    run = _ci_job_run(conn, root, task_id, branch, repo, profile, actor=actor)
+    if profile.full_suite != targets.FULL_SUITE_BOTH:
+        return run
+    from . import store
+    if isinstance(conn, sqlite3.Connection):
+        store.journal(conn, task_id, actor, "полный набор локально",
+                      f"full_suite: {targets.FULL_SUITE_BOTH} — локальный "
+                      f"прогон в паре с итогом задания CI {profile.ci_job}")
+    own = _reported(profile) or _own(profile)
+    local = (full_suite(root, task_id, command=own, fresh=True) if fresh
+             else full_suite(root, task_id, command=own))
+    local_line = f"локальный прогон компонента: {local.detail}"
+    if run.green and local.green:
+        return FullSuiteRun(True, FULL_SUITE_GREEN, local.digest,
+                            local.log_path, f"{run.detail}\n{local_line}",
+                            local.tests)
+    # Равное старшинство — решает итог CI: «неизвестно» CI не уступает
+    # «не начат» локального (требование 3).
+    if _not_green_rank(local) < _not_green_rank(run) or run.green:
+        return local._replace(detail=f"{local_line}\n{run.detail}")
+    return run._replace(detail=f"{run.detail}\n{local_line}",
+                        tests=local.tests)
+
+
+def _ci_job_run(conn, root: Path, task_id: str, branch: str, repo: Path,
+                profile, *, actor: str) -> FullSuiteRun:
+    """Итог задания CI `profile.ci_job` у головы ветки — три условия
+    принятия, затем `ci.job_full_suite`; невыполненное условие и
+    недоказанный итог — «неизвестно» с причиной (инвариант 41)."""
+    from . import store
+    job = profile.ci_job
+    try:
+        base = targets.target(profile.project).get("base") or config.MAIN_BRANCH
+    except targets.TargetsError as exc:
+        sha, reason = "", f"запись проекта {profile.project} не прочитана: {exc}"
+    else:
+        sha, reason = _ci_result_conditions(root, branch, repo, base)
+    result = None
+    if not reason:
+        result = ci.job_full_suite(profile.project, sha, job)
+        reason = result.reason if result.state == ci.JOB_UNKNOWN else ""
+    if reason:
+        reason = " ".join(f"итог задания CI {job} не принят: {reason}".split())
+        detail = f"{UNKNOWN_PREFIX}{reason}"
+        if isinstance(conn, sqlite3.Connection):
+            store.journal(conn, task_id, actor, CI_JOB_UNKNOWN_ACTION, detail)
+        return FullSuiteRun(False, FULL_SUITE_NOT_STARTED, reason, None, detail)
+    record = (f"{CI_JOB_RECORD}{job}, задание {result.job_id}, sha {sha}, "
+              f"тестов {result.count}")
+    if result.state == ci.JOB_RED:
+        shown = ", ".join(result.bad[:10]) + (
+            f" и ещё {len(result.bad) - 10}" if len(result.bad) > 10 else "")
+        digest = f"упало тестов {len(result.bad)} из {result.count}: {shown}"
+        detail = f"{record} — красный; {digest}"
+        if isinstance(conn, sqlite3.Connection):
+            store.journal(conn, task_id, actor, CI_JOB_RED_ACTION, detail)
+        return FullSuiteRun(False, FULL_SUITE_RED, digest, None, detail)
+    if isinstance(conn, sqlite3.Connection):
+        store.journal(conn, task_id, actor, CI_JOB_ACCEPTED_ACTION, record)
+    return FullSuiteRun(True, FULL_SUITE_GREEN, record, None, record)
 
 
 def _task_own_profile(conn, task_id: str):
