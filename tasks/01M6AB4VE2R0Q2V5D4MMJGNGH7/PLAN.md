@@ -42,7 +42,10 @@ schema_version: 5
 Инциденты (требование 5): на `approve` гейта мержа `target-human` —
 `_mr_incident_stops` до публикации головы и снятия черновика (MR из БД влит
 или закрыт → эскалация; MR открыт и голова ветки на сервере не своя →
-эскалация без отправки). В `mr-sync` — чужой коммит при открытом MR →
+эскалация без отправки; статус MR не прочитан → отказ `approve`, задача на
+гейте — ANSWER-2 п. 2). Статус MR читается один раз за вызов `approve`
+(ANSWER-2 п. 1): тело гейта повторяется после ожидания CI, сверенная задача
+помечается в `ContextVar` цикла `_mr_incident_checked`. В `mr-sync` — чужой коммит при открытом MR →
 `awaiting_human -> escalated` (`escalated_from=awaiting_human`, возврат
 механикой Б2.1а). «Своя» голова — последняя из записей «ветка отправлена» и
 «голова ветки на сервере принята»; принятая пишется в
@@ -66,7 +69,8 @@ done`, `closed_as` (`merged_upstream` по (а), `merged_upstream_other` по
 `tasks.mr_sync_at` по часам пульта (`store.now`), так что «не чаще раза в N
 минут» держится и через перезапуск надзора. Смена итога относительно прошлой
 сверки — запись «mr-sync: итог сменился», значимая для `watch` (класс
-`gates`, уведомление); первая сверка сменой не считается.
+`gates`, уведомление); первая сверка задачи — тоже смена («(первая сверка) →
+итог», ANSWER-2 п. 3).
 
 Бюджет SPEC ($50) не пересматривается.
 
@@ -115,9 +119,12 @@ done`, `closed_as` (`merged_upstream` по (а), `merged_upstream_other` по
   узел `artifact_branch.origin_sync_refusal`, что у `_docs_ref_unsynced`.
 - Гейт мержа `target-human` строже: новые эскалации до публикации головы;
   `operator`-путь и артель не затронуты (ветвь `people_entry`).
-- `approve` гейта мержа с `mr_iid` теперь читает `mr_status` — расходится с
-  существующим тестом Б2.1б, см. «Эскалация», вопрос 1. Других красных в
-  прогнанных модулях нет.
+- `approve` гейта мержа с `mr_iid` теперь читает `mr_status` (один раз за
+  вызов) и отказывает при его сбое. `test_ac15_…` Б2.1б правлен по мандату
+  ANSWER-2 п. 1 (множество + `mr_status`, предел одного чтения, строка
+  документации). Отказ при сбое краснил ещё четыре теста того же файла —
+  их подделка хостинга отвечала на `mr_status` отказом; подделке добавлен
+  метод `mr_status` (открытый невлитый MR) — см. «Эскалация», вопрос 1.
 - Схема БД: три новых столбца `add_column` (идемпотентно), прежние данные не
   меняются. `delivery_policy` отдаёт ещё ключ `mr_sync_interval_min`.
 - `watch`: новое значимое действие только «mr-sync: итог сменился».
@@ -131,11 +138,15 @@ done`, `closed_as` (`merged_upstream` по (а), `merged_upstream_other` по
 (`mr_sync` 47, `mr_fields`, `awaiting_hint`) — зелёные; `tests/test_invariants.py`
 с наложенным приложением — 88 passed; модули доставки, доски, `watch`,
 надзора эпика, схемы, RETRO/закрытия, `answer`/эскалаций, `zone_lock`,
-`merge_after`, карты — зелёные, кроме
-`tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac15_gate_with_link_talks_to_mr_only_by_undraft_and_assign`
-(вопрос 1). Мутации своих тестов и приложения проверены: приём головы при любой
-эскалации, интервал в секундах, показ итога вне `awaiting_human`, надзор с
-`_close`, пустой отбор `mr-sync` — каждый краснит свой тест.
+`merge_after`, карты — зелёные. После ANSWER-2: долгоживущие файлы задачи,
+`test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py` (36), `test_mr_sync_units.py`
+— 97 passed; `test_invariants.py`, `awaiting_views`, `awaiting_commands`,
+`test_watch` — 114 passed; `test_invariants.py` с наложенным приложением
+(`git apply --check` проходит) — 88 passed. Мутации своих тестов и приложения
+проверены: приём головы при любой эскалации, интервал в секундах, показ итога
+вне `awaiting_human`, надзор с `_close`, пустой отбор `mr-sync`, сбой
+`mr_status` пропускает гейт, первая сверка не смена, повторное чтение
+`mr_status` в цикле гейта — каждая краснит свой тест.
 
 ## Риски
 
@@ -295,31 +306,41 @@ index 2b6f9c51a..1728829c5 100644
 
 **Вопросы** (по блокирующести):
 
-1. **Конфликт SPEC и существующего теста (блокирует сдачу).** Требование 5 /
-   AC-13 (`tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py::test_ac13_mr_merged_before_awaiting_escalates_on_approve`)
-   требуют на `approve` гейта мержа задачи с `mr_iid` прочитать статус MR
-   (`forge.mr_status`); существующий
-   `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac15_gate_with_link_talks_to_mr_only_by_undraft_and_assign`
-   утверждает `talked <= {"undraft_mr", "assign_mr"}` и краснеет на этом
-   вызове (вывод: «Extra items in the left set: 'mr_status'»). Иного способа
-   узнать статус MR нет (новые вызовы API запрещены SPEC). Варианты:
-   (а) мандат на правку утверждения: `talked <= {"undraft_mr", "assign_mr",
-   "mr_status"}` (`mr_status` — чтение, не правка MR; смысл теста «гейт MR не
-   правит и не переоткрывает» сохраняется), строка мандата:
-   `Ослабление тестов разрешено: tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac15_gate_with_link_talks_to_mr_only_by_undraft_and_assign`;
-   (б) снять AC-13 из SPEC. **Дефолт: (а)** — код уже реализован под него.
-2. Отказ `forge.mr_status` на `approve` гейта мержа (задача с `mr_iid`):
-   сейчас — запись журнала «статус MR не прочитан» и гейт идёт дальше
-   (снятие черновика само спросит хостинг). Варианты: (а) так; (б) отказ
-   `approve`, задача на гейте. **Дефолт: (а)** — при (б) тот же
-   `test_ac15` (подделка `mr_status` отвечает отказом) краснел бы и по
-   состоянию.
-3. Первая сверка задачи (прошлого итога нет) уведомления `watch` не даёт —
-   «смена» только относительно прошлой сверки. Варианты: (а) так; (б)
-   уведомлять и о первом итоге. **Дефолт: (а).**
+1. **Правка подделки хостинга вне мандата (блокирует сдачу).** Решение
+   ANSWER-2 п. 2 (б) краснит ещё четыре существующих теста того же файла —
+   их общая подделка `FakeForge` на `mr_status` отвечала отказом
+   («подделка хостинга: mr_status не отвечает», `__getattr__`), а теперь
+   отказ останавливает гейт:
+   `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac9_existing_link_undrafts_and_assigns`,
+   `::test_ac11_undraft_or_assign_refusal_no_second_mr[undraft_mr]`,
+   `::test_ac11_undraft_or_assign_refusal_no_second_mr[assign_mr]`,
+   `::test_ac13_draft_on_verifying_undraft_on_gate` (вывод: «approve
+   отклонён: статус MR не прочитан — MR !…: подделка хостинга: mr_status не
+   отвечает»). В рабочей копии классу `FakeForge` добавлен метод
+   `mr_status` по образцу `undraft_mr`/`assign_mr`: запись вызова, отказ при
+   `fail["mr_status"]`, иначе открытый невлитый MR с `target_branch` =
+   `main`. Утверждения тестов не менялись, ни один метод не удалён; с ним
+   файл зелёный (36 passed). SPEC («Существующие тесты») велит иную правку
+   существующих тестов эскалировать. Варианты: (а) принять метод подделки
+   как есть, строка мандата:
+   `Ослабление тестов разрешено: tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac9_existing_link_undrafts_and_assigns, tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac11_undraft_or_assign_refusal_no_second_mr, tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac13_draft_on_verifying_undraft_on_gate`;
+   (б) вернуть п. 2 к варианту (а) вопроса 2 прошлой эскалации (сбой —
+   запись журнала, гейт идёт дальше) и убрать метод подделки.
+   **Дефолт: (а)** — код и тесты уже под него; подделка лишь отвечает так,
+   как отвечает настоящий хостинг.
 
-**Контекст.** Реализация целиком в рабочей копии (шаги 1–6), приложение к
-`tests/test_invariants.py` — выше; прогоны — в «Влиянии на систему».
+**Контекст.** ANSWER-2 закрыт в коде. П. 1 — `test_ac15_…` правлен по
+мандату (множество `{"undraft_mr", "assign_mr", "mr_status"}`, подделка
+`mr_status` в тесте отвечает открытым невлитым MR,
+`len(stand.fake.named("mr_status")) <= 1`, `mr_status` убран из «ловимых
+мутаций» строки документации; `MR_CALLS` и проверка состояния не тронуты);
+гейт читает статус MR один раз за `approve` (`_mr_incident_checked`). П. 2 —
+сбой `mr_status` отказывает `approve`, задача на `merge_gate`
+(`_mr_incident_stops`), тест
+`tests/test_mr_sync_units.py::test_gate_refuses_when_mr_status_unread`. П. 3 —
+первая сверка уведомляет `watch` (`mr_sync.sync_task`, `FIRST_SYNC`), тест
+`tests/test_mr_sync_units.py::FirstSyncNotifiesTest::test_first_sync_is_a_change_repeat_is_not`.
+Карта регенерирована. Прогоны — во «Влиянии на систему».
 
-**Блокирует.** Выход из `in_dev`: гейт неослабления и полный набор красны на
-`test_ac15` до мандата по вопросу 1.
+**Блокирует.** Выход из `in_dev` со `status: ready`: правка четырёх тестов
+вне мандата. При ответе (а) PLAN сдаётся без изменения кода.

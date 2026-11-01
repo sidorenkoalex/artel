@@ -1,17 +1,18 @@
-# NOTE developer (визит 1)
+# NOTE developer (визит 2, после ANSWER-2)
 
 ## Выяснено
-- Реализация целиком в worktree (незакоммичено — коммитит пульт): orchestrator/mr_sync.py (сверка evaluate/sync_task, --confirm/_close, supervised, record_fork_point, accept_server_head, foreign_commit); проводка: artel.py (mr-sync), fsm_merge_gate (_mr_incident_stops до публикации головы, record_fork_point в _deliver_mr), fsm._approve_escalated (accept_server_head), auto._poll_mr_sync, watch (OUTCOME_CHANGED_ACTION значим), catalog/board (mr_sync_shown), retro/snapshot/cleanup (note → строка «Закрытие:» RETRO), schema (fork_point, mr_sync_outcome, mr_sync_at; CLOSED_AS_MERGED_UPSTREAM(_OTHER)), targets (mr_sync_interval_min), forge/gitlab_adapter (5 полей), подсказка без «(шаг Б2.2)» + HINT в тесте Б2.1а.
-- Зелёные: все 3 долгоживущих файла задачи (mr_sync 47), test_invariants с приложением (88), модули доставки/доски/watch/надзора/схемы/RETRO/answer/zone_lock/merge_after; свой tests/test_mr_sync_units.py (4, мутации проверены).
-- КОНФЛИКТ → PLAN status: escalate: tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py::test_ac15_gate_with_link_talks_to_mr_only_by_undraft_and_assign (talked <= {undraft_mr, assign_mr}) против AC-13 (mr_status на approve). Предложен мандат на добавку mr_status в множество.
-- Планка AC-20 читает PLAN из закоммиченной ссылки документов: до автокоммита пульта plank-run красен «нет приложения»; логика планки на дисковом PLAN проверена вручную — дифф применяется, слова есть.
+- ANSWER-2 закрыт в коде (незакоммичено — коммитит пульт):
+  - п. 1: test_ac15 Б2.1б правлен по мандату (+mr_status, предел 1 чтения, докстринг). Тело гейта повторяется после ожидания CI → mr_status читался дважды; одно чтение за approve — ContextVar `_mr_incident_checked` в `_cmd_approve_merge_gate_cycle` (fsm_merge_gate.py).
+  - п. 2 (б): сбой mr_status → `_people_refusal(MR_REFUSED_ACTION, "статус MR не прочитан — …")`, задача на merge_gate. Тест tests/test_mr_sync_units.py::test_gate_refuses_when_mr_status_unread (фикстура `stand` импортом из test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery).
+  - п. 3 (б): первая сверка — тоже запись «mr-sync: итог сменился» («(первая сверка) → итог», mr_sync.FIRST_SYNC). Тест FirstSyncNotifiesTest.
+- П. 2 (б) краснил ещё 4 теста delivery-файла (ac9, ac11×2, ac13): FakeForge.__getattr__ отвечал на mr_status отказом. Добавлен метод FakeForge.mr_status (открытый MR; fail["mr_status"] — отказ) — ВНЕ мандата → PLAN снова status: escalate (1 вопрос, дефолт — принять).
+- Зелёные: 3 долгоживущих файла + delivery (36) + units — 97; test_invariants/awaiting_views/awaiting_commands/test_watch — 114; invariants с приложением — 88. Мутации трёх новых сторожей проверены. Карта регенерирована.
 
 ## Не сработало
-- Bash отклоняет `ls`, `cd`, `$x`, `for`, `{…'…}` — правки через Edit, мутации python-heredoc с бэкапом файла.
-- pytest -n (xdist) в шаге — узлы падают; гонять без -n.
+- Bash-сторож отклоняет heredoc с `$`/f-string `{…}` внутри строк («simple_expansion») — длинный текст PLAN писать через Edit.
 
 ## Где остановился
-PLAN.md сдан status: escalate (3 вопроса). После ANSWER: если мандат по вопросу 1 — правка утверждения test_ac15 по мандату, PLAN → ready.
+PLAN status: escalate (вопрос о методе FakeForge.mr_status). При ответе (а) — только status: ready, код не менять. При (б) — вернуть в `_mr_incident_stops` журнал+return False, убрать FakeForge.mr_status и тест unread.
 
 ## Чего не хватило
-Где в существующих тестах Б2.1б зафиксировано «гейт не читает MR» — нашлось только прогоном (test_mr_delivery.py:1308).
+Что тело гейта target-human исполняется дважды за approve (заход до ожидания CI и после) — видно только по журналу подделки.
