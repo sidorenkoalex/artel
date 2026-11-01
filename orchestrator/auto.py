@@ -1424,7 +1424,22 @@ def _supervise(conn, epic_id: str, observation_id: str, launch_child) -> None:
                 return
             procs.append(proc)
             print(f"[{epic_id}] запущен дочерний auto {task_id}: pid {proc.pid}")
+        _poll_mr_sync(conn, view)
         _epic_sleep()
+
+
+def _poll_mr_sync(conn, view: _EpicView) -> None:
+    """Опрос `mr-sync` задач эпика, ждущих людей проекта (SPEC
+    01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 6; ANSWER-1 п. 5): только
+    сверка без `--confirm` и не чаще `policy.mr_sync_interval_min` минут —
+    закрытие остаётся командой Оператора (требование 8 надзора). Отложенный
+    импорт: `mr_sync` тянет гейт мержа."""
+    awaiting = [task_id for task_id, status in view.status.items()
+                if status == _AWAITING]
+    if not awaiting:
+        return
+    from . import mr_sync
+    mr_sync.supervised(conn, awaiting)
 
 
 def drop_dead_supervisor_lock(conn, epic, row, by: str) -> bool:

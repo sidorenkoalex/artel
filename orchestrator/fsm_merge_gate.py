@@ -40,6 +40,13 @@ from .advance_gates.test_integrity import merge_gate_escalates
 _fresh_suite_for_cycle: ContextVar[bool] = ContextVar(
     "fresh_suite_for_merge_gate_cycle", default=False)
 
+# Задачи, чей MR уже сверен на инцидент в этом вызове `approve` (ANSWER-2
+# п. 1 SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7): тело гейта повторяется после
+# ожидания CI, а статус MR читается один раз за `approve`. `None` — вне
+# цикла гейта, сверка каждый раз.
+_mr_incident_checked: ContextVar[set | None] = ContextVar(
+    "mr_incident_checked_for_merge_gate_cycle", default=None)
+
 # Предел ожидания CI новой головы main после push мержа (SPEC
 # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-4): полный прогон CI main идёт 3–4
 # минуты, очередь раннеров добавляет столько же. Это не
@@ -1601,6 +1608,8 @@ def _approve_for_project_people(conn, task_id: str, state: str, t,
         return ("stopped",)
     if _appendices_refuse(conn, task_id, ctx):
         return ("stopped",)
+    if _mr_incident_stops(conn, task_id, state, ctx):
+        return ("stopped",)
     head = _confirmed_code_head(conn, task_id)
     if _local_head_unconfirmed(conn, task_id, branch, head, ctx):
         return ("stopped",)
@@ -1643,6 +1652,53 @@ def _appendices_refuse(conn, task_id: str,
     _people_refusal(conn, task_id, PEOPLE_REFUSED_ACTION,
                     f"{APPENDIX_REFUSAL_DETAIL}"
                     + (f" ({', '.join(paths)})" if paths else ""))
+    return True
+
+
+MR_STATUS_UNREAD_DETAIL = "статус MR не прочитан"
+
+
+def _mr_incident_stops(conn, task_id: str, state: str,
+                       ctx: repo_context.RepoContext) -> bool:
+    """Инциденты MR, заведённого раньше (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    требование 5), — до публикации головы и до снятия черновика: MR уже
+    влит или закрыт — эскалация; MR открыт, а голова ветки на сервере не
+    своя (`mr_sync.foreign_commit`) — эскалация без перезаписи ветки.
+    Ссылки на MR в БД нет — проверять нечего. Статус MR не прочитан —
+    отказ `approve`, задача на гейте (ANSWER-2 п. 2): проверка инцидента
+    при сбое хостинга не пропускается. `True` — гейт остановлен."""
+    from . import mr_sync
+    row = store.get_task(conn, task_id)
+    iid, _url = store.mr_link(row)
+    if iid is None:
+        return False
+    checked = _mr_incident_checked.get()
+    if checked is not None and task_id in checked:
+        return False
+    mr = forge.mr_status(ctx.target, iid)
+    if mr.reason:
+        _people_refusal(conn, task_id, MR_REFUSED_ACTION,
+                        f"{MR_STATUS_UNREAD_DETAIL} — MR !{iid}: {mr.reason}; "
+                        f"черновик не снят, исполнитель не назначен")
+        return True
+    detail = ""
+    if mr.state in ("merged", "closed"):
+        detail = (f"{mr_sync.MR_DONE_EARLY_DETAIL}: MR !{iid} {mr.state}; "
+                  f"черновик не снят, исполнитель не назначен")
+    elif mr.state == "opened":
+        try:
+            detail = mr_sync.foreign_commit(conn, task_id, row["branch"],
+                                            ctx.path)
+        except mr_sync.GitFailure as exc:
+            _people_refusal(conn, task_id, MR_REFUSED_ACTION, str(exc))
+            return True
+    if not detail:
+        if checked is not None:
+            checked.add(task_id)
+        return False
+    store.update_task(conn, task_id, escalated_from=state)
+    store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
+                    detail=detail)
     return True
 
 
@@ -1757,7 +1813,18 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
     """MR через `forge` (требование 4): ссылки в БД нет — открыть MR ветки
     в `base`; ссылка есть — снять черновик и назначить исполнителя у этого
     MR, описание не трогается. Успех — `awaiting_human`; 409 открытия без
-    ссылки — эскалация; иной отказ — задача на гейте."""
+    ссылки — эскалация; иной отказ — задача на гейте.
+
+    Точка ответвления считается до MR: без неё сверка `mr-sync` навсегда
+    дала бы «неизвестно», и задачу из `awaiting_human` вывел бы только
+    `kill` — поэтому несчитанная точка — отказ `approve`, MR не тронут."""
+    from . import mr_sync
+    fork, base_sha, why = mr_sync.fork_point(head, ctx)
+    if not fork:
+        _people_refusal(conn, task_id, mr_sync.FORK_POINT_ACTION,
+                        f"точка ответвления не вычислена: {why} — MR не "
+                        f"тронут")
+        return ("stopped",)
     row = store.get_task(conn, task_id)
     iid, url = store.mr_link(row)
     if iid is None:
@@ -1776,6 +1843,7 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
         iid, url = result.iid, result.url
     elif not _ready_existing_mr(conn, task_id, ctx.target, iid):
         return ("stopped",)
+    mr_sync.record_fork_point(conn, task_id, head, ctx, fork, base_sha)
     store.set_state(conn, task_id, fsm.AWAITING_HUMAN, "operator",
                     expected_state=state,
                     detail=f"MR !{iid} {url or ''} — вливают люди проекта")
@@ -1912,6 +1980,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
     if refusal is not None:
         merge_queue.wait_for_window(conn, task_id, sid)
     token = _fresh_suite_for_cycle.set(fresh_suite)
+    checked_token = _mr_incident_checked.set(set())
     try:
         while True:
             outcome = _cmd_approve_merge_gate(
@@ -1934,6 +2003,7 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
             confirmed_ci_note = _wait_for_branch_ci_green(
                 conn, task_id, branch, start, deadline)
     finally:
+        _mr_incident_checked.reset(checked_token)
         _fresh_suite_for_cycle.reset(token)
         merge_lock.release(conn, sid)
 

@@ -21,7 +21,7 @@ import pytest
 from orchestrator import amend, answer, config, fsm, store
 
 STATE = "awaiting_human"
-HINT = "состояние ждёт людей проекта — mr-sync (шаг Б2.2)"
+HINT = "состояние ждёт людей проекта — artel.py mr-sync <id> [--confirm]"
 WORDS = ("ветка", "ревью", "проект", "люди", "слияние", "основание", "правка")
 
 

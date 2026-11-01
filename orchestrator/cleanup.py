@@ -734,16 +734,20 @@ def _closing_outcome(conn, task_id: str) -> str:
 
 
 def _commit_closing(conn, task_id: str, merge_sha: str = "",
-                    applied_appendices=None) -> None:
+                    applied_appendices=None, note: str = "") -> None:
     """Коммит закрытия (`snapshot.commit_closing`) — один узел на оба пути
     закрытия, `kill` и мерж; канарейка идёт тем же потоком (ADR-0021
     п.13). `merge_sha`/`applied_appendices` передаёт путь мержа — RETRO
     закрытия несёт sha мержа и перечень приложений PLAN (SPEC
     01M4M67SGNEYMN9F1C7XVX24XE, требование 3). Отложенный импорт:
     `snapshot` -> `retro` -> `cleanup` — прямой импорт на уровне модуля
-    замкнул бы этот же файл в цикл."""
+    замкнул бы этот же файл в цикл. `note` — строка закрытия без мержа
+    пультом (`mr-sync --confirm`, SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    требование 4): чем подтверждено нахождение правки в `base`."""
     from . import snapshot
-    note = snapshot.commit_closing(conn, task_id, _closing_outcome(conn, task_id),
-                                   merge_sha=merge_sha,
-                                   applied_appendices=applied_appendices)
-    print(f"  {note}")
+    outcome = snapshot.commit_closing(conn, task_id,
+                                      _closing_outcome(conn, task_id),
+                                      merge_sha=merge_sha,
+                                      applied_appendices=applied_appendices,
+                                      note=note)
+    print(f"  {outcome}")
