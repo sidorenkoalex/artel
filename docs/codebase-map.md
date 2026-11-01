@@ -1,5 +1,5 @@
 ---
-built_at_sha: b8c87eebeafc12c133d5cb0ba627a1f1875b27c3
+built_at_sha: e0b245eeadd67b236ffb1a929994da60871e7aa5
 ---
 
 # Codebase-map пульта
@@ -1635,6 +1635,7 @@ built_at_sha: b8c87eebeafc12c133d5cb0ba627a1f1875b27c3
 - `evaluate`
 - `expected_server_head`
 - `foreign_commit`
+- `fork_point`
 - `interval_min`
 - `record_fork_point`
 - `supervised`
@@ -11356,6 +11357,7 @@ built_at_sha: b8c87eebeafc12c133d5cb0ba627a1f1875b27c3
 
 **Публичные функции:**
 - `test_gate_refuses_when_mr_status_unread`
+- `test_gate_refuses_without_fork_point`
 
 **Импортирует:** `orchestrator/board.py`, `orchestrator/mr_sync.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py`
 

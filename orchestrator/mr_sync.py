@@ -21,7 +21,6 @@ ANSWER-1 п. 3); (б) коммиты задачи в `base` по содержи�
 закрытие остаётся командой Оператора (инвариант 18).
 """
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -96,40 +95,63 @@ class Sync:
 # ------------------------------------------------------------------ git
 
 
-def _git(repo, *args, input: str | None = None):
-    """git в клоне проекта, вывод строкой; `None` — git не запустился."""
+GIT_TIMEOUT_SEC = 60
+
+
+def _git(repo, *args, input: bytes | None = None):
+    """git в клоне проекта, вывод байтами: дифф проекта людей не обязан
+    быть в UTF-8. `None` — git не запустился; срок истёк — `GitFailure`."""
     try:
-        return gitcmd.read(repo, *args, text=True, input=input)
+        return gitcmd.read(repo, *args, input=input, timeout=GIT_TIMEOUT_SEC)
     except OSError:
         return None
+    except gitcmd.Timeout as exc:
+        raise GitFailure(str(exc)) from None
 
 
-def _out(repo, *args, input: str | None = None) -> str | None:
-    """stdout git; `None` — git не ответил успехом."""
+def _out_bytes(repo, *args, input: bytes | None = None) -> bytes | None:
+    """stdout git байтами; `None` — git не ответил успехом."""
     res = _git(repo, *args, input=input)
     if res is None or res.returncode != 0:
         return None
     return res.stdout
 
 
-def _apply_passes(repo, base_sha: str, patch: str, reverse: bool) -> bool:
+def _out(repo, *args, input: bytes | None = None) -> str | None:
+    """stdout git строкой; байты вне UTF-8 сохраняются `surrogateescape` —
+    путь файла возвращается в аргументы git без потерь."""
+    out = _out_bytes(repo, *args, input=input)
+    return None if out is None else out.decode("utf-8", "surrogateescape")
+
+
+def _shown(text: str) -> str:
+    """Строка для вывода и журнала: байты вне UTF-8 — знаком замены."""
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def _apply_passes(repo, base_sha: str, patch: bytes, reverse: bool) -> bool:
     """`git apply --check` диффа `patch` на дерево `base_sha` — временным
-    индексом, без рабочего дерева клона."""
+    индексом, без рабочего дерева клона; патч — файлом, байтами как есть."""
     with tempfile.TemporaryDirectory(prefix="artel-mr-sync-") as tmp:
-        env = gitcmd.pult_env({**os.environ,
-                               "GIT_INDEX_FILE": os.path.join(tmp, "index")})
-        read = subprocess.run(["git", "-C", str(repo), "read-tree", base_sha],
-                              capture_output=True, text=True, env=env)
-        if read.returncode != 0:
-            raise GitFailure(f"read-tree {base_sha[:12]}: "
-                              f"{read.stderr.strip()[:200]}")
-        argv = ["git", "-C", str(repo), "apply", "--cached", "--check",
-                "--binary", "--whitespace=nowarn"]
-        if reverse:
-            argv.append("-R")
-        res = subprocess.run([*argv, "-"], input=patch, capture_output=True,
-                             text=True, env=env)
-        return res.returncode == 0
+        env = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, "index")}
+        patch_file = os.path.join(tmp, "task.patch")
+        with open(patch_file, "wb") as fh:
+            fh.write(patch)
+        args = ["apply", "--cached", "--check", "--binary",
+                "--whitespace=nowarn", *(["-R"] if reverse else []),
+                patch_file]
+        try:
+            read = gitcmd.read_env(repo, env, "read-tree", base_sha,
+                                   timeout=GIT_TIMEOUT_SEC)
+            if read.returncode != 0:
+                raise GitFailure(f"read-tree {base_sha[:12]}: "
+                                 f"{read.stderr.strip()[:200]}")
+            return gitcmd.read_env(repo, env, *args,
+                                   timeout=GIT_TIMEOUT_SEC).returncode == 0
+        except (OSError, UnicodeDecodeError) as exc:
+            raise GitFailure(f"git apply --check: {exc}") from None
+        except gitcmd.Timeout as exc:
+            raise GitFailure(str(exc)) from None
 
 
 class GitFailure(Exception):
@@ -142,9 +164,9 @@ def _need(value, what: str):
     return value
 
 
-def _patch_ids(repo, text: str) -> dict:
+def _patch_ids(repo, patch: bytes) -> dict:
     """{sha коммита: patch-id} вывода `git log -p`/`git show`."""
-    out = _need(_out(repo, "patch-id", "--stable", input=text), "patch-id")
+    out = _need(_out(repo, "patch-id", "--stable", input=patch), "patch-id")
     ids = {}
     for line in out.splitlines():
         parts = line.split()
@@ -166,11 +188,11 @@ def _commits_sign(repo, base_sha: str, fork: str, head: str) -> tuple:
     found = [sha for sha in commits if marks.get(sha) == "-"]
     closing = ""
     if commits and commits[0] in found:
-        last = _patch_ids(repo, _need(_out(repo, "show", "--no-color",
-                                           commits[0]), "show"))
+        last = _patch_ids(repo, _need(_out_bytes(repo, "show", "--no-color",
+                                                 commits[0]), "show"))
         wanted = last.get(commits[0])
-        log = _need(_out(repo, "log", "-p", "--no-color", "--no-merges",
-                         f"{fork}..{base_sha}"), "log базы")
+        log = _need(_out_bytes(repo, "log", "-p", "--no-color", "--no-merges",
+                               f"{fork}..{base_sha}"), "log базы")
         base_ids = _patch_ids(repo, log)
         order = _need(_out(repo, "rev-list", "--no-merges",
                            f"{fork}..{base_sha}"), "rev-list базы").split()
@@ -181,21 +203,22 @@ def _commits_sign(repo, base_sha: str, fork: str, head: str) -> tuple:
 
 def _diff_sign(repo, base_sha: str, fork: str, head: str) -> tuple:
     """Признак (в): (проходит ли, строки доказательства по файлам)."""
-    files = _need(_out(repo, "diff", "--name-only", fork, head),
-                  "diff --name-only").split("\n")
+    files = _need(_out(repo, "diff", "-z", "--name-only", fork, head),
+                  "diff --name-only").split("\0")
     files = [f for f in files if f]
     lines = []
     for rel in files:
-        patch = _need(_out(repo, "diff", "--binary", fork, head, "--", rel),
-                      f"diff {rel}")
+        patch = _need(_out_bytes(repo, "diff", "--binary", fork, head, "--",
+                                 rel), f"diff {_shown(rel)}")
         back = _apply_passes(repo, base_sha, patch, reverse=True)
         ahead = _apply_passes(repo, base_sha, patch, reverse=False)
-        lines.append(f"  (в) {rel}: обратное наложение — "
+        lines.append(f"  (в) {_shown(rel)}: обратное наложение — "
                      f"{'проходит' if back else 'не проходит'}, прямое — "
                      f"{'проходит' if ahead else 'не проходит'}")
     if not files:
         return False, ["  (в) дифф задачи пуст"]
-    whole = _need(_out(repo, "diff", "--binary", fork, head), "diff задачи")
+    whole = _need(_out_bytes(repo, "diff", "--binary", fork, head),
+                  "diff задачи")
     passes = (_apply_passes(repo, base_sha, whole, reverse=True)
               and not _apply_passes(repo, base_sha, whole, reverse=False))
     return passes, lines
@@ -250,21 +273,27 @@ def accept_server_head(conn, task_id: str) -> None:
                   f"{remote} {row['branch']}")
 
 
-def record_fork_point(conn, task_id: str, head: str, ctx) -> str:
+def fork_point(head: str, ctx) -> tuple:
     """Точка ответвления `git merge-base <подтверждённая голова>
-    origin/<base>` на `approve` гейта мержа (требование 2) — в БД и журнал;
-    "" — не вычислена (тоже в журнал)."""
+    origin/<base>` (требование 2): (точка, sha origin/<base>, причина);
+    точка "" — не вычислена, причина названа."""
     base_sha, why = gitcmd.fetch_ref_sha("origin", ctx.base, repo=ctx.path)
-    fork = (_out(ctx.path, "merge-base", head, base_sha) or "").strip() \
-        if base_sha else ""
-    if not fork:
-        store.journal(conn, task_id, "orchestrator", FORK_POINT_ACTION,
-                      f"не вычислена: {why or 'merge-base не ответил'}")
-        return ""
+    if not base_sha:
+        return "", "", f"git fetch origin {ctx.base} не удался: {why}"
+    try:
+        fork = (_out(ctx.path, "merge-base", head, base_sha) or "").strip()
+    except GitFailure as exc:
+        return "", base_sha, str(exc)
+    return fork, base_sha, "" if fork else "merge-base не ответил"
+
+
+def record_fork_point(conn, task_id: str, head: str, ctx,
+                      fork: str, base_sha: str) -> None:
+    """Точка ответвления, вычисленная `fork_point` на `approve` гейта мержа,
+    — в БД и журнал при переходе в `awaiting_human`."""
     store.update_task(conn, task_id, fork_point=fork)
     store.journal(conn, task_id, "orchestrator", FORK_POINT_ACTION,
                   f"{fork} (merge-base {head} и {ctx.base} {base_sha})")
-    return fork
 
 
 # --------------------------------------------------------------- сверка

@@ -3,10 +3,14 @@
 Сквозные сценарии (таблица итогов, `--confirm`, инциденты, опрос надзора)
 держит `tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py`. Здесь — узлы в
 изоляции: принятая голова ветки только при возврате из эскалации «чужой
-коммит» (ANSWER-1 п. 6, отрицательная половина), срок опроса надзора и
-показ итога в модели доски только у задачи в `awaiting_human`.
+коммит» (ANSWER-1 п. 6, отрицательная половина), срок опроса надзора,
+показ итога в модели доски только у задачи в `awaiting_human`, признаки
+(б)/(в) на правке не в UTF-8 и отказ `approve` без точки ответвления.
 """
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -34,19 +38,6 @@ class AcceptServerHeadTest(TaskSeededTmpRootTest):
         return [r for r in store.task_steps(store.db(), self.TASK)
                 if r["action"] == mr_sync.ACCEPTED_HEAD_ACTION]
 
-    def test_foreign_commit_escalation_accepts_server_head(self):
-        """Возврат из эскалации «чужой коммит» записывает голову сервера принятой.
-
-        Ловит мутацию: голова не записывается вовсе (записи «голова ветки
-        на сервере принята» нет) либо записывается не голова сервера.
-        """
-        self.escalate(f"{mr_sync.FOREIGN_COMMIT_DETAIL}: голова x — не своя")
-        accepted = self.accept()
-        self.assertEqual(len(accepted), 1)
-        self.assertTrue(accepted[0]["detail"].startswith(SERVER_HEAD))
-        self.assertEqual(mr_sync.expected_server_head(store.db(), self.TASK),
-                         SERVER_HEAD)
-
     def test_other_escalation_does_not_accept_head(self):
         """Иная эскалация (например MR влит до `awaiting_human`) голову сервера не принимает.
 
@@ -57,6 +48,57 @@ class AcceptServerHeadTest(TaskSeededTmpRootTest):
         self.escalate(f"{mr_sync.MR_DONE_EARLY_DETAIL}: MR !7 merged")
         self.assertEqual(self.accept(), [])
         self.assertEqual(mr_sync.expected_server_head(store.db(), self.TASK), "")
+
+
+class NonUtf8DiffTest(unittest.TestCase):
+    """Правка задачи с файлом в cp1251: признаки (б) и (в) считаются по
+    байтам, без исключения декодирования (REVIEW R1-F1)."""
+
+    def git(self, *args: str) -> str:
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_COMMITTER_NAME": "t",
+               "GIT_AUTHOR_EMAIL": "t@example.invalid",
+               "GIT_COMMITTER_EMAIL": "t@example.invalid",
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        return subprocess.run(["git", "-C", self.repo, *args], env=env,
+                              check=True, capture_output=True).stdout.decode()
+
+    def commit(self, rel: str, data: bytes, message: str) -> str:
+        with open(os.path.join(self.repo, rel), "wb") as fh:
+            fh.write(data)
+        self.git("add", rel)
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = tmp.name
+        self.git("init", "-q", "-b", "base")
+        self.fork = self.commit("readme.txt", b"start\n", "fork")
+        self.git("checkout", "-q", "-b", "task")
+        self.head = self.commit("legacy.txt", "Привет\n".encode("cp1251"),
+                                "task")
+        self.git("checkout", "-q", "base")
+        self.commit("other.txt", b"other\n", "other")
+        self.git("cherry-pick", self.head)
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def test_signs_on_cp1251_file(self):
+        """Коммит задачи с файлом в cp1251, перенесённый в базу: (б) находит его, (в) проходит с доказательством по файлу.
+
+        Ловит мутацию: вывод git снова декодируется строгим UTF-8
+        (`text=True` в `_git`/`_out_bytes`, патч строкой в `git apply`) —
+        `UnicodeDecodeError` вылетает мимо `GitFailure`, сверка падает
+        трассировкой вместо итога.
+        """
+        commits, found, closing = mr_sync._commits_sign(
+            self.repo, self.base, self.fork, self.head)
+        self.assertEqual(found, commits)
+        self.assertEqual(closing, self.base)
+        passes, lines = mr_sync._diff_sign(self.repo, self.base, self.fork,
+                                           self.head)
+        self.assertTrue(passes, lines)
+        self.assertIn("legacy.txt: обратное наложение — проходит", lines[0])
 
 
 class DueTest(unittest.TestCase):
@@ -140,6 +182,40 @@ def test_gate_refuses_when_mr_status_unread(stand):
     where = stand.context(task, out)
     assert stand.state(task) == "merge_gate", where
     assert reason in out, where
+    assert stand.fake.named("undraft_mr") == [], where
+    assert stand.fake.named("assign_mr") == [], where
+
+
+def test_gate_refuses_without_fork_point(stand):
+    """Точка ответвления не вычислена на `approve` гейта мержа — отказ `approve` до MR, задача на гейте (REVIEW R1-F3).
+
+    Сценарий: стенд доставки Б2.1б, запись `target-human`, ссылка на MR в
+    БД, `git merge-base` не отвечает. `approve`: задача в `merge_gate`,
+    причина в выводе, точки ответвления в БД нет, `undraft_mr`/`assign_mr`
+    не званы.
+
+    Ловит мутацию: несчитанная точка не останавливает гейт — задача уходит
+    в `awaiting_human` без точки, где каждая сверка — «неизвестно» и выход
+    только `kill`; либо отказ идёт после снятия черновика MR.
+    """
+    stand.record(mr_assignee='"42"')
+    task = stand.new_task(state="merge_gate", published=True)
+    iid = stand.rng.randrange(100, 10 ** 6)
+    store.update_task(stand.conn, task, mr_iid=iid,
+                      mr_url=f"https://localhost/mr/{iid}")
+    real_out = mr_sync._out
+
+    def out(repo, *args, **kwargs):
+        if args and args[0] == "merge-base":
+            return None
+        return real_out(repo, *args, **kwargs)
+
+    with mock.patch.object(mr_sync, "_out", out):
+        out_text = stand.approve(task)
+    where = stand.context(task, out_text)
+    assert stand.state(task) == "merge_gate", where
+    assert "точка ответвления не вычислена" in out_text, where
+    assert not store.get_task(stand.conn, task)["fork_point"], where
     assert stand.fake.named("undraft_mr") == [], where
     assert stand.fake.named("assign_mr") == [], where
 

@@ -1813,7 +1813,18 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
     """MR через `forge` (требование 4): ссылки в БД нет — открыть MR ветки
     в `base`; ссылка есть — снять черновик и назначить исполнителя у этого
     MR, описание не трогается. Успех — `awaiting_human`; 409 открытия без
-    ссылки — эскалация; иной отказ — задача на гейте."""
+    ссылки — эскалация; иной отказ — задача на гейте.
+
+    Точка ответвления считается до MR: без неё сверка `mr-sync` навсегда
+    дала бы «неизвестно», и задачу из `awaiting_human` вывел бы только
+    `kill` — поэтому несчитанная точка — отказ `approve`, MR не тронут."""
+    from . import mr_sync
+    fork, base_sha, why = mr_sync.fork_point(head, ctx)
+    if not fork:
+        _people_refusal(conn, task_id, mr_sync.FORK_POINT_ACTION,
+                        f"точка ответвления не вычислена: {why} — MR не "
+                        f"тронут")
+        return ("stopped",)
     row = store.get_task(conn, task_id)
     iid, url = store.mr_link(row)
     if iid is None:
@@ -1832,8 +1843,7 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
         iid, url = result.iid, result.url
     elif not _ready_existing_mr(conn, task_id, ctx.target, iid):
         return ("stopped",)
-    from . import mr_sync
-    mr_sync.record_fork_point(conn, task_id, head, ctx)
+    mr_sync.record_fork_point(conn, task_id, head, ctx, fork, base_sha)
     store.set_state(conn, task_id, fsm.AWAITING_HUMAN, "operator",
                     expected_state=state,
                     detail=f"MR !{iid} {url or ''} — вливают люди проекта")
