@@ -15,8 +15,8 @@ push; отдельный вызов адаптера здесь добавлял
 `merge_gate`, а не условие перехода (тот же приём, что `fsm.py::
 _regenerate_and_commit_map`/`_generate_and_commit_retro`, SPEC T042/T043).
 """
-from . import (alerts, artifact_branch, ci, config, gitcmd, repo_context,
-               store, targets)
+from . import (alerts, artifact_branch, ci, config, forge, gitcmd,
+               repo_context, store, targets)
 
 # Пропуск черновика на пустой кодовой ветке (SPEC
 # 01M3HP7WAXKFK3GYZ3T6HX08M0, требование 8) — запись журнала ОБЫЧНОГО
@@ -133,9 +133,15 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     if not _is_github_target(target_name):
         return
     try:
-        base = targets.target(target_name)["base"]
+        entry = targets.target(target_name)
+        base = entry["base"]
     except targets.TargetsError as exc:
         _incident(conn, task_id, "Draft MR FAILED", f"targets.yaml: {exc}")
+        return
+    # MR проекта с гейтом людей проекта открывает только `forge`
+    # (`ensure_forge_draft_mr`, SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требование
+    # 6; ответ Оператора ANSWER-2 п. 1): путь `gh` для него выключен.
+    if targets.merged_by_project_people(entry):
         return
 
     # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
@@ -164,6 +170,11 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     # CI ветки читает PLAN.md из origin: документы — раньше кода.
     artifact_branch.send_pending(task_id)
     push = gitcmd.in_repo(repo, "push", "-u", "origin", branch)
+    if push is not None and gitcmd.IN_FLIGHT_LIMIT_REASON in (push.stderr or ""):
+        # Отказ пределом отправок — штатная очередь, не сбой (SPEC
+        # 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7; ANSWER-2 п. 4): причину
+        # в журнал задачи уже записала точка отправки, алерта нет.
+        return
     if push is None or push.returncode != 0:
         _incident(conn, task_id, "Draft MR FAILED",
                   f"git push -u origin {branch} не удался: "
@@ -318,3 +329,113 @@ def undraft_mr(conn, task_id: str, t) -> None:
         return
     store.journal(conn, task_id, "orchestrator", "MR снят с Draft",
                  ready.stdout.strip()[:300] or "ok")
+
+
+# MR через `forge` проекта с гейтом людей проекта (`merge_gate:
+# target-human`, SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требования 4, 6; ADR-0029
+# п. 1, 7): одна функция открытия MR и одно описание — для чернового MR на
+# входе в `verifying` и для MR гейта мержа.
+MR_OPENED_ACTION = "MR открыт"
+MR_ASSIGNEE_ACTION = "исполнитель MR"
+ASSIGNEE_NOT_NUMERIC = "исполнитель не числовой id — не назначен"
+DRAFT_MR_REFUSAL_ACTION = "переход отклонён: черновой MR не открыт"
+# Отказ `approve` гейта мержа пределом `policy.max_awaiting` — его читает
+# строка `status` (`catalog`), пишет гейт мержа.
+AWAITING_LIMIT_ACTION = "approve отклонён: предел awaiting_human"
+
+
+def people_entry(target_name: str) -> dict | None:
+    """Запись проекта, MR которого вливают люди проекта
+    (`targets.merged_by_project_people`); None — гейт иной или запись не
+    читается."""
+    try:
+        entry = targets.target(target_name)
+    except targets.TargetsError:
+        return None
+    return entry if targets.merged_by_project_people(entry) else None
+
+
+def mr_assignee(policy: dict) -> tuple[int | None, str]:
+    """(id исполнителя для `forge`, запись журнала о неназначенном): id —
+    только целое (`targets.delivery_policy` уже сделал целым строку цифр);
+    иное значение и отсутствие поля — без исполнителя с записью."""
+    value = policy.get("mr_assignee")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value, ""
+    if value is None:
+        return None, f"{ASSIGNEE_NOT_NUMERIC}: policy.mr_assignee не задан"
+    return None, f"{ASSIGNEE_NOT_NUMERIC}: policy.mr_assignee = {value!r}"
+
+
+def mr_description(task_id: str, branch: str, head: str, repo,
+                   protected) -> str:
+    """Описание MR: защищённые пути проекта, изменённые веткой до `head`
+    (дифф от базы сравнения ветки), — не весь перечень проекта. Описание
+    пишется только при открытии: правки описания в интерфейсе `forge`
+    нет. Git не ответил — описание без подсветки (подсветка — сведение, не
+    условие MR)."""
+    base = gitcmd.diff_base(branch, repo=repo)
+    files = gitcmd.diff_names(base, head, repo=repo) if base and head else None
+    touched = [p for p in files or [] if config.is_protected_path(p, protected)]
+    text = (f"MR задачи {task_id}: открыт пультом Артели, вливают люди "
+            f"проекта.")
+    if touched:
+        text += (f"\n\n⚠️ Ветка изменяет защищённые пути проекта: "
+                 f"{', '.join(touched)}.")
+    return text
+
+
+def open_forge_mr(conn, task_id: str, t, head: str, *,
+                  draft: bool) -> forge.MergeRequest:
+    """Открывает MR ветки задачи в `base` её проекта через `forge`; успех —
+    ссылка (`iid`, `web_url`) в столбцах задачи и в журнале, запись о
+    неназначенном исполнителе. Отказ хостинга — результат с `reason`,
+    ссылка не пишется; решение — за вызывающим."""
+    target_name = t["target"] or config.DEFAULT_TARGET
+    try:
+        entry = targets.target(target_name)
+    except targets.TargetsError as exc:
+        return forge.MergeRequest(reason=f"targets.yaml: {exc}")
+    ctx = repo_context.resolve(target_name)
+    repo = repo_context.path_or_none(ctx)
+    protected = repo_context.protected_paths(ctx) if ctx is not None else ()
+    assignee, note = mr_assignee(targets.delivery_policy(entry))
+    body = mr_description(task_id, t["branch"], head, repo, protected)
+    title = f"{task_id}: {t['title'] or task_id}"
+    result = forge.open_mr(target_name, t["branch"], entry["base"], title,
+                           body, draft, assignee)
+    if result.reason:
+        return result
+    store.set_mr_link(conn, task_id, result.iid, result.url)
+    kind = "черновой MR" if draft else "MR"
+    store.journal(conn, task_id, "orchestrator", MR_OPENED_ACTION,
+                  f"{kind} !{result.iid} {result.url or ''} ветки "
+                  f"{t['branch']} в {entry['base']} (голова {head})")
+    if note:
+        store.journal(conn, task_id, "orchestrator", MR_ASSIGNEE_ACTION, note)
+    return result
+
+
+def ensure_forge_draft_mr(conn, task_id: str, t) -> str | None:
+    """Черновой MR через `forge.open_mr(draft=True)` на входе в
+    `verifying` (SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 6) — проект с
+    гейтом людей проекта и `draft_mr: true`, ссылки на MR в БД нет. Зовётся
+    после публикации головы ветки при любом её исходе — и тогда, когда
+    голова уже была на сервере: отказ прошлого входа повторяется.
+
+    None — черновик открыт, уже есть или не нужен; иначе причина отказа
+    хостинга."""
+    if t["is_canary"]:
+        return None
+    target_name = t["target"] or config.DEFAULT_TARGET
+    entry = people_entry(target_name)
+    if entry is None or not targets.delivery_policy(entry)["draft_mr"]:
+        return None
+    row = store.get_task(conn, task_id)
+    if store.mr_link(row)[0] is not None:
+        return None
+    ctx = repo_context.resolve(target_name)
+    head = gitcmd.branch_head_sha(t["branch"],
+                                  repo=repo_context.path_or_none(ctx))
+    result = open_forge_mr(conn, task_id, row, head, draft=True)
+    return result.reason or None

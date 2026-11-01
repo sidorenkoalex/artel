@@ -61,9 +61,11 @@ REAL_CMD_RUN = runner.cmd_run
 # Все состояния FSM Фазы 0 — тот же список, что в tests/test_invariants.py:
 # реестра состояний в коде нет, а свипы этого модуля должны идти по всем.
 # `spec_audit` — аудит SPEC (SPEC 01M4MQAGRWMWR0GFDM9086P3TD, требование 20).
+# `awaiting_human` — ожидание людей проекта (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+# требование 22).
 FSM_STATES = ("spec_writing", "spec_audit", "spec_gate", "in_dev", "verifying",
-              "review", "acceptance", "merge_gate", "done", "escalated",
-              "killed")
+              "review", "acceptance", "merge_gate", "awaiting_human", "done",
+              "escalated", "killed")
 
 # Заготовки валидны по guard: с T017 он вызывается на каждом переходе
 # `advance`, и артефакт без обязательных секций цикл дальше не пускает.

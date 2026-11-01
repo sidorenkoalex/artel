@@ -337,7 +337,9 @@ LOCAL_FIELDS = {
                "commit_template": False, "co_author": False,
                "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
-               "draft_mr": False, "max_in_flight": False},
+               "draft_mr": False, "max_in_flight": False,
+               "max_awaiting": False, "awaiting_holds_zones": False,
+               "mr_sync_interval_min": False},
     "machine": {"forge": True, "url": True, "token_slot": True,
                 "path": False, COMPONENTS_FIELD: False,
                 "commit_author": False},
@@ -357,7 +359,13 @@ PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
     "commit_template", "co_author", "push_options", "push_options_forbidden",
-    "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight")
+    "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
+    "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
+# Умолчания полей доставки, которые читает `delivery_policy` (SPEC
+# 01M5XZ9Z68V75VXF5Z66C708T4, требование 2): отдаёт их только она.
+DELIVERY_DEFAULTS = {"max_awaiting": 3, "awaiting_holds_zones": True,
+                     "draft_mr": True, "max_in_flight": None,
+                     "mr_assignee": None, "mr_sync_interval_min": None}
 DELIVERY_MACHINE_FIELDS = ("commit_author",)
 # Подполя профиля и компонента, которые живут в разделе `policy`.
 LOCAL_POLICY_SCOPES = ("weakening_scope", "mutation_claim_scope")
@@ -542,6 +550,26 @@ def push_whitelisted(entry: dict) -> bool:
     return entry.get("merge_gate") != "operator"
 
 
+def merged_by_project_people(entry: dict) -> bool:
+    """Вливают ли MR проекта с записью `entry` люди проекта: `merge_gate`
+    — `target-human` (ADR-0029 п. 1; SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+    требование 4). Сравнение с литералом — только здесь."""
+    return entry.get("merge_gate") == "target-human"
+
+
+def delivery_policy(entry: dict) -> dict:
+    """Поля доставки плоской записи `entry` с умолчаниями
+    `DELIVERY_DEFAULTS` (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требования 2-3).
+    `mr_assignee` целым или строкой цифр — id исполнителя (целое), иной
+    строкой — имя как есть."""
+    policy = {field: entry.get(field, default)
+              for field, default in DELIVERY_DEFAULTS.items()}
+    assignee = policy["mr_assignee"]
+    if isinstance(assignee, str) and assignee.strip().isdigit():
+        policy["mr_assignee"] = int(assignee.strip())
+    return policy
+
+
 def push_option_error(option: object, forbidden: list | tuple = ()) -> str | None:
     """Причина отказа опции отправки `option` — та же норма для элемента
     `policy.push_options` при загрузке и для `-o` в argv отправки; None —
@@ -647,14 +675,32 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
         refuse("ci_required_jobs", "не список строк")
     if "mr_assignee" in policy:
         assignee = policy["mr_assignee"]
-        if not isinstance(assignee, str) or not assignee.strip():
-            refuse("mr_assignee", "не непустая строка")
+        # Целое (не bool) — id исполнителя (SPEC 01M5XZ9Z68V75VXF5Z66C708T4,
+        # требование 3); прочее — по-прежнему только непустая строка.
+        if isinstance(assignee, bool) or not (
+                isinstance(assignee, int)
+                or (isinstance(assignee, str) and assignee.strip())):
+            refuse("mr_assignee", "не непустая строка и не целое")
     if not isinstance(policy.get("draft_mr", True), bool):
         refuse("draft_mr", f"{policy['draft_mr']!r}, не true/false")
     if "max_in_flight" in policy:
         limit = policy["max_in_flight"]
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             refuse("max_in_flight", f"{limit!r}, не целое > 0")
+    if "max_awaiting" in policy:
+        limit = policy["max_awaiting"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            refuse("max_awaiting", f"{limit!r}, не целое > 0")
+    if not isinstance(policy.get("awaiting_holds_zones", True), bool):
+        refuse("awaiting_holds_zones",
+               f"{policy['awaiting_holds_zones']!r}, не true/false")
+    # Опрос `mr-sync` надзором эпика (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7,
+    # требование 6): поля нет — опрос выключен.
+    if "mr_sync_interval_min" in policy:
+        interval = policy["mr_sync_interval_min"]
+        if (isinstance(interval, bool) or not isinstance(interval, int)
+                or interval <= 0):
+            refuse("mr_sync_interval_min", f"{interval!r}, не целое > 0")
 
 
 def _check_local_values(name: str, where: str, entry: dict) -> None:
