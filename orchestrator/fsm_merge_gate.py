@@ -15,6 +15,7 @@ AC-12). Единственный способ продвинуть ROOT впер
 цикла FSM.
 """
 import contextlib
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, appendix_tree, artifact_branch,
-              artifact_source, ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
+              artifact_source, ci, cleanup, config, forge, fsm, fsm_postmerge,
+              gitcmd,
               github_adapter, lease, merge_lock, merge_queue, project_profile,
               reference_cache, repo_context, session, store, targets,
               workspace)
@@ -1504,6 +1506,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                  f"и повтори: artel.py approve {task_id}")
     _profile_refusal_exit(conn, task_id, target)
     branch = t["branch"]
+    if github_adapter.people_entry(target) is not None:
+        return _approve_for_project_people(conn, task_id, state, t, ctx,
+                                           confirmed_ci_note, during_canary)
     if _docs_ref_unsynced(conn, task_id):
         return ("stopped",)
     if _protected_path_diff_gate(conn, task_id, state, branch, ctx):
@@ -1548,6 +1553,262 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     _await_main_ci(conn, task_id, final_sha, ctx)
     _rebuild_core_reference(conn, task_id, final_sha)
     return ("done",)
+
+
+# Гейт мержа проекта, MR которого вливают люди проекта (`merge_gate:
+# target-human`; SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требования 1-5; ADR-0029
+# п. 1): пульт не сливает и не отправляет `base` — открывает MR через `forge`.
+BASE_MOVED_DETAIL = "base сдвинулся — подготовка ветки заново"
+APPENDIX_REFUSAL_DETAIL = ("приложения не применяются в проекте с "
+                           "target-human — правку вносят люди проекта")
+MR_EXISTS_DETAIL = "MR ветки уже существует, ссылки в БД нет"
+PEOPLE_REFUSED_ACTION = "approve отклонён"
+HEAD_UNCONFIRMED_ACTION = "approve отклонён: голова не подтверждена"
+MR_REFUSED_ACTION = "approve отклонён: MR"
+MR_DURING_CANARY_REFUSED_ACTION = "MR не открыт: идёт канарейка"
+_FIXATION_ACTION = "sha зафиксирован"
+# Код ответа хостинга в причине `forge` — текст адаптера GitLab
+# (`gitlab_adapter.py:211`, «GitLab ответил кодом 409 на …»).
+_HOSTING_CODE = re.compile(r"ответил кодом ([0-9]{3}) на")
+_CONFLICT_CODE = "409"
+
+
+def _approve_for_project_people(conn, task_id: str, state: str, t,
+                                ctx: repo_context.RepoContext,
+                                confirmed_ci_note: str | None,
+                                during_canary: str | None) -> tuple:
+    """Тело окна `merge_gate -> awaiting_human` под мьютексом merge-окна:
+    сверка ссылки документов с `origin` -> защищённые пути и неослабление
+    по тексту -> приложения PLAN (отказ) -> подтверждённая голова -> сдвиг
+    `base` (возврат в `in_dev`) -> публикация головы и сверка её на
+    сервере -> неослабление по исходам -> лок планки -> зелёный CI головы
+    ветки -> канарейка -> предел `max_awaiting` -> MR через `forge`.
+
+    Не исполняются: отказ по красному CI base, подтяжка на гейте, слияние,
+    `checks_local`, карта и `guard --all`, отправка `base`, закрытие и
+    уборка, ожидание CI base, справочник ядра — пульт в `base` не пишет.
+    Сдвиг `base` не подтягивается здесь: голова, уходящая в MR, заново
+    проходит `in_dev -> verifying` (сжатие и `freshness`, Б1.2).
+
+    Возврат — сигнал циклу `_cmd_approve_merge_gate_cycle`, как у
+    `_cmd_approve_merge_gate`: `("wait", branch)` — ждать CI вне тела."""
+    branch = t["branch"]
+    if _docs_ref_unsynced(conn, task_id):
+        return ("stopped",)
+    if _protected_path_diff_gate(conn, task_id, state, branch, ctx):
+        return ("stopped",)
+    if _test_integrity_diff_gate(conn, task_id, state, branch, ctx):
+        return ("stopped",)
+    if _appendices_refuse(conn, task_id, ctx):
+        return ("stopped",)
+    head = _confirmed_code_head(conn, task_id)
+    if _local_head_unconfirmed(conn, task_id, branch, head, ctx):
+        return ("stopped",)
+    if _base_moved_returns(conn, task_id, state, head, ctx):
+        return ("stopped",)
+    if _ensure_branch_head_published(conn, task_id, branch) != "ok":
+        return ("stopped",)
+    if _server_head_unconfirmed(conn, task_id, branch, head, ctx):
+        return ("stopped",)
+    if _outcome_integrity_merge_gate(conn, task_id, state, ctx):
+        return ("stopped",)
+    if _acceptance_locks_refuse(conn, task_id):
+        return ("stopped",)
+    ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)
+    if ci_outcome != "ok":
+        return ci_outcome
+    _refuse_mr_during_canary(conn, task_id, during_canary)
+    if _awaiting_limit_refuses(conn, task_id, ctx):
+        return ("stopped",)
+    return _deliver_mr(conn, task_id, state, head, ctx)
+
+
+def _people_refusal(conn, task_id: str, action: str, detail: str) -> None:
+    store.journal(conn, task_id, "fsm", action, detail)
+    print(f"[{task_id}] approve отклонён: {detail}\n"
+          f"  задача осталась на гейте merge; повтори: artel.py approve "
+          f"{task_id}")
+
+
+def _appendices_refuse(conn, task_id: str,
+                       ctx: repo_context.RepoContext) -> bool:
+    """Приложения PLAN в проекте с гейтом людей проекта (требование 3):
+    правку защищённых путей пульт в `base` не вносит. Разбор с ошибками —
+    тоже приложение. `True` — отказано."""
+    appendices, errors, _unread = appendix_tree.read_plan(
+        conn, task_id, repo_context.protected_paths(ctx))
+    if not appendices and not errors:
+        return False
+    paths = sorted({p for a in appendices for p in a.paths})
+    _people_refusal(conn, task_id, PEOPLE_REFUSED_ACTION,
+                    f"{APPENDIX_REFUSAL_DETAIL}"
+                    + (f" ({', '.join(paths)})" if paths else ""))
+    return True
+
+
+def _confirmed_code_head(conn, task_id: str) -> str:
+    """Голова кодовой ветки, подтверждённая Оператором: поле `код=`
+    последней записи фиксации с подтверждённым sha (`tasks.fixed_sha`) —
+    у внешнего проекта sha `approve` — голова ссылки документов, а голову
+    кода называет та же запись. Пусто — записи нет."""
+    fixed = store.get_task(conn, task_id)["fixed_sha"] or ""
+    for row in reversed(store.task_steps(conn, task_id)):
+        if row["action"] != _FIXATION_ACTION:
+            continue
+        detail = row["detail"] or ""
+        if fixed and f"sha={fixed}," not in detail:
+            continue
+        match = re.search(r"код=([0-9a-f]{40})", detail)
+        return match.group(1) if match else ""
+    return ""
+
+
+def _local_head_unconfirmed(conn, task_id: str, branch: str, head: str,
+                            ctx: repo_context.RepoContext) -> bool:
+    """Голова ветки, которая ушла бы в MR, — не подтверждённая (требование
+    1): отказ до публикации, неподтверждённая голова на сервер не идёт."""
+    local = gitcmd.branch_head_sha(branch, repo=repo_context.path_or_none(ctx))
+    if head and local == head:
+        return False
+    _people_refusal(conn, task_id, HEAD_UNCONFIRMED_ACTION,
+                    f"голова ветки {branch} {local or '(не прочитана)'} — не "
+                    f"подтверждённая фиксацией {head or '(нет записи)'}; MR не "
+                    f"открыт — проверь ветку и подтверди новую фиксацию")
+    return True
+
+
+def _server_head_unconfirmed(conn, task_id: str, branch: str, head: str,
+                             ctx: repo_context.RepoContext) -> bool:
+    """Голова ветки на сервере после публикации — не подтверждённая
+    (требование 1): MR открылся бы на чужой коммит."""
+    remote = gitcmd.remote_branch_sha(branch, repo=repo_context.path_or_none(ctx))
+    if remote == head:
+        return False
+    _people_refusal(conn, task_id, HEAD_UNCONFIRMED_ACTION,
+                    f"голова ветки {branch} на сервере "
+                    f"{remote or '(не прочитана)'} — не подтверждённая "
+                    f"{head}; MR не открыт")
+    return True
+
+
+def _base_moved_returns(conn, task_id: str, state: str, head: str,
+                        ctx: repo_context.RepoContext) -> bool:
+    """`base` на сервере ушёл вперёд от подтверждённой головы (требование
+    2): возврат в `in_dev` без подтяжки здесь. `True` — задача вернулась."""
+    origin_sha = _origin_main_sha(ctx)
+    if origin_sha is None:
+        sys.exit(f"[{task_id}] approve отклонён: git fetch origin "
+                 f"{ctx.base} не ответил\n"
+                 f"  задача осталась на гейте merge; почини доступ к "
+                 f"origin и повтори: artel.py approve {task_id}")
+    if gitcmd.is_ancestor(origin_sha, head,
+                          repo=repo_context.path_or_none(ctx)):
+        return False
+    store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
+                    detail=f"{BASE_MOVED_DETAIL}: {ctx.base} "
+                           f"{origin_sha[:8]} не в ветке, MR не открыт")
+    return True
+
+
+def _refuse_mr_during_canary(conn, task_id: str,
+                             during_canary: str | None) -> None:
+    """Живой прогон канарейки держит и открытие MR (требование 1) — тем же
+    правилом и флагом, что мерж задачи артели (`_refuse_during_canary`)."""
+    from . import canary
+    note = canary.live_run_note(default_set_only=True)
+    if note is None:
+        return
+    if during_canary is not None:
+        store.journal(conn, task_id, "operator", MERGE_DURING_CANARY_ACTION,
+                      f"{note}; основание: {during_canary}")
+        return
+    detail = (f"{note}: MR не открывается во время канарейки — дождись "
+              f"итога или повтори с {canary.DURING_CANARY_FLAG} "
+              f'"<основание>"')
+    store.journal(conn, task_id, "fsm", MR_DURING_CANARY_REFUSED_ACTION, detail)
+    sys.exit(f"[{task_id}] approve отклонён: {detail}\n"
+             f"  задача осталась на гейте merge")
+
+
+def _awaiting_limit_refuses(conn, task_id: str,
+                            ctx: repo_context.RepoContext) -> bool:
+    """Предел `policy.max_awaiting` (требование 5): счёт задач этого
+    проекта в `awaiting_human` — под мьютексом merge-окна, иначе два
+    параллельных `approve` прошли бы оба. `True` — отказано."""
+    try:
+        limit = targets.delivery_policy(targets.target(ctx.target))["max_awaiting"]
+    except targets.TargetsError:
+        return False
+    if limit is None:
+        return False
+    waiting = [r["id"] for r in store.project_tasks(conn, ctx.target)
+               if r["state"] == fsm.AWAITING_HUMAN and r["id"] != task_id]
+    if len(waiting) < limit:
+        return False
+    _people_refusal(conn, task_id, github_adapter.AWAITING_LIMIT_ACTION,
+                    f"предел awaiting_human: задач проекта в awaiting_human "
+                    f"{len(waiting)} из {limit} (policy.max_awaiting) — MR не "
+                    f"открыт, задача ждёт на гейте")
+    return True
+
+
+def _deliver_mr(conn, task_id: str, state: str, head: str,
+                ctx: repo_context.RepoContext) -> tuple:
+    """MR через `forge` (требование 4): ссылки в БД нет — открыть MR ветки
+    в `base`; ссылка есть — снять черновик и назначить исполнителя у этого
+    MR, описание не трогается. Успех — `awaiting_human`; 409 открытия без
+    ссылки — эскалация; иной отказ — задача на гейте."""
+    row = store.get_task(conn, task_id)
+    iid, url = store.mr_link(row)
+    if iid is None:
+        result = github_adapter.open_forge_mr(conn, task_id, row, head,
+                                              draft=False)
+        if result.reason:
+            code = _HOSTING_CODE.search(result.reason)
+            if code is not None and code.group(1) == _CONFLICT_CODE:
+                store.set_state(conn, task_id, "escalated", "fsm",
+                                expected_state=state,
+                                detail=f"{MR_EXISTS_DETAIL}: {result.reason}")
+                return ("stopped",)
+            _people_refusal(conn, task_id, MR_REFUSED_ACTION,
+                            f"MR не открыт: {result.reason}")
+            return ("stopped",)
+        iid, url = result.iid, result.url
+    elif not _ready_existing_mr(conn, task_id, ctx.target, iid):
+        return ("stopped",)
+    store.set_state(conn, task_id, fsm.AWAITING_HUMAN, "operator",
+                    expected_state=state,
+                    detail=f"MR !{iid} {url or ''} — вливают люди проекта")
+    return ("awaiting",)
+
+
+def _ready_existing_mr(conn, task_id: str, target: str, iid: int) -> bool:
+    """Черновой MR задачи из БД: снять черновик и назначить исполнителя —
+    только числовой id (ответ Оператора ANSWER-2 п. 3). `False` — отказ
+    хостинга, задача остаётся на гейте."""
+    result = forge.undraft_mr(target, iid)
+    if result.reason:
+        _people_refusal(conn, task_id, MR_REFUSED_ACTION,
+                        f"черновик MR !{iid} не снят: {result.reason}")
+        return False
+    store.journal(conn, task_id, "orchestrator", "MR снят с черновика",
+                  f"MR !{iid}")
+    policy = targets.delivery_policy(targets.target(target))
+    assignee, note = github_adapter.mr_assignee(policy)
+    if assignee is None:
+        store.journal(conn, task_id, "orchestrator",
+                      github_adapter.MR_ASSIGNEE_ACTION, note)
+        return True
+    result = forge.assign_mr(target, iid, assignee)
+    if result.reason:
+        _people_refusal(conn, task_id, MR_REFUSED_ACTION,
+                        f"исполнитель {assignee} MR !{iid} не назначен: "
+                        f"{result.reason}")
+        return False
+    store.journal(conn, task_id, "orchestrator",
+                  github_adapter.MR_ASSIGNEE_ACTION,
+                  f"MR !{iid}: исполнитель {assignee}")
+    return True
 
 
 def _rebuild_core_reference(conn, task_id: str, final_sha: str) -> None:

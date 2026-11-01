@@ -176,6 +176,10 @@ def hosting_env(env: dict, token: str) -> dict:
 PUSH_SENT_ACTION = "ветка отправлена:"
 PUSH_SENT_LEGACY_ACTION = "ветка отправлена"
 PUSH_REFUSED_ACTION = "отправка отказана"
+# Причина отказа первой отправки пределом `policy.max_in_flight` (SPEC
+# 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7): по ней `status` и черновой MR
+# GitHub отличают штатную очередь от сбоя отправки.
+IN_FLIGHT_LIMIT_REASON = "предел max_in_flight"
 PUSH_WHITELIST_SOURCE = "branch_push_whitelist"
 PUSH_SUBCOMMANDS = ("push", "send-pack")
 PUSH_RESET_CONFIG = ("-c", "push.followTags=false", "-c", "push.pushOption=")
@@ -720,6 +724,58 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
     return None
 
 
+def _in_flight_refusal(project: str, entry: dict,
+                       task_ids: list) -> tuple[str, str] | None:
+    """(задача, причина) отказа ПЕРВОЙ отправки ветки задачи пределом
+    `policy.max_in_flight` (SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7);
+    None — предела нет, отправка не первая или предел не достигнут.
+
+    Первая отправка — у задачи нет записи «ветка отправлена» ни новой, ни
+    старой формы. В счёт идут незакрытые задачи этого проекта с такой
+    записью в любом состоянии; закрытые (`done`, `killed`) и задачи других
+    проектов — нет."""
+    from . import store, targets
+    limit = targets.delivery_policy(entry)["max_in_flight"]
+    if limit is None or not task_ids or not config.DB.exists():
+        return None
+    conn = store.db()
+    sent = (PUSH_SENT_ACTION, PUSH_SENT_LEGACY_ACTION)
+    first = [t for t in task_ids
+             if store.last_task_step_of(conn, t, sent) is None]
+    if not first:
+        return None
+    flying = [row["id"] for row in store.project_tasks(conn, project)
+              if row["state"] not in _dead_states() and row["id"] not in first
+              and store.last_task_step_of(conn, row["id"], sent) is not None]
+    if len(flying) < limit:
+        return None
+    return first[0], (f"{IN_FLIGHT_LIMIT_REASON}: незакрытых задач проекта "
+                      f"с отправленной веткой {len(flying)} из {limit} — "
+                      f"первая отправка ветки задачи {first[0]} ждёт, пока "
+                      f"одна из них закроется")
+
+
+def in_flight_refusal(task_id: str) -> str | None:
+    """Причина, по которой единая точка отправки откажет первой отправке
+    ветки задачи `task_id` пределом `policy.max_in_flight`; None — не
+    откажет. Для команды, которая коммитит до отправки (`amend-tests`,
+    ответ Оператора ANSWER-3 задачи 01M5XZ9Z68XE2EKPDHYCAK25KF): отказ до
+    коммита, без неотправленного хвоста. Запись проекта не прочитана —
+    None: решает сама точка отправки, она при этом отказывает."""
+    from . import store, targets
+    if not config.DB.exists():
+        return None
+    try:
+        project = store.task_target(store.db(), task_id)
+        entry = targets.load().get(project)
+        if entry is None:
+            return None
+        found = _in_flight_refusal(project, entry, [task_id])
+    except (targets.TargetsError, sqlite3.Error):
+        return None
+    return found[1] if found is not None else None
+
+
 def _refuse(plan: _PushPlan, project: str | None, related: str | None,
             env: dict, task_id: str | None, reason: str) -> _PushPlan:
     """Отказ отправки с записью: журнал задачи отправки, иначе задачи
@@ -897,7 +953,16 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
                 if reason is not None:
                     return _refuse(plan, project, task_id_of, env, task_id,
                                    reason)
-        plan.sent = [(s["task"]["id"], s["src"], s["name"]) for s in branches]
+            try:
+                waiting = _in_flight_refusal(
+                    project, entry,
+                    list(dict.fromkeys(s["task"]["id"] for s in branches)))
+            except sqlite3.Error:
+                waiting = None
+            if waiting is not None:
+                return _refuse(plan, project, waiting[0], env, task_id,
+                               waiting[1])
+        plan.sent =[(s["task"]["id"], s["src"], s["name"]) for s in branches]
     reset = list(PUSH_RESET_CONFIG) if whitelisted else []
     rest = list(args[index + 1:])
     for spec, pos in zip(specs, positions[1:]):

@@ -846,8 +846,22 @@ def _refuse_awaiting_human(conn, task_id: str) -> None:
         sys.exit(f"[{task_id}] amend-tests: отказ — {fsm.AWAITING_HUMAN_HINT}")
 
 
+def _refuse_in_flight(conn, task_id: str) -> None:
+    """Отказ первым действием команды пределом `policy.max_in_flight`
+    (SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7; ANSWER-3): точка
+    отправки откажет и сама, но уже после коммита правки — команда вышла
+    бы сбоем с неотправленным коммитом в кодовой ветке. Канарейка origin
+    не трогает (`_push_code_head`) — предел её не касается."""
+    if store.get_task(conn, task_id)["is_canary"]:
+        return
+    why = gitcmd.in_flight_refusal(task_id)
+    if why is not None:
+        _refuse(conn, task_id, "первая отправка ветки", [why])
+
+
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     _refuse_awaiting_human(conn, task_id)
+    _refuse_in_flight(conn, task_id)
     profile = _profile_or_exit(conn, task_id)
     rule = _plank_rule_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
@@ -1236,6 +1250,7 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     Голова, сдвинутая мимо пульта, лок не получает: правку планки ролью
     узаконивает не эта команда, а `approve <id> <sha>`."""
     _refuse_awaiting_human(conn, task_id)
+    _refuse_in_flight(conn, task_id)
     profile = _profile_or_exit(conn, task_id)
     rule = _plank_rule_or_exit(conn, task_id)
     fixation.stop_on_ref_drift(conn, task_id, "operator", "amend-tests")
