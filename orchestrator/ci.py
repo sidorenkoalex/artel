@@ -19,7 +19,13 @@ from typing import NamedTuple
 
 from scripts import ci_push_class
 
-from . import config, forge, gitcmd, repo_context, workspace
+from . import config, forge, gitcmd, repo_context, targets, workspace
+
+# Реестр хостингов для проверки `full_suite` при загрузке записи (SPEC
+# 01M5XZSKK8GZTECA2KWAFHE029, требование 1): `targets` не импортирует
+# `forge` (цикл), а этот модуль импортирует оба. Атрибут читается при
+# вызове — подмена реестра видна загрузчику.
+targets.hosting_registry = lambda: forge.IMPLEMENTATIONS
 
 # Заключения проверок, считающиеся зелёными. `skipped` обязателен: job
 # `protected-paths` идёт только на pull_request и на push репозитория
@@ -1297,6 +1303,97 @@ def accepted_full_suite(sha: str, repo: Path | None = None) -> tuple[str, str]:
         if run_id is not None:
             return str(run_id), ""
     return "", "CI не сообщил ID прогона полного набора"
+
+
+# Итог задания CI полного набора компонента (SPEC 01M5XZSKK8GZTECA2KWAFHE029,
+# требование 2): зелёный, красный или «неизвестно» с причиной.
+JOB_GREEN = "green"
+JOB_RED = "red"
+JOB_UNKNOWN = "unknown"
+# Исходы теста отчёта задания; иной исход — «неизвестно» (ANSWER-1, п. 1).
+JOB_REPORT_OUTCOMES = ("success", "failed", "skipped", "error")
+JOB_REPORT_BAD = ("failed", "error")
+# Статусы задания, при которых краснота разобранного отчёта — честный
+# красный; прочие (`canceled`, `manual`, идущие) — «неизвестно».
+JOB_FINISHED = ("success", "failed")
+
+
+class JobSuite(NamedTuple):
+    """Итог задания `job` у коммита `sha`: `state` — `JOB_*`, `reason` —
+    причина «неизвестно», `job_id` — номер последней попытки, `count` —
+    число тестов отчёта, `bad` — тесты с `failed`/`error`."""
+    state: str
+    reason: str = ""
+    job_id: int | None = None
+    count: int = 0
+    bad: tuple = ()
+
+
+def _last_job(target: str, sha: str, job: str):
+    """(последняя попытка `job` — наибольший `id` — из
+    `forge.pipeline_status(sha).jobs`, причина её отсутствия)."""
+    res = forge.pipeline_status(target, sha)
+    mine = [j for j in res.jobs if j.name == job]
+    if not mine:
+        why = f": {res.reason}" if res.reason else ""
+        return None, f"задания CI «{job}» нет в конвейере коммита {sha}{why}"
+    return max(mine, key=lambda j: j.id or 0), ""
+
+
+def _one_line(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def job_full_suite(target: str, sha: str, job: str) -> JobSuite:
+    """Итог полного набора из задания CI `job` конвейера ровно `sha`.
+
+    Годность задания, статус и отчёт — одной попытки: номер последней
+    попытки до и после чтения отчёта совпадает (ANSWER-1, п. 3). Зелёный —
+    задание без права падать в `success` с разобранным непустым отчётом без
+    `failed`/`error`; красный — `success`/`failed` с `failed`/`error` в
+    разобранном отчёте; прочее — «неизвестно» (инвариант 41)."""
+    last, why = _last_job(target, sha, job)
+    if last is None:
+        return JobSuite(JOB_UNKNOWN, why)
+    if last.allow_failure:
+        return JobSuite(JOB_UNKNOWN, f"задание CI «{job}» {last.id} — с правом "
+                                     f"падать", last.id)
+    result = forge.job_result(target, sha, job)
+    report = forge.job_test_report(target, sha, job)
+    again, why = _last_job(target, sha, job)
+    if again is None or again.id != last.id:
+        return JobSuite(JOB_UNKNOWN, f"задание CI «{job}» перезапущено во время "
+                                     f"чтения", last.id)
+    if result.status is None:
+        return JobSuite(JOB_UNKNOWN, f"статус задания CI «{job}» {last.id} не "
+                                     f"прочитан: {_one_line(result.reason)}",
+                        last.id)
+    if result.status not in JOB_FINISHED:
+        return JobSuite(JOB_UNKNOWN, f"задание CI «{job}» {last.id} в статусе "
+                                     f"{result.status}", last.id)
+    outcomes = report.outcomes
+    if outcomes is None:
+        return JobSuite(JOB_UNKNOWN, f"отчёт тестов задания CI «{job}» "
+                                     f"{last.id} не разобран: "
+                                     f"{_one_line(report.reason)}", last.id)
+    if not outcomes:
+        return JobSuite(JOB_UNKNOWN, f"отчёт тестов задания CI «{job}» "
+                                     f"{last.id} пуст", last.id)
+    odd = sorted({o for o in outcomes.values() if o not in JOB_REPORT_OUTCOMES})
+    if odd:
+        return JobSuite(JOB_UNKNOWN, f"отчёт тестов задания CI «{job}» "
+                                     f"{last.id}: исход вне "
+                                     f"{' | '.join(JOB_REPORT_OUTCOMES)} — "
+                                     f"{', '.join(map(repr, odd))}", last.id,
+                        len(outcomes))
+    bad = tuple(sorted(t for t, o in outcomes.items() if o in JOB_REPORT_BAD))
+    if bad:
+        return JobSuite(JOB_RED, "", last.id, len(outcomes), bad)
+    if result.status != "success":
+        return JobSuite(JOB_UNKNOWN, f"задание CI «{job}» {last.id} в статусе "
+                                     f"{result.status}, а в отчёте нет "
+                                     f"failed/error", last.id, len(outcomes))
+    return JobSuite(JOB_GREEN, "", last.id, len(outcomes))
 
 
 def status_kind(note: str) -> str:

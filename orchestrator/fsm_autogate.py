@@ -423,7 +423,7 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
                 workspace.task_repo(task_id), actor="fsm")
         if not run.green:
             return ok, f"автогейт: {tree.mark(run.detail)}"
-        ok.append(tree.mark((run.detail if "принят итог CI" in run.detail
+        ok.append(tree.mark((run.detail if acceptance.is_ci_result(run)
                             else "полный набор tests/ в worktree ветки зелёный")
                             + (f" — {run.digest}" if run.digest else "")
                             + (f" (лог прогона: {run.log_path})"
