@@ -1,16 +1,15 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Вердикт concerns по SPEC sha 4ea239fe. Главное: verify-ok при всех отметках ведёт в review без условия «CI зелёный + verifying_gate пройден» (fsm_advance.py:463-480); auto опрашивает verifying бесконечно, если потолок снят (auto.py:1080,1093-1100,528), и держит lease (auto.py:672) — auto.py только чтение по ТЗ.
-- «Общего правила долгого ожидания Оператора» в коде нет (алерт attention только из auto_stop, alerts.py:36-42).
-- Разделы description/policy/machine — только локальный слой targets (targets.py:338, _flatten :786).
-- Обход FsmTest.commands без профиля verify у песочницы — пустой (test_invariants.py:412-415).
+- Аудит SPEC sha 38d11a7c (итерация 2). Решения гейта 1–6 в SPEC отражены. Ссылки SPEC на код сверены — совпадают (fsm_advance.py:442/463-480/350/496, auto.py:1080-1100/1152/1170/1280-1312, board.py:19-20/27, brief.py:86, test_invariants.py:400/744/1613/1769).
+- Находки: AC-16 — шпион по вызовам, а не по исходу (прецедент исхода test_invariants.py:3613); матрица без строки об удержании надзора после красного CI (auto.py:1170,1251) — «набор состояний» с verifying даст цикл перезапусков; AC-1 не ловит regex имени; AC-12 не ловит пустую причину; AC-17 не требует, чтобы verify-ok в обходе реально сработал (прецедент mr_sync_call :635); description есть только в targets.local.yaml (targets.py:338,434); «одна запись на голову» vs повторный вход в verifying с той же головой.
+- Вердикт — concerns.
 
 ## Не сработало
-- Bash с `cd …;` и `ls` отказаны песочницей — только абсолютные пути и grep/Read.
+- Bash: составные команды и ls отказаны; работают одиночные grep/git -C.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, status ready; guard — ок. Шаг завершён.
+- SPEC-AUDIT.md записан (status ready, verdict concerns, 9 пунктов), guard — ок. Шаг завершён.
 
 ## Чего не хватило
-- Дольше всего искал, есть ли алерт долгого ожидания гейта — не нашёл ни в config, ни в alerts.
+- Где хранится «строка status» — это строка вывода catalog.cmd_status (_status_line), не поле БД.
