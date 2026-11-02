@@ -1,18 +1,17 @@
 # NOTE analyst
 
 ## Выяснено
-- Факты ТЗ сверены по коду: `fsm_advance.verifying` — `orchestrator/fsm_advance.py:442` (гейт по исходам `verifying_gate` уже на `verifying`, строка 474); `board.waiting_on` — `orchestrator/board.py:27`, `CI_STATES = ("verifying",)` строка 20.
-- Предел возвратов ревью — `config.LIMIT_REVIEW_ITERS = 3` (`config.py:330`), механизм — `fsm_advance._review_changes_requested` (`fsm_advance.py:350`): возврат, доводящий счётчик до предела, эскалирует вместо возврата.
-- Возврат `verifying -> in_dev` уже считается возвратом в брифе (`brief._RETURN_TRIGGER_STATES`, `brief.py:86`) — причина попадает в раздел «Причина возврата».
-- `tests/test_invariants.py` — защищённый путь (`config.py:788`); обход команд — `FsmTest.commands()` (`tests/test_invariants.py:400`).
-- Сигналы объёма: 10 зон, бюджет ≥ $30, критериев ≥ 10 → в SPEC обоснование монолита (выбор за Оператором).
+- Итерация 2 (возврат из spec_gate): Оператор решил 6 пунктов аудита (Е1, Г1/Е2, А2, В2, В1, А1) — см. «Причина возврата» брифа.
+- `auto`: опрос `verifying` — `orchestrator/auto.py:1080-1100`; надзор эпика — `_epic_view` `auto.py:1280`, статус «ждёт Оператора» `_WAITING` для `EPIC_GATE_STATES`/`escalated` (`:1308`), `_NOT_HOLDING_STOP_STATES` `:1170`.
+- `CountersNeverResetTest.COUNTERS` — `tests/test_invariants.py:1613`; `review_iters` — `schema.py:184`.
+- Факты итерации 1: `fsm_advance.verifying` `:442`, `LIMIT_REVIEW_ITERS` `config.py:330`, `board.waiting_on` `board.py:27`.
 
 ## Не сработало
-- `cd … ; grep` и составные команды Bash требуют подтверждения — только одиночные команды с абсолютными путями.
+- `ls` в Bash нет; составные команды требуют подтверждения — только grep/Read с абсолютными путями.
 
 ## Где остановился
-- SPEC написан (13 AC, status: ready, merge_after 01M6BMG29KZV1RX21HFAXZG3CM, budget 40 = рамка ТЗ), `scripts/guard.py` — ок.
-- Толкование: счётчик `verify-fail` — свой, с пределом `LIMIT_REVIEW_ITERS` (ТЗ: «тем же механизмом и значением»); если Оператор имел в виду общий `review_iters` — правка на гейте SPEC.
+- SPEC итерации 2 записан (17 AC, status: ready, зоны + auto.py, budget 40, merge_after 01M6BMG29KZV1RX21HFAXZG3CM, раздел «Матрица неослабления»); guard — ок. Шаг завершён.
+- Толкование п. 5 возврата при двух проверках: журнальная запись «ждёт проверки» — одна на голову (первая неотмеченная), предусловие verify-ok — наличие такой записи по текущей голове для любого имени профиля; строка `status` после отметки `a` называет `b` (AC-10).
 
 ## Чего не хватило
-- Константы «общего правила долгого ожидания Оператора» в `config.py` не нашёл — в SPEC новое алерт-правило вынесено в «Не входит».
+- Б1 аудита (поле `verify` в плоской записи артели, `_flatten`) Оператор не решал — оставлено формулировкой ТЗ.
