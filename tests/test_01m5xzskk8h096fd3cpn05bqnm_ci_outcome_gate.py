@@ -916,33 +916,53 @@ def test_ac8_module_missing_in_head_tree_is_not_a_match(box):
 
 
 def test_ac9_in_dev_gate_of_ci_component_judges_local_checkouts(box):
-    """На `in_dev → verifying` гейт компонента `full_suite: ci` судит по локальным выпискам базы и головы, как сейчас, и не читает отчётов CI.
+    """Компонент `full_suite: ci` на `in_dev → verifying` не судится локальными выписками и не читает отчётов CI; находку того же сценария ловит гейт на `verifying` по отчёту CI головы и возвращает задачу в `in_dev`.
 
-    Сценарий: задача проекта с компонентом `full_suite: ci` прошла выход
-    из `tests_writing`; тест базы на голове красен все три прогона
-    (сценарий раннера). `advance` из `in_dev`: прежний отказ «переход
-    отклонён: гейт неослабления по исходам — сломан правкой» с
-    идентификатором теста, задача в `in_dev`; шпион видит `worktree add`
-    и полные прогоны сторон «база» и «голова»; из кадров гейта нет ни
-    одного чтения `pipeline_status`/`job_result`/`job_test_report`.
+    Сценарий (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, ANSWER-1 п. 1): задача
+    проекта с компонентом `full_suite: ci` прошла выход из
+    `tests_writing`; тест базы на голове локально красен все три прогона
+    (сценарий раннера). `advance` из `in_dev`: задача в `verifying`;
+    шпион не видит ни `worktree add`, ни полных прогонов сторон «база» и
+    «голова», из кадров гейта нет ни одного чтения `pipeline_status`/
+    `job_result`/`job_test_report`. Затем зелёный CI головы: в отчёте
+    задания `ci_job` головы тот же тест `failed`, в отчёте точки
+    ответвления — `success`. Опрос `verifying`: задача в `in_dev`, отказ
+    «переход отклонён: гейт неослабления по исходам — сломан правкой» с
+    идентификатором теста.
 
-    Ловит мутацию: режим `ci` включён и на `in_dev` — гейт читает отчёты
-    CI (у неотправленной головы их нет — сбой подготовки) вместо выписок;
-    выписки на `in_dev` пропущены для `ci` — гейт пройден.
+    Ловит мутацию: `ci` по-прежнему судится на `in_dev` выписками — шпион
+    видит `worktree add`, задача не уходит в `verifying`; гейт на
+    `verifying` не вызван — зелёный CI ведёт в `review`, находка
+    пропущена.
     """
     rel, name = box.py_rel(), box.py_name()
-    project = box.ci_project({rel: py_source([name, box.py_name()])})
+    names = [name, box.py_name()]
+    project = box.ci_project({rel: py_source(names)})
     box.cases[(rel, name)] = {"base": ["passed"], "head": ["failed"]}
     t = box.task(project)
     box.checkouts.clear()
     box.forge.calls.clear()
     rows, output = box.developer_advance(t)
-    detail = box.refusal(rows, output, BROKEN_ACTION)
     context = box.explain(rows, output) + f"\nхостинг: {box.forge.calls}"
-    assert box.cid(project, rel, name) in detail, context
-    assert box.checkouts, context
-    assert {r["side"] for r in box.full_runs()} >= {"base", "head"}, context
+    assert box.state(t) == "verifying", context
+    assert box.checkouts == [], context
+    assert box.full_runs() == [], context
     assert box.gate_reads() == [], context
+
+    head = box.head(t)
+    point = box.git("-C", str(project.clone), "merge-base",
+                    f"refs/remotes/origin/{config.MAIN_BRANCH}",
+                    t.branch).strip()
+    report = box.green(rel, names)
+    box.publish(point, project.job, "success", report)
+    box.publish(head, project.job, "success",
+                dict(report, **{box.key(rel, name): "failed"}))
+    rows, output = box.run_advance(t.id)
+    context = box.explain(rows, output) + f"\nхостинг: {box.forge.calls}"
+    detail = box.refusal(rows, output, BROKEN_ACTION)
+    assert box.state(t) == "in_dev", context
+    assert "state -> in_dev" in [r["action"] for r in rows], context
+    assert f"{BROKEN}: {box.cid(project, rel, name)} — " in detail, context
 
 
 # ---------------------------------------------------------------- AC-10
