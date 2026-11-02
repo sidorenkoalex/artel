@@ -121,11 +121,6 @@ FULL_SUITE_LOCAL = "local"
 FULL_SUITE_CI = "ci"
 FULL_SUITE_BOTH = "both"
 COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
-# Реестр реализаций хостинга (`forge.IMPLEMENTATIONS`) выставляет сюда
-# `ci` при своём импорте: `forge` импортирует этот модуль, обратный
-# импорт был бы циклом. `None` — `forge` не загружен; тогда хостинг без
-# чтения отчёта задания ловит приёмка при использовании.
-hosting_registry = None
 COMPONENT_TEMPLATE_MARKS = ("<id>", "<dir>", "<name>")
 COMPONENT_DEPENDS_VIA = ("paths", "files", "contract")
 COMPONENT_PATHS_SOURCE = ("file", "key")
@@ -1095,12 +1090,21 @@ def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
     if "report" not in fields:
         raise TargetsError(f"{here}: поле 'report' — нет: обязательно при "
                            f"'full_suite: {mode}' (граница гейта исходов)")
-    registry = hosting_registry() if hosting_registry is not None else None
-    if registry is not None and getattr(registry.get(hosting),
-                                        "job_test_report", None) is None:
+    if getattr(_hosting_registry().get(hosting), "job_test_report",
+               None) is None:
         raise TargetsError(f"{here}: поле 'full_suite' — '{mode}': реализация "
                            f"хостинга '{hosting}' не читает отчёт тестов "
                            f"задания CI")
+
+
+def _hosting_registry() -> dict:
+    """Реестр реализаций хостинга `forge.IMPLEMENTATIONS` — импортом при
+    вызове: `forge` импортирует этот модуль, импорт на уровне модуля был бы
+    циклом. Не подстановкой из `ci` при его импорте — проверка записи не
+    зависит от того, загружен ли `ci` (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW,
+    требование 10)."""
+    from . import forge
+    return forge.IMPLEMENTATIONS
 
 
 # Плагины повторов pytest и их аргументы (SPEC 01M5FRYVP4NF81VT00FYPHPWJH,

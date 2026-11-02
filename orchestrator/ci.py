@@ -21,12 +21,6 @@ from scripts import ci_push_class
 
 from . import config, forge, gitcmd, repo_context, targets, workspace
 
-# Реестр хостингов для проверки `full_suite` при загрузке записи (SPEC
-# 01M5XZSKK8GZTECA2KWAFHE029, требование 1): `targets` не импортирует
-# `forge` (цикл), а этот модуль импортирует оба. Атрибут читается при
-# вызове — подмена реестра видна загрузчику.
-targets.hosting_registry = lambda: forge.IMPLEMENTATIONS
-
 # Заключения проверок, считающиеся зелёными. `skipped` обязателен: job
 # `protected-paths` идёт только на pull_request и на push репозитория
 # пропускается — без него зелёного CI не бывало бы вовсе.

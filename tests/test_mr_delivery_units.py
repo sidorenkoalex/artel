@@ -153,7 +153,8 @@ class GithubDraftMrTest(unittest.TestCase):
         `alerts.raise_alert` зван (инцидент `github_adapter`).
         """
         refusal = subprocess.CompletedProcess(
-            [], 1, "", f"{gitcmd.PUSH_REFUSED_ACTION} (проект proj): "
+            [], gitcmd.IN_FLIGHT_REFUSAL, "",
+            f"{gitcmd.PUSH_REFUSED_ACTION} (проект proj): "
                        f"{gitcmd.IN_FLIGHT_LIMIT_REASON}: 2 из 2")
         with mock.patch.object(github_adapter.targets, "target",
                                lambda name: {"forge": "github",
