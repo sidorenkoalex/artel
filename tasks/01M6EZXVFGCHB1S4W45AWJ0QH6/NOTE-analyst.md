@@ -1,21 +1,19 @@
 # Записка analyst
 
 ## Выяснено
-- Итерация 2 (после аудита fail Д-1…Д-7). Решения SPEC:
-  - отдельный каталог хуков `target-human`: `<config.ROOT>/scripts/git-hooks/target-human/` (pre-push с правилами + pre-commit с прежней защитой main) — так AC-4 (нет политики → отказ) не спорит с AC-5 (общий хук прежний);
-  - файл политики `<git-common-dir клона>/artel-push-policy`, 4 строки key=value: project, base, branch_template, artifacts_prefix;
-  - строка doctor `clone-push-hook` из `check_clone_hooks`/`_fix_project_clones` (уже подключены в doctor/cli.py:203,:261); `clone-hooks` — только прочие проекты;
-  - «иной core.hooksPath» = задан и не равен; снятый не отказывает в gitcmd (пульт всё равно ставит `-c`), ловит doctor. Так `tests/test_gitcmd_push_point.py:123,:131` остаются зелёными (шпион push не исполняет, хук не запускается);
-  - `-c core.hooksPath` вставляет `_push_plan` после сверок (как PUSH_RESET_CONFIG, gitcmd.py:966-971);
-  - клон проекта и подмодулей — токеном слота (сейчас `clone` нет в HOSTING_SUBCOMMANDS, gitcmd.py:41);
-  - прежние сверки (gitcmd.py:189-193, :660-664, :719-723) сохраняются и покрываются AC.
-- Тесты проектов с GIT_CONFIG_GLOBAL (test_01m545edths…) — merge_gate operator, новой сверкой не задеты.
+- Итерация 3 (возврат с spec_gate, решения Оператора Д-1…Д-4 по аудиту 2):
+  - Д-1 → требование 8: сумма и бит исполнения `pre-push` и `pre-commit` каталога target-human; `--fix` ставит бит; AC-16.
+  - Д-2 → новое требование 11: помощник учётных данных отдаёт токен только для host адреса записи (все хостинговые вызовы проекта с token_slot); AC-17. Ограничение: `tests/test_hosting_token_units.py::HostingEnvTest::test_appends_after_existing_git_config_entries` проверяет KEY_2 == "credential.helper" и COUNT == "3" — остаётся без правки, поэтому форма `credential.<url>.helper` через hosting_env его сломает; SPEC прямо говорит «форма, меняющая тест, не входит» → практически сверка host в помощнике.
+  - Д-3 → AC-15 переписан: токен виден в вызове, клонирующем подмодули, любой формы; подмодуль извлечён.
+  - Д-4 → AC-18: refs/notes/x отказ; удаление refs/artifacts/<id> проходит (gitcmd.py:687-690); `branch_template=` пустое — отказ. Требование 3 дополнено.
+  - Прежние требования 11-13 перенумерованы в 12-14, ссылки в «Не входит» обновлены.
+- budget_usd оставлен $40 (рамка ТЗ); при 18 AC калибровка ~$85 — отмечено в «Оценке объёма» как решение Оператора.
 
 ## Не сработало
-- Составные bash-команды (ls, xargs, ;) требуют подтверждения — только одиночные grep/sed.
+- Составные bash-команды требуют подтверждения — только одиночные grep/sed.
 
 ## Где остановился
-- SPEC.md итерации 2 сдан (status: ready, 13 требований, AC-1..AC-15), guard ок. QUESTIONS не нужен: Д-4 решён буквальным чтением ТЗ («нет иного» ≠ «не задан») без правки тестов.
+- SPEC.md итерации 3 сдан (status: ready, 14 требований, AC-1..AC-18), guard ок.
 
 ## Чего не хватило
-- Где пульт ставит токен клону — нигде: `clone` вне HOSTING_SUBCOMMANDS (gitcmd.py:41).
+- Ничего существенного.
