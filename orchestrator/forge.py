@@ -48,6 +48,9 @@ class PipelineStatus:
     jobs: list = field(default_factory=list)
     failed: list = field(default_factory=list)
     marks: list = field(default_factory=list)
+    # Код HTTP-ответа хостинга, на котором функция отказала (не 2xx); None —
+    # ответ получен либо отказ без HTTP-ответа (SPEC 01M6EZXVFGH5Z2876XWMQG35FP).
+    http_status: int | None = None
 
 
 @dataclass
@@ -101,6 +104,7 @@ class Protections:
     branches: list | None = None
     tags: list | None = None
     reason: str = ""
+    http_status: int | None = None
 
 
 @dataclass
@@ -117,6 +121,7 @@ class BranchPipeline:
     verdict: str = UNKNOWN
     reason: str = ""
     jobs: list = field(default_factory=list)
+    http_status: int | None = None
 
 
 class _GitHub:

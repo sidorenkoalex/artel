@@ -221,7 +221,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
   mr-sync [<id>…] | mr-sync <id> --confirm [--by-content] |
   knowledge <id> <путь>[::<символ>]|::<символ> |
-  forge-probe <проект> [--job <имя>] |
+  forge-probe <проект> [--ref <ветка> | --sha <sha>] [--job <имя>] |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
@@ -2368,41 +2368,49 @@ def _cmd_pause(rest: list) -> None:
     pause.cmd_pause(rest[0])
 
 
-_FORGE_PROBE_USAGE = "forge-probe <проект> [--job <имя>]"
+_FORGE_PROBE_USAGE = "forge-probe <проект> [--ref <ветка> | --sha <sha>] [--job <имя>]"
 
 # Уровни доступа участника проекта GitLab API v4 — подпись к числу.
 _ACCESS_LEVELS = {10: "guest", 20: "reporter", 30: "developer",
                   40: "maintainer", 50: "owner"}
 
 
-def _forge_probe_args(rest: list) -> tuple[str, str | None]:
-    """(проект, имя задания или None) из аргументов `forge-probe`."""
-    positional, job = [], None
+def _forge_probe_args(rest: list) -> tuple[str, str | None, str | None, str | None]:
+    """(проект, имя задания, ветка `--ref`, sha `--sha`; None — флага нет)
+    из аргументов `forge-probe`."""
+    positional = []
+    flags = {"--job": None, "--ref": None, "--sha": None}
+    wanted = {"--job": "имя задания", "--ref": "имя ветки", "--sha": "sha коммита"}
     args = iter(rest)
     for arg in args:
-        if arg == "--job":
-            job = next(args, None)
-            if not job:
-                sys.exit(f"{_FORGE_PROBE_USAGE}: --job требует имя задания")
+        if arg in flags:
+            flags[arg] = next(args, None)
+            if not flags[arg]:
+                sys.exit(f"{_FORGE_PROBE_USAGE}: {arg} требует {wanted[arg]}")
         elif arg.startswith("-"):
             sys.exit(f"неизвестный флаг {arg!r}; использование: {_FORGE_PROBE_USAGE}")
         else:
             positional.append(arg)
     if len(positional) != 1:
         sys.exit(f"использование: {_FORGE_PROBE_USAGE}")
-    return positional[0], job
+    if flags["--ref"] is not None and flags["--sha"] is not None:
+        sys.exit(f"--ref и --sha вместе не задаются; использование: {_FORGE_PROBE_USAGE}")
+    return positional[0], flags["--job"], flags["--ref"], flags["--sha"]
 
 
 def _cmd_forge_probe(rest: list) -> None:
-    """`forge-probe <проект> [--job <имя>]`: сведения хостинга проекта —
+    """`forge-probe <проект> [--ref <ветка> | --sha <sha>] [--job <имя>]`:
+    сведения хостинга проекта —
     только чтение через `forge` (SPEC 01M5WCXBR9K8CN586W1AP3ZN6Q, требования
     3-4). Печатает пользователя токена и его уровень доступа, срок токена,
-    защищённые ветки и теги, последний конвейер базовой ветки; с `--job` —
-    сводку отчёта тестов задания в этом конвейере. Работает и для записи
+    защищённые ветки и теги, последний конвейер базовой ветки (`--ref` —
+    указанной ветки, `--sha` — конвейеры ровно этого коммита по
+    `forge.pipeline_status`, SPEC 01M6EZXVFGH5Z2876XWMQG35FP, требование 13);
+    с `--job` — сводку отчёта тестов задания в этом конвейере. Работает и для записи
     хостинга вне `SUPPORTED_FORGES`. Печатаются только поля результатов
     `forge` и причины адаптера — токен в них не попадает. Ошибка отдельного
     запроса — его причина в строке, не отказ команды."""
-    name, job = _forge_probe_args(rest)
+    name, job, ref, sha = _forge_probe_args(rest)
     try:
         entry = targets.target(name)
     except targets.TargetsError as exc:
@@ -2433,20 +2441,31 @@ def _cmd_forge_probe(rest: list) -> None:
         print(f"  защищённые ветки: {', '.join(protected.branches) or '(нет)'}")
         print(f"  защищённые теги: {', '.join(protected.tags) or '(нет)'}")
 
-    pipeline = forge.branch_pipeline(name, base)
-    if not pipeline.sha:
-        print(f"  последний конвейер {base}: {pipeline.reason}")
-    else:
-        print(f"  последний конвейер {base}: sha {pipeline.sha}, итог "
-              f"{pipeline.verdict}" + (f" — {pipeline.reason}" if pipeline.reason else ""))
-        for item in pipeline.jobs:
+    if sha is not None:
+        status = forge.pipeline_status(name, sha)
+        print(f"  конвейеры коммита {sha}: итог {status.verdict}"
+              + (f" — {status.reason}" if status.reason else ""))
+        for item in status.jobs:
             print(f"    задание {item.name}: {item.status}")
+        report_sha = sha
+    else:
+        branch = ref or base
+        pipeline = forge.branch_pipeline(name, branch)
+        if not pipeline.sha:
+            print(f"  последний конвейер {branch}: {pipeline.reason}")
+        else:
+            print(f"  последний конвейер {branch}: sha {pipeline.sha}, итог "
+                  f"{pipeline.verdict}" + (f" — {pipeline.reason}" if pipeline.reason else ""))
+            for item in pipeline.jobs:
+                print(f"    задание {item.name}: {item.status}")
+        report_sha = pipeline.sha
     if job is None:
         return
-    if not pipeline.sha:
-        print(f"  отчёт тестов задания {job}: нет конвейера базы — {pipeline.reason}")
+    if not report_sha:
+        where = "базы" if ref is None else f"ветки {branch}"
+        print(f"  отчёт тестов задания {job}: нет конвейера {where} — {pipeline.reason}")
         return
-    report = forge.job_test_report(name, pipeline.sha, job)
+    report = forge.job_test_report(name, report_sha, job)
     if report.reason:
         print(f"  отчёт тестов задания {job}: {report.reason}")
         return
@@ -2454,7 +2473,7 @@ def _cmd_forge_probe(rest: list) -> None:
     for outcome in report.outcomes.values():
         counts[outcome] = counts.get(outcome, 0) + 1
     summary = ", ".join(f"{outcome}: {n}" for outcome, n in sorted(counts.items()))
-    print(f"  отчёт тестов задания {job} (sha {pipeline.sha[:8]}): "
+    print(f"  отчёт тестов задания {job} (sha {report_sha[:8]}): "
           f"тестов {len(report.outcomes)} — {summary or 'пусто'}")
 
 
