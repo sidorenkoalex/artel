@@ -1,4 +1,4 @@
-<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 800.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 3} -->
+<!-- artel-epic-row: {"id": "E01M5W66QH7MNY4XWVRTP4TAWRP", "project": "artel", "title": "Проект на GitLab с гейтом людей проекта (ADR-0029)", "goal": "Пульт ведёт задачи проекта на GitLab до открытого MR: адаптер хостинга, ветка по ключу трекера, гейт target-human с awaiting_human и mr-sync, полный набор из CI, профиль проверок; первая живая задача — после Б2", "envelope_usd": 800.0, "state": "open", "outcome": null, "created_at": "2026-10-26 13:25:40Z", "closed_at": null, "parallel": 4} -->
 # Эпик E01M5W66QH7MNY4XWVRTP4TAWRP: Проект на GitLab с гейтом людей проекта (ADR-0029)
 
 - Проект: artel
@@ -28,4 +28,10 @@
 | 01M5XZSKK8H096FD3CPN05BQNM | GitLab В1.2: гейт неослабления по исходам из отчётов задания CI | done | — |
 | 01M69W4J5DSBFYS8A0FG71N93K | Предпосылка теста fetch базы рабочей копии не зависит от версии git (git 2.56 на раннере CI) | done | — |
 | 01M6AB4VE2R0Q2V5D4MMJGNGH7 | GitLab Б2.2: команда mr-sync — сверка MR и нахождения правки в base, закрытие done по подтверждению Оператора | done | — |
-| 01M6BMG29KZV1RX21HFAXZG3CM | GitLab: гейт неослабления по исходам для full_suite ci — на verifying по отчёту CI отправленной головы | in_dev | — |
+| 01M6BMG29KZV1RX21HFAXZG3CM | GitLab: гейт неослабления по исходам для full_suite ci — на verifying по отчёту CI отправленной головы | done | — |
+| 01M6EXF3TMNRKCZH8CS9BXXG1Z | GitLab Б2.3: хук pre-push в клоне, сверки отправки, строки doctor, отказ при сбое, открытие gitlab и target-human | killed | divided |
+| 01M6EZXVFG405Y1BTFDSGBKS8E | GitLab Б2.3-4: открытие gitlab и target-human, тексты отказа, порядок при инциденте | in_dev | — |
+| 01M6EZXVFGCHB1S4W45AWJ0QH6 | GitLab Б2.3-2: хук pre-push в клоне, его строка doctor, клон подмодулей и сверки перед отправкой | in_dev | — |
+| 01M6EZXVFGH5Z2876XWMQG35FP | GitLab Б2.3-3: строки doctor проекта и forge-probe по ветке или коммиту | done | — |
+| 01M6EZXVFGXC6WBDA9QJESAZRW | GitLab Б2.3-1: отказ при сбое вместо пропуска | tests_writing | — |
+| 01M6F3DKM3KB2JYMD0J50YRBPE | GitLab В2: профиль проверок verify — ручные проверки human:<имя>, команды verify-ok и verify-fail | spec_writing | — |
