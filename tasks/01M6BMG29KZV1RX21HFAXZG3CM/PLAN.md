@@ -46,6 +46,12 @@ schema_version: 5
   developer) и предел (возврат с `RETURN_DETAIL` у задачи уже был).
   Повтор проверяется первым, как требует правило «если подходят оба».
   Счёт ведётся по журналу всей задачи, новой колонки нет.
+- ANSWER-2: «предыдущий отказ» правила повтора — последняя запись отказа
+  с находками (`OUTCOME_BROKEN_REFUSAL_ACTION` /
+  `OUTCOME_INTEGRITY_REFUSAL_ACTION`). Записи ожидания (`PENDING_ACTION`)
+  и сбоя подготовки (`PREPARE_REFUSAL_ACTION`) не считаются. Код
+  `_cycle_reason` уже так выбирал; правило записано комментарием, и
+  добавлен тест на сценарий ANSWER-2.
 
 ## Шаги
 1. `outcome_integrity.py`: `_Pending`, `_CI_PENDING_STATUSES`, тройка из
@@ -60,6 +66,14 @@ schema_version: 5
    `verifying`; после этого опрос `verifying` возвращает задачу в `in_dev`
    с той же находкой «сломан правкой».
 4. Регенерирована карта `docs/codebase-map.md`.
+5. ANSWER-2: новый файл
+   `tests/test_01m6bmg29kzv1rx21hfaxzg3cm_repeat_after_wait.py::test_repeat_after_pending_poll_escalates_as_repeat`.
+   Сценарий: возврат по X → шаг `developer` → `verifying` → опрос с
+   незавершённым заданием головы (ожидание) → опрос с X → `escalated` с
+   причиной «повтор находки гейта по исходам». Файл назван с префиксом
+   задачи: планка AC-15 пускает в `tests/` только такие новые файлы. В
+   перечень лока он не входит, и лок лишних файлов не отвергает. Стенд и
+   помощники импортируются из долгоживущего файла, сам файл не правился.
 
 ## Покрытие требований
 
@@ -80,7 +94,7 @@ schema_version: 5
 | 13 | 1 (у мержа поведение прежнее, `_Pending` ⊂ `_Prepare`) |
 | 14 | 1 (`local` и артель: `_verifying_refusal` → `None` без чтений и записей) |
 | 15 | 3 |
-| 16 | 1 (`_cycle_reason`) |
+| 16 | 1 (`_cycle_reason`), 5 (уточнение ANSWER-2) |
 
 Проверки:
 - `tests/test_01m6bmg29kzv1rx21hfaxzg3cm_verifying_outcome_gate.py` —
@@ -92,6 +106,10 @@ schema_version: 5
   rewrite_flow.
 - Временная мутация «гейт на verifying не вызван» краснит переписанный
   `test_ac9`; код после проверки возвращён.
+- ANSWER-2: долгоживущий файл задачи и новый тест — 46 passed, планка — 4
+  passed. Временная мутация «`PENDING_ACTION` засчитан предыдущим
+  отказом» в `_cycle_reason` краснит новый тест; код после проверки
+  возвращён.
 
 ## Влияние на систему
 - Защита не ослабляется. `review` из `verifying` для `ci`/`both`
