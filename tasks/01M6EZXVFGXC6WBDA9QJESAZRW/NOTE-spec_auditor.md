@@ -1,19 +1,17 @@
 # Записка spec_auditor — 01M6EZXVFGXC6WBDA9QJESAZRW
 
 ## Выяснено
-- Все места SPEC сверены с кодом, номера строк совпадают (fsm_merge_gate.py:1516, 1661-1702/1695-1698, 1789-1808/1796-1797; gitcmd.py:768-775, 928-932, 956-961, 975, 1242-1245, 215-220; github_adapter.py:173, 347-355; ci.py:28; targets.py:1098; mr_sync.py:356).
-- Требование 2 / AC-3 на main уже выполнено: gitcmd.py:884-886 (TargetsError → entries None) + 928-932 → отказ «гейт мержа неизвестен». Но при entries None адресат-URL не узнаётся: gitcmd.py:812-815 → проект = артель, отказа нет.
-- Отказы гейта пишут журнал (fsm_merge_gate.py:1635-1636, gitcmd._refuse) — «БД не изменилась» в AC-1/2/4 буквально невыполнимо.
-- Код отказа пределом нигде не назван; связки gitcmd → код в AC нет.
-- in_flight_refusal зовёт amend.py:857 для всех проектов, исключения артели в требовании 4 нет (в 6 есть).
-- Существующих тестов, закрепляющих пропуск при сбое, нет (кроме смены входа заглушки test_mr_delivery_units.py:155-157).
-- AC-12 согласован: на main открытый MR с sha-предком → (б) пуст (git cherry), (в) → BY_DIFF → --confirm без --by-content отказ; мутация True → MERGED_THIS.
+- Аудит 2 (spec_sha 0616c5df…): пять отклонений первого аудита сняты решением Оператора №1 и перенесены в SPEC (требования 1–7, 12; AC-5, AC-8, AC-12).
+- Новое: между resolve (fsm_merge_gate.py:1508) и people_entry (:1516) стоит _profile_refusal_exit (:1514). Он читает targets.target через project_profile.decide → repo_context.resolve/profile_of и при TargetsError даёт sys.exit + MERGE_PROFILE_REFUSAL_ACTION. Шов AC-1 «после resolve» туда и попадает.
+- AC-6 маскируется: отказ требования 1 на :1516 той же формы и с той же причиной срабатывает раньше _awaiting_limit_refuses (:1630).
+- forge.MergeRequest.state по умолчанию None (forge.py:71) — в AC-13 не назван.
+- Гейт неослабления сравнивает только утверждения (guard.py:2286, :5909), смена входа заглушки допустима.
 
 ## Не сработало
-- grep с `cd` и пайпами требует подтверждения — абсолютные пути без пайпов.
+- `ls`, `$(...)` и пайпы в Bash требуют подтверждения: читать через Read и grep без подстановок.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, verdict concerns.
+- SPEC-AUDIT.md записан: verdict concerns, status ready, 4 отклонения + 1 для сведения.
 
 ## Чего не хватило
-- Нет готового перечня «форм отказа» гейта мержа (sys.exit vs ("stopped",)) — искал по коду.
+- Нет перечня чтений targets.target на пути гейта мержа до people_entry: собирал по коду (project_profile.decide, repo_context.profile_of).

@@ -5,138 +5,164 @@ author_role: spec_auditor
 status: ready
 verdict: concerns
 signals: в) пути-признаки (тесты): tests/, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py; в) пути-признаки (гейты): orchestrator/fsm_merge_gate.py; д) ТЗ ссылается на ADR: ADR-0029.
-spec_sha: 0c954f2afea0fa1a45b65e86afe8adc67d814cfb
+spec_sha: 0616c5dfcab1582a79bdecda3068b53c9a16b81d
 schema_version: 5
 ---
 
 # SPEC-AUDIT: GitLab Б2.3-1: отказ при сбое вместо пропуска
 
-Проверен SPEC с sha содержимого 0c954f2afea0fa1a45b65e86afe8adc67d814cfb
+Проверен SPEC с sha содержимого 0616c5dfcab1582a79bdecda3068b53c9a16b81d
 (`git hash-object` файла в каталоге документов совпал). ANSWER-n.md у
-задачи нет, решений Оператора на гейте SPEC в брифе нет.
+задачи нет. Учтено решение Оператора на гейте SPEC №1 (пп. 1–5 прошлого
+аудита). Рабочий каталог — ветка задачи на main `df354e409`.
 
 ## ТЗ и SPEC
-Все пункты «Требуется» ТЗ разнесены в SPEC: people_entry/гейт мержа →
-требование 1; точка отправки → 2; `_awaiting_limit_refuses` → 3; три места
-`gitcmd` → 4, 5, 6; `github_adapter.py:173` → 7; `_mr_incident_stops` → 8;
-правило признака (а) `mr_sync` → 9; реестр хостингов `ci`/`targets` → 10;
-запрет литералов и `EXEMPT` → 11. Критерии приёмки ТЗ: устройство тестов
-со сбоем → требование 12 и AC-1…AC-10; `github` + `operator` → AC-2; сбой
-БД в `in_repo` у артели → AC-9; тест `mr_sync` с мутацией → AC-12;
-прежнее поведение при читаемых записи и БД → AC-15. «Только чтение» и
-«Не входит» ТЗ перенесены в «Не входит» SPEC; зоны, `merge_after`,
-рамка $40 совпадают с ТЗ.
+Все пункты «Требуется» ТЗ есть в SPEC:
+- people_entry и гейт мержа → требование 1;
+- точка отправки → 2;
+- `_awaiting_limit_refuses` → 3;
+- три места `gitcmd` → 4, 5, 6;
+- `github_adapter.py:173` → 7;
+- `_mr_incident_stops` → 8;
+- признак (а) `mr_sync` → 9;
+- реестр хостингов → 10;
+- запрет литералов и `EXEMPT` → 11.
 
-Сверх ТЗ в SPEC: AC-13 добавляет структурное условие «строка
-`targets.hosting_registry = …` в `orchestrator/ci.py` отсутствует» — это
-прямое прочтение «реестр не подставляется при импорте `ci`», не новое
-требование. AC-10 уточняет «нет алерта и вызова `gh`» — следует из
-существующего теста. Потерь нет.
+Критерии ТЗ:
+- устройство тестов → требование 12;
+- `github` + `operator` → AC-2;
+- `in_repo` артели → AC-11;
+- мутация `mr_sync` → AC-14;
+- прежнее поведение → AC-17.
 
-Расхождение по смыслу, унаследованное из ТЗ (не потеря, но вопрос
-Оператору — см. вердикт п. 5): ТЗ даёт исключение «артель и `operator`
-при сбое БД идут как прежде» только для `in_repo`; для `in_flight_refusal`
-и `_push_plan` исключения нет, и SPEC (требования 4–5) его тоже не
-вводит.
+Зоны, `merge_after` и рамка $40 совпадают с ТЗ.
+
+Решение Оператора №1 перенесено полностью:
+- п. 1 → требование 12, третий пункт;
+- п. 2 → требования 1, 3, 12 и AC-1, AC-3, AC-6;
+- п. 3 → требование 7, AC-12;
+- п. 4 → требование 2, AC-4, AC-5;
+- п. 5 → требования 4–6, AC-7, AC-8, AC-10, AC-11.
+
+Расхождение с ТЗ в требованиях 4–5. ТЗ исключает «артель и `operator`»
+только в `in_repo`. SPEC, следуя п. 5 решения, исключает в 4–6 только
+артель. Для `in_repo` (требование 6) проект `operator` получил отказ
+при сбое БД. По ТЗ там «отправки артели и проектов `operator` при сбое
+БД идут как прежде». Решение п. 5 («исключение только артель для
+требований 4–6») прямо меняет букву ТЗ. Значит, это решение Оператора, а
+не отклонение. Отмечаю, чтобы смена была видна на гейте.
+
+Требований сверх ТЗ и решений нет.
 
 ## Факты против кода
-Подтвердилось (рабочий каталог, ветка задачи = main df354e409):
-- `fsm_merge_gate.py:1516` — `if github_adapter.people_entry(target) is not None:`; до неё `repo_context.resolve` и отказ `sys.exit` при `ctx is None` (`:1508-1514`).
-- `github_adapter.py:347-355` — `people_entry`, `TargetsError` → `None`; `:173` — `gitcmd.IN_FLIGHT_LIMIT_REASON in (push.stderr or "")`.
-- `fsm_merge_gate._mr_incident_stops` `:1661-1702`; статус вне трёх значений → `detail == ""` → `return False` на `:1695-1698`.
-- `fsm_merge_gate._awaiting_limit_refuses` `:1789-1808`, `except targets.TargetsError: return False` на `:1796-1797`.
-- `gitcmd.in_flight_refusal` `:758-775`, `except (targets.TargetsError, sqlite3.Error): return None` на `:774-775`.
-- `gitcmd._push_plan` `:956-961` — `except sqlite3.Error: waiting = None`.
-- `gitcmd.in_repo` `:1242-1245` — `except sqlite3.Error: refusal = None`.
-- `gitcmd.py:928-932` — отказ «гейт мержа неизвестен — …» при `project != DEFAULT_TARGET and entry is None`.
-- `gitcmd._project_tasks` `:215-220` — `store.db()` без перехвата: постоянный `sqlite3.Error` летит исключением.
-- `gitcmd._refused` `:975-978` — код `1` для любого отказа.
-- `repo_context.resolve` `:93-96` — `TargetsError` → `None`.
-- `ci.py:28` — `targets.hosting_registry = lambda: forge.IMPLEMENTATIONS`; `targets.py:128` — `hosting_registry = None`, `:1098` — `None` → проверка пропущена.
-- `mr_sync.py:356` — `if mr.state == "merged":`.
-- `tests/test_mr_delivery_units.py:149-166` — заглушка с кодом `1` и `IN_FLIGHT_LIMIT_REASON`, утверждения `assert_not_called`.
-- `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py` — `EXEMPT` в районе `:416-421`, сторож `test_ac9_no_support_literals_outside_targets`.
+Подтвердилось:
+- `fsm_merge_gate.py:1508-1514`: `repo_context.resolve` и `sys.exit` при `ctx is None`.
+- `fsm_merge_gate.py:1514`: `_profile_refusal_exit`.
+- `fsm_merge_gate.py:1516`: `people_entry(target) is not None`.
+- `fsm_merge_gate.py:1572`: `PEOPLE_REFUSED_ACTION = "approve отклонён"`.
+- `fsm_merge_gate.py:1635-1639`: `_people_refusal` = `store.journal` + `print`.
+- `fsm_merge_gate.py:1661-1702`: `_mr_incident_stops`, проход на `:1695-1698`.
+- `fsm_merge_gate.py:1789-1808`: `_awaiting_limit_refuses`, `except TargetsError: return False` на `:1796-1797`.
+- `github_adapter.py:173`: `IN_FLIGHT_LIMIT_REASON in (push.stderr or "")`.
+- `github_adapter.py:347-355`: `people_entry`, `TargetsError` → `None`.
+- `gitcmd.py:758-775`: `in_flight_refusal`, `except (TargetsError, sqlite3.Error): return None`.
+- `gitcmd.py:812-816`: при `entries is None` URL не сопоставляется, проект = `DEFAULT_TARGET`.
+- `gitcmd.py:884-886` и `:928-932`: отказ «гейт мержа неизвестен — targets.yaml не читается».
+- `gitcmd.py:956-961`: `waiting = None`.
+- `gitcmd.py:975-978`: `_refused`, код `1`.
+- `gitcmd.py:1242-1245`: `refusal = None`.
+- `gitcmd.py:215-220`: `_project_tasks` без перехвата.
+- `repo_context.py:85-89`, `:93-96`.
+- `ci.py:28`, `targets.py:1098`, `mr_sync.py:356`.
+- `amend.py:857`.
+- `tests/test_mr_delivery_units.py:149-166`.
+- `EXEMPT` в `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:416-421`.
 
-Уточнения к фактам SPEC:
-- Требование 2 на main уже выполнено: `gitcmd.py:884-886` (`TargetsError` → `entries = None`) и `:928-932` дают «гейт мержа неизвестен — targets.yaml не читается» для проекта, узнанного по месту вызова. SPEC пишет требование как изменение, а в «Материалах» называет `:928-932` только «образцом причины».
-- Не учтено: при `entries is None` адресат-URL не сопоставляется с проектом (`gitcmd.py:812-815`, `project_by_url` только при `entries is not None`), и проект становится `config.DEFAULT_TARGET` (`:815`). Сбой чтения записи тогда не отказывает (см. «Пути обхода» п. 1).
-- `gitcmd.in_flight_refusal` вызывается вне зон, из `orchestrator/amend.py:857` (`_refuse_in_flight` для любой задачи, не канарейки). SPEC этого потребителя не упоминает.
+Смена входа заглушки в `test_in_flight_refusal_is_not_an_incident`
+(`tests/test_mr_delivery_units.py:155-157`) — не утверждение. Гейт
+неослабления сравнивает только утверждения метода
+(`scripts/guard.py:2286-2302`, `:5909-5921`), так что это верно, раздел
+«Меняемое поведение» не нужен.
+
+Не учтено в SPEC: между `resolve` (`:1508`) и `people_entry` (`:1516`)
+запись `targets.target` читается ещё дважды:
+- `_profile_refusal_exit` → `project_profile.for_task_target` → `decide` → `repo_context.resolve` (`orchestrator/project_profile.py:201`);
+- `repo_context.profile_of` (`orchestrator/repo_context.py:170`).
+
+`TargetsError` в этих чтениях отказывает уже там: `sys.exit` и журнал
+`MERGE_PROFILE_REFUSAL_ACTION` (`orchestrator/fsm_merge_gate.py:1441-1448`).
+См. вердикт п. 1.
+
+`forge.MergeRequest.state` по умолчанию `None` (`orchestrator/forge.py:71`),
+а не `""`. См. вердикт п. 3.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | частично | Сбой `people_entry` по-прежнему ведёт в путь слияния в `base`. Ловится. Но «состояние задачи и БД не изменились» буквально несовместимо с записью отказа в журнал (`fsm_merge_gate.py:1635-1636`, `_people_refusal` → `store.journal`), а форма отказа не названа (вердикт пп. 1–2). |
-| AC-2 | частично | Ветка `operator` возвращает слияние при сбое (`people_entry` → None трактуется как «гейт operator»). Те же оговорки, что у AC-1. |
-| AC-3 | да, но зелёный на main | Удаление отказа `:928-932`. Тест красным до правки не будет: требование уже выполнено (вердикт п. 4). |
-| AC-4 | частично | `except TargetsError: return False` оставлен. Оговорка «БД не изменилась» — как у AC-1: отказ пишет `AWAITING_LIMIT_ACTION` в журнал. |
-| AC-5 | да | `except TargetsError: return None` оставлен. |
-| AC-6 | да | `except sqlite3.Error: return None` оставлен. |
-| AC-7 | да | `except sqlite3.Error: waiting = None` оставлен. |
-| AC-8 | да | `except sqlite3.Error: refusal = None` оставлен для белого списка или непрочитанной записи. |
-| AC-9 | да | Отказ при сбое БД распространён на артель или `operator`. |
-| AC-10 | частично | Возврат проверки по stderr ловится. Не ловится: `gitcmd` по-прежнему отдаёт отказ пределом кодом `1` (`gitcmd.py:975`), а `github_adapter` ждёт новый код. Тогда реальный отказ пределом становится инцидентом «Draft MR FAILED», а тест на заглушке зелёный (вердикт п. 3). Значение или имя кода не названо. |
-| AC-11 | да | Возврат прохода на `:1695-1698` для `locked` и `""`. |
-| AC-12 | да | `state == "merged"` → `True`. На main открытый MR с sha-предком: `git cherry` пуст, (б) нет, (в) → `BY_DIFF` → `--confirm` без `--by-content` отказ (`mr_sync.py:467`). С мутацией `by_merge` → `MERGED_THIS` → закрытие. |
-| AC-13 | да | Подстановка реестра оставлена в `ci.py` либо проверка при `hosting_registry is None` по-прежнему пропускается. Ловится подпроцессом без импорта `ci` (и `forge`). |
-| AC-14 | да | Новое `entry["merge_gate"] == "operator"` вне `targets.py` или новый элемент `EXEMPT`. Сторож ac9 ловит его по подстроке имени. |
-| AC-15 | да | Регрессия пути артели или `operator` при читаемых записи и БД. Держат существующие тесты, в том числе `tests/test_01m5xzskk8gzteca2kwafhe029_component_fields.py:166`, неявно зависящий от `ci.py:28`. |
+| AC-1 | частично | Ловит: `people_entry` снова глотает `TargetsError` и задача идёт путём слияния. Но названный шов «`TargetsError` в `targets.target` после `repo_context.resolve`» первым срабатывает в `_profile_refusal_exit` (`fsm_merge_gate.py:1514`, `sys.exit` + `MERGE_PROFILE_REFUSAL_ACTION`). Ожидаемых `("stopped",)` и `PEOPLE_REFUSED_ACTION` при таком шве не будет (вердикт п. 1) |
+| AC-2 | частично | Ловит: ветка `operator` снова сливает при сбое. Оговорка про шов та же, что у AC-1 |
+| AC-3 | да | `people_entry` снова возвращает `None` при `TargetsError` |
+| AC-4 | да, сторож | Удалён отказ `gitcmd.py:928-932`. На main уже зелёный — так и заявлено |
+| AC-5 | да | URL при `entries is None` по-прежнему считается артелью (`gitcmd.py:815`). Вторая половина ловит отказ и для `origin` артели |
+| AC-6 | частично | Нужная мутация — `except TargetsError: return False` оставлен на `:1796-1797`. Тест её не поймает, если сбой не ограничен чтением внутри `_awaiting_limit_refuses`. Тогда раньше откажет `people_entry` (`:1516`, требование 1), и причина та же: «запись проекта не прочитана:» (вердикт п. 2) |
+| AC-7 | да | `except … return None` оставлен для `TargetsError` или для `sqlite3.Error` |
+| AC-8 | да | Отказ при сбое распространён на артель — `amend-tests` артели откажет |
+| AC-9 | да | `waiting = None` оставлен |
+| AC-10 | да | `refusal = None` оставлен для одного из трёх видов записи |
+| AC-11 | да | Отказ при сбое распространён на артель |
+| AC-12 | да | Ловит три мутации: отказ пределом с кодом `1`; новый код у прочих отказов; `github_adapter` снова сверяет stderr |
+| AC-13 | да, частично | Ловит возврат прохода для `locked` и `""`. Не назван `None` — значение по умолчанию `MergeRequest.state`. Пропустит проверку вида `mr.state in ("locked", "")` (вердикт п. 3) |
+| AC-14 | да | `state == "merged"` → `True` даёт `MERGED_THIS` вместо отказа `BY_DIFF` |
+| AC-15 | да | Подстановка реестра оставлена в `ci.py`, или проверка при `hosting_registry is None` пропускается |
+| AC-16 | да | Новое сравнение литералом вне `targets.py` или новый элемент `EXEMPT` |
+| AC-17 | да | Регрессия пути артели или `operator` при читаемых записи и БД. Держат существующие тесты |
 
 ## Зоны
-Зоны SPEC: `orchestrator/fsm_merge_gate.py`, `gitcmd.py`, `github_adapter.py`,
-`ci.py`, `targets.py`, `tests/`. Этого достаточно для требований 1–11:
-- Требование 7 правит `gitcmd._refused` или отказ пределом и `github_adapter.py:173`.
-- Требование 10 — `ci.py` и `targets.py`. Ленивый импорт `forge` внутри `targets` возможен без правки `forge.py`.
-- Требование 1 правит `people_entry` или `fsm_merge_gate`.
+Зоны SPEC покрывают требования 1–11:
+- требования 1, 3, 8 — `fsm_merge_gate.py` и `github_adapter.py`;
+- требования 2, 4–7 — `gitcmd.py` и `github_adapter.py`;
+- требование 10 — `ci.py` и `targets.py`;
+- тесты — `tests/`.
 
-`amend.py` (потребитель `in_flight_refusal`, `:857`) не правится, но меняет
-поведение: `amend-tests` откажет при сбое чтения. Это следствие требования 4,
-зона не нужна. Защищённых путей (`config.PROTECTED_PATHS`) задача не
-трогает. Песочница ролей не расширяется. `mr_sync.py`, `gitlab_adapter.py`
-и ADR-0029 — только чтение, зон на них нет. Отклонений нет.
+`amend.py` и `project_profile.py` не правятся. `amend.py` меняет поведение
+только через требование 4. Защищённых путей задача не трогает, песочница
+ролей не расширяется. `mr_sync.py`, `gitlab_adapter.py` и ADR-0029 — только
+чтение. Отклонений нет.
 
 ## Матрица неослабления
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `people_entry`/ветвление гейта мержа при сбое чтения (`fsm_merge_gate.py:1516`, `github_adapter.py:347-355`) | Путь `operator`/артели гейта мержа; тестов на пропуск при сбое нет | Да, усиливается: сбой → отказ | AC-1, AC-2, AC-15 | Усиление, мандат не нужен |
-| `_awaiting_limit_refuses` (`fsm_merge_gate.py:1796-1797`) | Предел `max_awaiting` | Да, усиливается | AC-4 | Усиление |
-| `_mr_incident_stops` (`:1695-1698`) | Проверка инцидента MR; `tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py:1364` (merged/closed) | Да, усиливается | AC-11, существующий тест прежний | Усиление |
-| `in_flight_refusal` (`gitcmd.py:774-775`) | Предел `max_in_flight` до коммита `amend-tests` (`amend.py:857`); `tests/test_mr_delivery_units.py:267` | Да, усиливается. Побочно: артель тоже откажет при сбое (вердикт п. 5) | AC-5, AC-6 | Вопрос Оператору по артели |
-| `_push_plan` `max_in_flight` (`gitcmd.py:956-961`) | Предел `max_in_flight` в точке отправки | Да, усиливается | AC-7 | Усиление |
-| `in_repo` (`gitcmd.py:1242-1245`) | Отказ отправки ветки в `awaiting_human`; `tests/test_awaiting_human_units.py` | Да, для белого списка усиливается, артель и `operator` прежние | AC-8, AC-9 | Усиление |
-| Распознавание отказа пределом (`github_adapter.py:173`, код `gitcmd.py:975`) | «отказ пределом — не инцидент»; `tests/test_mr_delivery_units.py:149-166` | Да, если код отказа пределом в `gitcmd` реально меняется. Связка не покрыта | AC-10 (только заглушка). Связка `gitcmd` → код — не покрыто | Отклонение (вердикт п. 3) |
-| Вход заглушки `test_in_flight_refusal_is_not_an_incident` (`tests/test_mr_delivery_units.py:155-157`) | Тот же тест; утверждения `assert_not_called` | Да, утверждения прежние, «Меняемое поведение» не нужно | Тот же тест | Допустимо |
-| Подстановка реестра (`ci.py:28`, `targets.py:1098`) | Проверка `full_suite: ci/both`; `tests/test_01m5xzskk8gzteca2kwafhe029_component_fields.py:166` (зависит от импорта `ci` через песочницу) | Да, становится безусловной | AC-13, существующий тест прежний (AC-15) | Усиление |
-| Сторож ac9 (`tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:416-421`) | Запрет литералов `forge`/`merge_gate` | Да, без новых `EXEMPT` | AC-14 | Без изменений |
+| `people_entry`: сбой → исключение; отказ гейта мержа (`github_adapter.py:347-355`, `fsm_merge_gate.py:1516`) | Путь гейта артели и `operator`; тестов на пропуск при сбое нет | Да, усиливается | AC-1, AC-2, AC-3, AC-17 | Усиление |
+| `_awaiting_limit_refuses` (`fsm_merge_gate.py:1796-1797`) | Предел `max_awaiting` | Да, усиливается | AC-6 (оговорка, вердикт п. 2) | Усиление |
+| `_mr_incident_stops` (`fsm_merge_gate.py:1695-1698`) | Проверка инцидента MR; `tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py` | Да, усиливается | AC-13 | Усиление |
+| Адресат-URL при непрочитанной записи (`gitcmd.py:812-816`) | Единая точка отправки | Да, усиливается | AC-5 | Усиление |
+| `in_flight_refusal` (`gitcmd.py:774-775`) | Предел `max_in_flight` до коммита `amend-tests` (`amend.py:857`) | Да, артель прежняя | AC-7, AC-8 | Усиление |
+| `_push_plan` `max_in_flight` (`gitcmd.py:956-961`) | Предел `max_in_flight` | Да, усиливается | AC-9 | Усиление |
+| `in_repo` (`gitcmd.py:1242-1245`) | Отказ отправки ветки в `awaiting_human` | Да. `operator` при сбое БД теперь отказывает — решение п. 5 | AC-10, AC-11 | Усиление |
+| Код отказа пределом (`gitcmd.py:975`, `github_adapter.py:173`) | «Отказ пределом — не инцидент»; `tests/test_mr_delivery_units.py:149-166` | Да | AC-12, тот же тест со сменой входа заглушки | Усиление |
+| Подстановка реестра (`ci.py:28`, `targets.py:1098`) | Проверка `full_suite: ci/both` | Да, становится безусловной | AC-15 | Усиление |
+| Сторож ac9 (`tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:416-421`) | Запрет литералов `forge`/`merge_gate` | Да | AC-16 | Без изменений |
 
-Раздел «Меняемое поведение» в SPEC отсутствует. Это верно: существующих
-тестов, утверждающих пропуск при сбое, нет. Смена в
-`test_mr_delivery_units.py` — вход заглушки, не литерал утверждения.
+Раздела «Меняемое поведение» в SPEC нет, и это верно. Существующих
+утверждений, закрепляющих пропуск при сбое, нет. Заглушек с
+`state=None`/`""` в тестах гейта не найдено: фейк `mr_status` даёт
+`opened` (`tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py:380-387`).
 
 ## Пути обхода гейтов
-1. **Адресат-URL при непрочитанной записи.** `git push <url-внешнего-проекта> <ветка>` вне клона проекта при `TargetsError` в `targets.load()` (`gitcmd.py:884-886`). `_push_destination` не сопоставляет URL при `entries is None` (`:812-814`) и считает отправку артельной (`:815`). Отказ `:928-932` не срабатывает. Требование 2 SPEC выполнено буквально (оно уже выполнено на main), а сбой чтения записи пропускает проверку — ровно класс задачи. AC-3 этого не ловит.
-2. **Код отказа пределом.** Исполнитель меняет `github_adapter.py:173` на сравнение `push.returncode == <новый код>` и правит заглушку теста, но `gitcmd._refused` (`:975`) для отказа пределом оставляет `1`. AC-10 зелёный, а реальный отказ пределом даёт алерт «Draft MR FAILED» — регресс SPEC 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7. Нет критерия «отказ пределом из `gitcmd.git`/`in_repo` несёт код предела».
-3. **«Отказ» гейта мержа через `sys.exit`.** Буквальное «тест сверяет возвращённый отказ, а не летящее исключение» при принятой форме отказа гейта (`sys.exit(...)`, `fsm_merge_gate.py:1510-1514`) допускает два несовместимых прочтения: тест ждёт `("stopped",)` и запись журнала, а код отказывает `SystemExit` (или наоборот). Тест и код расходятся на устройстве, не на поведении.
+1. **Маскировка AC-6 отказом требования 1.** Тест AC-6 с `TargetsError`, постоянным после `resolve`, получает отказ `("stopped",)` + `PEOPLE_REFUSED_ACTION` «запись проекта не прочитана: …». Отказывает либо `people_entry` (`fsm_merge_gate.py:1516`), либо раньше `_profile_refusal_exit`. До `_awaiting_limit_refuses` (`:1630`) тест не доходит. Исполнитель оставляет `return False` на `:1796-1797` — AC-6 зелёный. Пропуск `max_awaiting` при сбое между `people_entry` и `:1795` остаётся.
+2. **Шов AC-1 и AC-2.** Сбой «после `resolve`» срабатывает в `_profile_refusal_exit` (`sys.exit`, `fsm_merge_gate.py:1446`). Тест будет красным и после правной реализации. Тогда автор тестов или разработчик подгоняет устройство: считает вызовы `targets.target` либо переносит отказ `_profile_refusal_exit` в форму `("stopped",)` — правка вне требований. Возможен и вариант, где тест через `_profile_refusal_exit` не доходит до `people_entry` вовсе.
 
 ## Вердикт
-**concerns** — SPEC вести можно, но пять отклонений решает Оператор на гейте
-(правка SPEC аналитиком либо решение в ANSWER):
+**concerns.** Пять отклонений прошлого аудита сняты решением Оператора №1
+и перенесены в SPEC. Новые отклонения:
 
-1. **AC-1, AC-2, AC-4, требование 12 (третий пункт): «состояние задачи и БД не изменились» несовместимо с журналом отказа.** Отказ гейта пишет журнал (`orchestrator/fsm_merge_gate.py:1635-1636`), отказ отправки — тоже (`orchestrator/gitcmd.py:779` `_refuse`). Нужно уточнить: строка `tasks` (`state`, поля MR, `draft_mr_created`) и таблицы, кроме журнала, неизменны, а запись отказа ожидаема.
-2. **Форма отказа и шов подмены не названы (требования 1, 7; AC-1, AC-2, AC-10).** Не сказано:
-   - отказ гейта мержа при сбое — это `sys.exit` с текстом (как `fsm_merge_gate.py:1510-1514`) или `("stopped",)` и запись журнала (как `_people_refusal`);
-   - какое действие журнала;
-   - что делает `people_entry` при сбое: пробрасывает `TargetsError` или различает «не people» и «не прочитано»;
-   - каково значение или имя кода отказа пределом.
+1. **AC-1, AC-2: шов «после `repo_context.resolve`» попадает не в `people_entry`.** Ссылки: `fsm_merge_gate.py:1514`, `:1441-1448`, `project_profile.py:201`, `repo_context.py:170`. Требование 12 говорит «чтение внутри `people_entry`», AC-1 — «после `resolve`»; это несогласованно. Нужно уточнить в AC-1, AC-2: сбой только в чтении `targets.target` из `people_entry`, предыдущие чтения записи успешны. Это в рамках решения п. 2 (шов `targets.target`).
+2. **AC-6 не ловит оставленный `return False` (`fsm_merge_gate.py:1796-1797`).** Отказ требования 1 (`:1516`) имеет ту же форму и причину. Нужно: сбой только в чтении из `_awaiting_limit_refuses` (`:1795`), и тест подтверждает, что отказал именно предел. Например, предыдущие чтения записи успешны, а `people_entry` вернул запись.
+3. **AC-13 не называет `None`** — значение по умолчанию `forge.MergeRequest.state` (`orchestrator/forge.py:71`). Требование 8 («пустой») покрывает его по смыслу, но критерий пропустит реализацию, проверяющую только `""`. Предложение: «`locked`, `""`, `None`».
+4. **Задачи артели на гейте мержа при сбое чтения в `people_entry` — без AC.** Требование 1 и ТЗ: «Задачи артели — без изменений»; `people_entry` теперь бросает исключение. Мутация «отказ и для артели» (`config.DEFAULT_TARGET` не исключён) не ловится: AC-17 проверяет только читаемую запись. Малое: ТЗ такого критерия прямо не требует.
+5. **Для сведения Оператора, не дефект SPEC.** В требовании 6 проект `operator` при сбое БД отказывает, хотя ТЗ это исключало. Так следует из решения п. 5 («только артель для 4–6»), SPEC его исполняет буквально.
 
-   Без этого автор тестов либо навяжет устройство (`тест-навязывает-устройство`), либо не сможет построить «результат с кодом предела».
-3. **AC-10 не связывает код отказа пределом в `gitcmd` с распознаванием в `github_adapter`** (`orchestrator/gitcmd.py:975`, `orchestrator/github_adapter.py:173`). Нужен критерий: отказ пределом из `gitcmd.in_repo`/`git` возвращает код предела, а прочие отказы точки — нет («Пути обхода» п. 2).
-4. **Требование 2 и AC-3 уже выполнены на main** (`orchestrator/gitcmd.py:884-886`, `:928-932`). Тест на них зелёный без правки. Остаётся непокрытым пропуск при сбое для адресата-URL (`orchestrator/gitcmd.py:812-815`). Решить: входит ли адресат-URL при непрочитанной записи в требование 2 (тогда отказ и AC), или это часть 2 деления (сверки отправки) — тогда сказать об этом в «Не входит».
-5. **Требование 4 (`in_flight_refusal`) и требование 5 не исключают артель и `operator`, в отличие от требования 6.**
-   - Следствие требования 4: `amend-tests` задачи артели откажет при сбое чтения `targets.yaml` (`orchestrator/amend.py:857`), хотя точка отправки артель пропускает (`orchestrator/gitcmd.py:928`, исключение `DEFAULT_TARGET`).
-   - Это противоречит и `repo_context.resolve` («пульт обязан работать над собой и при сломанном файле», `orchestrator/repo_context.py:85-89`).
-   - Буква ТЗ здесь совпадает с SPEC, поэтому решение за Оператором: распространить исключение артели и `operator` на требования 4–5 или подтвердить отказ для всех. AC-15 этот случай не покрывает: там только читаемые запись и БД.
-
-Факты о коде SPEC подтвердились все (см. «Факты против кода»). Зоны
-достаточны, защищённых путей нет. Матрица неослабления — только усиления.
+Факты о коде SPEC подтвердились все. Зоны достаточны, защищённых путей
+нет. Матрица — только усиления.
