@@ -39,13 +39,29 @@ AC-1/AC-2 — чтение записи внутри `people_entry` (решен�
 `operator` при сбое БД отказывает (решение 5 подтверждает требования
 4–6).
 
+Решения Оператора по третьему аудиту (возврат из `spec_gate`): второй
+вызывающий `people_entry` — `github_adapter.ensure_forge_draft_mr`
+(`orchestrator/github_adapter.py:430-433`, переход `in_dev -> verifying`
+через `orchestrator/advance_gates/tests_writing.py:82`) — ловит
+`TargetsError` внутри `github_adapter.py` и отказывает переходу
+(решение 1 → требование 13, AC-19, AC-20); шов подмены без счёта
+вызовов — отдельная функция-читатель записи в `github_adapter`, которой
+пользуется только `people_entry` (решение 2 → требования 1, 12, AC-1,
+AC-2, AC-3, AC-18).
+
 ## Требования
 
 1. Гейт мержа (`orchestrator/fsm_merge_gate.py:1516`, вызов
    `github_adapter.people_entry`, `orchestrator/github_adapter.py:347-355`,
    сейчас `TargetsError` → `None`): `github_adapter.people_entry` различает
    «гейт проекта не `target-human`» (возврат `None`) и «запись проекта не
-   прочитана» (бросает `targets.TargetsError`). Место вызова в
+   прочитана» (бросает `targets.TargetsError`). Запись `people_entry`
+   читает через отдельную функцию-читатель записи в `github_adapter`,
+   которой пользуется только `people_entry`; прочие чтения
+   `targets.target` (в `repo_context`, `project_profile`, `fsm_merge_gate`,
+   `gitcmd`, `open_forge_mr`) её не используют. Для артели
+   (`config.DEFAULT_TARGET`) `people_entry` запись не читает и возвращает
+   `None`. Место вызова в
    `fsm_merge_gate` ловит `TargetsError` и для задачи любого проекта,
    кроме артели (`config.DEFAULT_TARGET`), отказывает гейтом мержа тем же
    устройством, что `_people_refusal`: возврат `("stopped",)` и запись
@@ -116,7 +132,7 @@ AC-1/AC-2 — чтение записи внутри `people_entry` (решен�
     `EXEMPT` сторожа ac9
     (`tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:416-421`)
     запрещены.
-12. Тесты отказа при сбое (AC-1…AC-11, AC-18) устроены так:
+12. Тесты отказа при сбое (AC-1…AC-11, AC-18…AC-20) устроены так:
     - сбой подменяется в точке чтения внутри гейта или отправки, а не
       постоянной подменой загрузчика (постоянный `TargetsError`
       отказывает раньше, в `repo_context.resolve` —
@@ -124,18 +140,20 @@ AC-1/AC-2 — чтение записи внутри `people_entry` (решен�
       `orchestrator/repo_context.py:93-96`; постоянный `sqlite3.Error`
       валит отправку исключением в `gitcmd._project_tasks` —
       `orchestrator/gitcmd.py:215-220`; такой тест зелёный и без правки).
-      Для записи шов подмены — `targets.target` (чтение внутри
-      `people_entry`/`fsm_merge_gate` и `gitcmd`). На гейте мержа запись
+      Для записи шов подмены — функция-читатель записи `people_entry` в
+      `github_adapter` (требование 1) для AC-1, AC-2, AC-18…AC-20 и
+      `targets.target` в названном чтении `fsm_merge_gate` и `gitcmd` для
+      прочих. На гейте мержа запись
       читается до `people_entry` ещё в `repo_context.resolve`
       (`fsm_merge_gate.py:1508`) и в `_profile_refusal_exit` (`:1514`,
       через `project_profile.decide` и `repo_context.profile_of`); сбой в
       них отказывает раньше (`sys.exit` и `MERGE_PROFILE_REFUSAL_ACTION`,
       `:1441-1448`). Поэтому сбой подменяется только в названном чтении,
-      все прочие чтения записи успешны: в AC-1, AC-2, AC-18 — только в
-      вызове `targets.target`, который делает `people_entry`, после
-      успешных чтений `repo_context.resolve` и `_profile_refusal_exit`
-      (например `side_effect` со сбоем начиная с того вызова по счёту или
-      подмена читателя записи в `github_adapter`); в AC-6 — только в
+      все прочие чтения записи успешны: в AC-1, AC-2, AC-18…AC-20 —
+      подменой функции-читателя записи `people_entry` в `github_adapter`
+      (без счёта вызовов `targets.target`); `targets.target` не
+      подменяется, чтения `repo_context.resolve`, `_profile_refusal_exit`
+      и все прочие успешны; в AC-6 — только в
       чтении внутри `_awaiting_limit_refuses` (`:1795`), а `people_entry`
       и прочие чтения успешны. Для БД — чтение
       названного места (`in_flight_refusal`, проверка `max_in_flight` в
@@ -147,14 +165,26 @@ AC-1/AC-2 — чтение записи внутри `people_entry` (решен�
       ссылки и ветки после отказа не изменились; ровно одна запись
       журнала об отказе допустима и обязательна;
     - шпион не видит слияния, отправки или открытия MR.
+13. Второй вызывающий `people_entry` —
+    `github_adapter.ensure_forge_draft_mr`
+    (`orchestrator/github_adapter.py:430-433`; его зовёт гейт перехода
+    `in_dev -> verifying`, `orchestrator/advance_gates/tests_writing.py:82`):
+    `targets.TargetsError` из `people_entry` ловится внутри
+    `github_adapter.py` (в `ensure_forge_draft_mr`), и функция возвращает
+    отказ перехода с причиной «запись проекта не прочитана: <причина>».
+    Задача остаётся в `in_dev` (отказ `DRAFT_MR_REFUSAL_ACTION` гейта
+    `_forge_draft_mr_gate`), `ensure_forge_draft_mr` ветку не отправляет,
+    черновой MR не открывается. Задача артели — без изменений
+    (`people_entry` для артели запись не читает, требование 1).
+    `orchestrator/advance_gates/tests_writing.py` не меняется.
 
 ## Критерии приёмки
 
-AC-1. Задача внешнего проекта с `merge_gate: target-human` на гейте мержа: `TargetsError`, подменённый только в вызове `targets.target`, который делает `github_adapter.people_entry` (чтения записи в `repo_context.resolve` и `_profile_refusal_exit` до него успешны — `side_effect` со сбоем с вызова этого номера или подмена читателя в `github_adapter`), даёт возврат `("stopped",)` и ровно одну запись журнала действием `PEOPLE_REFUSED_ACTION` с причиной, начинающейся «запись проекта не прочитана:»; слияния в `base`, отправки и открытия MR нет; состояние задачи, поля задачи, ссылки и ветки не изменились.
+AC-1. Задача внешнего проекта с `merge_gate: target-human` на гейте мержа: `TargetsError`, поднятый подменённой функцией-читателем записи `people_entry` в `github_adapter` (`targets.target` не подменён, чтения записи в `repo_context.resolve`, `_profile_refusal_exit` и прочие успешны), даёт возврат `("stopped",)` и ровно одну запись журнала действием `PEOPLE_REFUSED_ACTION` с причиной, начинающейся «запись проекта не прочитана:»; слияния в `base`, отправки и открытия MR нет; состояние задачи, поля задачи, ссылки и ветки не изменились.
 
-AC-2. То же для задачи проекта `github` + `merge_gate: operator`: сбой чтения записи, подменённый тем же швом, что в AC-1 (только вызов `targets.target` внутри `people_entry`, прочие чтения успешны), даёт тот же отказ (`("stopped",)`, одна запись журнала `PEOPLE_REFUSED_ACTION` «запись проекта не прочитана: …») без слияния, отправки и открытия MR; состояние задачи, поля, ссылки и ветки не изменились.
+AC-2. То же для задачи проекта `github` + `merge_gate: operator`: сбой чтения записи, подменённый тем же швом, что в AC-1 (функция-читатель записи `people_entry` в `github_adapter`, прочие чтения успешны), даёт тот же отказ (`("stopped",)`, одна запись журнала `PEOPLE_REFUSED_ACTION` «запись проекта не прочитана: …») без слияния, отправки и открытия MR; состояние задачи, поля, ссылки и ветки не изменились.
 
-AC-3. `github_adapter.people_entry`: при `TargetsError` в `targets.target` бросает `targets.TargetsError`; при читаемой записи с гейтом не `target-human` возвращает `None`; при `target-human` — запись.
+AC-3. `github_adapter.people_entry` для проекта вне артели: при `TargetsError` в функции-читателе записи бросает `targets.TargetsError`; при читаемой записи с гейтом не `target-human` возвращает `None`; при `target-human` — запись. Для артели (`config.DEFAULT_TARGET`) возвращает `None` и при читателе, поднимающем `TargetsError`.
 
 AC-4. Единая точка отправки (`gitcmd`): сбой чтения записи проекта вне артели, узнанного по месту вызова, даёт отказ отправки с причиной «гейт мержа неизвестен»; `git push` не вызван (сторож регрессии, на main уже зелёный).
 
@@ -184,11 +214,15 @@ AC-16. Вне `orchestrator/targets.py` нет новых сравнений з�
 
 AC-17. Артель и проекты `github` + `merge_gate: operator` при читаемых записи и БД: путь гейта мержа и отправки прежний (слияние/отправка проходят так же, как на main), утверждения существующих тестов прежние.
 
-AC-18. Задача артели (`config.DEFAULT_TARGET`) на гейте мержа: `TargetsError`, подменённый тем же швом, что в AC-1 (только вызов `targets.target` внутри `people_entry`), отказа не даёт — записи журнала `PEOPLE_REFUSED_ACTION` нет, задача идёт прежним путём гейта мержа артели, как при `people_entry` → `None` на main.
+AC-18. Задача артели (`config.DEFAULT_TARGET`) на гейте мержа: `TargetsError`, подменённый тем же швом, что в AC-1 (функция-читатель записи `people_entry` в `github_adapter`; `targets.target` не подменён, прочие чтения успешны), отказа не даёт — записи журнала `PEOPLE_REFUSED_ACTION` нет, задача идёт прежним путём гейта мержа артели, как при `people_entry` → `None` на main.
+
+AC-19. Задача внешнего проекта на переходе `in_dev -> verifying`: `TargetsError`, поднятый подменённой функцией-читателем записи `people_entry` (прочие чтения успешны), даёт отказ перехода — `advance` не переводит задачу, она остаётся в `in_dev`, запись журнала действием `DRAFT_MR_REFUSAL_ACTION` с причиной, содержащей «запись проекта не прочитана:»; `ensure_forge_draft_mr` возвращает причину, а не `None` и не летящее исключение; `forge.open_mr` не вызван, ссылки на MR в БД нет, `ensure_forge_draft_mr` ветку не отправляет.
+
+AC-20. Задача артели на переходе `in_dev -> verifying` при той же подмене функции-читателя записи `people_entry`: отказа `DRAFT_MR_REFUSAL_ACTION` нет и исключение не летит — `ensure_forge_draft_mr` возвращает `None`, переход идёт прежним путём, как на main.
 
 ## Оценка объёма и деление
 Сработавшие сигналы: файлов зоны ≥ 5 (пять модулей `orchestrator/` + `tests/`),
-критериев приёмки ≥ 10 (18), `budget_usd` ≥ $30 ($40 — рамка ТЗ).
+критериев приёмки ≥ 10 (20), `budget_usd` ≥ $30 ($40 — рамка ТЗ).
 
 Материал для решения Оператора — обоснование монолита. Задача уже сама
 является частью 1 из 4 деления родителя 01M6EXF3TMNRKCZH8CS9BXXG1Z,
@@ -213,6 +247,9 @@ AC-18. Задача артели (`config.DEFAULT_TARGET`) на гейте ме�
 - Правка `orchestrator/targets.py` сверх требования 10.
 - Правка `orchestrator/forge.py` — только чтение (значение по умолчанию
   `MergeRequest.state`, требование 8).
+- Правка `orchestrator/advance_gates/tests_writing.py` — сбой второго
+  вызывающего `people_entry` обрабатывается внутри `github_adapter.py`
+  (требование 13); порядок гейтов перехода `in_dev -> verifying` прежний.
 - Правка `orchestrator/repo_context.py` — упомянут только как место
   раннего отказа при постоянной подмене загрузчика (требование 12).
 - Полный зелёный набор `tests/` и зелёный CI ветки — их держит пульт.
@@ -236,3 +273,10 @@ AC-18. Задача артели (`config.DEFAULT_TARGET`) на гейте ме�
   `IN_FLIGHT_LIMIT_REASON` в stderr; при требовании 7 его заглушка
   должна нести код отказа пределом — это смена входа заглушки, не
   утверждения (`assert_not_called` остаются прежними).
+- Порядок гейтов перехода `in_dev -> verifying`
+  (`orchestrator/advance_gates/tests_writing.py:71-74`): публикация головы
+  ветки (`_publish_head_gate`) идёт до `_forge_draft_mr_gate`. При подмене
+  только читателя записи `people_entry` (прочие чтения успешны) голова
+  может быть уже опубликована первым гейтом — «ветка не отправлена» в
+  требовании 13 и AC-19 относится к `ensure_forge_draft_mr`, который
+  отправки не делает; `tests_writing.py` вне зон, его порядок не меняется.
