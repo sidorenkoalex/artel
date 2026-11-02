@@ -1,10 +1,10 @@
 ## Выяснено
-- Повторный шаг: advance отказал «ANSWER-1 записан после последнего шага developer». Код прошлого шага уже реализует ANSWER-1 пп. 1–4 (include/неподдержанный if/changes — warn, ssh и чужой хост подмодуля — warn, retry {max: N}, http_status при 403 заданий у красного конвейера).
-- Строка перезапусков без файла CI оставлена `skip` по SPEC треб. 9 (ANSWER «нет файла CI — warn» прочитан как строка workflow, треб. 6).
-- Bash шага ограничен: ls/wc/cp и heredoc с `{…'` отказаны; работают python3 -c, git, pytest.
+- Код уже реализует ANSWER-1 пп. 1–4; прошлый отказ advance — инвариант 35: адреса `*.example` в tests/test_doctor_gitlab_ci_file.py.
+- Хосты заменены: `git.example` → `localhost`, `other.example` → `127.0.0.1`; проверка — `guard.network_address_errors_from_files([(путь, текст)])` даёт [].
+- Bash шага ограничен: ls/wc/cp отказаны; работают python3, git, pytest.
 ## Где остановился
-- Шаг завершён: добавлены 2 теста пробелов ANSWER-1 п. 4 в tests/test_doctor_gitlab_ci_file.py (нет файла CI — warn; target-human без компонента ci/both — строк 8/9 нет), мутация проверена, карта перегенерирована, 73 passed, plank-run 1 passed, PLAN ready.
+- Шаг завершён: 24 passed в файле, plank-run 1 passed, карта перегенерирована, PLAN ready.
 ## Не сработало
 - —
 ## Чего не хватило
-- Что именно в ANSWER-1 требует новой работы, если код уже по нему написан: гейт смотрит только время записи ANSWER относительно шага.
+- Правило «в tests/ только localhost/127.0.0.1» (инвариант 35) всплыло только отказом advance; в скиле coding-standards его нет.

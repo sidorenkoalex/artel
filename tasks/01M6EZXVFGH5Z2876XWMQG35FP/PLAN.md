@@ -111,6 +111,11 @@ schema_version: 5
   8/9 нет без компонента ci/both; мутация «условие компонента снято» —
   красный, код возвращён). Задачные тесты — 73 passed, `plank-run` — 1
   passed, карта перегенерирована.
+- Отказ advance по инварианту 35 (адреса `git.example`/`other.example` в
+  `tests/test_doctor_gitlab_ci_file.py:166, 206, 218, 222-224`): хосты
+  заменены на `localhost` (хост записи) и `127.0.0.1` (чужой хост);
+  `guard.network_address_errors_from_files` — пусто, файл — 24 passed,
+  `plank-run` — 1 passed.
 
 ## Предложения системе
 - Bash шага роли отказывает в heredoc с `{…'` и в `ls`/`wc`/`cp` — правку
