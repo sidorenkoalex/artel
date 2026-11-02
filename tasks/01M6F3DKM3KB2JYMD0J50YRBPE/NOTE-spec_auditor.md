@@ -1,15 +1,14 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Аудит SPEC sha 38d11a7c (итерация 2). Решения гейта 1–6 в SPEC отражены. Ссылки SPEC на код сверены — совпадают (fsm_advance.py:442/463-480/350/496, auto.py:1080-1100/1152/1170/1280-1312, board.py:19-20/27, brief.py:86, test_invariants.py:400/744/1613/1769).
-- Находки: AC-16 — шпион по вызовам, а не по исходу (прецедент исхода test_invariants.py:3613); матрица без строки об удержании надзора после красного CI (auto.py:1170,1251) — «набор состояний» с verifying даст цикл перезапусков; AC-1 не ловит regex имени; AC-12 не ловит пустую причину; AC-17 не требует, чтобы verify-ok в обходе реально сработал (прецедент mr_sync_call :635); description есть только в targets.local.yaml (targets.py:338,434); «одна запись на голову» vs повторный вход в verifying с той же головой.
-- Вердикт — concerns.
+- Аудит SPEC sha 77ccd3d4 (итерация 3). Решения гейта №1 (1–6) и №2 (1–9) отражены. Ссылки SPEC на код верны.
+- Находки (вердикт concerns, 6 пунктов): В1 — pull-main меняет голову внутри визита verifying (pull_main.py:61-107), AC на это нет; В2 — потолок CI для проекта с verify не покрыт (test_verifying_ceiling.py — без verify); А1 — _epic_view (auto.py:1308) _WAITING только по состоянию, требование 5 запрещает нужную правку; А2 — актор перехода verify-ok не назван, _child_holds ждёт actor=operator (auto.py:1207-1222); В3 — waiting_on при CI в ожидании у проекта с verify не проверен; В4 — verify: [] без AC.
 
 ## Не сработало
-- Bash: составные команды и ls отказаны; работают одиночные grep/git -C.
+- `ls` в Bash отказан; работают git ls-files, grep, sed.
 
 ## Где остановился
-- SPEC-AUDIT.md записан (status ready, verdict concerns, 9 пунктов), guard — ок. Шаг завершён.
+- SPEC-AUDIT.md записан (status ready, verdict concerns), guard — ок. Шаг завершён.
 
 ## Чего не хватило
-- Где хранится «строка status» — это строка вывода catalog.cmd_status (_status_line), не поле БД.
+- Как надзор эпика различает «ждёт Оператора» и «держит после остановки» — auto.py:1225-1312 (_child_holds, _epic_view).
