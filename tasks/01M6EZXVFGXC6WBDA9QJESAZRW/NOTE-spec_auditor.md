@@ -1,15 +1,16 @@
 # Записка spec_auditor — 01M6EZXVFGXC6WBDA9QJESAZRW
 
 ## Выяснено
-- Аудит 3 (spec_sha f6ff8ac1…): решения Оператора №1 и №2 перенесены в SPEC полностью; отклонения аудитов 1–2 сняты.
-- Новое: у people_entry второй вызывающий — github_adapter.ensure_forge_draft_mr (:431), зовётся из advance_gates/tests_writing.py:82 на in_dev->verifying для любой задачи, включая артель. Требование 1 (people_entry бросает) его не учитывает.
-- Пример шва «side_effect начиная с N-го вызова» конфликтует с «только» для AC-18 (путь артели продолжается); github_adapter.targets — общий модуль, подмена там глобальна.
+- Аудит 4 (spec_sha e33f5134…): решение Оператора №3 (ensure_forge_draft_mr, шов-читатель) перенесено — требование 13, AC-19/20, требования 1/12. Отклонения аудита 3 сняты.
+- people_entry зовут только fsm_merge_gate.py:1516 и github_adapter.py:431 (grep по orchestrator/ и tests/); тестов на people_entry напрямую нет.
+- Новое (мелкое): «people_entry для артели запись не читает» — на main читает; targets.py:865 не запрещает артели merge_gate target-human.
+- «Ветка не отправлена» решения №3 SPEC сузил до «ensure_forge_draft_mr не отправляет» (публикация головы идёт раньше, tests_writing.py:71-74) — проверяемой мутации нет.
 
 ## Не сработало
-- Пайпы с awk в Bash требуют подтверждения — читать через Read.
+- cd + git/grep в одной команде требуют подтверждения — абсолютные пути.
 
 ## Где остановился
-- SPEC-AUDIT.md записан: verdict concerns, status ready, 2 отклонения.
+- SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Чего не хватило
-- Перечня вызывающих people_entry в SPEC — нашёл grep'ом по orchestrator/.
+- Нет запрета target-human для артели в targets.check — искал в targets.py:860-893.
