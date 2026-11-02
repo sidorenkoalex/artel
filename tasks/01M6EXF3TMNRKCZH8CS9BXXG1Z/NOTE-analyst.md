@@ -1,17 +1,20 @@
-# Записка analyst — 01M6EXF3TMNRKCZH8CS9BXXG1Z (GitLab Б2.3)
+# Записка analyst — 01M6EXF3TMNRKCZH8CS9BXXG1Z (GitLab Б2.3), шаг 2 (возврат аудита 1 из 2)
 
 ## Выяснено
-- ANSWER-1: в1 B, в2 B (множество пар {(github,operator),(gitlab,target-human)}), в3 A (мандат на сторож А0, условия (а)–(г)), в4 A (4 части), п.5 — добавка к части 3 (doctor для forge: gitlab без gh).
-- SPEC написан с «## Деление» на 4 части; guard ок; QUESTIONS.md удалён. Разбор частей проверен `guard.parse_division_subsections` + `merge_after.division_order_items`: ч1 после 01M6AB4VE2R0Q2V5D4MMJGNGH7, ч2 после части 1, ч3 без зависимостей (loose — только уведомление в fsm.py:1113), ч4 после частей 1–3.
-- Отступление от нарезки батча: в зоны ч1 добавлен orchestrator/targets.py — `hosting_registry` (`targets.py:128`, `:1098`) подставляется в `ci.py:28`, правка п.7 может потребовать targets.py.
-- Мандат «Ослабление тестов разрешено» читается только из ANSWER своей задачи (advance_gates/mandate.py:29); spawn подзадачи (catalog.py) ANSWER не переносит — в ТЗ ч4 написано, что Оператору нужно повторить мандат в ANSWER подзадачи.
-- Рамки частей 40/40/45/25 = $150 > рамки ТЗ $85 (в SPEC объяснено).
+- Аудит fail, 12 пунктов. Закрываю правкой SPEC, без нового батча.
+- gitcmd: три места fail-open — in_flight_refusal :768-775, _push_plan :956-961, in_repo :1242-1245. Сужение in_repo: отказ только для проекта не-артели под белым списком/с непрочитанной записью (прецедент gitcmd.py:928-932 «гейт мержа неизвестен»).
+- Клоны уже имеют core.hooksPath = <ROOT>/scripts/git-hooks (workspace.set_clone_hooks :68; doctor clone-hooks warn git_hooks.py:148). Общий pre-push пропускает всё при ARTEL_PULT_GIT=1 (:14). Правила target-human — в хуке, который git реально вызывает; маркер их не снимает.
+- -c core.hooksPath в gitcmd НЕТ — новое требование (сужено до клона target-human).
+- Выбор по forge в doctor — через реестр forge (прецедент misc_checks.check_base_branch :91-140, IMPLEMENTATIONS.get), без литералов и без новых EXEMPT ac9.
+- project-token зовёт `gh auth token` (project_checks.py:211-246) — для gitlab сверку с токеном gh не делать.
+- Хук doctor-строка и --fix перенесены в часть 2 (зона doctor/git_hooks.py), клон подмодулей — в часть 2 (workspace.py); часть 3 больше не зависит от части 2.
 
 ## Не сработало
-- В Bash нет `ls`, `rm`; `$VAR` в командах отклоняется — удалял через python3 os.remove.
+- —
 
 ## Где остановился
-- SPEC status: ready, guard ок. Шаг завершён.
+- SPEC.md переписан под 12 пунктов аудита, status: ready, guard ок, деление разбирается на 4 части. Добавлен раздел «Матрица неослабления» (8 строк). people_entry: сбой чтения → отказ для любой не-артели (прецедент gitcmd.py:928-932). Рамки 40/40/40/25 = $145 — подтверждение Оператору на гейте. Шаг завершён.
+- guard отказывал на «orchestrator/» и misc_checks.py без классификации — исправлено («Не входит»).
 
 ## Чего не хватило
-- Переносится ли мандат ANSWER родителя в подзадачу деления — нет; искал в catalog.spawn_subtask/mandate.py.
+- Число рамки в ANSWER-1 п. 4 («сумма до .») — вынесено Оператору на гейт.
