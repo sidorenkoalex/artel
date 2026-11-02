@@ -1,17 +1,21 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ достаточно, SPEC.md написан (status: ready, 12 требований, AC-1..AC-15), guard ок.
-- merge_after: 01M6EZXVFGXC6WBDA9QJESAZRW («часть 1» — так показывает `artel.py show`).
-- budget_usd 40 = рамка ТЗ. Сигналы объёма: AC ≥ 10, бюджет ≥ $30; в SPEC дан материал к решению «монолит», решение — за Оператором.
-- Клона подмодулей в orchestrator/ сейчас нет вовсе (grep "submodule" пуст); `ensure_clone` — workspace.py:95-123, `set_clone_hooks` — :68-75.
-- Токен слота: gitcmd.hosting_token (:125), hosting_env (:149). scripts/git-hooks/ не защищённый путь.
+- Итерация 2 (после аудита fail Д-1…Д-7). Решения SPEC:
+  - отдельный каталог хуков `target-human`: `<config.ROOT>/scripts/git-hooks/target-human/` (pre-push с правилами + pre-commit с прежней защитой main) — так AC-4 (нет политики → отказ) не спорит с AC-5 (общий хук прежний);
+  - файл политики `<git-common-dir клона>/artel-push-policy`, 4 строки key=value: project, base, branch_template, artifacts_prefix;
+  - строка doctor `clone-push-hook` из `check_clone_hooks`/`_fix_project_clones` (уже подключены в doctor/cli.py:203,:261); `clone-hooks` — только прочие проекты;
+  - «иной core.hooksPath» = задан и не равен; снятый не отказывает в gitcmd (пульт всё равно ставит `-c`), ловит doctor. Так `tests/test_gitcmd_push_point.py:123,:131` остаются зелёными (шпион push не исполняет, хук не запускается);
+  - `-c core.hooksPath` вставляет `_push_plan` после сверок (как PUSH_RESET_CONFIG, gitcmd.py:966-971);
+  - клон проекта и подмодулей — токеном слота (сейчас `clone` нет в HOSTING_SUBCOMMANDS, gitcmd.py:41);
+  - прежние сверки (gitcmd.py:189-193, :660-664, :719-723) сохраняются и покрываются AC.
+- Тесты проектов с GIT_CONFIG_GLOBAL (test_01m545edths…) — merge_gate operator, новой сверкой не задеты.
 
 ## Не сработало
-- TZ части 1 (tasks/01M6EZXVFGXC6WBDA9QJESAZRW) читать запрещено правами шага.
+- Составные bash-команды (ls, xargs, ;) требуют подтверждения — только одиночные grep/sed.
 
 ## Где остановился
-- Шаг завершён: SPEC сдан.
+- SPEC.md итерации 2 сдан (status: ready, 13 требований, AC-1..AC-15), guard ок. QUESTIONS не нужен: Д-4 решён буквальным чтением ТЗ («нет иного» ≠ «не задан») без правки тестов.
 
 ## Чего не хватило
-- Не смог прочитать ТЗ части 1, чтобы понять, вводит ли она клон подмодулей/слот токена, на которые опирается требование 9.
+- Где пульт ставит токен клону — нигде: `clone` вне HOSTING_SUBCOMMANDS (gitcmd.py:41).
