@@ -1,5 +1,5 @@
 ---
-built_at_sha: d85b5321248a9b2a1cbd82e35d24f79cd023bfce
+built_at_sha: 320bebef75182d086180fce639165d17f584597e
 ---
 
 # Codebase-map пульта
@@ -8646,6 +8646,17 @@ built_at_sha: d85b5321248a9b2a1cbd82e35d24f79cd023bfce
 
 **Импортируется:** `tests/test_invariants.py`
 
+## tests/test_01m6bmg29kzv1rx21hfaxzg3cm_repeat_after_wait.py
+
+**Назначение:** Повтор находки гейта по исходам на `verifying` узнаётся и через опрос ожидания отчёта головы (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требование 16; ANSWER-2).
+
+**Публичные функции:**
+- `test_repeat_after_pending_poll_escalates_as_repeat`
+
+**Импортирует:** `tests/test_01m6bmg29kzv1rx21hfaxzg3cm_verifying_outcome_gate.py`
+
+**Импортируется:** —
+
 ## tests/test_01m6bmg29kzv1rx21hfaxzg3cm_verifying_outcome_gate.py
 
 **Назначение:** Гейт неослабления по исходам для компонента `full_suite: ci` — на `verifying` по отчёту CI отправленной головы, а не на `in_dev` локальными выписками.
@@ -8686,7 +8697,7 @@ built_at_sha: d85b5321248a9b2a1cbd82e35d24f79cd023bfce
 
 **Импортирует:** `orchestrator/advance_gates/outcome_integrity.py`, `orchestrator/advance_gates/refusal_classes.py`, `orchestrator/brief.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/forge.py`, `orchestrator/github_adapter.py`, `orchestrator/project_profile.py`, `orchestrator/pull_main.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/components_outcome_sandbox.py`, `tests/fixtures.py`, `tests/merge_outcome_sandbox.py`, `tests/outcome_gate_sandbox.py`, `tests/sandbox.py`
 
-**Импортируется:** —
+**Импортируется:** `tests/test_01m6bmg29kzv1rx21hfaxzg3cm_repeat_after_wait.py`
 
 ## tests/test_acceptance.py
 

@@ -1527,6 +1527,8 @@ def _cycle_reason(conn, task_id: str, detail: str) -> str:
     был. Ни то, ни другое — пусто."""
     steps = store.task_steps(conn, task_id)
     current = _finding_ids(detail)
+    # Предыдущий отказ — только запись с находками: ожидание отчёта головы
+    # и сбой подготовки находок не несут и повтор не прерывают (ANSWER-2).
     previous = next((r for r in reversed(steps) if r["action"] in
                      (BROKEN_REFUSAL_ACTION, OUTCOME_REFUSAL_ACTION)), None)
     if previous is not None and current and \
