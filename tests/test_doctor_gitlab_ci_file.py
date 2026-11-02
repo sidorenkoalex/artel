@@ -139,6 +139,40 @@ def test_reruns_include_without_finding_warns(clone):
     assert line.status == "warn" and "include" in line.detail, line
 
 
+def test_workflow_rules_without_ci_file_warns(clone):
+    """Файла `.gitlab-ci.yml` нет — строка правил workflow `warn` (ANSWER-1 п. 4).
+
+    Ловит мутацию: отсутствие файла CI даёт `ok` («правил нет — конвейер
+    любой ветки») или `skip` вместо `warn`.
+    """
+    line = rules_line(clone)
+    assert line.status == "warn" and pc.CI_FILE_MISSING in line.detail, line
+
+
+def test_target_human_without_ci_component_has_no_ci_file_rows(clone, monkeypatch):
+    """Запись `target-human` без компонента `full_suite` ci/both — строк
+    `project-ci-file-no-paths-` и `project-ci-reruns-` нет (ANSWER-1 п. 4).
+
+    Ловит мутацию: строки требований 8/9 добавляются любой записи с
+    `target-human` либо компоненту с `full_suite: local`.
+    """
+    monkeypatch.setattr(doctor.repo_context, "is_artel", lambda name: False)
+    monkeypatch.setattr(doctor.repo_context, "clone_path", lambda name: clone)
+    monkeypatch.setattr(doctor.runner, "in_role_environment", lambda: True)
+    monkeypatch.setattr(doctor.forge, "ci_by_pipeline", lambda name: True)
+    monkeypatch.setattr(doctor.brief, "project_skills_refusal", lambda name, entry: "")
+    write_ci(clone, "tests:\n  script:\n    - pytest\n  retry: 2\n")
+    entry = {"merge_gate": "target-human", "base": "main",
+             "url": "https://git.example/team/proj",
+             doctor.targets.COMPONENTS_FIELD: {
+                 "app": {"full_suite": "local", "ci_job": "tests"}}}
+    names = [c.name for c in pc.project_entry_checks("x", entry)
+             + pc.component_checks("x", entry)]
+    assert "project-submodules-x" in names, names
+    assert not [n for n in names if n.startswith(("project-ci-file-no-paths-",
+                                                  "project-ci-reruns-"))], names
+
+
 def test_job_retry_zero_overrides_default(clone):
     """Своё `retry: 0` задания перекрывает `default: retry` — находки нет.
 

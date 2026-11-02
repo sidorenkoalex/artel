@@ -1,5 +1,5 @@
 ---
-built_at_sha: 347f698271628626c92f9e784cee4a7de6b536b6
+built_at_sha: 4b716ccd32bc82bd41790bd587462a8a66eb1ec0
 ---
 
 # Codebase-map пульта
@@ -10182,8 +10182,10 @@ built_at_sha: 347f698271628626c92f9e784cee4a7de6b536b6
 - `test_retry_mapping_form`
 - `test_rule_variables_and_operators`
 - `test_ssh_and_foreign_submodules_warn_without_probe`
+- `test_target_human_without_ci_component_has_no_ci_file_rows`
 - `test_unparsed_forms_name_the_line`
 - `test_unsupported_if_and_changes_warn`
+- `test_workflow_rules_without_ci_file_warns`
 - `write_ci`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/doctor/project_checks.py`, `orchestrator/forge.py`, `orchestrator/gitlab_adapter.py`, `tests/sandbox.py`
