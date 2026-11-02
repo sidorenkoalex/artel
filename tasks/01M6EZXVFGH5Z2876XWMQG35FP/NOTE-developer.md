@@ -1,11 +1,10 @@
 ## Выяснено
-- ANSWER-1 (03.11) уточняет SPEC: include/неподдержанный if/changes — warn, ssh и чужой хост подмодуля — warn, retry {max: N}; реализовано так.
-- Строка перезапусков без файла CI оставлена `skip` по SPEC (ANSWER «нет файла CI — warn» прочитан как строка workflow).
-- Bash шага ограничен: ls/wc/cp и heredoc с `{…'` отказаны; работают python3 -c, git, pytest; крупные правки — инструментом Edit.
+- Повторный шаг: advance отказал «ANSWER-1 записан после последнего шага developer». Код прошлого шага уже реализует ANSWER-1 пп. 1–4 (include/неподдержанный if/changes — warn, ssh и чужой хост подмодуля — warn, retry {max: N}, http_status при 403 заданий у красного конвейера).
+- Строка перезапусков без файла CI оставлена `skip` по SPEC треб. 9 (ANSWER «нет файла CI — warn» прочитан как строка workflow, треб. 6).
+- Bash шага ограничен: ls/wc/cp и heredoc с `{…'` отказаны; работают python3 -c, git, pytest.
 ## Где остановился
-- Шаг завершён: forge http_status, адаптер, project_checks (развилка GitLab, разборщик .gitlab-ci.yml, строки 8–10), forge-probe --ref/--sha, tests/test_doctor_gitlab_ci_file.py, карта перегенерирована; PLAN ready.
-- Зелёные: долгоживущие файлы задачи, смежные doctor/forge/gitlab тесты, сторож ac9, plank-run.
+- Шаг завершён: добавлены 2 теста пробелов ANSWER-1 п. 4 в tests/test_doctor_gitlab_ci_file.py (нет файла CI — warn; target-human без компонента ci/both — строк 8/9 нет), мутация проверена, карта перегенерирована, 73 passed, plank-run 1 passed, PLAN ready.
 ## Не сработало
-- Мутацию через bash-скрипт с копией файла — отказ прав; делал Edit туда-обратно.
+- —
 ## Чего не хватило
-- Список разрешённых команд Bash шага роли — нашёл только отказами.
+- Что именно в ANSWER-1 требует новой работы, если код уже по нему написан: гейт смотрит только время записи ANSWER относительно шага.
