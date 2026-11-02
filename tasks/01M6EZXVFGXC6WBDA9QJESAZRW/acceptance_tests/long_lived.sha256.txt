@@ -1,0 +1,1 @@
+44a8bb0d23b9382c2e46aa844d10072486355a294416a97b66e06e30fc372d1e  tests/test_01m6ezxvfgxc6wbda9qjesazrw_hosting_registry.py
