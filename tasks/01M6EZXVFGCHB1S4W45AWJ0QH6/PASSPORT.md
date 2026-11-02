@@ -8,3 +8,4 @@
 2026-11-02 21:19:14Z  spec_audit  actor=fsm
 2026-11-02 21:25:58Z  spec_gate  actor=fsm
 2026-11-02 21:26:34Z  tests_writing  actor=operator
+2026-11-02 21:44:21Z  in_dev  actor=fsm
