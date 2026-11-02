@@ -163,7 +163,7 @@ def test_target_human_without_ci_component_has_no_ci_file_rows(clone, monkeypatc
     monkeypatch.setattr(doctor.brief, "project_skills_refusal", lambda name, entry: "")
     write_ci(clone, "tests:\n  script:\n    - pytest\n  retry: 2\n")
     entry = {"merge_gate": "target-human", "base": "main",
-             "url": "https://git.example/team/proj",
+             "url": "https://localhost/team/proj",
              doctor.targets.COMPONENTS_FIELD: {
                  "app": {"full_suite": "local", "ci_job": "tests"}}}
     names = [c.name for c in pc.project_entry_checks("x", entry)
@@ -203,7 +203,7 @@ def submodules(clone: Path, *urls: str):
     (clone / ".gitmodules").write_text("".join(
         f'[submodule "m{i}"]\n\tpath = libs/m{i}\n\turl = {url}\n'
         for i, url in enumerate(urls)), encoding="utf-8")
-    entry = {"url": "https://git.example/team/proj", "token_slot": "slot"}
+    entry = {"url": "https://localhost/team/proj", "token_slot": "slot"}
     return pc.check_submodules("project-submodules-x", clone, entry, False)
 
 
@@ -215,13 +215,13 @@ def test_relative_submodule_resolved_from_entry_url(clone, probe):
     """
     line = submodules(clone, "../lib.git")
     assert line.status == "ok", line
-    assert probe.calls == [("ls-remote", "https://git.example/team/lib.git")], probe.calls
+    assert probe.calls == [("ls-remote", "https://localhost/team/lib.git")], probe.calls
 
 
 @pytest.mark.parametrize("url,marker", [
-    ("git@git.example:team/lib.git", "ssh-адрес, токеном слота не проверяется"),
-    ("ssh://git@git.example/team/lib.git", "ssh-адрес, токеном слота не проверяется"),
-    ("https://other.example/team/lib.git", "не на хосте записи"),
+    ("git@localhost:team/lib.git", "ssh-адрес, токеном слота не проверяется"),
+    ("ssh://git@localhost/team/lib.git", "ssh-адрес, токеном слота не проверяется"),
+    ("https://127.0.0.1/team/lib.git", "не на хосте записи"),
 ])
 def test_ssh_and_foreign_submodules_warn_without_probe(clone, probe, url, marker):
     """ssh-адрес на том же хосте и подмодуль чужого хоста — `warn` без пробы (ANSWER-1 пп. 1, 4).
