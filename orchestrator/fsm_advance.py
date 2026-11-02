@@ -30,7 +30,8 @@ from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        in_outcome_bounds)
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
-from .advance_gates.outcome_integrity import _outcome_integrity_gate_refuses
+from .advance_gates.outcome_integrity import (_outcome_integrity_gate_refuses,
+                                              verifying_gate)
 from .advance_gates.plan_appendix import (
     PLAN_APPENDIX_GATE_FAILURE_ACTION,
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION, _plan_appendix_gate,
@@ -466,9 +467,18 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # прежним путём.
         if _long_lived_manifest_refuses(conn, task_id):
             return False
-        store.set_state(conn, task_id, "review", "fsm",
-                        expected_state=state, detail=note)
-        return False
+        # Гейт по исходам компонента `ci`/`both` по отчёту CI этой головы
+        # (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требования 2-6, 12): `review`
+        # только через его проход; ожидание отчёта головы идёт тем же
+        # потолком, что ожидание CI.
+        verdict = verifying_gate(conn, task_id, t, state)
+        if verdict.moved:
+            return False
+        if not verdict.wait:
+            store.set_state(conn, task_id, "review", "fsm",
+                            expected_state=state, detail=note)
+            return False
+        note = f"гейт неослабления по исходам ждёт: {verdict.wait}"
     if ci.verifying_head_not_in_origin(note) and not t["is_canary"]:
         # GitHub не видит голову (HTTP 422) — без отправки CI по ней не
         # придёт, и задача ждала бы потолка (SPEC 01M44ENQCRK02T2MWZB9HC3XHH,

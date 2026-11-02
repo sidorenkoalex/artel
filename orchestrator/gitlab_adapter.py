@@ -279,18 +279,28 @@ def _project(target: str) -> tuple[str, dict | None, str]:
     return project, entry, why
 
 
-def _read_all(target: str, path: str, query: dict) -> tuple[list | None, str]:
-    """Список постранично до конца, сверенный с `X-Total`; (None, причина) —
-    ошибка запроса или неполная выдача."""
+def _failed_status(reply: Reply) -> int | None:
+    """Код ответа отказавшего запроса — только из `Reply.status`, не из
+    текста причины; None — ответ 2xx или HTTP-ответа нет."""
+    status = reply.status
+    if status is None or 200 <= status < 300:
+        return None
+    return status
+
+
+def _read_all(target: str, path: str,
+              query: dict) -> tuple[list | None, str, int | None]:
+    """Список постранично до конца, сверенный с `X-Total`; (None, причина,
+    код ответа отказа) — ошибка запроса или неполная выдача."""
     items: list = []
     total = ""
     for page in range(1, MAX_PAGES + 1):
         params = dict(query, per_page=PER_PAGE, page=page)
         reply = request(target, "GET", f"{path}?{urllib.parse.urlencode(params)}")
         if reply.reason:
-            return None, reply.reason
+            return None, reply.reason, _failed_status(reply)
         if not isinstance(reply.data, list):
-            return None, f"ответ GitLab на GET {path} — не список"
+            return None, f"ответ GitLab на GET {path} — не список", None
         if page == 1:
             total = _header(reply.headers, "X-Total")
         items.extend(reply.data)
@@ -298,14 +308,14 @@ def _read_all(target: str, path: str, query: dict) -> tuple[list | None, str]:
             break
     else:
         return None, (f"неполная выдача GET {path}: больше {MAX_PAGES} "
-                      f"страниц по {PER_PAGE}")
+                      f"страниц по {PER_PAGE}"), None
     if not re.fullmatch(r"[0-9]+", total):
         return None, (f"неполная выдача GET {path}: нет числа X-Total, "
-                      f"полноту не сверить")
+                      f"полноту не сверить"), None
     if len(items) != int(total):
         return None, (f"неполная выдача GET {path}: прочитано {len(items)} "
-                      f"из {total} по X-Total")
-    return items, ""
+                      f"из {total} по X-Total"), None
+    return items, "", None
 
 
 def _job(item: dict) -> forge.Job:
@@ -374,15 +384,18 @@ def _job_findings(jobs: list, required: set) -> tuple[list, list, list]:
 
 
 def _pipeline_findings(target: str, project: str, pipeline: dict,
-                       required: set) -> tuple[list, list, list, list]:
-    """(находки, задания, упавшие, пометки) одного конвейера: старший итог
-    из статуса самого конвейера и его заданий."""
+                       required: set) -> tuple[list, list, list, list, int | None]:
+    """(находки, задания, упавшие, пометки, код ответа отказа чтения
+    заданий) одного конвейера: старший итог из статуса самого конвейера и
+    его заданий."""
     pid = pipeline.get("id")
     status = str(pipeline.get("status", ""))
-    items, why = _read_all(target, f"/projects/{project}/pipelines/{pid}/jobs", {})
+    items, why, http_status = _read_all(
+        target, f"/projects/{project}/pipelines/{pid}/jobs", {})
     if items is None:
         # Неполная выдача заданий — `unknown` при любых прочитанных статусах.
-        return [(forge.UNKNOWN, f"задания конвейера {pid}: {why}")], [], [], []
+        return ([(forge.UNKNOWN, f"задания конвейера {pid}: {why}")], [], [], [],
+                http_status)
     jobs = [_job(i) for i in items if isinstance(i, dict)]
     findings, failed, marks = _job_findings(jobs, required)
     if status == "failed":
@@ -392,7 +405,7 @@ def _pipeline_findings(target: str, project: str, pipeline: dict,
     elif status not in PIPELINE_GREEN:
         findings.append((forge.UNKNOWN, f"конвейер {pid}: статус {status!r} — "
                                         f"исход не установлен"))
-    return findings, jobs, failed, marks
+    return findings, jobs, failed, marks, None
 
 
 def _verdict(findings: list) -> tuple[str, str]:
@@ -409,9 +422,10 @@ def pipeline_status(target: str, sha: str) -> forge.PipelineStatus:
     project, entry, why = _project(target)
     if why:
         return forge.PipelineStatus(forge.UNKNOWN, why)
-    pipelines, why = _read_all(target, f"/projects/{project}/pipelines", {"sha": sha})
+    pipelines, why, http_status = _read_all(target, f"/projects/{project}/pipelines",
+                                            {"sha": sha})
     if pipelines is None:
-        return forge.PipelineStatus(forge.UNKNOWN, why)
+        return forge.PipelineStatus(forge.UNKNOWN, why, http_status=http_status)
     if not pipelines:
         return forge.PipelineStatus(forge.NONE, NO_PIPELINE)
     findings, jobs, failed, marks = [], [], [], []
@@ -424,8 +438,11 @@ def pipeline_status(target: str, sha: str) -> forge.PipelineStatus:
         jobs += found[1]
         failed += found[2]
         marks += found[3]
+        if http_status is None:
+            http_status = found[4]
     verdict, reason = _verdict(findings)
-    return forge.PipelineStatus(verdict, reason, jobs, sorted(set(failed)), marks)
+    return forge.PipelineStatus(verdict, reason, jobs, sorted(set(failed)), marks,
+                                http_status)
 
 
 def _sha_jobs(target: str, sha: str) -> tuple[list | None, str]:
@@ -433,13 +450,15 @@ def _sha_jobs(target: str, sha: str) -> tuple[list | None, str]:
     project, _entry, why = _project(target)
     if why:
         return None, why
-    pipelines, why = _read_all(target, f"/projects/{project}/pipelines", {"sha": sha})
+    pipelines, why, _status = _read_all(target, f"/projects/{project}/pipelines",
+                                        {"sha": sha})
     if pipelines is None:
         return None, why
     found = []
     for pipeline in pipelines:
         pid = pipeline.get("id") if isinstance(pipeline, dict) else None
-        items, why = _read_all(target, f"/projects/{project}/pipelines/{pid}/jobs", {})
+        items, why, _status = _read_all(
+            target, f"/projects/{project}/pipelines/{pid}/jobs", {})
         if items is None:
             return None, why
         found += [(pid, _job(i)) for i in items if isinstance(i, dict)]
@@ -583,9 +602,9 @@ def protections(target: str) -> forge.Protections:
         return forge.Protections(reason=why)
     names = []
     for kind in ("protected_branches", "protected_tags"):
-        items, why = _read_all(target, f"/projects/{project}/{kind}", {})
+        items, why, http_status = _read_all(target, f"/projects/{project}/{kind}", {})
         if items is None:
-            return forge.Protections(reason=why)
+            return forge.Protections(reason=why, http_status=http_status)
         names.append([str(i.get("name")) for i in items if isinstance(i, dict)])
     return forge.Protections(*names)
 
@@ -613,14 +632,16 @@ def branch_pipeline(target: str, branch: str) -> forge.BranchPipeline:
                                     "per_page": 1})
     reply = request(target, "GET", f"/projects/{project}/pipelines?{query}")
     if reply.reason:
-        return forge.BranchPipeline(reason=reply.reason)
+        return forge.BranchPipeline(reason=reply.reason,
+                                    http_status=_failed_status(reply))
     pipelines = [p for p in reply.data or [] if isinstance(p, dict)
                  and isinstance(p.get("id"), int)] if isinstance(reply.data, list) else []
     if not pipelines:
         return forge.BranchPipeline(verdict=forge.NONE,
                                     reason=f"у ветки {branch} нет конвейеров")
     last = max(pipelines, key=lambda p: p["id"])
-    findings, jobs, _failed, _marks = _pipeline_findings(target, project, last,
-                                                         _required(entry))
+    findings, jobs, _failed, _marks, http_status = _pipeline_findings(
+        target, project, last, _required(entry))
     verdict, reason = _verdict(findings)
-    return forge.BranchPipeline(str(last.get("sha", "")), verdict, reason, jobs)
+    return forge.BranchPipeline(str(last.get("sha", "")), verdict, reason, jobs,
+                                http_status)
