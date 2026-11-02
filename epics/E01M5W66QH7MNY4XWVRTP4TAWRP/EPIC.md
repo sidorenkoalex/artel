@@ -24,7 +24,8 @@
 | 01M5XXA2HY73D3WTXDR19Z5SWW | GitLab Б2.1: гейт мержа target-human — MR вместо слияния, состояние awaiting_human | killed | divided |
 | 01M5XZ9Z68V75VXF5Z66C708T4 | Б2.1а: состояние awaiting_human и его учёт в перечнях пульта | done | — |
 | 01M5XZ9Z68XE2EKPDHYCAK25KF | Б2.1б: гейт мержа target-human открывает MR, черновой MR и max_in_flight через forge | done | — |
-| 01M5XZSKK8GZTECA2KWAFHE029 | GitLab В1.1: источник полного набора full_suite (local\|ci\|both) на приёмке | in_dev | — |
-| 01M5XZSKK8H096FD3CPN05BQNM | GitLab В1.2: гейт неослабления по исходам из отчётов задания CI | in_dev | — |
+| 01M5XZSKK8GZTECA2KWAFHE029 | GitLab В1.1: источник полного набора full_suite (local\|ci\|both) на приёмке | done | — |
+| 01M5XZSKK8H096FD3CPN05BQNM | GitLab В1.2: гейт неослабления по исходам из отчётов задания CI | done | — |
 | 01M69W4J5DSBFYS8A0FG71N93K | Предпосылка теста fetch базы рабочей копии не зависит от версии git (git 2.56 на раннере CI) | done | — |
-| 01M6AB4VE2R0Q2V5D4MMJGNGH7 | GitLab Б2.2: команда mr-sync — сверка MR и нахождения правки в base, закрытие done по подтверждению Оператора | merge_gate | — |
+| 01M6AB4VE2R0Q2V5D4MMJGNGH7 | GitLab Б2.2: команда mr-sync — сверка MR и нахождения правки в base, закрытие done по подтверждению Оператора | done | — |
+| 01M6BMG29KZV1RX21HFAXZG3CM | GitLab: гейт неослабления по исходам для full_suite ci — на verifying по отчёту CI отправленной головы | in_dev | — |
