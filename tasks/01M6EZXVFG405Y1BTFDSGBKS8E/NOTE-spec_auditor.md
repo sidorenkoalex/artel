@@ -1,16 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде подтверждены: targets.py:29-30, :283, :299; forge.py:163, :184; catalog.py:856; runner.py:184; fsm.py:1794 и auto.py:1038 зовут runner.refuse_unsupported_project.
-- ANSWER-*.md в каталоге документов задачи нет — мандата на правку сторожа А0 в этой задаче пока нет.
-- Тесты, подменяющие SUPPORTED_*: mr_delivery/mr_sync используют gitlab+target-human (после SUPPORTED_PAIRS поддержано); awaiting_* — github+target-human, но до unsupported_reason не доходят (zone_lock/cleanup). mr_sync «other» = gitlab+operator, только ghost-задачи + mr-sync, не run/auto/approve.
-- rewrite_flow gitlab+operator — advance/pull_main, не гейтятся поддержкой.
+- Повторный аудит, SPEC sha 5ae99380: прежние отклонения сняты решением гейта №1 (forge.py вне зон, треб. 6 поимённо, мандат в ANSWER на in_dev).
+- Новое: треб. 3 начинает причину с «проект <имя>: », а catalog.py:858, runner.py:188-189, doctor/cli.py:44 уже ставят этот префикс → дубль; файлы вне зон.
+- Номера строк треб. 6 в сторже А0 сверены — верны.
+- tests/test_epic_draft_promote_unsupported_project.py берёт причину вызовом и пары те же — не ломается.
+- Артель вне границ outcome_integrity; рубеж test_integrity снимает находки мандатом на файл целиком.
 
 ## Не сработало
-- zsh: `ls` не найден в PATH шага; `--include` grep не работает — git grep.
+- `ls`, `$VAR` в bash и `cd && git` блокируются — пиши `git -C <путь>` и используй Read.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. Отклонения: (1) нет ANSWER с мандатом/матрицей/независимой проверкой; (2) условия (б) не перечисляют сохраняемые утверждения ac2–ac8 — мандат на весь файл; (3) AC-4 только запрещает подстроку для `_hosting`, не требует, что текст называет.
+- SPEC-AUDIT.md сдан: verdict concerns, status ready.
 
 ## Чего не хватило
 - Нет.
