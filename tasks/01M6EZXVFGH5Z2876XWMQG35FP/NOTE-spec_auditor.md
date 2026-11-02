@@ -1,13 +1,12 @@
 ## Выяснено
-- forge.py: у типов только reason; ProjectInfo без поля кода; _GitHub имеет pipeline_status → выбор ci-token по hasattr(pipeline_status) не различит хостинги, только ci_by_pipeline.
-- gitlab_adapter._read_all теряет Reply.status (возвращает (None, reason)) — заполнить поле кода без правки _read_all нельзя.
-- Сторож ac9 (tests/test_01m5w27…:425-442) не ловит `forge.hosting(x) == "gitlab"` (attr `hosting` не field_like).
-- Имени файла CI (.gitlab-ci.yml) и поля записи под него в коде нет; ADR-0029:55 — «если запись называет файл конвейера».
-- full_suite ci|both допустим только у хостинга с job_test_report (targets.py:1098-1103) — у github нет, строки 8/9 фактически gitlab-only.
-- doctor/__init__ не импортирует catalog (branch_template) — обход через entry.get("branch_template")/targets.DEFAULT_BRANCH_TEMPLATE.
+- Аудит 2 (sha 6de28bb8): отклонения возврата 1 закрыты; вердикт concerns, 9 пунктов.
+- Главное новое: YAML-разборщика для .gitlab-ci.yml в пульте нет (PyYAML не берётся, yamlmini без блочных списков, yamlmini.py вне зон).
+- Все тексты gitlab_adapter._status_reason несут код → AC-12 не отличает http_status из текста от Reply.status.
+- AC-9 пуст без подмены shutil.which("gh") (код main выходит раньше вызова gh).
+- targets.py:563 — второе сравнение merge_gate с литералом (SPEC пишет «единственное»).
 ## Не сработало
-- Bash с cd/ls/wc требует подтверждения — читать Read/grep абсолютными путями.
+- Bash с cd + относительные пути и конвейеры (| head, xargs) требуют подтверждения — только абсолютные пути, по одной команде.
 ## Где остановился
-- SPEC-AUDIT.md записан, verdict fail, status ready; guard — ок. Шаг завершён.
+- SPEC-AUDIT.md записан (status ready, verdict concerns), guard — ок. Шаг завершён.
 ## Чего не хватило
-- Не нашёл, что значит «с target-human» в заголовке п.1 ТЗ (merge_gate?) — в SPEC выпало.
+- Не знал, какой YAML-разбор допустим в пульте — нашёл в докстринге orchestrator/yamlmini.py:1-24.
