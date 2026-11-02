@@ -50,8 +50,13 @@ G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J; ADR-0026, «Решение» пп. 6-7)
 (`forge.job_test_report`), без выписок, перепрогонов, третьей выписки и
 доказательства `_proven` (`_judge_ci`). Отчёт головы — ровно её sha; отчёт
 базы — точки ответвления, иначе её родителя с тем же деревом. Нет годного
-отчёта стороны или отчёт базы неоднозначен — сбой подготовки. На выходе из
-`in_dev` компонент `ci` судится локальными выписками, как прежде.
+отчёта стороны или отчёт базы неоднозначен — сбой подготовки.
+
+Рубеж `ci` до ревью (SPEC 01M6BMG29KZV1RX21HFAXZG3CM): на выходе из `in_dev`
+компонент `full_suite: ci` не судится — головы на сервере ещё нет; его
+судит `verifying_gate` после зелёного CI отправленной головы тем же ядром
+`_judge_ci` с базой `_diff_base`. У `both` локальная часть остаётся на
+`in_dev`, часть по отчётам CI — на `verifying`.
 """
 import hashlib
 import os
@@ -165,6 +170,13 @@ class Finding(NamedTuple):
 
 class _Prepare(Exception):
     """Отказ подготовки: причина — текст исключения."""
+
+
+class _Pending(_Prepare):
+    """Отчёт головы ещё не годен по проходящей причине (задание не
+    завершено, его нет, отчёт не разобран, сбой чтения, перезапуск во время
+    чтения): на `verifying` — ожидание, на гейте мержа — сбой подготовки,
+    как прежде (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требования 6-7)."""
 
 
 def describe(case) -> str:
@@ -1026,6 +1038,10 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
 # Режим `ci` на гейте мержа (SPEC 01M5XZSKK8H096FD3CPN05BQNM, требования
 # 1-8): годные статусы последней попытки задания `ci_job`.
 _CI_FIT_STATUSES = ("success", "failed")
+# Незавершённые статусы задания (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требование
+# 6): ожидание на `verifying`; прочие негодные — эскалация сразу.
+_CI_PENDING_STATUSES = ("created", "pending", "running",
+                        "waiting_for_resource", "preparing", "scheduled")
 BASE_REPORT_ACTION = "гейт исходов: отчёт базы"
 BASE_REPORT_LINE = "отчёт базы: задание {job} коммита {sha} (дерево совпадает с {point})"
 NO_BASE_REPORT = "нет отчёта базы"
@@ -1042,10 +1058,13 @@ class _CiReport(NamedTuple):
 
 
 def _ci_report(target: str, sha: str, job: str):
-    """(`_CiReport` ровно `sha`, "") либо (`None`, причина негодности) —
-    требование 2. Попытка — наибольший `id` заданий `job` в
-    `forge.pipeline_status(sha).jobs`; номер до и после чтения отчёта
-    совпадает, иначе статус и отчёт могли быть от разных попыток."""
+    """(`_CiReport` ровно `sha`, "", False) либо (`None`, причина
+    негодности, проходящая ли она) — требование 2. Попытка — наибольший
+    `id` заданий `job` в `forge.pipeline_status(sha).jobs`; номер до и
+    после чтения отчёта совпадает, иначе статус и отчёт могли быть от
+    разных попыток. Проходящая негодность (SPEC 01M6BMG29KZV1RX21HFAXZG3CM,
+    требование 6) — задания нет, оно не завершено, статус или отчёт не
+    прочитан, перезапуск во время чтения."""
     def last_attempt():
         res = forge.pipeline_status(target, sha)
         mine = [j for j in res.jobs if j.name == job]
@@ -1054,23 +1073,24 @@ def _ci_report(target: str, sha: str, job: str):
                 f"задания CI «{job}» нет в конвейере коммита {sha[:12]}{why}")
     last, why = last_attempt()
     if last is None:
-        return None, why
+        return None, why, True
     where = f"задание CI «{job}» {last.id} коммита {sha[:12]}"
     result = forge.job_result(target, sha, job)
     report = forge.job_test_report(target, sha, job)
     again, _why = last_attempt()
     if again is None or again.id != last.id:
-        return None, f"{where} перезапущено во время чтения"
+        return None, f"{where} перезапущено во время чтения", True
     status = result.status
     if status is None:
-        return None, f"{where}: статус не прочитан — {result.reason}"
+        return None, f"{where}: статус не прочитан — {result.reason}", True
     if status not in _CI_FIT_STATUSES:
-        return None, f"{where} в статусе {status}"
+        return (None, f"{where} в статусе {status}",
+                status in _CI_PENDING_STATUSES)
     if status == "failed" and last.allow_failure:
-        return None, f"{where} упало с правом падать (allow_failure)"
+        return None, f"{where} упало с правом падать (allow_failure)", False
     if report.outcomes is None:
-        return None, f"{where}: отчёт не разобран — {report.reason}"
-    return _CiReport(sha, last.id, dict(report.outcomes)), ""
+        return None, f"{where}: отчёт не разобран — {report.reason}", True
+    return _CiReport(sha, last.id, dict(report.outcomes)), "", False
 
 
 def _rev(repo: Path, *args: str) -> str:
@@ -1087,7 +1107,7 @@ def _ci_base_report(conn, task_id: str, repo: Path, target: str,
     точки ответвления, иначе родителя (`rev-list --parents`) с тем же
     деревом; поиск только чтением git и `forge`. Не найден — `_Prepare`
     «нет отчёта базы»."""
-    found, why = _ci_report(target, point, job)
+    found, why, _pending = _ci_report(target, point, job)
     if found is not None:
         return found, ""
     reasons = [f"точка ответвления {point[:12]}: {why}"]
@@ -1097,7 +1117,7 @@ def _ci_base_report(conn, task_id: str, repo: Path, target: str,
         if _rev(repo, "rev-parse", f"{parent}^{{tree}}") != point_tree:
             reasons.append(f"родитель {parent[:12]}: дерево другое")
             continue
-        found, why = _ci_report(target, parent, job)
+        found, why, _pending = _ci_report(target, parent, job)
         if found is None:
             reasons.append(f"родитель {parent[:12]}: {why}")
             continue
@@ -1156,9 +1176,10 @@ def _judge_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
     base_sha = base_of(repo, branch, head_sha)
     target = store.task_target(conn, task_id)
     job = profile.ci_job
-    head_report, why = _ci_report(target, head_sha, job)
+    head_report, why, pending = _ci_report(target, head_sha, job)
     if head_report is None:
-        raise _Prepare(f"{NO_HEAD_REPORT}: голова {head_sha[:12]}: {why}")
+        raise (_Pending if pending else _Prepare)(
+            f"{NO_HEAD_REPORT}: голова {head_sha[:12]}: {why}")
     base_report, parent_line = _ci_base_report(conn, task_id, repo, target,
                                                base_sha, job)
     base, unresolved, base_ids = _ci_cases(repo, profile, base_report)
@@ -1266,6 +1287,14 @@ def _outcome_integrity_gate(conn, task_id: str, t,
     profile = _bounds(t["is_canary"], t["target"])
     if profile is None:
         return None
+    if profile.full_suite == targets.FULL_SUITE_CI:
+        # Компонент `ci` судится на `verifying` по отчёту CI отправленной
+        # головы (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требование 1): здесь
+        # головы на сервере ещё нет.
+        project_profile.journal_skip(
+            conn, task_id, CHECK_OUTCOME, project_profile.Decision(
+                target, skip=DEFERRED_LINE.format(name=profile.component)))
+        return None
     return _gate(conn, task_id, t["branch"], artifact_branch, profile,
                  _diff_base, merge=False)
 
@@ -1274,18 +1303,30 @@ def _outcome_integrity_gate(conn, task_id: str, t,
 # диффа (SPEC 01M5JGSAANR1NZYQD4FCSVE48Y, требование 3).
 CHECK_OUTCOME = "гейт неослабления по исходам"
 OUT_OF_BOUNDS_LINE = "компонент {name}: вне границы гейта исходов"
+DEFERRED_LINE = ("компонент {name}: судится по отчёту CI отправленной головы "
+                 "на verifying")
 _HEAD_LINE = "голова {head}"
+# Рубежи гейта записи из нескольких компонентов.
+_IN_DEV, _VERIFYING, _MERGE = "in_dev", "verifying", "merge"
+_CI_MODES = (targets.FULL_SUITE_CI, targets.FULL_SUITE_BOTH)
 
 
 def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
-                     target: str, base_of, merge: bool) -> GateRefusal | None:
+                     target: str, base_of, merge: bool,
+                     verifying: bool = False) -> GateRefusal | None:
     """Гейт записи из нескольких компонентов (SPEC
     01M5JGSAANR1NZYQD4FCSVE48Y, требование 3): компоненты
     `select_components` путей диффа (с потребителями по `depends_on`), в
     порядке записи. Компонент в границе — свой прогон ядра `_gate` и своя
     запись; первый отказ останавливает гейт («компонент <имя>: …»).
     Компоненты вне границы — строкой в каждой записи; вне границы все —
-    запись пропуска без прогона. Сбой чтения диффа — отказ подготовки."""
+    запись пропуска без прогона. Сбой чтения диффа — отказ подготовки.
+
+    Рубеж (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требования 1, 10-11): на
+    `in_dev` компонент `full_suite: ci` не судится (строка
+    `DEFERRED_LINE`); на `verifying` судятся только `ci` и `both` — ядром
+    по отчётам CI, без записи пропуска."""
+    stage = _MERGE if merge else _VERIFYING if verifying else _IN_DEV
     repo = workspace.task_repo(task_id)
     bases: dict = {}
 
@@ -1318,6 +1359,14 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
     outside = tuple(OUT_OF_BOUNDS_LINE.format(name=p.component)
                     for p in profiles if not in_outcome_bounds(p))
     inside = [p for p in profiles if in_outcome_bounds(p)]
+    if stage == _VERIFYING:
+        inside = [p for p in inside if p.full_suite in _CI_MODES]
+        if not inside:
+            return None
+    elif stage == _IN_DEV:
+        outside += tuple(DEFERRED_LINE.format(name=p.component) for p in inside
+                         if p.full_suite == targets.FULL_SUITE_CI)
+        inside = [p for p in inside if p.full_suite != targets.FULL_SUITE_CI]
     if not inside:
         project_profile.journal_skip(
             conn, task_id, CHECK_OUTCOME, project_profile.Decision(
@@ -1326,7 +1375,8 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
         return None
     for profile in inside:
         refusal = _gate(conn, task_id, branch, artifact_branch, profile,
-                        cached_base, merge, extra=outside)
+                        cached_base, merge, extra=outside,
+                        ci=stage == _VERIFYING)
         if refusal is not None:
             return refusal._replace(
                 detail=f"компонент {profile.component}: {refusal.detail}")
@@ -1334,15 +1384,18 @@ def _components_gate(conn, task_id: str, branch: str, artifact_branch: str,
 
 
 def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
-          base_of, merge: bool, extra: tuple = ()) -> GateRefusal | None:
+          base_of, merge: bool, extra: tuple = (),
+          ci: bool = False) -> GateRefusal | None:
     """Ядро гейта на обоих рубежах: выписки, ключ, (на мерже)
     доказательство, прогоны, сравнение, мандат; сбой подготовки — отказ
     `PREPARE_REFUSAL_ACTION`, не пропуск. `extra` — строки, дописываемые в
-    запись пройденного гейта (компоненты вне границы)."""
+    запись пройденного гейта (компоненты вне границы). `ci` — гейт на
+    `verifying`: ядро по отчётам CI, проходящая негодность отчёта головы —
+    отказ `PENDING_ACTION` (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требование 6)."""
     repo = workspace.task_repo(task_id)
-    if merge and profile.full_suite == targets.FULL_SUITE_CI:
+    if ci or (merge and profile.full_suite == targets.FULL_SUITE_CI):
         return _gate_ci(conn, task_id, branch, artifact_branch, profile,
-                        repo, base_of, extra)
+                        repo, base_of, extra, verifying=ci)
     # `resolve()`: временный каталог macOS — символическая ссылка, а пути
     # отчёта раннер считает от реального корня выписки.
     scratch = Path(tempfile.mkdtemp(prefix="artel-outcome-")).resolve()
@@ -1368,18 +1421,26 @@ def _gate(conn, task_id: str, branch: str, artifact_branch: str, profile,
 
 
 def _gate_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
-             repo: Path, base_of, extra: tuple) -> GateRefusal | None:
-    """Ядро гейта мержа в режиме `ci` (`_judge_ci`) без выписок; сбой
-    подготовки — отказ `PREPARE_REFUSAL_ACTION`, не пропуск."""
+             repo: Path, base_of, extra: tuple,
+             verifying: bool = False) -> GateRefusal | None:
+    """Ядро гейта в режиме `ci` (`_judge_ci`) без выписок; сбой подготовки
+    — отказ `PREPARE_REFUSAL_ACTION`, не пропуск. На `verifying`
+    проходящая негодность отчёта головы — отказ `PENDING_ACTION`
+    (ожидание); на мерже она — сбой подготовки, как прежде."""
+    command = "advance" if verifying else "approve"
     try:
         return _judge_ci(conn, task_id, branch, artifact_branch, profile,
                          repo, base_of, extra)
+    except _Pending as exc:
+        if verifying:
+            return GateRefusal(PENDING_ACTION, str(exc), "")
+        reason = str(exc)
     except _Prepare as exc:
         reason = str(exc)
     except Exception as exc:  # noqa: BLE001 — fail-closed: сбой не пропуск
         reason = f"сбой {exc!r}"
     return GateRefusal(PREPARE_REFUSAL_ACTION, reason,
-                       f"разберись с подготовкой и повтори artel.py approve "
+                       f"разберись с подготовкой и повтори artel.py {command} "
                        f"{task_id}")
 
 
@@ -1391,6 +1452,125 @@ def _outcome_integrity_gate_refuses(conn, task_id: str, t,
     return _run_gates(conn, task_id,
                       [lambda: _outcome_integrity_gate(conn, task_id, t,
                                                        artifact_branch)])
+
+
+# Гейт на `verifying` для `ci` и `both` (SPEC 01M6BMG29KZV1RX21HFAXZG3CM,
+# требования 2-6, 16): ожидание отчёта головы — не отказ, запись без
+# префикса «переход отклонён» (её не читают бриф и стоп-кран `auto`).
+PENDING_ACTION = "гейт исходов на verifying: ожидание отчёта CI головы"
+RETURN_DETAIL = ("гейт неослабления по исходам на verifying: сломан правкой — "
+                 "возврат developer")
+REPEAT_REASON = "повтор находки гейта по исходам"
+LIMIT_REASON = "предел возвратов гейта по исходам"
+# Возвратов `verifying → in_dev` по гейту исходов за всю жизнь задачи.
+VERIFYING_RETURNS_LIMIT = 1
+_DEVELOPER_STEP_ACTION = "agent run started"
+_COMPONENT_PREFIX = re.compile(r"^компонент [^:]+: ")
+
+
+class VerifyingVerdict(NamedTuple):
+    """Исход гейта на `verifying`: `moved` — задача ушла из `verifying`
+    (в `in_dev` или `escalated`); `wait` — причина ожидания. Оба пусты —
+    гейт пройден, переход в `review` за вызывающим."""
+    moved: bool
+    wait: str
+
+
+def _verifying_refusal(conn, task_id: str, t) -> GateRefusal | None:
+    """Отказ гейта на `verifying`: компоненты `ci`/`both` в границе судятся
+    ядром `_judge_ci` с базой `_diff_base` и головой кодовой ветки — той
+    же, чей CI зелёный в этом опросе (требования 2-3); мандат — с
+    ветки-источника `tasks/<id>/` (требование 9). `local` и артель — `None`
+    без чтений и записей (требование 14)."""
+    if t["is_canary"]:
+        return None
+    target = t["target"] or config.DEFAULT_TARGET
+    if project_profile.is_multi(target):
+        try:
+            modes = {p.full_suite
+                     for p in project_profile.component_profiles(target)}
+        except targets.TargetsError as exc:
+            return GateRefusal(PREPARE_REFUSAL_ACTION,
+                               f"запись проекта не прочитана: {exc}", "")
+        if not modes & set(_CI_MODES):
+            return None
+        decision = project_profile.for_task_target(target, task_id, conn)
+        if decision.profile is None:
+            return GateRefusal(project_profile.REFUSAL_ACTION,
+                               decision.refusal,
+                               project_profile.refusal_hint(task_id))
+        artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+        return _components_gate(conn, task_id, t["branch"], artifact_branch,
+                                target, _diff_base, merge=False,
+                                verifying=True)
+    profile = _bounds(False, target)
+    if profile is None or profile.full_suite not in _CI_MODES:
+        return None
+    artifact_branch, _foreign = artifact_source.resolve(conn, task_id)
+    return _gate(conn, task_id, t["branch"], artifact_branch, profile,
+                 _diff_base, merge=False, ci=True)
+
+
+def _finding_ids(detail: str) -> frozenset:
+    """Идентификаторы находок детали отказа гейта (строка компонента —
+    без префикса «компонент <имя>: »)."""
+    found = (_finding_id(_COMPONENT_PREFIX.sub("", line))
+             for line in (detail or "").splitlines())
+    return frozenset(cid for cid in found if cid is not None)
+
+
+def _cycle_reason(conn, task_id: str, detail: str) -> str:
+    """Причина эскалации вместо возврата в `in_dev` (требование 16):
+    повтор — тот же набор находок, что у предыдущего отказа гейта исходов
+    задачи (поиск не обрывается границей визита), и после него был шаг
+    developer; предел — возврат `verifying → in_dev` по гейту у задачи уже
+    был. Ни то, ни другое — пусто."""
+    steps = store.task_steps(conn, task_id)
+    current = _finding_ids(detail)
+    previous = next((r for r in reversed(steps) if r["action"] in
+                     (BROKEN_REFUSAL_ACTION, OUTCOME_REFUSAL_ACTION)), None)
+    if previous is not None and current and \
+            _finding_ids(previous["detail"]) == current and \
+            any(r["id"] > previous["id"] and r["actor"] == "developer"
+                and r["action"] == _DEVELOPER_STEP_ACTION for r in steps):
+        return REPEAT_REASON
+    returns = sum(1 for r in steps if r["action"] == "state -> in_dev"
+                  and (r["detail"] or "") == RETURN_DETAIL)
+    if returns >= VERIFYING_RETURNS_LIMIT:
+        return LIMIT_REASON
+    return ""
+
+
+def verifying_gate(conn, task_id: str, t, state: str) -> VerifyingVerdict:
+    """Гейт исходов после зелёного CI отправленной головы (требования 2-6,
+    16): проход — пусто; проходящая негодность отчёта головы — запись
+    `PENDING_ACTION` и ожидание; «сломан правкой» — возврат в `in_dev`
+    (запись отказа после `state -> in_dev`: её видит бриф developer), кроме
+    повтора и предела возвратов; прочие находки и сбои подготовки —
+    запись отказа и `escalated` сразу."""
+    refusal = _verifying_refusal(conn, task_id, t)
+    if refusal is None:
+        return VerifyingVerdict(False, "")
+    if refusal.action == PENDING_ACTION:
+        store.journal(conn, task_id, "fsm", PENDING_ACTION, refusal.detail)
+        return VerifyingVerdict(False, refusal.detail)
+    reason = ""
+    if refusal.action == BROKEN_REFUSAL_ACTION:
+        reason = _cycle_reason(conn, task_id, refusal.detail)
+        if not reason:
+            store.set_state(conn, task_id, "in_dev", "fsm",
+                            expected_state=state, detail=RETURN_DETAIL)
+            store.journal(conn, task_id, "fsm", refusal.action, refusal.detail)
+            print(f"[{task_id}] переход отклонён: {refusal.detail}")
+            if refusal.hint:
+                print(f"  дальше: {refusal.hint}")
+            return VerifyingVerdict(True, "")
+    store.journal(conn, task_id, "fsm", refusal.action, refusal.detail)
+    print(f"[{task_id}] переход отклонён: {refusal.detail}")
+    detail = f"{reason}: {refusal.detail}" if reason else refusal.detail
+    store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
+                    detail=f"{CHECK_OUTCOME} на verifying: {detail}")
+    return VerifyingVerdict(True, "")
 
 
 def merge_gate_escalates(conn, task_id: str, state: str, main_sha_of) -> bool:
