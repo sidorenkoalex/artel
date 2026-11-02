@@ -1,18 +1,15 @@
 ## Выяснено
-- Возврат аудита 1 из 2 (12 отклонений). Решаю SPEC-ом, не батчем: почти всё закрывается кодом.
-- А-1 «с target-human»: предикат `targets.merged_by_project_people(entry)` (targets.py:566-570) — без литерала. Новые строки 8–10 — только для таких записей; строки защит/workflow — для forge-пути (`forge.ci_by_pipeline`) по п.2 ТЗ.
-- Б-2: `_GitHub` имеет `pipeline_status`, но нет `protections`/`project_info`/`branch_pipeline`; развилка — `forge.ci_by_pipeline`.
-- Б-3: проба подмодуля — `doctor.gitcmd.in_repo(clone, "ls-remote", url)`: `gitcmd._hosting_project` по `-C clone` даёт токен слота записи (gitcmd.py:98-122, 1005-1011). В роли `hosting_token` отказывает.
-- Б-4: шаблон ветки — `entry.get("branch_template") or doctor.targets.DEFAULT_BRANCH_TEMPLATE` (targets.py:364).
-- Поле кода: назвал `http_status: int | None`; права = {401,403,404} как `_GhProbe.denied` (project_checks.py:269-272).
-- Код ответа теряется в `_read_all` (gitlab_adapter.py:282-308) — проведение кода разрешено в SPEC явно.
+- Возврат 2 со spec_gate: Оператор решил 9 пунктов аудита 2 (причина возврата в брифе). Все 9 вносятся в SPEC, батч не нужен.
+- Решения: свой мини-разборщик YAML в project_checks.py (yamlmini не трогать), нераспознанная форма — warn «.gitlab-ci.yml не разобран: <место>»; http_status только из Reply.status; AST-сторож AC-15 снят, «без gh» — шпион при подменённом shutil.which("gh"); ci-token: любой прочитанный итог — ok; форма «правило workflow №<n> (if: …)»; без token_slot — skip «нет token_slot» у строк, идущих в хостинг.
+- gh в project_checks зовётся через doctor.subprocess.run (:193, :215, :277) после doctor.shutil.which("gh") (:184, :212, :314).
 
 ## Не сработало
-- Bash с `;`/`cd &&` иногда требует подтверждения — Read/grep с абсолютными путями.
+- `ls` в Bash недоступен (zsh: command not found) — Read по абсолютным путям.
 
 ## Где остановился
-- SPEC.md переписан под все 12 отклонений аудита (15 AC, budget 40 = рамка, status: ready), guard ок. Шаг завершён.
-- Выбор, который может оспорить Оператор: строки 8–10 только у `target-human` (буква ТЗ:24); строка workflow оценивает только push-конвейер (MR-события — в «Не входит»); ok при заполненном слоте `project-token`.
+- SPEC.md переписан под 9 решений (15 AC, budget 40, status: ready), guard ок. Шаг завершён.
+- Новые требования: 12 (разборщик файла CI), 14 (без token_slot; AC слит в AC-13, чтобы не уйти в класс >15 AC); прежние 12/13 стали 13/15.
+- Спорное: неподдержанное выражение `if` / `changes`/`exists` оставил `skip` (решение 1 — только про нераспознанную форму YAML → `warn`).
 
 ## Чего не хватило
-- Семантики оценки `workflow:rules` в ТЗ нет — задал по правилам GitLab (push-конвейер, правила с 1, первое сработавшее решает).
+- Формулировка решения 2 («текст причины без кода — поле пустое») двусмысленна; заложил оба случая в AC-12: Reply(403,"отказ")→403 и Reply(None, текст с «(403)»)→None.
