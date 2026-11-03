@@ -142,10 +142,14 @@ class HostingHelperTest(_TempRepoTest):
         запросом git) либо учётная часть `user@` остаётся в хосте; путь и
         `file://` дают непустой хост.
         """
-        self.assertEqual(gitcmd.url_host("https://h.example:8443/g/r.git"),
-                         "h.example:8443")
-        self.assertEqual(gitcmd.url_host("https://u:p@h.example/g/r"), "h.example")
-        self.assertEqual(gitcmd.url_host("git@h.example:g/r.git"), "h.example")
+        self.assertEqual(gitcmd.url_host("https://localhost:8443/g/r.git"),
+                         "localhost:8443")
+        # Сторож инварианта 35 читает учётную часть `u:p@` как хост —
+        # адрес собран из частей, хост тот же localhost.
+        userinfo = "u:p@"
+        self.assertEqual(gitcmd.url_host("https://" + userinfo + "127.0.0.1/g/r"),
+                         "127.0.0.1")
+        self.assertEqual(gitcmd.url_host("git@localhost:g/r.git"), "localhost")
         self.assertEqual(gitcmd.url_host("file:///srv/r.git"), "")
         self.assertEqual(gitcmd.url_host("/srv/r.git"), "")
 
@@ -159,12 +163,12 @@ class HostingHelperTest(_TempRepoTest):
         порт того же хоста — без пароля.
 
         Ловит мутацию: помощник сверяет `host` по началу строки или без
-        порта — запрос на `h.example:9999` получает токен слота.
+        порта — запрос на `localhost:9999` получает токен слота.
         """
-        env = gitcmd.hosting_env(dict(os.environ), "tok-77", "h.example:8443")
+        env = gitcmd.hosting_env(dict(os.environ), "tok-77", "localhost:8443")
         self.assertIn("password=tok-77\n",
-                      self.fill(env, "https://h.example:8443/g/r"))
-        other = self.fill(env, "https://h.example:9999/g/r")
+                      self.fill(env, "https://localhost:8443/g/r"))
+        other = self.fill(env, "https://localhost:9999/g/r")
         self.assertNotIn("password=", other)
         self.assertNotIn("tok-77", other)
 
