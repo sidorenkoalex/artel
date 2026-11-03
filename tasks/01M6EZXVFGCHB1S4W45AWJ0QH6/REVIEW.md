@@ -2,96 +2,111 @@
 task: 01M6EZXVFGCHB1S4W45AWJ0QH6
 type: review
 author_role: reviewer
-status: approved
-iteration: 2
+status: changes_requested
+iteration: 3
 schema_version: 5
 ---
 
 # REVIEW: GitLab Б2.3-2: хук pre-push в клоне, его строка doctor, клон подмодулей и сверки перед отправкой
 
 ## Фаза A — план
-- В PLAN добавлен шаг 7: долгоживущие сторожа в `tests/` под R1-F1. Таблица
-  покрытия обновлена, в ней есть все требования 1–14. Шаги проверяемые.
-- «Влияние на систему» сходится с diff. Инкрементальный diff итерации 2
-  трогает только `tests/test_push_hook_stand.py` (новый) и
-  `tests/test_push_hook_units.py` (+2 метода). Код не менялся, прежние
-  утверждения не тронуты, удалённых строк нет.
+- Шаг 8 (возврат из merge_gate) — проверяемая единица: в нём четыре пункта
+  возврата и 10 тестов. Таблица покрытия дополнена (требования 4 и 12 → шаг 8).
+- Толкование «отсутствия» файла политики (пульт пишет эталон перед каждой
+  отправкой) расходится с буквой требования 1: там названы ровно два
+  случая записи. Обоснование в PLAN выдерживает проверку. Хук по-прежнему
+  отказывает отправкам роли из оболочки без файла (требование 4 держится).
+  Отправка пульта и так проходит сверки `gitcmd`. Поэтому замечанием это
+  не ставлю.
+- «Влияние на систему» и «Риски» называют новый побочный эффект: отправка
+  пишет файл в `.git` клона. Не названо, что запись идёт по пути, который
+  контролирует роль (см. R3-F1).
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | Сторож — `test_ensure_clone_human_gets_own_hooks_and_policy_others_old_path` (каталог `target-human`, эталон политики побайтно; у `operator` прежний путь и файла политики нет); `--fix` — `test_push_hook_line_fails_on_damage_and_fix_restores` |
-| 2 | OK | `test_human_pre_commit_refuses_main_commit_without_marker` |
-| 3 | OK | `test_tags_and_notes_refused_with_valid_policy`, вместе с прежними юнит-тестами хука. Мутация «всё вне `refs/heads/*` пропускается» дала 3 красных |
-| 4 | OK | `test_missing_or_unreadable_policy_refuses_naming_path`, прежний тест на пустой/отсутствующий ключ |
-| 5 | OK | Без изменений с итерации 1 (постоянный `core.hooksPath`, хук не читает маркер) |
-| 6 | OK | `test_human_push_carries_hooks_path_operator_does_not`. Мутация прошлой итерации `gitcmd.py:1126` теперь красная |
-| 7 | OK | Прежние файлы хуков не тронуты |
-| 8 | OK | 7 повреждений → `fail`, потом `--fix` → `ok`; `config.worktree` с значением в detail; `skip` без хука в `HEAD`. Мутация «бит исполнения не сверяется» красная |
-| 9 | OK | `test_push_hook_line_skip_without_reference_and_absent_without_clones`: `clone-hooks` остаётся `warn` для `operator`, `target-human` из него исключён |
-| 10 | OK | `test_clone_and_submodules_carry_slot_token`, `test_clone_without_slot_goes_without_token`. Мутация «`submodule update` мимо `gitcmd`» красная |
-| 11 | OK | Без изменений с итерации 1, юнит-тесты помощника на месте |
-| 12 | OK | Тесты `test_transport_env_refuses_before_git` ×3 и `test_config_redirect_refuses_before_git` ×3. Мутации «нет `GIT_SSH_COMMAND`» и «нет `insteadOf`/`sshCommand` в `PUSH_REDIRECT_CONFIG`» красные |
-| 13 | OK | `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py` (сторож ac9) зелёный, `EXEMPT` не тронут |
-| 14 | OK | Тесты артели и `operator` из пакета зелёные |
+| 1 | OK | Без изменений с итерации 2. Эталон и путь перенесены в `gitcmd`, `workspace` их делегирует (`workspace.py:108-120`) |
+| 2 | OK | Без изменений |
+| 3 | OK | Без изменений |
+| 4 | OK с замечанием | `_push_policy_refusal` (`gitcmd.py:318-339`) отказывает до git, если файл нельзя записать или прочитать, и называет путь. Но запись идёт по символической ссылке — R3-F1 |
+| 5 | OK | Без изменений |
+| 6 | OK | Без изменений |
+| 7 | OK | Прежние хуки не тронуты |
+| 8 | OK | Без изменений с итерации 2. Символическая ссылка вместо файла политики строкой не ловится, потому что сумма считается по цели ссылки (часть R3-F1) |
+| 9 | OK | Без изменений |
+| 10 | OK | Без изменений |
+| 11 | OK | Без изменений |
+| 12 | OK | `--get-all remote.origin.url` и ровно одно значение (`gitcmd.py:903-911`). `_strict_config` отказывает при сбое чтения (`:512-528`, `:881-889`). `GIT_SSH` в `GIT_TRANSPORT_ENV_NAMES` (`:249`). Сторожа: `test_second_origin_url_refuses_before_git[local/global]`, `test_config_read_failure_refuses_before_git` ×3, `test_git_ssh_env_refuses_before_git` |
+| 13 | OK | Признак проекта — `targets.merged_by_project_people` (`gitcmd.py:1181`), литералов нет |
+| 14 | OK | Строгое чтение псевдонима (`gitcmd.py:1154-1159`) стоит после выхода для проектов не под белым списком (`:1145-1146`). У артели и `operator` вызов прежний |
 
 ## Замечания
-Нет blocker/major. Заявки «Ловит мутацию» у всех 19 новых методов говорят
-о наблюдаемом расхождении (отказ или его отсутствие, статус строки, argv,
-окружение вызова). Выборочно проверил 6 заявок временной мутацией (см.
-ниже), все тесты покраснели.
-
-Наблюдение без замечания (minor, на вкус): бит исполнения проверяется
-только у `pre-commit` (`pre-commit-exec`), содержимое — только у
-`pre-push` (`pre-push-text`). Сверка общая и идёт циклом по обоим файлам
-(`doctor/git_hooks.py:219-232`), поэтому одного варианта на каждый тип
-расхождения хватает.
+- major — `orchestrator/gitcmd.py:330` (`_push_policy_refusal`, `path.write_bytes(expected)`).
+  Тот же класс есть и в `orchestrator/workspace.py:134` (`write_push_policy`:
+  `ensure_clone` и `doctor --fix`). Пульт пишет файл политики по пути в общем
+  каталоге git клона и идёт по символической ссылке. Этот каталог под
+  контролем роли (модель угроз SPEC: роль меняет конфигурацию клона и
+  рабочей копии). Сценарий: роль кладёт
+  `<клон>/.git/artel-push-policy` → символическую ссылку на любой файл,
+  куда может писать процесс пульта (исходник пульта в `config.ROOT`, БД
+  `store`, файл в `~` Оператора). Следующая отправка пульта из этого клона
+  затирает цель ссылки четырьмя строками политики. Чтение обратно
+  проходит через ту же ссылку и даёт эталон, поэтому отказа нет, отправка
+  идёт дальше. Строка `doctor` `clone-push-hook` тоже видит эталон
+  (сумма по цели) и не отличает такое состояние от исправного.
+  Пробой подтверждено: временный репозиторий, ссылка на файл `victim`,
+  `_push_policy_refusal(...)` вернул `None`, `victim` стал текстом
+  политики. До итерации 3 такая запись шла только при `ensure_clone`
+  (свежий клон, ссылки там ещё нет) и при `doctor --fix`, который
+  запускает Оператор. Теперь её вызывает любая отправка пульта, а условия
+  создаёт роль.
+  Предложение: в обоих местах не идти по ссылке. Например, открывать с
+  `os.O_NOFOLLOW` (или проверить `path.is_symlink()`/`lstat` и отказать с
+  путём файла), либо писать во временный файл того же каталога и
+  `os.replace` — это заменяет саму ссылку, а не её цель. Строке `doctor`
+  считать символическую ссылку на месте файла политики расхождением
+  `fail`, а `--fix` — заменять её обычным файлом. Нужен тест в
+  `tests/test_push_hook_stand.py`: ссылка на месте файла политики даёт
+  отказ (или замену ссылки), а цель ссылки после отправки не изменилась.
+- minor — `orchestrator/gitcmd.py:1184` — `deleting ="--delete" …`:
+  случайно потерян пробел перед `"`, правка вне смысла итерации. Вернуть
+  `deleting = "--delete"`.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | accepted | tests/ (гейт PLAN шаг 6); orchestrator/gitcmd.py:1126-1130, :748, :821-827; orchestrator/doctor/git_hooks.py:186-354; orchestrator/workspace.py:146-156, :206-212; scripts/git-hooks/target-human/* | Долгоживущие свойства требований 1, 2, 3–4, 6, 8–10, 12 сторожила только разовая планка | После мержа регресс второго рубежа никто бы не поймал | Принято (итерация 2): `tests/test_push_hook_stand.py` (17 методов, стенд `real_git`) и 2 метода в `tests/test_push_hook_units.py` покрывают пункты 1–6. Временные мутации ревьювера по пунктам 1, 2, 3, 5, 6 красные (см. «Проверено исполнением») |
+| R3-F1 | open | orchestrator/gitcmd.py:330; orchestrator/workspace.py:134; orchestrator/doctor/git_hooks.py (сверка файла политики) | Запись файла политики идёт по символической ссылке в общем каталоге git клона, а этот каталог контролирует роль | Роль заставляет пульт затереть любой файл, куда он может писать (исходник пульта, БД, файлы Оператора), и отправка при этом проходит; `doctor` подмену не видит | Не идти по ссылке (`O_NOFOLLOW` / `lstat` → отказ, либо временный файл + `os.replace`); `doctor` — `fail` на ссылке, `--fix` — заменить её обычным файлом; тест в `tests/test_push_hook_stand.py` |
+| R3-F2 | open | orchestrator/gitcmd.py:1184 | `deleting ="--delete"` — потерян пробел | Только стиль | Вернуть пробел |
 
 ## Вердикт
-approved. R1-F1 закрыто: долгоживущие сторожа добавлены, и проверка
-мутациями показала, что они ловят то, что заявлено. Требования 1–14
-реализованы, планка зелёная, CI коммита 8e9cf85c зелёный.
+changes_requested: R3-F1 (major, безопасность) и R3-F2 (minor). Остальные
+пункты возврата из merge_gate закрыты: несколько значений
+`remote.origin.url`, строгое чтение конфигурации, `GIT_SSH`, перезапись
+политики перед отправкой. Сторожа проверены мутациями.
 
 ## Проверено исполнением
 - `python3 -m pytest -p no:cacheprovider -q tests/test_push_hook_stand.py
-  tests/test_push_hook_units.py` — 32 passed, 14 subtests passed.
-- `python3 -m pytest -p no:cacheprovider -q tests/test_push_hook_stand.py
-  tests/test_push_hook_units.py tests/test_git_hooks.py
-  tests/test_hosting_token_units.py tests/test_gitcmd_push_point.py` — 98
-  passed, 25 subtests passed.
-- `python3 -m pytest -q tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py`
-  (сторож ac9, требование 13) — 16 passed.
+  tests/test_push_hook_units.py tests/test_gitcmd_push_point.py
+  tests/test_git_hooks.py tests/test_hosting_token_units.py` — 108 passed,
+  25 subtests passed.
 - `artel.py plank-run 01M6EZXVFGCHB1S4W45AWJ0QH6` — 68 passed, код выхода
   pytest 0.
-- Временные мутации. После каждой код возвращён `git checkout --`,
-  `git status --short` чист:
-  1. `gitcmd.py:1126` `if False and whitelisted …` (без `-c core.hooksPath`),
-     вместе с `GIT_TRANSPORT_ENV_NAMES` без `GIT_SSH_COMMAND` и
-     `PUSH_REDIRECT_CONFIG` только с `pushinsteadof`. Прогон
-     `tests/test_push_hook_stand.py`: 4 failed —
-     `test_human_push_carries_hooks_path_operator_does_not`,
-     `test_transport_env_refuses_before_git[GIT_SSH_COMMAND]`,
-     `test_config_redirect_refuses_before_git[insteadOf]`,
-     `[sshCommand]`.
-  2. `doctor/git_hooks.py:230` — без сверки бита исполнения; `workspace.py:152`
-     — `submodule update` прямым `subprocess.run` мимо `gitcmd`. Прогон
-     `tests/test_push_hook_stand.py`: 2 failed — `…[pre-commit-exec]`,
-     `test_clone_and_submodules_carry_slot_token`.
-  3. `scripts/git-hooks/target-human/pre-push:85` — `continue` вместо
-     отказа ссылке вне `refs/heads/*`. Прогон `tests/test_push_hook_units.py`:
-     3 failed — `refs/tags/v1`, `refs/notes/x`, `refs/artifacts/` (пустой
-     id).
+- Пробой R3-F1 (скрипт во временном каталоге, после прогона удалён): `git init`, затем
+  `.git/artel-push-policy` → ссылка на `victim`,
+  `gitcmd._push_policy_refusal("p", {"base": "main"}, repo)` → `None`;
+  содержимое `victim` после вызова —
+  `project=p\nbase=main\nbranch_template=task/{id}-{slug}\nartifacts_prefix=refs/artifacts/\n`.
+- Временные мутации (вместе): `gitcmd.py:903` `--get` вместо `--get-all`,
+  `gitcmd.py:330` без записи политики. Прогон `tests/test_push_hook_stand.py`:
+  4 failed — `test_second_origin_url_refuses_before_git[local]`, `[global]`,
+  `test_push_rewrites_policy_from_entry[changed]`, `[deleted]`. Код
+  возвращён `git checkout -- orchestrator/gitcmd.py`, `git status --short`
+  чист.
 
 ## Предложения системе
-- Пакет ревью итерации 2 содержит только инкрементальный diff `tests/`.
-  Чтобы мутировать код, ревьюверу приходится читать его адресно по
-  номерам строк из прошлого REVIEW. Это работает, пока код между
-  итерациями не менялся. Полезно, если пакет будет отмечать «код с
-  прошлого вердикта не менялся» явно.
+- Класс «пульт пишет файл по пути в каталоге, который контролирует роль»
+  (`.git` клона, рабочая копия) стоит вынести в скил ревью или в
+  инвариант guard: запись без защиты от символической ссылки — это
+  примитив перезаписи для роли.
