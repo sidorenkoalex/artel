@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import (agent_log, ci, config, fsm, gitcmd, mr_sync, session, spend,
-               store, workspace)
+               store, verify, workspace)
 from .advance_gates import refusal_classes
 from .providers.claude import TOOL_CALL_LINE_PREFIX
 
@@ -230,8 +230,11 @@ def _matches_class(action: str, detail: str, events: set) -> bool:
     # Смена итога сверки MR задачи в `awaiting_human` (SPEC
     # 01M6AB4VE2R0Q2V5D4MMJGNGH7, требование 6) — событие класса `gates`:
     # повтор того же итога записью смены не бывает.
+    # Вход в ожидание ручной проверки (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE,
+    # требование 2) — тоже ожидание Оператора: одна запись на визит и голову.
     if "gates" in events and (action in _GATE_ACTIONS
-                              or action == mr_sync.OUTCOME_CHANGED_ACTION):
+                              or action == mr_sync.OUTCOME_CHANGED_ACTION
+                              or action == verify.WAIT_ACTION):
         return True
     if ("refusals" in events and action.startswith(store.REFUSAL_ACTION_PREFIX)
             and action not in _PRE_ADVANCE_REFUSAL_ACTIONS):
@@ -291,6 +294,7 @@ def _notify(message: str) -> None:
 def _significant(action: str) -> bool:
     return (action in _GATE_ACTIONS or action == _AUTO_STOP_ACTION or
             action == mr_sync.OUTCOME_CHANGED_ACTION or
+            action == verify.WAIT_ACTION or
             (action.startswith(store.REFUSAL_ACTION_PREFIX) and
              action not in _PRE_ADVANCE_REFUSAL_ACTIONS))
 

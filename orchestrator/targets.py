@@ -165,6 +165,17 @@ REFERENCE_FIELDS = ("modules", "constants_module", "constants", "min_uses")
 REFERENCE_MIN_USES = "min_uses"
 REFERENCE_MIN_USES_RANGE = (1, 1000)
 
+# Профиль проверок этапа `verifying` — необязательное поле раздела
+# `description` записи локального слоя (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE,
+# требование 1; ADR-0029 п. 10): список проверок `<тип>:<имя>` каталога
+# типов. `ci` — ядро этапа, в профиле не объявляется; исполняется только
+# `human`, `agent`/`script` есть в каталоге, но не исполняются (пункт C4).
+VERIFY_FIELD = "verify"
+VERIFY_HUMAN = "human"
+VERIFY_CORE_TYPE = "ci"
+VERIFY_PENDING_TYPES = ("agent", "script")
+VERIFY_NAME = re.compile(r"[a-z0-9-]+")
+
 
 class TargetsError(Exception):
     """Декларацию target'а взять неоткуда: файл, формат или сама запись."""
@@ -338,7 +349,7 @@ LOCAL_SECTIONS = ("description", "policy", "machine")
 LOCAL_FIELDS = {
     "description": {"base": True, PROFILE_FIELD: False,
                     COMPONENTS_FIELD: False, KNOWLEDGE_FIELD: False,
-                    REFERENCE_FIELD: False},
+                    REFERENCE_FIELD: False, VERIFY_FIELD: False},
     "policy": {"no_paths": True, "project_skills": True, "merge_gate": True,
                "sandbox": False, WRAPPER_FIELD: False,
                "weakening_scope": False,
@@ -464,7 +475,7 @@ def merge_local(name: str, entry: object, source: Path | None = None) -> dict:
     _check_delivery(where, policy, machine)
     _check_local_values(name, where, entry)
     flat = _flatten(name, description, policy, machine)
-    check(name, flat, source)
+    check(name, flat, source, local=True)
     return flat
 
 
@@ -817,20 +828,32 @@ def _flatten(name: str, description: dict, policy: dict,
         flat[COMPONENTS_FIELD] = merged
     elif comps is not None:
         flat[COMPONENTS_FIELD] = comps
-    for field in (KNOWLEDGE_FIELD, REFERENCE_FIELD):
+    for field in (KNOWLEDGE_FIELD, REFERENCE_FIELD, VERIFY_FIELD):
         if field in description:
             flat[field] = description[field]
     return flat
 
 
-def check(name: str, entry: object, source: Path | None = None) -> None:
+def check(name: str, entry: object, source: Path | None = None, *,
+          local: bool = False) -> None:
     """Проверка одной записи. TargetsError называет поле, а не только файл.
 
     `source` — файл слоя, из которого пришла запись (требование 7); по
-    умолчанию — `config.TARGETS`, текст прежний."""
+    умолчанию — `config.TARGETS`, текст прежний. `local` — запись сведена
+    из разделов локального слоя (`merge_local`): только там допустимо поле
+    `verify`."""
     where = f"{config.TARGETS if source is None else source}: target '{name}'"
     if not isinstance(entry, dict):
         raise TargetsError(f"{where} — не набор полей")
+    if VERIFY_FIELD in entry:
+        if not local:
+            raise TargetsError(
+                f"{where}: поле '{VERIFY_FIELD}' — только в разделе "
+                f"'description' записи локального слоя {local_path()}")
+        reason = _verify_error(entry[VERIFY_FIELD])
+        if reason:
+            raise TargetsError(f"{where}: поле 'description.{VERIFY_FIELD}' "
+                               f"— {reason}")
     for field, kind in FIELDS.items():
         if field not in entry:
             raise TargetsError(f"{where}: нет поля '{field}'")
@@ -889,6 +912,42 @@ def check(name: str, entry: object, source: Path | None = None) -> None:
             raise TargetsError(f"{where}: поле '{KNOWLEDGE_FIELD}' — {reason}")
     if REFERENCE_FIELD in entry:
         _check_reference(where, entry[REFERENCE_FIELD])
+
+
+def _verify_error(value: object) -> str:
+    """Причина отказа значения поля `verify`; "" — значение годно."""
+    if not isinstance(value, list):
+        return f"{value!r}, не список проверок <тип>:<имя>"
+    names: set = set()
+    for item in value:
+        if not isinstance(item, str):
+            return f"элемент {item!r} — не строка <тип>:<имя>"
+        kind, colon, check_name = item.partition(":")
+        if kind == VERIFY_CORE_TYPE:
+            return (f"'{item}': проверка {VERIFY_CORE_TYPE} — ядро этапа "
+                    f"verifying, в профиле не объявляется")
+        if not colon:
+            return f"'{item}': нет типа — ожидается <тип>:<имя>"
+        if kind in VERIFY_PENDING_TYPES:
+            return f"'{item}': тип не реализован (пункт C4)"
+        if kind != VERIFY_HUMAN:
+            return (f"'{item}': неизвестный тип '{kind}' (исполняется: "
+                    f"{VERIFY_HUMAN}; не реализованы: "
+                    f"{', '.join(VERIFY_PENDING_TYPES)})")
+        if not VERIFY_NAME.fullmatch(check_name):
+            return (f"'{item}': имя проверки {check_name!r} — не по "
+                    f"[a-z0-9-]+")
+        if check_name in names:
+            return f"'{item}': повтор имени проверки '{check_name}'"
+        names.add(check_name)
+    return ""
+
+
+def verify_checks(entry: dict) -> list:
+    """Имена проверок `human:<имя>` профиля `verify` проверенной записи по
+    порядку профиля; [] — поля нет или профиль пуст (поведение прежнее)."""
+    return [item.partition(":")[2] for item in entry.get(VERIFY_FIELD) or []
+            if item.partition(":")[0] == VERIFY_HUMAN]
 
 
 def wrapper_paths(agent_wrapper=()) -> tuple:

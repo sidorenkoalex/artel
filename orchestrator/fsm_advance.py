@@ -20,8 +20,8 @@ from scripts import guard
 
 from . import (acceptance, artifact_branch, artifact_source, artifacts, budget, ci, config,
               fsm, fsm_autogate, gitcmd, github_adapter, merge_after,
-              project_profile, pull, repo_context, store, targets, workspace,
-              yamlmini)
+              project_profile, pull, repo_context, store, targets, verify,
+              workspace, yamlmini)
 from .advance_gates import spec_audit as spec_audit_gate
 from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import (_acceptance_lock_refuses,
@@ -456,6 +456,19 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # нет в origin, опрос отправляет туда сам (SPEC
     # 01M44ENQCRK02T2MWZB9HC3XHH, требование 6).
     branch = t["branch"]
+    # Профиль проверок проекта (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требование
+    # 2): задача, уже ждущая отметки Оператора по текущей голове, CI не
+    # опрашивает и потолку не подлежит — ждёт человек, не CI. Запись
+    # проекта не прочитана — `review` не наступает: объявленная проверка
+    # молча не пропускается.
+    profile_error = ""
+    try:
+        names = verify.checks(target)
+    except targets.TargetsError as exc:
+        names, profile_error = [], f"профиль проверок verify не прочитан: {exc}"
+    sha = verify.head(task_id, branch) if names else ""
+    if names and sha and verify.hold(conn, task_id, state, names, sha):
+        return False
     outcome, note = ci.verifying_status(branch,
                                         repo=workspace.task_repo(task_id))
     store.journal(conn, task_id, "orchestrator",
@@ -474,11 +487,19 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         verdict = verifying_gate(conn, task_id, t, state)
         if verdict.moved:
             return False
-        if not verdict.wait:
+        if verdict.wait:
+            note = f"гейт неослабления по исходам ждёт: {verdict.wait}"
+        elif profile_error:
+            note = profile_error
+        elif names:
+            if sha:
+                verify.enter_wait(conn, task_id, state, names, sha)
+                return False
+            note = "голова ветки не прочитана — ожидание проверки не начато"
+        else:
             store.set_state(conn, task_id, "review", "fsm",
                             expected_state=state, detail=note)
             return False
-        note = f"гейт неослабления по исходам ждёт: {verdict.wait}"
     if ci.verifying_head_not_in_origin(note) and not t["is_canary"]:
         # GitHub не видит голову (HTTP 422) — без отправки CI по ней не
         # придёт, и задача ждала бы потолка (SPEC 01M44ENQCRK02T2MWZB9HC3XHH,
