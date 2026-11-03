@@ -71,7 +71,7 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tests/test_fail_closed_on_read_failure.py; места: orchestrator/fsm_merge_gate.py:1521, orchestrator/gitcmd.py:1023, :1016, :905 | долгоживущие свойства требований 1, 5, 6, 7 сторожит только планка: четыре временные мутации — `tests/` зелёные | после мержа регрессия снова откроет слияние/отправку при сбое чтения, CI не заметит (ADR-0018 п. 3) | по тесту в `tests/` на каждое место, с «Ловит мутацию: …» под мутацию из «Замечаний» |
+| R1-F1 | fixed | tests/test_fail_closed_on_read_failure.py; места: orchestrator/fsm_merge_gate.py:1521, orchestrator/gitcmd.py:1023, :1016, :905 | долгоживущие свойства требований 1, 5, 6, 7 сторожит только планка: четыре временные мутации — `tests/` зелёные | после мержа регрессия снова откроет слияние/отправку при сбое чтения, CI не заметит (ADR-0018 п. 3) | по тесту в `tests/` на каждое место, с «Ловит мутацию: …» под мутацию из «Замечаний» — fixed (developer): четыре сторожа в `tests/test_fail_closed_on_read_failure.py` (A `test_merge_gate_unread_entry_refuses_external`, B `test_in_flight_limit_refusal_carries_code_from_git_and_in_repo`, C `test_push_plan_in_flight_db_error_external_refused`, D `test_in_repo_db_error_refuses_external_not_artel`); каждая мутация роняет свой тест |
 
 ## Вердикт
 changes_requested: закрыть R1-F1 — добавить четыре сторожа в `tests/`. Код по SPEC
