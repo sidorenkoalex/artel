@@ -105,7 +105,7 @@ ENTRY = """  {name}:
       mutation_claim_scope: [tests/test_*.py]
 {policy}    machine:
       forge: {forge}
-      url: https://localhost/grp/{name}
+      url: {url}
       token_slot: {name}-token
 """
 
@@ -501,7 +501,8 @@ class Stand:
         for name in (self.ext, self.other):
             text += ENTRY.format(name=name, base=config.MAIN_BRANCH,
                                  protected=PROTECTED_UNCHANGED, gate=gate,
-                                 policy=lines, forge=forge_name)
+                                 policy=lines, forge=forge_name,
+                                 url=config.PROJECTS / name / "origin.git")
         local = targets.local_path()
         local.parent.mkdir(parents=True, exist_ok=True)
         local.write_text(text, encoding="utf-8")

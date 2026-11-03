@@ -3,7 +3,9 @@
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
+import hashlib
 import os
+from pathlib import Path
 
 from orchestrator import doctor
 
@@ -148,13 +150,18 @@ def _clone_hooks_value(clone) -> str:
 def check_clone_hooks() -> list:
     """Строка на каждый проект `targets.yaml`: клона нет — `warn`
     (`doctor --fix` заведёт); `core.hooksPath` клона не задан или не равен
-    абсолютному пути пина — `warn` с именем проекта и клона."""
+    абсолютному пути пина — `warn` с именем проекта и клона. Клоны проектов
+    `target-human` сверяет отдельная строка `clone-push-hook`
+    (`_check_push_hook_clones`)."""
     expected = str(doctor.workspace.hooks_path())
-    missing, wrong = [], []
+    missing, wrong, human = [], [], []
     for name in _project_names():
         clone = doctor.workspace.repo(name)
         if not clone.exists():
             missing.append(f"{name}: клона {clone} нет")
+            continue
+        if doctor.workspace.is_target_human(name):
+            human.append((name, clone))
             continue
         value = _clone_hooks_value(clone)
         if value != expected:
@@ -169,20 +176,209 @@ def check_clone_hooks() -> list:
                   if wrong else
                   doctor.Check(CLONE_HOOKS_CHECK, "ok",
                                f"core.hooksPath клонов = {expected}"))
+    if human:
+        checks.append(_check_push_hook_clones(human))
     return checks
+
+
+# --- хук белого списка клонов проектов target-human (SPEC -----------------
+# 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 8) --------------------------------
+# Эталон хука — содержимое в коммите HEAD главной копии пульта, не файл на
+# диске: правку файла на диске строка и ловит. Эталон файла политики —
+# текст по текущей записи проекта (`workspace.push_policy_text`).
+
+PUSH_HOOK_CHECK = "clone-push-hook"
+PUSH_HOOK_NAMES = ("pre-push", "pre-commit")
+
+
+def _hook_rel(hook: str) -> str:
+    return f"{HOOKS_PATH}/{doctor.gitcmd.TARGET_HUMAN_HOOKS}/{hook}"
+
+
+def _reference_hooks() -> tuple[dict | None, str]:
+    """({имя хука: содержимое в HEAD главной копии}, причина пропуска)."""
+    if not _inside_work_tree():
+        return None, "config.ROOT — не git-репозиторий (git не ответил)"
+    texts = {}
+    for hook in PUSH_HOOK_NAMES:
+        try:
+            res = doctor.gitcmd.read(doctor.config.ROOT, "show",
+                                     f"HEAD:{_hook_rel(hook)}")
+        except OSError as exc:
+            return None, f"git show HEAD:{_hook_rel(hook)}: {exc}"
+        if res.returncode != 0:
+            return None, f"в HEAD главной копии нет {_hook_rel(hook)}"
+        texts[hook] = res.stdout
+    return texts, ""
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _hook_findings(directory: Path, reference: dict) -> list:
+    findings = []
+    for hook, text in reference.items():
+        path = directory / hook
+        if not path.is_file():
+            findings.append(f"{path}: файла нет")
+            continue
+        actual = _sha256(path.read_bytes())
+        if actual != _sha256(text):
+            findings.append(f"{path}: sha256 {actual[:12]} — не эталон "
+                            f"HEAD:{_hook_rel(hook)}")
+        if not _is_executable(path):
+            findings.append(f"{path}: без бита исполнения")
+    return findings
+
+
+def _worktree_paths(clone: Path) -> list:
+    """Рабочие копии задач клона (`git worktree list`), кроме самого клона."""
+    res = doctor.gitcmd.in_repo(clone, "worktree", "list", "--porcelain")
+    if res is None or res.returncode != 0:
+        return []
+    paths = [Path(line[len("worktree "):]) for line in res.stdout.splitlines()
+             if line.startswith("worktree ")]
+    own = Path(clone).resolve()
+    return [p for p in paths if p.resolve() != own and p.exists()]
+
+
+def _worktree_hooks_values(worktree: Path) -> list:
+    """Значения `core.hooksPath` из конфигурации самой рабочей копии
+    (`config.worktree` её каталога git)."""
+    res = doctor.gitcmd.in_repo(worktree, "rev-parse", "--absolute-git-dir")
+    if res is None or res.returncode != 0 or not res.stdout.strip():
+        return []
+    own = Path(res.stdout.strip()) / "config.worktree"
+    if not own.is_file():
+        return []
+    res = doctor.gitcmd.in_repo(worktree, "config", "--file", str(own),
+                                "--get-all", "core.hooksPath")
+    if res is None or res.returncode != 0:
+        return []
+    return [v for v in res.stdout.splitlines() if v]
+
+
+def _push_hook_findings(name: str, clone: Path, reference: dict) -> list:
+    expected = doctor.workspace.project_hooks_path(name)
+    findings = []
+    value = _clone_hooks_value(clone)
+    if not value or not doctor.gitcmd.same_dir(value, expected):
+        findings.append(f"core.hooksPath клона = {value or '(не задан)'}, "
+                        f"ожидается {expected}")
+    directory = Path(value) if value and os.path.isabs(value) else expected
+    findings += _hook_findings(directory, reference)
+    path, error = doctor.workspace.push_policy_path(clone)
+    if error is not None:
+        findings.append(error)
+    else:
+        try:
+            entry = doctor.targets.target(name)
+            want = doctor.workspace.push_policy_text(name, entry).encode("utf-8")
+        except doctor.targets.TargetsError as exc:
+            want = None
+            findings.append(f"эталон файла политики не собран: {exc}")
+        if want is not None:
+            # Сумма по цели ссылки дала бы эталон — ссылка сама расхождение
+            # (REVIEW R3-F1); `--fix` заменяет её обычным файлом.
+            if path.is_symlink():
+                findings.append(f"файл политики {path} — символическая ссылка "
+                                f"на {os.readlink(path)}")
+            elif not path.is_file():
+                findings.append(f"файла политики {path} нет")
+            else:
+                try:
+                    actual = path.read_bytes()
+                except OSError as exc:
+                    actual = None
+                    findings.append(f"файл политики {path} не читается: {exc}")
+                if actual is not None and _sha256(actual) != _sha256(want):
+                    findings.append(f"файл политики {path}: sha256 "
+                                    f"{_sha256(actual)[:12]} — не эталон по "
+                                    f"записи")
+    for worktree in _worktree_paths(clone):
+        for wt_value in _worktree_hooks_values(worktree):
+            if not doctor.gitcmd.same_dir(wt_value, expected):
+                findings.append(f"core.hooksPath рабочей копии {worktree} = "
+                                f"{wt_value}, ожидается {expected}")
+    return [f"клон {name} ({clone}): {f}" for f in findings]
+
+
+def _check_push_hook_clones(human: list) -> doctor.Check:
+    """Строка `clone-push-hook` по клонам проектов `target-human` (`human`
+    — пары (имя, клон)): хуки каталога, куда указывает `core.hooksPath`
+    клона, против эталона из HEAD (сумма и бит исполнения), файл политики
+    против эталона по записи, `core.hooksPath` клона и рабочих копий задач.
+    `config.ROOT` не репозиторий или в HEAD нет файла хука — `skip`
+    (ANSWER-1 п. 5)."""
+    reference, why = _reference_hooks()
+    if reference is None:
+        return doctor.Check(PUSH_HOOK_CHECK, "skip", f"{why} — хуки клонов "
+                            f"target-human не сверены")
+    findings = []
+    for name, clone in human:
+        findings += _push_hook_findings(name, clone, reference)
+    if findings:
+        return doctor.Check(PUSH_HOOK_CHECK, "fail",
+                            "; ".join(findings) + " — почини: doctor --fix")
+    return doctor.Check(PUSH_HOOK_CHECK, "ok",
+                        f"хуки и файл политики клонов target-human — эталон "
+                        f"({', '.join(n for n, _c in human)})")
+
+
+def _fix_push_hook_clone(name: str, clone: Path, reference: dict | None,
+                         why: str) -> None:
+    """`doctor --fix` клона проекта `target-human`: файлы хуков каталога
+    пульта проекта — из HEAD с битом исполнения, файл политики — эталон,
+    `core.hooksPath` клона — каталог пульта проекта."""
+    expected = doctor.workspace.project_hooks_path(name)
+    done = []
+    if reference is None:
+        print(f"  [FIX] {PUSH_HOOK_CHECK}: клон {name}: хуки не восстановлены "
+              f"— {why}")
+    else:
+        for hook, text in reference.items():
+            path = expected / hook
+            try:
+                if not path.is_file() or path.read_bytes() != text:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(text)
+                    done.append(f"{hook} из HEAD")
+                if not _is_executable(path):
+                    os.chmod(path, path.stat().st_mode | 0o111)
+                    done.append(f"бит исполнения {hook}")
+            except OSError as exc:
+                print(f"  [FIX] {PUSH_HOOK_CHECK}: клон {name}: {path}: {exc}")
+    error = doctor.workspace.write_push_policy(clone, name)
+    print(f"  [FIX] {PUSH_HOOK_CHECK}: клон {name}: "
+          + (error if error else "файл политики — эталон"))
+    value = _clone_hooks_value(clone)
+    if not value or not doctor.gitcmd.same_dir(value, expected):
+        error = doctor.workspace.set_clone_hooks(clone, name)
+        done.append(error if error else f"core.hooksPath = {expected}")
+    if done:
+        print(f"  [FIX] {PUSH_HOOK_CHECK}: клон {name}: {'; '.join(done)}")
 
 
 def _fix_project_clones() -> None:
     """`doctor --fix`: недостающий клон каждого проекта заводится
     (`workspace.ensure_clone`, хуки пина ставятся там же); существующему —
-    `core.hooksPath` = абсолютный путь пина, если стоит другое значение."""
+    `core.hooksPath` = абсолютный путь пина, если стоит другое значение;
+    клону проекта `target-human` — хуки, файл политики и `core.hooksPath`
+    к эталону (`_fix_push_hook_clone`)."""
     expected = str(doctor.workspace.hooks_path())
+    reference = why = None
     for name in _project_names():
         clone = doctor.workspace.repo(name)
         if not clone.exists():
             _path, error = doctor.workspace.ensure_clone(name)
             print(f"  [FIX] {PROJECT_CLONES_CHECK}: "
                   + (error if error else f"заведён клон {name} — {clone}"))
+            continue
+        if doctor.workspace.is_target_human(name):
+            if why is None:
+                reference, why = _reference_hooks()
+            _fix_push_hook_clone(name, clone, reference, why)
             continue
         if _clone_hooks_value(clone) == expected:
             continue
