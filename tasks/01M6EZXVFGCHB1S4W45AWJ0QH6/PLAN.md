@@ -80,23 +80,37 @@ schema_version: 5
    `format`), утверждения те же.
 6. Юнит-тесты `tests/test_push_hook_units.py`; карта
    `python3 scripts/codebase_map.py`.
+7. (Итерация 2, REVIEW R1-F1.) Долгоживущие сторожа в `tests/`:
+   `tests/test_push_hook_stand.py` — стенд `real_git` (каталог
+   `scripts/git-hooks` закоммичен в `config.ROOT`, клоны — `ensure_clone`,
+   шпион отправки): `-c core.hooksPath` в отправке `target-human` и её
+   отсутствие у `operator`; строка `clone-push-hook` (изменённый хук, хук
+   без бита исполнения, изменённый/удалённый файл политики, чужой/прежний/
+   снятый `core.hooksPath`, `config.worktree`, `--fix` → `ok`, `skip` без
+   хука в `HEAD`, нет строки без клонов, исключение из `clone-hooks`);
+   сверки `GIT_SSH_COMMAND`/`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`,
+   `remote.origin.url`, `insteadOf`, `core.sshCommand`; `ensure_clone` и
+   `pre-commit` `target-human`; клон и подмодули с токеном слота, без
+   слота — без токена. В `tests/test_push_hook_units.py` — отказ хука на
+   теги/`refs/notes` при исправной политике и при отсутствующем или
+   нечитаемом файле политики.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1, 3, 4 |
-| 2 | 1 |
-| 3 | 1 |
-| 4 | 1 |
+| 1 | 1, 3, 4, 7 |
+| 2 | 1, 7 |
+| 3 | 1, 7 |
+| 4 | 1, 7 |
 | 5 | 1, 2 |
-| 6 | 2 |
+| 6 | 2, 7 |
 | 7 | 1 (прежние файлы не тронуты) |
-| 8 | 4 |
-| 9 | 4 |
-| 10 | 2, 3 |
+| 8 | 4, 7 |
+| 9 | 4, 7 |
+| 10 | 2, 3, 7 |
 | 11 | 2 |
-| 12 | 2, 5 |
+| 12 | 2, 5, 7 |
 | 13 | 2, 3, 4 (только `targets.merged_by_project_people`/`push_whitelisted`) |
 | 14 | 2, 3, 4 |
 
@@ -107,6 +121,19 @@ schema_version: 5
 файлов вокруг клонов/`target-human`/doctor (329 passed), `test_invariants` и
 `test_doctor*` (253 passed). Новые тесты проверены временной мутацией —
 каждый из 11 случаев красный.
+Итерация 2: `tests/test_push_hook_stand.py` + `tests/test_push_hook_units.py`
+— 32 passed; вместе с `test_git_hooks`, `test_hosting_token_units`,
+`test_gitcmd_push_point` — 98 passed; `test_invariants` — 88 passed;
+`plank-run` — 68 passed. 20 временных мутаций (вставка `-c` в
+`_push_plan`, перечень переменных окружения, сверка `remote.origin.url`,
+`PUSH_REDIRECT_CONFIG`, разбор `clone`, `_clone_submodules`, запись
+политики и каталог хуков в `ensure_clone`, сумма/бит/политика/
+`core.hooksPath`/`config.worktree` в строке doctor, исключение из
+`clone-hooks`, `skip`, бит в `--fix`, правило ссылок и отсутствие файла
+политики в `pre-push`, `pre-commit`) — все красные, код возвращён. Мутация
+«`clone` убран из `HOSTING_SUBCOMMANDS`» выжила законно: `clone`
+разбирается раньше этой проверки (`gitcmd.py:131-132`), её сторожит
+мутация самого разбора.
 
 ## Влияние на систему
 - Защита `main` главной копии и клонов прочих проектов — прежние файлы и
