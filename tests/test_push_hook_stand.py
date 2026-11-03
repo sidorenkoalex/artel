@@ -318,6 +318,121 @@ def test_config_redirect_refuses_before_git(stand, tmp_path, finding):
     assert_refused(stand, gitcmd.in_repo(clone, "push", "origin", branch), needle)
 
 
+def test_git_ssh_env_refuses_before_git(stand):
+    """`GIT_SSH` (без `_COMMAND`) в окружении — отказ отправки `target-human`
+    до вызова git, причина называет переменную.
+
+    Ловит мутацию: `GIT_SSH` не входит в перечень переменных транспорта —
+    отправка с подменённой программой ssh доходит до git.
+    """
+    clone, branch = stand.ready_push()
+    stand.monkeypatch.setenv("GIT_SSH", "/usr/bin/ssh")
+    assert_refused(stand, gitcmd.in_repo(clone, "push", "origin", branch),
+                   "GIT_SSH")
+
+
+@pytest.mark.parametrize("scope", ["local", "global"])
+def test_second_origin_url_refuses_before_git(stand, tmp_path, scope):
+    """Второе значение `remote.origin.url` — в локальной конфигурации клона
+    либо в `~/.gitconfig` — отказ отправки до вызова git: `git push origin`
+    шлёт на каждое значение, и ветка ушла бы и на чужой адрес.
+
+    Ловит мутацию: адрес читается `--get` (последнее значение) либо
+    `--get-all` только локального слоя — при последнем значении, равном
+    адресу записи, второй адрес проходит сверку.
+    """
+    clone, branch = stand.ready_push()
+    url = out(clone, "config", "--get", "remote.origin.url")
+    other = str(tmp_path / "other.git")
+    if scope == "local":
+        # Чужой адрес первым, адрес записи последним: `--get` видит адрес записи.
+        git(clone, "config", "--unset-all", "remote.origin.url")
+        git(clone, "config", "--add", "remote.origin.url", other)
+        git(clone, "config", "--add", "remote.origin.url", url)
+    else:
+        gitconfig = Path(os.environ["HOME"]) / ".gitconfig"
+        gitconfig.write_text(gitconfig.read_text(encoding="utf-8")
+                             + f"[remote \"origin\"]\n\turl = {other}\n",
+                             encoding="utf-8")
+    assert out(clone, "config", "--get", "remote.origin.url") == url
+    assert_refused(stand, gitcmd.in_repo(clone, "push", "origin", branch),
+                   "remote.origin.url")
+
+
+@pytest.mark.parametrize("key", ["--get-regexp", "core.hooksPath",
+                                 "remote.origin.pushurl"])
+def test_config_read_failure_refuses_before_git(stand, key):
+    """Сбой `git config` (код не 0 и не 1) на любой сверке конфигурации —
+    отказ отправки до вызова git с причиной «не прочитана», а не «ключа
+    нет».
+
+    Ловит мутацию: чтение конфигурации сверок отдаёт пустую строку при
+    сбое git — `insteadOf`/`sshCommand`/`core.hooksPath`/`pushurl` молча не
+    сверены, отправка доходит до git.
+    """
+    clone, branch = stand.ready_push()
+    spied = subprocess.run
+
+    def failing(argv, *args, **kwargs):
+        words = [os.fsdecode(a) for a in argv] if isinstance(argv, list) else []
+        if subcommand(argv) == "config" and key in words:
+            return subprocess.CompletedProcess(argv, 128, "", "fatal: сбой")
+        return spied(argv, *args, **kwargs)
+
+    stand.monkeypatch.setattr(subprocess, "run", failing)
+    assert_refused(stand, gitcmd.in_repo(clone, "push", "origin", branch),
+                   "не прочитана")
+
+
+# --- файл политики перед отправкой пульта (требование 4) ---------------------
+
+@pytest.mark.parametrize("damage", ["changed", "deleted"])
+def test_push_rewrites_policy_from_entry(stand, damage):
+    """Перед отправкой пульт перезаписывает файл политики эталоном по
+    записи проекта: изменённый или удалённый файл после отправки снова
+    равен эталону, отправка доходит до git.
+
+    Ловит мутацию: файл политики перед отправкой не перезаписывается —
+    подмена политики ролью (иной шаблон ветки, иной `base`) переживает
+    отправку пульта.
+    """
+    clone, branch = stand.ready_push()
+    policy = clone / ".git" / workspace.PUSH_POLICY_NAME
+    reference = policy.read_bytes()
+    if damage == "changed":
+        policy.write_text("project=x\nbase=dev\nbranch_template={ref}\n"
+                          "artifacts_prefix=refs/\n", encoding="utf-8")
+    else:
+        policy.unlink()
+    res = gitcmd.in_repo(clone, "push", "origin", branch)
+    assert res.returncode == 0 and len(stand.pushes) == 2, res.stderr
+    assert policy.read_bytes() == reference
+
+
+@pytest.mark.parametrize("damage", ["unreadable", "directory"])
+def test_unusable_policy_refuses_before_git(stand, damage):
+    """Файл политики, который пульт не может записать или прочитать (нет
+    прав, на его месте каталог), — отказ отправки до вызова git, причина
+    называет путь файла.
+
+    Ловит мутацию: сбой записи/чтения файла политики в `gitcmd` не
+    сверяется — отказ остаётся только хуку, причина пульта его не называет.
+    """
+    clone, branch = stand.ready_push()
+    policy = clone / ".git" / workspace.PUSH_POLICY_NAME
+    if damage == "unreadable":
+        policy.chmod(0)
+    else:
+        policy.unlink()
+        policy.mkdir()
+    try:
+        assert_refused(stand, gitcmd.in_repo(clone, "push", "origin", branch),
+                       str(policy))
+    finally:
+        if damage == "unreadable":
+            policy.chmod(0o644)
+
+
 # --- строка doctor clone-push-hook (требования 8, 9) ------------------------
 
 def strip_exec(path: Path) -> None:

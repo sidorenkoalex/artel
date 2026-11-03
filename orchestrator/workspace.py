@@ -105,24 +105,19 @@ def set_clone_hooks(clone: Path, target: str | None = None) -> str | None:
     return None
 
 
-PUSH_POLICY_NAME = "artel-push-policy"
+PUSH_POLICY_NAME = gitcmd.PUSH_POLICY_NAME
 
 
 def push_policy_text(target: str, entry: dict) -> str:
     """Эталон файла политики `pre-push` проекта `target-human` по записи
-    `entry` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, «Термины»)."""
-    template = entry.get("branch_template") or targets.DEFAULT_BRANCH_TEMPLATE
-    return (f"project={target}\nbase={entry.get('base') or ''}\n"
-            f"branch_template={template}\n"
-            f"artifacts_prefix={gitcmd.ARTIFACT_REF_PREFIX}\n")
+    `entry` (`gitcmd.push_policy_text`: тот же эталон пульт пишет перед
+    каждой своей отправкой)."""
+    return gitcmd.push_policy_text(target, entry)
 
 
 def push_policy_path(clone: Path) -> tuple[Path | None, str | None]:
     """(путь файла политики в общем каталоге git клона, причина отказа)."""
-    res = gitcmd.in_repo(clone, "rev-parse", "--git-common-dir")
-    if res is None or res.returncode != 0 or not res.stdout.strip():
-        return None, f"общий каталог git клона {clone} не получен: {_failure(res)}"
-    return Path(clone) / res.stdout.strip() / PUSH_POLICY_NAME, None
+    return gitcmd.push_policy_path(clone)
 
 
 def write_push_policy(clone: Path, target: str) -> str | None:

@@ -246,7 +246,7 @@ GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 GIT_LOCATION_ENV_NAMES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")
 # Переменные, подменяющие транспорт или слои конфигурации вызова (SPEC
 # 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 12): под белым списком — отказ.
-GIT_TRANSPORT_ENV_NAMES = ("GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL",
+GIT_TRANSPORT_ENV_NAMES = ("GIT_SSH_COMMAND", "GIT_SSH", "GIT_CONFIG_GLOBAL",
                            "GIT_CONFIG_SYSTEM")
 # Ключи действующей конфигурации, уводящие отправку мимо адреса записи или
 # её транспорта (там же); имена — в каноническом виде `git config`.
@@ -285,6 +285,58 @@ def project_hooks_path(entry: dict | None) -> Path:
     if entry is not None and targets.merged_by_project_people(entry):
         return path / TARGET_HUMAN_HOOKS
     return path
+
+
+PUSH_POLICY_NAME = "artel-push-policy"
+
+
+def push_policy_text(project: str, entry: dict) -> str:
+    """Эталон файла политики `pre-push` проекта `target-human` по записи
+    `entry` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, «Термины»)."""
+    from . import targets
+    template = entry.get("branch_template") or targets.DEFAULT_BRANCH_TEMPLATE
+    return (f"project={project}\nbase={entry.get('base') or ''}\n"
+            f"branch_template={template}\n"
+            f"artifacts_prefix={ARTIFACT_REF_PREFIX}\n")
+
+
+def push_policy_path(cwd: Path) -> tuple[Path | None, str | None]:
+    """(путь файла политики в общем каталоге git репозитория `cwd`,
+    причина отказа)."""
+    try:
+        res = subprocess.run(["git", "-C", str(cwd), "rev-parse",
+                              "--git-common-dir"],
+                             capture_output=True, text=True, env=pult_env())
+    except OSError as exc:
+        return None, f"общий каталог git {cwd} не получен: {exc}"
+    if res.returncode != 0 or not res.stdout.strip():
+        detail = (res.stderr or "").strip()[:200] or "git вернул ненулевой код"
+        return None, f"общий каталог git {cwd} не получен: {detail}"
+    return Path(cwd) / res.stdout.strip() / PUSH_POLICY_NAME, None
+
+
+def _push_policy_refusal(project: str, entry: dict, cwd: Path) -> str | None:
+    """Файл политики клона проекта `target-human` перед отправкой пульта
+    (решение Оператора при возврате с приёмки): пульт перезаписывает его
+    эталоном по записи — источнику истины, — затем читает обратно. Файл не
+    записан или не читается (нет прав, на его месте каталог, общий каталог
+    git не получен) — отказ до git с путём файла, а не только отказ хука.
+    None — на диске эталон."""
+    path, error = push_policy_path(cwd)
+    if error is not None:
+        return f"файл политики не найден — {error}"
+    expected = push_policy_text(project, entry).encode("utf-8")
+    try:
+        path.write_bytes(expected)
+    except OSError as exc:
+        return f"файл политики {path} не записан по записи проекта: {exc}"
+    try:
+        actual = path.read_bytes()
+    except OSError as exc:
+        return f"файл политики {path} не читается: {exc}"
+    if actual != expected:
+        return f"файл политики {path} не равен эталону по записи проекта"
+    return None
 
 
 def same_dir(value: str, expected: Path) -> bool:
@@ -451,6 +503,29 @@ def _raw_config(cwd: Path, *args: str) -> str:
     except OSError:
         return ""
     return res.stdout.strip() if res.returncode == 0 else ""
+
+
+class _ConfigUnread(Exception):
+    """`git config` клона не ответил: сверка белого списка не выполнена."""
+
+
+def _strict_config(cwd: Path, *args: str) -> str:
+    """Вывод `git config <args>` клона `cwd`; пусто — ключа нет (код 1).
+    Иной сбой git — `_ConfigUnread`: под белым списком непрочитанная
+    конфигурация — отказ, а не «ключа нет» (иначе сбой молча пропускал бы
+    сверки `insteadOf`/`sshCommand`/`core.hooksPath`)."""
+    command = "git config " + " ".join(args)
+    try:
+        res = subprocess.run(["git", "-C", str(cwd), "config", *args],
+                             capture_output=True, text=True, env=pult_env())
+    except OSError as exc:
+        raise _ConfigUnread(f"{command}: {exc}") from exc
+    if res.returncode == 0:
+        return res.stdout.strip()
+    if res.returncode == 1:
+        return ""
+    raise _ConfigUnread(f"{command}: код {res.returncode}, "
+                       f"{(res.stderr or '').strip()[:200]}")
 
 
 def _split_globals(args: list, cwd: Path) -> tuple[list, int | None, Path]:
@@ -803,30 +878,41 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         if last != sha:
             return (f"{PUSH_LEASE_FLAG}={lease}: sha не последней записи "
                     f"«{PUSH_SENT_ACTION}» ({last or 'записи нет'})")
-    for key in ("pushurl", "push", "mirror"):
-        if _raw_config(cwd, "--get-all", f"remote.origin.{key}"):
-            return f"в конфигурации клона задан remote.origin.{key}"
-    if _raw_config(cwd, "--local", "--get-all", "push.pushOption"):
-        return "в конфигурации клона задан push.pushOption"
-    return _config_redirect_refusal(entry, cwd)
+    try:
+        for key in ("pushurl", "push", "mirror"):
+            if _strict_config(cwd, "--get-all", f"remote.origin.{key}"):
+                return f"в конфигурации клона задан remote.origin.{key}"
+        if _strict_config(cwd, "--local", "--get-all", "push.pushOption"):
+            return "в конфигурации клона задан push.pushOption"
+        return _config_redirect_refusal(entry, cwd)
+    except _ConfigUnread as exc:
+        return f"конфигурация клона не прочитана — сверка не выполнена: {exc}"
 
 
 def _config_redirect_refusal(entry: dict, cwd: Path) -> str | None:
     """Причина отказа по действующей конфигурации вызова `cwd` (все слои,
     включая конфигурацию рабочей копии; SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6,
-    требование 12): `remote.origin.url` не адрес записи, ключи
-    `PUSH_REDIRECT_CONFIG`, `core.hooksPath` задан и не каталог хуков
-    пульта проекта. Незаданный `core.hooksPath` не отказ: отправка пульта
-    несёт свой `-c`, а снятый ролью путь ловит строка `doctor`."""
-    origin = _raw_config(cwd, "--get", "remote.origin.url")
-    if url_key(origin) != url_key(str(entry.get("url") or "")):
-        return (f"в конфигурации remote.origin.url = {origin or '(не задан)'}"
+    требование 12): `remote.origin.url` не ровно одно значение, равное
+    адресу записи, ключи `PUSH_REDIRECT_CONFIG`, `core.hooksPath` задан и
+    не каталог хуков пульта проекта. Незаданный `core.hooksPath` не отказ:
+    отправка пульта несёт свой `-c`, а снятый ролью путь ловит строка
+    `doctor`. Сбой чтения — `_ConfigUnread`."""
+    # `git push origin` шлёт на КАЖДОЕ значение remote.origin.url всех
+    # слоёв: второе значение (локальное или из ~/.gitconfig) увело бы
+    # ветку на чужой адрес мимо сверки последнего значения.
+    origins = _strict_config(cwd, "--get-all", "remote.origin.url").splitlines()
+    if len(origins) != 1:
+        return (f"в конфигурации remote.origin.url — значений "
+                f"{len(origins)} ({', '.join(origins) or 'не задан'}), нужно "
+                f"ровно одно — адрес записи проекта")
+    if url_key(origins[0]) != url_key(str(entry.get("url") or "")):
+        return (f"в конфигурации remote.origin.url = {origins[0]}"
                 f" — не адрес записи проекта")
-    found = _raw_config(cwd, "--get-regexp", PUSH_REDIRECT_CONFIG)
+    found = _strict_config(cwd, "--get-regexp", PUSH_REDIRECT_CONFIG)
     if found:
         return f"в конфигурации задан {found.splitlines()[0].split(' ')[0]}"
     expected = project_hooks_path(entry)
-    for value in _raw_config(cwd, "--get-all", "core.hooksPath").splitlines():
+    for value in _strict_config(cwd, "--get-all", "core.hooksPath").splitlines():
         if not same_dir(value, expected):
             return (f"в конфигурации core.hooksPath = {value} — не каталог "
                     f"хуков пульта проекта {expected}")
@@ -1065,7 +1151,12 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
             return _refuse(plan, cwd_project, None, env, task_id,
                            f"глобальная опция git {foreign[0]} перед "
                            f"подкомандой {sub}")
-        alias = _raw_config(cwd, "--get", f"alias.{sub}")
+        try:
+            alias = _strict_config(cwd, "--get", f"alias.{sub}")
+        except _ConfigUnread as exc:
+            return _refuse(plan, cwd_project, None, env, task_id,
+                           f"подкоманда {sub} — псевдоним не сверен, "
+                           f"конфигурация клона не прочитана: {exc}")
         if not alias:
             return None
         return _refuse(plan, cwd_project, None, env, task_id,
@@ -1087,9 +1178,11 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     if whitelisted:
         reason = _whitelist_refusal(project, entry, globals_, sub, cwd, env,
                                     flags, options, positional, specs)
+        if reason is None and targets.merged_by_project_people(entry):
+            reason = _push_policy_refusal(project, entry, cwd)
         if reason is not None:
             return _refuse(plan, project, related, env, task_id, reason)
-    deleting = "--delete" in flags or "-d" in flags or any(
+    deleting ="--delete" in flags or "-d" in flags or any(
         s["colon"] for s in specs)
     branches = [s for s in specs if s["kind"] == "branch"
                 and s["task"] is not None and not s["colon"]]

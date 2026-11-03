@@ -1,5 +1,5 @@
 ---
-built_at_sha: 38d7f2344b3d27fe3f7fa0959e9444544e6f7391
+built_at_sha: 8e9cf85c4609350351ec0d087b10aa3c28709829
 ---
 
 # Codebase-map пульта
@@ -1396,6 +1396,8 @@ built_at_sha: 38d7f2344b3d27fe3f7fa0959e9444544e6f7391
 - `pult_identity`
 - `pult_identity_args`
 - `pult_message`
+- `push_policy_path`
+- `push_policy_text`
 - `qualified_ref`
 - `read`
 - `read_env`
@@ -12447,13 +12449,18 @@ built_at_sha: 38d7f2344b3d27fe3f7fa0959e9444544e6f7391
 - `subcommand`
 - `test_clone_and_submodules_carry_slot_token`
 - `test_clone_without_slot_goes_without_token`
+- `test_config_read_failure_refuses_before_git`
 - `test_config_redirect_refuses_before_git`
 - `test_ensure_clone_human_gets_own_hooks_and_policy_others_old_path`
+- `test_git_ssh_env_refuses_before_git`
 - `test_human_pre_commit_refuses_main_commit_without_marker`
 - `test_human_push_carries_hooks_path_operator_does_not`
 - `test_push_hook_line_fails_on_damage_and_fix_restores`
 - `test_push_hook_line_skip_without_reference_and_absent_without_clones`
+- `test_push_rewrites_policy_from_entry`
+- `test_second_origin_url_refuses_before_git`
 - `test_transport_env_refuses_before_git`
+- `test_unusable_policy_refuses_before_git`
 - `test_worktree_hooks_path_fails_with_value`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/keychain.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`
