@@ -170,10 +170,12 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     # CI ветки читает PLAN.md из origin: документы — раньше кода.
     artifact_branch.send_pending(task_id)
     push = gitcmd.in_repo(repo, "push", "-u", "origin", branch)
-    if push is not None and gitcmd.IN_FLIGHT_LIMIT_REASON in (push.stderr or ""):
+    if push is not None and push.returncode == gitcmd.IN_FLIGHT_REFUSAL:
         # Отказ пределом отправок — штатная очередь, не сбой (SPEC
         # 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7; ANSWER-2 п. 4): причину
-        # в журнал задачи уже записала точка отправки, алерта нет.
+        # в журнал задачи уже записала точка отправки, алерта нет. Узнаётся
+        # по коду, не по тексту stderr: иной сбой с той же строкой — сбой
+        # (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 7).
         return
     if push is None or push.returncode != 0:
         _incident(conn, task_id, "Draft MR FAILED",
@@ -344,14 +346,26 @@ DRAFT_MR_REFUSAL_ACTION = "переход отклонён: черновой MR 
 AWAITING_LIMIT_ACTION = "approve отклонён: предел awaiting_human"
 
 
+# Причина отказа гейта мержа и чернового MR, когда запись проекта не
+# прочитана (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требования 1, 13).
+ENTRY_UNREAD_DETAIL = "запись проекта не прочитана"
+
+
+def _people_entry_record(target_name: str) -> dict:
+    """Запись проекта для `people_entry` — отдельная точка чтения: её
+    сбой подменяют тесты, не трогая прочие чтения `targets.target`."""
+    return targets.target(target_name)
+
+
 def people_entry(target_name: str) -> dict | None:
     """Запись проекта, MR которого вливают люди проекта
-    (`targets.merged_by_project_people`); None — гейт иной или запись не
-    читается."""
-    try:
-        entry = targets.target(target_name)
-    except targets.TargetsError:
+    (`targets.merged_by_project_people`); None — гейт иной или проект —
+    артель (её запись не читается: пульт работает над собой и при
+    сломанном `targets.yaml`). Запись не прочитана — `targets.TargetsError`:
+    «не прочитана» не значит «гейт не target-human»."""
+    if repo_context.is_artel(target_name):
         return None
+    entry = _people_entry_record(target_name)
     return entry if targets.merged_by_project_people(entry) else None
 
 
@@ -428,7 +442,10 @@ def ensure_forge_draft_mr(conn, task_id: str, t) -> str | None:
     if t["is_canary"]:
         return None
     target_name = t["target"] or config.DEFAULT_TARGET
-    entry = people_entry(target_name)
+    try:
+        entry = people_entry(target_name)
+    except targets.TargetsError as exc:
+        return f"{ENTRY_UNREAD_DETAIL}: {exc}"
     if entry is None or not targets.delivery_policy(entry)["draft_mr"]:
         return None
     row = store.get_task(conn, task_id)

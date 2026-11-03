@@ -1,0 +1,103 @@
+#!/bin/sh
+# pre-push клона проекта target-human (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6,
+# требования 3-5; ADR-0029 п. 13): второй рубеж белого списка отправок.
+# Клон получает этот каталог постоянным core.hooksPath (workspace.
+# ensure_clone, doctor --fix), отправка пульта — ещё и `-c core.hooksPath`
+# (gitcmd._push_plan); так хук срабатывает при любой форме отправки,
+# запускающей хуки: псевдоним, короткое имя remote, адрес.
+#
+# Правила — из файла политики artel-push-policy в общем каталоге git клона
+# (его пишет пульт): проходят ветка по branch_template и ссылки с префиксом
+# artifacts_prefix (обновление и удаление); отказ — base, удаление ветки,
+# теги и прочие ссылки вне refs/heads/* и artifacts_prefix, ветка не по
+# шаблону. Маркер ARTEL_PULT_GIT=1 правил не снимает.
+#
+# Только POSIX sh, git и встроенные команды оболочки: PATH роли ограничен
+# манифестом стека, посторонних интерпретаторов там нет.
+
+refuse() {
+    printf 'pre-push (target-human): %s\n' "$*" >&2
+    exit 1
+}
+
+common=$(git rev-parse --git-common-dir 2>/dev/null) || common=.git
+case $common in
+    /*) ;;
+    *) common="$(pwd)/$common" ;;
+esac
+policy="$common/artel-push-policy"
+
+broken() {
+    refuse "файл политики $policy: $1 — любая отправка отказана" \
+        "(восстановить: artel.py doctor --fix)"
+}
+
+[ -e "$policy" ] || broken "файла нет"
+[ -f "$policy" ] && [ -r "$policy" ] || broken "файл не читается"
+
+project= base= branch_template= artifacts_prefix=
+while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+        project=*) project=${line#project=} ;;
+        base=*) base=${line#base=} ;;
+        branch_template=*) branch_template=${line#branch_template=} ;;
+        artifacts_prefix=*) artifacts_prefix=${line#artifacts_prefix=} ;;
+    esac
+done < "$policy" || broken "файл не читается"
+
+for key in project base branch_template artifacts_prefix; do
+    eval "value=\$$key"
+    [ -n "$value" ] || broken "нет ключа $key с непустым значением"
+done
+
+# Шаблон ветки -> образец case: {id}, {slug}, {ref} — непустая подстрока,
+# прочие символы буквально (символы образца экранируются).
+pattern= rest=$branch_template
+while [ -n "$rest" ]; do
+    case $rest in
+        '{id}'*) pattern="$pattern?*"; rest=${rest#'{id}'} ;;
+        '{slug}'*) pattern="$pattern?*"; rest=${rest#'{slug}'} ;;
+        '{ref}'*) pattern="$pattern?*"; rest=${rest#'{ref}'} ;;
+        *)
+            tail=${rest#?}
+            char=${rest%"$tail"}
+            rest=$tail
+            case $char in
+                '*'|'?'|'['|']'|'\') pattern="$pattern\\$char" ;;
+                *) pattern="$pattern$char" ;;
+            esac
+            ;;
+    esac
+done
+
+# git подаёт на stdin по строке на обновляемый ref:
+# "<локальный ref> <локальный sha> <удалённый ref> <удалённый sha>";
+# удаление — локальный sha из одних нулей.
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$remote_ref" ] || continue
+    case $local_sha in
+        *[!0]*) deleting=no ;;
+        *) deleting=yes ;;
+    esac
+    case $remote_ref in
+        "$artifacts_prefix"?*) continue ;;
+        refs/heads/*) ;;
+        *) refuse "$remote_ref: ссылка вне refs/heads/* и $artifacts_prefix" \
+               "(проект $project)" ;;
+    esac
+    name=${remote_ref#refs/heads/}
+    if [ "$deleting" = yes ]; then
+        refuse "$remote_ref: удаление ветки (проект $project)"
+    fi
+    if [ "$name" = "$base" ]; then
+        refuse "$remote_ref: отправка в base $base (проект $project)"
+    fi
+    # shellcheck disable=SC2254
+    case $name in
+        $pattern) ;;
+        *) refuse "$remote_ref: ветка не по шаблону $branch_template" \
+               "(проект $project)" ;;
+    esac
+done
+
+exit 0

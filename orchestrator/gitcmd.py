@@ -5,6 +5,7 @@ import re
 import shlex
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -38,13 +39,36 @@ def pult_env(base: dict | None = None) -> dict:
 # Токен хостинга внешнего проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C,
 # требования 1-3, 7): подкоманды git, говорящие с remote, — только они
 # получают помощник учётных данных пульта; локальные связку ключей не читают.
-HOSTING_SUBCOMMANDS = ("fetch", "push", "pull", "ls-remote")
+HOSTING_SUBCOMMANDS = ("fetch", "push", "pull", "ls-remote", "clone")
 HOSTING_TOKEN_ENV = "ARTEL_HOSTING_TOKEN"
+# Хост адреса записи проекта (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, требование
+# 11): помощник отдаёт пароль только на запрос `get` с этим `host` —
+# подмодуль на другом хосте токена слота не получает. Пустое значение
+# (адрес-путь, `file://`) совпадает только с запросом без `host`.
+HOSTING_HOST_ENV = "ARTEL_HOSTING_HOST"
 # Помощник читает пароль из окружения, а не из своего текста: значение
 # токена не попадает ни в argv git, ни в argv помощника (`GIT_TRACE`).
 HOSTING_CREDENTIAL_HELPER = (
-    '!f() { test "$1" = get || exit 0; echo username=x-access-token; '
+    '!f() { test "$1" = get || exit 0; h=; while IFS= read -r l; do '
+    'case "$l" in host=*) h="${l#host=}";; esac; done; '
+    f'test "$h" = "${{{HOSTING_HOST_ENV}}}" || exit 0; '
+    'echo username=x-access-token; '
     f'echo "password=${{{HOSTING_TOKEN_ENV}}}"; }}; f')
+
+
+def url_host(url: str) -> str:
+    """`host` адреса `url` в том виде, в каком его называет запрос git к
+    помощнику учётных данных: с портом, без учётной части; адрес-путь и
+    `file://` — пустая строка (ANSWER-1 п. 2)."""
+    url = url.strip()
+    if "://" in url:
+        if url.lower().startswith("file://"):
+            return ""
+        return urllib.parse.urlsplit(url).netloc.rpartition("@")[2]
+    head, colon, _rest = url.partition(":")
+    if colon and "/" not in head:
+        return head.rpartition("@")[2]
+    return ""
 
 
 def url_key(url: str) -> str:
@@ -105,7 +129,11 @@ def _hosting_project(args: tuple) -> tuple | None:
             cwd = cwd / args[i + 1]
         i += 2
     rest = args[i:]
-    if not rest or rest[0] not in HOSTING_SUBCOMMANDS:
+    if rest and rest[0] == "clone":
+        return _clone_project(rest[1:])
+    submodules = (len(rest) > 1 and rest[0] == "submodule"
+                  and rest[1] == "update")
+    if not rest or (rest[0] not in HOSTING_SUBCOMMANDS and not submodules):
         return None
     name = _project_of_path(cwd)
     if name is not None:
@@ -119,6 +147,21 @@ def _hosting_project(args: tuple) -> tuple | None:
                 found = project_by_url(arg, entries)
                 if found is not None:
                     return found
+    return None
+
+
+def _clone_project(words: list) -> tuple | None:
+    """(имя, запись) внешнего проекта со `token_slot`, чей `url` клонирует
+    `git clone <words>` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 10).
+    Каталог клона ещё не в области проекта — проект узнаётся по адресу.
+    Запись без `token_slot` — `None`: авторизация клона прежняя."""
+    entries = _declared_targets()
+    for word in words:
+        if word.startswith("-"):
+            continue
+        found = project_by_url(word, entries)
+        if found is not None:
+            return found if found[1].get("token_slot") else None
     return None
 
 
@@ -146,11 +189,12 @@ def hosting_token(name: str, entry: dict) -> tuple[str | None, str | None]:
     return token, None
 
 
-def hosting_env(env: dict, token: str) -> dict:
+def hosting_env(env: dict, token: str, host: str = "") -> dict:
     """Окружение хостингового git-вызова: чужие помощники сброшены пустым
     `credential.helper`, следом — помощник пульта (как `-c
     credential.helper= -c credential.helper=<пульт>`); конфигурация клона и
-    `GIT_CONFIG_GLOBAL` не трогаются."""
+    `GIT_CONFIG_GLOBAL` не трогаются. `host` — хост адреса записи
+    (`url_host`): только на него помощник отдаёт пароль."""
     env = dict(env)
     try:
         count = int(env.get("GIT_CONFIG_COUNT") or 0)
@@ -162,6 +206,7 @@ def hosting_env(env: dict, token: str) -> dict:
         count += 1
     env["GIT_CONFIG_COUNT"] = str(count)
     env[HOSTING_TOKEN_ENV] = token
+    env[HOSTING_HOST_ENV] = host
     return env
 
 
@@ -180,6 +225,15 @@ PUSH_REFUSED_ACTION = "отправка отказана"
 # 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7): по ней `status` и черновой MR
 # GitHub отличают штатную очередь от сбоя отправки.
 IN_FLIGHT_LIMIT_REASON = "предел max_in_flight"
+# Код возврата отказа пределом `max_in_flight` (SPEC
+# 01M6EZXVFGXC6WBDA9QJESAZRW, требование 7): прочие отказы точки отправки
+# несут 1, git — свои коды; 75 — EX_TEMPFAIL, «повтори позже».
+IN_FLIGHT_REFUSAL = 75
+PUSH_REFUSAL = 1
+# Сбой чтения при проверке предела — не отказ пределом: текст без
+# `IN_FLIGHT_LIMIT_REASON`, иначе `status` покажет сбой очередью.
+IN_FLIGHT_UNCHECKED = "policy.max_in_flight не проверен"
+DB_UNREAD = "БД пульта не прочитана"
 PUSH_WHITELIST_SOURCE = "branch_push_whitelist"
 PUSH_SUBCOMMANDS = ("push", "send-pack")
 PUSH_RESET_CONFIG = ("-c", "push.followTags=false", "-c", "push.pushOption=")
@@ -191,6 +245,16 @@ GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 # Переменные, переносящие репозиторий вызова: под белым списком отправка
 # идёт только из клона проекта рабочим каталогом.
 GIT_LOCATION_ENV_NAMES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")
+# Переменные, подменяющие транспорт или слои конфигурации вызова (SPEC
+# 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 12): под белым списком — отказ.
+GIT_TRANSPORT_ENV_NAMES = ("GIT_SSH_COMMAND", "GIT_SSH", "GIT_CONFIG_GLOBAL",
+                           "GIT_CONFIG_SYSTEM")
+# Ключи действующей конфигурации, уводящие отправку мимо адреса записи или
+# её транспорта (там же); имена — в каноническом виде `git config`.
+PUSH_REDIRECT_CONFIG = r"^url\..*\.(insteadof|pushinsteadof)$|^core\.sshcommand$"
+# Каталог хуков пульта проекта `target-human` под `<config.ROOT>/scripts/
+# git-hooks` (требования 1, 6): его `pre-push` держит правила белого списка.
+TARGET_HUMAN_HOOKS = "target-human"
 # Глобальные опции git со значением отдельным словом.
 GIT_GLOBALS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
                           "--config-env", "--super-prefix")
@@ -210,6 +274,102 @@ GIT_BUILTINS = frozenset((
     "status", "switch", "symbolic-ref", "tag", "update-index", "update-ref",
     "var", "verify-commit", "version", "worktree", "write-tree",
 ))
+
+
+def project_hooks_path(entry: dict | None) -> Path:
+    """Каталог хуков пульта проекта с записью `entry` — абсолютный путь в
+    главной копии пульта: у проекта `target-human` — свой каталог, у прочих
+    проектов и артели (`entry` None) — прежний `<config.ROOT>/scripts/
+    git-hooks`."""
+    from . import targets
+    path = Path(config.ROOT) / "scripts" / "git-hooks"
+    if entry is not None and targets.merged_by_project_people(entry):
+        return path / TARGET_HUMAN_HOOKS
+    return path
+
+
+PUSH_POLICY_NAME = "artel-push-policy"
+
+
+def push_policy_text(project: str, entry: dict) -> str:
+    """Эталон файла политики `pre-push` проекта `target-human` по записи
+    `entry` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, «Термины»)."""
+    from . import targets
+    template = entry.get("branch_template") or targets.DEFAULT_BRANCH_TEMPLATE
+    return (f"project={project}\nbase={entry.get('base') or ''}\n"
+            f"branch_template={template}\n"
+            f"artifacts_prefix={ARTIFACT_REF_PREFIX}\n")
+
+
+def push_policy_path(cwd: Path) -> tuple[Path | None, str | None]:
+    """(путь файла политики в общем каталоге git репозитория `cwd`,
+    причина отказа)."""
+    try:
+        res = subprocess.run(["git", "-C", str(cwd), "rev-parse",
+                              "--git-common-dir"],
+                             capture_output=True, text=True, env=pult_env())
+    except OSError as exc:
+        return None, f"общий каталог git {cwd} не получен: {exc}"
+    if res.returncode != 0 or not res.stdout.strip():
+        detail = (res.stderr or "").strip()[:200] or "git вернул ненулевой код"
+        return None, f"общий каталог git {cwd} не получен: {detail}"
+    return Path(cwd) / res.stdout.strip() / PUSH_POLICY_NAME, None
+
+
+def write_push_policy_file(path: Path, data: bytes) -> None:
+    """Пишет файл политики, не идя по символической ссылке на его месте
+    (REVIEW R3-F1): общий каталог git клона контролирует роль, и ссылка
+    `artel-push-policy` → чужой файл иначе дала бы ей перезапись любого
+    файла, доступного пульту. Временный файл того же каталога (`mkstemp` —
+    `O_EXCL`, по ссылке не открывает) переименовывается на место пути:
+    `os.replace` заменяет саму ссылку, а не её цель. Каталог на месте файла
+    — `OSError`, как и прочие сбои записи."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _push_policy_refusal(project: str, entry: dict, cwd: Path) -> str | None:
+    """Файл политики клона проекта `target-human` перед отправкой пульта
+    (решение Оператора при возврате с приёмки): пульт перезаписывает его
+    эталоном по записи — источнику истины, — затем читает обратно. Файл не
+    записан или не читается (нет прав, на его месте каталог, общий каталог
+    git не получен) — отказ до git с путём файла, а не только отказ хука.
+    None — на диске эталон."""
+    path, error = push_policy_path(cwd)
+    if error is not None:
+        return f"файл политики не найден — {error}"
+    expected = push_policy_text(project, entry).encode("utf-8")
+    try:
+        write_push_policy_file(path, expected)
+    except OSError as exc:
+        return f"файл политики {path} не записан по записи проекта: {exc}"
+    try:
+        actual = path.read_bytes()
+    except OSError as exc:
+        return f"файл политики {path} не читается: {exc}"
+    if actual != expected:
+        return f"файл политики {path} не равен эталону по записи проекта"
+    return None
+
+
+def same_dir(value: str, expected: Path) -> bool:
+    """Значение `core.hooksPath` — абсолютный путь каталога `expected`
+    (временный каталог macOS живёт под `/private`, оттого сверка и по
+    раскрытым ссылкам)."""
+    if not os.path.isabs(value):
+        return False
+    return (os.path.abspath(value) == os.path.abspath(expected)
+            or Path(value).resolve() == Path(expected).resolve())
 
 
 def _project_tasks(project: str) -> list:
@@ -366,6 +526,29 @@ def _raw_config(cwd: Path, *args: str) -> str:
     except OSError:
         return ""
     return res.stdout.strip() if res.returncode == 0 else ""
+
+
+class _ConfigUnread(Exception):
+    """`git config` клона не ответил: сверка белого списка не выполнена."""
+
+
+def _strict_config(cwd: Path, *args: str) -> str:
+    """Вывод `git config <args>` клона `cwd`; пусто — ключа нет (код 1).
+    Иной сбой git — `_ConfigUnread`: под белым списком непрочитанная
+    конфигурация — отказ, а не «ключа нет» (иначе сбой молча пропускал бы
+    сверки `insteadOf`/`sshCommand`/`core.hooksPath`)."""
+    command = "git config " + " ".join(args)
+    try:
+        res = subprocess.run(["git", "-C", str(cwd), "config", *args],
+                             capture_output=True, text=True, env=pult_env())
+    except OSError as exc:
+        raise _ConfigUnread(f"{command}: {exc}") from exc
+    if res.returncode == 0:
+        return res.stdout.strip()
+    if res.returncode == 1:
+        return ""
+    raise _ConfigUnread(f"{command}: код {res.returncode}, "
+                       f"{(res.stderr or '').strip()[:200]}")
 
 
 def _split_globals(args: list, cwd: Path) -> tuple[list, int | None, Path]:
@@ -540,6 +723,7 @@ class _PushPlan:
         self.args = args
         self.cwd = cwd
         self.refusal: str | None = None
+        self.code = PUSH_REFUSAL
         self.sent: list = []
 
     def after(self, code: int) -> None:
@@ -659,6 +843,7 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         return f"отправка не из клона проекта {project} ({cwd})"
     names = sorted(n for n in env if (n in GIT_CONFIG_ENV_NAMES
                    or n in GIT_LOCATION_ENV_NAMES
+                   or n in GIT_TRANSPORT_ENV_NAMES
                    or n.startswith(GIT_CONFIG_ENV_PREFIXES)))
     if names:
         return f"переменные окружения {', '.join(names)}"
@@ -716,11 +901,44 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         if last != sha:
             return (f"{PUSH_LEASE_FLAG}={lease}: sha не последней записи "
                     f"«{PUSH_SENT_ACTION}» ({last or 'записи нет'})")
-    for key in ("pushurl", "push", "mirror"):
-        if _raw_config(cwd, "--get-all", f"remote.origin.{key}"):
-            return f"в конфигурации клона задан remote.origin.{key}"
-    if _raw_config(cwd, "--local", "--get-all", "push.pushOption"):
-        return "в конфигурации клона задан push.pushOption"
+    try:
+        for key in ("pushurl", "push", "mirror"):
+            if _strict_config(cwd, "--get-all", f"remote.origin.{key}"):
+                return f"в конфигурации клона задан remote.origin.{key}"
+        if _strict_config(cwd, "--local", "--get-all", "push.pushOption"):
+            return "в конфигурации клона задан push.pushOption"
+        return _config_redirect_refusal(entry, cwd)
+    except _ConfigUnread as exc:
+        return f"конфигурация клона не прочитана — сверка не выполнена: {exc}"
+
+
+def _config_redirect_refusal(entry: dict, cwd: Path) -> str | None:
+    """Причина отказа по действующей конфигурации вызова `cwd` (все слои,
+    включая конфигурацию рабочей копии; SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6,
+    требование 12): `remote.origin.url` не ровно одно значение, равное
+    адресу записи, ключи `PUSH_REDIRECT_CONFIG`, `core.hooksPath` задан и
+    не каталог хуков пульта проекта. Незаданный `core.hooksPath` не отказ:
+    отправка пульта несёт свой `-c`, а снятый ролью путь ловит строка
+    `doctor`. Сбой чтения — `_ConfigUnread`."""
+    # `git push origin` шлёт на КАЖДОЕ значение remote.origin.url всех
+    # слоёв: второе значение (локальное или из ~/.gitconfig) увело бы
+    # ветку на чужой адрес мимо сверки последнего значения.
+    origins = _strict_config(cwd, "--get-all", "remote.origin.url").splitlines()
+    if len(origins) != 1:
+        return (f"в конфигурации remote.origin.url — значений "
+                f"{len(origins)} ({', '.join(origins) or 'не задан'}), нужно "
+                f"ровно одно — адрес записи проекта")
+    if url_key(origins[0]) != url_key(str(entry.get("url") or "")):
+        return (f"в конфигурации remote.origin.url = {origins[0]}"
+                f" — не адрес записи проекта")
+    found = _strict_config(cwd, "--get-regexp", PUSH_REDIRECT_CONFIG)
+    if found:
+        return f"в конфигурации задан {found.splitlines()[0].split(' ')[0]}"
+    expected = project_hooks_path(entry)
+    for value in _strict_config(cwd, "--get-all", "core.hooksPath").splitlines():
+        if not same_dir(value, expected):
+            return (f"в конфигурации core.hooksPath = {value} — не каталог "
+                    f"хуков пульта проекта {expected}")
     return None
 
 
@@ -760,19 +978,32 @@ def in_flight_refusal(task_id: str) -> str | None:
     ветки задачи `task_id` пределом `policy.max_in_flight`; None — не
     откажет. Для команды, которая коммитит до отправки (`amend-tests`,
     ответ Оператора ANSWER-3 задачи 01M5XZ9Z68XE2EKPDHYCAK25KF): отказ до
-    коммита, без неотправленного хвоста. Запись проекта не прочитана —
-    None: решает сама точка отправки, она при этом отказывает."""
+    коммита, без неотправленного хвоста.
+
+    Сбой чтения записи или БД — причина «не проверен» для задачи любого
+    проекта, кроме артели (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 4):
+    пульт работает над собой и при сломанном `targets.yaml`. Проект задачи
+    не прочитан — задача не известна как задача артели, отказ."""
     from . import store, targets
     if not config.DB.exists():
         return None
     try:
         project = store.task_target(store.db(), task_id)
+    except sqlite3.Error as exc:
+        return f"{IN_FLIGHT_UNCHECKED} — {DB_UNREAD}: {exc}"
+    try:
         entry = targets.load().get(project)
         if entry is None:
             return None
         found = _in_flight_refusal(project, entry, [task_id])
-    except (targets.TargetsError, sqlite3.Error):
-        return None
+    except targets.TargetsError as exc:
+        if project == config.DEFAULT_TARGET:
+            return None
+        return f"{IN_FLIGHT_UNCHECKED} — запись проекта не прочитана: {exc}"
+    except sqlite3.Error as exc:
+        if project == config.DEFAULT_TARGET:
+            return None
+        return f"{IN_FLIGHT_UNCHECKED} — {DB_UNREAD}: {exc}"
     return found[1] if found is not None else None
 
 
@@ -805,6 +1036,23 @@ def _push_destination(args: list, index: int, cwd: Path,
     refspec) отправки `args[index]` — проект по месту вызова, иначе по
     локальному пути или адресу назначения, иначе артель."""
     flags, options, positional, positions = _push_words(args[index + 1:])
+    project = _destination_project(positional, cwd, cwd_project, entries)
+    specs = _refspecs(positional[1:], _project_tasks(project))
+    return flags, options, positional, positions, project, specs
+
+
+def _destination_project(positional: list, cwd: Path,
+                         cwd_project: str | None,
+                         entries: dict | None) -> str:
+    """Проект отправки по позиционным словам `positional` без чтения БД:
+    по месту вызова, иначе по локальному пути или адресу назначения, иначе
+    артель.
+
+    Записи не прочитаны, назначение — сетевой адрес, не адрес `origin`
+    корня пульта: проект не узнать, и это не артель (SPEC
+    01M6EZXVFGXC6WBDA9QJESAZRW, требование 2) — проект называет сам адрес,
+    записи у него нет, и точка отправки отказывает «гейт мержа
+    неизвестен»."""
     dest = positional[0] if positional else ""
     project = cwd_project
     local = _local_dest_path(dest) if dest else None
@@ -813,9 +1061,11 @@ def _push_destination(args: list, index: int, cwd: Path,
     if project is None and dest and entries is not None:
         found = project_by_url(dest, entries)
         project = found[0] if found is not None else None
-    project = project or config.DEFAULT_TARGET
-    specs = _refspecs(positional[1:], _project_tasks(project))
-    return flags, options, positional, positions, project, specs
+    if project is None and dest and entries is None and local is None:
+        origin = _raw_config(Path(config.ROOT), "--get", "remote.origin.url")
+        if not origin or url_key(dest) != url_key(origin):
+            project = url_key(dest)
+    return project or config.DEFAULT_TARGET
 
 
 def _refuse_awaiting_human(plan: _PushPlan, project: str, specs: list,
@@ -851,9 +1101,20 @@ def _awaiting_human_refusal(argv: list, task_id: str | None) -> str | None:
         entries = targets.load()
     except targets.TargetsError:
         entries = None
-    *_, project, specs = _push_destination(
-        argv, index, cwd, next(iter(located), None), entries)
+    _flags, _options, positional, _positions = _push_words(argv[index + 1:])
+    project = _destination_project(positional, cwd, next(iter(located), None),
+                                   entries)
     plan = _PushPlan(list(argv), cwd)
+    try:
+        specs = _refspecs(positional[1:], _project_tasks(project))
+    except sqlite3.Error as exc:
+        # Ветки задач не сверены — отправка вне артели не идёт (SPEC
+        # 01M6EZXVFGXC6WBDA9QJESAZRW, требование 6); у артели — как прежде.
+        if project == config.DEFAULT_TARGET:
+            return None
+        _refuse(plan, project, None, env, task_id,
+                f"{DB_UNREAD} — ветки задач проекта не сверены: {exc}")
+        return plan.refusal
     if _refuse_awaiting_human(plan, project, specs, env, task_id):
         return plan.refusal
     return None
@@ -913,7 +1174,12 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
             return _refuse(plan, cwd_project, None, env, task_id,
                            f"глобальная опция git {foreign[0]} перед "
                            f"подкомандой {sub}")
-        alias = _raw_config(cwd, "--get", f"alias.{sub}")
+        try:
+            alias = _strict_config(cwd, "--get", f"alias.{sub}")
+        except _ConfigUnread as exc:
+            return _refuse(plan, cwd_project, None, env, task_id,
+                           f"подкоманда {sub} — псевдоним не сверен, "
+                           f"конфигурация клона не прочитана: {exc}")
         if not alias:
             return None
         return _refuse(plan, cwd_project, None, env, task_id,
@@ -935,6 +1201,8 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     if whitelisted:
         reason = _whitelist_refusal(project, entry, globals_, sub, cwd, env,
                                     flags, options, positional, specs)
+        if reason is None and targets.merged_by_project_people(entry):
+            reason = _push_policy_refusal(project, entry, cwd)
         if reason is not None:
             return _refuse(plan, project, related, env, task_id, reason)
     deleting = "--delete" in flags or "-d" in flags or any(
@@ -957,13 +1225,25 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
                 waiting = _in_flight_refusal(
                     project, entry,
                     list(dict.fromkeys(s["task"]["id"] for s in branches)))
-            except sqlite3.Error:
+            except sqlite3.Error as exc:
+                # Счёт не прочитан — предел не проверен, отправка вне артели
+                # не идёт (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 5).
+                if project != config.DEFAULT_TARGET:
+                    return _refuse(plan, project, related, env, task_id,
+                                   f"{IN_FLIGHT_UNCHECKED} — {DB_UNREAD}: "
+                                   f"{exc}")
                 waiting = None
             if waiting is not None:
-                return _refuse(plan, project, waiting[0], env, task_id,
-                               waiting[1])
+                _refuse(plan, project, waiting[0], env, task_id, waiting[1])
+                plan.code = IN_FLIGHT_REFUSAL
+                return plan
         plan.sent =[(s["task"]["id"], s["src"], s["name"]) for s in branches]
     reset = list(PUSH_RESET_CONFIG) if whitelisted else []
+    if whitelisted and targets.merged_by_project_people(entry):
+        # Хук белого списка срабатывает и тогда, когда роль сняла или
+        # подменила постоянный `core.hooksPath` клона (SPEC
+        # 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 6).
+        reset += ["-c", f"core.hooksPath={project_hooks_path(entry)}"]
     rest = list(args[index + 1:])
     for spec, pos in zip(specs, positions[1:]):
         if "explicit" in spec:
@@ -972,9 +1252,10 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     return plan
 
 
-def _refused(args, refusal: str, text: bool = True) -> subprocess.CompletedProcess:
+def _refused(args, refusal: str, text: bool = True,
+             code: int = PUSH_REFUSAL) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(
-        list(args), 1, "" if text else b"",
+        list(args), code, "" if text else b"",
         refusal if text else refusal.encode())
 
 
@@ -1000,7 +1281,7 @@ def git(*args: str, task_id: str | None = None) -> subprocess.CompletedProcess:
     plan = _push_plan(list(args), Path(config.ROOT), env, task_id)
     if plan is not None:
         if plan.refusal is not None:
-            return _refused(args, plan.refusal)
+            return _refused(args, plan.refusal, code=plan.code)
         args = tuple(plan.args)
     project = _hosting_project(args)
     if project is not None:
@@ -1008,7 +1289,8 @@ def git(*args: str, task_id: str | None = None) -> subprocess.CompletedProcess:
         if refusal is not None:
             return subprocess.CompletedProcess(args, 1, "", refusal)
         if token is not None:
-            env = hosting_env(env, token)
+            env = hosting_env(env, token,
+                              url_host(str(project[1].get("url") or "")))
     try:
         res = subprocess.run(["git", *args], cwd=config.ROOT, env=env,
                              capture_output=True, text=True)
@@ -1197,7 +1479,7 @@ def carpentry(repo: Path, args: list, env: dict, *,
     plan = _push_plan(list(args), Path(repo), env, task_id)
     if plan is not None:
         if plan.refusal is not None:
-            return _refused(["git", *args], plan.refusal, text)
+            return _refused(["git", *args], plan.refusal, text, plan.code)
         args = plan.args
     try:
         res = subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
@@ -1239,10 +1521,7 @@ def in_repo(repo: Path, *args: str,
     # вовсе: argv и поведение такого вызова — ровно прежние.
     if any(word in PUSH_SUBCOMMANDS for word in args):
         argv = ["-C", str(repo), *args]
-        try:
-            refusal = _awaiting_human_refusal(argv, task_id)
-        except sqlite3.Error:
-            refusal = None
+        refusal = _awaiting_human_refusal(argv, task_id)
         if refusal is not None:
             return _refused(["git", *argv], refusal)
     if task_id is None:
@@ -1295,7 +1574,7 @@ def read(repo: Path, *args: str, timeout: float | None = None,
         kwargs["timeout"] = timeout
     argv, plan = _point_plan(repo, args, None, task_id)
     if plan is not None and plan.refusal is not None:
-        return _refused(["git", *argv], plan.refusal, text)
+        return _refused(["git", *argv], plan.refusal, text, plan.code)
     try:
         res = subprocess.run(["git", *argv],
                              capture_output=True, env=pult_env(), **kwargs)
@@ -1319,7 +1598,7 @@ def read_env(repo: Path, env: dict, *args: str, timeout: float,
     дочитывается — `Timeout`; `OSError` запуска выходит наружу."""
     argv, plan = _point_plan(repo, args, env, task_id)
     if plan is not None and plan.refusal is not None:
-        return _refused(["git", *argv], plan.refusal)
+        return _refused(["git", *argv], plan.refusal, code=plan.code)
     process = subprocess.Popen(["git", *argv],
                                cwd=config.ROOT, env=pult_env(env),
                                stdout=subprocess.PIPE,
@@ -1353,7 +1632,8 @@ def read_stream(repo: Path, *args: str, limit: int, timeout: float,
     Процесс — `subprocess.Popen`: поток через `subprocess.run` не читается."""
     argv, plan = _point_plan(repo, args, None, task_id)
     if plan is not None and plan.refusal is not None:
-        return _refused(["git", *argv], plan.refusal, text=False)
+        return _refused(["git", *argv], plan.refusal, text=False,
+                        code=plan.code)
     end = time.monotonic() + timeout
     try:
         proc = subprocess.Popen(["git", *argv],

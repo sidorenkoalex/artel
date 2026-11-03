@@ -24,10 +24,13 @@ FORGES = ("github", "gitlab")
 MERGE_GATES = ("operator", "target-human")
 # Значения, которые пульт исполняет (ADR-0029 п. 8; SPEC
 # 01M5W27CY7K7NR9347NKD8F0NX): запись принимает весь `FORGES`/`MERGE_GATES`,
-# а задачу, отправку и мерж ведёт только этот список — расширение (адаптер
-# GitLab, гейт людей проекта) — одна строка здесь.
-SUPPORTED_FORGES = ("github",)
-SUPPORTED_MERGE_GATES = ("operator",)
+# а задачу, отправку и мерж ведёт только множество пар `SUPPORTED_PAIRS`:
+# значение, исполняемое в одной паре, не исполняется в другой (свой мерж и
+# отправка `base` на GitLab не проверены, гейт людей проекта на GitHub не
+# реализован — SPEC 01M6EZXVFG405Y1BTFDSGBKS8E, ADR-0029 п. 14).
+SUPPORTED_FORGES = ("github", "gitlab")
+SUPPORTED_MERGE_GATES = ("operator", "target-human")
+SUPPORTED_PAIRS = {("github", "operator"), ("gitlab", "target-human")}
 
 # Поля записи (ADR-0003 п.2) и их вид. "text" — непустая строка,
 # "list" — список строк (возможно пустой).
@@ -121,11 +124,6 @@ FULL_SUITE_LOCAL = "local"
 FULL_SUITE_CI = "ci"
 FULL_SUITE_BOTH = "both"
 COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
-# Реестр реализаций хостинга (`forge.IMPLEMENTATIONS`) выставляет сюда
-# `ci` при своём импорте: `forge` импортирует этот модуль, обратный
-# импорт был бы циклом. `None` — `forge` не загружен; тогда хостинг без
-# чтения отчёта задания ловит приёмка при использовании.
-hosting_registry = None
 COMPONENT_TEMPLATE_MARKS = ("<id>", "<dir>", "<name>")
 COMPONENT_DEPENDS_VIA = ("paths", "files", "contract")
 COMPONENT_PATHS_SOURCE = ("file", "key")
@@ -281,9 +279,10 @@ def target(name: str) -> dict:
 
 
 def unsupported_reason(name: str) -> str | None:
-    """Причина, по которой пульт не ведёт задачи проекта `name`: значение
-    `forge` или `merge_gate` записи вне исполняемых (`SUPPORTED_FORGES`,
-    `SUPPORTED_MERGE_GATES`); None — проект поддержан.
+    """Причина, по которой пульт не ведёт задачи проекта `name`: пара
+    (`forge`, `merge_gate`) записи вне `SUPPORTED_PAIRS`; None — проект
+    поддержан. Причина без префикса «проект <имя>: » — его ставит
+    вызывающий.
 
     Отказ ставят действия, ведущие к задаче, отправке и мержу (`new`,
     `run`, `auto`, `approve`), а не загрузка записи: чтение, `doctor` и
@@ -295,12 +294,12 @@ def unsupported_reason(name: str) -> str | None:
         entry = target(name)
     except TargetsError:
         return None
-    if entry["forge"] not in SUPPORTED_FORGES:
-        return f"хостинг {entry['forge']} не поддержан: адаптера нет (ADR-0029)"
-    if entry["merge_gate"] not in SUPPORTED_MERGE_GATES:
-        return (f"гейт мержа {entry['merge_gate']} не исполняется "
-                f"(ADR-0029)")
-    return None
+    forge, gate = entry["forge"], entry["merge_gate"]
+    if (forge, gate) in SUPPORTED_PAIRS:
+        return None
+    supported = ", ".join(f"{f} + {g}" for f, g in sorted(SUPPORTED_PAIRS))
+    return (f"гейт мержа {gate} не поддержан для хостинга {forge} "
+            f"(поддержаны: {supported})")
 
 
 def core_reference(name: str) -> dict | None:
@@ -1095,12 +1094,21 @@ def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
     if "report" not in fields:
         raise TargetsError(f"{here}: поле 'report' — нет: обязательно при "
                            f"'full_suite: {mode}' (граница гейта исходов)")
-    registry = hosting_registry() if hosting_registry is not None else None
-    if registry is not None and getattr(registry.get(hosting),
-                                        "job_test_report", None) is None:
+    if getattr(_hosting_registry().get(hosting), "job_test_report",
+               None) is None:
         raise TargetsError(f"{here}: поле 'full_suite' — '{mode}': реализация "
                            f"хостинга '{hosting}' не читает отчёт тестов "
                            f"задания CI")
+
+
+def _hosting_registry() -> dict:
+    """Реестр реализаций хостинга `forge.IMPLEMENTATIONS` — импортом при
+    вызове: `forge` импортирует этот модуль, импорт на уровне модуля был бы
+    циклом. Не подстановкой из `ci` при его импорте — проверка записи не
+    зависит от того, загружен ли `ci` (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW,
+    требование 10)."""
+    from . import forge
+    return forge.IMPLEMENTATIONS
 
 
 # Плагины повторов pytest и их аргументы (SPEC 01M5FRYVP4NF81VT00FYPHPWJH,
