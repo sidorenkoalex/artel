@@ -188,6 +188,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
            [--fresh-suite] [--no-answer] [--accept-audit-fail]
            [--during-canary "<основание>"] [--as-epic] |
   reject <id> "<причина>" | spec-audit <id> |
+  verify-ok <id> <имя> <sha> "<итог>" | verify-fail <id> <имя> "<причина>" |
   answer <id> <файл-с-ответом> |
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
   kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
@@ -615,6 +616,23 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
 красная главная ветка 22-26.09). Неизвестный статус вершины главной ветки
 — тоже отказ, а не повтор (инвариант 19).
 
+`verify-ok <id> <имя> <sha> "<итог>"` и `verify-fail <id> <имя> "<причина>"`
+(SPEC 01M6F3DKM3KB2JYMD0J50YRBPE) — итог ручной проверки `human:<имя>`
+профиля `verify` проекта (поле `description.verify` записи локального
+слоя). Задача проекта с профилем после зелёного CI головы и прохода гейта
+по исходам ждёт на `verifying` записью «ждёт проверки <имя> по sha <sha>»;
+`auto` на ожидании останавливается без алерта. `verify-ok` пишет отметку
+проверки по текущей голове (sha другой головы — отказ «отметка для другой
+головы»; без записи ожидания этого визита `verifying` по этой голове —
+отказ «проверка не ожидается для этой головы»; пустой итог — отказ); когда
+отмечены все проверки профиля, задача уходит в `review`. Отметка
+действительна только для своей головы и визита. `verify-fail` возвращает
+задачу в `in_dev` с причиной (пустая — отказ) в разделе «Причина возврата»
+брифа developer; возвраты считаются своим счётчиком задачи с пределом
+`LIMIT_REVIEW_ITERS`, предел — `escalated`. Обе — только из `verifying` и
+только для имени из профиля. Пульт стенд не разворачивает: этап только
+ждёт отметок.
+
 `mr-sync [<id>…]` (SPEC 01M6AB4VE2R0Q2V5D4MMJGNGH7) — сверка MR задач
 проектов `merge_gate: target-human` в `awaiting_human` (без id — всех) и
 нахождения правки задачи в `base`: статус MR, признаки (а) коммит вливания —
@@ -839,7 +857,8 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
-                          targets, venv, version, watch, workspace, zone_lock)
+                          targets, venv, verify, version, watch, workspace,
+                          zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
 from scripts import guard as artifact_guard  # noqa: E402
 
@@ -2603,6 +2622,15 @@ def _refuse_if_role_restricted(cmd: str, rest: list) -> None:
                  f"роли {role}")
 
 
+def _verify_args(rest: list, count: int, command: str) -> list:
+    """Позиционные аргументы `verify-ok`/`verify-fail`: ровно `count`."""
+    if len(rest) != count:
+        usage = ('verify-ok <id> <имя> <sha> "<итог>"' if count == 4
+                 else 'verify-fail <id> <имя> "<причина>"')
+        sys.exit(f"{command}: нужно {count} аргумента — {usage}")
+    return rest
+
+
 def main() -> None:
     _refuse_if_worktree()
     args = sys.argv[1:]
@@ -2643,6 +2671,12 @@ def main() -> None:
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
+        # Решения Оператора по ручной проверке `verify` — вне белого списка
+        # ролей (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требования 3-4).
+        "verify-ok": lambda: verify.cmd_verify_ok(*_verify_args(rest, 4,
+                                                                "verify-ok")),
+        "verify-fail": lambda: verify.cmd_verify_fail(
+            *_verify_args(rest, 3, "verify-fail")),
         "answer": lambda: answer.cmd_answer(*_answer_args(rest)),
         "zones-extend": lambda: _cmd_zones_extend(rest),
         "kill": lambda: _cmd_kill(rest),

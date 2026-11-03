@@ -178,6 +178,21 @@ CREATE TABLE IF NOT EXISTS external_refs (
 );
 """
 
+# Отметки ручных проверок `human:<имя>` этапа `verifying` (SPEC
+# 01M6F3DKM3KB2JYMD0J50YRBPE, требование 3): команда Оператора `verify-ok`
+# пишет строку на проверку, голову и визит — `visit_step_id` — id записи
+# журнала входа задачи в `verifying`, после которой отметка поставлена:
+# отметка прошлого визита или другой головы не действует. Тем же литералом
+# в `SCHEMA` и `migrate()` (см. `MODEL_TARIFFS_DDL`).
+VERIFY_MARKS_DDL = """
+CREATE TABLE IF NOT EXISTS verify_marks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+  name TEXT NOT NULL, sha TEXT NOT NULL, summary TEXT NOT NULL,
+  visit_step_id INTEGER NOT NULL, created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -196,6 +211,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   merge_after TEXT, closed_as TEXT, epic_id TEXT, start_after TEXT,
   mr_iid INTEGER, mr_url TEXT,
   fork_point TEXT, mr_sync_outcome TEXT, mr_sync_at TEXT,
+  verify_fails INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
 {EPICS_DDL}
@@ -203,6 +219,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 {EPIC_DRAFTS_DDL}
 {EPIC_SUPERVISION_DDL}
 {EXTERNAL_REFS_DDL}
+{VERIFY_MARKS_DDL}
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
@@ -461,6 +478,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     add_column(conn, "tasks", "fork_point", "TEXT")
     add_column(conn, "tasks", "mr_sync_outcome", "TEXT")
     add_column(conn, "tasks", "mr_sync_at", "TEXT")
+    # Возвраты `verify-fail` задачи (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE,
+    # требование 4): свой счётчик, не `review_iters`; эскалацией не
+    # сбрасывается (инвариант 3). DEFAULT 0 — возвратов ещё не было.
+    add_column(conn, "tasks", "verify_fails", "INTEGER DEFAULT 0")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -558,6 +579,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(EPIC_DRAFTS_DDL)
     conn.executescript(EPIC_SUPERVISION_DDL)
     conn.executescript(EXTERNAL_REFS_DDL)
+    conn.executescript(VERIFY_MARKS_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:

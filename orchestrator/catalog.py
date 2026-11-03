@@ -11,7 +11,7 @@ from scripts import guard
 from . import (alerts, artifact_branch, board, budget, config, cycle_hint,
               epics, github_adapter, gitcmd, idgen, liveness, merge_after, merge_queue, models,
               providers, repo_context, retro, runner,
-              store, targets, tz_check, workspace, zone_lock)
+              store, targets, tz_check, verify, workspace, zone_lock)
 from .advance_gates import spec_audit
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
@@ -1370,8 +1370,14 @@ def _delivery_suffix(conn, r) -> str:
 def _status_line(conn, rows, r, wave_breaker_open: bool) -> str:
     """Строка задачи `status`: одна и та же в группе эпика и вне её (SPEC
     01M5TBBDFS6DWQY6MS263T1KPY, требование 13)."""
-    flag = (" <- ЖДЁТ ОПЕРАТОРА" if r["state"] in board.OPERATOR_STATES
-            else "")
+    # Ожидание ручной проверки профиля `verify` (SPEC
+    # 01M6F3DKM3KB2JYMD0J50YRBPE, требование 2) — та же отметка и строка
+    # «ждёт проверки <имя> по sha <sha>» первой неотмеченной проверки.
+    verify_wait = verify.status_text(conn, r)
+    flag = (" <- ЖДЁТ ОПЕРАТОРА"
+            if r["state"] in board.OPERATOR_STATES or verify_wait else "")
+    if verify_wait:
+        flag += f"  [{verify_wait}]"
     # Пометка canary — ТОЛЬКО здесь и в RETRO (tasks/T065/SPEC.md,
     # требование 6), не в `title` самой задачи: строка `status` видна
     # Оператору, не роли внутри промпта шага.

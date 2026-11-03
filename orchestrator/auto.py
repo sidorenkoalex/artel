@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
               fsm, lease, merge_after, models, parallel_limit, pause, pull,
-              rounds, runner, session, store, zone_lock)
+              rounds, runner, session, store, verify, zone_lock)
 from .advance_gates import refusal_classes, spec_audit
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -513,7 +513,8 @@ def _advance_verifying_poll(conn, task_id: str, session_id: str) -> bool:
     обоих случаях эта функция возвращает `False`, дальше решает вызывающий
     цикл по новому `state`. Завершённый красный CI (требование 2, AC-4)
     здесь же и останавливает цикл `auto` — задача остаётся в `verifying`,
-    подсказка называет `reject`; это ЕДИНСТВЕННЫЙ исход, где функция сама
+    подсказка называет `reject`; это и ожидание ручной проверки
+    Оператора (`verify`) — единственные исходы, где функция сама
     печатает итог и возвращает `True` (цикл обязан остановиться немедленно,
     не дожидаясь потолка времени). «Проверок нет»/«проверки идут» не
     меняют состояние — функция засыпает на `VERIFYING_POLL_INTERVAL_SEC` и
@@ -524,6 +525,15 @@ def _advance_verifying_poll(conn, task_id: str, session_id: str) -> bool:
     t = store.get_task(conn, task_id)
     if t["state"] != "verifying":
         return False
+    # Ожидание ручной проверки (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требование
+    # 5): ждёт Оператор, не CI — цикл останавливается без алерта, как на
+    # гейте, и не держит lease; отметок цикл не ставит (инвариант 18).
+    wait = verify.status_text(conn, t)
+    if wait is not None:
+        auto_stop(conn, task_id, "verifying",
+                  f"{verify.AUTO_STOP_REASON} — {wait}",
+                  verify.AUTO_STOP_HINT.format(id=task_id), alert=False)
+        return True
     note = _verifying_poll_note(conn, task_id, journaled_before)
     if note is not None and ci.verifying_is_red(note):
         reason, hint = config.AUTO_STOP_VERIFYING_RED
@@ -1305,7 +1315,12 @@ def _epic_view(conn, epic) -> _EpicView:
             status = _AWAITING
         elif task_id in view.running:
             status = _RUNNING
-        elif state in EPIC_GATE_STATES or state == "escalated":
+        elif (state in EPIC_GATE_STATES or state == "escalated"
+              or verify.waiting(conn, t)):
+            # Ожидание ручной проверки — ждёт Оператора, как гейт (SPEC
+            # 01M6F3DKM3KB2JYMD0J50YRBPE, требование 5): признак — само
+            # ожидание текущего визита, не `verifying` целиком, — красный
+            # CI по-прежнему удерживается `_child_holds`.
             status = _WAITING
         elif task_id in children and _child_holds(conn, epic_id,
                                                   children[task_id]):

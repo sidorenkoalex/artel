@@ -717,6 +717,27 @@ def insert_external_ref(conn: sqlite3.Connection, kind: str, object_id: str,
     return cur.rowcount > 0
 
 
+def insert_verify_mark(conn: sqlite3.Connection, task_id: str, name: str,
+                       sha: str, summary: str, visit_step_id: int,
+                       by: str) -> None:
+    """Отметка ручной проверки `verify-ok` (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE,
+    требование 3): проверка `name` задачи по голове `sha` в визите
+    `verifying`, начатом записью журнала `visit_step_id`."""
+    conn.execute(
+        "INSERT INTO verify_marks (task_id, name, sha, summary, visit_step_id,"
+        " created_by, created_at) VALUES (?,?,?,?,?,?,?)",
+        (task_id, name, sha, summary, visit_step_id, by, now()))
+    conn.commit()
+
+
+def verify_marked_names(conn: sqlite3.Connection, task_id: str, sha: str,
+                        visit_step_id: int) -> set:
+    """Имена проверок, отмеченных по голове `sha` в визите `visit_step_id`."""
+    return {row["name"] for row in conn.execute(
+        "SELECT name FROM verify_marks WHERE task_id=? AND sha=? "
+        "AND visit_step_id=?", (task_id, sha, visit_step_id))}
+
+
 def delete_external_ref(conn: sqlite3.Connection, kind: str, object_id: str,
                         system: str, key: str) -> bool:
     """Снимает ссылку; `False` — её не было."""

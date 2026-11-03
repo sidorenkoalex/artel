@@ -12,7 +12,7 @@ import html
 import json
 import sys
 
-from . import config, merge_after, store, targets, zone_lock
+from . import config, merge_after, store, targets, verify, zone_lock
 
 SCHEMA_VERSION = 1
 # Состояния, которым `status` ставит отметку «ЖДЁТ ОПЕРАТОРА» (требование 11).
@@ -37,7 +37,9 @@ def waiting_on(conn, t, terminal_states) -> str | None:
     if state in OPERATOR_STATES:
         return "operator"
     if state in CI_STATES:
-        return "ci"
+        # Ожидание ручной проверки профиля `verify` держит Оператор, не CI
+        # (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требование 2).
+        return "operator" if verify.waiting(conn, t) else "ci"
     if state in HUMAN_STATES:
         return "human"
     if zone_lock.queue_wait(conn, t["id"], t) is not None:
