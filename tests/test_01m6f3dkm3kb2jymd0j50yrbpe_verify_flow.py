@@ -13,8 +13,9 @@
 (`tests.sandbox.RealGitSandbox`): клон внешнего проекта
 (`tests.sandbox.make_project_repo`), запись проекта `forge: gitlab` — в
 локальном слое (`targets.local_path()`), у одного проекта с полем
-`description.verify`, у другого без него. Поддержка `gitlab` — подменой
-`targets.SUPPORTED_FORGES`.
+`description.verify`, у другого без него. Поддержка `gitlab` с гейтом `operator` — подменой
+`targets.SUPPORTED_FORGES` и `targets.SUPPORTED_PAIRS` (после открытия пар
+01M6EZXVFG405Y1BTFDSGBKS8E пара gitlab+operator вне поддержки).
 
 CI головы — ответ подделки хостинга `pipeline_status` по sha коммита
 (реестр `forge.IMPLEMENTATIONS`, ключ `gitlab`): зелёный, идущий или
@@ -239,6 +240,8 @@ class Stand:
         for patcher in (
                 mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""}),
                 mock.patch.object(targets, "SUPPORTED_FORGES", ("github", "gitlab")),
+                mock.patch.object(targets, "SUPPORTED_PAIRS",
+                                  targets.SUPPORTED_PAIRS | {("gitlab", "operator")}),
                 mock.patch.dict(forge.IMPLEMENTATIONS, {"gitlab": self.fake}),
                 mock.patch.object(ci, "gh", lambda *a, **k:
                                   subprocess.CompletedProcess(list(a), 0, "", "")),
