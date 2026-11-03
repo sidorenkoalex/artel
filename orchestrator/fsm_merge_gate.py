@@ -1513,7 +1513,17 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                  f"и повтори: artel.py approve {task_id}")
     _profile_refusal_exit(conn, task_id, target)
     branch = t["branch"]
-    if github_adapter.people_entry(target) is not None:
+    # Запись не прочитана — гейт проекта неизвестен: путь слияния в `base`
+    # для него закрыт (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 1).
+    # Артели `people_entry` запись не читает — сбоя здесь у неё нет.
+    try:
+        people = github_adapter.people_entry(target)
+    except targets.TargetsError as exc:
+        _people_refusal(conn, task_id, PEOPLE_REFUSED_ACTION,
+                        f"{github_adapter.ENTRY_UNREAD_DETAIL}: {exc}; гейт "
+                        f"мержа проекта неизвестен — ни слияния, ни MR")
+        return ("stopped",)
+    if people is not None:
         return _approve_for_project_people(conn, task_id, state, t, ctx,
                                            confirmed_ci_note, during_canary)
     if _docs_ref_unsynced(conn, task_id):
@@ -1656,6 +1666,7 @@ def _appendices_refuse(conn, task_id: str,
 
 
 MR_STATUS_UNREAD_DETAIL = "статус MR не прочитан"
+MR_STATE_UNKNOWN_DETAIL = "статус MR неизвестен"
 
 
 def _mr_incident_stops(conn, task_id: str, state: str,
@@ -1692,6 +1703,15 @@ def _mr_incident_stops(conn, task_id: str, state: str,
         except mr_sync.GitFailure as exc:
             _people_refusal(conn, task_id, MR_REFUSED_ACTION, str(exc))
             return True
+    else:
+        # Статус вне трёх известных (`locked`, пустой, `None` — умолчание
+        # `forge.MergeRequest.state`) — инцидент не проверен, не «инцидента
+        # нет» (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 8).
+        _people_refusal(conn, task_id, MR_REFUSED_ACTION,
+                        f"{MR_STATE_UNKNOWN_DETAIL} — MR !{iid}: "
+                        f"{mr.state!r}; черновик не снят, исполнитель не "
+                        f"назначен")
+        return True
     if not detail:
         if checked is not None:
             checked.add(task_id)
@@ -1786,6 +1806,9 @@ def _refuse_mr_during_canary(conn, task_id: str,
              f"  задача осталась на гейте merge")
 
 
+AWAITING_UNCHECKED_DETAIL = "предел awaiting_human не проверен"
+
+
 def _awaiting_limit_refuses(conn, task_id: str,
                             ctx: repo_context.RepoContext) -> bool:
     """Предел `policy.max_awaiting` (требование 5): счёт задач этого
@@ -1793,8 +1816,14 @@ def _awaiting_limit_refuses(conn, task_id: str,
     параллельных `approve` прошли бы оба. `True` — отказано."""
     try:
         limit = targets.delivery_policy(targets.target(ctx.target))["max_awaiting"]
-    except targets.TargetsError:
-        return False
+    except targets.TargetsError as exc:
+        # Предел не прочитан — не значит «предела нет» (SPEC
+        # 01M6EZXVFGXC6WBDA9QJESAZRW, требование 3).
+        _people_refusal(conn, task_id, PEOPLE_REFUSED_ACTION,
+                        f"{AWAITING_UNCHECKED_DETAIL}: "
+                        f"{github_adapter.ENTRY_UNREAD_DETAIL}: {exc}; MR не "
+                        f"открыт, задача ждёт на гейте")
+        return True
     if limit is None:
         return False
     waiting = [r["id"] for r in store.project_tasks(conn, ctx.target)

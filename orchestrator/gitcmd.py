@@ -180,6 +180,15 @@ PUSH_REFUSED_ACTION = "отправка отказана"
 # 01M5XZ9Z68XE2EKPDHYCAK25KF, требование 7): по ней `status` и черновой MR
 # GitHub отличают штатную очередь от сбоя отправки.
 IN_FLIGHT_LIMIT_REASON = "предел max_in_flight"
+# Код возврата отказа пределом `max_in_flight` (SPEC
+# 01M6EZXVFGXC6WBDA9QJESAZRW, требование 7): прочие отказы точки отправки
+# несут 1, git — свои коды; 75 — EX_TEMPFAIL, «повтори позже».
+IN_FLIGHT_REFUSAL = 75
+PUSH_REFUSAL = 1
+# Сбой чтения при проверке предела — не отказ пределом: текст без
+# `IN_FLIGHT_LIMIT_REASON`, иначе `status` покажет сбой очередью.
+IN_FLIGHT_UNCHECKED = "policy.max_in_flight не проверен"
+DB_UNREAD = "БД пульта не прочитана"
 PUSH_WHITELIST_SOURCE = "branch_push_whitelist"
 PUSH_SUBCOMMANDS = ("push", "send-pack")
 PUSH_RESET_CONFIG = ("-c", "push.followTags=false", "-c", "push.pushOption=")
@@ -540,6 +549,7 @@ class _PushPlan:
         self.args = args
         self.cwd = cwd
         self.refusal: str | None = None
+        self.code = PUSH_REFUSAL
         self.sent: list = []
 
     def after(self, code: int) -> None:
@@ -760,19 +770,32 @@ def in_flight_refusal(task_id: str) -> str | None:
     ветки задачи `task_id` пределом `policy.max_in_flight`; None — не
     откажет. Для команды, которая коммитит до отправки (`amend-tests`,
     ответ Оператора ANSWER-3 задачи 01M5XZ9Z68XE2EKPDHYCAK25KF): отказ до
-    коммита, без неотправленного хвоста. Запись проекта не прочитана —
-    None: решает сама точка отправки, она при этом отказывает."""
+    коммита, без неотправленного хвоста.
+
+    Сбой чтения записи или БД — причина «не проверен» для задачи любого
+    проекта, кроме артели (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 4):
+    пульт работает над собой и при сломанном `targets.yaml`. Проект задачи
+    не прочитан — задача не известна как задача артели, отказ."""
     from . import store, targets
     if not config.DB.exists():
         return None
     try:
         project = store.task_target(store.db(), task_id)
+    except sqlite3.Error as exc:
+        return f"{IN_FLIGHT_UNCHECKED} — {DB_UNREAD}: {exc}"
+    try:
         entry = targets.load().get(project)
         if entry is None:
             return None
         found = _in_flight_refusal(project, entry, [task_id])
-    except (targets.TargetsError, sqlite3.Error):
-        return None
+    except targets.TargetsError as exc:
+        if project == config.DEFAULT_TARGET:
+            return None
+        return f"{IN_FLIGHT_UNCHECKED} — запись проекта не прочитана: {exc}"
+    except sqlite3.Error as exc:
+        if project == config.DEFAULT_TARGET:
+            return None
+        return f"{IN_FLIGHT_UNCHECKED} — {DB_UNREAD}: {exc}"
     return found[1] if found is not None else None
 
 
@@ -805,6 +828,23 @@ def _push_destination(args: list, index: int, cwd: Path,
     refspec) отправки `args[index]` — проект по месту вызова, иначе по
     локальному пути или адресу назначения, иначе артель."""
     flags, options, positional, positions = _push_words(args[index + 1:])
+    project = _destination_project(positional, cwd, cwd_project, entries)
+    specs = _refspecs(positional[1:], _project_tasks(project))
+    return flags, options, positional, positions, project, specs
+
+
+def _destination_project(positional: list, cwd: Path,
+                         cwd_project: str | None,
+                         entries: dict | None) -> str:
+    """Проект отправки по позиционным словам `positional` без чтения БД:
+    по месту вызова, иначе по локальному пути или адресу назначения, иначе
+    артель.
+
+    Записи не прочитаны, назначение — сетевой адрес, не адрес `origin`
+    корня пульта: проект не узнать, и это не артель (SPEC
+    01M6EZXVFGXC6WBDA9QJESAZRW, требование 2) — проект называет сам адрес,
+    записи у него нет, и точка отправки отказывает «гейт мержа
+    неизвестен»."""
     dest = positional[0] if positional else ""
     project = cwd_project
     local = _local_dest_path(dest) if dest else None
@@ -813,9 +853,11 @@ def _push_destination(args: list, index: int, cwd: Path,
     if project is None and dest and entries is not None:
         found = project_by_url(dest, entries)
         project = found[0] if found is not None else None
-    project = project or config.DEFAULT_TARGET
-    specs = _refspecs(positional[1:], _project_tasks(project))
-    return flags, options, positional, positions, project, specs
+    if project is None and dest and entries is None and local is None:
+        origin = _raw_config(Path(config.ROOT), "--get", "remote.origin.url")
+        if not origin or url_key(dest) != url_key(origin):
+            project = url_key(dest)
+    return project or config.DEFAULT_TARGET
 
 
 def _refuse_awaiting_human(plan: _PushPlan, project: str, specs: list,
@@ -851,9 +893,20 @@ def _awaiting_human_refusal(argv: list, task_id: str | None) -> str | None:
         entries = targets.load()
     except targets.TargetsError:
         entries = None
-    *_, project, specs = _push_destination(
-        argv, index, cwd, next(iter(located), None), entries)
+    _flags, _options, positional, _positions = _push_words(argv[index + 1:])
+    project = _destination_project(positional, cwd, next(iter(located), None),
+                                   entries)
     plan = _PushPlan(list(argv), cwd)
+    try:
+        specs = _refspecs(positional[1:], _project_tasks(project))
+    except sqlite3.Error as exc:
+        # Ветки задач не сверены — отправка вне артели не идёт (SPEC
+        # 01M6EZXVFGXC6WBDA9QJESAZRW, требование 6); у артели — как прежде.
+        if project == config.DEFAULT_TARGET:
+            return None
+        _refuse(plan, project, None, env, task_id,
+                f"{DB_UNREAD} — ветки задач проекта не сверены: {exc}")
+        return plan.refusal
     if _refuse_awaiting_human(plan, project, specs, env, task_id):
         return plan.refusal
     return None
@@ -957,11 +1010,18 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
                 waiting = _in_flight_refusal(
                     project, entry,
                     list(dict.fromkeys(s["task"]["id"] for s in branches)))
-            except sqlite3.Error:
+            except sqlite3.Error as exc:
+                # Счёт не прочитан — предел не проверен, отправка вне артели
+                # не идёт (SPEC 01M6EZXVFGXC6WBDA9QJESAZRW, требование 5).
+                if project != config.DEFAULT_TARGET:
+                    return _refuse(plan, project, related, env, task_id,
+                                   f"{IN_FLIGHT_UNCHECKED} — {DB_UNREAD}: "
+                                   f"{exc}")
                 waiting = None
             if waiting is not None:
-                return _refuse(plan, project, waiting[0], env, task_id,
-                               waiting[1])
+                _refuse(plan, project, waiting[0], env, task_id, waiting[1])
+                plan.code = IN_FLIGHT_REFUSAL
+                return plan
         plan.sent =[(s["task"]["id"], s["src"], s["name"]) for s in branches]
     reset = list(PUSH_RESET_CONFIG) if whitelisted else []
     rest = list(args[index + 1:])
@@ -972,9 +1032,10 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
     return plan
 
 
-def _refused(args, refusal: str, text: bool = True) -> subprocess.CompletedProcess:
+def _refused(args, refusal: str, text: bool = True,
+             code: int = PUSH_REFUSAL) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(
-        list(args), 1, "" if text else b"",
+        list(args), code, "" if text else b"",
         refusal if text else refusal.encode())
 
 
@@ -1000,7 +1061,7 @@ def git(*args: str, task_id: str | None = None) -> subprocess.CompletedProcess:
     plan = _push_plan(list(args), Path(config.ROOT), env, task_id)
     if plan is not None:
         if plan.refusal is not None:
-            return _refused(args, plan.refusal)
+            return _refused(args, plan.refusal, code=plan.code)
         args = tuple(plan.args)
     project = _hosting_project(args)
     if project is not None:
@@ -1197,7 +1258,7 @@ def carpentry(repo: Path, args: list, env: dict, *,
     plan = _push_plan(list(args), Path(repo), env, task_id)
     if plan is not None:
         if plan.refusal is not None:
-            return _refused(["git", *args], plan.refusal, text)
+            return _refused(["git", *args], plan.refusal, text, plan.code)
         args = plan.args
     try:
         res = subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
@@ -1239,10 +1300,7 @@ def in_repo(repo: Path, *args: str,
     # вовсе: argv и поведение такого вызова — ровно прежние.
     if any(word in PUSH_SUBCOMMANDS for word in args):
         argv = ["-C", str(repo), *args]
-        try:
-            refusal = _awaiting_human_refusal(argv, task_id)
-        except sqlite3.Error:
-            refusal = None
+        refusal = _awaiting_human_refusal(argv, task_id)
         if refusal is not None:
             return _refused(["git", *argv], refusal)
     if task_id is None:
@@ -1295,7 +1353,7 @@ def read(repo: Path, *args: str, timeout: float | None = None,
         kwargs["timeout"] = timeout
     argv, plan = _point_plan(repo, args, None, task_id)
     if plan is not None and plan.refusal is not None:
-        return _refused(["git", *argv], plan.refusal, text)
+        return _refused(["git", *argv], plan.refusal, text, plan.code)
     try:
         res = subprocess.run(["git", *argv],
                              capture_output=True, env=pult_env(), **kwargs)
@@ -1319,7 +1377,7 @@ def read_env(repo: Path, env: dict, *args: str, timeout: float,
     дочитывается — `Timeout`; `OSError` запуска выходит наружу."""
     argv, plan = _point_plan(repo, args, env, task_id)
     if plan is not None and plan.refusal is not None:
-        return _refused(["git", *argv], plan.refusal)
+        return _refused(["git", *argv], plan.refusal, code=plan.code)
     process = subprocess.Popen(["git", *argv],
                                cwd=config.ROOT, env=pult_env(env),
                                stdout=subprocess.PIPE,
@@ -1353,7 +1411,8 @@ def read_stream(repo: Path, *args: str, limit: int, timeout: float,
     Процесс — `subprocess.Popen`: поток через `subprocess.run` не читается."""
     argv, plan = _point_plan(repo, args, None, task_id)
     if plan is not None and plan.refusal is not None:
-        return _refused(["git", *argv], plan.refusal, text=False)
+        return _refused(["git", *argv], plan.refusal, text=False,
+                        code=plan.code)
     end = time.monotonic() + timeout
     try:
         proc = subprocess.Popen(["git", *argv],
