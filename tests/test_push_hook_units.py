@@ -133,6 +133,44 @@ class TargetHumanPrePushTest(_TempRepoTest):
         self.assertIn(".git/artel-push-policy", res.stderr)
 
 
+    def test_tags_and_notes_refused_with_valid_policy(self):
+        """При исправном файле политики отправка `refs/tags/*` и
+        `refs/notes/*` — отказ с именем ссылки; ветка по шаблону проходит.
+
+        Ловит мутацию: хук пропускает всё вне `refs/heads/*` (проверяет
+        только ветки) — тег или `refs/notes/x` уходит на `origin`.
+        """
+        text = policy()
+        self.assertEqual(self.hook(f"x {SHA} refs/heads/task/a-b {ZERO}",
+                                   text=text).returncode, 0)
+        for ref in ("refs/tags/v1", "refs/notes/x"):
+            with self.subTest(ref=ref):
+                res = self.hook(f"x {SHA} {ref} {ZERO}", text=text)
+                self.assertEqual(res.returncode, 1, res.stderr)
+                self.assertIn(ref, res.stderr)
+
+    def test_missing_or_unreadable_policy_refuses_naming_path(self):
+        """Файла политики нет или он не читается — отказ и ветке по шаблону,
+        причина называет путь файла.
+
+        Ловит мутацию: без файла политики хук выходит с 0 (правила
+        молча сняты) либо нечитаемый файл читается как пустой без отказа.
+        """
+        line = f"x {SHA} refs/heads/task/a-b {ZERO}"
+        path = self.repo / ".git" / "artel-push-policy"
+        res = self.hook(line)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn(".git/artel-push-policy", res.stderr)
+        if os.geteuid() == 0:
+            self.skipTest("root читает файл без прав чтения")
+        path.write_text(policy(), encoding="utf-8")
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o644)
+        res = self.hook(line)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn(".git/artel-push-policy", res.stderr)
+
+
 class HostingHelperTest(_TempRepoTest):
 
     def test_url_host_forms(self):
