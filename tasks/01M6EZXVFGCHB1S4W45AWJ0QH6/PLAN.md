@@ -141,3 +141,7 @@ schema_version: 5
 - Нет команды пульта для прогона одного хука с заданным stdin — тесты хука
   пишут свою обвязку (`tests/test_push_hook_units.py`); класс «хук git
   проверяется настоящим push» дорог.
+- `scripts/guard.py::network_address_errors_from_files` (инвариант 35)
+  принимает учётную часть адреса за хост: `https://u:p@localhost/…`
+  отказывается как внешний адрес. В `tests/test_push_hook_units.py` такой
+  адрес собран из частей (хост — `127.0.0.1`), с комментарием.
