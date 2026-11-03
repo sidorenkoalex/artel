@@ -1,5 +1,5 @@
 ---
-built_at_sha: 9976e001b2e7bbf7cec8926ac6562c801bfc1ff4
+built_at_sha: 998c7daac9bc9c00ec7631953c1208d7aae678d8
 ---
 
 # Codebase-map пульта
@@ -2518,7 +2518,7 @@ built_at_sha: 9976e001b2e7bbf7cec8926ac6562c801bfc1ff4
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/board.py`, `orchestrator/catalog.py`, `orchestrator/fsm_advance.py`, `orchestrator/watch.py`, `tests/test_verify_profile.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/board.py`, `orchestrator/catalog.py`, `orchestrator/fsm_advance.py`, `orchestrator/watch.py`, `tests/test_invariants.py`, `tests/test_verify_profile.py`
 
 ## orchestrator/version.py
 
@@ -11147,7 +11147,7 @@ built_at_sha: 9976e001b2e7bbf7cec8926ac6562c801bfc1ff4
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/artel.py`, `orchestrator/artifact_branch.py`, `orchestrator/board.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/epics.py`, `orchestrator/forge.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/idgen.py`, `orchestrator/merge_after.py`, `orchestrator/mr_sync.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/test_lint.py`, `scripts/guard.py`, `tests/sandbox.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py`, `tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py`, `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py`, `tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/artel.py`, `orchestrator/artifact_branch.py`, `orchestrator/board.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/epics.py`, `orchestrator/forge.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/idgen.py`, `orchestrator/merge_after.py`, `orchestrator/mr_sync.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/test_lint.py`, `orchestrator/verify.py`, `scripts/guard.py`, `tests/sandbox.py`, `tests/test_01m42pencs26d0656x8fr7dfa7_project_area.py`, `tests/test_01m443hpzbmjgchvgv4jqn88rs_sleep_guard.py`, `tests/test_01m590gjaf0edv4nbc4c99mfvh_report_outcome.py`, `tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py`, `tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py`
 
 **Импортируется:** `tests/test_01m4jn2edqp8q3wvyk0ts95zvc_network_address.py`, `tests/test_01m5nhxja3x7c66xtjn4j3e25w_shared_fixtures.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_review_registry_gate.py`, `tests/test_verifying_ceiling.py`
 
