@@ -13,7 +13,9 @@
 Клон заводится идемпотентно (`ensure_clone`): существующий каталог клона не
 трогается. Хуки защиты `main` клона — из пина: `core.hooksPath` —
 абсолютный `<config.ROOT>/scripts/git-hooks` (требование 6), а не
-`scripts/git-hooks` проверяемого кода клона.
+`scripts/git-hooks` проверяемого кода клона. Клон проекта `target-human`
+получает свой каталог `<config.ROOT>/scripts/git-hooks/target-human` и
+файл политики его `pre-push` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6).
 
 Все операции идут через `gitcmd` с явным репозиторием клона.
 """
@@ -65,13 +67,92 @@ def task_repo(task_id: str) -> Path:
     return repo(task_target(task_id))
 
 
-def set_clone_hooks(clone: Path) -> str | None:
-    """`core.hooksPath` клона — абсолютный путь пина; `None` — поставлено,
-    иначе причина."""
-    res = gitcmd.in_repo(clone, "config", "core.hooksPath", str(hooks_path()))
+def _entry_or_none(target: str | None) -> dict | None:
+    if target is None:
+        return None
+    try:
+        return targets.target(target)
+    except targets.TargetsError:
+        return None
+
+
+def project_hooks_path(target: str | None) -> Path:
+    """Каталог хуков пульта проекта `target` (`gitcmd.project_hooks_path`):
+    у проекта `target-human` — `<config.ROOT>/scripts/git-hooks/
+    target-human`, у прочих — `hooks_path()` (SPEC
+    01M6EZXVFGCHB1S4W45AWJ0QH6, требование 1)."""
+    return gitcmd.project_hooks_path(_entry_or_none(target))
+
+
+def is_target_human(target: str) -> bool:
+    entry = _entry_or_none(target)
+    return entry is not None and targets.merged_by_project_people(entry)
+
+
+def _failure(res) -> str:
+    return ((res.stderr or "").strip()[:200] if res is not None
+            else "git не ответил") or "git вернул ненулевой код"
+
+
+def set_clone_hooks(clone: Path, target: str | None = None) -> str | None:
+    """`core.hooksPath` клона — абсолютный каталог хуков пульта проекта
+    `target` (без проекта — путь пина); `None` — поставлено, иначе
+    причина."""
+    res = gitcmd.in_repo(clone, "config", "core.hooksPath",
+                         str(project_hooks_path(target)))
     if res is None or res.returncode != 0:
-        return ((res.stderr or "").strip()[:200] if res is not None
-                else "git не ответил") or "git config вернул ненулевой код"
+        return _failure(res)
+    return None
+
+
+PUSH_POLICY_NAME = "artel-push-policy"
+
+
+def push_policy_text(target: str, entry: dict) -> str:
+    """Эталон файла политики `pre-push` проекта `target-human` по записи
+    `entry` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, «Термины»)."""
+    template = entry.get("branch_template") or targets.DEFAULT_BRANCH_TEMPLATE
+    return (f"project={target}\nbase={entry.get('base') or ''}\n"
+            f"branch_template={template}\n"
+            f"artifacts_prefix={gitcmd.ARTIFACT_REF_PREFIX}\n")
+
+
+def push_policy_path(clone: Path) -> tuple[Path | None, str | None]:
+    """(путь файла политики в общем каталоге git клона, причина отказа)."""
+    res = gitcmd.in_repo(clone, "rev-parse", "--git-common-dir")
+    if res is None or res.returncode != 0 or not res.stdout.strip():
+        return None, f"общий каталог git клона {clone} не получен: {_failure(res)}"
+    return Path(clone) / res.stdout.strip() / PUSH_POLICY_NAME, None
+
+
+def write_push_policy(clone: Path, target: str) -> str | None:
+    """Эталон файла политики — в общий каталог git клона; `None` —
+    записан, иначе причина."""
+    try:
+        entry = targets.target(target)
+    except targets.TargetsError as exc:
+        return f"файл политики не записан: {exc}"
+    path, error = push_policy_path(clone)
+    if error is not None:
+        return error
+    try:
+        path.write_bytes(push_policy_text(target, entry).encode("utf-8"))
+    except OSError as exc:
+        return f"файл политики {path} не записан: {exc}"
+    return None
+
+
+def _clone_submodules(clone: Path, entry: dict) -> str | None:
+    """Подмодули клона внешнего проекта со `token_slot` — тем же токеном
+    слота (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 10; ANSWER-1 п. 3):
+    `submodule update` идёт через `gitcmd`, хостинговым вызовом проекта.
+    Записи без слота и клону без `.gitmodules` — ничего. `None` — успех."""
+    if not entry.get("token_slot") or not (clone / ".gitmodules").is_file():
+        return None
+    res = gitcmd.in_repo(clone, "submodule", "update", "--init", "--recursive",
+                         "--quiet")
+    if res is None or res.returncode != 0:
+        return _failure(res)
     return None
 
 
@@ -105,7 +186,8 @@ def ensure_clone(target: str) -> tuple[Path, str | None]:
     if clone.exists():
         return clone, None
     try:
-        url = targets.target(target)["url"]
+        entry = targets.target(target)
+        url = entry["url"]
     except targets.TargetsError as exc:
         return clone, f"клон {clone} не заведён: {exc}"
     clone.parent.mkdir(parents=True, exist_ok=True)
@@ -115,9 +197,19 @@ def ensure_clone(target: str) -> tuple[Path, str | None]:
         detail = ((res.stderr or "").strip()[:300] if res is not None
                   else "git не ответил")
         return clone, f"клон {clone} из {url} не заведён: {detail}"
-    hooks_error = set_clone_hooks(clone)
+    if target != config.DEFAULT_TARGET:
+        sub_error = _clone_submodules(clone, entry)
+        if sub_error is not None:
+            shutil.rmtree(clone, ignore_errors=True)
+            return clone, (f"клон {clone} из {url} не заведён: подмодули не "
+                           f"извлечены: {sub_error}")
+    hooks_error = set_clone_hooks(clone, target)
     if hooks_error is not None:
         return clone, f"клону {clone} не поставлены хуки: {hooks_error}"
+    if targets.merged_by_project_people(entry):
+        policy_error = write_push_policy(clone, target)
+        if policy_error is not None:
+            return clone, f"клону {clone} не записана политика: {policy_error}"
     inherit_identity(clone)
     _fetch_docs_refs(clone)
     return clone, None

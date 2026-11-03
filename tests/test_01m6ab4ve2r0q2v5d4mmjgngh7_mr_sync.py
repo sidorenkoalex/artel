@@ -132,7 +132,7 @@ ENTRY = """  {name}:
       mutation_claim_scope: [tests/test_*.py]
 {policy}    machine:
       forge: gitlab
-      url: https://localhost/grp/{name}
+      url: {url}
       token_slot: {name}-token
 """
 
@@ -452,9 +452,11 @@ class Stand:
                         if value is not None)
         text = "targets:\n"
         text += ENTRY.format(name=self.ext, base=MAIN, gate="target-human",
-                             policy=lines)
+                             policy=lines,
+                             url=config.PROJECTS / self.ext / "origin.git")
         text += ENTRY.format(name=self.other, base=MAIN, gate=other_gate,
-                             policy="      draft_mr: false\n")
+                             policy="      draft_mr: false\n",
+                             url=config.PROJECTS / self.other / "origin.git")
         local = targets.local_path()
         local.parent.mkdir(parents=True, exist_ok=True)
         local.write_text(text, encoding="utf-8")
@@ -1767,7 +1769,8 @@ def test_ac17_bad_interval_refuses_record_naming_field(tmp_root, monkeypatch, va
         local.parent.mkdir(parents=True, exist_ok=True)
         local.write_text("targets:\n" + ENTRY.format(
             name=name, base=MAIN, gate="target-human",
-            policy=f"      draft_mr: false\n      mr_sync_interval_min: {raw}\n"),
+            policy=f"      draft_mr: false\n      mr_sync_interval_min: {raw}\n",
+            url=config.PROJECTS / name / "origin.git"),
             encoding="utf-8")
 
     good = rng.randint(1, 120)

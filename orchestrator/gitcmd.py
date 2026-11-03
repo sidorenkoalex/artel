@@ -38,13 +38,36 @@ def pult_env(base: dict | None = None) -> dict:
 # Токен хостинга внешнего проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C,
 # требования 1-3, 7): подкоманды git, говорящие с remote, — только они
 # получают помощник учётных данных пульта; локальные связку ключей не читают.
-HOSTING_SUBCOMMANDS = ("fetch", "push", "pull", "ls-remote")
+HOSTING_SUBCOMMANDS = ("fetch", "push", "pull", "ls-remote", "clone")
 HOSTING_TOKEN_ENV = "ARTEL_HOSTING_TOKEN"
+# Хост адреса записи проекта (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, требование
+# 11): помощник отдаёт пароль только на запрос `get` с этим `host` —
+# подмодуль на другом хосте токена слота не получает. Пустое значение
+# (адрес-путь, `file://`) совпадает только с запросом без `host`.
+HOSTING_HOST_ENV = "ARTEL_HOSTING_HOST"
 # Помощник читает пароль из окружения, а не из своего текста: значение
 # токена не попадает ни в argv git, ни в argv помощника (`GIT_TRACE`).
 HOSTING_CREDENTIAL_HELPER = (
-    '!f() { test "$1" = get || exit 0; echo username=x-access-token; '
+    '!f() { test "$1" = get || exit 0; h=; while IFS= read -r l; do '
+    'case "$l" in host=*) h="${l#host=}";; esac; done; '
+    f'test "$h" = "${{{HOSTING_HOST_ENV}}}" || exit 0; '
+    'echo username=x-access-token; '
     f'echo "password=${{{HOSTING_TOKEN_ENV}}}"; }}; f')
+
+
+def url_host(url: str) -> str:
+    """`host` адреса `url` в том виде, в каком его называет запрос git к
+    помощнику учётных данных: с портом, без учётной части; адрес-путь и
+    `file://` — пустая строка (ANSWER-1 п. 2)."""
+    url = url.strip()
+    if "://" in url:
+        if url.lower().startswith("file://"):
+            return ""
+        return urllib.parse.urlsplit(url).netloc.rpartition("@")[2]
+    head, colon, _rest = url.partition(":")
+    if colon and "/" not in head:
+        return head.rpartition("@")[2]
+    return ""
 
 
 def url_key(url: str) -> str:
@@ -105,7 +128,11 @@ def _hosting_project(args: tuple) -> tuple | None:
             cwd = cwd / args[i + 1]
         i += 2
     rest = args[i:]
-    if not rest or rest[0] not in HOSTING_SUBCOMMANDS:
+    if rest and rest[0] == "clone":
+        return _clone_project(rest[1:])
+    submodules = (len(rest) > 1 and rest[0] == "submodule"
+                  and rest[1] == "update")
+    if not rest or (rest[0] not in HOSTING_SUBCOMMANDS and not submodules):
         return None
     name = _project_of_path(cwd)
     if name is not None:
@@ -119,6 +146,21 @@ def _hosting_project(args: tuple) -> tuple | None:
                 found = project_by_url(arg, entries)
                 if found is not None:
                     return found
+    return None
+
+
+def _clone_project(words: list) -> tuple | None:
+    """(имя, запись) внешнего проекта со `token_slot`, чей `url` клонирует
+    `git clone <words>` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 10).
+    Каталог клона ещё не в области проекта — проект узнаётся по адресу.
+    Запись без `token_slot` — `None`: авторизация клона прежняя."""
+    entries = _declared_targets()
+    for word in words:
+        if word.startswith("-"):
+            continue
+        found = project_by_url(word, entries)
+        if found is not None:
+            return found if found[1].get("token_slot") else None
     return None
 
 
@@ -146,11 +188,12 @@ def hosting_token(name: str, entry: dict) -> tuple[str | None, str | None]:
     return token, None
 
 
-def hosting_env(env: dict, token: str) -> dict:
+def hosting_env(env: dict, token: str, host: str = "") -> dict:
     """Окружение хостингового git-вызова: чужие помощники сброшены пустым
     `credential.helper`, следом — помощник пульта (как `-c
     credential.helper= -c credential.helper=<пульт>`); конфигурация клона и
-    `GIT_CONFIG_GLOBAL` не трогаются."""
+    `GIT_CONFIG_GLOBAL` не трогаются. `host` — хост адреса записи
+    (`url_host`): только на него помощник отдаёт пароль."""
     env = dict(env)
     try:
         count = int(env.get("GIT_CONFIG_COUNT") or 0)
@@ -162,6 +205,7 @@ def hosting_env(env: dict, token: str) -> dict:
         count += 1
     env["GIT_CONFIG_COUNT"] = str(count)
     env[HOSTING_TOKEN_ENV] = token
+    env[HOSTING_HOST_ENV] = host
     return env
 
 
@@ -200,6 +244,16 @@ GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 # Переменные, переносящие репозиторий вызова: под белым списком отправка
 # идёт только из клона проекта рабочим каталогом.
 GIT_LOCATION_ENV_NAMES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")
+# Переменные, подменяющие транспорт или слои конфигурации вызова (SPEC
+# 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 12): под белым списком — отказ.
+GIT_TRANSPORT_ENV_NAMES = ("GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL",
+                           "GIT_CONFIG_SYSTEM")
+# Ключи действующей конфигурации, уводящие отправку мимо адреса записи или
+# её транспорта (там же); имена — в каноническом виде `git config`.
+PUSH_REDIRECT_CONFIG = r"^url\..*\.(insteadof|pushinsteadof)$|^core\.sshcommand$"
+# Каталог хуков пульта проекта `target-human` под `<config.ROOT>/scripts/
+# git-hooks` (требования 1, 6): его `pre-push` держит правила белого списка.
+TARGET_HUMAN_HOOKS = "target-human"
 # Глобальные опции git со значением отдельным словом.
 GIT_GLOBALS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
                           "--config-env", "--super-prefix")
@@ -219,6 +273,28 @@ GIT_BUILTINS = frozenset((
     "status", "switch", "symbolic-ref", "tag", "update-index", "update-ref",
     "var", "verify-commit", "version", "worktree", "write-tree",
 ))
+
+
+def project_hooks_path(entry: dict | None) -> Path:
+    """Каталог хуков пульта проекта с записью `entry` — абсолютный путь в
+    главной копии пульта: у проекта `target-human` — свой каталог, у прочих
+    проектов и артели (`entry` None) — прежний `<config.ROOT>/scripts/
+    git-hooks`."""
+    from . import targets
+    path = Path(config.ROOT) / "scripts" / "git-hooks"
+    if entry is not None and targets.merged_by_project_people(entry):
+        return path / TARGET_HUMAN_HOOKS
+    return path
+
+
+def same_dir(value: str, expected: Path) -> bool:
+    """Значение `core.hooksPath` — абсолютный путь каталога `expected`
+    (временный каталог macOS живёт под `/private`, оттого сверка и по
+    раскрытым ссылкам)."""
+    if not os.path.isabs(value):
+        return False
+    return (os.path.abspath(value) == os.path.abspath(expected)
+            or Path(value).resolve() == Path(expected).resolve())
 
 
 def _project_tasks(project: str) -> list:
@@ -669,6 +745,7 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         return f"отправка не из клона проекта {project} ({cwd})"
     names = sorted(n for n in env if (n in GIT_CONFIG_ENV_NAMES
                    or n in GIT_LOCATION_ENV_NAMES
+                   or n in GIT_TRANSPORT_ENV_NAMES
                    or n.startswith(GIT_CONFIG_ENV_PREFIXES)))
     if names:
         return f"переменные окружения {', '.join(names)}"
@@ -731,6 +808,28 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
             return f"в конфигурации клона задан remote.origin.{key}"
     if _raw_config(cwd, "--local", "--get-all", "push.pushOption"):
         return "в конфигурации клона задан push.pushOption"
+    return _config_redirect_refusal(entry, cwd)
+
+
+def _config_redirect_refusal(entry: dict, cwd: Path) -> str | None:
+    """Причина отказа по действующей конфигурации вызова `cwd` (все слои,
+    включая конфигурацию рабочей копии; SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6,
+    требование 12): `remote.origin.url` не адрес записи, ключи
+    `PUSH_REDIRECT_CONFIG`, `core.hooksPath` задан и не каталог хуков
+    пульта проекта. Незаданный `core.hooksPath` не отказ: отправка пульта
+    несёт свой `-c`, а снятый ролью путь ловит строка `doctor`."""
+    origin = _raw_config(cwd, "--get", "remote.origin.url")
+    if url_key(origin) != url_key(str(entry.get("url") or "")):
+        return (f"в конфигурации remote.origin.url = {origin or '(не задан)'}"
+                f" — не адрес записи проекта")
+    found = _raw_config(cwd, "--get-regexp", PUSH_REDIRECT_CONFIG)
+    if found:
+        return f"в конфигурации задан {found.splitlines()[0].split(' ')[0]}"
+    expected = project_hooks_path(entry)
+    for value in _raw_config(cwd, "--get-all", "core.hooksPath").splitlines():
+        if not same_dir(value, expected):
+            return (f"в конфигурации core.hooksPath = {value} — не каталог "
+                    f"хуков пульта проекта {expected}")
     return None
 
 
@@ -1024,6 +1123,11 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
                 return plan
         plan.sent =[(s["task"]["id"], s["src"], s["name"]) for s in branches]
     reset = list(PUSH_RESET_CONFIG) if whitelisted else []
+    if whitelisted and targets.merged_by_project_people(entry):
+        # Хук белого списка срабатывает и тогда, когда роль сняла или
+        # подменила постоянный `core.hooksPath` клона (SPEC
+        # 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 6).
+        reset += ["-c", f"core.hooksPath={project_hooks_path(entry)}"]
     rest = list(args[index + 1:])
     for spec, pos in zip(specs, positions[1:]):
         if "explicit" in spec:
@@ -1069,7 +1173,8 @@ def git(*args: str, task_id: str | None = None) -> subprocess.CompletedProcess:
         if refusal is not None:
             return subprocess.CompletedProcess(args, 1, "", refusal)
         if token is not None:
-            env = hosting_env(env, token)
+            env = hosting_env(env, token,
+                              url_host(str(project[1].get("url") or "")))
     try:
         res = subprocess.run(["git", *args], cwd=config.ROOT, env=env,
                              capture_output=True, text=True)
