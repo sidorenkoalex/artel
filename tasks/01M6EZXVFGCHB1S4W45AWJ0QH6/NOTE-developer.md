@@ -1,24 +1,23 @@
 # Записка developer — 01M6EZXVFGCHB1S4W45AWJ0QH6
 
 ## Выяснено
-- Итерация 3 (возврат из merge_gate, 4 пункта):
-  (1) `remote.origin.url` теперь читается `--get-all` по всем слоям, нужно ровно одно значение = url записи;
-  (2) `gitcmd._strict_config`: код 1 — ключа нет, иной код/OSError — `_ConfigUnread` → отказ «не прочитана»
-  (все сверки `_whitelist_refusal` + псевдоним клона под белым списком);
-  (3) `GIT_SSH` в `GIT_TRANSPORT_ENV_NAMES`;
-  (4) `gitcmd._push_policy_refusal`: перед отправкой target-human пульт пишет эталон политики, читает обратно;
-  сбой записи/чтения → отказ до git с путём. Эталон/путь перенесены в gitcmd (`push_policy_text`/`push_policy_path`).
-- Строгое «файла нет → отказ» краснит десятки существующих тестов (test_gitcmd_push_point, MR-стенды: клоны без
-  ensure_clone) — поэтому отсутствующий файл создаётся записью; толкование записано в PLAN шаг 8.
-- 10 новых тестов в tests/test_push_hook_stand.py, 4 мутации — все красные. 216 + 378 passed, plank 68.
+- Итерация 4 (REVIEW iter 3: R3-F1 major, R3-F2 minor):
+  - `gitcmd.write_push_policy_file(path, data)`: mkstemp в том же каталоге + `os.replace` — символическая ссылка
+    на месте `artel-push-policy` заменяется, цель не трогается. Используют `_push_policy_refusal` и
+    `workspace.write_push_policy` (ensure_clone, doctor --fix).
+  - doctor `clone-push-hook`: `path.is_symlink()` → finding «символическая ссылка на <цель>» (fail); --fix пишет
+    тем же помощником → обычный файл.
+  - R3-F2: пробел в `deleting = "--delete"`.
+- Следствие: файл mode 0 теперь заменяется (rename требует только права на каталог), поэтому свой тест итерации 3
+  `test_unusable_policy_refuses_before_git[unreadable]` переделан в `[unwritable-dir]` (каталог .git 0o555).
+- 3 новых теста `*symlink*` в tests/test_push_hook_stand.py; мутации красные. 332 passed затронутых модулей, plank 68.
+- Реестр REVIEW: R3-F1, R3-F2 размечены `fixed`.
 
 ## Не сработало
-- `sed -i`, `ls`, `cd … && grep` требуют подтверждения — мутации Edit'ом, откат обратным Edit'ом (код не закоммичен,
-  `git checkout --` снёс бы работу).
+- Многострочный Bash (cp + heredoc python) требует подтверждения — мутации Edit'ом.
 
 ## Где остановился
-- Шаг завершён, PLAN.md status: ready (шаг 8). Карта перегенерирована.
+- Шаг завершён, PLAN.md status: ready (шаг 9), карта перегенерирована.
 
 ## Чего не хватило
-- Явного текста решения Оператора по п. (4) — есть только формулировка возврата; два решения в ней частично
-  противоречат друг другу и SPEC («тесты зелёные без правки»).
+- Ничего существенного.
