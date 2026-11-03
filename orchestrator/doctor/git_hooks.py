@@ -279,7 +279,12 @@ def _push_hook_findings(name: str, clone: Path, reference: dict) -> list:
             want = None
             findings.append(f"эталон файла политики не собран: {exc}")
         if want is not None:
-            if not path.is_file():
+            # Сумма по цели ссылки дала бы эталон — ссылка сама расхождение
+            # (REVIEW R3-F1); `--fix` заменяет её обычным файлом.
+            if path.is_symlink():
+                findings.append(f"файл политики {path} — символическая ссылка "
+                                f"на {os.readlink(path)}")
+            elif not path.is_file():
                 findings.append(f"файла политики {path} нет")
             else:
                 try:

@@ -131,7 +131,8 @@ def write_push_policy(clone: Path, target: str) -> str | None:
     if error is not None:
         return error
     try:
-        path.write_bytes(push_policy_text(target, entry).encode("utf-8"))
+        gitcmd.write_push_policy_file(
+            path, push_policy_text(target, entry).encode("utf-8"))
     except OSError as exc:
         return f"файл политики {path} не записан: {exc}"
     return None

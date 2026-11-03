@@ -409,19 +409,22 @@ def test_push_rewrites_policy_from_entry(stand, damage):
     assert policy.read_bytes() == reference
 
 
-@pytest.mark.parametrize("damage", ["unreadable", "directory"])
+@pytest.mark.parametrize("damage", ["unwritable-dir", "directory"])
 def test_unusable_policy_refuses_before_git(stand, damage):
-    """Файл политики, который пульт не может записать или прочитать (нет
-    прав, на его месте каталог), — отказ отправки до вызова git, причина
-    называет путь файла.
+    """Файл политики, который пульт не может записать (общий каталог git
+    закрыт на запись, на месте файла каталог), — отказ отправки до вызова
+    git, причина называет путь файла. Нечитаемый файл в закрытом на запись
+    каталоге пульт заменить не может — тот же отказ.
 
     Ловит мутацию: сбой записи/чтения файла политики в `gitcmd` не
     сверяется — отказ остаётся только хуку, причина пульта его не называет.
     """
     clone, branch = stand.ready_push()
-    policy = clone / ".git" / workspace.PUSH_POLICY_NAME
-    if damage == "unreadable":
+    common = clone / ".git"
+    policy = common / workspace.PUSH_POLICY_NAME
+    if damage == "unwritable-dir":
         policy.chmod(0)
+        common.chmod(0o555)
     else:
         policy.unlink()
         policy.mkdir()
@@ -429,8 +432,53 @@ def test_unusable_policy_refuses_before_git(stand, damage):
         assert_refused(stand, gitcmd.in_repo(clone, "push", "origin", branch),
                        str(policy))
     finally:
-        if damage == "unreadable":
+        if damage == "unwritable-dir":
+            common.chmod(0o755)
             policy.chmod(0o644)
+
+
+def plant_policy_symlink(policy: Path, victim: Path) -> bytes:
+    """Ссылка на месте файла политики — на `victim` с эталонным текстом
+    политики, как сделала бы роль; возвращает содержимое `victim`."""
+    victim.write_bytes(policy.read_bytes() + b"# victim\n")
+    policy.unlink()
+    policy.symlink_to(victim)
+    return victim.read_bytes()
+
+
+def test_push_replaces_policy_symlink_not_its_target(stand, tmp_path):
+    """Символическая ссылка роли на месте файла политики: отправка пульта
+    заменяет саму ссылку обычным файлом-эталоном, цель ссылки не меняется
+    (REVIEW R3-F1).
+
+    Ловит мутацию: файл политики пишется `write_bytes` по пути — запись идёт
+    по ссылке и затирает чужой файл (исходник пульта, БД, файл Оператора).
+    """
+    clone, branch = stand.ready_push()
+    policy = clone / ".git" / workspace.PUSH_POLICY_NAME
+    reference = policy.read_bytes()
+    victim = tmp_path / "victim"
+    before = plant_policy_symlink(policy, victim)
+    res = gitcmd.in_repo(clone, "push", "origin", branch)
+    assert res.returncode == 0 and len(stand.pushes) == 2, res.stderr
+    assert victim.read_bytes() == before
+    assert not policy.is_symlink() and policy.read_bytes() == reference
+
+
+def test_write_push_policy_replaces_symlink_not_its_target(stand, tmp_path):
+    """`workspace.write_push_policy` (`ensure_clone`, `doctor --fix`) тоже не
+    идёт по ссылке: ссылка заменена эталоном, цель не тронута.
+
+    Ловит мутацию: `write_push_policy` пишет `write_bytes` по пути ссылки.
+    """
+    name, clone = stand.project(TARGET_HUMAN)
+    policy = clone / ".git" / workspace.PUSH_POLICY_NAME
+    reference = policy.read_bytes()
+    victim = tmp_path / "victim"
+    before = plant_policy_symlink(policy, victim)
+    assert workspace.write_push_policy(clone, name) is None
+    assert victim.read_bytes() == before
+    assert not policy.is_symlink() and policy.read_bytes() == reference
 
 
 # --- строка doctor clone-push-hook (требования 8, 9) ------------------------
@@ -484,6 +532,29 @@ def test_push_hook_line_fails_on_damage_and_fix_restores(stand, tmp_path, damage
     assert Path(out(clone, "config", "--get", "core.hooksPath")) == hooks
     repaired = push_line()
     assert repaired.status == "ok", f"{damage}: {repaired.detail}"
+
+
+def test_push_hook_line_fails_on_policy_symlink_and_fix_replaces(stand, tmp_path):
+    """Символическая ссылка на месте файла политики — `clone-push-hook`
+    `fail`, даже если цель ссылки несёт эталон; `doctor --fix` заменяет
+    ссылку обычным файлом-эталоном, цель не тронута, строка — `ok`.
+
+    Ловит мутацию: строка сверяет сумму по цели ссылки (ссылка на эталон —
+    `ok`) или `--fix` пишет политику по ссылке.
+    """
+    name, clone = stand.project(TARGET_HUMAN)
+    policy = clone / ".git" / workspace.PUSH_POLICY_NAME
+    reference = policy.read_bytes()
+    victim = tmp_path / "victim"
+    victim.write_bytes(reference)
+    policy.unlink()
+    policy.symlink_to(victim)
+    broken = push_line()
+    assert broken.status == "fail", broken.detail
+    assert "символическая ссылка" in broken.detail and str(victim) in broken.detail
+    doctor._fix_project_clones()
+    assert not policy.is_symlink() and policy.read_bytes() == reference
+    assert push_line().status == "ok", push_line().detail
 
 
 def test_worktree_hooks_path_fails_with_value(stand, tmp_path):

@@ -5,6 +5,7 @@ import re
 import shlex
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -315,6 +316,28 @@ def push_policy_path(cwd: Path) -> tuple[Path | None, str | None]:
     return Path(cwd) / res.stdout.strip() / PUSH_POLICY_NAME, None
 
 
+def write_push_policy_file(path: Path, data: bytes) -> None:
+    """Пишет файл политики, не идя по символической ссылке на его месте
+    (REVIEW R3-F1): общий каталог git клона контролирует роль, и ссылка
+    `artel-push-policy` → чужой файл иначе дала бы ей перезапись любого
+    файла, доступного пульту. Временный файл того же каталога (`mkstemp` —
+    `O_EXCL`, по ссылке не открывает) переименовывается на место пути:
+    `os.replace` заменяет саму ссылку, а не её цель. Каталог на месте файла
+    — `OSError`, как и прочие сбои записи."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _push_policy_refusal(project: str, entry: dict, cwd: Path) -> str | None:
     """Файл политики клона проекта `target-human` перед отправкой пульта
     (решение Оператора при возврате с приёмки): пульт перезаписывает его
@@ -327,7 +350,7 @@ def _push_policy_refusal(project: str, entry: dict, cwd: Path) -> str | None:
         return f"файл политики не найден — {error}"
     expected = push_policy_text(project, entry).encode("utf-8")
     try:
-        path.write_bytes(expected)
+        write_push_policy_file(path, expected)
     except OSError as exc:
         return f"файл политики {path} не записан по записи проекта: {exc}"
     try:
@@ -1182,7 +1205,7 @@ def _push_plan(args: list, cwd: Path, env: dict | None,
             reason = _push_policy_refusal(project, entry, cwd)
         if reason is not None:
             return _refuse(plan, project, related, env, task_id, reason)
-    deleting ="--delete" in flags or "-d" in flags or any(
+    deleting = "--delete" in flags or "-d" in flags or any(
         s["colon"] for s in specs)
     branches = [s for s in specs if s["kind"] == "branch"
                 and s["task"] is not None and not s["colon"]]

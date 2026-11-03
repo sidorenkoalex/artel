@@ -1,5 +1,5 @@
 ---
-built_at_sha: 8e9cf85c4609350351ec0d087b10aa3c28709829
+built_at_sha: 6d68ee1e2dbb39a2fcd57dde7834f4adfc1aa8e3
 ---
 
 # Codebase-map пульта
@@ -1408,6 +1408,7 @@ built_at_sha: 8e9cf85c4609350351ec0d087b10aa3c28709829
 - `show`
 - `url_host`
 - `url_key`
+- `write_push_policy_file`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/forge.py`, `orchestrator/fsm.py`, `orchestrator/keychain.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/targets.py`
 
@@ -12443,6 +12444,7 @@ built_at_sha: 8e9cf85c4609350351ec0d087b10aa3c28709829
 - `git`
 - `hooks_pairs`
 - `out`
+- `plant_policy_symlink`
 - `push_line`
 - `stand`
 - `strip_exec`
@@ -12456,12 +12458,15 @@ built_at_sha: 8e9cf85c4609350351ec0d087b10aa3c28709829
 - `test_human_pre_commit_refuses_main_commit_without_marker`
 - `test_human_push_carries_hooks_path_operator_does_not`
 - `test_push_hook_line_fails_on_damage_and_fix_restores`
+- `test_push_hook_line_fails_on_policy_symlink_and_fix_replaces`
 - `test_push_hook_line_skip_without_reference_and_absent_without_clones`
+- `test_push_replaces_policy_symlink_not_its_target`
 - `test_push_rewrites_policy_from_entry`
 - `test_second_origin_url_refuses_before_git`
 - `test_transport_env_refuses_before_git`
 - `test_unusable_policy_refuses_before_git`
 - `test_worktree_hooks_path_fails_with_value`
+- `test_write_push_policy_replaces_symlink_not_its_target`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/keychain.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`
 
