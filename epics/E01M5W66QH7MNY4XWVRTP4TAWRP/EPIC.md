@@ -30,8 +30,8 @@
 | 01M6AB4VE2R0Q2V5D4MMJGNGH7 | GitLab Б2.2: команда mr-sync — сверка MR и нахождения правки в base, закрытие done по подтверждению Оператора | done | — |
 | 01M6BMG29KZV1RX21HFAXZG3CM | GitLab: гейт неослабления по исходам для full_suite ci — на verifying по отчёту CI отправленной головы | done | — |
 | 01M6EXF3TMNRKCZH8CS9BXXG1Z | GitLab Б2.3: хук pre-push в клоне, сверки отправки, строки doctor, отказ при сбое, открытие gitlab и target-human | killed | divided |
-| 01M6EZXVFG405Y1BTFDSGBKS8E | GitLab Б2.3-4: открытие gitlab и target-human, тексты отказа, порядок при инциденте | in_dev | — |
-| 01M6EZXVFGCHB1S4W45AWJ0QH6 | GitLab Б2.3-2: хук pre-push в клоне, его строка doctor, клон подмодулей и сверки перед отправкой | in_dev | — |
+| 01M6EZXVFG405Y1BTFDSGBKS8E | GitLab Б2.3-4: открытие gitlab и target-human, тексты отказа, порядок при инциденте | merge_gate | — |
+| 01M6EZXVFGCHB1S4W45AWJ0QH6 | GitLab Б2.3-2: хук pre-push в клоне, его строка doctor, клон подмодулей и сверки перед отправкой | verifying | — |
 | 01M6EZXVFGH5Z2876XWMQG35FP | GitLab Б2.3-3: строки doctor проекта и forge-probe по ветке или коммиту | done | — |
-| 01M6EZXVFGXC6WBDA9QJESAZRW | GitLab Б2.3-1: отказ при сбое вместо пропуска | tests_writing | — |
-| 01M6F3DKM3KB2JYMD0J50YRBPE | GitLab В2: профиль проверок verify — ручные проверки human:<имя>, команды verify-ok и verify-fail | spec_writing | — |
+| 01M6EZXVFGXC6WBDA9QJESAZRW | GitLab Б2.3-1: отказ при сбое вместо пропуска | done | — |
+| 01M6F3DKM3KB2JYMD0J50YRBPE | GitLab В2: профиль проверок verify — ручные проверки human:<имя>, команды verify-ok и verify-fail | in_dev | — |
