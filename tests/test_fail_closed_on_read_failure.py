@@ -3,21 +3,24 @@
 отправки; правило признака (а) `mr-sync` (требование 9)."""
 import sqlite3
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
 from orchestrator import (config, forge, fsm_merge_gate, github_adapter,
-                          gitcmd, idgen, store, targets)
+                          gitcmd, idgen, keychain, repo_context, store,
+                          targets)
 
 EXTERNAL = "qfailclosed"
 
 
-def _task(target: str, state: str = "merge_gate") -> str:
+def _task(target: str, state: str = "merge_gate",
+          branch: str | None = None) -> str:
     task_id = idgen.new_task_id()
     store.insert_task(store.db(), task_id, "Задача", state,
-                      f"task/{task_id.lower()}-x", target,
+                      branch or f"task/{task_id.lower()}-x", target,
                       config.DEFAULT_BUDGET_USD)
     return task_id
 
@@ -74,6 +77,38 @@ def test_ensure_forge_draft_mr_unread_entry_returns_reason(monkeypatch):
         mock.Mock(), "T1", {"is_canary": 0, "target": EXTERNAL})
     assert reason == f"{github_adapter.ENTRY_UNREAD_DETAIL}: сбой чтения"
     open_mr.assert_not_called()
+
+
+@pytest.mark.parametrize("gate", ["target-human", "operator"])
+def test_merge_gate_unread_entry_refuses_external(real_git, monkeypatch, gate):
+    """Гейт мержа задачи внешнего проекта при сбое читателя записи `people_entry` — `("stopped",)` и одна запись `PEOPLE_REFUSED_ACTION`, без слияния и отправки.
+
+    Ловит мутацию: место вызова `people_entry` в `_cmd_approve_merge_gate`
+    не ловит `TargetsError` (`except` иного класса) — исключение летит из
+    гейта; либо сбой ведёт путём слияния в `base` — записи отказа нет.
+    """
+    from tests import test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery as delivery
+    stand = delivery.Stand(real_git)
+    stand.record(gate=gate, forge_name="github" if gate == "operator"
+                 else "gitlab")
+    task_id = stand.new_task(state="merge_gate", published=True)
+    monkeypatch.setattr(github_adapter, "_people_entry_record",
+                        _raise(targets.TargetsError("сбой чтения")))
+    stand.reset_spies()
+    before = len(stand.rows(task_id))
+    row = dict(store.get_task(stand.conn, task_id))
+    out = fsm_merge_gate._cmd_approve_merge_gate(
+        stand.conn, task_id, "merge_gate", store.get_task(stand.conn, task_id))
+    new = [(r["action"], r["detail"] or "")
+           for r in stand.rows(task_id)[before:]]
+    assert out == ("stopped",), new
+    assert len(new) == 1, new
+    assert new[0][0] == fsm_merge_gate.PEOPLE_REFUSED_ACTION, new
+    assert new[0][1].startswith(
+        f"{github_adapter.ENTRY_UNREAD_DETAIL}: сбой чтения"), new
+    assert dict(store.get_task(stand.conn, task_id)) == row
+    assert stand.pushes == []
+    assert [c for c in stand.git_calls if delivery.git_sub(c) == "merge"] == []
 
 
 # ------------------------------------------- гейт мержа (треб. 3, 8)
@@ -173,6 +208,155 @@ def test_in_flight_refusal_code_is_distinct():
     plan = gitcmd._PushPlan([], config.ROOT)
     assert plan.code == gitcmd.PUSH_REFUSAL
     assert gitcmd._refused(["git"], "отказ").returncode == gitcmd.PUSH_REFUSAL
+
+
+# Стенд отправки: запись проекта в локальном слое, настоящий клон по адресу
+# `repo_context.clone_path`; `git push` шпион записывает и не исполняет.
+
+REAL_RUN = subprocess.run
+REAL_POPEN = subprocess.Popen
+
+
+@pytest.fixture
+def pushes(initialized_tmp_root, monkeypatch) -> list:
+    sent: list = []
+
+    def is_push(argv) -> bool:
+        return isinstance(argv, list) and argv[:1] == ["git"] and "push" in argv
+
+    def run(argv, *args, **kwargs):
+        if is_push(argv):
+            sent.append(list(argv))
+            empty = "" if kwargs.get("text") else b""
+            return subprocess.CompletedProcess(argv, 0, empty, empty)
+        return REAL_RUN(argv, *args, **kwargs)
+
+    def popen(argv, *args, **kwargs):
+        if is_push(argv):
+            sent.append(list(argv))
+            raise OSError("отправка процессом Popen не исполняется")
+        return REAL_POPEN(argv, *args, **kwargs)
+
+    monkeypatch.delenv(config.ARTEL_TASK_ENV, raising=False)
+    monkeypatch.setenv(config.ARTEL_ROLE_ENV, "")
+    monkeypatch.setattr(keychain, "token", lambda *a, **k: "tok")
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return sent
+
+
+def _repo(path: Path, origin_url: str) -> Path:
+    def git(*args):
+        REAL_RUN(["git", *args], cwd=path, check=True, capture_output=True)
+    path.mkdir(parents=True)
+    git("init", "-q", "-b", config.MAIN_BRANCH)
+    git("config", "user.email", "artel@example.invalid")
+    git("config", "user.name", "artel tests")
+    git("commit", "-q", "--allow-empty", "-m", "init")
+    git("remote", "add", "origin", origin_url)
+    git("branch", "feature/x")
+    return path
+
+
+def _project_clone(gate: str = "operator", policy: str = "") -> Path:
+    """Запись проекта `EXTERNAL` (`forge: github`, гейт `gate`) и его клон."""
+    url = f"https://localhost/team/{EXTERNAL}"
+    local = targets.local_path()
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(
+        f"targets:\n  {EXTERNAL}:\n"
+        f"    description:\n      base: {config.MAIN_BRANCH}\n"
+        f"      test_profile:\n        command: [python3, -m, pytest]\n"
+        f"        long_lived_dir: tests\n"
+        f"        long_lived_name: test_<id>_<name>.py\n"
+        f"    policy:\n      no_paths: []\n      project_skills: []\n"
+        f"      merge_gate: {gate}\n"
+        f"      weakening_scope: [tests/**/*.py]\n"
+        f"      mutation_claim_scope: [tests/test_*.py]\n{policy}"
+        f"    machine:\n      forge: github\n"
+        f"      url: {url}\n"
+        f"      token_slot: {EXTERNAL}-token\n", encoding="utf-8")
+    return _repo(repo_context.clone_path(EXTERNAL), url)
+
+
+def _fail_first(monkeypatch, name: str, exc: Exception) -> list:
+    """Первый вызов `store.<name>` бросает `exc`, следующие — настоящие."""
+    real = getattr(store, name)
+    calls: list = []
+
+    def wrapper(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise exc
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, name, wrapper)
+    return calls
+
+
+def test_in_flight_limit_refusal_carries_code_from_git_and_in_repo(pushes):
+    """Отказ пределом `max_in_flight` из `gitcmd.in_repo` и `gitcmd.git` несёт код `IN_FLIGHT_REFUSAL`, `git push` не вызван.
+
+    Ловит мутацию: убрано `plan.code = IN_FLIGHT_REFUSAL` в `_push_plan` —
+    отказ пределом снова с кодом `PUSH_REFUSAL` (1), `github_adapter` не
+    отличит его от прочих отказов.
+    """
+    clone = _project_clone(policy="      max_in_flight: 1\n")
+    _task(EXTERNAL, "in_dev", "feature/x")
+    other = _task(EXTERNAL, "in_dev")
+    store.journal(store.db(), other, "orchestrator", gitcmd.PUSH_SENT_ACTION,
+                  f"{'a' * 40} {store.get_task(store.db(), other)['branch']}")
+    for res in (gitcmd.in_repo(clone, "push", "origin", "feature/x"),
+                gitcmd.git("-C", str(clone), "push", "origin", "feature/x")):
+        assert gitcmd.IN_FLIGHT_LIMIT_REASON in (res.stderr or ""), res
+        assert res.returncode == gitcmd.IN_FLIGHT_REFUSAL, res
+    assert pushes == []
+
+
+def test_push_plan_in_flight_db_error_external_refused(pushes, monkeypatch):
+    """`sqlite3.Error` в счёте `max_in_flight` при отправке проекта вне артели — отказ с причиной, `git push` не вызван.
+
+    Ловит мутацию: в `_push_plan` условие `project != config.DEFAULT_TARGET`
+    у `except sqlite3.Error` заменено на `False` — `waiting = None`, предел
+    пропущен, шпион видит `git push`.
+    """
+    clone = _project_clone(policy="      max_in_flight: 1\n")
+    _task(EXTERNAL, "in_dev", "feature/x")
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(args)
+        raise sqlite3.OperationalError("сбой")
+
+    monkeypatch.setattr(store, "last_task_step_of", fail)
+    res = gitcmd.in_repo(clone, "push", "origin", "feature/x")
+    assert calls, "стенд: счёт max_in_flight не читал журнал"
+    assert res.returncode != 0, res
+    assert gitcmd.IN_FLIGHT_UNCHECKED in (res.stderr or ""), res
+    assert pushes == []
+
+
+def test_in_repo_db_error_refuses_external_not_artel(pushes, monkeypatch):
+    """`sqlite3.Error` в чтении `in_repo` (ветки задач проекта): отправка проекта вне артели — отказ, `git push` не вызван; отправка артели идёт.
+
+    Ловит мутацию: в `_awaiting_human_refusal` условие `project ==
+    config.DEFAULT_TARGET` заменено на `True` — сбой БД пропускает и
+    внешний проект, шпион видит его `git push`.
+    """
+    clone = _project_clone()
+    _task(EXTERNAL, "in_dev", "feature/x")
+    calls = _fail_first(monkeypatch, "project_tasks",
+                        sqlite3.OperationalError("сбой"))
+    res = gitcmd.in_repo(clone, "push", "origin", "feature/x")
+    assert calls, "стенд: in_repo не читал БД"
+    assert res.returncode != 0 and gitcmd.DB_UNREAD in (res.stderr or ""), res
+    assert pushes == []
+    artel = _repo(Path(config.ROOT) / "artel-repo",
+                  "https://localhost/team/artel")
+    _fail_first(monkeypatch, "project_tasks", sqlite3.OperationalError("сбой"))
+    res = gitcmd.in_repo(artel, "push", "origin", "feature/x")
+    assert res.returncode == 0, res
+    assert len(pushes) == 1
 
 
 def test_url_destination_unread_entries_is_not_artel(monkeypatch):
