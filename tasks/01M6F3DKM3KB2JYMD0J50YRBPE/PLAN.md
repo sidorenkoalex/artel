@@ -2,7 +2,7 @@
 task: 01M6F3DKM3KB2JYMD0J50YRBPE
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -145,18 +145,5 @@ index 1728829c5..7c647d42f 100644
 - Подтяжка main в ветку задачи после фиксации долгоживущих тестов может сделать их фикстуру устаревшей (здесь `SUPPORTED_PAIRS` из 01M6EZXVFG405Y1BTFDSGBKS8E), а правка — только `amend-tests`: класс «зафиксированная фикстура против подтянутого main» стоит отдельной проверки пульта на подтяжке (прогон долгоживущих файлов задачи на голове после подтяжки).
 - Сторож `conftest.py` считает полным прогоном `pytest.main` из `python -c` с одним файлом — временную подмену для диагностики пришлось делать плагином `-p` в корне рабочей копии.
 
-## Эскалация
-Код `тест-навязывает-устройство` не подходит: это расхождение зафиксированного долгоживущего файла с main, подтянутым в ветку после его фиксации.
-
-**Вопросы**
-1. (блокирует) `tests/test_01m6f3dkm3kb2jymd0j50yrbpe_verify_flow.py` красный в трёх методах: `test_ac16_auto_stops_on_wait_without_alert_and_releases_lease`, `test_ac17_red_ci_child_stop_still_holds_task[с verify]`, `test_ac17_red_ci_child_stop_still_holds_task[без verify]`. Причина: фикстура `ENTRY` — `forge: gitlab` + `merge_gate: operator`, `Stand` подменяет только `targets.SUPPORTED_FORGES`; `targets.SUPPORTED_PAIRS` = (github, operator), (gitlab, target-human) пришёл в ветку подтяжкой main (`519cfae33`; код 01M6EZXVFG405Y1BTFDSGBKS8E, коммит `2c5fa190d`) после фиксации тестов (`0da03dfc4`), и `auto` отказывает «гейт мержа operator не поддержан для хостинга gitlab» до опроса `verifying`. Варианты правки командой `amend-tests`:
-   - (а) **дефолт**: в `Stand.__init__` рядом с подменой `SUPPORTED_FORGES` добавить `mock.patch.object(targets, "SUPPORTED_PAIRS", targets.SUPPORTED_PAIRS | {("gitlab", "operator")})`. Проверено: с такой подменой (временный плагин pytest, тест не правился) файл — 32/32 зелёные;
-   - (б) фикстура `ENTRY` с `merge_gate: target-human` — пара поддержана без подмены, но включает ветки доставки через MR людей проекта (`awaiting_human`, открытие MR через `forge`), которые этим файлом не проверялись; не прогонялось.
-   Дефолт при молчании — (а).
-
-**Контекст**
-- Реализация закоммичена (81719054f), требования 1–8: `verify_record` 19/19; `verify_flow` 29/32 (красны только три `auto`-сценария с неподдержанной парой), 32/32 с подменой пары; свои тесты `tests/test_verify_profile.py` 4/4; связанные модули — 390 зелёных; `tests/test_invariants.py` с приложением зелёный.
-- Код под тест не подгонялся: ослабить отказ `runner.refuse_unsupported_project` значило бы ослабить защиту 01M6EZXVFG405Y1BTFDSGBKS8E вне зоны задачи.
-
-**Блокирует**
-- Зелёный прогон долгоживущего файла задачи на выходе `in_dev -> verifying`. После правки теста по варианту (а) код менять не нужно — PLAN сдаётся `ready` без изменений.
+## Ответ на эскалацию (ANSWER-2)
+Оператор выбрал вариант (а): подмена `targets.SUPPORTED_PAIRS | {("gitlab", "operator")}` добавлена в стенд `tests/test_01m6f3dkm3kb2jymd0j50yrbpe_verify_flow.py` командой `amend-tests`, утверждения не менялись. Код не менялся. Прогон 04.11: `verify_flow` + `verify_record` + `tests/test_verify_profile.py` — 55 passed.
