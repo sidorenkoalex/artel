@@ -484,6 +484,12 @@ class FsmTest(unittest.TestCase):
             # id — по задаче проекта `target-human` в `awaiting_human`
             # песочницы (`mr_sync_call`), а не пустым отказом.
             ("mr-sync", self.mr_sync_call),
+            # Ручная проверка профиля `verify` (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE,
+            # требование 7): по задаче проекта с `verify: [human:stand]` в
+            # ожидании отметки по текущей голове (`verify_call`), а не
+            # отказом «не в verifying».
+            ("verify-ok", lambda: self.verify_call("verify-ok")),
+            ("verify-fail", lambda: self.verify_call("verify-fail")),
         ]
 
     # ------------------------------------- эпик свипа (ADR-0028 п. 17)
@@ -633,6 +639,63 @@ class FsmTest(unittest.TestCase):
         synced = [r for r in store.task_steps(conn, human)[before:]
                   if r["action"] == mr_sync.SYNC_ACTION]
         assert synced, f"mr-sync не сверил задачу {human} проекта target-human"
+
+    VERIFY_PROJECT = "sweepverify"
+    VERIFY_SHA = "c" * 40
+
+    def verify_call(self, command: str) -> None:
+        """`verify-ok`/`verify-fail` по песочнице, где у проекта профиль
+        `verify: [human:stand]`, а его задача ждёт отметки по текущей голове
+        (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требование 7): команда обязана
+        сработать — без отказа (код выхода 0) и с эффектом: `verify-ok` —
+        отметка в БД и `review`, `verify-fail` — `in_dev`. Задача свипа —
+        артели: профиля у неё нет. Перед вызовом — новый визит `verifying` с
+        записью ожидания и нулевой счётчик возвратов (иначе свип по всем
+        состояниям довёл бы `verify-fail` до предела); запись проекта и
+        голова ветки — подмены на время вызова."""
+        from orchestrator import targets, verify
+        conn = store.db()
+        task = getattr(self, "_verify_task", None)
+        if task is None:
+            task = self._verify_task = idgen.new_task_id()
+            store.insert_task(conn, task, "Задача ручной проверки",
+                              "verifying", f"task/{task.lower()}-verify",
+                              self.VERIFY_PROJECT, 1.0)
+        store.update_task(conn, task, state="verifying", verify_fails=0)
+        store.journal(conn, task, "fsm", verify.VISIT_ACTION, "свип")
+        store.journal(conn, task, "fsm", verify.WAIT_ACTION,
+                      verify.wait_text("stand", self.VERIFY_SHA))
+        visit = store.last_task_step_of(conn, task, (verify.VISIT_ACTION,))
+        entry = {"forge": "gitlab", "base": config.MAIN_BRANCH,
+                 "url": f"https://localhost/grp/{self.VERIFY_PROJECT}",
+                 "token_slot": "sweep-token", "no_paths": [],
+                 "project_skills": [], "merge_gate": "target-human",
+                 "verify": ["human:stand"]}
+        real_target = targets.target
+
+        def target(name):
+            return dict(entry) if name == self.VERIFY_PROJECT else real_target(name)
+
+        with mock.patch.object(targets, "target", target), \
+                mock.patch.object(verify, "head",
+                                  lambda task_id, branch: self.VERIFY_SHA):
+            try:
+                if command == "verify-ok":
+                    verify.cmd_verify_ok(task, "stand", self.VERIFY_SHA,
+                                         "стенд проверен")
+                else:
+                    verify.cmd_verify_fail(task, "stand", "стенд не прошёл")
+            except SystemExit as exc:
+                if exc.code not in (None, 0):
+                    raise AssertionError(f"{command} отказал: {exc.code}")
+        state = store.get_task(conn, task)["state"]
+        if command == "verify-ok":
+            marked = store.verify_marked_names(conn, task, self.VERIFY_SHA,
+                                               visit["id"])
+            assert "stand" in marked, f"verify-ok не записал отметку {task}"
+            assert state == "review", f"verify-ok: {task} в {state}, не в review"
+        else:
+            assert state == "in_dev", f"verify-fail: {task} в {state}, не в in_dev"
 
     def run_command(self, call) -> tuple[str, mock.Mock]:
         """Прогон команды с подменённым агентом; SystemExit — тоже исход."""
