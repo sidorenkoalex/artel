@@ -1,0 +1,23 @@
+#!/bin/sh
+# pre-commit клона проекта target-human (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6,
+# требование 2): поведение прежнего scripts/git-hooks/pre-commit — коммит
+# на ветке main проходит только с маркером пульта ARTEL_PULT_GIT=1 в
+# окружении. Клон target-human берёт хуки из этого каталога (core.hooksPath),
+# и без этого файла перевод клона на отдельный каталог снял бы защиту main.
+#
+# Только POSIX sh, git и встроенные команды оболочки: PATH роли ограничен
+# манифестом стека, посторонних интерпретаторов там нет.
+
+if [ "${ARTEL_PULT_GIT:-}" = "1" ]; then
+    exit 0
+fi
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+if [ "$branch" != "main" ]; then
+    exit 0
+fi
+
+printf '%s\n' \
+    "pre-commit: коммит в main клона проекта — только командой пульта" \
+    "обход по решению Оператора: ARTEL_PULT_GIT=1" >&2
+exit 1
