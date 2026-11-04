@@ -43,7 +43,9 @@ def cmd_task_rm(rest: list) -> None:
         item, reason = _check(raw, roots, task_id, in_branch)
         if reason is not None:
             refusals.append(f"{raw}: {reason}")
-        else:
+        elif item not in planned:
+            # Повтор пути (`f f`, `f ./f`) — один файл: второй `unlink`
+            # упал бы трассировкой после первого удаления.
             planned.append(item)
     if refusals:
         sys.exit("task-rm: отказ всей команды, ни один файл не удалён —\n  "

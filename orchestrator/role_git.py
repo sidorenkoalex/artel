@@ -135,9 +135,8 @@ def informational(opts: list, args: list, idx: int) -> bool:
     return idx >= len(args) or args[idx] in INFO_COMMANDS
 
 
-def command_line_config(opts: list) -> list:
-    """[(ключ, значение)…] конфигурации из командной строки и окружения:
-    `-c`, `--config-env`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`."""
+def option_config(opts: list) -> list:
+    """[(ключ, значение)…] из опций `-c` и `--config-env` разбора `parse`."""
     entries = []
     for name, value in opts:
         if value is None:
@@ -148,6 +147,13 @@ def command_line_config(opts: list) -> list:
         elif name == "--config-env":
             key, _eq, var = value.partition("=")
             entries.append((key.lower(), os.environ.get(var, "")))
+    return entries
+
+
+def command_line_config(opts: list) -> list:
+    """[(ключ, значение)…] конфигурации из командной строки и окружения:
+    `-c`, `--config-env`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`."""
+    entries = option_config(opts)
     try:
         for token in shlex.split(os.environ.get("GIT_CONFIG_PARAMETERS", "")):
             key, _eq, val = token.partition("=")
@@ -237,7 +243,14 @@ def read_config(git: str, globals_: list) -> list | None:
 
 
 def _alias_refusal(sub: str, config: list) -> str | None:
-    """Причина отказа по псевдониму: `!`-псевдоним или раскрытие в `clean`."""
+    """Причина отказа по псевдониму: `!`-псевдоним, раскрытие в `clean`
+    или тело, задающее `-c`/`--config-env` pager, fsmonitor или
+    `core.worktree`.
+
+    Тело псевдонима git разбирает как глобальные опции перед подкомандой и
+    допускает в нём `-c`/`--config-env`: значение опции — не подкоманда
+    (`cl = -c a.b=c clean`), а заданная там конфигурация в `git config
+    --list` вызова не видна — её проверяет разбор тела."""
     aliases = {}
     for key, value in config:
         if key.startswith("alias."):
@@ -260,11 +273,20 @@ def _alias_refusal(sub: str, config: list) -> str | None:
             words = shlex.split(value)
         except ValueError:
             return None
-        while words and words[0].startswith("-"):
-            words.pop(0)
-        if not words:
+        opts, idx = parse(words)
+        body = option_config(opts)
+        reason = _command_refusal(body)
+        if reason is not None:
+            return f"псевдоним `{word}`: {reason}"
+        for key, value in body:
+            if key == "core.worktree":
+                return (f"псевдоним `{word}` задаёт `core.worktree` — рабочее "
+                        f"дерево вне проверки границы git роли")
+            if key.startswith("alias."):
+                aliases[key[len("alias."):]] = value
+        if idx >= len(words):
             return None
-        word = words[0]
+        word = words[idx]
 
 
 def _command_refusal(config: list) -> str | None:
