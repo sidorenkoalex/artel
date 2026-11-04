@@ -142,7 +142,8 @@ from .preflight import (check_cli_found, cli_version, check_cli_version,
 from .isolation import (isolation_smoke, CODEX_SMOKE_CHECK,
                         provider_isolation_smokes, codex_isolation_smoke,
                         FOREIGN_SECRETS_CHECK, check_foreign_provider_secrets,
-                        _foreign_provider_secrets)
+                        _foreign_provider_secrets, ROLE_GIT_BOUNDARY_CHECK,
+                        check_role_git_boundary)
 from .live_smoke import live_smoke, _live_smoke_run
 from .recovery import recovery_check
 from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,
@@ -207,6 +208,7 @@ from .map_growth import (MAP_SIZE_ACTION, MAP_GROWTH_SOURCE, _FAR_FUTURE_TS,
                          _map_growth_series, _map_growth_message,
                          _map_growth_check, check_map_growth)
 from .machine_load import check_machine_load
+from .role_nproc import ROLE_NPROC_CHECK, check_role_nproc
 from .suite_duration import check_suite_duration
 from .worktree_db import WORKTREE_DB_CHECK, check_worktree_db_files
 from .cli import all_checks, LABELS, cmd_doctor, cmd_alert_ack

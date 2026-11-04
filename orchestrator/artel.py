@@ -187,13 +187,15 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
            [--fresh-suite] [--no-answer] [--accept-audit-fail]
            [--during-canary "<основание>"] [--as-epic] |
-  reject <id> "<причина>" | spec-audit <id> |
+  reject <id> "<причина>" | reject <id> --decision <файл> | spec-audit <id> |
   verify-ok <id> <имя> <sha> "<итог>" | verify-fail <id> <имя> "<причина>" |
   answer <id> <файл-с-ответом> |
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
   kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | targets-migrate <проект> |
+  target-set <проект> <путь поля> <значение> |
+  target-set --show <проект> [<путь>] |
   reference <проект> [--sha <sha>] | conventions-stamp <проект> <файл>… |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
@@ -221,7 +223,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
            --wait-ci: ждать завершения CI коммита вместо отказа |
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
   mr-sync [<id>…] | mr-sync <id> --confirm [--by-content] |
-  knowledge <id> <путь>[::<символ>]|::<символ> |
+  knowledge <id> <путь>[::<символ>]|::<символ> | task-rm <id> <путь>… |
   forge-probe <проект> [--ref <ветка> | --sha <sha>] [--job <имя>] |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
@@ -857,8 +859,8 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
-                          targets, venv, verify, version, watch, workspace,
-                          zone_lock)
+                          targets, task_files, venv, verify, version, watch,
+                          workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
 from scripts import guard as artifact_guard  # noqa: E402
 
@@ -2558,11 +2560,15 @@ def _cmd_guard(rest: list) -> None:
 #: ещё справочную копию таблицы исходов `mutation-run-<n>.tsv` в каталог
 #: документов задачи на диске; ссылку документов, ветку и рабочую копию
 #: задачи не меняет (требование 10 SPEC 01M5NPKPWFEWTYMBYWVR797AM6, суженное
-#: SPEC 01M5PWFGJQNV8YSAN5MF0CKHVW).
+#: SPEC 01M5PWFGJQNV8YSAN5MF0CKHVW). `task-rm` удаляет файлы — только в
+#: пределах своей задачи: файлы (не каталоги, не `.git`) рабочей копии
+#: задачи и файлы каталога её документов, которых нет в ссылке документов;
+#: под признаком роли — только задачи `ARTEL_TASK` (SPEC
+#: 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требование 4).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
      "acceptance-dry-run", "plank-run", "suite-run", "mutation-run",
-     "preflight", "knowledge", "guard"))
+     "preflight", "knowledge", "guard", "task-rm"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -2622,6 +2628,34 @@ def _refuse_if_role_restricted(cmd: str, rest: list) -> None:
                  f"роли {role}")
 
 
+DECISION_FLAG = "--decision"
+
+
+def _cmd_reject(rest: list) -> None:
+    """`reject <id> "<причина>"` либо `reject <id> --decision <файл>` (SPEC
+    01M6KB0SJHDA4D4GNEM7PGZ40P, требования 1, 10). Ключ разбирается явно,
+    а не текстом причины: без значения и вместе с позиционной причиной —
+    отказ до lease и журнала. Чтение файла и проверка состояния — в
+    `fsm._cmd_reject`."""
+    if not rest:
+        sys.exit('reject: не передан id задачи; синтаксис: reject <id> '
+                 '"<причина>" | reject <id> --decision <файл>')
+    task_id, args = rest[0], rest[1:]
+    if DECISION_FLAG not in args:
+        fsm.cmd_reject(task_id, args[0] if args else "")
+        return
+    at = args.index(DECISION_FLAG)
+    if at + 1 >= len(args) or args[at + 1].startswith("--"):
+        sys.exit(f"reject: {DECISION_FLAG} без значения; синтаксис: "
+                 f"reject {task_id} {DECISION_FLAG} <файл>")
+    extra = args[:at] + args[at + 2:]
+    if extra:
+        sys.exit(f"reject: {DECISION_FLAG} не сочетается с позиционной "
+                 f"причиной ({' '.join(extra)}) — решение целиком в файле; "
+                 f"синтаксис: reject {task_id} {DECISION_FLAG} <файл>")
+    fsm.cmd_reject(task_id, "", decision_file=args[at + 1])
+
+
 def _verify_args(rest: list, count: int, command: str) -> list:
     """Позиционные аргументы `verify-ok`/`verify-fail`: ровно `count`."""
     if len(rest) != count:
@@ -2668,8 +2702,7 @@ def main() -> None:
             accept_audit_fail=_approve_accept_audit_fail_arg(rest),
             **_approve_during_canary_kwargs(rest),
             **_approve_as_epic_kwargs(rest)),
-        "reject": lambda: fsm.cmd_reject(rest[0],
-                                         rest[1] if len(rest) > 1 else ""),
+        "reject": lambda: _cmd_reject(rest),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
         # Решения Оператора по ручной проверке `verify` — вне белого списка
         # ролей (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требования 3-4).
@@ -2691,6 +2724,10 @@ def main() -> None:
         # команда Оператора, вне белого списка ролей (SPEC
         # 01M5SCGSQN0AT0B07H7M9803RA, требование 10).
         "targets-migrate": lambda: projects.cmd_targets_migrate(rest[0]),
+        # Правит поле записи в локальном слое `.artel/targets.yaml` — команда
+        # Оператора, вне белого списка ролей, в том числе `--show` (SPEC
+        # 01M6KBD9FC36WARWSY9Z0JDMG5, требование 10).
+        "target-set": lambda: projects.cmd_target_set(rest),
         # Пишет кэш справочника и журнал пульта — команда Оператора, вне
         # белого списка ролей (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 4).
         "reference": lambda: projects.cmd_reference(rest),
@@ -2760,11 +2797,31 @@ def main() -> None:
         "watch": lambda: watch.cmd_watch(rest),
         "observe": lambda: _cmd_observe(rest),
         "hook-migrate": lambda: _cmd_hook_migrate(rest),
+        "task-rm": lambda: task_files.cmd_task_rm(rest),
     }
     fn = table.get(cmd)
     if fn is None:
         sys.exit(f"Неизвестная команда {cmd}. Без аргументов — справка.")
-    fn()
+    _run_without_role_git(fn)
+
+
+def _run_without_role_git(fn) -> None:
+    """Команда пульта, запущенная шагом роли, — без обёртки git роли у своих
+    дочерних процессов (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требование 5):
+    вызовы git пульта и запускаемые им прогоны тестов идут мимо механизма
+    отказа, потолок `GIT_CEILING_DIRECTORIES` и `ARTEL_GIT_GUARD_ROOT`
+    остаются. Единственный способ снятия — каталог обёртки этой копии пульта
+    убран из PATH; `os.environ` восстанавливается при любом выходе, чтобы
+    тесты, зовущие `main()` в одном процессе, не зависели от порядка."""
+    if not runner.in_role_environment() or "PATH" not in os.environ:
+        fn()
+        return
+    saved = os.environ["PATH"]
+    os.environ["PATH"] = runner.path_without_role_git(saved)
+    try:
+        fn()
+    finally:
+        os.environ["PATH"] = saved
 
 
 if __name__ == "__main__":

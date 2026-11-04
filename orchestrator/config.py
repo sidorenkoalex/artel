@@ -192,6 +192,15 @@ MERGE_GATE_CI_WAIT_CEILING_SEC = 3600
 # выхода ИЗ этой очереди).
 MERGE_QUEUE_WAIT_CEILING_SEC = 7200
 PUMP_JOIN_TIMEOUT_SEC = 10
+# Предел числа процессов шага роли (SPEC 01M6KB0FS809DG55K9A20CYKJE,
+# требования 1-2): процесс агента получает `RLIMIT_NPROC` =
+# min(kern.maxprocperuid − запас, пределы пульта). Предел общий на
+# пользователя, запас оставляет командам пульта и сессии Оператора место
+# для fork, когда роль упёрлась в свой (инцидент 04.11: 3645 процессов git
+# при kern.maxprocperuid = 4000). FALLBACK — значение машины 04.11, если
+# kern.maxprocperuid не прочитан или его нет на платформе.
+ROLE_NPROC_RESERVE = 1000
+ROLE_NPROC_FALLBACK_MAXPROC = 4000
 # Предел прогона acceptance_tests/ на гейте review -> verifying
 # (orchestrator/acceptance.py, SPEC T023 требование 6). Без него зависший
 # тест (сетевой стол, бесконечный цикл, дедлок) вешает advance/auto без
@@ -924,7 +933,9 @@ AUTO_STOP = {
     "spec_writing": ("SPEC ещё пишется",
                      "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
     "spec_gate": ("гейт SPEC — решение Оператора",
-                  "прочитай SPEC и: artel.py approve {id}{sha}; " + _BOTH_COMMANDS),
+                  "прочитай SPEC и: artel.py approve {id}{sha}; вернуть "
+                  "SPEC — artel.py reject {id} --decision <файл> (форма "
+                  "templates/SPEC-GATE-DECISION.md); " + _BOTH_COMMANDS),
     # Отсылка к записи «приёмка: что проверит approve»
     # (`fsm_autogate.ACCEPTANCE_CHECKLIST_ACTION`, 01M2B6K76EAFDF5X1B3Z9XK30Q,
     # требование 3/AC-6): что из протокола `docs/operator-gates.md`

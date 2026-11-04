@@ -805,9 +805,14 @@ class RoleEnvTest(TmpRootTest):
         Ни глобального, ни системного конфига: идентичность может прийти
         только из окружения — иначе проба доказывала бы ~/.gitconfig
         машины, а не перенос в слой роли.
+
+        Репозиторий пробы — вне `self.root`: `self.root` — защищаемый корень
+        границы git роли (`ARTEL_GIT_GUARD_ROOT`), и git в нём вне своей
+        рабочей копии отклоняется (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT,
+        требования 2, 10; раздел «Правки существующих тестов»).
         """
-        repo = self.root / "probe"
-        repo.mkdir(exist_ok=True)
+        repo = Path(tempfile.mkdtemp(prefix="role-env-probe-"))
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
         absent = str(self.root / "нет-такого-конфига")
         env = dict(env, GIT_CONFIG_GLOBAL=absent, GIT_CONFIG_SYSTEM=absent)
         for args in (["init", "-q"], ["add", "step.txt"]):
