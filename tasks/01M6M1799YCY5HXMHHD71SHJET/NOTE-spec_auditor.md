@@ -1,17 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде (forge.py:127-212, github_adapter.py:107-115/342/372-381/402-458, fsm_merge_gate.py:1587-1590/1840-1908, mr_sync.py:51-53/317-359, targets.py:33/590-592/699-706) подтверждены по HEAD 89698bf92.
-- Сторож литералов НЕ ловит `forge.hosting(t) == "github"` (опыт с support_comparisons) — требование 8 «признак реализации» без AC.
-- Текст gh «a pull request for branch … already exists:» несёт URL существующего PR — разбор URL из любого вывода превратит конфликт в «успех»; SPEC не ограничивает разбор stdout при коде 0.
-- AC-14: у _GitHub нет названной точки входа проверки списка (у GitLab — публичный request) — тест вынужден звать неназванный помощник.
-- Существующие тесты: моки mr_assignee нет; фейки MergeRequest с reason без iid — не ломаются.
+- Визит 2 (spec_sha 481831b0…): факты SPEC о коде подтверждены по HEAD 89698bf92 (forge.py:69-84/127-212, ci.py:69-98, github_adapter.py:107-115/342/372-381/402-458, fsm_merge_gate.py:1587-1590/1672-1714/1840-1908, mr_sync.py:38/53/306-359, repo_context.py:91/97, тест GH_CALLS :370-383, метод :1189-1202).
+- Существующие тесты не ломаются: ExistingLinkTest (test_mr_delivery_units.py:79-122) патчит targets.target без `forge` → «хостинг не определён» → прежнее поведение (требование 8 это покрывает); подделки реестра (mr_delivery.py:328-386, test_invariants.py:627-637) без ASSIGNEE_BY_NAME; hosting_registry.py:32 — у _GitHub по-прежнему нет job_test_report.
+- Решения 1-9 гейта учтены.
+- Новые отклонения: разбор адреса PR «<адрес проекта>/pull/<n>» ломается на url с `.git`/`/`/scp (ci.py:101-107 эти виды допускает); AC-14 не ловит «разрешённая форма + хвост» (`pr ready 7 --undo`) и недесятичный номер; artel-цель в github_call (remote "origin").
 
 ## Не сработало
-- `gh help exit-codes` в песочнице роли отклонён — утверждения о `gh` опытом не проверены (вынесены в пробу Оператора).
+- `command -v gh` в песочнице роли требует подтверждения — поведение gh опытом не проверено.
 
 ## Где остановился
-SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. Пять отклонений: е-1/б-1 (адрес из stderr конфликта), в-1 (AC-14 без точки входа), е-2 (сторож не видит forge.hosting()==литерал), а-1, в-2.
+SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Чего не хватило
-Точки входа закрытого списка `_GitHub` (аналога `gitlab_adapter.request`) — SPEC её не называет.
+Живого `gh` для сверки вывода `pr create` (вид адреса при url с .git/scp).
