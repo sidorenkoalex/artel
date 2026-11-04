@@ -38,6 +38,9 @@ import sys
 GUARD_ROOT_ENV = "ARTEL_GIT_GUARD_ROOT"
 TASK_ENV = "ARTEL_TASK"
 REFUSAL_EXIT = 1
+# Маркер в тексте `role_bin/git`: признак обёртки и для копии, рядом с
+# которой `role_git.py` не лежит.
+WRAPPER_MARKER = b"artel-role-git-wrapper"
 CONFIG_TIMEOUT_SEC = 30
 
 # Глобальные опции git со значением отдельным словом (`gitcmd.
@@ -77,15 +80,32 @@ def _inside(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def real_git(wrapper_dir: str) -> str | None:
-    """Первый `git` по PATH, не лежащий в каталоге обёртки."""
-    for item in os.environ.get("PATH", "").split(os.pathsep):
+def is_role_wrapper(candidate: str) -> bool:
+    """`candidate` — обёртка git роли любой копии пульта: рядом с её
+    каталогом лежит `role_git.py` либо файл несёт маркер обёртки."""
+    real = os.path.realpath(candidate)
+    if os.path.isfile(os.path.join(os.path.dirname(real), os.pardir,
+                                   "role_git.py")):
+        return True
+    try:
+        with open(real, "rb") as fh:
+            return WRAPPER_MARKER in fh.read(4096)
+    except OSError:
+        return False
+
+
+def real_git(wrapper_dir: str, path_value: str | None = None) -> str | None:
+    """Первый `git` по PATH, не являющийся обёрткой git роли — ни своей, ни
+    обёрткой другой копии пульта: две обёртки на PATH иначе передавали бы
+    вызов друг другу без предела глубины (возврат с гейта мержа 04.11)."""
+    if path_value is None:
+        path_value = os.environ.get("PATH", "")
+    for item in path_value.split(os.pathsep):
         if not item or os.path.realpath(item) == wrapper_dir:
             continue
         candidate = os.path.join(item, "git")
         if (os.path.isfile(candidate) and os.access(candidate, os.X_OK)
-                and os.path.realpath(candidate)
-                != os.path.join(wrapper_dir, "git")):
+                and not is_role_wrapper(candidate)):
             return candidate
     return None
 

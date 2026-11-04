@@ -10,13 +10,18 @@
 import contextlib
 import io
 import os
+import resource
+import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from orchestrator import artel, config, doctor, role_git, role_prompt, runner, task_files
+from tests.sandbox import TmpRootTest
 
 TASK = "01MOWNTASK"
 # Переменные, меняющие исход git вызова: снимаются в сквозных тестах, чтобы
@@ -449,8 +454,11 @@ class DoctorBoundaryTest(DoubleRootTest):
             return doctor.check_role_git_boundary()
 
     def env(self, *, ceiling=True, wrapper=True):
-        path = os.environ.get("PATH", "")
-        path = runner.path_without_role_git(path)
+        # Без обёрток любой копии пульта: как PATH, который собирает
+        # `role_env`, даже если тесты идут под окружением роли другой копии.
+        path = os.pathsep.join(
+            item for item in os.environ.get("PATH", "").split(os.pathsep)
+            if item and not role_git.is_role_wrapper(os.path.join(item, "git")))
         if wrapper:
             path = os.pathsep.join([str(runner.ROLE_GIT_BIN), path])
         env = quiet_git_env(PATH=path, **{role_git.GUARD_ROOT_ENV: str(self.root)})
@@ -471,6 +479,139 @@ class DoctorBoundaryTest(DoubleRootTest):
         self.assertTrue((self.root / "junk.txt").exists())
         self.assertEqual(sorted(p.name for p in (self.root / ".artel").iterdir()),
                          ["projects"])
+
+
+WRAPPER_TIMEOUT_SEC = 10
+# Запас процессов пользователя сверх уже запущенных: цепочка обёрток без
+# предела глубины упирается в лимит, а не исчерпывает процессы машины.
+NPROC_MARGIN = 64
+
+
+def _user_process_count() -> int | None:
+    ps = shutil.which("ps") or ("/bin/ps" if os.path.exists("/bin/ps") else None)
+    if ps is None:
+        return None
+    res = subprocess.run([ps, "-U", str(os.getuid()), "-o", "pid="],
+                         capture_output=True, text=True, timeout=30)
+    return len(res.stdout.split()) if res.returncode == 0 else None
+
+
+def run_bounded(cmd, *, cwd, env) -> subprocess.CompletedProcess | None:
+    """Вызов в своей группе процессов под RLIMIT_NPROC; превышение таймаута —
+    вся группа снимается, результат `None`."""
+    running = _user_process_count()
+
+    def limit():
+        if running is not None:
+            soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+            cap = running + NPROC_MARGIN
+            if hard != resource.RLIM_INFINITY:
+                cap = min(cap, hard)
+            if soft == resource.RLIM_INFINITY or cap < soft:
+                resource.setrlimit(resource.RLIMIT_NPROC, (cap, hard))
+
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True, preexec_fn=limit)
+    try:
+        out, err = proc.communicate(timeout=WRAPPER_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        return None
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+class TwoWrappersTest(DoubleRootTest):
+    """Обёртки двух копий пульта на одном PATH (главная копия после мержа и
+    рабочая копия задачи): вызов git не ходит по кругу между ними."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(os.path.realpath(tmp.name))
+        # Вторая копия пакета обёртки — как у другой копии пульта.
+        other = base / "other" / "orchestrator"
+        shutil.copytree(runner.ROLE_GIT_BIN, other / "role_bin")
+        shutil.copy2(Path(role_git.__file__), other / "role_git.py")
+        self.other_bin = other / "role_bin"
+        real = role_git.real_git(str(runner.ROLE_GIT_BIN))
+        self.assertIsNotNone(real)
+        # Счётчик процессов настоящего git: каждый вызов мимо обёрток
+        # проходит через этот шим и оставляет строку.
+        self.counter = base / "git-calls"
+        self.counter.write_text("", encoding="utf-8")
+        shim = base / "shim"
+        shim.mkdir()
+        (shim / "git").write_text(
+            f"#!/bin/sh\necho x >> '{self.counter}'\nexec '{real}' \"$@\"\n",
+            encoding="utf-8")
+        (shim / "git").chmod(0o755)
+        self.tail = [str(shim), os.path.dirname(sys.executable)]
+        self.outside = base / "outside"
+        self.outside.mkdir()
+        self.git_init(self.outside)
+
+    def git_calls(self) -> int:
+        return len(self.counter.read_text(encoding="utf-8").split())
+
+    def call(self, first: Path, second: Path, args, cwd: Path):
+        self.counter.write_text("", encoding="utf-8")
+        env = quiet_git_env(PATH=os.pathsep.join([str(first), str(second), *self.tail]),
+                            **{role_git.GUARD_ROOT_ENV: str(self.root),
+                               role_git.TASK_ENV: TASK})
+        return run_bounded([str(first / "git"), *args], cwd=str(cwd), env=env)
+
+    def test_git_finishes_with_foreign_wrapper_on_path(self):
+        """При двух обёртках на PATH `--version`, `status` вне корня и в своей копии завершаются за 10 с.
+
+        В своей копии дублёра обёртка читает `git config` — настоящий git
+        запускается не больше трёх раз за вызов. Оба порядка обёрток на PATH.
+
+        Ловит мутацию: `real_git` пропускает только каталог своей обёртки —
+        обёртки передают вызов друг другу, вызов не завершается за таймаут
+        (снят вместе с группой) либо упирается в RLIMIT_NPROC с ненулевым кодом.
+        """
+        for first, second in ((runner.ROLE_GIT_BIN, self.other_bin),
+                              (self.other_bin, runner.ROLE_GIT_BIN)):
+            for args, cwd in ((["--version"], self.outside),
+                              (["status", "--short"], self.outside),
+                              (["status", "--short"], self.own)):
+                res = self.call(first, second, args, cwd)
+                label = (first.parent.parent.name, args, cwd.name)
+                self.assertIsNotNone(res, f"не завершился за таймаут: {label}")
+                self.assertEqual(res.returncode, 0, (label, res.stderr))
+                self.assertGreaterEqual(self.git_calls(), 1, label)
+                self.assertLessEqual(self.git_calls(), 3, label)
+
+
+class RoleEnvForeignWrapperTest(TmpRootTest):
+
+    def test_role_path_has_only_own_wrapper_when_foreign_one_is_on_path(self):
+        """`role_env`, собранный при чужой обёртке первой на PATH, несёт ровно один каталог обёртки — свой.
+
+        Ловит мутацию: `_resolve_declared_tools` берёт `shutil.which("git")`
+        как есть — в PATH роли попадает каталог чужой обёртки вместо
+        каталога настоящего git.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        other = Path(os.path.realpath(tmp.name)) / "orchestrator"
+        shutil.copytree(runner.ROLE_GIT_BIN, other / "role_bin")
+        shutil.copy2(Path(role_git.__file__), other / "role_git.py")
+        path = os.pathsep.join([str(other / "role_bin"), os.environ.get("PATH", "")])
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            env = runner.role_env("developer", TASK)
+        wrappers = [item for item in env["PATH"].split(os.pathsep)
+                    if item and role_git.is_role_wrapper(os.path.join(item, "git"))]
+        self.assertEqual([Path(item).resolve() for item in wrappers],
+                         [runner.ROLE_GIT_BIN])
+        git = shutil.which("git", path=os.pathsep.join(
+            env["PATH"].split(os.pathsep)[2:]))
+        self.assertIsNotNone(git)
+        self.assertFalse(role_git.is_role_wrapper(git))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@
 # `.artel/venv/bin`, проверку вызова делает `orchestrator/role_git.py`
 # рядом с каталогом. В PATH роли нет `dirname`/`realpath` — каталог обёртки
 # берётся от `$0` средствами самой оболочки.
+# Маркер artel-role-git-wrapper: по нему `role_git.real_git` и
+# `runner.role_env` узнают обёртку любой копии пульта и идут мимо неё.
 case "$0" in
   */*) dir=${0%/*} ;;
   *) dir=. ;;

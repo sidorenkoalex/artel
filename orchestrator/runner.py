@@ -17,7 +17,8 @@ from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
               liveness, merge_after, models, parallel_limit, pause,
               project_profile,
-              providers, repo_context, review, role_prompt, roles, spend, stack, store,
+              providers, repo_context, review, role_git, role_prompt, roles, spend,
+              stack, store,
               targets, workspace, zone_lock)
 from scripts import guard
 
@@ -1011,6 +1012,11 @@ def _resolve_declared_tools() -> dict[str, str]:
     missing = []
     for name in stack.DECLARED_TOOLS:
         path = shutil.which(name)
+        if name == "git" and path is not None and role_git.is_role_wrapper(path):
+            # Обёртка git роли на PATH процесса (роль гоняет тесты, а они
+            # собирают `role_env`): её каталог в PATH роли дал бы вторую
+            # обёртку рядом со своей — берём настоящий git за всеми обёртками.
+            path = role_git.real_git(str(ROLE_GIT_BIN))
         if path is None:
             missing.append(name)
         else:
