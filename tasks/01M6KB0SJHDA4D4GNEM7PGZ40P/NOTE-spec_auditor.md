@@ -1,14 +1,15 @@
-# Записка spec_auditor — 01M6KB0SJHDA4D4GNEM7PGZ40P (аудит 4, spec_sha 5f6d5673)
+# Записка spec_auditor — 01M6KB0SJHDA4D4GNEM7PGZ40P (аудит 5, spec_sha 42f39762)
 
 ## Выяснено
-- Решение №3 (F1, C1–C3, C5, B1, A1) закрыто текстом SPEC. Факты SPEC сверены с кодом на 8fa671cc0, расхождений нет. Бриф аналитика берёт полный detail через _return_context (brief.py:1527); store не режет detail.
-- Обвязка: лямбда с условным выражением из двух _cmd_reject(conn, tid, …) проходит оба AST-линтера; keyword-only decision_file проходит test_ac6.
-- Базы диффов: blob skills/spec-audit.md = 93bab317b, skills/spec-authoring.md = b63133cf4 — совпадают с index диффов.
-- Вердикт concerns, одно отклонение — C1: форма «файл:строка» и «перечень путей» не определена, AC-4 не ловит разбор вида «любое двоеточие».
-- Замечания: --decision в awaiting_human (fsm.py:1865 срабатывает раньше); метка поля в начале строки; tests/test_auto_cycle.py:345–363 не в перечне SPEC; круговой импорт brief→gitcmd→fsm.
+- Решение №4 (C1 и замечания) внесено в SPEC полностью: термины `файл:строка`/путь (треб. 2), метка поля в начале строки (треб. 2, AC-3), --decision до awaiting_human (треб. 10, AC-15), test_auto_cycle.py:345–363 и test_invariants.py:405 в перечне, импорт brief в fsm по месту (треб. 5).
+- Факты SPEC сверены с кодом на 8fa671cc0: fsm.py:1851–1922, artel.py:190/2675, brief.py:76/1325/1343/1584–1596/1627–1630, answer.py:239/264–267, mandate.py:55/105/118–125, config.py:926 — совпадают.
+- Три диффа ТЗ (с «шестью полями» и ``` с новой строки) проходят git apply --check на HEAD.
+- answer на spec_gate состояния не меняет (answer.py:430–439) — AC-7 «после answer тот же файл проходит» выполним.
+- Отклонения: C1 — граница токена `файл:строка` не задана (обратные кавычки шаблона, диапазоны «177–182»); C2 — AC-5 не требует случая на каждое поле, а заглушки четырёх полей проходят проверку формы.
+- Замечание: верхний импорт brief в auto.py замкнёт круг auto→brief→gitcmd→fsm→fsm_advance→auto.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict concerns, guard ок.
+- SPEC-AUDIT.md сдан: status ready, verdict concerns.
 
 ## Чего не хватило
-- Поиск тестов с текстом справки reject — их нет; искать пришлось grep по tests/ и scripts/.
+- Ничего существенного; правила доступа Bash отклоняют `cd …;` и `$VAR` в составных командах — только абсолютные пути.
