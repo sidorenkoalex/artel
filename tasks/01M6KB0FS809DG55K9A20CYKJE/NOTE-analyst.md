@@ -1,22 +1,17 @@
 # Записка analyst — 01M6KB0FS809DG55K9A20CYKJE
 
 ## Выяснено
-- ТЗ достаточно для SPEC; вопросов нет. Строка ТЗ «Порядок: задача … смержена» — не «Порядок: после …», поля `merge_after` нет.
-- Шаг 2 (возврат по SPEC-AUDIT О-1…О-8): решения внесены; функция `runner.role_nproc_limit`, аргумент `spawn_agent` — `nproc_limit`.
-- Шаг 3 (возврат 2, Н-1/Н-2): точки подмены `runner._read_maxprocperuid() -> tuple[int | None, str]` и `runner._user_process_count() -> int`.
-- Шаг 4 (возврат 3, Н-3/Н-4): требование 3 — сбой счёта процессов (исключение `_user_process_count`) → шаг запускается, одна запись «счёт процессов пользователя недоступен: <причина>» на шаг; абсолютные пути /usr/sbin/sysctl и ps как `liveness._ps_executable` (liveness.py:89). Требование 6 — warn «счёт недоступен». Требование 5 — снятие группы только при `isinstance(agent_pid, int)` (runner.py:1864). AC-4 — подмена `resource.getrlimit`, вызов через модуль. Новый AC-8 — сбой счёта. Критериев 8.
-- Шаг 5 (возврат 4 с гейта SPEC): внесены пять решений. 1) Отказ при исчерпанном запасе — `SystemExit` из `cmd_run`; цикл auto останавливается веткой «run отказался стартовать» (auto.py:1017, флаг тревоги True). auto.py не меняется, вынесен в «Не входит» (guard требует классифицировать путь). В AC-5 добавлен прогон через auto. 2) Расчёт один раз до `_run_attempts` (runner.py:889). 3) Пустой вывод или код 0 без числа = «недоступно»; в doctor при недоступности обоих источников — warn с обеими пометками; тест stale_cycles :556–567 (FileNotFoundError на sysctl) проходит без правки. 4) Расхождение потоков на Linux — в docs/stack.md. 5) AC-6: os.killpg в завершении теста, процесс живёт не дольше 30 с.
-- Строки кода: вызов `spawn_agent` — runner.py:1805, `close_pump` — :1876, «agent run finished» — :2086, INCOMPLETE — :2104–2115.
-
-- Шаг 6 (возврат 5, П-1/П-2): в AC-1 добавлена проверка подменой `spawn_agent`, что шаг через `cmd_run` передаёт `nproc_limit` = `role_nproc_limit`. Из требования 6 убрана ссылка на тест stale_cycles как держатель живучести. В AC-7 добавлен случай: `subprocess.run` бросает FileNotFoundError на sysctl → «ok» + «значение по умолчанию», без исключения. Вступление AC-7 оговаривает подмену subprocess.run для этого случая.
-
-- Шаг 7 (возврат 6, Р-1/Р-2): скобка требования 1 заменена — `role_nproc_limit` зовёт `runner._cmd_run` один раз до `_run_attempts` (runner.py:889, вызов :333), не `_spawn_and_wait`; число идёт в каждую попытку и в `spawn_agent(nproc_limit=…)`. Сигнатура `runner.role_nproc_limit() -> int` без аргументов; AC-1/3/4/7 зовут `runner.role_nproc_limit()`. Прочее не трогал.
+- ТЗ достаточно; вопросов нет. Строка ТЗ «Порядок: задача … смержена» — не «Порядок: после …», `merge_after` нет.
+- Точки подмены: `runner.role_nproc_limit() -> int`, `runner._read_maxprocperuid() -> tuple[int | None, str]`, `runner._user_process_count() -> int`; аргумент `spawn_agent(nproc_limit=…)`.
+- Отказ при исчерпанном запасе — `SystemExit` из `cmd_run`; auto останавливается «run отказался стартовать» (auto.py:1017), auto.py не меняется.
+- Шаг 8 (возврат 7, С-1/С-2): расчёт предела и проверка запаса — в `runner._run_developer_step` (runner.py:302) до `_run_attempts` (вызов :333), т.е. внутри try/finally снятия захвата зоны в `_cmd_run` (:286–299). Исправлено в требованиях 1 и 3. В требование 3 добавлено: отказ по запасу не оставляет захвата зоны (finally, `zone_lock.claimed_but_not_started`). В AC-5 добавлен третий прогон: developer-шаг в in_dev → SystemExit, захвата зоны после отказа нет.
+- Строки кода: `spawn_agent` — runner.py:1805, `close_pump` — :1876, «agent run finished» — :2086.
 
 ## Не сработало
 - `cd … ; grep` в одной команде Bash отклоняется — нужны абсолютные пути.
 
 ## Где остановился
-- SPEC.md обновлён по возврату 6, status: ready, `scripts/guard.py` — ок.
+- SPEC.md обновлён по возврату 7, status: ready, `scripts/guard.py` — ок.
 
 ## Чего не хватило
-- Ничего: решения Оператора по Н-3/Н-4 были полными.
+- Ничего.
