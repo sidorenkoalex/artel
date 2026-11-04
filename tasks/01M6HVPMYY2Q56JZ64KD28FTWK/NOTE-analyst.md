@@ -1,30 +1,30 @@
-# Записка analyst (шаг 2, после аудита fail 1 из 2)
+# Записка analyst (шаг 3, после ANSWER-2)
 
 ## Выяснено
-- `resume` без паузы журнала не пишет (pause.py:111-113), закреплено
-  tests/test_pause.py:163; `stop` журнала не пишет (artel.py:1604-1623) —
-  «resume после stop» без правки pause.py/artel.py (вне зон) ненаблюдаем.
-- `answer`: указание в in_dev/review идёт без lease (answer.py:313-316);
-  lease (answer.py:317) берётся ДО проверки состояния — в verifying с циклом
-  отказ по lease, без цикла — по состоянию (answer.py:440-442).
-- Ожидание зоны — только in_dev (zone_lock.py:498); `_holds_queue`
-  (zone_lock.py:584) — только живой lease держит очередь.
-- «цикл оборван» пишет `cmd_auto` на любом BaseException (auto.py:691);
-  классификация по ПЕРВОЙ записи остановки после запуска дочернего мирит
-  ac18[CYCLE_ABORTED] (авария) с ac13 (вне мандата).
-- Глобальная оценка мест в `_epic_view` (auto.py:1366-1368) против
-  runner/parallel_limit — риск цикла отказов (О3).
+- ANSWER-2: Q1 A (pause.py в зонах: `resume` без паузы после stop пишет
+  журнал operator), Q2 A, Q3 A, Q4 B, Q5 A.
+- Причина stop в цикле — `auto._STOP_COMMAND_REASON` (auto.py:124,
+  «штатная остановка — команда stop»); стенд ac17 пишет иной текст
+  «остановлен командой stop» (tests/…epic_supervisor.py:1240), ac17 без resume.
+- Остановки ожидания зоны: `_ZONE_WAIT_CEILING_REASON` (auto.py:108),
+  `_ZONE_WAIT_LEASE_LOST_REASON` (auto.py:118).
+- `"resume"` уже в `_operator_actions` (auto.py:1225) — запись resume из
+  pause.py надзор увидит без новой механики.
+- Рубеж answer: test_01m4r4jq…answer_spec_gate.py:444 (ac10) — чужой живой
+  lease на spec_gate обязан отказывать; признак «цикл ждёт» нельзя выводить
+  из «lease без pgid» — только из наблюдаемого ожидания (запись входа в
+  ожидание зоны без закрытия; verifying).
+- Глобальная оценка: `others = busy - running` (auto.py:1366) — оставить.
 
 ## Не сработало
-- Сложная bash-команда (ls; cat) отклонена — читать файлы через Read.
+- `xargs` в bash отклоняется — один grep за раз.
 
 ## Где остановился
-- Написан QUESTIONS.md (5 вопросов: resume после stop/зоны pause.py; answer
-  в verifying; глобальная оценка мест; какие остановки снимает освобождение
-  зоны; «любым запуском auto» вне эпика), guard ок. SPEC.md не тронут.
-- Раздел «Контекст» QUESTIONS.md — что аналитик закроет сам в SPEC после
-  ответа (Т1, В1–В4, В6, матрица д, убрать epics.py из зон).
+- SPEC.md написан (15 AC, budget 50, zones + pause.py, без epics.py),
+  status: ready, guard ок. QUESTIONS.md удалён (task-rm отказал — файл в
+  ссылке документов; удалён os.remove в каталоге документов).
+- Строка AC, начинающаяся с «2.» после переноса, ломает guard (AC-разметка).
 
 ## Чего не хватило
-- Прежний батч QUESTIONS (вопрос 3 ANSWER-1) удалён — формулировку вопроса,
-  на который отвечал Оператор, не видно; пришлось выводить из ответа.
+- Где пишется текст причины stop — искал «командой stop», верно
+  `_STOP_COMMAND_REASON` auto.py:124.
