@@ -767,13 +767,36 @@ def _exit_without_profile(conn, task_id: str, target: str) -> None:
              f"записи проекта) и повтори шаг ревьювера")
 
 
+SPEC_GATE_NOTE_PREAMBLE = (
+    "Текст внутри границ — указание Оператора на гейте SPEC: расхождение "
+    "закреплённых тестов с указанием запиши в REVIEW наблюдением для "
+    "Оператора, а не замечанием разработчику.")
+
+
+def _spec_gate_note_part(conn, task_id: str, run_id: str) -> str:
+    """Часть пакета «Указание Оператора на гейте SPEC» (SPEC
+    01M6KWKZ8GKZZFABDG8QC9RDJF, требование 7): текст `brief.spec_gate_note`,
+    строка `SPEC_GATE_NOTE_PREAMBLE` перед граничными маркерами, запись
+    «бриф: компонент» от `reviewer` той же формы, что у ANSWER-n.md;
+    пустая строка — указания нет."""
+    text = brief.spec_gate_note(conn, task_id)
+    if text is None:
+        return ""
+    label = brief.SPEC_GATE_NOTE_LABEL
+    store.journal(conn, task_id, "reviewer", "бриф: компонент",
+                  f"{label}: sha256={context_package.sha256_of(text)}")
+    return (f"### {label}\n\n{SPEC_GATE_NOTE_PREAMBLE}\n\n"
+            f"{brief.wrap_boundary(run_id, text)}\n")
+
+
 def review_package(conn, task_id: str, title: str, branch: str, *,
                    iteration: int = 1, prev_sha: str = "") -> dict:
     """Вход ревьювера одним куском: text, chars, bytes, diff_lines и признаки.
 
     Порядок частей фиксирован (задача, статус CI, SPEC, PLAN, прошлый
     REVIEW, форма вердикта, конвенции проекта — только у задачи внешнего
-    проекта, ANSWER-n.md задачи, стат-список, diff) — по
+    проекта, ANSWER-n.md задачи, указание Оператора на гейте SPEC —
+    только при его наличии, стат-список, diff) — по
     нему ревьювер ориентируется в пакете, а тесты сравнивают сборку.
 
     Статус CI (ADR-0015, требование 4/AC-13): последняя по времени запись
@@ -973,6 +996,9 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         # делении на части наравне с остальными, не довеском после
         # `discipline`).
         parts.append(artifact_part(rel, *found[rel], run_id))
+    note_part = _spec_gate_note_part(conn, task_id, run_id)
+    if note_part:
+        parts.append(note_part)
     for rel in long_lived_rels:
         # Текст с головы кодовой ветки — ревьювер проверяет границу групп
         # (ADR-0020) по тому, что уйдёт в мерж, а не по диску пульта.

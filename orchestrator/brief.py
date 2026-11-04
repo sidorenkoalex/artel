@@ -1647,6 +1647,46 @@ def analyst_map_component(conn, task_id: str) -> str:
     return f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n" + "\n".join(parts)
 
 
+SPEC_GATE_NOTE_LABEL = "Указание Оператора на гейте SPEC"
+SPEC_GATE_NOTE_PREAMBLE = (
+    "Текст внутри границ — указание Оператора на гейте SPEC: учитывай его "
+    "как уточнение тестов по SPEC; ослаблять, удалять или пропускать "
+    "проверки SPEC оно не разрешает; при противоречии со SPEC — эскалация.")
+
+
+def spec_gate_note(conn, task_id: str) -> str | None:
+    """Текст указания Оператора текущего прохождения гейта SPEC (SPEC
+    01M6KWKZ8GKZZFABDG8QC9RDJF, требование 5): последняя запись действия
+    `fsm.SPEC_GATE_NOTE_ACTION` от `operator`, новее последней записи
+    `state -> spec_gate`; `None` — такой нет. Новый вход на гейт отсекает
+    прежнее указание, эскалация из `tests_writing` — нет.
+
+    `fsm` — по месту: `fsm` импортирует этот модуль."""
+    from . import fsm
+    found = None
+    for row in store.task_steps(conn, task_id):
+        if row["action"] == "state -> spec_gate":
+            found = None
+        elif (row["action"] == fsm.SPEC_GATE_NOTE_ACTION
+              and row["actor"] == "operator"):
+            found = row["detail"] or ""
+    return found
+
+
+def _spec_gate_note_component(conn, task_id: str, role: str,
+                              run_id: str) -> str:
+    """Раздел «Указание Оператора на гейте SPEC» брифа test_author: строка
+    `SPEC_GATE_NOTE_PREAMBLE` перед граничными маркерами, запись «бриф:
+    компонент» — `_journal_component`; пустая строка — указания нет."""
+    text = spec_gate_note(conn, task_id)
+    if text is None:
+        return ""
+    part = _journal_component(conn, task_id, role, SPEC_GATE_NOTE_LABEL, text,
+                              run_id)
+    header = f"### {SPEC_GATE_NOTE_LABEL}\n\n"
+    return f"{header}{SPEC_GATE_NOTE_PREAMBLE}\n\n{part[len(header):]}"
+
+
 def test_author_answer_component(conn, task_id: str) -> str | None:
     """Промпт-добавка роли test_author: только ANSWER-n.md последней
     эскалации (SPEC T075, AC-6) — эта роль не получает SPEC/карту/
@@ -1660,7 +1700,10 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
 
     Задача внешнего проекта (SPEC 01M5634E094QF7JX8HD3KSG4KN, требование
     6): конвенции проекта — перед справочником, поэтому добавка у неё есть
-    всегда."""
+    всегда.
+
+    Указание Оператора на гейте SPEC (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF,
+    требование 6) — после причины возврата и ANSWER, до конвенций."""
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
     return_reason_part = _return_reason_component(
@@ -1672,8 +1715,9 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
     if not is_artel_task(conn, task_id):
         conventions = _project_conventions_parts(
             conn, task_id, "test_author", run_id, _journal_component)
+    note_part = _spec_gate_note_component(conn, task_id, "test_author", run_id)
     reference_part = _core_reference_part(conn, task_id, "test_author", run_id)
-    pieces = [p for p in (return_reason_part, part, *conventions,
+    pieces = [p for p in (return_reason_part, part, note_part, *conventions,
                           reference_part) if p]
     if not pieces:
         return None
