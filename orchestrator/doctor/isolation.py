@@ -440,3 +440,87 @@ def _foreign_provider_secrets(provider) -> list:
             if name in doctor.stack.ROLE_ENV_ALLOWLIST and os.environ.get(name):
                 found.append(name)
     return found
+
+
+ROLE_GIT_BOUNDARY_CHECK = "role-git-boundary"
+ROLE_GIT_PROBE_TIMEOUT_SEC = 30
+
+
+def check_role_git_boundary() -> doctor.Check:
+    """Граница git роли на собранном окружении шага, без запуска агента
+    (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требование 7).
+
+    (а) git из временного подкаталога `<ROOT>/.artel` не находит
+    репозиторий пульта. Проба идёт без каталога обёртки в PATH — так, как
+    его снимает диспетчер для дочерних процессов команд пульта: с обёрткой
+    вызов отклонила бы она сама, и пропавший потолок
+    `GIT_CEILING_DIRECTORIES` остался бы незамеченным.
+    (б) `git clean -n` в корне пульта отклоняется обёрткой. Только пробный
+    `-n`: настоящий `git clean` в `config.ROOT` при сломанном механизме
+    повторил бы инцидент 04.11.
+
+    Временный подкаталог не создался (песочница Codex) — `fail` с причиной,
+    не исключение `doctor`.
+    """
+    try:
+        env = doctor.runner.role_env()
+    except (OSError, doctor.providers.UnknownProviderError) as exc:
+        return doctor.Check(ROLE_GIT_BOUNDARY_CHECK, "fail",
+                            f"окружение роли не собрано: {exc}")
+    root = doctor.config.ROOT
+    try:
+        probe = Path(tempfile.mkdtemp(prefix="role-git-boundary-",
+                                      dir=root / ".artel"))
+    except OSError as exc:
+        return doctor.Check(ROLE_GIT_BOUNDARY_CHECK, "fail",
+                            f"временный подкаталог {root / '.artel'} не "
+                            f"создан, граница не проверена: {exc}")
+    try:
+        problems = _role_git_boundary_problems(env, probe, root)
+    finally:
+        doctor.shutil.rmtree(probe, ignore_errors=True)
+    if problems:
+        return doctor.Check(ROLE_GIT_BOUNDARY_CHECK, "fail", "; ".join(problems))
+    return doctor.Check(ROLE_GIT_BOUNDARY_CHECK, "ok",
+                        "git роли из каталогов .artel не доходит до "
+                        "репозитория пульта, git clean в нём отклоняется")
+
+
+def _role_git_boundary_problems(env: dict, probe: Path, root: Path) -> list:
+    problems = []
+    bare = dict(env, PATH=doctor.runner.path_without_role_git(env.get("PATH", "")))
+    ceiling = _probe_git(bare, ["rev-parse", "--show-toplevel"], probe)
+    if isinstance(ceiling, str):
+        problems.append(f"(а) {ceiling}")
+    elif ceiling.returncode == 0:
+        problems.append(f"(а) git из {probe} нашёл репозиторий "
+                        f"{ceiling.stdout.strip()} — нет потолка "
+                        f"{doctor.runner.GIT_CEILING_ENV}")
+    clean = _probe_git(env, ["clean", "-n"], root)
+    if isinstance(clean, str):
+        problems.append(f"(б) {clean}")
+    elif clean.returncode == 0 or "task-rm" not in clean.stdout + clean.stderr:
+        problems.append(f"(б) git clean -n в {root} не отклонён обёрткой git "
+                        f"роли (код {clean.returncode})")
+    return problems
+
+
+def _probe_git(env: dict, args: list, cwd: Path):
+    """Исход `git <args>` по PATH окружения `env`; строка — git не запущен.
+
+    git ищется перебором PATH окружения, а не `doctor.shutil.which`: тесты
+    `doctor` подменяют `which` поиском по PATH процесса, а здесь важен
+    именно PATH роли — с обёрткой или без неё."""
+    git = next((os.path.join(item, "git")
+                for item in env.get("PATH", "").split(os.pathsep)
+                if item and os.access(os.path.join(item, "git"), os.X_OK)),
+               None)
+    if git is None:
+        return "git не найден в PATH окружения роли"
+    try:
+        return doctor.subprocess.run([git, *args], cwd=str(cwd), env=env,
+                                     stdin=doctor.subprocess.DEVNULL,
+                                     capture_output=True, text=True,
+                                     timeout=ROLE_GIT_PROBE_TIMEOUT_SEC)
+    except (OSError, doctor.subprocess.SubprocessError) as exc:
+        return f"git не запущен: {exc}"

@@ -221,7 +221,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
            --wait-ci: ждать завершения CI коммита вместо отказа |
   ci-rerun <id> --reason "<основание>" | pull-main <id> |
   mr-sync [<id>…] | mr-sync <id> --confirm [--by-content] |
-  knowledge <id> <путь>[::<символ>]|::<символ> |
+  knowledge <id> <путь>[::<символ>]|::<символ> | task-rm <id> <путь>… |
   forge-probe <проект> [--ref <ветка> | --sha <sha>] [--job <имя>] |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
@@ -857,8 +857,8 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store, suite_run,
-                          targets, venv, verify, version, watch, workspace,
-                          zone_lock)
+                          targets, task_files, venv, verify, version, watch,
+                          workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
 from scripts import guard as artifact_guard  # noqa: E402
 
@@ -2558,11 +2558,15 @@ def _cmd_guard(rest: list) -> None:
 #: ещё справочную копию таблицы исходов `mutation-run-<n>.tsv` в каталог
 #: документов задачи на диске; ссылку документов, ветку и рабочую копию
 #: задачи не меняет (требование 10 SPEC 01M5NPKPWFEWTYMBYWVR797AM6, суженное
-#: SPEC 01M5PWFGJQNV8YSAN5MF0CKHVW).
+#: SPEC 01M5PWFGJQNV8YSAN5MF0CKHVW). `task-rm` удаляет файлы — только в
+#: пределах своей задачи: файлы (не каталоги, не `.git`) рабочей копии
+#: задачи и файлы каталога её документов, которых нет в ссылке документов;
+#: под признаком роли — только задачи `ARTEL_TASK` (SPEC
+#: 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требование 4).
 _ROLE_ALLOWED_COMMANDS = frozenset(
     ("status", "show", "log", "version", "models", "report",
      "acceptance-dry-run", "plank-run", "suite-run", "mutation-run",
-     "preflight", "knowledge", "guard"))
+     "preflight", "knowledge", "guard", "task-rm"))
 
 #: Флаг, превращающий читающую команду в меняющую состояние.
 _ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
@@ -2760,11 +2764,31 @@ def main() -> None:
         "watch": lambda: watch.cmd_watch(rest),
         "observe": lambda: _cmd_observe(rest),
         "hook-migrate": lambda: _cmd_hook_migrate(rest),
+        "task-rm": lambda: task_files.cmd_task_rm(rest),
     }
     fn = table.get(cmd)
     if fn is None:
         sys.exit(f"Неизвестная команда {cmd}. Без аргументов — справка.")
-    fn()
+    _run_without_role_git(fn)
+
+
+def _run_without_role_git(fn) -> None:
+    """Команда пульта, запущенная шагом роли, — без обёртки git роли у своих
+    дочерних процессов (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требование 5):
+    вызовы git пульта и запускаемые им прогоны тестов идут мимо механизма
+    отказа, потолок `GIT_CEILING_DIRECTORIES` и `ARTEL_GIT_GUARD_ROOT`
+    остаются. Единственный способ снятия — каталог обёртки этой копии пульта
+    убран из PATH; `os.environ` восстанавливается при любом выходе, чтобы
+    тесты, зовущие `main()` в одном процессе, не зависели от порядка."""
+    if not runner.in_role_environment() or "PATH" not in os.environ:
+        fn()
+        return
+    saved = os.environ["PATH"]
+    os.environ["PATH"] = runner.path_without_role_git(saved)
+    try:
+        fn()
+    finally:
+        os.environ["PATH"] = saved
 
 
 if __name__ == "__main__":

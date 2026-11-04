@@ -142,7 +142,8 @@ from .preflight import (check_cli_found, cli_version, check_cli_version,
 from .isolation import (isolation_smoke, CODEX_SMOKE_CHECK,
                         provider_isolation_smokes, codex_isolation_smoke,
                         FOREIGN_SECRETS_CHECK, check_foreign_provider_secrets,
-                        _foreign_provider_secrets)
+                        _foreign_provider_secrets, ROLE_GIT_BOUNDARY_CHECK,
+                        check_role_git_boundary)
 from .live_smoke import live_smoke, _live_smoke_run
 from .recovery import recovery_check
 from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,
