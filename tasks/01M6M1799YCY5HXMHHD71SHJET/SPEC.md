@@ -38,14 +38,17 @@ budget_usd: 40
 ## Требования
 
 1. **`_GitHub.open_mr(target, branch, base, title, body, draft, assignee)`**
-   одним вызовом `gh pr create --head <branch> --base <base> --title <title>
-   --body <body>` — с `--draft` только при `draft`, с `--assignee=<имя>`
-   одним аргументом только при заданном исполнителе; `gh` — через `ci.gh` с
-   `repo` = адрес проекта (`ctx.remote`, как `github_adapter._gh_repo_kwargs`,
-   `orchestrator/github_adapter.py:107-115`). Номер PR берётся из адреса PR
-   в выводе `pr create`. Успех — `forge.MergeRequest` с номером PR в `iid`,
-   адресом в `url` и прочими полями из `mr_status` этого номера (требование
-   4). Адрес PR в выводе не разобран — результат с причиной, без `iid`.
+   одним вызовом `gh` с argv ровно в порядке `pr create --head <branch>
+   --base <base> --title <title> --body <body>`, затем `--draft` (только при
+   `draft`), затем `--assignee=<имя>` одним аргументом (только при заданном
+   исполнителе); вызов — через `forge.github_call` (требование 7).
+   Номер PR разбирается ТОЛЬКО из стандартного вывода `pr create` при коде
+   выхода 0 — адрес вида `<адрес проекта>/pull/<номер>`. Успех —
+   `forge.MergeRequest` с номером PR в `iid`, адресом в `url` и прочими
+   полями из `mr_status` этого номера (требование 4). Код выхода 0, адрес в
+   stdout не разобран — результат с причиной, без `iid`. Код выхода не 0 —
+   результат с причиной без `iid`; адрес в stderr (в том числе адрес
+   существующего PR в тексте проверки `gh` «already exists») не разбирается.
    Частичный успех — адрес разобран, последующее чтение `mr_status`
    отказало — результат несёт `iid` и `url` вместе с причиной.
 2. **Сохранение ссылки при частичном успехе.** `github_adapter.open_forge_mr`
@@ -65,8 +68,9 @@ budget_usd: 40
      "<база>" already exists`;
    - отказ сервера 422: `A pull request already exists`.
 
-   `_deliver_mr` эскалирует «MR ветки уже существует, ссылки в БД нет» по
-   этому полю так же, как по коду 409 GitLab; распознавание 409 GitLab по
+   Результат с этим признаком не несёт `iid` (требование 1), ссылка на MR в
+   БД не пишется. `_deliver_mr` эскалирует «MR ветки уже существует, ссылки в
+   БД нет» по этому полю так же, как по коду 409 GitLab; распознавание 409 GitLab по
    тексту причины (`orchestrator/fsm_merge_gate.py:1589-1590`), тексты и
    поведение GitLab не меняются.
 4. **`_GitHub.mr_status(target, mr)`** — `gh pr view <номер> --json
@@ -85,7 +89,8 @@ budget_usd: 40
 
    «PR не найден» — причина с подстрокой `(404)` — ТОЛЬКО когда `gh`
    завершился кодом выхода 1 и его stderr содержит подстроку
-   `Could not resolve to a PullRequest`. Всё прочее — отсутствие репозитория
+   `Could not resolve to a PullRequest`. Всё прочее — та же подстрока при
+   любом ином коде выхода (например 2 или 4), отсутствие репозитория
    (`Could not resolve to a Repository …`), нехватка прав, код выхода 4
    (нужна авторизация), сбой сети, отказ слота токена — причина без `(404)`.
    Вывод не JSON или JSON без `number` — причина без `(404)`.
@@ -99,31 +104,62 @@ budget_usd: 40
    добавляет исполнителя, а не заменяет его (у GitLab — замена): если
    `policy.mr_assignee` сменили между черновиком и гейтом, у PR будут оба, а
    `assignee` результата — первый из `assignees`; поведение не выравнивается.
-7. **Закрытый список вызовов `gh` у `_GitHub`.** Разрешены только:
+7. **Закрытый список вызовов `gh` у `_GitHub`.** Все вызовы `gh` функций
+   `open_mr`, `mr_status`, `undraft_mr`, `assign_mr` идут через одну
+   публичную функцию `forge.github_call(target, *args) ->
+   subprocess.CompletedProcess`: она сверяет `args` с закрытым списком ниже
+   и только для разрешённой формы вызывает `ci.gh(*args, repo=<адрес
+   проекта>)`, где адрес проекта — `ctx.remote` контекста проекта
+   (`repo_context.resolve(target).remote` — `url` записи, как
+   `github_adapter._gh_repo_kwargs`, `orchestrator/github_adapter.py:107-115`).
+   `repo` задан у каждого вызова: `ci.gh` без `repo` работает в корне
+   артели (`config.ROOT`) и не дописывает `--repo` (`orchestrator/ci.py:72-93`)
+   — команда изменила бы PR с тем же номером в репозитории артели; поэтому
+   проект, контекст которого не разрешён (`repo_context.resolve` даёт
+   `None`), — тоже отказ без вызова `ci.gh`. Отказ —
+   `subprocess.CompletedProcess(args, 1, "", <причина>)` без вызова
+   `ci.gh`; причина вызова вне списка начинается ровно с текста
+   `вызов gh не разрешён адаптеру GitHub — gh не запущен: ` и продолжается
+   argv отказанного вызова через пробел; причина проекта без контекста —
+   `адрес проекта <target> не разрешён — gh не запущен`. Отказ
+   `github_call` функция `_GitHub` превращает в результат с причиной (по
+   образцу `orchestrator/gitlab_adapter.py:157`). Прежнее чтение check runs
+   `pipeline_status` (`ci.check_runs`) идёт как сейчас, не через
+   `github_call`. Разрешены только:
    `pr create --head <ветка> --base <база> --title <заголовок> --body <текст>`
    с необязательными `--draft` и `--assignee=<имя>`; `pr view <номер> --json
    <ровно набор полей требования 4>`; `pr ready <номер>`; `pr edit <номер>
    --add-assignee=<имя>`; и прежнее чтение check runs `pipeline_status`
-   (`ci.check_runs`). Список проверяет и подкоманду, и флаги: например
-   `pr edit <номер> --base x` — вне списка. Вызов вне списка отказывает до
-   запуска `gh` (без вызова `ci.gh`) результатом с именованной причиной (по
-   образцу `orchestrator/gitlab_adapter.py:157`). `pr merge`, `pr close`,
+   (`ci.check_runs`, вне `github_call`). `<номер>` — целое в десятичной
+   записи. Список проверяет и подкоманду, и флаги: например
+   `pr edit <номер> --base x` и `pr view <номер> --json number` — вне
+   списка. `pr merge`, `pr close`,
    `pr comment` и `api` с методом записи `_GitHub` не вызывает никогда.
-8. **Исполнитель по имени для GitHub.** `github_adapter.mr_assignee` получает
-   необязательный проект; вид исполнителя задаёт реализация в реестре `forge`
-   (признак реализации, а не сравнение значения `forge` с литералом —
-   сторож литералов `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:425-435`, `:488`):
-   - GitLab — только целое, как сейчас;
-   - GitHub — имя по правилу имён GitHub (латинские буквы, цифры, одиночные
+8. **Исполнитель по имени для GitHub.** Сигнатура —
+   `github_adapter.mr_assignee(policy, target=None)`; вид исполнителя задаёт
+   реализация в реестре `forge.IMPLEMENTATIONS` под значением `forge` записи
+   проекта — атрибутом реализации `ASSIGNEE_BY_NAME` (истина — исполнитель
+   по имени; `_GitHub` несёт его со значением `True`), а не сравнением
+   значения `forge` с литералом (сторож литералов
+   `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:425-435`,
+   `:488` сравнение через `forge.hosting(t) == "github"` не видит — поэтому
+   признак закреплён критерием AC-15 с подменой реестра):
+   - реализация без атрибута `ASSIGNEE_BY_NAME` (GitLab и подделки реестра
+     в прежних тестах) — только целое, как сейчас, с прежними текстами;
+   - реализация с `ASSIGNEE_BY_NAME` (GitHub) — имя по правилу имён GitHub (латинские буквы, цифры, одиночные
      `-` не в начале и не в конце, длина до 39 знаков) или целое (его
      `targets.delivery_policy` уже сделал из строки цифр), которое
      передаётся строкой (`42` → `--assignee=42`);
-   - не назначен (запись журнала `MR_ASSIGNEE_ACTION`): булево, `@me`,
-     `@copilot` и любое значение с `@`, список через запятую, значение с
-     ведущим `-`, значение с пробелом, имя вне правила;
-   - запись о неназначенном для GitHub — своим текстом без подстроки
-     «не числовой id»; для GitLab и для вызова без проекта — прежний текст
-     `ASSIGNEE_NOT_NUMERIC` (`orchestrator/github_adapter.py:342`);
+   - не назначен (запись журнала `MR_ASSIGNEE_ACTION`): поле
+     `policy.mr_assignee` не задано, булево, `@me`, `@copilot` и любое
+     значение с `@`, список через запятую, значение с ведущим `-`, значение
+     с пробелом, имя вне правила;
+   - запись о неназначенном для реализации с `ASSIGNEE_BY_NAME` — своим
+     текстом без подстроки «не числовой id», в том числе при незаданном поле
+     (сейчас без поля пишется `ASSIGNEE_NOT_NUMERIC: policy.mr_assignee не
+     задан`, `orchestrator/github_adapter.py:379-380`); для реализации без
+     атрибута и для вызова без проекта — прежние тексты `ASSIGNEE_NOT_NUMERIC`
+     (`orchestrator/github_adapter.py:342`, `:379-381`);
    - вызов без проекта (`mr_assignee(policy)`) и вызов с проектом, хостинг
      которого не определён (запись без `forge` или значение вне реестра
      `forge.IMPLEMENTATIONS`), отвечают как сейчас.
@@ -159,14 +195,19 @@ stderr); ни одного обращения к настоящему GitHub и 
 
 AC-1. `forge.open_mr` для проекта `forge: github` в четырёх сочетаниях
 (черновик/не черновик × с исполнителем/без) вызывает подделку `ci.gh`
-сначала ровно с argv `pr create --head <branch> --base <base> --title
-<title> --body <body>` плюс `--draft` только при черновике и одним
-аргументом `--assignee=<имя>` только при исполнителе, с `repo` = адрес
-проекта; затем `pr view <номер>` требования 4. Результат: `iid` — номер из
-адреса PR, `url` — адрес, остальные поля — из ответа чтения, `reason` пуст.
+сначала с позиционными аргументами, равными точному списку в этом порядке:
+`pr`, `create`, `--head`, `<branch>`, `--base`, `<base>`, `--title`,
+`<title>`, `--body`, `<body>`, затем `--draft` (только при черновике), затем
+`--assignee=<имя>` одним элементом (только при исполнителе); затем `pr view
+<номер>` требования 4. У каждого вызова именованный аргумент `repo` подделки
+равен `url` записи проекта. Ответ `pr create` — код 0, stdout `<url
+проекта>/pull/<номер>`. Результат: `iid` — номер из адреса PR, `url` —
+адрес, остальные поля — из ответа чтения, `reason` пуст.
 
-AC-2. `forge.open_mr` для `github`, когда вывод `pr create` не содержит
-разбираемого адреса PR, отдаёт результат с непустой причиной и `iid` `None`;
+AC-2. `forge.open_mr` для `github`, когда `pr create` завершился кодом 0, а
+его stdout не содержит разбираемого адреса PR, отдаёт результат с непустой
+причиной и `iid` `None`; подделка `ci.gh` вызвана с `pr create` (шпион видел
+хотя бы один такой вызов);
 `open_forge_mr` при таком результате не пишет ссылку на MR в БД и запись
 «MR открыт».
 
@@ -181,13 +222,18 @@ AC-4. Частичный успех на входе в `verifying`: `ensure_forg
 сохранена, записи «MR открыт» нет; следующий вызов `ensure_forge_draft_mr`
 не вызывает `pr create` повторно и не получает «уже существует».
 
-AC-5. `pr create` отказал (код выхода не 0) со stderr, содержащим
-`a pull request for branch "<ветка>" into branch "<база>" already exists`, —
-`approve` на `merge_gate` даёт эскалацию «MR ветки уже существует, ссылки в
-БД нет»; то же для stderr с `A pull request already exists` (отказ сервера
-422).
+AC-5. `pr create` отказал (код выхода 1) со stderr, содержащим
+`a pull request for branch "<ветка>" into branch "<база>" already exists:`
+и следом адрес существующего PR `<url проекта>/pull/<номер>`, — результат
+`forge.open_mr` несёт признак «уже существует» требования 3 и `iid` `None`;
+после `approve` на `merge_gate` ссылки на MR в БД задачи нет, задача в
+эскалации «MR ветки уже существует, ссылки в БД нет». То же (признак есть,
+`iid` нет, ссылки нет, эскалация) для stderr с `A pull request already
+exists` (отказ сервера 422).
 
-AC-6. `pr create` отказал иным текстом — `approve` на `merge_gate` оставляет
+AC-6. `pr create` отказал иным текстом — подделка `ci.gh` вызвана с
+`pr create` (шпион видел хотя бы один такой вызов), признака «уже
+существует» у результата нет; `approve` на `merge_gate` оставляет
 задачу на гейте, причина в журнале, ссылки на MR в БД нет, эскалации нет.
 
 AC-7. `forge.mr_status` для `github` по ответу `pr view` сопоставляет поля по
@@ -197,7 +243,8 @@ AC-7. `forge.mr_status` для `github` по ответу `pr view` сопост
 `target_branch`/`source_branch`/`sha`; `mergeCommit.oid` →
 `merge_commit_sha`, `mergeCommit: null` → `None`; `squash_commit_sha` —
 `None` при любом ответе; argv — `pr view <номер> --json
-number,url,title,state,isDraft,assignees,baseRefName,headRefName,headRefOid,mergeCommit`.
+number,url,title,state,isDraft,assignees,baseRefName,headRefName,headRefOid,mergeCommit`,
+именованный аргумент `repo` подделки равен `url` записи проекта.
 
 AC-8. `mr_status` со `state`, отличным от трёх известных, — `approve` на
 `merge_gate` отказывает «статус MR неизвестен»; вывод `pr view` не JSON или
@@ -206,8 +253,9 @@ JSON без `number` — результат с причиной без `(404)`.
 AC-9. «Не найден» и «не прочитан» в `mr-sync`: `pr view` с кодом выхода 1 и
 stderr, содержащим `Could not resolve to a PullRequest`, — причина с
 подстрокой `(404)`, `mr-sync` даёт «MR не найден», `mr-sync --confirm`
-отказывает; `Could not resolve to a Repository …`, код выхода 4 и сбой сети
-— причина без `(404)`, `mr-sync` даёт «не прочитан», а не «MR не найден»;
+отказывает; та же подстрока `Could not resolve to a PullRequest` в stderr при
+коде выхода 4 и при коде выхода 2, `Could not resolve to a Repository …`,
+код выхода 4 и сбой сети — причина без `(404)`, `mr-sync` даёт «не прочитан», а не «MR не найден»;
 ответ без `baseRefName` — `mr-sync` даёт «неизвестно».
 
 AC-10. `mr-sync` в песочнице с локальным голым `origin`: PR влит каждым из
@@ -219,16 +267,21 @@ git-командами, `mergeCommit.oid` подделки — получивш�
 
 AC-11. `forge.undraft_mr` для `github`: PR-черновик — `pr ready <номер>`
 вызван ровно один раз, результат — по новому чтению (`draft` `False`); PR не
-черновик — `pr ready` не вызван, результат — чтение; отказ `gh` — результат
-с причиной, `_ready_existing_mr` оставляет задачу на гейте.
+черновик — `pr ready` не вызван, результат — чтение; у каждого вызова
+(`pr view`, `pr ready`) именованный аргумент `repo` подделки равен `url`
+записи проекта; отказ `pr ready` (PR — черновик) — подделка вызвана с
+`pr ready` (шпион видел такой вызов), результат с причиной,
+`_ready_existing_mr` оставляет задачу на гейте.
 
 AC-12. `forge.assign_mr` для `github` вызывает `ci.gh` с argv `pr edit
 <номер> --add-assignee=<login>` (флаг и значение — один элемент argv), затем
-чтение; отказ `gh` — `_ready_existing_mr` оставляет задачу на гейте с
-причиной.
+чтение; у каждого вызова именованный аргумент `repo` подделки равен `url`
+записи проекта; отказ `pr edit` — подделка вызвана с `pr edit` (шпион видел
+такой вызов), `_ready_existing_mr` оставляет задачу на гейте с причиной.
 
 AC-13. Шпион на `ci.gh` при вызовах четырёх функций `_GitHub` (AC-1–AC-12)
-видит только вызовы из закрытого списка требования 7; транспорт GitLab
+видел каждый из вызовов `pr create`, `pr view`, `pr ready`, `pr edit` хотя
+бы один раз и только вызовы из закрытого списка требования 7; транспорт GitLab
 (`gitlab_adapter`) не вызван ни разу; `pr merge`, `pr close`, `pr comment`
 не появились ни разу. Вне ограничения списка (вызовы не из `_GitHub`):
 `ci.check_runs`/`ci.check_runs_page` (чтение CI гейта, в том числе через
@@ -237,18 +290,31 @@ AC-13. Шпион на `ci.gh` при вызовах четырёх функци
 `github_adapter.undraft_mr`) и закрытие PR при `kill`
 (`cleanup._close_project_pr`).
 
-AC-14. Вызов `gh` из `_GitHub` вне закрытого списка — в том числе `pr edit
-<номер> --base x`, `pr merge <номер>`, `pr view <номер>` с иным набором
-`--json` — отказан результатом с именованной причиной, подделка `ci.gh` не
-вызвана.
+AC-14. `forge.github_call` для проекта `forge: github`, вызванная напрямую с
+`pr edit 7 --base x`, `pr merge 7`, `pr close 7`, `pr comment 7`,
+`pr view 7 --json number`, отдаёт `subprocess.CompletedProcess` с кодом 1 и
+`stderr`, начинающимся с `вызов gh не разрешён адаптеру GitHub — gh не
+запущен: `; шпион `ci.gh` не вызван. Каждая разрешённая форма требования 7
+(`pr create` в четырёх сочетаниях `--draft`/`--assignee=<имя>`, `pr view 7
+--json <набор требования 4>`, `pr ready 7`, `pr edit 7
+--add-assignee=alice`) — шпион `ci.gh` вызван ровно с этими позиционными
+аргументами и `repo`, равным `url` записи проекта, `github_call` отдаёт его
+ответ. Проект, для которого `repo_context.resolve` даёт `None`, — код 1,
+`ci.gh` не вызван.
 
 AC-15. Исполнитель: проект GitHub и `mr_assignee` `alice` — `pr create`
 с `--assignee=alice`, `pr edit` с `--add-assignee=alice`; GitHub и целое
 `42` — `--assignee=42`; GitHub и `@copilot`, `@me`, `a,b`, `-x`, `a b` —
 не назначен: в argv `pr create` нет флага исполнителя, запись журнала
-«исполнитель MR» без подстроки «не числовой id»; GitLab и `alice` — не
-назначен с прежней записью `ASSIGNEE_NOT_NUMERIC`; булево — не назначен;
-`mr_assignee(policy)` без проекта и с проектом без `forge` — прежние ответы.
+«исполнитель MR» без подстроки «не числовой id»; GitHub без поля
+`policy.mr_assignee` — не назначен, запись журнала без подстроки «не
+числовой id»; GitLab и `alice` — не назначен с прежней записью
+`ASSIGNEE_NOT_NUMERIC`; булево — не назначен; `mr_assignee(policy)` без
+проекта и с проектом без `forge` — прежние ответы. Подмена реестра
+`forge.IMPLEMENTATIONS`: `_GitHub` под ключом `gitlab` — `mr_assignee` с
+проектом `forge: gitlab` принимает `alice`; объект без атрибута
+`ASSIGNEE_BY_NAME` под ключом `github` — `mr_assignee` с проектом `forge:
+github` не назначает `alice` и назначает целое `42`.
 
 AC-16. `token_user`, `token_expiry`, `protections`, `project_info`,
 `branch_pipeline`, `job_result`, `job_test_report` для `github` — результат
@@ -261,6 +327,41 @@ AC-17. В `tests/test_01m5wcxbm7wcmrwcbwnchmar3t_gitlab_forge.py` словарь
 `token_user`, `token_expiry`, `protections`, `project_info`,
 `branch_pipeline`); утверждения `test_ac13_github_other_functions_refuse`
 совпадают с main, на методе нет `skip`/`xfail`.
+
+## Решения Оператора на гейте SPEC
+
+Возврат с гейта SPEC (девять решений) учтён так; все проверки — против
+временного дублёра (подделка/шпион `ci.gh`, подмена реестра, песочница
+пульта), не против настоящего GitHub, `gh` или репозитория артели:
+
+- Решение 1 (номер PR — только из stdout при коде 0; адрес в stderr
+  «already exists» не разбирается) — требования 1, 3; AC-5 (stderr с
+  адресом существующего PR: признак есть, `iid` нет, ссылки в БД нет,
+  эскалация). Сверено: ссылка пишется при результате без причины / с `iid`
+  (`orchestrator/github_adapter.py:421-423`, требование 2), эскалация —
+  `orchestrator/fsm_merge_gate.py:1863-1868`.
+- Решение 2 (`forge.github_call`; отказ — `CompletedProcess` код 1 с
+  именованной причиной без `ci.gh`) — требование 7 (текст причины
+  закреплён); AC-14 через публичную функцию. Прежнее `pipeline_status`
+  через `ci.check_runs` остаётся вне `github_call`.
+- Решение 3 (признак реализации) — требование 8, имя атрибута
+  `ASSIGNEE_BY_NAME`; AC-15, два случая подмены реестра. Подделки
+  `IMPLEMENTATIONS["gitlab"]` прежних тестов
+  (`tests/test_01m5xz9z68xe2ekpdhycak25kf_mr_delivery.py:456` и др.)
+  атрибута не несут и получают прежнее поведение «только целое».
+- Решение 4 (`repo` = адрес проекта у каждого вызова) — требование 7
+  (сверено: `orchestrator/ci.py:72-93` — без `repo` нет `--repo`, `cwd` —
+  `config.ROOT`); AC-1, AC-7, AC-11, AC-12, AC-14 проверяют `repo` подделки.
+- Решение 5 (порядок argv `pr create`) — требование 1; AC-1 точным списком.
+- Решение 6 (`mr_assignee(policy, target=None)`; GitHub без поля —
+  GitHub-текст) — требование 8 (сверено: `orchestrator/github_adapter.py:379-380`);
+  AC-15. `tests/test_mr_delivery_units.py` зовёт без `target` — не ломается.
+- Решение 7 (`Could not resolve to a PullRequest` при кодах 4 и 2 — без
+  `(404)`) — требование 4; AC-9.
+- Решение 8 (шпион видел вызов) — AC-2, AC-6 (`pr create`), AC-11
+  (`pr ready`), AC-12 (`pr edit`), AC-13 (все четыре). Сверено: прежний
+  отказ без вызова `gh` — `orchestrator/forge.py:205-212`.
+- Решение 9 (заметки test_author) — раздел «Материалы».
 
 ## Оценка объёма и деление
 
@@ -316,3 +417,8 @@ ANSWER-1); число файлов зоны ≥ 5; число критериев
   `orchestrator/github_adapter.py:107-115`.
 - Гейт мержа людей проекта — `orchestrator/fsm_merge_gate.py:1593-1908`;
   `mr-sync` — `orchestrator/mr_sync.py:51-53`, `:319-359`.
+- Заметки для test_author (решение 9, проверок не меняют): адрес PR для
+  разбора — вид `<адрес проекта>/pull/<номер>`; для AC-10 слияния в
+  долгоживущем файле воспроизводятся git-командами по образцу
+  `tests/test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py` (`squash_with_other`,
+  `:644`; `rebase_merge`, `:689`).

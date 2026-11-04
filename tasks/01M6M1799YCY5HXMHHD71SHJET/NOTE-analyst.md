@@ -1,15 +1,17 @@
 # Записка аналитика 01M6M1799YCY5HXMHHD71SHJET
 
 ## Выяснено
-- ANSWER-1: мандат на `tests/test_01m5wcxbm7wcmrwcbwnchmar3t_gitlab_forge.py::test_ac13_github_other_functions_refuse` (только удаление 4 ключей GH_CALLS), «не найден» = код 1 + stderr `Could not resolve to a PullRequest` → `(404)`, булево поле «уже существует» в MergeRequest, mr_assignee без forge = как без проекта, бюджет 40 — приняты.
-- SPEC.md написан: 10 требований, AC-1..AC-17, монолит (часть 1 из 2), без merge_after (ТЗ: «первой из двух»), без «Меняемого поведения». guard ок.
-- Вызовы gh вне `_GitHub` (не ограничены списком, названы в AC-13): ci.check_runs/check_runs_page, run_list, find_run_id, trigger_rerun, github_adapter.ensure_draft_mr (pr create/pr comment), github_adapter.undraft_mr (pr ready <ветка>), cleanup._close_project_pr (pr close при kill, cleanup.py:245).
+- Шаг 2 (возврат со spec_gate, 9 решений): все внесены в SPEC, новый раздел «Решения Оператора на гейте SPEC» связывает каждое решение с требованием/AC.
+- Закреплено мной по поручению решений: публичная `forge.github_call(target, *args)`; текст отказа — префикс `вызов gh не разрешён адаптеру GitHub — gh не запущен: ` + argv; проект без контекста — `адрес проекта <target> не разрешён — gh не запущен` (следствие решения 4: без repo ci.gh идёт в config.ROOT, ci.py:72-93); атрибут реализации `ASSIGNEE_BY_NAME`.
+- `pipeline_status` оставлен через `ci.check_runs`, вне `github_call` (иначе менялось бы поведение CI-чтения).
+- ctx.remote внешнего проекта = `url` записи (repo_context.py:97).
+- Сохранено с прошлого шага: ANSWER-1 — мандат на 4 ключа GH_CALLS, «не найден» = код 1 + `Could not resolve to a PullRequest`, бюджет 40.
 
 ## Не сработало
-- `task-rm` отказывает файлу, сохранённому в ссылке документов (QUESTIONS.md) — удалён os.remove в каталоге документов.
+- Длинный heredoc с python-скриптом правок — «Parser aborted»; правил через Edit по кускам.
 
 ## Где остановился
-- Шаг завершён: SPEC status ready, QUESTIONS.md удалён.
+- SPEC.md status ready, guard ок. AC-1..AC-17 без перенумерации.
 
 ## Чего не хватило
-- Штатного способа удалить сохранённый в ссылке документ (task-rm его не берёт).
+- Ничего существенного.
