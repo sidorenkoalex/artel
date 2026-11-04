@@ -1,17 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 2 (spec_sha af308e64…): все 8 пунктов возврата Оператора отражены в SPEC (треб. 3, 6, 7, 8; AC-1, AC-3, AC-5–AC-7, AC-13, AC-17; «Не входит»).
-- Факты о коде верны: artel.py:2562, role_prompt.py:197/:503, gitcmd.py:25/:1123/:259-276, docs/stack.md:529-535/:568-578, repo_context.clone_path = PROJECTS/<имя>/repo (клон артели ≠ ROOT).
-- НОВОЕ, проверено руками: git при старте ставит свой exec-path первым в PATH детей. Внутри `!`-псевдонима PATH[0] = /Library/Developer/CommandLineTools/usr/libexec/git-core, `command -v git` → …/git-core/git. Значит вложенный git из pager/fsmonitor/`!`-псевдонима идёт МИМО обёртки на PATH — утверждение треб. 3 «вложенный git идёт через PATH» ложно.
-- `git -c core.fsmonitor='git clean -fX' status` во временном репозитории вне ROOT повис (>120 с, видимо рекурсия: вложенный git наследует -c через GIT_CONFIG_PARAMETERS и снова зовёт fsmonitor). AC-7 в форме fsmonitor без таймаута вешает тест.
-- Существующие тесты текст docs/stack.md и полный набор _ROLE_ALLOWED_COMMANDS не закрепляют (только докстринги).
+- Визит 3 (spec_sha af94d695…): разница с af308e64 (`git diff 8295ca3d5 e8e18a228` в refs/artifacts/<id>) — только требование 3 «Объём отказа», AC-7, строка «Не входит»; ровно решение Оператора №2. Вердикт pass.
+- Ссылки на код верны на HEAD a99d020b9 (artel.py:2562, role_prompt.py:197/503, gitcmd.py:25/259/263/1123, runner.py:1017/1093).
+- PATH роли у Codex переживает оболочку входа (inherit=all, codex.py:150-168) — обёртка дойдёт.
+- Без TTY git pager не запускает; при TTY `-c pager.log=…` исполняется (канал вне списка решения №2 — наблюдение).
+- Визит 2: git ставит exec-path первым в PATH детей; fsmonitor='git clean -fX' рекурсивно виснет.
 
 ## Не сработало
-- pkill/ls в Bash под запретом; повисший фоновый тест остановлен TaskStop.
+- Bash: `ls`, `cd` перед git, `$VAR`-раскрытия, `{…'…}` в python -c — под запретом; использовать Read и python3 -c без словарей.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns (П1 exec-path, П2 fsmonitor-зависание/аргументы хука).
+- SPEC-AUDIT.md записан, status ready, verdict pass; guard — ок. Шаг завершён.
 
 ## Чего не хватило
-- Знания, что git подменяет PATH детям (exec-path первым) — нигде в репозитории не записано.
+- Как получить прошлую версию SPEC: `git log refs/artifacts/<id> -- tasks/<id>/SPEC.md` в рабочем каталоге.
