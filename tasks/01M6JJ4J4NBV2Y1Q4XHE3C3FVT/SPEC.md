@@ -4,7 +4,7 @@ type: spec
 author_role: analyst
 status: ready
 schema_version: 5
-zones: orchestrator/runner.py, orchestrator/role_git.py, orchestrator/role_bin/, orchestrator/task_files.py, orchestrator/artel.py, orchestrator/role_prompt.py, orchestrator/providers/claude.py, orchestrator/providers/codex.py, orchestrator/doctor/isolation.py, orchestrator/doctor/cli.py, orchestrator/doctor/__init__.py, docs/reference/role-home/claude/settings.json, docs/reference/role-home.md, docs/stack.md, docs/codebase-map.md, tests/test_01m6jj4j4nbv2y1q4xhe3c3fvt_*.py
+zones: orchestrator/runner.py, orchestrator/role_git.py, orchestrator/role_bin/, orchestrator/task_files.py, orchestrator/artel.py, orchestrator/role_prompt.py, orchestrator/providers/claude.py, orchestrator/providers/codex.py, orchestrator/doctor/isolation.py, orchestrator/doctor/cli.py, orchestrator/doctor/__init__.py, docs/reference/role-home/claude/settings.json, docs/reference/role-home.md, docs/stack.md, docs/codebase-map.md, tests/test_multitarget.py, tests/test_01m6jj4j4nbv2y1q4xhe3c3fvt_*.py
 budget_usd: 90
 ---
 
@@ -82,7 +82,9 @@ budget_usd: 90
    требования 1: он наступает и в окружении, из которого граница убрана.
 
    Репозитории вне `config.ROOT` (например, временные каталоги тестов) не
-   затрагиваются.
+   затрагиваются. Вызовы git, не обращающиеся к репозиторию (`git --version`,
+   `git help`), проходят при любом текущем каталоге, в том числе внутри
+   `config.ROOT` (решение Оператора, возврат 10, 04.11).
 3. **Отказ `git clean`.** Прямой `git clean` шага роли с любыми флагами и путями
    отклоняется до исполнения, если его репозиторий лежит внутри `config.ROOT`
    (репозиторий пульта, клоны и рабочие копии в `.artel`, включая свою рабочую
@@ -175,7 +177,11 @@ budget_usd: 90
    `plank-run`, `mutation-run`, запущенные ролью, работают как прежде; код и
    тесты роли, исполняемые этими командами, идут без механизма требований 2–3
    (остаётся граница требования 1) — принятое ограничение модели угрозы
-   (раздел «Не входит»).
+   (раздел «Не входит»). Диспетчер убирает из PATH каталог обёртки своей
+   копии пульта (того `artel.py`, который запущен); `artel.py`, запущенный ролью
+   не из главной копии, снимает каталог обёртки своей копии, а не каталог из PATH
+   роли, — принятое ограничение (решение Оператора, возврат 10, 04.11; раздел
+   «Не входит»).
 6. **PATH и прямой pytest.** Если механизм — обёртка git на PATH: её каталог —
    вторым элементом PATH роли сразу после `.artel/venv/bin`, раньше каталога
    git; `git --version` через неё совпадает с выводом настоящего git; порядок
@@ -241,6 +247,13 @@ budget_usd: 90
      `<корень>/.artel/projects/<проект>/repo`; отдельных каналов для них нет.
    - Переменной нет — fail-closed: защищается корень, вычисленный от
      расположения файла обёртки, проверка не пропускается.
+   - Каталог обёртки, который `runner.role_env` ставит в PATH роли
+     (требование 6), вычисляется от расположения модуля
+     `orchestrator/runner.py` (каталог `orchestrator/role_bin/` рядом с ним) — тот же каталог, от которого
+     обёртка вычисляет свой корень и который диспетчер убирает из PATH
+     (требование 5), — а не от `config.ROOT` (решение Оператора, возврат 10,
+     04.11). Подмена `config.ROOT` на дублёр в тестах меняет
+     `ARTEL_GIT_GUARD_ROOT` и потолок, но не каталог обёртки в PATH.
 
 ## Критерии приёмки
 Проверка — в песочнице пульта с подменёнными процессами агента: команды
@@ -408,8 +421,9 @@ AC-14. `knowledge`, `suite-run`, `plank-run`, `mutation-run`, запущенны
 `ARTEL_PULT_GIT=1` и с любыми переменными `ARTEL_*` в окружении, всё равно
 отказывает на `git clean` в дублёре (ненулевой код, строка причины, файлы
 дублёра на месте), в том числе когда `ARTEL_GIT_GUARD_ROOT` указывает на
-посторонний временный каталог: обёртка, скопированная в дублёр как
-`<дублёр>/orchestrator/role_bin`, вызвана с этой переменной на постороннем
+посторонний временный каталог: пакет обёртки, скопированный в дублёр целиком
+(`<дублёр>/orchestrator/role_bin` и `<дублёр>/orchestrator/role_git.py`),
+вызван с этой переменной на постороннем
 каталоге — отказ `git clean` в `<дублёр>`, лежащем по пути файла обёртки,
 сохраняется. `os.environ` процесса после вызова
 `artel.main()` под признаком роли совпадает с прежним при каждом из трёх
@@ -459,8 +473,24 @@ orchestrator/role_bin/../..> status` отклоняется до исполне�
 |---|---|---|---|---|
 | `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py::Ac7WrapperMachineTest::test_ac7_wrapper_machine_direct_git_wired_and_equivalent` — пропуск (`skipTest`, `wrapper_developer_bin`, `tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py:486-487`) при прямом `pytest` под окружением роли с обёрткой git на PATH; файл теста не правится | PATH процесса теста ведёт к git напрямую мимо обёртки xcrun (`tests/test_01m5kjne39phv9eawjchk7qdfs_direct_git.py:490-539`) | остаётся: прогоны `suite-run`/`plank-run` идут без механизма (требование 5), там тест исполняется как прежде | тот же тест в прогонах `suite-run`/`plank-run` и CI; при прямом `pytest` роли — не покрыто | принято Оператором, возврат 3, 04.11 |
 
+## Правки существующих тестов
+Мандат Оператора 04.11 (возврат 10) — единственная разрешённая правка
+существующего теста `tests/`:
+
+- `tests/test_multitarget.py::RoleEnvTest::commit_probe` (помощник тестов
+  `test_commit_of_the_step_passes_with_that_environment` и
+  `test_the_same_commit_without_identity_fails`, `tests/test_multitarget.py:821`,
+  `:830`): пробный репозиторий создаётся во временном каталоге вне `self.root`
+  (с удалением в `addCleanup`) вместо `self.root / "probe"`
+  (`tests/test_multitarget.py:809`). Утверждения обоих тестов, окружение пробы
+  (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` на несуществующий файл) и проверяемое
+  свойство (идентичность коммита приходит из окружения роли) не меняются.
+  Причина: по требованиям 2 и 10 git с текущим каталогом внутри защищаемого
+  корня (`self.root` = `ARTEL_GIT_GUARD_ROOT`) вне своей рабочей копии
+  отклоняется.
+
 ## Оценка объёма и деление
-Сработавшие сигналы: файлов зоны ≥ 5 (16 позиций), критериев приёмки ≥ 10 (19),
+Сработавшие сигналы: файлов зоны ≥ 5 (17 позиций), критериев приёмки ≥ 10 (19),
 `budget_usd` ≥ $60 (90).
 
 **Обоснование монолита** (материал для решения Оператора на гейте SPEC):
@@ -498,9 +528,13 @@ orchestrator/role_bin/../..> status` отклоняется до исполне�
 - Правка локального слоя пульта `.artel/home/`, `.artel/models.yaml` и каталогов
   `tasks/`; перенос строки `deny` в рабочий HOME — ручной шаг Оператора после
   мержа.
-- Правка существующих тестов `tests/`: не ожидается; если существующий тест
-  закрепляет прежнее окружение или PATH роли иначе, чем в требовании 6, —
-  эскалация с перечнем методов, не правка.
+- Правка существующих тестов `tests/` сверх перечня раздела «Правки
+  существующих тестов» (там — только `tests/test_multitarget.py::RoleEnvTest::commit_probe`);
+  если другой существующий тест закрепляет прежнее окружение или PATH роли иначе,
+  чем в требовании 6, — эскалация с перечнем методов, не правка.
+- `artel.py`, запущенный ролью не из главной копии пульта: диспетчер убирает из
+  PATH каталог обёртки своей копии (требование 5) — принятое ограничение
+  (решение Оператора, возврат 10, 04.11).
 
 ## Материалы
 - ТЗ: `tasks/01M6JJ4J4NBV2Y1Q4XHE3C3FVT/TZ.md`; лог инцидента
