@@ -1,16 +1,15 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 4 (spec_sha e34863a1…): разница с af94d695 — `git diff e8e18a228 e7c8d161b -- tasks/<id>/SPEC.md`; все пункты решения Оператора №3 отражены.
-- Факты верны: runner.py:1195 in_role_environment; direct_git тест skipTest :487, тест :490; workspace.py:452-454 clean -f -d -x; клон артели — `.artel/projects/artel/repo` (repo_context.py:78-82), не ROOT.
-- Пробелы проверяемости: нет AC на цепочку нескольких/относительных `-C`, на путь через символическую ссылку в ROOT, на cwd внутри ROOT вне `.artel` для не-clean команды (потолок там не действует).
-- «клон проекта» в исключении требования 2 — не сказано, чей (своей задачи или любой).
+- Визит 5 (spec_sha a0b091d2…): разница с e34863a1 — `git -C <wt> diff e7c8d161b 0541d03d8 -- tasks/<id>/SPEC.md`; решение №4 отражено (SPEC.md:62-67, 224-241).
+- Факты верны (config.py:57, artel.py:2562, role_prompt.py:197/503, runner.py:1017/1093/1195, gitcmd.py:25/259/263/1123, mutation_run.py:467, plank_helper.py:67); тесты PATH закрепляют только PATH[0].
+- Наблюдение: `<клон>/.git/worktrees/<чужая>` попадает в исключение клона — на ревью.
 
 ## Не сработало
-- Bash: `cat` нет в окружении; читать через Read/sed.
+- Bash с `$VAR` и `cd …;` в составной команде требует подтверждения — писать абсолютные пути/`git -C`.
 
 ## Где остановился
-- SPEC-AUDIT.md записан: status ready, verdict concerns (В-1..В-3), guard — ок. Шаг завершён.
+- SPEC-AUDIT.md записан: status ready, verdict pass. Шаг завершён (guard — см. ниже).
 
 ## Чего не хватило
 - Ничего существенного.
