@@ -194,6 +194,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   kill <id> [--yes] [--reason "<текст>"] | release <id> | worktree-db-clean <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | targets-migrate <проект> |
+  target-set <проект> <путь поля> <значение> |
+  target-set --show <проект> [<путь>] |
   reference <проект> [--sha <sha>] | conventions-stamp <проект> <файл>… |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
@@ -2695,6 +2697,10 @@ def main() -> None:
         # команда Оператора, вне белого списка ролей (SPEC
         # 01M5SCGSQN0AT0B07H7M9803RA, требование 10).
         "targets-migrate": lambda: projects.cmd_targets_migrate(rest[0]),
+        # Правит поле записи в локальном слое `.artel/targets.yaml` — команда
+        # Оператора, вне белого списка ролей, в том числе `--show` (SPEC
+        # 01M6KBD9FC36WARWSY9Z0JDMG5, требование 10).
+        "target-set": lambda: projects.cmd_target_set(rest),
         # Пишет кэш справочника и журнал пульта — команда Оператора, вне
         # белого списка ролей (SPEC 01M4TVBT9ZCRQDY669QV3S95MA, требование 4).
         "reference": lambda: projects.cmd_reference(rest),
