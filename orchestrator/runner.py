@@ -7,6 +7,7 @@ WIP-чекпоинты рабочего дерева — `orchestrator/checkpoin
 агента, окружение/cwd/argv шага и сам цикл попыток `cmd_run`.
 """
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -80,7 +81,8 @@ def _attempts_word(n: int) -> str:
     return "попыток"
 
 
-def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
+def spawn_agent(cmd: list[str], *, nproc_limit: int | None = None,
+                **kwargs) -> subprocess.Popen:
     """cli-вызов агента шага — тонкая обёртка над `subprocess.Popen`.
 
     По образцу `gitcmd.git`/`keychain.token`: отдельная точка мокинга в
@@ -96,9 +98,120 @@ def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
     обычном `subprocess.Popen` без своей группы (инцидент 04.09, SPEC
     «Контекст»). `setdefault` — явный `start_new_session` вызывающего
     кода (если он вообще появится) сильнее дефолта этой обёртки.
+
+    `nproc_limit` (SPEC 01M6KB0FS809DG55K9A20CYKJE, требование 1) —
+    готовый `RLIMIT_NPROC` процесса агента: ставится в ребёнке до `exec`,
+    мягкий и жёсткий равными, его наследуют все потомки роли. В ребёнке
+    между fork и exec — только `setrlimit` с уже посчитанным числом: ни
+    sysctl, ни `ps`, ни импортов. Без аргумента запуск прежний.
     """
     kwargs.setdefault("start_new_session", True)
+    if nproc_limit is not None:
+        limits = (nproc_limit, nproc_limit)
+        setrlimit = resource.setrlimit
+        which = resource.RLIMIT_NPROC
+
+        def _limit_nproc() -> None:
+            setrlimit(which, limits)
+
+        kwargs["preexec_fn"] = _limit_nproc
     return subprocess.Popen(cmd, **kwargs)
+
+
+# Действия журнала предела процессов шага и снятия оставшейся группы (SPEC
+# 01M6KB0FS809DG55K9A20CYKJE, требования 2-3, 5).
+NPROC_WARNING_ACTION = "предел процессов шага: предупреждение"
+NPROC_REFUSAL_ACTION = "run отклонён: запас процессов пользователя исчерпан"
+GROUP_LEFTOVER_ACTION = "agent process group terminated"
+SYSCTL = "/usr/sbin/sysctl"
+
+
+def _read_maxprocperuid() -> tuple[int | None, str]:
+    """`kern.maxprocperuid` машины: `(значение, "ok")`; `(None, "absent")`
+    — параметра нет на платформе (не macOS); `(None, "failed")` — сбой
+    чтения на macOS, в том числе пустой вывод или вывод без числа (SPEC
+    01M6KB0FS809DG55K9A20CYKJE, требование 2). `sysctl` — по абсолютному
+    пути: PATH роли собран из манифеста и `/usr/sbin` может не нести."""
+    if sys.platform != "darwin":
+        return None, "absent"
+    try:
+        res = subprocess.run([SYSCTL, "-n", "kern.maxprocperuid"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None, "failed"
+    if res.returncode != 0:
+        return None, "failed"
+    try:
+        value = int((res.stdout or "").strip())
+    except ValueError:
+        return None, "failed"
+    if value <= 0:
+        return None, "failed"
+    return value, "ok"
+
+
+def role_nproc_limit() -> int:
+    """`RLIMIT_NPROC` шага роли: min(kern.maxprocperuid − запас, мягкий и
+    жёсткий предел пульта); бесконечный предел пульта в min не участвует,
+    непрочитанный kern.maxprocperuid заменяет
+    `config.ROLE_NPROC_FALLBACK_MAXPROC` (SPEC 01M6KB0FS809DG55K9A20CYKJE,
+    требования 1-2). Одна формула на шаг и строку `doctor`."""
+    maxproc, _ = _read_maxprocperuid()
+    if maxproc is None:
+        maxproc = config.ROLE_NPROC_FALLBACK_MAXPROC
+    terms = [maxproc - config.ROLE_NPROC_RESERVE]
+    terms.extend(value for value in resource.getrlimit(resource.RLIMIT_NPROC)
+                 if value != resource.RLIM_INFINITY)
+    return min(terms)
+
+
+def _user_process_count() -> int:
+    """Число процессов пользователя пульта (`ps -U <uid>`; SPEC
+    01M6KB0FS809DG55K9A20CYKJE, требование 3). Сбой — исключение: `ps` не
+    запустился, не ответил в срок, вернул ненулевой код, пустой вывод или
+    строку не-pid; ноль процессов за сбой не выдаётся."""
+    res = subprocess.run(
+        [liveness._ps_executable(), "-U", str(os.getuid()), "-o", "pid="],
+        capture_output=True, text=True, timeout=10)
+    if res.returncode != 0:
+        raise RuntimeError(f"ps вернул код {res.returncode}: "
+                           f"{(res.stderr or '').strip()}")
+    lines = [line.strip() for line in (res.stdout or "").splitlines()
+             if line.strip()]
+    if not lines:
+        raise RuntimeError("ps: пустой вывод")
+    if not all(line.isdigit() for line in lines):
+        raise RuntimeError("ps: вывод без числа")
+    return len(lines)
+
+
+def _step_nproc_limit(conn, task_id: str, role: str) -> tuple[int, str | None]:
+    """Предел процессов шага и проверка запаса — один раз на шаг, до цикла
+    попыток (SPEC 01M6KB0FS809DG55K9A20CYKJE, требования 2-3). Возвращает
+    `(предел, текст отказа)`; текст не `None` — запас исчерпан, шаг не
+    начинается (запись журнала сделана)."""
+    _, outcome = _read_maxprocperuid()
+    limit = role_nproc_limit()
+    if outcome == "failed":
+        detail = (f"kern.maxprocperuid не прочитан — предел процессов шага "
+                  f"{limit} посчитан от значения по умолчанию "
+                  f"{config.ROLE_NPROC_FALLBACK_MAXPROC}")
+        store.journal(conn, task_id, role, NPROC_WARNING_ACTION, detail)
+        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+    try:
+        count = _user_process_count()
+    except Exception as exc:
+        detail = (f"счёт процессов пользователя недоступен: "
+                  f"{exc or type(exc).__name__} — шаг идёт с пределом {limit} "
+                  f"без сверки запаса")
+        store.journal(conn, task_id, role, NPROC_WARNING_ACTION, detail)
+        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+        return limit, None
+    if count >= limit:
+        detail = f"запас процессов пользователя исчерпан: {count} из {limit}"
+        store.journal(conn, task_id, role, NPROC_REFUSAL_ACTION, detail)
+        return limit, f"[{task_id}] run отклонён: {detail}"
+    return limit, None
 
 
 def step_role(t) -> str | None:
@@ -320,6 +433,14 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> bool | None:
         return
     target, skills, model_id = payload
 
+    # Предел процессов шага и запас (SPEC 01M6KB0FS809DG55K9A20CYKJE,
+    # требования 1-3): один раз на шаг, до цикла попыток и внутри
+    # `try/finally` снятия захвата зоны в `_cmd_run`; отказ — `sys.exit`,
+    # как прочие отказы стартовать, — `auto` останавливается с тревогой.
+    nproc_limit, nproc_refusal = _step_nproc_limit(conn, task_id, role)
+    if nproc_refusal is not None:
+        sys.exit(nproc_refusal)
+
     if role == "developer":
         action, payload = _pull_before_developer_step(conn, task_id, t)
         if action == "exit":
@@ -331,7 +452,8 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> bool | None:
 
     journaled_before = len(store.task_steps(conn, task_id))
     attempt, reason, failure_class = _run_attempts(conn, task_id, t, role,
-                                                    prompt, target)
+                                                    prompt, target,
+                                                    nproc_limit=nproc_limit)
     if attempt is None:
         # Успех шага для `cmd_run_and_advance` — завершение роли этим
         # вызовом, не таймаут и не остановка потолком бюджета (оба тоже
@@ -887,7 +1009,7 @@ def _build_prompt(conn, task_id: str, t, role: str, target: str,
 
 
 def _run_attempts(conn, task_id: str, t, role: str, prompt: str,
-                  project: str):
+                  project: str, nproc_limit: int | None = None):
     """Цикл попыток агента: `run_agent_once` + бэкофф между попытками
     (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-4/AC-6). Возвращает `(attempt,
     reason, failure_class)`; `attempt is None` — шаг обязан завершиться
@@ -895,12 +1017,14 @@ def _run_attempts(conn, task_id: str, t, role: str, prompt: str,
     тот же ранний `return`, что раньше стоял прямо в теле
     `_run_developer_step`; иначе `attempt` — номер последней попытки, как
     в прежнем теле цикла (AC-6). `project` — проект задачи, определённый
-    `_step_project` до сборки промпта."""
+    `_step_project` до сборки промпта; `nproc_limit` — предел процессов
+    шага (`_step_nproc_limit`), один на все попытки."""
     reason = ""
     failure_class = None
     for attempt in range(1, config.AGENT_ATTEMPTS + 1):
         outcome, reason, failure_class = run_agent_once(
-            conn, task_id, role, prompt, attempt, project=project)
+            conn, task_id, role, prompt, attempt, project=project,
+            nproc_limit=nproc_limit)
         # Потолок проверяем после каждой попытки, до решения о ретрае: иначе
         # три попытки подряд потратят бюджет, исчерпанный ещё первой.
         if budget.enforce_budget(conn, task_id, t["state"]):
@@ -1574,7 +1698,8 @@ def _cost_partial_expected(role: str, pump, t=None) -> bool:
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
-                   attempt: int, project: str | None = None
+                   attempt: int, project: str | None = None,
+                   nproc_limit: int | None = None
                    ) -> tuple[str, str, str | None]:
     """Один запуск агента: исход попытки, пояснение и класс отказа.
 
@@ -1594,6 +1719,10 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     промпта; без него (прямой вызов) проект определяется здесь той же
     функцией и с тем же отказом — без отката на артель (SPEC
     01M545EB0A9F191WTDSPCH36GA, требование 9).
+
+    `nproc_limit` — предел процессов шага, посчитанный до цикла попыток
+    (SPEC 01M6KB0FS809DG55K9A20CYKJE, требование 1); `None` — процесс
+    агента без предела, как до этой задачи.
     """
     # Модель, её источник и провайдер — с учётом набора задачи (SPEC
     # 01M3YCHS4F08VTV6XX10VF92H3, требования 4, 8). `provider is None` —
@@ -1625,7 +1754,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
     skip, spawn_ctx = _spawn_and_wait(
         conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
-        model_id, project, provider)
+        model_id, project, provider, nproc_limit=nproc_limit)
     if skip is not None:
         return skip
     proc, pump, rc, timed_out, killed_group = spawn_ctx
@@ -1752,7 +1881,8 @@ def _reports_vitest(project: str, task_id: str, conn=None) -> bool:
 
 def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
                     prompt_path: Path, cwd: Path, env: dict, numbered: str,
-                    model_id: str | None, project: str, provider=None):
+                    model_id: str | None, project: str, provider=None,
+                    nproc_limit: int | None = None):
     """Запуск агента и ожидание завершения: открытие промпта, `spawn_
     agent`, перекачка вывода, таймаут и снятие группы процессов (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — оставшиеся два из пяти исходов
@@ -1801,6 +1931,11 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
         # командой — туда до запуска агента (ADR-0021 п.3).
         from . import artifact_branch
         artifact_branch.send_pending()
+        # Предел процессов шага (SPEC 01M6KB0FS809DG55K9A20CYKJE,
+        # требование 1) — аргументом, только когда он посчитан: прямой
+        # вызов попытки без него запускает агента как прежде.
+        limit_kwargs = ({"nproc_limit": nproc_limit}
+                        if nproc_limit is not None else {})
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся
@@ -1808,7 +1943,7 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
                 cmd,
                 cwd=cwd, env=env, text=True, bufsize=1,
                 stdin=prompt_file, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.STDOUT, **limit_kwargs,
             )
         except FileNotFoundError:
             # Промпт уже на диске, и это весь смысл ветки: ручной прогон роли
@@ -1872,6 +2007,17 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
             proc.kill()
         rc = proc.wait()
         timed_out = True
+    else:
+        if isinstance(agent_pid, int):
+            # Обычный исход (SPEC 01M6KB0FS809DG55K9A20CYKJE, требование
+            # 5): оставленное ролью в группе шага снимается тем же
+            # механизмом, что на таймауте, и ДО `close_pump` — потомок,
+            # держащий stdout агента, иначе держал бы перекачку до
+            # `PUMP_JOIN_TIMEOUT_SEC`. Пустая группа — без записи.
+            leftover = liveness.terminate_process_group(agent_pid)
+            if leftover:
+                store.journal(conn, task_id, role, GROUP_LEFTOVER_ACTION,
+                              liveness.group_kill_detail(agent_pid, leftover))
 
     close_pump(conn, task_id, role, pump, proc)
     return None, (proc, pump, rc, timed_out, killed_group)
