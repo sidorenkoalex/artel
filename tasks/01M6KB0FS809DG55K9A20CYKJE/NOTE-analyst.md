@@ -2,18 +2,17 @@
 
 ## Выяснено
 - ТЗ достаточно для SPEC; вопросов нет. Строка ТЗ «Порядок: задача … смержена» — не «Порядок: после …», поля `merge_after` нет.
-- Шаг 2 (возврат из spec_gate по SPEC-AUDIT О-1…О-8): решения Оператора внесены в SPEC.
-  - Имя функции вычисления выбрано: `runner.role_nproc_limit`. Аргумент `spawn_agent`: `nproc_limit`.
-  - Требование 2 изменено по О-6: запись только на macOS при сбое чтения, одна на шаг; на Linux без записи.
-  - doctor: warn при N ≥ M (О-5).
-  - Критерии перенумерованы, их теперь 7: новый AC-4 — RLIM_INFINITY (О-1); AC-5 — отказ + тревога; AC-6 — снятие группы + без ожидания PUMP_JOIN_TIMEOUT_SEC / без «agent log INCOMPLETE»; AC-7 — doctor.
-- Строки кода: вызов `spawn_agent` — runner.py:1805, вызов `close_pump` — :1876 (определение — :2094), «agent run finished» — :2086, INCOMPLETE — :2104–2115.
+- Шаг 2 (возврат по SPEC-AUDIT О-1…О-8): решения внесены; функция `runner.role_nproc_limit`, аргумент `spawn_agent` — `nproc_limit`; критериев 7.
+- Шаг 3 (возврат 2, Н-1/Н-2): в SPEC названы точки подмены
+  `runner._read_maxprocperuid() -> tuple[int | None, str]` (исходы "ok"/"absent"/"failed", платформа по sys.platform внутри) и
+  `runner._user_process_count() -> int`. Правлены требования 2, 3, 6 и AC-3, AC-4, AC-5, AC-7; в AC-5 добавлен случай N = M. Прочее не трогал.
+- Строки кода: вызов `spawn_agent` — runner.py:1805, `close_pump` — :1876, «agent run finished» — :2086, INCOMPLETE — :2104–2115.
 
 ## Не сработало
 - `cd … ; grep` в одной команде Bash отклоняется — нужны абсолютные пути.
 
 ## Где остановился
-- SPEC.md переписан, status: ready, `scripts/guard.py` — ок.
+- SPEC.md обновлён, status: ready, `scripts/guard.py` — ок.
 
 ## Чего не хватило
-- Способ счёта процессов пользователя на Linux (П-5 аудита) Оператор не решал, в SPEC не добавлял («прочее не трогать»).
+- Ничего: решения Оператора по Н-1/Н-2 были полными.
