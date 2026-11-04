@@ -1,15 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 5 (spec_sha a0b091d2…): разница с e34863a1 — `git -C <wt> diff e7c8d161b 0541d03d8 -- tasks/<id>/SPEC.md`; решение №4 отражено (SPEC.md:62-67, 224-241).
-- Факты верны (config.py:57, artel.py:2562, role_prompt.py:197/503, runner.py:1017/1093/1195, gitcmd.py:25/259/263/1123, mutation_run.py:467, plank_helper.py:67); тесты PATH закрепляют только PATH[0].
-- Наблюдение: `<клон>/.git/worktrees/<чужая>` попадает в исключение клона — на ревью.
+- Визит 6 (spec_sha 5e0372ae…): разница с визитом 5 — `git diff 0541d03d8 6b37d7c08 -- tasks/<id>/SPEC.md`; решение №5 отражено (SPEC.md:47-51, 73-79, 155-161, 240-248, 263-273, 353-360).
+- Опыт: при GIT_CEILING_DIRECTORIES=<корень> git из корня находит репо, из `.artel`, `.artel/logs` — 128.
+- Вызовы git пульта у команд роли идут с cwd=ROOT или `-C` (gitcmd.py:1295, 1503-1528, 1603, 1710; plank_helper.py:71; stack.py:614 cwd=_MODULE_ROOT).
+- Клон артели: `.artel/projects/artel/repo`; копии в `.../worktrees/<id>` (вне клона).
+- Вердикт concerns: Е-1 — запрет SPEC.md:216-217 только про `git clean`, а AC-2 без потолка гоняет `reset --hard`/`checkout -- .`; Е-2 — для чужой копии (внутри ROOT) не задан приоритет строки причины.
 
 ## Не сработало
-- Bash с `$VAR` и `cd …;` в составной команде требует подтверждения — писать абсолютные пути/`git -C`.
+- Bash: только git/python3; `ls`, `$VAR` требуют подтверждения — листинг через python3.
 
 ## Где остановился
-- SPEC-AUDIT.md записан: status ready, verdict pass. Шаг завершён (guard — см. ниже).
+- SPEC-AUDIT.md записан, status ready, verdict concerns; guard ок.
 
 ## Чего не хватило
 - Ничего существенного.
