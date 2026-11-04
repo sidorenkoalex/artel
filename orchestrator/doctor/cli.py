@@ -141,6 +141,9 @@ def all_checks(conn) -> list[doctor.Check]:
     # то, чего там быть не должно»), но лечится он не кодом шага, а
     # сужением общего белого списка манифеста.
     checks.append(doctor.check_foreign_provider_secrets())
+    # Граница git роли (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требование 7) —
+    # тот же предмет «чего шаг достать не должен».
+    checks.append(doctor.check_role_git_boundary())
     checks.append(doctor.live_smoke(conn))
 
     try:

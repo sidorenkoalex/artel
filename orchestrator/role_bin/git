@@ -1,0 +1,12 @@
+#!/bin/sh
+# Обёртка git роли (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требования 2, 3, 6):
+# `runner.role_env` ставит этот каталог в PATH роли сразу после
+# `.artel/venv/bin`, проверку вызова делает `orchestrator/role_git.py`
+# рядом с каталогом. В PATH роли нет `dirname`/`realpath` — каталог обёртки
+# берётся от `$0` средствами самой оболочки.
+case "$0" in
+  */*) dir=${0%/*} ;;
+  *) dir=. ;;
+esac
+dir=$(cd -P -- "$dir" && pwd -P) || exit 127
+exec python3 -I -S "$dir/../role_git.py" "$dir" "$@"

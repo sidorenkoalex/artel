@@ -711,6 +711,29 @@ PROJECT_SKILLS_REFUSAL_ACTION = "run отклонён: project_skills проек
 # (ADR-0023, поправка 16.10, п.6).
 GIT_CONFIG_NOSYSTEM_ENV = "GIT_CONFIG_NOSYSTEM"
 
+# Граница git роли (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT, требования 1, 6, 10):
+# потолок подъёма git и корень механизма отказа — оба из разрешённого
+# `config.ROOT`; каталог обёртки — рядом с этим модулем, а не от
+# `config.ROOT`: тот же каталог, от которого обёртка считает свой корень и
+# который диспетчер `artel.py` убирает из PATH своих дочерних процессов.
+GIT_CEILING_ENV = "GIT_CEILING_DIRECTORIES"
+GIT_GUARD_ROOT_ENV = "ARTEL_GIT_GUARD_ROOT"
+ROLE_GIT_BIN = Path(__file__).resolve().parent / "role_bin"
+
+
+def path_without_role_git(path_value: str) -> str:
+    """PATH без каталога обёртки git роли; прочие элементы и их порядок
+    прежние (требование 5)."""
+    keep = []
+    for item in path_value.split(os.pathsep):
+        try:
+            same = bool(item) and Path(item).resolve() == ROLE_GIT_BIN
+        except OSError:
+            same = False
+        if not same:
+            keep.append(item)
+    return os.pathsep.join(keep)
+
 
 class StepProjectError(Exception):
     """Проект задачи на пути шага не определён; текст — причина."""
@@ -1159,6 +1182,14 @@ def role_env(role: str | None = None, task_id: str | None = None,
     (SPEC 01M545EB0A9F191WTDSPCH36GA, требование 4), системный git-конфиг
     машины в его шаг не попадает. Артель и вызовы без проекта (doctor,
     офлайн-смоки) — без изменений (требование 6).
+
+    Граница git роли (SPEC 01M6JJ4J4NBV2Y1Q4XHE3C3FVT): вторым элементом
+    PATH — обёртка git `orchestrator/role_bin/` (отказ git в репозитории
+    пульта, в чужой задаче и `git clean`, `orchestrator/role_git.py`);
+    `GIT_CEILING_DIRECTORIES` не даёт git из каталогов `.artel`, которые
+    сами не репозитории, подняться до репозитория пульта;
+    `ARTEL_GIT_GUARD_ROOT` добавляет обёртке защищаемый корень —
+    `config.ROOT` этого вызова (дублёр в тестах).
     """
     resolved = _resolve_declared_tools()
     venv_bin = _venv_interpreter_bin()
@@ -1175,7 +1206,15 @@ def role_env(role: str | None = None, task_id: str | None = None,
     env.update(provider.environment(role, task_id))
     if project is not None and not repo_context.is_artel(project):
         env[GIT_CONFIG_NOSYSTEM_ENV] = "1"
-    env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
+    env["PATH"] = os.pathsep.join([venv_bin, str(ROLE_GIT_BIN)]
+                                  + _role_path_dirs(resolved))
+    # Потолок равен самому корню (решение Оператора, возврат 5): при
+    # потолке `<ROOT>/.artel` git из самого `.artel` находит репозиторий
+    # пульта. Значение разрешено (`/tmp` → `/private/tmp`): git сравнивает
+    # потолок с физическим путём текущего каталога.
+    guard_root = str(Path(config.ROOT).resolve())
+    env[GIT_CEILING_ENV] = guard_root
+    env[GIT_GUARD_ROOT_ENV] = guard_root
     if role:
         env[config.ARTEL_ROLE_ENV] = role
     if task_id:
