@@ -109,6 +109,12 @@ NO_ANSWER_FLAG = "--no-answer"
 # Эпик из поделённого родителя на гейте SPEC (SPEC
 # 01M5TBBDFS6DWQY6MS263T1KPY, требование 7).
 AS_EPIC_FLAG = "--as-epic"
+# Указание Оператора на гейте SPEC (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF):
+# `approve <id> --note <файл>` пишет текст файла записью этого действия,
+# читает её `brief.spec_gate_note`. Действие не начинается с `state -> `:
+# выборки переходов и гейтов мандатов запись не видят.
+SPEC_GATE_NOTE_FLAG = "--note"
+SPEC_GATE_NOTE_ACTION = "указание Оператора на гейте SPEC"
 # Мерж и запись в main при живом прогоне канарейки (SPEC
 # 01M5C6QA6S3RY9PS4H9ZJ58WQ0, требование 6); здесь, а не в `canary`:
 # `canary` импортирует этот модуль.
@@ -950,7 +956,8 @@ def cmd_approve(task_id: str, sha: str | None = None,
                fresh_suite: bool = False,
                accept_audit_fail: bool = False,
                during_canary: str | None = None,
-               as_epic: bool = False) -> None:
+               as_epic: bool = False,
+               note: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -984,16 +991,117 @@ def cmd_approve(task_id: str, sha: str | None = None,
 
     `as_epic` (SPEC 01M5TBBDFS6DWQY6MS263T1KPY, требование 7) — флаг
     `approve <id> [sha] --as-epic`: эпик из поделённого родителя на гейте
-    SPEC. Отказы флага — до `lease.run_locked` и без записей."""
+    SPEC. Отказы флага — до `lease.run_locked` и без записей.
+
+    `note` (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF, требования 1-4) — файл флага
+    `approve <id> --note <файл>`: указание Оператора на гейте SPEC для
+    test_author и ревьювера. Отказы флага — до lease без записей и
+    повторно под lease; без флага `_cmd_approve` зовётся прежним вызовом."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     as_epic_goal = _as_epic_goal(conn, task_id) if as_epic else None
+    note_text = (_spec_gate_note_text(conn, task_id, note)
+                 if note is not None else None)
     lease.run_locked(
         conn, task_id, session_id,
-        lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
-                                 fixes_main, no_answer, fresh_suite,
-                                 accept_audit_fail, during_canary,
-                                 as_epic_goal))
+        lambda sid: (_cmd_approve(conn, task_id, sha, sid, accept_red,
+                                  fixes_main, no_answer, fresh_suite,
+                                  accept_audit_fail, during_canary,
+                                  as_epic_goal)
+                     if note_text is None else
+                     _cmd_approve(conn, task_id, sha, sid, accept_red,
+                                  fixes_main, no_answer, fresh_suite,
+                                  accept_audit_fail, during_canary,
+                                  as_epic_goal, note_text=note_text)))
+
+
+def _spec_gate_note_state_refusal(t) -> str:
+    return (f"флаг {SPEC_GATE_NOTE_FLAG} допустим только в состоянии "
+            f"spec_gate, задача в {t['state']}")
+
+
+def _spec_gate_note_text(conn, task_id: str, note_file: str) -> str:
+    """Текст файла указания `approve --note` — либо отказ до lease без
+    единой записи (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF, требования 1-4):
+    задача не на гейте SPEC; файл не прочитан, крупнее
+    `config.CONTEXT_FILE_MAX_BYTES` байт или пуст после `strip()`; в нём
+    строка мандата или заголовок файла решения; `approve` поведёт задачу
+    не в `tests_writing`."""
+    t = store.get_task(conn, task_id)
+    if t["state"] != "spec_gate":
+        sys.exit(f"[{task_id}] approve отклонён: "
+                 f"{_spec_gate_note_state_refusal(t)}")
+    path = Path(note_file)
+    try:
+        # Предел — по байтам файла: `read_text` сворачивает CRLF в LF, и
+        # длина прочитанного текста меньше размера файла.
+        size = len(path.read_bytes())
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"[{task_id}] approve отклонён: флаг {SPEC_GATE_NOTE_FLAG}: "
+                 f"файл указания {note_file} не прочитан ({exc})")
+    if size > config.CONTEXT_FILE_MAX_BYTES:
+        sys.exit(f"[{task_id}] approve отклонён: флаг {SPEC_GATE_NOTE_FLAG}: "
+                 f"файл указания {note_file} — {size} байт, больше предела "
+                 f"{config.CONTEXT_FILE_MAX_BYTES}")
+    if not text.strip():
+        sys.exit(f"[{task_id}] approve отклонён: флаг {SPEC_GATE_NOTE_FLAG}: "
+                 f"файл указания {note_file} пуст")
+    reason = (_spec_gate_note_content_refusal(task_id, text)
+              or _spec_gate_note_path_refusal(conn, task_id))
+    if reason:
+        sys.exit(f"[{task_id}] approve отклонён: флаг {SPEC_GATE_NOTE_FLAG}: "
+                 f"{reason}")
+    return text
+
+
+def _spec_gate_note_content_refusal(task_id: str, text: str) -> str:
+    """Почему текст не принят указанием: строка мандата (подсказка — по
+    виду маркера) или заголовок файла решения; пустая строка — принят.
+    `answer._has_mandate_lines` не импортируется: `answer` импортирует
+    этот модуль."""
+    from . import spec_gate_decision
+    from .advance_gates import mandate
+    test_markers = (mandate.TEST_WEAKENING_MANDATE_MARKER,
+                    mandate.TEST_ID_MANDATE_MARKER)
+    for line in text.splitlines():
+        for marker in mandate.MANDATE_MARKERS:
+            if mandate.line_elements(line, marker) is None:
+                continue
+            if marker in test_markers:
+                return (f"строка мандата тестов «{marker}» — мандат подаётся "
+                        f"файлом ответа: artel.py answer {task_id} <файл>")
+            return (f"строка мандата «{marker}» — зоны и зависимости мержа "
+                    f"задаются полями SPEC и подаются возвратом SPEC: "
+                    f"artel.py reject {task_id} …")
+    if spec_gate_decision.starts_with_header(text):
+        return (f"файл начинается заголовком файла решения — он подаётся "
+                f"возвратом: artel.py reject {task_id} --decision <файл>")
+    return ""
+
+
+def _spec_gate_note_path_refusal(conn, task_id: str) -> str:
+    """Почему `approve` поведёт задачу не в `tests_writing` — те же
+    условия, что ветви обработчика `_approve_spec_gate` (деление,
+    `skip_tests`, SPEC без AC-разметки); пустая строка — поведёт. SPEC
+    читается напрямую, как в `_as_epic_goal`: узел
+    `_read_branch_text_or_refuse` свой отказ журналирует."""
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    text, reason = artifact_branch.show(task_id, branch,
+                                        f"tasks/{task_id}/SPEC.md")
+    if text is None:
+        return f"SPEC не прочитан ({reason})"
+    meta = yamlmini.frontmatter(text) or {}
+    if guard.parse_division_subsections(text):
+        return ("SPEC несёт деление — approve заведёт части, а не "
+                "tests_writing; указанию некого ждать")
+    if meta.get("skip_tests"):
+        return ("SPEC несёт skip_tests — approve уведёт задачу в in_dev "
+                "мимо tests_writing")
+    if not guard.requires_ac_markup(meta):
+        return ("SPEC без AC-разметки — approve уведёт задачу в in_dev "
+                "мимо tests_writing")
+    return ""
 
 
 def _as_epic_state_refusal(t) -> str:
@@ -1336,7 +1444,8 @@ def _spec_protected_zones_refusal(conn, task_id: str, meta: dict) -> str:
 
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
                        accept_audit_fail: bool = False,
-                       as_epic_goal: str | None = None) -> None:
+                       as_epic_goal: str | None = None,
+                       note_text: str | None = None) -> None:
     # Последний вердикт аудита SPEC `fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD,
     # требование 16) проходит гейт только явным флагом Оператора — раньше
     # всех прочих сверок: без флага решать здесь нечего. Вердикт — из
@@ -1506,6 +1615,12 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str,
         from .advance_gates.tests_writing import SPEC_GATE_PASSED_DETAIL
         store.set_state(conn, task_id, "tests_writing", "operator",
                         expected_state=state, detail=SPEC_GATE_PASSED_DETAIL)
+        # Указание — только после выигранного перехода: проигранный
+        # `set_state` (CasConflict, DocsRefIncident) записи не оставляет.
+        if note_text is not None:
+            store.journal(conn, task_id, "operator", SPEC_GATE_NOTE_ACTION,
+                          note_text)
+            print(f"[{task_id}] {SPEC_GATE_NOTE_ACTION}: записано")
         print("  дальше: " + cycle_hint.launch_text(
             conn, task_id, "run", "(запуск test_author)"))
 
@@ -1785,7 +1900,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
                  fresh_suite: bool = False,
                  accept_audit_fail: bool = False,
                  during_canary: str | None = None,
-                 as_epic_goal: str | None = None) -> None:
+                 as_epic_goal: str | None = None,
+                 note_text: str | None = None) -> None:
     # Неподдержанный проект (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование
     # 5) — первым действием под lease, до таблицы состояний: в любом
     # состоянии, иначе гейт мержа влил бы ветку в `base` проекта с гейтом
@@ -1800,6 +1916,17 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # появиться у задачи между проверкой и lease.
     if as_epic_goal is not None and (state != "spec_gate" or t["epic_id"]):
         sys.exit(f"[{task_id}] approve отклонён: {_as_epic_state_refusal(t)}")
+    # Повтор проверок `--note` под lease (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF,
+    # требования 1, 3): состояние и SPEC могли смениться между проверкой и
+    # lease — отказ без записей, как до lease.
+    if note_text is not None:
+        if state != "spec_gate":
+            sys.exit(f"[{task_id}] approve отклонён: "
+                     f"{_spec_gate_note_state_refusal(t)}")
+        reason = _spec_gate_note_path_refusal(conn, task_id)
+        if reason:
+            sys.exit(f"[{task_id}] approve отклонён: флаг "
+                     f"{SPEC_GATE_NOTE_FLAG}: {reason}")
     if no_answer and state != "escalated":
         sys.exit(f"[{task_id}] approve отклонён: флаг {NO_ANSWER_FLAG} "
                  f"допустим только в состоянии escalated, задача в {state}")
@@ -1831,10 +1958,14 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`,
     # `no_answer` (SPEC 01M44ENW1B73Z80PR73HP1C9CG) — только для `escalated`,
     # `accept_audit_fail` (SPEC 01M4MQAGRWMWR0GFDM9086P3TD) — для `spec_gate`.
+    # `note_text` (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF) — тоже для `spec_gate`,
+    # и только при флаге: без него `partial` прежний.
+    spec_gate_kwargs = ({} if note_text is None
+                        else {"note_text": note_text})
     handler = {
         "spec_gate": partial(_approve_spec_gate,
                              accept_audit_fail=accept_audit_fail,
-                             as_epic_goal=as_epic_goal),
+                             as_epic_goal=as_epic_goal, **spec_gate_kwargs),
         "acceptance": partial(_approve_acceptance, accept_red=accept_red,
                               fresh_suite=fresh_suite),
         "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main,

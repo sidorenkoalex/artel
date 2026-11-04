@@ -186,7 +186,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
                [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
            [--fresh-suite] [--no-answer] [--accept-audit-fail]
-           [--during-canary "<основание>"] [--as-epic] |
+           [--during-canary "<основание>"] [--as-epic] [--note <файл>] |
   reject <id> "<причина>" | reject <id> --decision <файл> | spec-audit <id> |
   verify-ok <id> <имя> <sha> "<итог>" | verify-fail <id> <имя> "<причина>" |
   answer <id> <файл-с-ответом> |
@@ -2221,10 +2221,11 @@ ACCEPT_AUDIT_FAIL_FLAG = spec_audit.ACCEPT_FAIL_FLAG
 
 
 def _approve_reason_indices(rest: list) -> set[int]:
-    """Позиции флагов `--accept-red`/`--fixes-main`/`--during-canary` и их
-    оснований."""
+    """Позиции флагов `--accept-red`/`--fixes-main`/`--during-canary`/
+    `--note` и их значений."""
     skipped: set[int] = set()
-    for flag in (ACCEPT_RED_FLAG, FIXES_MAIN_FLAG, DURING_CANARY_FLAG):
+    for flag in (ACCEPT_RED_FLAG, FIXES_MAIN_FLAG, DURING_CANARY_FLAG,
+                 NOTE_FLAG):
         if flag in rest:
             flag_idx = rest.index(flag)
             skipped.update((flag_idx, flag_idx + 1))
@@ -2279,6 +2280,24 @@ def _approve_as_epic_kwargs(rest: list) -> dict:
     требование 7) — эпик из поделённого родителя на гейте SPEC. Без флага —
     прежний вызов `fsm.cmd_approve` без нового параметра."""
     return {"as_epic": True} if _approve_bool_flag(rest, AS_EPIC_FLAG) else {}
+
+
+NOTE_FLAG = fsm.SPEC_GATE_NOTE_FLAG
+
+
+def _approve_note_kwargs(rest: list) -> dict:
+    """Флаг `approve <id> --note <файл>` (SPEC 01M6KWKZ8GKZZFABDG8QC9RDJF,
+    требование 1) — указание Оператора на гейте SPEC. Нет значения или
+    значение — другой флаг — отказ до lease; без флага — прежний вызов
+    `fsm.cmd_approve` без нового параметра."""
+    if NOTE_FLAG not in rest[1:]:
+        return {}
+    idx = rest.index(NOTE_FLAG, 1)
+    value = rest[idx + 1] if idx + 1 < len(rest) else ""
+    if not value or value.startswith("--"):
+        sys.exit(f"[{rest[0]}] approve отклонён: флаг {NOTE_FLAG} требует "
+                 f"файл указания следующим аргументом, а не флаг")
+    return {"note": value}
 
 
 _ANSWER_SYNTAX = "artel.py answer {id} <файл-с-ответом>"
@@ -2701,7 +2720,8 @@ def main() -> None:
             no_answer=_approve_no_answer_arg(rest),
             accept_audit_fail=_approve_accept_audit_fail_arg(rest),
             **_approve_during_canary_kwargs(rest),
-            **_approve_as_epic_kwargs(rest)),
+            **_approve_as_epic_kwargs(rest),
+            **_approve_note_kwargs(rest)),
         "reject": lambda: _cmd_reject(rest),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
         # Решения Оператора по ручной проверке `verify` — вне белого списка
