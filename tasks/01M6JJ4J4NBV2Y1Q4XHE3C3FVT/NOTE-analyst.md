@@ -1,15 +1,15 @@
 # Записка analyst
 
 ## Выяснено
-- Итерация 2 (возврат spec_gate по SPEC-AUDIT concerns): SPEC переписан, status: ready, guard ок. 9 требований, 18 AC, budget_usd 90.
-- Закрыто: Е1 (требование 7 и AC-17 — только неразрушительный `git clean -n`/дублёр в временном подкаталоге `.artel`, тесты в песочнице); В1 (AC-1 + `.artel/logs`); В2 (AC-3 `--work-tree`/`GIT_WORK_TREE`, AC-6 `--config-env`/`GIT_CONFIG_COUNT`/`!`-псевдоним из `.git/config`, AC-7 pager/fsmonitor вложенный clean + `-c core.pager=cat log` успех); В4 (AC-17 — две подмены: без границы и без отказа clean); В3 (AC-13 — test_author и developer, `docs_dir_note` role_prompt.py:503, вызов :197); Е3 — прочтение «б» в требовании 3; А1 — перенос замера в PLAN принят, в требовании 6; Б1 — `_push_plan` gitcmd.py:1123, требование 8 правит docs/stack.md:529-535 и таблицу :568-578; Е2/Е4 — в «Не входит» и требование 8.
-- AC перенумерованы: старые AC-3..15 сдвинулись (AC-4 = прежний AC-3 и т.д.).
+- Итерация 3 (возврат 2 по SPEC-AUDIT, П1/П2, решение Оператора «б»): правлены только требование 3 (абзац «Объём отказа»), AC-7 и строка «Не входит» про pager/fsmonitor. Прочее SPEC не тронуто; guard ок, status: ready, 18 AC, budget_usd 90.
+- Требование 3: отказ верхнего уровня любого вызова git в репозитории внутри ROOT, если core.pager/core.fsmonitor (из -c, --config-env, GIT_CONFIG_PARAMETERS/COUNT, файлов конфигурации, включая .git/config) или GIT_PAGER содержат вызов git как команду; cat/less допустимы; GIT_EXEC_PATH не подменяется; ложное «вложенный git идёт через PATH» убрано, вместо него — основание (git ставит exec-path первым в PATH детей).
+- AC-7: перечень форм, код ≠ 0, строка с task-rm, файлы целы, таймаут 30 с на вызов, cat/less log — успех, мутация «не читает pager/fsmonitor из .git/config» краснит.
 
 ## Не сработало
-- Длинная python-heredoc правка через Bash — «Parser aborted»; SPEC переписан инструментом Write целиком.
+- `cmd; echo rc=$?` в Bash отклоняется («simple_expansion») — запускать guard без `$?`.
 
 ## Где остановился
 - Готово; ждёт аудита/гейта SPEC.
 
 ## Чего не хватило
-- В PATH шага нет `ls`/`awk` без подтверждения — читать через python3/Read.
+- Ничего существенного.
