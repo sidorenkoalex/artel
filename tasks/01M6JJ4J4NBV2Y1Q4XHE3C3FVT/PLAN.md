@@ -127,6 +127,31 @@ schema_version: 5
      файл. Мутация «отказ `sub == "clean"` выключен» в одиночку
      эквивалентна: слово `clean` отклоняет и `_alias_refusal`; выключение
      обоих мест — 4 красных теста.
+10. Итерация 3 (возврат с гейта мержа, ANSWER-1: две обёртки на PATH
+    передавали вызов друг другу — требование 6):
+    - `role_git.is_role_wrapper` — признак обёртки любой копии пульта:
+      рядом с каталогом лежит `../role_git.py` либо файл несёт маркер
+      `artel-role-git-wrapper` (добавлен в `role_bin/git`);
+      `role_git.real_git` пропускает каждый такой `git` на PATH, не только
+      свой каталог — обёртка никогда не зовёт другую обёртку. Переменной
+      вложенного вызова нет (п. 3 возврата отменён ANSWER-1).
+    - `runner._resolve_declared_tools`: если `shutil.which("git")` —
+      обёртка (любой копии), берётся `role_git.real_git` — в PATH роли
+      попадает каталог настоящего git, а не каталог чужого `role_bin`.
+    - Тесты `tests/test_role_git.py`: `TwoWrappersTest` — копия пакета
+      обёртки во временном каталоге и своя обёртка на одном PATH (оба
+      порядка); `--version`, `status` вне корня и `status` в своей копии
+      дублёра (обёртка читает `git config`) — код 0 за 10 с; вызов в своей
+      группе процессов под `RLIMIT_NPROC` (запущенные + 64), по таймауту
+      группа снимается `killpg`; число запусков настоящего git — через
+      шим-счётчик, 1..3. `RoleEnvForeignWrapperTest` — `role_env` при
+      чужой обёртке первой на PATH несёт ровно один каталог обёртки — свой.
+      Мутации: старый `real_git` (только свой каталог) — `TwoWrappersTest`
+      красный (снят таймаутом); `which` без фильтра в `runner` —
+      `RoleEnvForeignWrapperTest` красный. `DoctorBoundaryTest.env` (тест
+      этой задачи) собирает PATH без обёрток любой копии.
+    - Существующие тесты `tests/` не правились (в том числе
+      `test_multitarget` сверх `commit_probe`).
 
 ## Покрытие требований
 
@@ -137,11 +162,21 @@ schema_version: 5
 | 3 | 1, 9 |
 | 4 | 3, 4, 9 |
 | 5 | 3 |
-| 6 | 2 (замер — «Подход») |
+| 6 | 2, 10 (замер — «Подход») |
 | 7 | 5 |
 | 8 | 7 |
 | 9 | 6, 7 |
 | 10 | 1, 2 |
+
+Итерация 3: планка `plank-run` — 119 passed; `tests/test_role_git.py`,
+долгоживущий файл задачи, `test_multitarget`, `test_providers`,
+`test_codex_login_shell_path`, `test_01m5kjne39…_direct_git`,
+`test_runner_role_environment`, `test_stack` — 160 passed; `test_codebase_map`
+— 34 passed. Сценарий возврата: копия пакета обёртки первой на PATH процесса
+pytest — `test_multitarget` (в том числе
+`RoleEnvTest::test_commit_of_the_step_passes_with_that_environment`) и
+`tests/test_role_git.py` зелёные, без зависания; см. «Риски» о
+долгоживущем `test_ac16_wrapper_dir_second_in_role_path_before_git`.
 
 Итерация 2: планка `plank-run` — 119 passed; `tests/test_role_git.py`,
 долгоживущий файл задачи, `test_multitarget`, `test_codebase_map` — 110
@@ -193,6 +228,18 @@ passed; на настоящем git через обёртку в дублёре
   pager-ом из файла конфигурации на tty, рабочее дерево вне корня с
   каталогом `.git` внутри корня (`git worktree add /tmp/x` пульта).
 - Вложенный git в своих хуках клона идёт мимо обёртки — как и прежде.
+- Долгоживущий
+  `tests/test_01m6jj4j4nbv2y1q4xhe3c3fvt_role_git_boundary.py::test_ac16_wrapper_dir_second_in_role_path_before_git`
+  (файл залочен, не правился): его помощник `_real_git` пропускает только
+  каталог обёртки рабочей копии. При прямом `pytest` из рабочей копии,
+  когда на PATH процесса стоит обёртка ДРУГОЙ копии (главной после мержа),
+  `_real_git` отдаёт её каталог, а `role_env` по п. 2 возврата этот каталог
+  в PATH роли больше не кладёт — тест красный (воспроизведено: 2 failed).
+  В CI, `suite-run`, `plank-run` и при обычном прямом прогоне — зелёный.
+  Класс тот же, что принятый пропуск `Ac7WrapperMachineTest` (матрица
+  неослабления SPEC). Если Оператор сочтёт это расхождением — правка
+  `amend-tests`: `_real_git` пропускает любой каталог, где `git` —
+  обёртка роли (`role_git.is_role_wrapper`).
 
 ## Предложения системе
 - `task-rm` недоступен роли до мержа задачи (роль зовёт `artel.py` главной
