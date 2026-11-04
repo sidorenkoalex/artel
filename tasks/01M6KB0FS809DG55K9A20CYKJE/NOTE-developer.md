@@ -1,20 +1,16 @@
-# Записка developer
+# Записка developer, итерация 2
 
 ## Выяснено
-- Реализация: runner.spawn_agent(nproc_limit=) → preexec_fn с setrlimit; runner._read_maxprocperuid/role_nproc_limit/_user_process_count/_step_nproc_limit; вызов _step_nproc_limit в _run_developer_step после _refuse_before_start, до подтяжки и _run_attempts; предел протянут _run_attempts → run_agent_once → _spawn_and_wait (kwarg nproc_limit).
-- Снятие группы на обычном исходе — ветка else у proc.wait в _spawn_and_wait, до close_pump; запись action "agent process group terminated".
-- doctor: orchestrator/doctor/role_nproc.py, строка role-nproc, регистрация в cli.all_checks после machine-load.
-- plank-run: 27 passed; долгоживущий файл: 3 passed.
+- R1-F1 закрыт: tests/test_role_nproc_step.py (7 тестов, песочница DeveloperBriefTmpRootTest как в test_agent_log::CmdRunLoggingTest + ARTEL_ROLE_ENV="" и восстановление SIGTERM как в планке _step.py). Снятие группы проверено подменой liveness.terminate_process_group и FakeProc с целым pid.
+- Семь временных мутаций runner.py (>=→>, передача из _run_attempts, failed→!=ok, нет предупреждения, leftover=0, if True, неловимое исключение счёта) — каждая красит тест; код восстановлен.
+- R1-F2 размечен rejected: SPEC требует, чтобы шаг и doctor звали саму role_nproc_limit().
+- Карта регенерирована; затронутые тесты — 104 passed; claims/lint нового файла чисты.
 
 ## Не сработало
-- Bash: ls/awk недоступны; cd + git отклоняется.
-
-- Свой тест tests/test_role_nproc_limit.py (7 тестов), сторожа проверены мутацией; затронутые модули — 624 passed.
-- Приложение skills/test-authoring.md: git apply --check проходит (диф из ТЗ, закрывающий ``` вынесен на свою строку).
-- guard.py на файле tests/ ругается «нет frontmatter» — это не артефакт, применим только к tasks/; заявки мутаций проверены guard.test_functions_without_mutation_claim.
+- Bash: heredoc python с f-строкой отклоняется («brace with quote») — сценарий мутаций пришлось писать файлом и убирать task-rm.
 
 ## Где остановился
-- Готово: код, тесты, docs/stack.md, карта, PLAN.md status: ready.
+- Готово: тесты, REVIEW-реестр размечен, PLAN.md status: ready.
 
 ## Чего не хватило
-- Как прогнать линт заявок мутаций/детерминизма для своего теста — пришлось звать функции guard/test_lint вручную.
+- Ничего существенного.

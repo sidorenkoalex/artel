@@ -66,6 +66,13 @@ schema_version: 5
    и `ps`, статусы строки `doctor`). Сторожа проверены мутацией: сравнение
    строки `doctor` с `kern.maxprocperuid` вместо предела шага и снятая
    проверка кода `ps` — каждый тест краснеет на своей.
+   Итерация 2 (R1-F1): `tests/test_role_nproc_step.py` — сторожа поведения
+   шага через `runner.cmd_run` с `FakeProc`: отказ при N = M (SystemExit,
+   агент не порождён, захвата зоны нет), `nproc_limit` в каждой попытке,
+   однократные предупреждения (`failed`, сбой счёта) и их отсутствие
+   (`absent`), снятие группы на обычном исходе до `close_pump` и запись
+   только при непустой группе. Проверены семью временными мутациями
+   `runner.py` — каждая красит тест.
 5. `docs/stack.md` (раздел «Провайдер исполнителя роли», абзац «Предел
    числа процессов шага»), `docs/codebase-map.md` регенерирован.
 6. Приложение `skills/test-authoring.md` — ниже.
@@ -76,7 +83,8 @@ schema_version: 5
 `test_step_project`, `test_auto_cycle`, `test_liveness`,
 `test_invariants`, `test_agent_failure`, `test_step_cost`,
 `test_providers*`, `test_runner_*`, прочие тесты запуска шага) — 624
-passed.
+passed. Итерация 2: `test_role_nproc_step`, `test_role_nproc_limit`,
+долгоживущий, `test_agent_log`, `test_codebase_map` — 104 passed.
 
 ## Покрытие требований
 
