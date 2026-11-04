@@ -1579,6 +1579,8 @@ BASE_MOVED_DETAIL = "base сдвинулся — подготовка ветки
 APPENDIX_REFUSAL_DETAIL = ("приложения не применяются в проекте с "
                            "target-human — правку вносят люди проекта")
 MR_EXISTS_DETAIL = "MR ветки уже существует, ссылки в БД нет"
+MR_PARTIAL_DETAIL = ("MR открыт и ссылка сохранена, его чтение не удалось — "
+                     "задача ждёт на гейте")
 PEOPLE_REFUSED_ACTION = "approve отклонён"
 HEAD_UNCONFIRMED_ACTION = "approve отклонён: голова не подтверждена"
 MR_REFUSED_ACTION = "approve отклонён: MR"
@@ -1842,7 +1844,8 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
     """MR через `forge` (требование 4): ссылки в БД нет — открыть MR ветки
     в `base`; ссылка есть — снять черновик и назначить исполнителя у этого
     MR, описание не трогается. Успех — `awaiting_human`; 409 открытия без
-    ссылки — эскалация; иной отказ — задача на гейте.
+    ссылки или признак `already_exists` — эскалация; иной отказ (в том
+    числе MR открыт, а чтение не удалось) — задача на гейте.
 
     Точка ответвления считается до MR: без неё сверка `mr-sync` навсегда
     дала бы «неизвестно», и задачу из `awaiting_human` вывел бы только
@@ -1859,9 +1862,18 @@ def _deliver_mr(conn, task_id: str, state: str, head: str,
     if iid is None:
         result = github_adapter.open_forge_mr(conn, task_id, row, head,
                                               draft=False)
+        if result.reason and result.iid is not None:
+            # MR открыт и ссылка сохранена (`open_forge_mr`), не удалось
+            # чтение — это не «MR не открыт» (SPEC 01M6M1799YCY5HXMHHD71SHJET,
+            # требование 2); повторный `approve` идёт по ссылке.
+            _people_refusal(conn, task_id, MR_REFUSED_ACTION,
+                            f"{MR_PARTIAL_DETAIL} — MR !{result.iid} "
+                            f"{result.url or ''}: {result.reason}")
+            return ("stopped",)
         if result.reason:
             code = _HOSTING_CODE.search(result.reason)
-            if code is not None and code.group(1) == _CONFLICT_CODE:
+            if result.already_exists or (
+                    code is not None and code.group(1) == _CONFLICT_CODE):
                 store.set_state(conn, task_id, "escalated", "fsm",
                                 expected_state=state,
                                 detail=f"{MR_EXISTS_DETAIL}: {result.reason}")
@@ -1891,7 +1903,7 @@ def _ready_existing_mr(conn, task_id: str, target: str, iid: int) -> bool:
     store.journal(conn, task_id, "orchestrator", "MR снят с черновика",
                   f"MR !{iid}")
     policy = targets.delivery_policy(targets.target(target))
-    assignee, note = github_adapter.mr_assignee(policy)
+    assignee, note = github_adapter.mr_assignee(policy, target)
     if assignee is None:
         store.journal(conn, task_id, "orchestrator",
                       github_adapter.MR_ASSIGNEE_ACTION, note)

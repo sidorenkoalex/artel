@@ -340,6 +340,8 @@ def undraft_mr(conn, task_id: str, t) -> None:
 MR_OPENED_ACTION = "MR открыт"
 MR_ASSIGNEE_ACTION = "исполнитель MR"
 ASSIGNEE_NOT_NUMERIC = "исполнитель не числовой id — не назначен"
+ASSIGNEE_NOT_NAME = ("исполнитель не имя пользователя по правилу имён GitHub "
+                     "— не назначен")
 DRAFT_MR_REFUSAL_ACTION = "переход отклонён: черновой MR не открыт"
 # Отказ `approve` гейта мержа пределом `policy.max_awaiting` — его читает
 # строка `status` (`catalog`), пишет гейт мержа.
@@ -369,16 +371,35 @@ def people_entry(target_name: str) -> dict | None:
     return entry if targets.merged_by_project_people(entry) else None
 
 
-def mr_assignee(policy: dict) -> tuple[int | None, str]:
-    """(id исполнителя для `forge`, запись журнала о неназначенном): id —
-    только целое (`targets.delivery_policy` уже сделал целым строку цифр);
-    иное значение и отсутствие поля — без исполнителя с записью."""
+def mr_assignee(policy: dict,
+                target: str | None = None) -> tuple[int | str | None, str]:
+    """(исполнитель для `forge`, запись журнала о неназначенном). Вид
+    исполнителя задаёт реализация хостинга проекта `target`
+    (`forge.assignee_by_name`, SPEC 01M6M1799YCY5HXMHHD71SHJET, требование
+    8): по имени — имя пользователя или целое строкой; иначе, а также без
+    проекта и при неопределённом хостинге — только целое
+    (`targets.delivery_policy` уже сделал целым строку цифр). Иное значение
+    и отсутствие поля — без исполнителя с записью."""
     value = policy.get("mr_assignee")
+    if target is not None and forge.assignee_by_name(target):
+        return _assignee_by_name(value)
     if isinstance(value, int) and not isinstance(value, bool):
         return value, ""
     if value is None:
         return None, f"{ASSIGNEE_NOT_NUMERIC}: policy.mr_assignee не задан"
     return None, f"{ASSIGNEE_NOT_NUMERIC}: policy.mr_assignee = {value!r}"
+
+
+def _assignee_by_name(value) -> tuple[str | None, str]:
+    """Исполнитель по имени: `@me`, `@copilot`, список через запятую,
+    ведущий `-` и пробел правилу имён не отвечают — не назначен."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if forge.github_name_ok(value):
+        return value, ""
+    if value is None:
+        return None, f"{ASSIGNEE_NOT_NAME}: policy.mr_assignee не задан"
+    return None, f"{ASSIGNEE_NOT_NAME}: policy.mr_assignee = {value!r}"
 
 
 def mr_description(task_id: str, branch: str, head: str, repo,
@@ -403,8 +424,10 @@ def open_forge_mr(conn, task_id: str, t, head: str, *,
                   draft: bool) -> forge.MergeRequest:
     """Открывает MR ветки задачи в `base` её проекта через `forge`; успех —
     ссылка (`iid`, `web_url`) в столбцах задачи и в журнале, запись о
-    неназначенном исполнителе. Отказ хостинга — результат с `reason`,
-    ссылка не пишется; решение — за вызывающим."""
+    неназначенном исполнителе. Отказ хостинга — результат с `reason`;
+    ссылка пишется и тогда, когда отказ несёт `iid` (MR открыт, чтение не
+    удалось, SPEC 01M6M1799YCY5HXMHHD71SHJET, требование 2): иначе следующая
+    попытка открыла бы второй MR. Решение — за вызывающим."""
     target_name = t["target"] or config.DEFAULT_TARGET
     try:
         entry = targets.target(target_name)
@@ -413,14 +436,15 @@ def open_forge_mr(conn, task_id: str, t, head: str, *,
     ctx = repo_context.resolve(target_name)
     repo = repo_context.path_or_none(ctx)
     protected = repo_context.protected_paths(ctx) if ctx is not None else ()
-    assignee, note = mr_assignee(targets.delivery_policy(entry))
+    assignee, note = mr_assignee(targets.delivery_policy(entry), target_name)
     body = mr_description(task_id, t["branch"], head, repo, protected)
     title = f"{task_id}: {t['title'] or task_id}"
     result = forge.open_mr(target_name, t["branch"], entry["base"], title,
                            body, draft, assignee)
+    if result.iid is not None:
+        store.set_mr_link(conn, task_id, result.iid, result.url)
     if result.reason:
         return result
-    store.set_mr_link(conn, task_id, result.iid, result.url)
     kind = "черновой MR" if draft else "MR"
     store.journal(conn, task_id, "orchestrator", MR_OPENED_ACTION,
                   f"{kind} !{result.iid} {result.url or ''} ветки "
