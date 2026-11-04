@@ -10,9 +10,11 @@
 б2) — зафиксированное состояние документов задачи — коммит ссылки
 `refs/artifacts/<id>` в репозитории задачи (`artifact_branch.task_repo`).
 """
+import copy
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from . import (config, reference_cache, repo_context, store, targets, workspace,
@@ -363,6 +365,357 @@ def _write_atomic(path: Path, text: str) -> None:
     except OSError:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+TARGET_SET_USAGE = ("target-set <проект> <путь поля> <значение> | "
+                    "target-set --show <проект> [<путь>]")
+TARGET_SET_ABSENT = "(нет)"
+NO_COMPONENT = "компонента {comp} нет в записи; добавление компонентов не входит"
+# Виды полей компонента, значение которых — отображение (`targets.
+# COMPONENT_FIELDS`): лист такого поля командой не правится.
+_MAPPING_KINDS = ("mapping", "tools", "depends_on", "paths_source")
+
+
+def _backup_stamp() -> str:
+    """Время UTC до секунд для имени копии прежнего файла — шов теста
+    «две правки в одну секунду» (SPEC 01M6KBD9FC36WARWSY9Z0JDMG5,
+    требование 6)."""
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+
+def cmd_target_set(rest: list) -> None:
+    """Правка одного поля записи внешнего проекта в локальном слое (SPEC
+    01M6KBD9FC36WARWSY9Z0JDMG5).
+
+    Новый текст собирается целиком из разобранного прежнего и пишется
+    только после сверки в памяти: отличается ровно одним листом, сводится
+    `targets.merge_local`, прочие записи сводятся как прежде. Перед записью
+    прежний файл копируется в `config.LOGS`, после — запись журнала."""
+    if rest[:1] in (["-h"], ["--help"]):
+        print(TARGET_SET_USAGE)
+        return
+    if rest[:1] == ["--show"]:
+        _target_set_show(rest[1:])
+        return
+    if len(rest) < 3:
+        sys.exit(f"target-set: нужны проект, путь поля и значение\n"
+                 f"{TARGET_SET_USAGE}")
+    if len(rest) > 3:
+        sys.exit(f"target-set: значение — ровно один аргумент, получено "
+                 f"{len(rest) - 2}: {' '.join(rest[2:])} — возьми значение в "
+                 f"кавычки, например '[a, b]'; файл не записан")
+    name, field_path, raw = rest
+    if name == config.DEFAULT_TARGET:
+        sys.exit(f"target-set: запись {name} — в targets.yaml репозитория, "
+                 f"правка — doc-commit; файл не записан")
+    try:
+        _repo, local = targets.layers()
+    except targets.TargetsError as exc:
+        sys.exit(f"target-set: {exc}; файл не записан")
+    path = targets.local_path()
+    if local is None or name not in local:
+        sys.exit(f"target-set: записи {name} нет в локальном слое {path}; "
+                 f"файл не записан")
+    try:
+        old = path.read_text(encoding="utf-8")
+        data = yamlmini.mapping(old)
+    except (OSError, UnicodeDecodeError, yamlmini.YamlError) as exc:
+        sys.exit(f"target-set: {path} не прочитан: {exc}")
+    comment = _comment_line(old)
+    if comment is not None:
+        sys.exit(f"target-set: в {path} комментарий (строка {comment}) — "
+                 f"пересборка файла его сотрёт; убери комментарий вручную; "
+                 f"файл не записан")
+    entry = data["targets"][name]
+    keys = _field_keys(entry, field_path)
+    value = _argument_value(raw, field_path)
+    try:
+        new_text = _literal(value, field_path)
+    except _Unwritable:
+        sys.exit(f"target-set: значение {raw!r} поля {field_path} не записать "
+                 f"подмножеством YAML пульта; файл не записан")
+    found, current = _lookup(entry, keys)
+    if found and not _differences(current, value, field_path):
+        print(f"target-set: {name} {field_path}: без изменений ({new_text})")
+        return
+    try:
+        was = _literal(current, field_path) if found else TARGET_SET_ABSENT
+    except _Unwritable:
+        was = repr(current)
+    if not store.db_usable():
+        sys.exit(f"target-set: {NO_JOURNAL}; файл не записан")
+    edited = copy.deepcopy(data)
+    _assign(edited["targets"][name], keys, value)
+    try:
+        text = "".join(line + "\n" for line in _render(edited, 0, ""))
+    except _Unwritable as exc:
+        sys.exit(f"target-set: поле {exc} файла {path} не записать "
+                 f"подмножеством YAML пульта; файл не записан")
+    problems = _target_set_mismatches(data, text, name, keys, value, path)
+    if problems:
+        sys.exit(f"target-set: сверка не прошла — {'; '.join(problems)}; "
+                 f"файл не записан")
+    try:
+        backup = _backup_copy(path)
+    except OSError as exc:
+        sys.exit(f"target-set: копия {path} в {config.LOGS} не создана: "
+                 f"{exc}; файл не записан")
+    print(f"target-set: копия прежнего файла — {backup}")
+    try:
+        _write_atomic(path, text)
+    except OSError as exc:
+        sys.exit(f"target-set: {path} не записан: {exc}")
+    detail = f"{field_path}: {was} → {new_text}"
+    store.journal(store.db(), None, "operator", "target-set", detail,
+                  target=name)
+    print(f"target-set: {detail}")
+
+
+def _target_set_show(rest: list) -> None:
+    """`target-set --show <проект> [<путь>]`: значение поля или раздела
+    записи локального слоя как оно записано; файл не пишется."""
+    if not rest or len(rest) > 2:
+        sys.exit(f"target-set --show: нужен проект и, возможно, путь\n"
+                 f"{TARGET_SET_USAGE}")
+    name = rest[0]
+    path = targets.local_path()
+    try:
+        data = yamlmini.mapping(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        sys.exit(f"target-set --show: локального слоя {path} нет")
+    except (OSError, UnicodeDecodeError, yamlmini.YamlError) as exc:
+        sys.exit(f"target-set --show: {path} не прочитан: {exc}")
+    entries = data.get("targets")
+    if not isinstance(entries, dict) or name not in entries:
+        sys.exit(f"target-set --show: записи {name} нет в локальном слое {path}")
+    field_path = rest[1] if len(rest) == 2 else ""
+    found, value = _lookup(entries[name], field_path.split(".")
+                           if field_path else [])
+    if not found:
+        sys.exit(f"target-set --show: у записи {name} нет поля {field_path}")
+    label = field_path or name
+    try:
+        if isinstance(value, dict):
+            lines = [f"{label}:"] + _render(value, 2, label)
+        else:
+            lines = [f"{label}: {_literal(value, label)}"]
+    except _Unwritable:
+        lines = [f"{label}: {value!r}"]
+    print("\n".join(lines))
+
+
+def _comment_line(text: str) -> int | None:
+    """Номер первой строки с комментарием по правилу `yamlmini` (строка с
+    `#` первым непробельным символом; `#` в начале значения или после
+    пробела; кавычки значения снимаются раньше комментария); None — нет."""
+    for number, raw in enumerate(text.splitlines(), 1):
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            return number
+        _key, _sep, rest = stripped.partition(":")
+        rest = rest.strip()
+        if rest[:1] in ("'", '"'):
+            end = rest.find(rest[0], 1)
+            if end != -1:
+                tail = rest[end + 1:].strip()
+                if not tail:
+                    continue
+                if tail.startswith("#"):
+                    return number
+        if yamlmini.COMMENT.search(rest):
+            return number
+    return None
+
+
+def _field_keys(entry: dict, field_path: str) -> list[str]:
+    """Ключи пути поля от записи проекта; отказ — путь вне формы
+    `<раздел>.<поле>` / `<раздел>.components.<к>.<поле>`, поле вне перечня
+    раздела, вложенное отображение, компонент вне `description.components`."""
+    keys = field_path.split(".")
+    section = keys[0]
+    if section not in targets.LOCAL_SECTIONS or len(keys) < 2 or not all(keys):
+        sys.exit(f"target-set: путь {field_path!r} — не "
+                 f"<раздел>.<поле> или <раздел>.{targets.COMPONENTS_FIELD}."
+                 f"<компонент>.<поле>; разделы: "
+                 f"{', '.join(targets.LOCAL_SECTIONS)}; файл не записан")
+    if keys[1] == targets.COMPONENTS_FIELD and len(keys) >= 3:
+        comp = keys[2]
+        scope = f"{section}.{targets.COMPONENTS_FIELD}.{comp}"
+        allowed = _component_fields(section)
+        if len(keys) == 3:
+            sys.exit(f"target-set: путь {field_path} — блок компонента, не "
+                     f"поле; поля {scope}: {', '.join(allowed)}; файл не записан")
+        comps = entry.get("description", {}).get(targets.COMPONENTS_FIELD)
+        if not isinstance(comps, dict) or comp not in comps:
+            sys.exit(f"target-set: {NO_COMPONENT.format(comp=comp)}; "
+                     f"файл не записан")
+        field = keys[3]
+        if field not in allowed:
+            sys.exit(f"target-set: поля {field} нет в {scope}; допустимые: "
+                     f"{', '.join(allowed)}; файл не записан")
+        nested = (len(keys) > 4 or (section == "description" and
+                  targets.COMPONENT_FIELDS[field] in _MAPPING_KINDS))
+    else:
+        field = keys[1]
+        allowed = list(targets.LOCAL_FIELDS[section])
+        if field not in allowed:
+            sys.exit(f"target-set: поля {field} нет в {section}; допустимые: "
+                     f"{', '.join(allowed)}; файл не записан")
+        nested = (len(keys) > 2 or field in (targets.COMPONENTS_FIELD,
+                                             targets.PROFILE_FIELD))
+    found, current = _lookup(entry, keys[:4] if len(keys) > 4 else keys)
+    if nested or (found and isinstance(current, dict)):
+        sys.exit(f"target-set: путь {field_path} ведёт во вложенное "
+                 f"отображение — его поля командой не правятся; файл не записан")
+    return keys
+
+
+def _component_fields(section: str) -> list[str]:
+    """Допустимые поля блока компонента раздела (требование 2)."""
+    if section == "policy":
+        return list(targets.LOCAL_POLICY_SCOPES)
+    if section == "machine":
+        return list(targets.LOCAL_MACHINE_COMPONENT_FIELDS)
+    return [field for field in targets.COMPONENT_FIELDS
+            if field not in targets.LOCAL_POLICY_SCOPES]
+
+
+def _argument_value(raw: str, field_path: str) -> object:
+    """Значение аргумента тем же разбором, каким его прочтёт файл; отказ —
+    разбор не годен, теряет часть текста или даёт пустое значение."""
+    text = raw.strip()
+    if "\n" in raw or "\r" in raw:
+        sys.exit(f"target-set: значение поля {field_path} — в одну строку; "
+                 f"файл не записан")
+    try:
+        value = yamlmini.mapping(f"value: {text}\n").get("value")
+    except yamlmini.YamlError as exc:
+        sys.exit(f"target-set: значение {raw!r} не разобрано: {exc}; "
+                 f"файл не записан")
+    if _loses_text(text):
+        sys.exit(f"target-set: значение {raw!r} читается как {value!r} — "
+                 f"разбор теряет хвост комментария (`#` в начале или после "
+                 f"пробела); файл не записан")
+    if value is None or value == "":
+        sys.exit(f"target-set: значение {raw!r} поля {field_path} пусто; "
+                 f"файл не записан")
+    return value
+
+
+def _loses_text(text: str) -> bool:
+    """Отбросит ли разбор `yamlmini` часть текста как комментарий."""
+    if text.startswith("["):
+        end = text.find("]")
+        if end == -1:
+            return False
+        return bool(text[end + 1:].strip()) or any(
+            yamlmini.COMMENT.search(item.strip())
+            for item in text[1:end].split(","))
+    if text[:1] in ("'", '"'):
+        end = text.find(text[0], 1)
+        if end != -1 and text[end + 1:].strip().startswith("#"):
+            return True
+        if end != -1 and not text[end + 1:].strip():
+            return False
+    return bool(yamlmini.COMMENT.search(text))
+
+
+def _literal(value: object, field: str) -> str:
+    """Литерал значения в той записи, что пишет `_render`."""
+    if isinstance(value, list):
+        return f"[{', '.join(_list_item(item, field) for item in value)}]"
+    return _scalar_text(value, field)
+
+
+def _lookup(mapping: dict, keys: list) -> tuple[bool, object]:
+    """(есть ли значение по пути, значение)."""
+    value = mapping
+    for key in keys:
+        if not isinstance(value, dict) or key not in value:
+            return False, None
+        value = value[key]
+    return True, value
+
+
+def _assign(mapping: dict, keys: list, value: object) -> None:
+    """Лист по пути; недостающие блоки (компонент в `policy`/`machine`)
+    заводятся пустыми — существование компонента проверено раньше."""
+    for key in keys[:-1]:
+        mapping = mapping.setdefault(key, {})
+    mapping[keys[-1]] = value
+
+
+def _leaves(value: object, prefix: tuple = ()) -> dict:
+    """Листья разобранного отображения: путь → значение (список — лист)."""
+    if isinstance(value, dict):
+        found = {}
+        for key, item in value.items():
+            found.update(_leaves(item, prefix + (key,)))
+        return found
+    return {prefix: value}
+
+
+def _target_set_mismatches(data: dict, text: str, name: str, keys: list,
+                           value: object, path: Path) -> list[str]:
+    """Сверка нового текста до записи (требование 5): (а) разобранный текст
+    отличается от прежнего ровно листом по пути; (б) сведение слоя на нём
+    проходит, сведённые записи прочих проектов равны прежним."""
+    try:
+        new = yamlmini.mapping(text)
+    except yamlmini.YamlError as exc:
+        return [f"собранный текст не разобран: {exc}"]
+    target = ("targets", name, *keys)
+    old_leaves, new_leaves = _leaves(data), _leaves(new)
+    changed = [".".join(map(str, key)) for key in
+               dict.fromkeys([*old_leaves, *new_leaves])
+               if key not in old_leaves or key not in new_leaves
+               or _differences(old_leaves[key], new_leaves[key], "")]
+    if changed != [".".join(target)]:
+        return [f"изменились листы {', '.join(changed) or '(никакие)'}, "
+                f"ожидался один — {'.'.join(target)}"]
+    if _differences(value, new_leaves[target], ".".join(keys)):
+        return [f"{'.'.join(keys)} читается как {new_leaves[target]!r}, "
+                f"задано {value!r}"]
+    entries = new.get("targets")
+    if not isinstance(entries, dict) or list(entries) != list(data["targets"]):
+        return ["записи собранного текста расходятся с прежними"]
+    problems = []
+    for entry_name, entry in entries.items():
+        try:
+            got = targets.merge_local(entry_name, entry, path)
+        except targets.TargetsError as exc:
+            problems.append(str(exc))
+            continue
+        if entry_name == name:
+            continue
+        try:
+            want = targets.merge_local(entry_name, data["targets"][entry_name],
+                                       path)
+        except targets.TargetsError as exc:
+            problems.append(str(exc))
+            continue
+        problems.extend(_differences(want, got, entry_name))
+    return problems
+
+
+def _backup_copy(path: Path) -> Path:
+    """Копия прежнего файла в `config.LOGS` под новым именем
+    `targets-<время>[-<n>].yaml`: создание без перезаписи — вторая правка в
+    ту же секунду не затирает первую копию."""
+    content = path.read_bytes()
+    config.LOGS.mkdir(parents=True, exist_ok=True)
+    stamp = _backup_stamp()
+    number = 0
+    while True:
+        suffix = f"-{number}" if number else ""
+        backup = config.LOGS / f"targets-{stamp}{suffix}.yaml"
+        try:
+            with open(backup, "xb") as handle:
+                handle.write(content)
+        except FileExistsError:
+            number += 1
+            continue
+        return backup
 
 
 def reference_summary(name: str, setting: dict | None, sha: str,
