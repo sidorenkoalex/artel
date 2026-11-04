@@ -71,7 +71,7 @@ from unittest import mock
 
 import pytest
 
-from orchestrator import artel, config, doctor, fsm, pause, store, watch, zone_lock
+from orchestrator import artel, auto, config, doctor, fsm, pause, store, watch, zone_lock
 from tests.sandbox import declare_target, patch_pult_sleep, patch_sleep
 
 # Модуль, а не одноимённая функция фасада `doctor.stale_cycles`.
@@ -963,16 +963,17 @@ def test_ac9_supervisor_records_lock_row_and_no_lease(pult):
     """Записи надзора — с id эпика и проектом эпика; блокировка — не lease; в ней сессия запуска.
 
     Сценарий: эпик проекта вне артели (имя от зерна) с одной задачей;
-    дочерний `auto` доводит её до `done`, надзор завершается сам. Каждая
-    запись журнала с `task_id` = id эпика, сделанная за надзор, несёт
-    `target` = проект эпика (и такие записи есть); пока надзор жив, в
-    `leases` нет строки с id эпика или pid надзора, а строка
+    дочерний `auto` доводит её до `done`; Оператор закрывает эпик `epic
+    close` либо останавливает надзор `epic stop` (выбор от зерна) — надзор
+    завершён. Каждая запись журнала с `task_id` = id эпика, сделанная за
+    надзор, несёт `target` = проект эпика (и такие записи есть); пока
+    надзор жив, в `leases` нет строки с id эпика или pid надзора, а строка
     `epic_supervisors` несёт `session_id` сессии, звавшей `auto --epic`.
 
     Ловит мутацию: журнал надзора пишется без `target` (проект пульта по
     умолчанию) или с `task_id` задачи; либо блокировка берётся через
     `lease.acquire` по id эпика; либо `session_id` блокировки — не сессия
-    запуска.
+    запуска; либо надзор не завершается ни закрытием эпика, ни `epic stop`.
     """
     project = f"proekt{pult.seed % 100000}"
     declare_target(project)
@@ -980,6 +981,7 @@ def test_ac9_supervisor_records_lock_row_and_no_lease(pult):
     task = pult.task()
     pult.observation([task])
     pult.start()
+    ending = pult.rng.choice(("epic close", "epic stop"))
     seen = {}
 
     def script():
@@ -988,10 +990,16 @@ def test_ac9_supervisor_records_lock_row_and_no_lease(pult):
         seen["leases"] = [dict(r) for r in store.all_leases(store.db())]
         pult.set_state(task, "done")
         pult.child_stops(task, "done: задача слита")
+        yield
+        if ending == "epic close":
+            pult.ok("epic", "close", pult.epic, "итог сценария")
+        else:
+            pult.stop_epic_concurrently()
         yield from pult.forever()
 
     pult.supervise(script())
-    assert pult.exit == "сам", pult.msg(f"надзор не завершился сам: {pult.exit}")
+    expected = ("сам",) if ending == "epic close" else ("сам", "сигнал")
+    assert pult.exit in expected, pult.msg(f"{ending}: надзор не завершён: {pult.exit}")
     records = pult.records(pult.epic, pult.run_from)
     assert records, pult.msg("за надзор нет записей журнала с id эпика")
     wrong = [(r["action"], r["target"]) for r in records if r["target"] != project]
@@ -1247,37 +1255,61 @@ def test_ac17_manual_stop_holds_until_operator_action(pult):
 
 @pytest.mark.parametrize("variant", ["запись CYCLE_ABORTED", "выход без записи"])
 def test_ac18_abnormal_child_exit_holds_until_operator_action(pult, variant):
-    """Аварийный выход дочернего `auto`: перезапуска нет до нового действия Оператора, после — есть.
+    """Аварийный выход дочернего `auto`: перезапуск без действия Оператора; после трёх аварий подряд — предел до `epic retry`.
 
     Сценарий: (а) дочерний пишет `CYCLE_ABORTED_ACTION` и выходит; (б)
     процесс дочернего гибнет без записи о своей остановке (lease остаётся
-    с мёртвым pid). За `IDLE` пауз перезапуска нет; `epic retry` — второй
-    дочерний `auto`.
+    с мёртвым pid). После первой и второй аварии задача снова запущена не
+    позже трёх опросов, без действий Оператора. После третьей аварии
+    подряд за `IDLE` пауз четвёртого запуска нет, открыта тревога
+    `attention` по задаче, в журнале задачи — одна запись надзора о
+    пределе аварий с причиной; `epic retry` — задача снова запущена.
 
-    Ловит мутацию: аварийный выход принимается за обычное освобождение
-    места — задача сразу перезапускается; либо выход без записи не
-    замечается (надзор ждёт мёртвого дочернего вечно и не перезапускает
-    задачу и после `epic retry`).
+    Ловит мутацию: аварийный выход держит задачу до действия Оператора,
+    как раньше (второго запуска нет); либо выход без записи не замечается
+    (надзор ждёт мёртвого дочернего вечно); либо счёт аварий не ведётся
+    (четвёртый запуск без действия Оператора); либо предел — без тревоги
+    или без записи журнала; либо `epic retry` предел не снимает.
     """
     pult.new_epic()
     task = pult.task()
     pult.observation([task])
     pult.start()
+    seen = {}
 
-    def script():
-        yield from pult.wait_until(lambda: len(pult.children(task)) == 1, "первый запуск")
-        yield
+    def crash():
         if variant == "выход без записи":
             pult.child_vanishes(task)
         else:
             pult.child_stops(task, "RuntimeError: обрыв цикла",
                              action=zone_lock.CYCLE_ABORTED_ACTION)
-        yield from pult.never(lambda: len(pult.children(task)) > 1,
-                              f"перезапуск после «{variant}»")
+
+    def script():
+        yield from pult.wait_until(lambda: len(pult.children(task)) == 1, "первый запуск")
+        for launches in (2, 3):
+            yield
+            crash()
+            yield from pult.wait_until(lambda n=launches: len(pult.children(task)) == n,
+                                       f"запуск {launches} после аварии «{variant}»", 3)
+        yield
+        since = pult.top_step()
+        crash()
+        yield from pult.never(lambda: len(pult.children(task)) > 3,
+                              f"четвёртый запуск после трёх аварий «{variant}»")
+        seen["limit"] = [dict(r) for r in pult.records(task, since)
+                         if r["action"] == auto.EPIC_CRASH_LIMIT_ACTION]
+        seen["alerts"] = [dict(a) for a in store.open_alerts(store.db(), "attention")
+                          if a["target"] == task]
         pult.ok("epic", "retry", pult.epic, task)
-        yield from pult.wait_until(lambda: len(pult.children(task)) == 2, "перезапуск после retry")
+        yield from pult.wait_until(lambda: len(pult.children(task)) == 4,
+                                   "запуск после epic retry")
 
     pult.supervise(script())
+    assert len(seen.get("limit", [])) == 1 and seen["limit"][0]["detail"], pult.msg(
+        f"записи предела аварий: {seen.get('limit')}")
+    assert seen["limit"][0]["actor"] == store.EPIC_SUPERVISOR_ACTOR, pult.msg(
+        f"запись предела не от надзора: {seen['limit'][0]['actor']}")
+    assert seen["alerts"], pult.msg("нет тревоги attention по задаче после предела")
 
 
 # ===== Наблюдение эпика =====
@@ -1595,17 +1627,46 @@ def supervisor_ends_itself(pult, case: str) -> None:
     assert pult.records(pult.epic, pult.run_from), pult.msg(f"{case}: нет записи журнала эпика")
 
 
+def end_records(pult) -> list:
+    return [r for r in pult.records(pult.epic, 0)
+            if r["action"] == auto.EPIC_SUPERVISOR_END_ACTION]
+
+
 def test_ac27_all_tasks_final_supervisor_ends_itself(pult):
-    """Все задачи эпика `done`/`killed`: надзор завершается сам с записью журнала эпика.
+    """Все задачи открытого эпика `done`/`killed`: надзор жив, без запусков, записи завершения и тревоги; новая задача эпика запущена; `epic stop` завершает надзор.
 
-    Сценарий: эпик из задачи в `done` и задачи в `killed`; надзор
-    завершается сам, без дочерних запусков, и за надзор есть запись
-    журнала с id эпика.
+    Сценарий: эпик из задачи в `done` и задачи в `killed`, эпик открыт.
+    Первый надзор за `IDLE` пауз не завершается (сценарий кончается раньше
+    него), дочерних запусков нет, записи «надзор эпика завершён» и тревоги
+    `attention` по эпику нет. Второй надзор: в эпике заводится новая
+    готовая задача — надзор запускает её дочерний `auto`; затем `epic stop`
+    — надзор завершён.
 
-    Ловит мутацию: условие выхода «нет задач» вместо «нет неокончательных»
-    — надзор живёт до предела пауз; либо выходит молча, без записи журнала.
+    Ловит мутацию: надзор открытого эпика завершается сам, когда все
+    задачи окончательны (как раньше); либо завершение пишет запись или
+    тревогу; либо новая задача открытого эпика не подхватывается; либо
+    `epic stop` надзор, ждущий новых задач, не останавливает.
     """
-    supervisor_ends_itself(pult, "все окончательны")
+    final_epic(pult, "все окончательны")
+    pult.start()
+    pult.supervise(pult.never(lambda: pult.launched(), "запуск при окончательных задачах"),
+                   limit=IDLE * 3)
+    assert pult.exit == "сценарий", pult.msg(f"надзор открытого эпика завершился: {pult.exit}")
+    assert end_records(pult) == [], pult.msg("записана «надзор эпика завершён»")
+    assert pult.epic_alerts() == [], pult.msg("тревога attention по эпику")
+
+    pult.start()
+
+    def script():
+        yield
+        new = pult.task()
+        yield from pult.wait_until(lambda: new in pult.launched(), "запуск новой задачи эпика")
+        pult.stop_epic_concurrently()
+        yield from pult.forever()
+
+    pult.supervise(script())
+    assert pult.exit in ("сам", "сигнал"), pult.msg(f"надзор не завершён epic stop: {pult.exit}")
+    assert pult.stop_result is None, pult.msg(f"epic stop отказала: {pult.stop_result}")
 
 
 def test_ac28_start_after_on_killed_supervisor_ends_itself(pult):
@@ -1642,17 +1703,39 @@ def test_ac30_watch_delivers_attention_alert_and_end_record(pult, case):
     Случаи AC-27, AC-28, AC-29. Для AC-28 и AC-29 наблюдение выбрано по
     правилу (в): до старта в его наборе задач эпика не было — после старта
     неокончательные задачи эпика в наборе. Для AC-27 (неокончательных нет)
-    — наблюдение с окончательной задачей эпика. Одна итерация
+    — наблюдение с окончательной задачей эпика; пока эпик открыт, надзор
+    за `IDLE` пауз не завершается (записи завершения и тревоги по эпику
+    нет, запусков нет), завершается сам после `epic close`. Одна итерация
     `watch --observation` после завершения надзора выводит строку
     `alert:attention` с id эпика и строку журнала с id эпика.
 
     Ловит мутацию: неокончательные задачи эпика не добавляются в набор при
     старте (доставки нет); либо `watch` не доставляет записи и алерты с
-    id эпика; либо самозавершение не открывает алерт.
+    id эпика; либо самозавершение не открывает алерт; либо надзор
+    открытого эпика с окончательными задачами завершается сам до закрытия
+    эпика, либо закрытие эпика его не завершает.
     """
     obs, waiting = final_epic(pult, case)
     pult.start()
-    pult.supervise(pult.forever(), limit=IDLE * 3)
+    if case == "все окончательны":
+        seen = {}
+
+        def script():
+            for _ in range(IDLE):
+                yield
+            seen["ended"] = end_records(pult)
+            seen["alerts"] = pult.epic_alerts()
+            seen["launched"] = pult.launched()
+            pult.ok("epic", "close", pult.epic, "итог сценария")
+            yield from pult.forever()
+
+        pult.supervise(script(), limit=IDLE * 3)
+        assert "ended" in seen, pult.msg(f"{case}: надзор завершился до закрытия эпика")
+        assert seen["ended"] == [] and seen["alerts"] == [] and seen["launched"] == [], \
+            pult.msg(f"{case}: до закрытия эпика: {seen}")
+        assert end_records(pult), pult.msg(f"{case}: нет записи завершения после epic close")
+    else:
+        pult.supervise(pult.forever(), limit=IDLE * 3)
     assert pult.exit == "сам", pult.msg(f"{case}: надзор не завершился сам: {pult.exit}")
     if case != "все окончательны":
         missing = set(waiting) - pult.obs_tasks(obs)

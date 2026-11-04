@@ -123,6 +123,12 @@ _ZONE_WAIT_LEASE_LOST_REASON = "lease задачи потерян во врем�
 # состоянии, lease снимает `lease.run_locked` штатно, эскалации нет.
 _STOP_COMMAND_REASON = "штатная остановка — команда stop"
 
+# Отказ lease самого `auto <id>`: задачу ведёт другая живая сессия (SPEC
+# 01M6HVPMYY2Q56JZ64KD28FTWK, требование 3). Имя — вне перечня действий
+# Оператора надзора (`_operator_actions`) и вне «auto остановлен»/«переход
+# отклонён»: запись удержаний не снимает и разбор канарейки не меняет.
+AUTO_LEASE_REFUSED_ACTION = "auto не начат: lease задачи у другой сессии"
+
 
 def _stop_command_stop(conn, task_id: str, state: str) -> "Stop":
     """Исход остановки по команде `stop` — один на обе её точки."""
@@ -684,10 +690,17 @@ def cmd_auto(task_id: str, session_id: str | None = None,
     signal.signal(signal.SIGTERM, _on_sigterm)
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    # `run_locked` с `on_refusal="print"` возвращает `None` и при отказе, и
+    # после тела — отказ lease узнаётся только по тому, что тело не звано.
+    entered = False
+
+    def body(sid: str) -> None:
+        nonlocal entered
+        entered = True
+        _cmd_auto(conn, task_id, sid, wait_zone)
+
     try:
-        lease.run_locked(conn, task_id, session_id,
-                         lambda sid: _cmd_auto(conn, task_id, sid, wait_zone),
-                         on_refusal="print")
+        lease.run_locked(conn, task_id, session_id, body, on_refusal="print")
     except BaseException as exc:
         # Обрыв НЕ через `stop` (SPEC требование 7, AC-11): сигнал без
         # обработчика вроде SIGINT, необработанное исключение — если
@@ -697,6 +710,11 @@ def cmd_auto(task_id: str, session_id: str | None = None,
         store.journal(conn, task_id, "operator", zone_lock.CYCLE_ABORTED_ACTION,
                       f"{type(exc).__name__}: {exc}")
         raise
+    if not entered:
+        # Именованный отказ (SPEC 01M6HVPMYY2Q56JZ64KD28FTWK, требование 3):
+        # без записи надзор эпика принял бы этот выход за аварию.
+        store.journal(conn, task_id, "operator", AUTO_LEASE_REFUSED_ACTION,
+                      "lease задачи держит другая живая сессия — цикл не начат")
 
 
 @dataclass
@@ -1066,8 +1084,12 @@ def _auto_cycle(conn, task_id: str, session_id: str, wait_zone: bool = False) ->
     """
     t = store.get_task(conn, task_id)
     state = t["state"]
+    # pid и сессия цикла — по ним `answer` узнаёт lease живого цикла, а
+    # надзор эпика — старт своего дочернего (SPEC 01M6HVPMYY2Q56JZ64KD28FTWK,
+    # требование 11).
     store.journal(conn, task_id, "operator", zone_lock.AUTO_START_ACTION,
-                  f"состояние {state}, лимит {config.AUTO_MAX_STEPS} шагов")
+                  f"состояние {state}, лимит {config.AUTO_MAX_STEPS} шагов, "
+                  f"pid {os.getpid()}", session_id=session_id)
     print(f"[{task_id}] auto: старт из {state}, "
           f"лимит {config.AUTO_MAX_STEPS} шагов за вызов")
 
@@ -1164,6 +1186,10 @@ def _auto_cycle(conn, task_id: str, session_id: str, wait_zone: bool = False) ->
 # `store.EPIC_SUPERVISOR_ACTOR`.
 
 EPIC_POLL_SEC = 15
+# Период опроса открытого эпика, у которого нет неокончательных задач (SPEC
+# 01M6HVPMYY2Q56JZ64KD28FTWK, требование 9): надзор ждёт новых задач эпика,
+# а не завершается сам.
+EPIC_IDLE_POLL_SEC = 5 * 60
 EPIC_DEFAULT_PARALLEL = 1
 EPIC_GATE_STATES = ("spec_gate", "acceptance", "merge_gate")
 EPIC_SUPERVISOR_START_ACTION = "надзор эпика запущен"
@@ -1185,9 +1211,37 @@ _GLOBAL_LIMIT_REFUSAL_ACTION = "run отклонён: лимит паралле�
 # и эскалации задачу выводит сам Оператор, окончательная не продолжается.
 _NOT_HOLDING_STOP_STATES = EPIC_GATE_STATES + ("awaiting_human", "escalated",
                                                "done", "killed")
-# Записи, от которых считается «новое действие Оператора после остановки».
-_CHILD_END_ACTIONS = (zone_lock.AUTO_STOPPED_ACTION,
-                      zone_lock.CYCLE_ABORTED_ACTION, EPIC_CHILD_LOST_ACTION)
+# Записи остановки цикла `auto`: первая из них после запуска дочернего
+# задаёт причину его выхода (SPEC 01M6HVPMYY2Q56JZ64KD28FTWK, требование 4).
+_CYCLE_END_ACTIONS = (zone_lock.AUTO_STOPPED_ACTION,
+                      zone_lock.CYCLE_ABORTED_ACTION)
+# Предел аварийных выходов дочернего подряд и запись надзора о нём
+# (требование 4): актор — надзор, имя вне перечня `_operator_actions`.
+EPIC_CRASH_LIMIT = 3
+EPIC_CRASH_LIMIT_ACTION = "надзор эпика: предел аварий дочернего auto"
+# Признак выхода после `pause --now` — запись `pause.cmd_pause_now`
+# (требование 5); `pause.py` этого литерала константой не выносит.
+_PAUSE_NOW_KILLED_ACTION = "pause --now: процесс агента прерван"
+# Штатные отказы самого дочернего — удержание до действия Оператора, не
+# авария (требование 3).
+_NAMED_REFUSAL_ACTIONS = (AUTO_LEASE_REFUSED_ACTION,
+                          runner.UNSUPPORTED_PROJECT_ACTION)
+# Остановки ожидания зоны, которые снимает и снятое ожидание (требование 6).
+_ZONE_WAIT_STOP_REASONS = (_ZONE_WAIT_CEILING_REASON,
+                           _ZONE_WAIT_LEASE_LOST_REASON)
+# Подъём бюджета из `escalated` пишет `state -> …` актора `operator` с этой
+# деталью (`budget.cmd_budget`): это `budget`, не `approve`, — счёт аварий
+# он не сбрасывает.
+_BUDGET_RETURN_DETAIL = "бюджет поднят, продолжаем"
+# Запись `zones-extend` (и `answer` с одним мандатом зон): после перечня
+# путей ничего нет — счёт аварий не сбрасывает (требование 4).
+_ZONES_EXTEND_ANSWER = re.compile(r"ANSWER создан \(мандат на расширение зон: "
+                                  r"[^;()]*\)")
+_PID_IN_DETAIL = re.compile(r"\bpid (\d+)")
+# Места `parallel` эпика не занимает живой дочерний задачи, ждущей CI или
+# Оператора (требование 7); ожидание зоны — отдельной проверкой.
+_PLACELESS_STATES = EPIC_GATE_STATES + ("escalated", "awaiting_human",
+                                        "verifying")
 
 _epic_stop_requested = False
 _epic_sleeping = False
@@ -1206,14 +1260,14 @@ def _on_epic_sigterm(signum, frame) -> None:
         raise _EpicStopDuringSleep()
 
 
-def _epic_sleep() -> None:
+def _epic_sleep(seconds: float = EPIC_POLL_SEC) -> None:
     global _epic_sleeping
     if _epic_stop_requested:
         return
     try:
         _epic_sleeping = True
         if not _epic_stop_requested:
-            time.sleep(EPIC_POLL_SEC)
+            time.sleep(seconds)
     except _EpicStopDuringSleep:
         pass
     finally:
@@ -1225,7 +1279,8 @@ def _operator_actions() -> tuple[tuple, tuple]:
     перезапуск (требование 4): `approve`/`reject`/`budget` — переходы
     `state -> …` автора `operator`; `answer`/`zones-extend` — «ANSWER
     создан…»; `pause`/`pause --now`; `resume` пишет журнал, только снимая
-    паузу (`pause.cmd_resume`). Записи цикла `auto` и запуска дочернего в
+    паузу или после остановки цикла командой `stop` (`pause.cmd_resume`).
+    Записи цикла `auto` и запуска дочернего в
     перечень не входят. Отложенный импорт: `amend` тянет граф гейтов."""
     from . import amend, ci_rerun
     return (("бюджет изменён", "resume", amend.AMEND_ACTION,
@@ -1238,38 +1293,261 @@ def _is_operator_action(row, actions: tuple, prefixes: tuple) -> bool:
         row["action"] in actions or row["action"].startswith(prefixes))
 
 
-def _child_holds(conn, epic_id: str, child) -> bool:
-    """Задача, чей последний дочерний `auto` надзора не жив, ждёт нового
-    действия Оператора (требование 6, последнее условие): дочерний
-    остановился не на гейте — `auto остановлен` в состоянии вне
-    `_NOT_HOLDING_STOP_STATES`, `цикл оборван` или выход без записи об
-    остановке, — и после этой записи нет действия из перечня
-    `_operator_actions`. Отказ `run` по глобальному лимиту остановкой не
-    считается. Выход без записи помечается записью задачи один раз — она
-    и есть точка отсчёта нового действия."""
-    task_id = child["task_id"]
-    rows = store.task_steps_since(conn, task_id, child["step_id"])
-    if any(row["action"] == _GLOBAL_LIMIT_REFUSAL_ACTION for row in rows):
-        return False
-    anchor = None
+@dataclass
+class _ChildRun:
+    """Один запуск дочернего `auto` задачи по её журналу (SPEC
+    01M6HVPMYY2Q56JZ64KD28FTWK, требование 4): записи окна запуска без
+    записей самого надзора, исход и запись, от которой ищется действие
+    Оператора."""
+    pid: int | None
+    begin_id: float
+    rows: list
+    outcome: str
+    anchor: object
+    stop: object
+    lost: bool
+    exit_id: float
+
+
+_RUN_STOPPED, _RUN_CRASH, _RUN_NAMED, _RUN_PAUSE_NOW = (
+    "остановка", "авария", "именованный отказ", "выход после pause --now")
+
+
+def _pid_in(detail: str | None) -> int | None:
+    match = _PID_IN_DETAIL.search(detail or "")
+    return int(match.group(1)) if match else None
+
+
+def _run_begins(rows: list, child) -> list[tuple[int, int | None]]:
+    """(индекс первой записи окна, pid) каждого запуска дочернего задачи.
+
+    Запуск — запись `EPIC_CHILD_LAUNCH_ACTION`; она пишется после `Popen`,
+    и «auto старт» быстрого дочернего может лечь раньше неё — такая запись
+    с тем же pid начинает окно (ANSWER-4, п. 1). Окно последнего дочернего
+    начинается точно — после `step_id` его строки `epic_children`
+    (максимум журнала до `Popen`); строка без записи запуска (запуск
+    оборван до неё) — окно по ней же."""
+    begins: list = []
+    previous = -1
     for index, row in enumerate(rows):
-        if row["action"] in _CHILD_END_ACTIONS:
-            anchor = index
-    if anchor is None:
+        if not (row["actor"] == store.EPIC_SUPERVISOR_ACTOR
+                and row["action"] == EPIC_CHILD_LAUNCH_ACTION):
+            continue
+        pid = _pid_in(row["detail"])
+        begin = index
+        if pid is not None:
+            begin = next((early for early in range(previous + 1, index)
+                          if rows[early]["action"] == zone_lock.AUTO_START_ACTION
+                          and _pid_in(rows[early]["detail"]) == pid), index)
+        begins.append((begin, pid))
+        previous = index
+    if child is not None:
+        exact = next((index for index, row in enumerate(rows)
+                      if row["id"] > child["step_id"]), len(rows))
+        if begins and begins[-1][1] == child["pid"]:
+            begins[-1] = (min(begins[-1][0], exact), child["pid"])
+        else:
+            begins.append((exact, child["pid"]))
+    return begins
+
+
+def _child_runs(rows: list, child) -> list[_ChildRun]:
+    """Запуски дочернего задачи по порядку с исходом каждого (требования
+    3-5). Исход задаёт первая запись остановки цикла после запуска; записи
+    цикла после неё без нового запуска его не меняют. Именованный отказ —
+    удержание; «auto старт» и первая остановка «auto остановлен» — штатная
+    остановка; запись `pause --now` — не авария; иначе (нет старта, нет
+    остановки, первая — «цикл оборван») — авария.
+
+    `exit_id` — место выхода в журнале для счёта аварий подряд: «цикл
+    оборван» либо запись надзора о выходе без записи остановки, без неё —
+    граница окна."""
+    begins = _run_begins(rows, child)
+    runs = []
+    for k, (begin, pid) in enumerate(begins):
+        end = begins[k + 1][0] if k + 1 < len(begins) else len(rows)
+        window = rows[begin:end]
+        own = [row for row in window
+               if row["actor"] != store.EPIC_SUPERVISOR_ACTOR]
+        lost = next((row for row in window
+                     if row["action"] == EPIC_CHILD_LOST_ACTION), None)
+        stop = next((row for row in own if row["action"] in _CYCLE_END_ACTIONS),
+                    None)
+        started = any(row["action"] == zone_lock.AUTO_START_ACTION for row in own)
+        named = next((row for row in own
+                      if row["action"] in _NAMED_REFUSAL_ACTIONS), None)
+        pause_now = next((row for row in own if row["actor"] == "operator"
+                          and row["action"] == _PAUSE_NOW_KILLED_ACTION), None)
+        exit_id = rows[end]["id"] - 0.5 if end < len(rows) else float("inf")
+        if named is not None:
+            outcome, anchor = _RUN_NAMED, named
+        elif (started and stop is not None
+              and stop["action"] == zone_lock.AUTO_STOPPED_ACTION):
+            outcome, anchor = _RUN_STOPPED, stop
+        elif pause_now is not None:
+            outcome, anchor = _RUN_PAUSE_NOW, pause_now
+        else:
+            outcome, anchor = _RUN_CRASH, stop
+            if stop is not None:
+                exit_id = stop["id"]
+            elif lost is not None:
+                exit_id = lost["id"]
+        begin_id = rows[begin]["id"] if begin < len(rows) else float("inf")
+        runs.append(_ChildRun(pid, begin_id, own, outcome, anchor, stop,
+                              lost is not None, exit_id))
+    return runs
+
+
+def _resets_crash_count(row) -> bool:
+    """Действие Оператора из перечня сброса счёта аварий (требование 4):
+    `epic retry`, `answer` (кроме записи вида `zones-extend`),
+    `approve`/`reject` (`state -> …` актора `operator`, кроме подъёма
+    бюджета), `amend-tests`, `resume` — снявший паузу и после `stop`."""
+    if row["actor"] != "operator":
+        return False
+    from . import amend
+    action = row["action"]
+    if action in (EPIC_RETRY_ACTION, amend.AMEND_ACTION, "resume"):
+        return True
+    if action.startswith("state -> "):
+        return row["detail"] != _BUDGET_RETURN_DETAIL
+    if action.startswith("ANSWER создан"):
+        return _ZONES_EXTEND_ANSWER.fullmatch(action) is None
+    return False
+
+
+def _crash_streak(rows: list, runs: list) -> int:
+    """Аварийные выходы подряд к концу журнала: аварии, не разделённые
+    действием из перечня сброса. Штатные остановки, прочие действия и
+    смена состояния задачи серию не прерывают."""
+    events = sorted([(run.exit_id, True) for run in runs
+                     if run.outcome == _RUN_CRASH]
+                    + [(row["id"], False) for row in rows
+                       if _resets_crash_count(row)])
+    streak = 0
+    for _, crash in events:
+        streak = streak + 1 if crash else 0
+    return streak
+
+
+def _operator_acted_after(rows: list, anchor) -> bool:
+    actions, prefixes = _operator_actions()
+    return any(row["id"] > anchor["id"]
+               and _is_operator_action(row, actions, prefixes) for row in rows)
+
+
+def _note_crash_limit(conn, epic_id: str, task_id: str, run: _ChildRun,
+                      rows: list, streak: int) -> None:
+    """Запись журнала задачи и тревога `attention` о пределе аварий — один
+    раз на серию: запись уже есть в окне последнего запуска — второй нет."""
+    if any(row["action"] == EPIC_CRASH_LIMIT_ACTION and row["id"] >= run.begin_id
+           for row in rows):
+        return
+    detail = (f"эпик {epic_id}: аварийных выходов подряд — {streak}, "
+              f"последний pid {run.pid}; перезапуска нет до действия "
+              f"Оператора (artel.py epic retry {epic_id} {task_id})")
+    store.journal(conn, task_id, store.EPIC_SUPERVISOR_ACTOR,
+                  EPIC_CRASH_LIMIT_ACTION, detail)
+    alerts.raise_attention_alert(
+        conn, task_id, f"[{task_id}] {EPIC_CRASH_LIMIT_ACTION}: {detail}")
+    print(f"[{epic_id}] {task_id}: {EPIC_CRASH_LIMIT_ACTION}: {detail}")
+
+
+def _zone_wait_lifted(conn, t) -> bool:
+    """Ожидание зоны снято (требование 6): держатель окончательный, вне
+    `BLOCKING_STATES`, зону не держит по политике проекта или ожидание
+    снято `zone-release` — `zone_lock.blocking_conflict` конфликта не
+    видит."""
+    return (t["state"] == "in_dev"
+            and zone_lock.blocking_conflict(conn, t["id"], t) is None)
+
+
+@dataclass
+class _SupervisorMemory:
+    """Память процесса надзора между опросами — только номер опроса,
+    заметившего аварийный выход дочернего (якорь паузы требования 4): на
+    нём аварийная задача не перезапускается. Счёт аварий — по журналу;
+    новый процесс надзора начинает с пустой памятью."""
+    poll: int = 0
+    noticed: dict = field(default_factory=dict)
+
+
+def _child_hold(conn, epic_id: str, t, child, memory: _SupervisorMemory,
+                queue_free: set) -> str | None:
+    """Статус задачи, чей последний дочерний `auto` надзора не жив; `None`
+    — задача не держится и готова по общим правилам (SPEC
+    01M6HVPMYY2Q56JZ64KD28FTWK, требования 1, 3-6).
+
+    Штатная остановка не на гейте и именованный отказ держат задачу до
+    действия из `_operator_actions` после записи остановки (отказа);
+    остановку ожидания зоны снимает и снятое ожидание. Авария —
+    перезапуск со следующего опроса, после трёх подряд — удержание до
+    действия из перечня сброса. Отказ `run` по глобальному лимиту — не
+    остановка, задача в очереди. Выход без записи об остановке помечается
+    записью задачи один раз. `queue_free` пополняется задачами, которые
+    очередь зоны для задачи эпика не держат (требование 6)."""
+    task_id = t["id"]
+    rows = store.task_steps(conn, task_id)
+    runs = _child_runs(rows, child)
+    run = runs[-1]
+    if run.stop is None and not run.lost:
         store.journal(conn, task_id, store.EPIC_SUPERVISOR_ACTOR,
                       EPIC_CHILD_LOST_ACTION,
                       f"эпик {epic_id}: pid {child['pid']} не жив, записи "
-                      f"«{zone_lock.AUTO_STOPPED_ACTION}» нет — перезапуск "
-                      f"после действия Оператора (artel.py epic retry "
-                      f"{epic_id} {task_id})")
-        return True
-    end = rows[anchor]
-    if (end["action"] == zone_lock.AUTO_STOPPED_ACTION
-            and (end["detail"] or "").split(":", 1)[0] in _NOT_HOLDING_STOP_STATES):
-        return False
-    actions, prefixes = _operator_actions()
-    return not any(_is_operator_action(row, actions, prefixes)
-                   for row in rows[anchor + 1:])
+                      f"«{zone_lock.AUTO_STOPPED_ACTION}» нет")
+    if any(row["action"] == _GLOBAL_LIMIT_REFUSAL_ACTION for row in run.rows):
+        return None
+    if t["paused"]:
+        return _HELD
+    if run.outcome == _RUN_CRASH:
+        # Исход пересчитывается на каждом опросе: запись `pause --now` могла
+        # лечь позже, чем опрос заметил выход (ANSWER-4, п. 2).
+        noticed = memory.noticed.setdefault((task_id, child["pid"]), memory.poll)
+        if noticed == memory.poll:
+            return _CRASH_WAIT
+        streak = _crash_streak(rows, runs)
+        if streak >= EPIC_CRASH_LIMIT:
+            _note_crash_limit(conn, epic_id, task_id, run, rows, streak)
+            queue_free.add(task_id)
+            return _CRASH_LIMIT
+        return None
+    reason = ""
+    if run.outcome == _RUN_STOPPED:
+        stop_state, _, reason = (run.anchor["detail"] or "").partition(": ")
+        if stop_state in _NOT_HOLDING_STOP_STATES:
+            return None
+    if _operator_acted_after(rows, run.anchor):
+        return None
+    if run.outcome == _RUN_NAMED or reason in (_STOP_COMMAND_REASON,
+                                               config.AUTO_STOP_PAUSE[0]):
+        queue_free.add(task_id)
+    if reason.startswith(_ZONE_WAIT_STOP_REASONS) and _zone_wait_lifted(conn, t):
+        return _ZONE_FREE
+    return _HELD
+
+
+def _first_in_zone_queue(conn, task_id: str, view) -> bool:
+    """Задача, с которой ожидание зоны снято, — первая по
+    `zone_lock.queue_order` среди задач очереди, которые её держат
+    (требование 6): очередь для задачи эпика не держат задачи вне этого
+    эпика и задачи из `view.queue_free`."""
+    t = store.get_task(conn, task_id)
+    members = zone_lock._queue_members(conn, task_id, t,
+                                       zone_lock._own_paths(t["zones"]))
+    for other in zone_lock.queue_order(conn, list(members)):
+        if other == task_id:
+            return True
+        if other in view.status and other not in view.queue_free:
+            return False
+    return True
+
+
+def _takes_place(conn, t) -> bool:
+    """Живой дочерний занимает место `parallel` эпика, только если у задачи
+    идёт агентный шаг или она к нему готова (требование 7): ожидание зоны,
+    CI и Оператора места не занимает."""
+    return (t["state"] not in _PLACELESS_STATES
+            and zone_lock.wait_minutes(conn, t["id"]) is None)
 
 
 # Ожидание людей проекта (SPEC 01M5XZ9Z68V75VXF5Z66C708T4, требование 9):
@@ -1280,23 +1558,34 @@ _RUNNING, _WAITING, _HELD, _BUSY, _READY, _DEPENDS, _BLOCKED = (
     "ждёт действия Оператора после остановки не на гейте",
     "под чужим живым lease", "готова", "ждёт start_after",
     "заблокирована без решения Оператора вне гейта")
+_CRASH_WAIT, _CRASH_LIMIT, _ZONE_FREE, _ZONE_QUEUE = (
+    "аварийный выход дочернего auto — перезапуск со следующего опроса",
+    "предел аварий дочернего auto — ждёт действия Оператора",
+    "ожидание зоны снято",
+    "ожидание зоны снято — впереди в очереди зоны задача эпика")
 
 
 @dataclass
 class _EpicView:
-    """Разбор задач эпика одного опроса надзора."""
+    """Разбор задач эпика одного опроса надзора; `queue_free` — задачи,
+    которые очередь зоны для задачи эпика не держат."""
     status: dict = field(default_factory=dict)
     why: dict = field(default_factory=dict)
     ready: list = field(default_factory=list)
     running: set = field(default_factory=set)
     free: int = 0
     live: bool = False
+    queue_free: set = field(default_factory=set)
 
 
-def _epic_view(conn, epic) -> _EpicView:
+def _epic_view(conn, epic, memory: _SupervisorMemory | None = None) -> _EpicView:
     """Состояние линии эпика (требования 6, 7, 12): статус каждой
     неокончательной задачи, готовые к запуску по порядку эпика, свободные
-    места и признак «надзору есть ради чего жить»."""
+    места и признак «надзору есть ради чего жить».
+
+    `memory` — память процесса надзора между опросами; без неё вызов —
+    первый опрос."""
+    memory = memory if memory is not None else _SupervisorMemory()
     view = _EpicView()
     epic_id = epic["id"]
     tasks = store.epic_tasks(conn, epic_id)
@@ -1317,6 +1606,8 @@ def _epic_view(conn, epic) -> _EpicView:
         task_id, state = t["id"], t["state"]
         if state in fsm.TERMINAL_STATES:
             continue
+        if t["paused"]:
+            view.queue_free.add(task_id)
         if task_id in awaiting:
             status = _AWAITING
         elif task_id in view.running:
@@ -1326,11 +1617,12 @@ def _epic_view(conn, epic) -> _EpicView:
             # Ожидание ручной проверки — ждёт Оператора, как гейт (SPEC
             # 01M6F3DKM3KB2JYMD0J50YRBPE, требование 5): признак — само
             # ожидание текущего визита, не `verifying` целиком, — красный
-            # CI по-прежнему удерживается `_child_holds`.
+            # CI по-прежнему удерживается `_child_hold`.
             status = _WAITING
-        elif task_id in children and _child_holds(conn, epic_id,
-                                                  children[task_id]):
-            status = _HELD
+        elif task_id in children and (hold := _child_hold(
+                conn, epic_id, t, children[task_id], memory,
+                view.queue_free)) is not None:
+            status = hold
         elif task_id in busy:
             status = _BUSY
         elif merge_after.role_step_started(conn, task_id):
@@ -1366,11 +1658,21 @@ def _epic_view(conn, epic) -> _EpicView:
             view.status[task_id] = _BLOCKED
             view.why[task_id] = ("start_after на заблокированную задачу: "
                                  + ", ".join(depends[task_id]))
+    # Снятое ожидание зоны — в порядке очереди зоны, не эпика (требование 6).
+    for task_id in [tid for tid, s in view.status.items() if s == _ZONE_FREE]:
+        view.status[task_id] = (_READY if _first_in_zone_queue(conn, task_id, view)
+                                else _ZONE_QUEUE)
     view.live = any(status != _BLOCKED for status in view.status.values())
     view.ready = [t["id"] for t in tasks if view.status.get(t["id"]) == _READY]
     parallel = epic["parallel"] or EPIC_DEFAULT_PARALLEL
     others = busy - view.running
-    view.free = min(parallel - len(view.running),
+    by_id = {t["id"]: t for t in tasks}
+    # Место `parallel` — только идущий или готовый шаг (требование 7);
+    # глобальная оценка считает всех живых дочерних, как `runner.cmd_run`
+    # (требование 8).
+    placed = [task_id for task_id in view.running
+              if _takes_place(conn, by_id[task_id])]
+    view.free = min(parallel - len(placed),
                     config.MAX_PARALLEL_TASKS - len(view.running) - len(others))
     return view
 
@@ -1391,7 +1693,9 @@ def _end_supervision(conn, epic, reason: str) -> None:
 
 def _end_reason(view: _EpicView) -> str:
     if not view.status:
-        return "все задачи эпика окончательны"
+        # Открытый эпик без неокончательных задач надзор не завершает —
+        # сюда доходит только закрытый (требования 9, 10).
+        return "эпик закрыт, все задачи эпика окончательны"
     blocked = "; ".join(f"{task_id} — {view.why.get(task_id, _BLOCKED)}"
                         for task_id in view.status)
     return f"оставшиеся задачи заблокированы без решения Оператора вне гейта: {blocked}"
@@ -1422,8 +1726,15 @@ def _launch_epic_child(conn, epic, task_id: str, observation_id: str,
 
 
 def _supervise(conn, epic_id: str, observation_id: str, launch_child) -> None:
+    """Опросы надзора. Открытый эпик без неокончательных задач надзор не
+    завершает — ждёт новых задач с периодом `EPIC_IDLE_POLL_SEC` (SPEC
+    01M6HVPMYY2Q56JZ64KD28FTWK, требование 9); закрытый эпик и задачи,
+    заблокированные без решения Оператора вне гейта, завершают надзор, как
+    раньше."""
     procs: list = []
+    memory = _SupervisorMemory()
     while True:
+        memory.poll += 1
         epic = store.get_epic(conn, epic_id)
         if _epic_stop_requested:
             _epic_journal(conn, epic, EPIC_SUPERVISOR_STOP_ACTION,
@@ -1432,8 +1743,9 @@ def _supervise(conn, epic_id: str, observation_id: str, launch_child) -> None:
             return
         # Вышедшие дочерние пожинаются: зомби отвечал бы на pid «жив».
         procs = [proc for proc in procs if proc.poll() is None]
-        view = _epic_view(conn, epic)
-        if not view.live:
+        view = _epic_view(conn, epic, memory)
+        idle = not view.status and epic["state"] == "open"
+        if not view.live and not idle:
             _end_supervision(conn, epic, _end_reason(view))
             return
         for task_id in view.ready[:max(view.free, 0)]:
@@ -1446,7 +1758,7 @@ def _supervise(conn, epic_id: str, observation_id: str, launch_child) -> None:
             procs.append(proc)
             print(f"[{epic_id}] запущен дочерний auto {task_id}: pid {proc.pid}")
         _poll_mr_sync(conn, view)
-        _epic_sleep()
+        _epic_sleep(EPIC_IDLE_POLL_SEC if idle else EPIC_POLL_SEC)
 
 
 def _poll_mr_sync(conn, view: _EpicView) -> None:

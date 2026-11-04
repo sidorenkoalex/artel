@@ -99,7 +99,8 @@ def cmd_resume(task_id: str) -> None:
 
     Задача, не бывшая на паузе, — не ошибка (требование 9, AC-13):
     понятное сообщение, без записи в журнал (нечего снимать — не новый
-    факт).
+    факт). Исключение — последняя остановка цикла командой `stop`: тогда
+    запись `resume` пишется (`_last_cycle_stop_is_stop_command`).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     тем же доводом, что у `cmd_pause` (REVIEW T094 итерация 1, замечание
@@ -109,11 +110,43 @@ def cmd_resume(task_id: str) -> None:
     task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
     if not is_paused(t):
+        if _last_cycle_stop_is_stop_command(conn, task_id):
+            # SPEC 01M6HVPMYY2Q56JZ64KD28FTWK, требование 2: запись — действие
+            # Оператора, по которому надзор эпика перезапускает задачу.
+            store.journal(conn, task_id, "operator", "resume",
+                          "после остановки цикла командой stop")
+            print(f"[{task_id}] не была на паузе; цикл остановлен командой "
+                  f"stop — resume записан, надзор эпика перезапустит задачу")
+            return
         print(f"[{task_id}] не была на паузе — resume ничего не делает")
         return
     store.update_task(conn, task_id, paused=0)
     store.journal(conn, task_id, "operator", "resume", "пауза снята")
     print(f"[{task_id}] пауза снята: run/auto снова начинают агентные шаги")
+
+
+def _last_cycle_stop_is_stop_command(conn, task_id: str) -> bool:
+    """Последняя остановка цикла задачи — команда `stop` (SPEC
+    01M6HVPMYY2Q56JZ64KD28FTWK, требование 2): первая запись остановки
+    цикла после последней записи «auto старт» — «auto остановлен» с
+    причиной `auto._STOP_COMMAND_REASON` (её же пишет и остановка `epic
+    stop`). Нет такой записи старта или остановки после неё — `False`.
+
+    Отложенный импорт: `auto` и `zone_lock` на уровне модуля импортируют
+    этот модуль."""
+    from . import auto, zone_lock
+    rows = store.task_steps(conn, task_id)
+    starts = [i for i, row in enumerate(rows)
+              if row["action"] == zone_lock.AUTO_START_ACTION]
+    if not starts:
+        return False
+    for row in rows[starts[-1] + 1:]:
+        if row["action"] in (zone_lock.AUTO_STOPPED_ACTION,
+                             zone_lock.CYCLE_ABORTED_ACTION):
+            return (row["action"] == zone_lock.AUTO_STOPPED_ACTION
+                    and (row["detail"] or "").partition(": ")[2]
+                    == auto._STOP_COMMAND_REASON)
+    return False
 
 
 def _terminate_pid(pid: int) -> None:

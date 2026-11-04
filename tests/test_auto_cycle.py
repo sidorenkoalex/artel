@@ -13,6 +13,7 @@ tests/test_agent_log.py, tests/test_agent_failure.py, tests/test_step_cost.py).
 или удалить его может только Оператор отдельным ADR; перечень «инвариант →
 тест → откуда» — docs/invariants.md.
 """
+import os
 import shutil
 import signal
 import sqlite3
@@ -1116,11 +1117,19 @@ class AutoReportsTheCycleTest(AutoCycleTest):
         self.assertEqual(self.state(), "verifying")
 
     def test_start_and_stop_are_journalled_by_the_operator(self):
+        """Старт и остановка цикла — записи актора `operator`; деталь «auto
+        старт» целиком — состояние, лимит шагов и pid процесса цикла (SPEC
+        01M6HVPMYY2Q56JZ64KD28FTWK, требование 11; мандат ANSWER-3).
+
+        Ловит мутацию: в детали «auto старт» нет суффикса «, pid <pid>» либо
+        pid не процесса цикла.
+        """
         self.auto()
 
         rows = self.journal_rows()
         self.assertIn(("operator", "auto старт",
-                       f"состояние in_dev, лимит {config.AUTO_MAX_STEPS} шагов"),
+                       f"состояние in_dev, лимит {config.AUTO_MAX_STEPS} шагов, "
+                       f"pid {os.getpid()}"),
                       rows)
         self.assertEqual([(actor, action) for actor, action, _ in rows
                           if action == "auto остановлен"],
