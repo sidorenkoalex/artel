@@ -1848,20 +1848,154 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     handler(conn, task_id, t, state, sid)
 
 
-def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None:
+def cmd_reject(task_id: str, reason: str, session_id: str | None = None, *,
+               decision_file: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится в
     `lease.run_task_command`, до lease/CAS — иначе `reject` с префиксом на
     `merge_gate` кидал необработанный `CasConflict` сквозь
-    `lease.run_locked` (REVIEW T094 итерация 1, замечание 1)."""
-    lease.run_task_command(task_id, session_id,
-                           lambda conn, tid: _cmd_reject(conn, tid, reason))
+    `lease.run_locked` (REVIEW T094 итерация 1, замечание 1).
+
+    `decision_file` — файл решения `reject <id> --decision <файл>` (SPEC
+    01M6KB0SJHDA4D4GNEM7PGZ40P, требование 1). Без него тело зовётся
+    прежним вызовом без именованных аргументов: его закрепляет обвязка
+    lease (`tests/test_lease_run_task_command.py`)."""
+    lease.run_task_command(
+        task_id, session_id,
+        lambda conn, tid: (_cmd_reject(conn, tid, reason)
+                           if decision_file is None else
+                           _cmd_reject(conn, tid, reason,
+                                       decision_file=decision_file)))
 
 
-def _cmd_reject(conn, task_id: str, reason: str) -> None:
+SPEC_GATE_TEXT_WARNING = ("решение без сверки следствий — для сессии "
+                          "Оператора обязательна форма --decision")
+DECISION_ONLY_ON_SPEC_GATE = "--decision применим только на spec_gate"
+DECISION_HEADER_REFUSAL = "файл решения подаётся ключом --decision"
+# Сколько знаков причины возврата текстом печатает перечень прежних
+# решений (SPEC 01M6KB0SJHDA4D4GNEM7PGZ40P, требование 5).
+PRIOR_REASON_CHARS = 120
+
+
+def spec_gate_prior_decisions(conn, task_id: str) -> list[tuple[str, str]]:
+    """Прежние решения задачи на гейте SPEC по порядку: (номер, текст).
+
+    k — порядковый номер записи среди возвратов `brief._spec_gate_reasons`
+    (тот же источник, что «№k» в брифе аудитора); запись, поданная файлом
+    решения и проходящая разбор формы, даёт номера «k.n» и текст поля
+    «Текст» каждого решения, прочая — номер «k» и первые
+    `PRIOR_REASON_CHARS` знаков причины. Переносы строк свёрнуты.
+
+    `brief` — по месту: верхний импорт замыкает круг через `gitcmd`."""
+    from . import brief, spec_gate_decision
+    found = []
+    for k, reason in enumerate(brief._spec_gate_reasons(conn, task_id), 1):
+        decisions = spec_gate_decision.numbered(reason)
+        if decisions is None:
+            found.append((str(k), " ".join(reason.split())[:PRIOR_REASON_CHARS]))
+        else:
+            found += [(f"{k}.{n}", " ".join(text.split()))
+                      for n, text in decisions]
+    return found
+
+
+def spec_gate_prior_block(conn, task_id: str) -> str:
+    """Перечень прежних решений строками «№<номер>: <текст>» для отказа
+    `reject --decision` и подсказки остановки `auto`; пустая строка —
+    прежних возвратов нет."""
+    found = spec_gate_prior_decisions(conn, task_id)
+    if not found:
+        return ""
+    return ("прежние решения задачи (на них ссылается поле «Прежние "
+            "решения»):\n" + "\n".join(f"  №{number}: {text}"
+                                       for number, text in found))
+
+
+def _answer_texts(conn, task_id: str) -> list[str] | None:
+    """Тексты всех ANSWER-n.md задачи из ссылки документов; `None` — git не
+    ответил или файл не прочитан (мандат тогда не сверить)."""
+    branch, _ = artifact_source.resolve(conn, task_id)
+    paths = artifact_branch.ls_tree(task_id, branch, f"tasks/{task_id}")
+    if paths is None:
+        return None
+    texts = []
+    for rel in paths:
+        name = Path(rel).name
+        if not (name.startswith("ANSWER-") and name.endswith(".md")):
+            continue
+        text, _reason = artifact_branch.show(task_id, branch, rel)
+        if text is None:
+            return None
+        texts.append(text)
+    return texts
+
+
+def _read_decision_file(task_id: str, decision_file: str) -> str:
+    try:
+        return Path(decision_file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"[{task_id}] reject --decision отклонён: файл решения "
+                 f"{decision_file} не прочитан ({exc}); состояние не "
+                 f"изменилось")
+
+
+def _decision_refusal(conn, task_id: str, text: str) -> str | None:
+    """Почему файл решения не принят (требования 2, 3, 6, 7); `None` —
+    принят. Ссылки и мандат сверяются после разбора формы всего файла."""
+    from . import spec_gate_decision as decision
+    try:
+        decisions = decision.parse(text)
+    except decision.DecisionError as exc:
+        return str(exc)
+    numbers = [number for number, _ in spec_gate_prior_decisions(conn, task_id)]
+    for d in decisions:
+        name = f"Решение {d['number']}"
+        problem = decision.prior_refusal(d["fields"][decision.FIELD_PRIOR],
+                                         numbers)
+        if problem is not None:
+            return f"{name}, поле «{decision.FIELD_PRIOR}»: {problem}"
+        problem = decision.mandate_refusal(
+            d["fields"][decision.FIELD_TESTS], lambda: _answer_texts(conn, task_id))
+        if problem is not None:
+            return f"{name}, поле «{decision.FIELD_TESTS}»: {problem}"
+    return None
+
+
+def _spec_gate_reject_text(conn, task_id: str, reason: str,
+                           decision_file: str | None) -> str:
+    """Текст возврата с гейта SPEC для журнала (SPEC
+    01M6KB0SJHDA4D4GNEM7PGZ40P, требования 2-9): файл решения целиком либо
+    причина прежней формы с предупреждением. Отказ — `sys.exit`, состояние
+    не меняется."""
+    from . import spec_gate_decision
+    if decision_file is None:
+        if spec_gate_decision.starts_with_header(reason):
+            sys.exit(f"[{task_id}] reject отклонён: "
+                     f"{DECISION_HEADER_REFUSAL} — "
+                     f"reject {task_id} --decision <файл>; состояние не "
+                     f"изменилось")
+        print(f"[{task_id}] {SPEC_GATE_TEXT_WARNING}")
+        return reason
+    text = _read_decision_file(task_id, decision_file)
+    problem = _decision_refusal(conn, task_id, text)
+    if problem is not None:
+        block = spec_gate_prior_block(conn, task_id)
+        sys.exit(f"[{task_id}] reject --decision отклонён: {problem}; "
+                 f"состояние не изменилось"
+                 + (f"\n{block}" if block else ""))
+    return text
+
+
+def _cmd_reject(conn, task_id: str, reason: str, *,
+                decision_file: str | None = None) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
+    # Раньше проверки `awaiting_human` (требование 10): ключ вне гейта SPEC
+    # называется своим отказом в любом состоянии.
+    if decision_file is not None and state != "spec_gate":
+        sys.exit(f"[{task_id}] reject отклонён: {DECISION_ONLY_ON_SPEC_GATE} "
+                 f"(сейчас {state})")
     if state == AWAITING_HUMAN:
         sys.exit(f"[{task_id}] reject отклонён: {AWAITING_HUMAN_HINT}")
     if state == "merge_gate":
@@ -1909,9 +2043,10 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
         # что и именованный отказ неприменимого состояния ниже.
         # Соседние состояния этой проверки НЕ получают (SPEC «Не
         # входит»): там причина не обязательна и сегодня.
-        if not reason.strip():
+        if decision_file is None and not reason.strip():
             sys.exit(f"[{task_id}] reject на spec_gate требует причины: "
                      f"reject {task_id} \"<причина>\" (сейчас {state})")
+        reason = _spec_gate_reject_text(conn, task_id, reason, decision_file)
         # Draft MR тут не заводится: узел `_maybe_ensure_draft_mr` —
         # побочный эффект входа именно в in_dev (SPEC T079, требование 1).
         store.set_state(conn, task_id, "spec_writing", "operator",

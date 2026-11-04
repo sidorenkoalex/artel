@@ -933,7 +933,9 @@ AUTO_STOP = {
     "spec_writing": ("SPEC ещё пишется",
                      "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
     "spec_gate": ("гейт SPEC — решение Оператора",
-                  "прочитай SPEC и: artel.py approve {id}{sha}; " + _BOTH_COMMANDS),
+                  "прочитай SPEC и: artel.py approve {id}{sha}; вернуть "
+                  "SPEC — artel.py reject {id} --decision <файл> (форма "
+                  "templates/SPEC-GATE-DECISION.md); " + _BOTH_COMMANDS),
     # Отсылка к записи «приёмка: что проверит approve»
     # (`fsm_autogate.ACCEPTANCE_CHECKLIST_ACTION`, 01M2B6K76EAFDF5X1B3Z9XK30Q,
     # требование 3/AC-6): что из протокола `docs/operator-gates.md`
