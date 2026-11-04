@@ -38,10 +38,14 @@ budget_usd: 45
    провайдеров, Claude и Codex: оба идут через `runner.spawn_agent`. Запас —
    константа `config.ROLE_NPROC_RESERVE`, значение 1000.
    Устройство вычисления (решение Оператора О-7):
-   - ограничение вычисляет одна функция `runner.role_nproc_limit` в процессе
-     пульта до запуска; её зовёт код шага, вызывающий `spawn_agent`
-     (`runner._spawn_and_wait`, вызов `spawn_agent` — `runner.py:1805`), и
-     строка `doctor` требования 6;
+   - ограничение вычисляет одна функция `runner.role_nproc_limit() -> int`
+     без аргументов (решение Оператора, возврат 6, Р-2) в процессе пульта до
+     запуска; её зовёт `runner._cmd_run` ОДИН раз на шаг до цикла попыток
+     `runner._run_attempts` (`orchestrator/runner.py:889`, вызов —
+     `orchestrator/runner.py:333`), не `runner._spawn_and_wait`; готовое число
+     передаётся в каждую попытку и дальше в `spawn_agent(nproc_limit=…)`
+     (вызов `spawn_agent` — `runner.py:1805`; решение Оператора, возврат 6,
+     Р-1). Её же зовёт строка `doctor` требования 6;
    - `runner.spawn_agent` получает готовое число именованным аргументом
      `nproc_limit` и ставит `preexec_fn` только когда аргумент задан; без
      аргумента поведение `spawn_agent` прежнее, прочие вызовы `spawn_agent`
@@ -172,14 +176,14 @@ budget_usd: 45
 ## Критерии приёмки
 
 AC-1. Процесс, запущенный `runner.spawn_agent` с аргументом `nproc_limit`,
-равным значению `runner.role_nproc_limit`, несёт мягкий и жёсткий
+равным значению `runner.role_nproc_limit()`, несёт мягкий и жёсткий
 `RLIMIT_NPROC`, равные этому значению; дочерний процесс читает своё
 ограничение сам. Значение не выше текущих мягкого и жёсткого ограничений
 пульта. `resource.getrlimit(RLIMIT_NPROC)` процесса теста (пульта) после
 запуска равен прежнему. Без аргумента `nproc_limit` процесс, запущенный
 `runner.spawn_agent`, несёт те же `RLIMIT_NPROC`, что процесс теста.
 Шаг, запущенный через `runner.cmd_run`, зовёт `runner.spawn_agent` с
-аргументом `nproc_limit`, равным значению `runner.role_nproc_limit` того же
+аргументом `nproc_limit`, равным значению `runner.role_nproc_limit()` того же
 шага (проверка — подменой `runner.spawn_agent` и сверкой переданного
 аргумента; решение Оператора, возврат 5, П-1): реализация, в которой шаг не
 передаёт `nproc_limit`, этот критерий не проходит.
@@ -195,7 +199,7 @@ AC-2. Тест подменяет ограничение на «текущее �
 - все порождённые процессы завершаются в пределах теста.
 
 AC-3. `runner._read_maxprocperuid` подменена и возвращает `(None, "failed")`
-либо `(None, "absent")`. Тогда `runner.role_nproc_limit` вычисляет
+либо `(None, "absent")`. Тогда `runner.role_nproc_limit()` вычисляет
 ограничение от `config.ROLE_NPROC_FALLBACK_MAXPROC` с тем же min по текущим
 ограничениям. Журнал задачи:
 - при `(None, "failed")` (сбой чтения на macOS) — ровно одна
@@ -211,7 +215,7 @@ AC-4. `resource.getrlimit` подменена и возвращает для `RL
 `(resource.RLIM_INFINITY, resource.RLIM_INFINITY)` (решение Оператора Н-4:
 реализация вызывает `resource.getrlimit` через модуль — `import resource`, не
 `from resource import getrlimit`). Тогда при `runner._read_maxprocperuid`, подменённой
-на `(V, "ok")`, `runner.role_nproc_limit` даёт V − `config.ROLE_NPROC_RESERVE`,
+на `(V, "ok")`, `runner.role_nproc_limit()` даёт V − `config.ROLE_NPROC_RESERVE`,
 а при подменённой на `(None, "failed")` или `(None, "absent")` —
 `config.ROLE_NPROC_FALLBACK_MAXPROC` − `config.ROLE_NPROC_RESERVE`.
 
@@ -252,7 +256,7 @@ AC-7. Подменены только `runner._read_maxprocperuid` и
   `kern.maxprocperuid` идёт без подпроцесса — тот же исход при сбое этого
   чтения (решение Оператора, возврат 5, П-2).
 Ограничение, которое показывает строка, равно значению, которое
-`runner.role_nproc_limit` даёт шагу при тех же подменах.
+`runner.role_nproc_limit()` даёт шагу при тех же подменах.
 
 AC-8. `runner._user_process_count` подменена и бросает исключение. Тогда:
 - шаг запущен (агент порождён);

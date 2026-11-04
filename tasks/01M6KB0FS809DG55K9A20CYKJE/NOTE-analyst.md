@@ -10,11 +10,13 @@
 
 - Шаг 6 (возврат 5, П-1/П-2): в AC-1 добавлена проверка подменой `spawn_agent`, что шаг через `cmd_run` передаёт `nproc_limit` = `role_nproc_limit`. Из требования 6 убрана ссылка на тест stale_cycles как держатель живучести. В AC-7 добавлен случай: `subprocess.run` бросает FileNotFoundError на sysctl → «ok» + «значение по умолчанию», без исключения. Вступление AC-7 оговаривает подмену subprocess.run для этого случая.
 
+- Шаг 7 (возврат 6, Р-1/Р-2): скобка требования 1 заменена — `role_nproc_limit` зовёт `runner._cmd_run` один раз до `_run_attempts` (runner.py:889, вызов :333), не `_spawn_and_wait`; число идёт в каждую попытку и в `spawn_agent(nproc_limit=…)`. Сигнатура `runner.role_nproc_limit() -> int` без аргументов; AC-1/3/4/7 зовут `runner.role_nproc_limit()`. Прочее не трогал.
+
 ## Не сработало
 - `cd … ; grep` в одной команде Bash отклоняется — нужны абсолютные пути.
 
 ## Где остановился
-- SPEC.md обновлён по возврату 5, status: ready, `scripts/guard.py` — ок.
+- SPEC.md обновлён по возврату 6, status: ready, `scripts/guard.py` — ок.
 
 ## Чего не хватило
 - Ничего: решения Оператора по Н-3/Н-4 были полными.
