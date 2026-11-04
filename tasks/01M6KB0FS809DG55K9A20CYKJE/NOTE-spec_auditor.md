@@ -1,16 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Аудит №4 (spec_sha 3f5fb3c9…), вердикт pass. Н-3 (вариант б), Н-4 и условие isinstance(agent_pid, int) перенесены точно (SPEC.md:83–92, :100–102, :113–114, :174–177, :204–210).
-- tests/test_agent_log.py:540 совместим с вариантом (б). run_agent подменяет spawn_agent на FakeProc (:474–477), так что снятие группы под isinstance не вызывается. Тест проверяет только записи finished и FAILED.
-- Ссылки на runner (83, 1805, 1834/1864, 1876, 2086, 2094–2115) и liveness (89, 118, 157) на 8fa671cc0 верны. Blob skills/test-authoring.md — 5757841ad.
-- Замечание без отклонения: в doctor не задано сочетание «недоступны и sysctl, и счёт».
+- Аудит №5 (spec_sha 9b5a0f16…), вердикт concerns, две находки.
+- П-1. Ни один AC не проверяет, что шаг (cmd_run → _run_attempts → run_agent_once → _spawn_and_wait) передаёт в spawn_agent аргумент nproc_limit. AC-1 и AC-2 зовут spawn_agent напрямую. Вызов runner.py:1805 без аргумента проходит все AC.
+- П-2. В tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py:111 список PROCESS_INFO_TOOLS содержит "sysctl", а :553–556 пропускают его к настоящему subprocess.run. Значит, утверждение SPEC «песочница бросает FileNotFoundError на sysctl» неверно, и тест не проверяет живучесть строки doctor при FileNotFoundError.
+- Подтверждено: auto.py:971/:1017 (остановка с alert=True; в её подсказке «budget/kill»). lease.run_task_command пропускает SystemExit наружу. run_agent_once зовёт только runner.py:902. Тесты, подменяющие run_agent_once (test_git_fixation.py:1186, zone_queue_start.py:476), дают подмене любые kwargs — mock совместим. Дифф skills/test-authoring.md ложится: blob 5757841ad, контекст на :364–367.
+- SpyRun (tests/sandbox.py:1308) отвечает пустым успехом на любую команду. При счёте процессов это даёт запись-предупреждение на каждый cmd_run под SpyRun, в том числе на CI. Это принято решением Оператора (возврат 4, п. 3), отклонением не считается.
 
 ## Не сработало
-- `cd … && git` и `echo $?` отклоняются. Работают одиночные команды и `python3 -c`.
+- В Bash отклоняются ls и awk; работают grep и sed.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, guard ок.
+- SPEC-AUDIT.md записан, guard прогнан.
 
 ## Чего не хватило
 - Ничего существенного.
