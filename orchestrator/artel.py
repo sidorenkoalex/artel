@@ -187,7 +187,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"]
            [--fresh-suite] [--no-answer] [--accept-audit-fail]
            [--during-canary "<основание>"] [--as-epic] |
-  reject <id> "<причина>" | spec-audit <id> |
+  reject <id> "<причина>" | reject <id> --decision <файл> | spec-audit <id> |
   verify-ok <id> <имя> <sha> "<итог>" | verify-fail <id> <имя> "<причина>" |
   answer <id> <файл-с-ответом> |
   zones-extend <id> <путь>[, <путь>...] --matrix <файл> |
@@ -2628,6 +2628,34 @@ def _refuse_if_role_restricted(cmd: str, rest: list) -> None:
                  f"роли {role}")
 
 
+DECISION_FLAG = "--decision"
+
+
+def _cmd_reject(rest: list) -> None:
+    """`reject <id> "<причина>"` либо `reject <id> --decision <файл>` (SPEC
+    01M6KB0SJHDA4D4GNEM7PGZ40P, требования 1, 10). Ключ разбирается явно,
+    а не текстом причины: без значения и вместе с позиционной причиной —
+    отказ до lease и журнала. Чтение файла и проверка состояния — в
+    `fsm._cmd_reject`."""
+    if not rest:
+        sys.exit('reject: не передан id задачи; синтаксис: reject <id> '
+                 '"<причина>" | reject <id> --decision <файл>')
+    task_id, args = rest[0], rest[1:]
+    if DECISION_FLAG not in args:
+        fsm.cmd_reject(task_id, args[0] if args else "")
+        return
+    at = args.index(DECISION_FLAG)
+    if at + 1 >= len(args) or args[at + 1].startswith("--"):
+        sys.exit(f"reject: {DECISION_FLAG} без значения; синтаксис: "
+                 f"reject {task_id} {DECISION_FLAG} <файл>")
+    extra = args[:at] + args[at + 2:]
+    if extra:
+        sys.exit(f"reject: {DECISION_FLAG} не сочетается с позиционной "
+                 f"причиной ({' '.join(extra)}) — решение целиком в файле; "
+                 f"синтаксис: reject {task_id} {DECISION_FLAG} <файл>")
+    fsm.cmd_reject(task_id, "", decision_file=args[at + 1])
+
+
 def _verify_args(rest: list, count: int, command: str) -> list:
     """Позиционные аргументы `verify-ok`/`verify-fail`: ровно `count`."""
     if len(rest) != count:
@@ -2674,8 +2702,7 @@ def main() -> None:
             accept_audit_fail=_approve_accept_audit_fail_arg(rest),
             **_approve_during_canary_kwargs(rest),
             **_approve_as_epic_kwargs(rest)),
-        "reject": lambda: fsm.cmd_reject(rest[0],
-                                         rest[1] if len(rest) > 1 else ""),
+        "reject": lambda: _cmd_reject(rest),
         "spec-audit": lambda: fsm.cmd_spec_audit(rest[0]),
         # Решения Оператора по ручной проверке `verify` — вне белого списка
         # ролей (SPEC 01M6F3DKM3KB2JYMD0J50YRBPE, требования 3-4).

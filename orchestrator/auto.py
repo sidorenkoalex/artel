@@ -599,6 +599,12 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
             audit_hint = (f"; вердикт fail принимается только флагом: "
                           f"artel.py approve {task_id} "
                           f"{spec_audit.ACCEPT_FAIL_FLAG}")
+        # Перечень прежних решений (SPEC 01M6KB0SJHDA4D4GNEM7PGZ40P,
+        # требование 5): на них обязано сослаться поле «Прежние решения»
+        # файла решения `reject --decision`.
+        prior = fsm.spec_gate_prior_block(conn, task_id)
+        if prior:
+            audit_hint += "\n  " + prior.replace("\n", "\n  ")
     sha_hint = set_hint = ""
     if needs_sha:
         target = store.task_target(conn, task_id)
