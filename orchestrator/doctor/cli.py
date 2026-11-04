@@ -264,6 +264,9 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.stack.check_stack())
     checks.extend(doctor.check_map_growth(conn))
     checks.append(doctor.check_machine_load())
+    # Предел процессов шага роли (SPEC 01M6KB0FS809DG55K9A20CYKJE,
+    # требование 6) — рядом с нагрузкой машины: оба о запасе машины.
+    checks.append(doctor.check_role_nproc())
     checks.extend(doctor.check_suite_duration(conn))
     return checks
 
