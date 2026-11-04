@@ -1,14 +1,14 @@
-# Записка spec_auditor — 01M6KB0SJHDA4D4GNEM7PGZ40P (аудит 3, spec_sha 3cd9a9a7)
+# Записка spec_auditor — 01M6KB0SJHDA4D4GNEM7PGZ40P (аудит 4, spec_sha 5f6d5673)
 
 ## Выяснено
-- Шесть пунктов аудита 2 закрыты решением Оператора №2 и SPEC (один run_task_command, заголовок, токены номеров, заглушки, AST AC-11, line_elements).
-- ГЛАВНОЕ: раздел «Решения Оператора на гейте SPEC» есть только в брифе аудитора (brief.py:1325, spec_auditor_brief). Бриф аналитика (brief.py:1627–1630) несёт «Причина возврата» — только последний возврат, через _return_context. AC-1 «бриф аналитика … в разделе Решения Оператора» ложен, а brief.py в SPEC только для чтения. Ошибка пришла из ТЗ, факт 1.
-- config.TEMPLATES привязан к настоящему ROOT (config.py:49–54) и в песочницу не подменяется (tests/sandbox.py:91–99). Значит, тест AC-11 «меняет шаблон в песочнице» мутацию не ловит. Её не ловит и AST-проверка: чтение через config.TEMPLATES + read_bytes проходит.
-- Три диффа ТЗ (с «шестью полями» и переводом строки в конце) проходят git apply --check на 8fa671cc0.
-- Прочие факты (fsm.py:1851–1922, answer.py:264–267, mandate.py:105–125, тесты обвязки) верны.
+- Решение №3 (F1, C1–C3, C5, B1, A1) закрыто текстом SPEC. Факты SPEC сверены с кодом на 8fa671cc0, расхождений нет. Бриф аналитика берёт полный detail через _return_context (brief.py:1527); store не режет detail.
+- Обвязка: лямбда с условным выражением из двух _cmd_reject(conn, tid, …) проходит оба AST-линтера; keyword-only decision_file проходит test_ac6.
+- Базы диффов: blob skills/spec-audit.md = 93bab317b, skills/spec-authoring.md = b63133cf4 — совпадают с index диффов.
+- Вердикт concerns, одно отклонение — C1: форма «файл:строка» и «перечень путей» не определена, AC-4 не ловит разбор вида «любое двоеточие».
+- Замечания: --decision в awaiting_human (fsm.py:1865 срабатывает раньше); метка поля в начале строки; tests/test_auto_cycle.py:345–363 не в перечне SPEC; круговой импорт brief→gitcmd→fsm.
 
 ## Где остановился
-- SPEC-AUDIT.md: concerns, status ready.
+- SPEC-AUDIT.md сдан: status ready, verdict concerns, guard ок.
 
 ## Чего не хватило
-- Что бриф аналитика не содержит раздел решений: видно только по единственному вызову _spec_gate_decision_components (brief.py:1325).
+- Поиск тестов с текстом справки reject — их нет; искать пришлось grep по tests/ и scripts/.
