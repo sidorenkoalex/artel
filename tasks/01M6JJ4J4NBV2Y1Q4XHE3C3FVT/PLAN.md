@@ -107,6 +107,26 @@ schema_version: 5
    корень, цепочка псевдонимов, pager/fsmonitor, проверка набора `task-rm`.
    Мутации проверены временной правкой: «`-C` от исходного cwd», «без задачи
    всё своё», «один уровень псевдонима» — каждая красит свой тест.
+9. Итерация 2 (замечания ревью R1-F1..F3):
+   - R1-F1: `role_git._alias_refusal` разбирает тело псевдонима тем же
+     `parse()` (значение `-c`/`--config-env` — не подкоманда); конфигурация
+     из тела (`option_config`) проверяется: pager/fsmonitor с вызовом git и
+     `core.worktree` — отказ, `alias.*` тела участвуют в дальнейшем
+     раскрытии (`!`-псевдоним, `clean`).
+   - R1-F3: `task-rm` не планирует повтор пути (`f`, `./f`) дважды.
+   - R1-F2: в `tests/test_role_git.py` — сквозные сторожа ядра над
+     временным дублёром ROOT: `role_git.main` (своя копия, чужая копия,
+     корень, pager/псевдоним с `-c` в теле, вне корней и `--version`;
+     `os.execv` подменён), `artel._run_without_role_git` (PATH без
+     обёртки, восстановление после исключения), `cmd_task_rm` (`ARTEL_TASK`,
+     повтор пути), `docs_dir_note` (`task-rm <id>`), `check_role_git_boundary`
+     (`ok`; `fail` без потолка и без обёртки; временный каталог убран).
+     Мутации ревью (`role_git.py` foreign/`reason = None`, `artel.py` PATH,
+     `task_files.py` `ARTEL_TASK`, `role_prompt.py` `task-rm`,
+     `doctor/isolation.py` `fail`) и мутации R1-F1/R1-F3 — каждая красит
+     файл. Мутация «отказ `sub == "clean"` выключен» в одиночку
+     эквивалентна: слово `clean` отклоняет и `_alias_refusal`; выключение
+     обоих мест — 4 красных теста.
 
 ## Покрытие требований
 
@@ -114,8 +134,8 @@ schema_version: 5
 |---|---|
 | 1 | 2 |
 | 2 | 1, 2 |
-| 3 | 1 |
-| 4 | 3, 4 |
+| 3 | 1, 9 |
+| 4 | 3, 4, 9 |
 | 5 | 3 |
 | 6 | 2 (замер — «Подход») |
 | 7 | 5 |
@@ -123,7 +143,12 @@ schema_version: 5
 | 9 | 6, 7 |
 | 10 | 1, 2 |
 
-Проверено: планка `plank-run` — 119 passed; долгоживущий
+Итерация 2: планка `plank-run` — 119 passed; `tests/test_role_git.py`,
+долгоживущий файл задачи, `test_multitarget`, `test_codebase_map` — 110
+passed; на настоящем git через обёртку в дублёре
+`git -c 'alias.cl=-c a.b=c clean -fX' cl` — отказ, файл на месте.
+
+Итерация 1: планка `plank-run` — 119 passed; долгоживущий
 `tests/test_01m6jj4j4nbv2y1q4xhe3c3fvt_role_git_boundary.py` — 4 passed;
 затронутые модули (`test_multitarget`, `test_providers*`,
 `test_codex_login_shell_path`, `test_01m5kjne39…_direct_git`,
@@ -170,6 +195,10 @@ schema_version: 5
 - Вложенный git в своих хуках клона идёт мимо обёртки — как и прежде.
 
 ## Предложения системе
+- `task-rm` недоступен роли до мержа задачи (роль зовёт `artel.py` главной
+  копии пульта): временный файл каталога документов в итерации 2 пришлось
+  убрать `python3 -c os.unlink`. Ожидаемо, но класс «команда задачи,
+  нужная самой задаче, появляется только после мержа» стоит учесть.
 - Bash роли (курируемый `settings.json`): `chmod` и запуск локального
   скрипта (`orchestrator/role_bin/git …`) требуют подтверждения, `ls`
   недоступен — бит исполнения пришлось ставить `python3 -c os.chmod`,
