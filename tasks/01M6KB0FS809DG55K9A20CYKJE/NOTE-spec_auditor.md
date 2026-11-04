@@ -1,17 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Утверждения SPEC о коде подтвердились: runner.py:83 spawn_agent, :1805 вызов, :2086 «agent run finished»; liveness.py:118/:157. Но :2094 — это ОПРЕДЕЛЕНИЕ close_pump; вызов — runner.py:1876 (в `_spawn_and_wait`, раньше `_finish_ok`).
-- Дифф приложения ложится: blob skills/test-authoring.md на HEAD = 5757841ad, контекст строк 364–369 совпадает.
-- alerts.KINDS (alerts.py:73) хватает для тревоги требования 3, alerts.py не нужен.
-- Подмены spawn_agent в тестах (sandbox.claude_only_popen, FakeProc) — pid не int, поэтому новое снятие группы их не заденет.
-- Вердикт: concerns (8 отклонений, все решаемы на гейте).
+- Аудит №2 (spec_sha 710d2ada…): решения О-1…О-8 перенесены верно. Нумерация AC сдвинулась: новый AC-4 — RLIM_INFINITY, тревога теперь в AC-5, close_pump — в AC-6, doctor — в AC-7.
+- `_spawn_and_wait` вызывается на каждой попытке (цикл — runner.py:901 `_run_attempts`), значит предупреждение «одно на шаг» — вне `role_nproc_limit`.
+- Подмены spawn_agent в тестах берут **kwargs; часть из них пробрасывает kwargs в настоящий Popen в ветке «не CLI роли» (sandbox.py:1044 и др.). Сейчас эти ветки мертвы.
+- Blob skills/test-authoring.md по-прежнему 5757841ad — дифф приложения ложится.
+- Вердикт concerns: Н-1 — точки подмены sysctl, платформы и счёта процессов в SPEC не названы (класс О-7); Н-2 — в AC-5 нет случая равенства N = M.
 
 ## Не сработало
-- grep с `cd` и пайпами отклоняется правилами — нужны абсолютные пути и простые команды.
+- Команды с `;`, `ls`, `shasum` и `--include` отклоняются — нужны одиночные grep и git -C.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, guard прогнан.
+- SPEC-AUDIT.md записан, guard ок.
 
 ## Чего не хватило
-- Значение resource.RLIM_INFINITY на Linux (-1) на macOS не проверить — вывод сделан по документации CPython.
+- Как отличать «сбой на macOS» от «нет параметра» — ни ТЗ, ни SPEC точку не задают; отсюда Н-1.
