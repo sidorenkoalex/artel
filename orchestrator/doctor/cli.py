@@ -77,6 +77,46 @@ def targets_local_layer_check() -> doctor.Check:
                         f"локальный слой {path}: записи {', '.join(local)}")
 
 
+def target_failure_errors_check() -> doctor.Check:
+    """Строка `target-failure-errors` (SPEC 01M6KBD9FC36WARWSY9Z0JDMG5,
+    требование 9): компоненты в границе отчёта с пустым `failure_errors` —
+    честный FAIL_TO_PASS на выходе `tests_writing` им откажет, — одна строка
+    на все проекты, до работы test_author. Только записи с `components`:
+    `test_profile` вне границы отчёта."""
+    from orchestrator import project_profile
+    from orchestrator.advance_gates import acceptance as gate_acceptance
+    name = "target-failure-errors"
+    try:
+        declared = doctor.targets.load()
+    except doctor.targets.TargetsError as exc:
+        return doctor.Check(name, "skip", f"записи проектов не загрузились: {exc}")
+    hints, broken = [], []
+    for project, entry in declared.items():
+        if entry.get(doctor.targets.COMPONENTS_FIELD) is None:
+            continue
+        try:
+            profiles = project_profile.component_profiles(project)
+        except doctor.targets.TargetsError as exc:
+            broken.append(f"{project}: {exc}")
+            continue
+        for profile in profiles:
+            if (gate_acceptance.in_outcome_bounds(profile)
+                    and not profile.failure_errors):
+                hints.append(f"target-set {project} description.components."
+                             f"{profile.component}.failure_errors "
+                             f"'[AssertionError]'")
+    if hints:
+        return doctor.Check(
+            name, "warn",
+            "компоненты в границе отчёта без failure_errors — выход "
+            "tests_writing откажет честным FAIL_TO_PASS; задай: "
+            + "; ".join(hints + broken))
+    if broken:
+        return doctor.Check(name, "skip", "; ".join(broken))
+    return doctor.Check(name, "ok", "у компонентов в границе отчёта "
+                                    "failure_errors задан")
+
+
 def all_checks(conn) -> list[doctor.Check]:
     """Требование 1: прогон всех проверок doctor.
 
@@ -178,6 +218,10 @@ def all_checks(conn) -> list[doctor.Check]:
         # требование 8) — следом: предмет тот же, база клона проекта.
         checks.extend(doctor.check_project_conventions(name))
         checks.extend(doctor.recovery_check(conn, name))
+    # Одна строка на все проекты, вне ветки годного `targets.load()`: при
+    # сломанном слое она есть со `skip` (SPEC 01M6KBD9FC36WARWSY9Z0JDMG5,
+    # требование 9).
+    checks.append(target_failure_errors_check())
 
     checks.extend(doctor.check_orphans(conn))
     # Файлы БД пульта в рабочих копиях задач (SPEC
