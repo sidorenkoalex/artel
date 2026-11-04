@@ -32,12 +32,14 @@ record_fixation`): это запись пульта по команде Опер
 мимо гейтов, и следующая сверка фиксации не должна видеть её
 расхождением.
 """
+import re
+import socket
 import sys
 from pathlib import Path
 
 from . import (artifact_branch, artifact_source, cycle_hint, fixation, fsm,
                fsm_advance, gitcmd, lease, merge_after, runner, store,
-               workspace)
+               workspace, zone_lock)
 from .advance_gates import mandate
 
 
@@ -213,6 +215,8 @@ def _answer_document(task_id: str, n: int, raw: str) -> str:
 
 
 INSTRUCTION_ACTION = "ANSWER создан: указание Оператора"
+_NEXT_STEP_HINT = ("  указание дойдёт до роли на её следующем шаге; идущий "
+                   "шаг не прерывается")
 INSTRUCTION_STATES = ("in_dev", "review")
 _ROLE_ENV_REFUSAL = ("answer отказана — вызов из окружения роли (role_env), "
                      "REVIEW 01M287TPG0HAVXS8CHBCY679WN итерация 1, "
@@ -314,8 +318,51 @@ def cmd_answer(task_id: str, file_path: str,
     if raw is not None:
         _commit_instruction(conn, task_id, raw)
         return
+    if _cycle_waits_zone(conn, task_id):
+        # SPEC 01M6HVPMYY2Q56JZ64KD28FTWK, требование 11: lease держит цикл,
+        # который только ждёт зону, — мандат дойдёт до роли так же, как
+        # указание, на её следующем шаге.
+        _cmd_answer(conn, task_id, file_path)
+        print(_NEXT_STEP_HINT)
+        return
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_answer(conn, task_id, file_path))
+
+
+# Pid процесса цикла в детали записи «auto старт» (`auto._auto_cycle`).
+_CYCLE_PID = re.compile(r", pid (\d+)$")
+
+
+def _cycle_waits_zone(conn, task_id: str) -> bool:
+    """Lease задачи держит живой цикл `auto` этой задачи, который ждёт зону
+    без агентного шага (SPEC 01M6HVPMYY2Q56JZ64KD28FTWK, требование 11):
+    задача в `in_dev`; сессия и pid lease — те же, что в последней записи
+    «auto старт»; lease жив на этой машине; вход в ожидание зоны после
+    старта не закрыт, шага роли после входа нет. Открытый вход от убитого
+    цикла при lease другого процесса (ручной `run`) ожиданием не
+    считается — pid не совпадёт."""
+    if store.get_task(conn, task_id)["state"] != "in_dev":
+        return False
+    holder = lease.foreign_live_lease(conn, task_id, None)
+    if holder is None or holder["hostname"] != socket.gethostname():
+        return False
+    if zone_lock.wait_minutes(conn, task_id) is None:
+        return False
+    rows = store.task_steps(conn, task_id)
+    starts = [i for i, row in enumerate(rows)
+              if row["action"] == zone_lock.AUTO_START_ACTION]
+    if not starts:
+        return False
+    start = rows[starts[-1]]
+    match = _CYCLE_PID.search(start["detail"] or "")
+    if (match is None or int(match.group(1)) != holder["pid"]
+            or start["session_id"] != holder["session_id"]):
+        return False
+    enters = [i for i, row in enumerate(rows)
+              if row["action"].startswith(zone_lock._WAIT_ENTER_PREFIX)
+              and row["action"] != zone_lock.RELEASE_ACTION]
+    return not any(row["action"] == "agent run started"
+                   for row in rows[enters[-1] + 1:])
 
 
 def _commit_answer(conn, task_id: str, raw: str) -> tuple[str, str]:
@@ -342,8 +389,7 @@ def _commit_instruction(conn, task_id: str, raw: str) -> None:
     store.journal(conn, task_id, "operator", INSTRUCTION_ACTION, rel_answer)
     print(f"[{task_id}] {rel_answer} создан и закоммичен в артефактную "
           f"ветку {branch}")
-    print("  указание дойдёт до роли на её следующем шаге; идущий шаг не "
-          "прерывается")
+    print(_NEXT_STEP_HINT)
 
 
 def _cmd_answer(conn, task_id: str, file_path: str) -> None:
