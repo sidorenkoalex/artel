@@ -1,15 +1,15 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 7 (spec_sha b585fce1…): разница с визитом 6 — `git diff 6b37d7c08 8f7b53f0e -- tasks/<id>/SPEC.md`; решение №6 отражено (SPEC.md:78-81, 216-227, 250-255).
-- config.ROOT от расположения модуля (config.py:11), PROJECTS/VENV_DIR — константы при импорте (:57, :131); подмена config.ROOT в тесте не доходит до обёртки git в отдельном процессе.
-- Вердикт concerns: В-1 — канал, которым механизм узнаёт дублёр ROOT, не задан → тест навяжет устройство.
+- Визит 8 (spec_sha 21dfc2a4…): разница с визитом 7 — `git diff 8f7b53f0e 61b04a817 -- tasks/<id>/SPEC.md`; решение №7 отражено (требование 10 SPEC.md:215-228, форма теста :241-246, AC-19 :416-428). В-1 закрыт.
+- role_env кладёт переменные явным env[...] (runner.py:1167-1192); allowlist stack.py не нужен. Пути worktrees/repo совпадают с workspace.py:235-239, repo_context.py:78-82.
+- Вердикт concerns: Е-1 — при fail-closed способ снятия механизма диспетчером не задан; допустим новый маркер-выключатель в env, AC-14 ловит только ARTEL_PULT_GIT.
 
 ## Не сработало
-- Bash: только git/python3/sed допускались без вопросов.
+- `cd … && git …` требует подтверждения — работать без cd.
 
 ## Где остановился
-- SPEC-AUDIT.md записан, status ready, verdict concerns; guard — см. прогон.
+- SPEC-AUDIT.md записан, status ready, verdict concerns; прогон guard — см. ниже.
 
 ## Чего не хватило
 - Ничего существенного.
