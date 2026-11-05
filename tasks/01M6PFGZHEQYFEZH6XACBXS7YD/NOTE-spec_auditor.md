@@ -1,16 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде верны: spec_gate_decision.py:186-189 (isdigit/int), artel.py:2650-2675 (_cmd_reject), fsm.py:2078-2081 ловит только DecisionError, журнал хранит текст файла, не путь (fsm.py:2118, 2185).
-- Опыт python3: '²' isdigit True, int → ValueError; '３','١' int → 3/1, отказ идёт веткой «не по порядку».
-- Существующие тесты (tests/test_spec_gate_decision.py, tests/test_01m6kb0sjhda4d4gnem7pgz40p_decision_reject.py, test_lease_run_task_command.py) не ломаются; "decision=" в tests/ нет.
-- Вердикт concerns: литерал «повторён» не задан (AC-6); два пробельных ключа — сейчас отказ «не сочетается…» (artel.py:2670), тр.4 vs AC-7 неясно; аргумент «--decisions…» не определён; порядок/сочетания вне AC-6.
+- Второй визит (после возврата Оператора, решения 1–3): все решения внесены в SPEC (тр. 3–5, AC-4..AC-7).
+- Факты подтверждены: spec_gate_decision.py:186-190, artel.py:2650-2675, fsm.py:2079-2081 ловит только DecisionError; numbered() (spec_gate_decision.py:307) тоже через parse.
+- Опыт python3: '²' isdigit True/int ValueError; '３','١' isdecimal True, int ок, != str(i) → «не по порядку».
+- Тексты «не сочетается»/«без значения» в tests/ только в докстрингах; assert_refused без names — не ломаются.
+- Вердикт pass.
 
 ## Не сработало
-- grep с `--include=*.py` и `-e "--decision"` отклоняются оболочкой/правами; искать по `DECISION_FLAG\|"--decision"`.
+- `ls` в оболочке недоступен (command not found) — пользоваться grep/sed.
 
 ## Где остановился
-SPEC-AUDIT.md сдан (status: ready, verdict: concerns), guard ок.
+SPEC-AUDIT.md сдан (status: ready, verdict: pass), guard прогнан.
 
 ## Чего не хватило
 Ничего существенного.
