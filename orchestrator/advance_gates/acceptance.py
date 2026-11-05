@@ -171,7 +171,8 @@ def _seed_repeats_escalate(conn, task_id: str, t, long_lived: list[str],
     repeats = config.LONG_LIVED_SEED_REPEATS
     red: dict[str, list[str]] = {}
     for number in range(1, repeats + 1):
-        for test in acceptance.run_repeat(seeded, run_cwd, command=command):
+        for test in acceptance.run_repeat(seeded, run_cwd, command=command,
+                                          task_id=task_id):
             seeds = (", ".join(f"зерно: {s}" for s in test.seeds)
                      if test.seeds else "зерно не напечатано")
             note = f" ({test.note})" if test.note else ""
