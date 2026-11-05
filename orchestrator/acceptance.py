@@ -16,10 +16,12 @@ import importlib.metadata
 import json
 import math
 import os
+import posixpath
 import re
 import sqlite3
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -803,18 +805,565 @@ def _session_to_log(argv: list, cwd: Path, env: dict, timeout: float,
     return code, log.read_bytes().decode("utf-8", errors="replace")
 
 
+# ------------------------------------------------ раннер `compose`
+#
+# Профиль с `runner: compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV; ADR-0023,
+# поправка 05.11.2026, пп. 1-2) гонится веткой отчёта: pytest идёт в
+# контейнере сервиса Compose-файла проекта, службы поднимает и снимает
+# пульт. Compose-файл проекта пульт не правит: собранная `config` конфигурация
+# проверяется, перекрывается (`_compose_override`) и пишется своим файлом во
+# временный каталог прогона — стенд поднимается только им.
+
+COMPOSE_ROLE_REFUSAL = ("раннер compose в шаге роли не исполняется — прогон "
+                        "в контейнере делают гейты пульта")
+COMPOSE_NO_TASK_REFUSAL = ("отказ запуска compose: id задачи не передан — имя "
+                           "проекта Compose без него не собрать; docker не "
+                           "вызывался")
+# Префикс имени проекта Compose (`artel-<id строчными>-<прогон>`) и метки
+# живого прогона — их читает `doctor` (строка «забытые стенды», часть 2).
+COMPOSE_PROJECT_PREFIX = "artel-"
+COMPOSE_RUN_LABELS = ("artel.run-pid", "artel.run-host", "artel.run-started")
+COMPOSE_REPORT_DIR = ".artel-report"
+# Правило перекрытия собранной конфигурации и отказов по ней — его версия
+# входит в ключ итога (требование 10): любая правка `_compose_override` или
+# `_compose_config_refusal` меняет и эту строку.
+COMPOSE_OVERRIDE_RULE = (
+    "1: services -ports +labels; networks +internal +labels, default "
+    "добавляется; отказ: network_mode, volumes_from, container_name, сеть "
+    "external, чужое name сети и тома, driver_opts тома local, сокет Docker "
+    "в bind, secrets.file, configs.file")
+# Поля записи `compose` в ключе итога (`compose_up_down_sec` — предел, не
+# итог).
+_COMPOSE_KEY_FIELDS = ("compose_file", "compose_service", "compose_env_file",
+                       "compose_env_template", "compose_mount")
+# Литералы сокета Docker и содержащих его каталогов: отказ без проверки
+# существования пути (требование 5).
+_DOCKER_SOCKET_LITERALS = ("/var/run/docker.sock", "/run/docker.sock",
+                           "/var/run", "/run", "/var", "/")
+_DOCKER_DEFAULT_SOCKET = "/var/run/docker.sock"
+COMPOSE_TEARDOWN_ACTION = "стенд compose не снят за предел"
+
+
+def _compose(command):
+    """Профиль `compose`, переданный каналом `command`; иначе `None`."""
+    return command if getattr(command, "runner", None) == \
+        targets.PROFILE_RUNNER_COMPOSE else None
+
+
+def find_docker() -> str | None:
+    """Программа `docker` по `PATH` вызывающего (требование 3); `None` — не
+    найдена."""
+    return shutil.which("docker")
+
+
+def compose_env(profile, docker: str) -> dict[str, str]:
+    """Окружение вызова `docker` места (требование 6): `PATH` — каталоги
+    `machine.path` записи, каталог `docker` (без разрешения ссылки),
+    `_OWN_SYSTEM_PATH_DIRS`, без повторов; `DOCKER_CONFIG` — заданный у
+    пульта, иначе `<HOME>/.docker`; `DOCKER_HOST`, `LANG`, `LC_ALL` — если
+    заданы; `TMPDIR`. Прочие переменные пульта, в том числе `HOME`, не
+    передаются."""
+    machine = (getattr(profile, "env", None) or {}).get("PATH") or ""
+    dirs = [d for d in machine.split(os.pathsep) if d]
+    dirs += [os.path.dirname(docker), *_OWN_SYSTEM_PATH_DIRS]
+    env = {"PATH": os.pathsep.join(dict.fromkeys(dirs))}
+    home = os.environ.get("HOME") or str(Path.home())
+    env["DOCKER_CONFIG"] = (os.environ.get("DOCKER_CONFIG")
+                            or os.path.join(home, ".docker"))
+    for name in ("DOCKER_HOST", "LANG", "LC_ALL"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env["TMPDIR"] = os.environ.get("TMPDIR") or tempfile.gettempdir()
+    return env
+
+
+def compose_project_name(task_id: str, run_id: str) -> str:
+    return f"{COMPOSE_PROJECT_PREFIX}{task_id.lower()}-{run_id}"
+
+
+def _compose_call(argv: list, env: dict, cwd: Path, timeout: float,
+                  log: Path | None = None) -> tuple[int | None, str]:
+    """(код возврата или `None` по пределу, вывод) вызова `docker` в своём
+    сеансе: на пределе и на исключении снимается группа процессов. Остаток
+    предела не больше нуля — вызова нет, `None`."""
+    if timeout <= 0:
+        return None, ""
+    out_file = open(log, "wb") if log is not None else None
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            stdout=out_file if out_file is not None else subprocess.PIPE,
+            stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            if out_file is not None:
+                proc.wait(timeout=timeout)
+                out = b""
+            else:
+                out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc.pid)
+            try:
+                out = b"" if out_file is not None else \
+                    proc.communicate(timeout=_OWN_DRAIN_SEC)[0]
+                proc.wait(timeout=_OWN_DRAIN_SEC)
+            except (subprocess.TimeoutExpired, ValueError, OSError):
+                out = b""
+                proc.kill()
+                proc.wait()
+            code = None
+        except BaseException:
+            _kill_group(proc.pid)
+            proc.wait()
+            raise
+        else:
+            code = proc.returncode
+    finally:
+        if out_file is not None:
+            out_file.close()
+    if log is not None:
+        out = log.read_bytes()
+    return code, _timeout_text(out or b"")
+
+
+def _inside_rel(path: str, base: str) -> str | None:
+    """Путь `path` от каталога `base` (оба абсолютные, нормализованные);
+    `None` — `path` не в `base`."""
+    if path == base:
+        return "."
+    if path.startswith(base.rstrip(os.sep) + os.sep):
+        return os.path.relpath(path, base)
+    return None
+
+
+class _ComposePlace(NamedTuple):
+    """Раскладка места `compose`: дерево, левая и правая части
+    монтирования."""
+    tree: Path
+    left: str
+    right: str
+
+    def container(self, host_path: str) -> str | None:
+        """Путь машины (абсолютный или от корня дерева) — путь контейнера;
+        `None` — не под левой частью монтирования."""
+        path = os.path.normpath(os.path.join(str(self.tree), host_path))
+        base = os.path.normpath(os.path.join(str(self.tree), self.left))
+        rel = _inside_rel(path, base)
+        if rel is None:
+            rel = _inside_rel(os.path.realpath(path), os.path.realpath(base))
+        if rel is None:
+            return None
+        return posixpath.normpath(posixpath.join(self.right,
+                                                 rel.replace(os.sep, "/")))
+
+    def report(self, run_id: str) -> tuple[Path, str]:
+        """(файл отчёта на машине, тот же файл в контейнере)."""
+        host = self.tree / self.left / COMPOSE_REPORT_DIR / f"{run_id}.xml"
+        return host, posixpath.join(self.right, COMPOSE_REPORT_DIR,
+                                    f"{run_id}.xml")
+
+
+def _compose_targets(profile, place: _ComposePlace, subset: list | None
+                     ) -> tuple[list | None, str]:
+    """(цели pytest в контейнере, отказ) — пути места переведены по
+    монтированию; путь вне его — отказ с именем пути (требование 8)."""
+    if subset is None:
+        args = [profile.long_lived_dir]
+        if _uses_plank_layout(profile):
+            parent = _layout_parent(profile.plank_layout)
+            ignored = [parent] if parent else []
+        elif _layout_mode(profile) == "layout":
+            ignored = [f"{profile.long_lived_dir}/{PLANK_LAYOUT_DIR}"]
+        else:
+            ignored = []
+    else:
+        args, ignored = list(subset), []
+    out = []
+    for arg, ignore in [*((a, False) for a in args),
+                        *((a, True) for a in ignored)]:
+        if arg.startswith("-"):
+            out.append(arg)
+            continue
+        path, sep, node = arg.partition("::")
+        inside = place.container(path)
+        if inside is None:
+            return None, (f"отказ запуска compose: путь {path} не лежит под "
+                          f"левой частью compose_mount «{place.left}» — "
+                          f"контейнер его не видит; прогон не запускался")
+        out.append(f"--ignore={inside}" if ignore else inside + sep + node)
+    return out, ""
+
+
+def _compose_pytest_argv(profile, place: _ComposePlace, subset: list | None,
+                         report: str, continue_on_collection_errors: bool
+                         ) -> tuple[list | None, str]:
+    """(команда pytest в контейнере, отказ): команда записи, запрет
+    повторов, цели, `-p no:cacheprovider`, `report_args` с путём отчёта в
+    контейнере."""
+    from . import project_profile
+    args = project_profile.report_args_of(profile)
+    if not any("{path}" in a for a in args):
+        return None, (f"в report_args компонента {_component_name(profile)} "
+                      f"нет {{path}} — отчёт пульта не подключить; прогон не "
+                      f"запускался")
+    targets_, refusal = _compose_targets(profile, place, subset)
+    if refusal:
+        return None, refusal
+    head = list(profile.command)
+    if _bans_rerun_plugins(profile):
+        head += NO_RERUN_PLUGINS_ARGS
+    extra = ["-p", "no:cacheprovider"] if is_pytest_command(head) else []
+    if continue_on_collection_errors and is_pytest_command(head):
+        extra.append(CONTINUE_ON_COLLECTION_ERRORS)
+    tail = [a.replace("{path}", report) for a in args]
+    return [*head, *targets_, *extra, *tail], ""
+
+
+def _docker_sockets(env: dict, docker: str, cwd: Path,
+                    timeout: float) -> tuple[set | None, str]:
+    """(`realpath` сокетов Docker, отказ): `unix://` из `DOCKER_HOST`
+    вызова, иначе сокет текущего контекста (`docker context inspect`, предел
+    `timeout`), и `/var/run/docker.sock`, если он есть (требование 5)."""
+    sockets = set()
+    host = env.get("DOCKER_HOST")
+    if host:
+        sockets.add(os.path.realpath(host[len("unix://"):]))
+    else:
+        argv = [docker, "context", "inspect", "--format",
+                "{{.Endpoints.docker.Host}}"]
+        code, out = _compose_call(argv, env, cwd, timeout)
+        if code is None:
+            return None, (f"отказ запуска compose: {' '.join(argv)} превысил "
+                          f"предел {timeout:g} с — сокет Docker не определён")
+        if code != 0:
+            return None, (f"отказ запуска compose: {' '.join(argv)} вернул код "
+                          f"{code}: {_bounded(out)} — сокет Docker не "
+                          f"определён")
+        found = (out.strip().splitlines() or [""])[0].strip()
+        if found.startswith("unix://"):
+            sockets.add(os.path.realpath(found[len("unix://"):]))
+    if os.path.exists(_DOCKER_DEFAULT_SOCKET):
+        sockets.add(os.path.realpath(_DOCKER_DEFAULT_SOCKET))
+    return sockets, ""
+
+
+def _socket_source(source: object, sockets: set) -> bool:
+    """Источник монтирования или файл секрета — сокет Docker или каталог,
+    его содержащий: литералом (`_DOCKER_SOCKET_LITERALS`) или по
+    `realpath`."""
+    if not isinstance(source, str) or not source:
+        return False
+    if posixpath.normpath(source) in _DOCKER_SOCKET_LITERALS:
+        return True
+    real = os.path.realpath(source)
+    return any(real == sock or real == "/" or
+               sock.startswith(real.rstrip(os.sep) + os.sep)
+               for sock in sockets)
+
+
+def _bind_sources(service: dict) -> list:
+    """Источники bind-монтирований сервиса собранной конфигурации."""
+    found = []
+    for volume in service.get("volumes") or ():
+        if isinstance(volume, dict):
+            if volume.get("type", "bind") == "bind":
+                found.append(volume.get("source"))
+        elif isinstance(volume, str):
+            source = volume.split(":", 1)[0]
+            if source.startswith(("/", ".", "~")):
+                found.append(source)
+    return found
+
+
+def _compose_config_refusal(cfg: dict, project: str, sockets: set) -> str:
+    """Отказ запуска по собранной конфигурации (требование 5); пусто —
+    годна. Текст называет сервис, сеть, том, секрет или конфигурацию."""
+    head = "отказ запуска compose по собранной конфигурации:"
+    own = (project, f"{project}_")
+
+    def foreign(name) -> bool:
+        return isinstance(name, str) and name != project and \
+            not name.startswith(own[1])
+    for name, service in (cfg.get("services") or {}).items():
+        service = service or {}
+        if "network_mode" in service:
+            return f"{head} сервис {name} — network_mode"
+        if service.get("volumes_from"):
+            return f"{head} сервис {name} — volumes_from"
+        if "container_name" in service:
+            return f"{head} сервис {name} — container_name"
+        for source in _bind_sources(service):
+            if _socket_source(source, sockets):
+                return (f"{head} сервис {name} — bind-монтирование сокета "
+                        f"Docker или его каталога ({source})")
+    for name, network in (cfg.get("networks") or {}).items():
+        network = network or {}
+        if network.get("external"):
+            return f"{head} сеть {name} — external"
+        if foreign(network.get("name")):
+            return (f"{head} сеть {name} — имя {network['name']} не имя "
+                    f"проекта {project} и не начинается с {project}_")
+    for name, volume in (cfg.get("volumes") or {}).items():
+        volume = volume or {}
+        if volume.get("driver_opts") and volume.get("driver") in (None, "local"):
+            return f"{head} том {name} — driver_opts у драйвера local"
+        if foreign(volume.get("name")):
+            return (f"{head} том {name} — имя {volume['name']} не имя "
+                    f"проекта {project} и не начинается с {project}_")
+    for section, what in (("secrets", "секрет"), ("configs", "конфигурация")):
+        for name, item in (cfg.get(section) or {}).items():
+            if _socket_source((item or {}).get("file"), sockets):
+                return (f"{head} {what} {name} — file на сокет Docker или его "
+                        f"каталог ({item['file']})")
+    return ""
+
+
+def _with_labels(obj: dict, labels: dict) -> dict:
+    current = obj.get("labels") or {}
+    if isinstance(current, list):
+        current = dict(item.split("=", 1) if "=" in item else (item, "")
+                       for item in current)
+    return dict(obj, labels={**current, **labels})
+
+
+def _compose_override(cfg: dict, labels: dict) -> dict:
+    """Перекрытие пульта (ADR-0023, поправка 05.11, п. 2): у сервисов снят
+    `ports`, у каждой сети, включая `default`, — `internal: true`;
+    контейнерам и сетям — метки живого прогона."""
+    out = dict(cfg)
+    out["services"] = {
+        name: _with_labels({k: v for k, v in (service or {}).items()
+                            if k != "ports"}, labels)
+        for name, service in (cfg.get("services") or {}).items()}
+    networks = dict(cfg.get("networks") or {})
+    networks.setdefault("default", {})
+    out["networks"] = {name: _with_labels(dict(net or {}, internal=True), labels)
+                       for name, net in networks.items()}
+    return out
+
+
+def _compose_prepare(profile, tree: Path, place: _ComposePlace) -> str:
+    """Файл окружения Compose дерева прогона (требование 4): не
+    отслеживается git, шаблон есть, оба пути отчёта и файла окружения — в
+    `info/exclude`; затем копия шаблона. Текст отказа или пусто."""
+    env_rel, template_rel = profile.compose_env_file, profile.compose_env_template
+    res = gitcmd.in_repo(tree, "ls-files", "--error-unmatch", "--", env_rel)
+    if res is None or res.returncode not in (0, 1):
+        detail = (res.stderr.strip() if res is not None else "") or "нет ответа"
+        return (f"отказ запуска compose: git не ответил, отслеживается ли "
+                f"{env_rel} ({detail}); docker не вызывался")
+    if res.returncode == 0:
+        return (f"отказ запуска compose: compose_env_file {env_rel} "
+                f"отслеживается git в дереве прогона — пульт его не "
+                f"перезаписывает; docker не вызывался")
+    template = tree / template_rel
+    if not template.is_file():
+        return (f"отказ запуска compose: шаблона compose_env_template "
+                f"{template_rel} нет в дереве прогона {tree}; docker не "
+                f"вызывался")
+    report_dir = posixpath.normpath(posixpath.join(place.left,
+                                                   COMPOSE_REPORT_DIR))
+    for pattern in (f"/{report_dir}/", f"/{env_rel}"):
+        refusal = _exclude_pattern(tree, pattern, "прогона compose")
+        if refusal:
+            return refusal
+    try:
+        shutil.copyfile(template, tree / env_rel)
+    except OSError as exc:
+        return (f"отказ запуска compose: шаблон {template_rel} не скопирован в "
+                f"{env_rel} ({exc}); docker не вызывался")
+    return ""
+
+
+def _compose_teardown(base: list, env: dict, cwd: Path, *, kill: bool,
+                      rmi: bool, project: str, task_id: str) -> None:
+    """Снятие стенда (требование 8): `kill` (по таймауту и исключению),
+    затем `down -v --remove-orphans` — вместе в пределе
+    `config.COMPOSE_TEARDOWN_TIMEOUT_SEC`; превышение — запись журнала
+    задачи с именем проекта, исход прогона не меняется."""
+    deadline = time.monotonic() + config.COMPOSE_TEARDOWN_TIMEOUT_SEC
+    down = ["down", "-v", "--remove-orphans", *(["--rmi", "local"] if rmi
+                                                else [])]
+    for sub in ([["kill"]] if kill else []) + [down]:
+        code, _out = _compose_call([*base, *sub], env, cwd,
+                                   deadline - time.monotonic())
+        if code is None:
+            from . import store  # store -> ... -> acceptance
+            with contextlib.suppress(sqlite3.Error, OSError):
+                store.journal(
+                    store.db(), task_id, "fsm", COMPOSE_TEARDOWN_ACTION,
+                    f"проект Compose {project}: {sub[0]} не завершился за "
+                    f"{config.COMPOSE_TEARDOWN_TIMEOUT_SEC} с — остатки стенда "
+                    f"снимает Оператор (docker compose --project-name "
+                    f"{project} down -v --remove-orphans)")
+            return
+
+
+def _compose_report_run(profile, tree: Path, subset: list | None,
+                        timeout: float, log: Path | None,
+                        continue_on_collection_errors: bool,
+                        task_id: str | None) -> ReportRun:
+    """`_report_run` профиля `compose` (требования 3-9): отказы запуска до
+    любого вызова `docker` (процесс роли, id задачи, `DOCKER_HOST`,
+    `docker`, `workdir`, пути, файл окружения), сборка и проверка
+    конфигурации, перекрытие, подъём служб, `run` в контейнере, итог — по
+    отчёту под монтированием; снятие стенда — в `finally`."""
+    from . import runner, store  # runner, store -> ... -> acceptance
+    from .reporters import outcome
+    if runner.in_role_environment():
+        return ReportRun(refusal=COMPOSE_ROLE_REFUSAL)
+    if not task_id:
+        return ReportRun(refusal=COMPOSE_NO_TASK_REFUSAL)
+    host = os.environ.get("DOCKER_HOST")
+    if host and not host.startswith("unix://"):
+        return ReportRun(refusal=(
+            f"отказ запуска compose: DOCKER_HOST={host} — удалённый демон "
+            f"Docker не допускается (только unix://); docker не вызывался"))
+    docker = find_docker()
+    if docker is None:
+        return ReportRun(refusal="отказ запуска compose: программа docker не "
+                                 "найдена в PATH; прогон не запускался")
+    tree = Path(tree)
+    cwd, refusal = _own_cwd(profile, tree)
+    if refusal:
+        return ReportRun(refusal=refusal)
+    left, right = targets.compose_mount_pair(profile.compose_mount)
+    place = _ComposePlace(tree, left, right)
+    workdir = place.container(profile.workdir or ".")
+    if workdir is None:
+        return ReportRun(refusal=(
+            f"отказ запуска compose: workdir {profile.workdir} не лежит под "
+            f"левой частью compose_mount «{left}»; прогон не запускался"))
+    run_id = os.urandom(4).hex()
+    project = compose_project_name(task_id, run_id)
+    if not re.fullmatch(r"[a-z0-9-]+", project):
+        return ReportRun(refusal=(f"отказ запуска compose: имя проекта "
+                                  f"{project} — не только [a-z0-9-]"))
+    report_host, report_container = place.report(run_id)
+    pytest_argv, refusal = _compose_pytest_argv(
+        profile, place, subset, report_container, continue_on_collection_errors)
+    if refusal:
+        return ReportRun(refusal=refusal)
+    refusal = _compose_prepare(profile, tree, place)
+    if refusal:
+        return ReportRun(refusal=refusal)
+    up_down = (profile.compose_up_down_sec
+               if profile.compose_up_down_sec is not None
+               else config.COMPOSE_UP_DOWN_SEC)
+    deadline = time.monotonic() + timeout + up_down
+
+    def left_sec(limit: float | None = None) -> float:
+        rest = deadline - time.monotonic()
+        return rest if limit is None else min(limit, rest)
+    env = compose_env(profile, docker)
+    sockets, refusal = _docker_sockets(
+        env, docker, cwd, left_sec(config.COMPOSE_CONFIG_TIMEOUT_SEC))
+    if refusal:
+        return ReportRun(refusal=refusal)
+    compose_file = tree / profile.compose_file
+    project_dir = str(compose_file.parent)
+    head = [docker, "compose", "--project-name", project,
+            "--project-directory", project_dir]
+    argv = [*head, "-f", str(compose_file), "--env-file",
+            str(tree / profile.compose_env_file), "config", "--format", "json"]
+    limit = left_sec(config.COMPOSE_CONFIG_TIMEOUT_SEC)
+    code, out = _compose_call(argv, env, cwd, limit)
+    call = " ".join(argv)
+    if code is None:
+        return ReportRun(refusal=(f"отказ запуска compose: {call} превысил "
+                                  f"предел {limit:g} с; стенд не поднимался"))
+    if code != 0:
+        return ReportRun(refusal=(f"отказ запуска compose: {call} вернул код "
+                                  f"{code}: {_bounded(out)}; стенд не "
+                                  f"поднимался"))
+    try:
+        cfg = json.loads(out)
+    except ValueError:
+        cfg = None
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("services"), dict):
+        return ReportRun(refusal=(f"отказ запуска compose: вывод {call} — не "
+                                  f"JSON конфигурации: {_bounded(out)}; стенд "
+                                  f"не поднимался"))
+    refusal = _compose_config_refusal(cfg, project, sockets)
+    if not refusal and profile.compose_service not in cfg["services"]:
+        refusal = (f"отказ запуска compose: сервиса {profile.compose_service} "
+                   f"нет в собранной конфигурации")
+    if refusal:
+        return ReportRun(refusal=refusal)
+    labels = {COMPOSE_RUN_LABELS[0]: str(os.getpid()),
+              COMPOSE_RUN_LABELS[1]: socket.gethostname(),
+              COMPOSE_RUN_LABELS[2]: store.now()}
+    holder = Path(tempfile.mkdtemp(prefix="artel-compose-"))
+    pult_file = holder / "compose.json"
+    service = cfg["services"][profile.compose_service] or {}
+    depends = service.get("depends_on") or ()
+    rmi = any("image" not in (s or {}) for s in cfg["services"].values())
+    base = [*head, "-f", str(pult_file)]
+    clean = False
+    try:
+        pult_file.write_text(json.dumps(_compose_override(cfg, labels)),
+                             encoding="utf-8")
+        if depends:
+            code, out = _compose_call([*base, "up", "-d", "--wait",
+                                       *list(depends)], env, cwd,
+                                      left_sec(config.COMPOSE_UP_TIMEOUT_SEC))
+            if code is None:
+                return ReportRun(timed_out=True, raw=(
+                    f"подъём служб compose ({project}) превысил предел\n{out}"))
+            if code != 0:
+                clean = True
+                return ReportRun(refusal=(
+                    f"отказ прогона compose: подъём служб {' '.join(depends)} "
+                    f"вернул код {code}; исход тестов не засчитан\n{out}"))
+        rest = left_sec()
+        if rest <= 0:
+            return ReportRun(timed_out=True, raw=(
+                f"предел места исчерпан после подъёма служб compose "
+                f"({project}) — run не вызывался"))
+        report_host.parent.mkdir(parents=True, exist_ok=True)
+        run_argv = [*base, "run", "--rm", "-T", "-w", workdir,
+                    profile.compose_service, *pytest_argv]
+        code, raw = _compose_call(run_argv, env, cwd, rest, log)
+        if code is None:
+            return ReportRun(timed_out=True, raw=raw)
+        clean = True
+        records, reason = outcome.parse_junit(
+            report_host, _component_name(profile), profile.workdir, cwd)
+        state, reason = outcome.verdict(records, code, reason)
+        block = outcome.summary_block(records) if records is not None else ""
+        return ReportRun(state=state, reason=reason, raw=raw, block=block,
+                         tests=tuple(records or ()), code=code)
+    finally:
+        try:
+            _compose_teardown(base, env, cwd, kill=not clean, rmi=rmi,
+                              project=project, task_id=task_id)
+        finally:
+            with contextlib.suppress(OSError):
+                report_host.unlink()
+            with contextlib.suppress(OSError):
+                report_host.parent.rmdir()
+            shutil.rmtree(holder, ignore_errors=True)
+
+
 def _report_run(profile, tree: Path, subset: list | None, timeout: float,
                 log: Path | None = None,
-                continue_on_collection_errors: bool = False) -> ReportRun:
+                continue_on_collection_errors: bool = False,
+                task_id: str | None = None) -> ReportRun:
     """Прогон компонента по отчёту в дереве `tree`: `subset` — пути тестов
     от корня дерева (планка, повтор, `--failed`), `None` — полный набор.
     Подготовка (сверка `workdir`, `report_args`, команды `pult-vitest`,
     установка и подключение зависимостей, версия Vitest) отказывает до
     запуска — `refusal`; иначе итог читается из отчёта
     (`reporters.outcome`). `continue_on_collection_errors` — ключ pytest
-    гейта честного `FAIL_TO_PASS` (`_report_argv`)."""
+    гейта честного `FAIL_TO_PASS` (`_report_argv`).
+
+    `task_id` — id задачи для имени проекта Compose: обязателен у профиля
+    `compose` (`_compose_report_run`), прочим не нужен (SPEC
+    01M6PAJ61D4PYAP79ADRPA6MWV, требование 3)."""
     from . import project_profile
     from .reporters import outcome
+    if _compose(profile) is not None:
+        return _compose_report_run(profile, Path(tree), subset, timeout, log,
+                                   continue_on_collection_errors, task_id)
     cwd, refusal = _own_cwd(profile, Path(tree))
     if not refusal:
         refusal = _prepare_deps(profile, Path(tree), cwd)
@@ -1420,8 +1969,11 @@ def run(tdir: Path, cwd: Path | None = None,
         if keep is not None:
             keep.append(ReportRun(refusal=refusal))
         return False, f"{location_note}\n{refusal}"
-    with _laid_plank(plan, Path(tdir).name, tests_dir, tree,
-                     own if plank_present(tests_dir) else None) as laid:
+    # Имя каталога планки — id задачи: им же идёт имя проекта Compose.
+    task_id = Path(tdir).name
+    with _laid_plank(plan, task_id, tests_dir, tree,
+                     (own or _compose(command)) if plank_present(tests_dir)
+                     else None) as laid:
         case_note = laid.note
         if case_note:
             location_note += f"\n{case_note}"
@@ -1433,7 +1985,8 @@ def run(tdir: Path, cwd: Path | None = None,
             targets = [*laid.targets, *extra]
         if reported is not None:
             return _run_reported(reported, targets, tree, location_note, extra,
-                                 file_times, keep, continue_on_collection_errors)
+                                 file_times, keep, continue_on_collection_errors,
+                                 task_id=task_id)
         if own is not None:
             targets = [_own_target(own, t) for t in targets]
         return _run_now(command, targets, run_cwd, location_note, extra,
@@ -1448,13 +2001,14 @@ def _report_timeout_text(run: ReportRun, what: str = "прогон") -> str:
 def _run_reported(profile, targets: list[str], tree: Path, location_note: str,
                   extra: list[str], file_times: dict[str, float] | None,
                   records: list | None = None,
-                  continue_on_collection_errors: bool = False
-                  ) -> tuple[bool, str]:
+                  continue_on_collection_errors: bool = False,
+                  task_id: str | None = None) -> tuple[bool, str]:
     """`run()` профиля с отчётом: цели — подмножество компонента, исход —
     из отчёта (требования 1, 8); `records` — исход и записи прогона."""
     run = _report_run(profile, tree, list(targets),
                       config.ACCEPTANCE_TIMEOUT_SEC,
-                      continue_on_collection_errors=continue_on_collection_errors)
+                      continue_on_collection_errors=continue_on_collection_errors,
+                      task_id=task_id)
     if records is not None:
         records.append(run)
         records.extend(run.tests)
@@ -1588,7 +2142,8 @@ def collect(tdir: Path, cwd: Path | None = None,
     if refusal:
         return False, f"{location_note}\n{refusal}"
     with _laid_plank(plan, Path(tdir).name, tests_dir, tree,
-                     own if plank_present(tests_dir) else None) as laid:
+                     (own or _compose(command)) if plank_present(tests_dir)
+                     else None) as laid:
         case_note = laid.note
         if case_note:
             location_note += f"\n{case_note}"
@@ -1599,7 +2154,8 @@ def collect(tdir: Path, cwd: Path | None = None,
         reported = _reported(command)
         if reported is not None:
             ok, output = _collect_reported(reported, targets, tree,
-                                           location_note)
+                                           location_note,
+                                           task_id=Path(tdir).name)
         else:
             if own is not None:
                 targets = [_own_target(own, t) for t in targets]
@@ -1611,7 +2167,8 @@ def collect(tdir: Path, cwd: Path | None = None,
 
 
 def _collect_reported(profile, targets: list[str], tree: Path,
-                      location_note: str) -> tuple[bool, str]:
+                      location_note: str,
+                      task_id: str | None = None) -> tuple[bool, str]:
     """`collect()` профиля с отчётом: сухого сбора у произвольной команды
     компонента нет — подмножество прогоняется, и «собралось» значит «отчёт
     прочитан и назвал хотя бы один тест»; исход тестов (в `tests_writing`
@@ -1619,7 +2176,7 @@ def _collect_reported(profile, targets: list[str], tree: Path,
     не собралось."""
     from .reporters import outcome
     run = _report_run(profile, tree, list(targets),
-                      config.ACCEPTANCE_TIMEOUT_SEC)
+                      config.ACCEPTANCE_TIMEOUT_SEC, task_id=task_id)
     if run.timed_out:
         return False, f"{location_note}\n{_report_timeout_text(run, 'сбор')}"
     if run.refusal or run.state == outcome.UNKNOWN:
@@ -1729,7 +2286,8 @@ def _junit_red_tests(report: Path, files: list[str]) -> list[RedTest] | None:
 
 
 def run_repeat(files: list[str], cwd: Path,
-               command: list[str] | None = None) -> list[RedTest]:
+               command: list[str] | None = None,
+               task_id: str | None = None) -> list[RedTest]:
     """Повторный прогон долгоживущих файлов `files` (пути от `cwd`) без
     планки (SPEC 01M48FRD9RJDBBVT2SN0FY5G2A, требование 2): красные тесты
     прогона, пустой список — прогон зелёный.
@@ -1743,11 +2301,13 @@ def run_repeat(files: list[str], cwd: Path,
 
     `command` — тот же контракт, что у `run()`: отказ запуска `pytest-own`
     — красный повтор каждого файла с текстом отказа; профиль с отчётом —
-    красные тесты отчёта (`_report_reds`)."""
+    красные тесты отчёта (`_report_reds`); `task_id` — id задачи для имени
+    проекта Compose у профиля `compose`."""
     reported = _reported(command)
     if reported is not None:
         return _report_reds(_report_run(reported, cwd, list(files),
-                                        config.ACCEPTANCE_TIMEOUT_SEC),
+                                        config.ACCEPTANCE_TIMEOUT_SEC,
+                                        task_id=task_id),
                             list(files))
     run_cwd, args = cwd, list(files)
     own = _own(command)
@@ -2040,7 +2600,8 @@ def plank_in_code_copy(task_id: str, branch: str, code_dir: Path,
 
 
 def run_plank(targets: list[str], cwd: Path,
-              profile=None, task_id: str | None = None
+              profile=None, task_id: str | None = None,
+              compose_task_id: str | None = None
               ) -> tuple[int | None, str]:
     """(код выхода pytest, весь вывод) — прогон `targets` тем же раннером
     (`_pytest_command`, `_pytest_env`) и тем же таймаутом
@@ -2058,19 +2619,25 @@ def run_plank(targets: list[str], cwd: Path,
     они гонятся из выкладки (`_plank_layout`) тем же путём от каталога
     планки; у компонента с `report` — по правилу планки и `plank_layout`
     (`_plank_plan`): каталог планки — выложенные файлы компонента. Не
-    передан — цели как есть (долгоживущий файл, раннер пульта)."""
+    передан — цели как есть (долгоживущий файл, раннер пульта).
+
+    `compose_task_id` — только id задачи для имени проекта Compose у
+    профиля `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV, решение шестого
+    круга 1): раскладку планки он не включает; не передан — id имени берётся
+    из `task_id`. У `compose` раскладка планки — та же, что у `pytest-own`."""
     run_cwd = cwd
     own = _own(profile)
     if own is not None:
         run_cwd, refusal = _own_cwd(own, cwd)
         if refusal:
             return REFUSED_EXIT_CODE, refusal
+    laid_own = own or _compose(profile)
     tests_dir = Path(cwd) / "tasks" / (task_id or "") / "acceptance_tests"
     plan = _plank_plan(tests_dir, profile) if task_id else _PlankPlan()
     if plan.refusal:
         return REFUSED_EXIT_CODE, plan.refusal
     with _laid_plank(plan, task_id or "", tests_dir, cwd,
-                     own if task_id else None) as laid:
+                     laid_own if task_id else None) as laid:
         case_note = laid.note
         if laid.refusal:
             return REFUSED_EXIT_CODE, laid.refusal
@@ -2087,7 +2654,8 @@ def run_plank(targets: list[str], cwd: Path,
                     for t in targets]
         reported = _reported(profile)
         if reported is not None:
-            code, output = _run_plank_reported(reported, args, cwd)
+            code, output = _run_plank_reported(
+                reported, args, cwd, task_id=compose_task_id or task_id)
         else:
             if own is not None:
                 args = [_own_target(own, t) for t in args]
@@ -2095,12 +2663,13 @@ def run_plank(targets: list[str], cwd: Path,
     return code, f"{case_note}\n{output}" if case_note else output
 
 
-def _run_plank_reported(profile, args: list[str],
-                        tree: Path) -> tuple[int | None, str]:
+def _run_plank_reported(profile, args: list[str], tree: Path,
+                        task_id: str | None = None) -> tuple[int | None, str]:
     """`run_plank()` профиля с отчётом: код 0 — только зелёный итог из
     отчёта; отказ подготовки — `REFUSED_EXIT_CODE`; предел — `None`;
     иначе код раннера, а при нулевом — 1 (красный или «неизвестно»)."""
-    run = _report_run(profile, tree, list(args), config.ACCEPTANCE_TIMEOUT_SEC)
+    run = _report_run(profile, tree, list(args), config.ACCEPTANCE_TIMEOUT_SEC,
+                      task_id=task_id)
     if run.refusal:
         return REFUSED_EXIT_CODE, run.refusal
     if run.timed_out:
@@ -2339,7 +2908,8 @@ def run_full_suite(root: Path, command: list[str] | None = None,
                    targets: tuple = ("tests",), extra: tuple = (),
                    log: Path | None = None,
                    limit: tuple[int, str] | None = None,
-                   test_ids: tuple = ()) -> tuple[bool, str]:
+                   test_ids: tuple = (),
+                   task_id: str | None = None) -> tuple[bool, str]:
     """(зелено, ПОЛНЫЙ вывод прогона) — прогон ПОЛНОГО пакета `tests/`
     каталога `root` через pytest (SPEC T066, требование 2в; переход раннера —
     SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
@@ -2398,6 +2968,9 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     `test_ids` — id упавших тестов (`suite-run --failed`, ANSWER-1 SPEC
     01M52EEFNA1WH31962HVNT0YZ9) в той форме, в какой их напечатал pytest:
     идут в argv после целей без перевода к `workdir`.
+
+    `task_id` — id задачи для имени проекта Compose у профиля `compose`
+    (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV, решение пятого круга 1).
     """
     global _last_full_suite_metrics, _last_process_snapshot, _last_run_completed_at
     global _last_report_tests
@@ -2410,7 +2983,7 @@ def run_full_suite(root: Path, command: list[str] | None = None,
     reported = _reported(command)
     if reported is not None:
         return _run_full_suite_reported(root, reported, targets, test_ids,
-                                        log, limit, full_run)
+                                        log, limit, full_run, task_id)
     own = _own(command)
     run_cwd = root
     if own is None:
@@ -2497,7 +3070,8 @@ def _report_subset(profile, targets: tuple, test_ids: tuple) -> list | None:
 def _run_full_suite_reported(root: Path, profile, targets: tuple,
                              test_ids: tuple, log: Path | None,
                              limit: tuple[int, str] | None,
-                             full_run: bool) -> tuple[bool, str]:
+                             full_run: bool,
+                             task_id: str | None = None) -> tuple[bool, str]:
     """`run_full_suite` профиля с отчётом (SPEC 01M590GJAF0EDV4NBC4C99MFVH,
     требования 1, 3, 9): команда компонента без флагов параллели и `-vv`
     пульта (`extra` не передаётся), итог — из отчёта. Отказ подготовки —
@@ -2505,7 +3079,7 @@ def _run_full_suite_reported(root: Path, profile, targets: tuple,
     иначе вывод раннера и сводка из отчёта в конце (её читают
     `run_summary_line`, `failed_entries`, `suite_run.parse`)."""
     global _last_report_tests
-    own = _own(profile)
+    own = _own(profile) or _compose(profile)
     subset = _report_subset(profile, targets, test_ids)
     if subset is None and own is not None and \
             not (root / own.long_lived_dir).is_dir():
@@ -2515,7 +3089,8 @@ def _run_full_suite_reported(root: Path, profile, targets: tuple,
         if holder is not None:
             return False, _not_started_note(holder)
         start = time.monotonic()
-        run = _report_run(profile, root, subset, limit[0], log=log)
+        run = _report_run(profile, root, subset, limit[0], log=log,
+                          task_id=task_id)
         if full_run and not run.refusal:
             _signal_near_limit(root, time.monotonic() - start, limit, None)
     if run.refusal:
@@ -3092,6 +3667,13 @@ def _report_suite_result_key(tree: str, profile, base: bool,
         # Итог, посчитанный до запрета повторов, переиспользоваться не должен.
         if _bans_rerun_plugins(profile):
             data["no_rerun_plugins"] = True
+        # Поля `compose_*` и правило перекрытия (SPEC
+        # 01M6PAJ61D4PYAP79ADRPA6MWV, требование 10) — только у `compose`:
+        # данные ключа прочих раннеров прежние.
+        if _compose(profile) is not None:
+            data["compose"] = {
+                **{sub: getattr(profile, sub) for sub in _COMPOSE_KEY_FIELDS},
+                "rule": COMPOSE_OVERRIDE_RULE}
         return hashlib.sha256(json.dumps(data, sort_keys=True,
                                          ensure_ascii=False).encode()).hexdigest()
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
@@ -3251,6 +3833,10 @@ def full_suite(root: Path, task_id: str,
     else:
         limit = project_profile.full_suite_limit(target)
     run_kwargs = {"limit": limit} if limit[1] != "config" else {}
+    # Имя проекта Compose несёт id задачи (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV,
+    # требование 3); прочим профилям вызов прежний.
+    if _compose(command) is not None:
+        run_kwargs["task_id"] = task_id
     try:
         tree = suite_tree_hash(root)
         key = suite_result_key(tree, command, root=root) if tree else None
