@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 9 (spec_sha 7028feb8): решение №8.1 внесено (требования 14, 15, 17, AC-2, AC-3); Д1/Д2 визита 8 сняты. Прочий текст SPEC против 711cfbf7 не менялся (git diff 12593cdec 00d5ce99e).
-- Якоря верны по 54fe44ebb: cli.py:221-226, :305-331 (:322); __init__.py:152-159; runner.py:1364-1381; acceptance.py:156; lease.py:399/408/414; liveness.py:75-86; test_doctor_closed_ref_fix.py:154-162, :177-183.
-- Опыт: 100 000 проб os.killpg(g,0) без пауз — 0,05 с; без wait() лидер-зомби держит группу (EPERM на все пробы), с wait() — ESRCH; в обоих режимах дочерний процесс формы теста не виден (20/20).
-- Новое: константа числа проб без имени (тест должен подменить её до кода) — Д1; «либо подменена liveness._group_exists» и неразличимость малой константы от 100 000 — Д2.
+- Визит 10 (spec_sha 55121bcc, коммит 8b183c446): разница с 7028feb8 — только внесение №9.1 (треб. 14, 15, 17, AC-2, AC-3, Материалы). Д1/Д2 визита 9 сняты.
+- Опыт: mock.patch.object(os,'killpg') с сигналом 0 → PermissionError действует на liveness._group_exists; счёт вызовов с сигналом 0 точен; SIGKILL уходит настоящей функции, группа исчезает.
+- pyproject.toml:13 — pytest-timeout 120 с: бесконечный цикл проб в реализации даст красный, не вечное зависание.
+- liveness.terminate_process_group (:118-155) — SIGTERM + sleep, форме треб. 14 не подходит (SPEC его не называет).
 
 ## Не сработало
-- `$`-подстановки и `for … do` в Bash отклоняются; списки каталогов — `python3 -c`.
+- Голый `sh` в Popen не находится (PATH окружения роли) — нужен `/bin/sh`.
 
 ## Где остановился
-- SPEC-AUDIT.md: status ready, verdict concerns (Д1 имя константы проб — дефолт GROUP_GONE_PROBES; Д2 тест исчерпания — только подмена os.killpg и счёт проб); guard — ок.
+- SPEC-AUDIT.md: status ready, verdict pass; наблюдение — сигнал SIGKILL назван в треб. 17/AC, не в треб. 14 (без отклонения).
 
 ## Чего не хватило
-- Ничего существенного; история SPEC — `git log refs/artifacts/<id> -- tasks/<id>/SPEC.md`.
+- Ничего; история SPEC — `git log refs/artifacts/<id> -- tasks/<id>/SPEC.md`.
