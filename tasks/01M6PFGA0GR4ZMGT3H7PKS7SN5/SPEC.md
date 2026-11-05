@@ -61,13 +61,22 @@ analyst, подменённая так же, как в существующих 
 «вызов `fsm._mark_questions_answered` удалён из
 `_pass_escalated_with_synthetic_answer`» делает этот критерий красным.
 
-AC-3. Эскалация из `spec_writing` с `answer_baseline = None` и эскалация
-из `in_dev`: после `_pass_escalated_with_synthetic_answer` новой строки
+AC-3. Два сценария, в каждом всё остальное условие AC-1 выполнено: в
+документах задачи лежит `QUESTIONS.md`, а `_pass_escalated_with_synthetic_answer`
+записывает новый синтетический ANSWER после эскалации, — различается
+только проверяемая половина условия: (а) `escalated_from = spec_writing`
+при `answer_baseline = None`; (б) `escalated_from = in_dev` при
+`answer_baseline`, не равном `None`. В обоих после
+`_pass_escalated_with_synthetic_answer` новой строки
 `fsm.QUESTIONS_ANSWERED_ACTION` в журнале нет, задача возвращена в прежнее
 состояние (`escalated_from`, при его отсутствии `in_dev`) — как до правки.
+Намеренные ошибки «условие убрано целиком (вызов безусловный)», «проверяется
+только `escalated_from`» и «проверяется только `answer_baseline`» делают
+этот критерий красным.
 
 AC-4. Эскалация из `spec_writing` с `answer_baseline`, не равным `None`,
-но без `QUESTIONS.md` в документах задачи: строки
+`_pass_escalated_with_synthetic_answer` записывает новый синтетический
+ANSWER, но `QUESTIONS.md` в документах задачи нет: строки
 `fsm.QUESTIONS_ANSWERED_ACTION` нет, функция не бросает исключение,
 задача возвращена в `spec_writing` — как до правки.
 
@@ -99,4 +108,13 @@ AC-4. Эскалация из `spec_writing` с `answer_baseline`, не равн
   (`grep` по `orchestrator/answer.py` на этой ветке) — строка задачи,
   прочитанная после записи ANSWER и до сброса, несёт значения на момент
   эскалации.
+- Решение 1 Оператора на гейте SPEC (форма отрицательных сценариев AC-3,
+  AC-4): сверено с кодом — `orchestrator/fsm.py:617-624`, без
+  `QUESTIONS.md` или без номера ANSWER `_mark_questions_answered` строки
+  не пишет, поэтому сценарий без батча не отличает безусловный вызов от
+  условного; образец формулировки «всё остальное условие выполнено» —
+  `tests/test_01m4r4jkc28j80z82tza62rf2j_answered_batch.py:424-444`.
+  Проверяется AC-3 и AC-4 тестами задачи против временного дублёра
+  (песочница пульта `tests/sandbox.py`), настоящие `tasks/` и `.artel/`
+  не меняются. С требованиями 1-3 и зонами не расходится.
 - Журнал прогона-основания: `.artel/logs/canary/run-20261103T222709Z-*.log`.
