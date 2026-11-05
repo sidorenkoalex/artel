@@ -26,11 +26,15 @@ MERGE_GATES = ("operator", "target-human")
 # 01M5W27CY7K7NR9347NKD8F0NX): запись принимает весь `FORGES`/`MERGE_GATES`,
 # а задачу, отправку и мерж ведёт только множество пар `SUPPORTED_PAIRS`:
 # значение, исполняемое в одной паре, не исполняется в другой (свой мерж и
-# отправка `base` на GitLab не проверены, гейт людей проекта на GitHub не
-# реализован — SPEC 01M6EZXVFG405Y1BTFDSGBKS8E, ADR-0029 п. 14).
+# отправка `base` на GitLab не проверены — SPEC 01M6EZXVFG405Y1BTFDSGBKS8E,
+# ADR-0029 п. 14). Гейт людей проекта на GitHub открыт SPEC
+# 01M6N7CYKDAMAKENX60CBK7VQX: повтор CI пультом, закрытие PR при `kill` и
+# поле `policy.ci_required_jobs` у такой записи закрыты признаками, а не
+# парой.
 SUPPORTED_FORGES = ("github", "gitlab")
 SUPPORTED_MERGE_GATES = ("operator", "target-human")
-SUPPORTED_PAIRS = {("github", "operator"), ("gitlab", "target-human")}
+SUPPORTED_PAIRS = {("github", "operator"), ("github", "target-human"),
+                   ("gitlab", "target-human")}
 
 # Поля записи (ADR-0003 п.2) и их вид. "text" — непустая строка,
 # "list" — список строк (возможно пустой).
@@ -888,6 +892,7 @@ def check(name: str, entry: object, source: Path | None = None, *,
         raise TargetsError(f"{where}: поле 'merge_gate' — "
                            f"'{entry['merge_gate']}', "
                            f"ожидается {' | '.join(MERGE_GATES)}")
+    _check_ci_required_jobs(where, entry)
     if PROFILE_FIELD in entry:
         _check_profile(where, entry[PROFILE_FIELD])
         if name == config.DEFAULT_TARGET:
@@ -1158,6 +1163,22 @@ def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
         raise TargetsError(f"{here}: поле 'full_suite' — '{mode}': реализация "
                            f"хостинга '{hosting}' не читает отчёт тестов "
                            f"задания CI")
+
+
+def _check_ci_required_jobs(where: str, entry: dict) -> None:
+    """`policy.ci_required_jobs` записи проекта людей — только у хостинга,
+    реализация которого в реестре `forge` поле читает (признак
+    `READS_CI_REQUIRED_JOBS`; SPEC 01M6N7CYKDAMAKENX60CBK7VQX, требование 8):
+    иначе гейт мержа молча не ждал бы названных заданий. Запись `operator`
+    поле не ограничивает — прежнее поведение."""
+    if not entry.get("ci_required_jobs") or not merged_by_project_people(entry):
+        return
+    hosting = entry["forge"]
+    if getattr(_hosting_registry().get(hosting), "READS_CI_REQUIRED_JOBS",
+               False) is not True:
+        raise TargetsError(f"{where}: поле 'policy.ci_required_jobs' — "
+                           f"реализация хостинга '{hosting}' это поле не "
+                           f"читает (обязательные задания CI не ждутся)")
 
 
 def _hosting_registry() -> dict:

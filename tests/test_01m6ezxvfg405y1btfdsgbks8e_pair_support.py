@@ -1,4 +1,4 @@
-"""Поддержка проекта решается парой (`forge`, `merge_gate`): `gitlab` + `target-human` поддержан, `github` + `target-human` и `gitlab` + `operator` — нет, с причиной, называющей гейт, хостинг и перечень поддержанных пар.
+"""Поддержка проекта решается парой (`forge`, `merge_gate`): `gitlab` + `target-human` и `github` + `target-human` поддержаны, `gitlab` + `operator` — нет, с причиной, называющей гейт, хостинг и перечень поддержанных пар.
 
 Группа: долгоживущий
 Красен до реализации: в `orchestrator/targets.py` нет `SUPPORTED_PAIRS`, `SUPPORTED_FORGES`/`SUPPORTED_MERGE_GATES` — `("github",)`/`("operator",)`, `unsupported_reason` для `gitlab` + `target-human` возвращает «хостинг gitlab не поддержан: адаптера нет», а для неподдержанных пар — прежние тексты без перечня пар.
@@ -17,13 +17,14 @@
 import contextlib
 import io
 import random
+import subprocess
 import sys
 from unittest import mock
 
 import pytest
 
-from orchestrator import artel, config, fsm, idgen, repo_context, runner, store, targets
-from tests.sandbox import artel_target_entry
+from orchestrator import artel, ci, config, fsm, idgen, repo_context, runner, store, targets
+from tests.sandbox import artel_target_entry, make_project_repo
 
 LETTERS = "abcdefghijkmnopqrstuvwxyz"
 
@@ -111,10 +112,9 @@ def action_args(action: str, name: str) -> list:
     return ["approve", insert_task(name, "merge_gate")]
 
 
-GHTH_REASON = ("гейт мержа target-human не поддержан для хостинга github "
-               "(поддержаны: github + operator, gitlab + target-human)")
 GLOP_REASON = ("гейт мержа operator не поддержан для хостинга gitlab "
-               "(поддержаны: github + operator, gitlab + target-human)")
+               "(поддержаны: github + operator, github + target-human, "
+               "gitlab + target-human)")
 
 
 def refusal_note(seed, name, action, code, out, halted) -> str:
@@ -186,41 +186,48 @@ def test_ac1_gitlab_target_human_new_not_refused(light_transition, seed):
 # --- AC-2 ---
 
 def test_ac2_github_target_human_reason_exact(tmp_root, seed):
-    """Запись `github` + `target-human` загружается, причина — ровно текст п. 3.
+    """Запись `github` + `target-human` загружается, причины неподдержки нет (SPEC 01M6N7CYKDAMAKENX60CBK7VQX).
 
     Сценарий: три записи `github` + `target-human` со случайными именами;
     `targets.target` отдаёт каждую без исключения, `unsupported_reason`
-    возвращает точный текст «гейт мержа target-human не поддержан для
-    хостинга github (поддержаны: …)».
+    возвращает `None`.
 
-    Ловит мутацию: пара `github` + `target-human` попала в поддержанные
-    (`unsupported_reason` решает по отдельным кортежам, где теперь есть
-    `target-human`) — вернётся `None`; причина с префиксом «проект <имя>: »
-    или прежний текст «не исполняется (ADR-0029)» — равенство не сойдётся.
+    Ловит мутацию: пара `github` + `target-human` не попала в
+    `SUPPORTED_PAIRS` — вернётся текст причины «гейт мержа target-human не
+    поддержан…»; отказ поставлен в проверку записи (`targets.check`) —
+    `targets.target` поднимет `TargetsError`.
     """
     for name in declare_many(random.Random(seed), "github", "target-human", 3):
         entry = targets.target(name)
         assert (entry["forge"], entry["merge_gate"]) == ("github", "target-human"), \
             f"зерно: {seed}; {name}: {entry}"
-        assert targets.unsupported_reason(name) == GHTH_REASON, f"зерно: {seed}; {name}"
+        assert targets.unsupported_reason(name) is None, f"зерно: {seed}; {name}"
 
 
 @pytest.mark.parametrize("action", ["new", "run", "auto", "approve"])
-def test_ac2_github_target_human_actions_refuse(initialized_tmp_root, halted, seed, action):
-    """Команды задачи проекта `github` + `target-human` отказывают причиной с одним префиксом.
+def test_ac2_github_target_human_actions_refuse(initialized_tmp_root, halted, seed, action,
+                                                monkeypatch):
+    """Команды задачи проекта `github` + `target-human` не отказывают причиной поддержки (SPEC 01M6N7CYKDAMAKENX60CBK7VQX).
 
-    Сценарий: запись `github` + `target-human` со случайным именем; для
-    `run`/`auto` задача заведена в БД в `in_dev`, для `approve` — в
-    `merge_gate`. Команда выходит отказом (не кодом 0 и не дойдя до
-    подменённых агента и `fsm.cmd_advance`), в выводе — `проект <имя>: `
-    и следом полный текст причины п. 3, без удвоенного «проект <имя>:
-    проект <имя>: ».
+    Сценарий: запись `github` + `target-human` со случайным именем, клон
+    заведён заранее (`origin` — локальный голый репозиторий), `ci.gh` —
+    подделка с отказом; для `run`/`auto` задача заведена в БД в `in_dev`,
+    для `approve` — в `merge_gate`. В выводе нет «не поддержан»; `new`
+    выходит с кодом 0.
 
-    Ловит мутацию: причина `unsupported_reason` сама начинается с «проект
-    <имя>: » — вывод вызывающего удвоит префикс; пара открыта — команда
-    дойдёт до агента/перехода (`Halt`) или `new` заведёт задачу с кодом 0.
+    Ловит мутацию: пара не поддержана — команда отказывает «проект <имя>:
+    гейт мержа target-human не поддержан…», `new` выходит ненулевым кодом.
     """
-    check_refusal(seed, halted, "github", "target-human", GHTH_REASON, action)
+    monkeypatch.setattr(ci, "gh", lambda *args, **kwargs: subprocess.CompletedProcess(
+        list(args), 1, "", "gh вне сценария теста"))
+    name = project_name(random.Random(seed))
+    declare(name, "github", "target-human")
+    make_project_repo(name, origin=True)
+    out, code = cli(*action_args(action, name))
+    note = refusal_note(seed, name, action, code, out, halted)
+    assert "не поддержан" not in out, note
+    if action == "new":
+        assert code == 0, note
 
 
 # --- AC-3 ---
@@ -277,23 +284,22 @@ def test_ac4_support_constants_exact():
     """
     assert targets.SUPPORTED_FORGES == ("github", "gitlab")
     assert targets.SUPPORTED_MERGE_GATES == ("operator", "target-human")
-    assert targets.SUPPORTED_PAIRS == {("github", "operator"), ("gitlab", "target-human")}
+    assert targets.SUPPORTED_PAIRS == {("github", "operator"), ("github", "target-human"),
+                                       ("gitlab", "target-human")}
 
 
 @pytest.mark.parametrize("forge,gate,expected", [
-    ("github", "target-human",
-     "гейт мержа target-human не поддержан для хостинга github "
-     "(поддержаны: github + operator, gitlab + target-human)"),
     ("gitlab", "operator",
      "гейт мержа operator не поддержан для хостинга gitlab "
-     "(поддержаны: github + operator, gitlab + target-human)"),
-], ids=["github-target-human", "gitlab-operator"])
+     "(поддержаны: github + operator, github + target-human, gitlab + target-human)"),
+], ids=["gitlab-operator"])
 def test_ac4_reason_text_names_pair_and_supported_list(tmp_root, seed, forge, gate, expected):
     """Текст причины неподдержанной пары называет её значения и перечень пар, без префикса.
 
     Сценарий: запись пары со случайным именем; текст `unsupported_reason`
     содержит значение `forge`, значение `merge_gate` и перечень
-    «github + operator, gitlab + target-human», не начинается с «проект »,
+    «github + operator, github + target-human, gitlab + target-human», не
+    начинается с «проект »,
     не содержит «адаптера нет» и точно равен тексту п. 3.
 
     Ловит мутацию: перечень собран не в порядке `sorted(SUPPORTED_PAIRS)`
@@ -307,7 +313,7 @@ def test_ac4_reason_text_names_pair_and_supported_list(tmp_root, seed, forge, ga
     note = f"зерно: {seed}; {name}: {reason!r}"
     assert reason is not None, note
     assert forge in reason and gate in reason, note
-    assert "github + operator, gitlab + target-human" in reason, note
+    assert "github + operator, github + target-human, gitlab + target-human" in reason, note
     assert not reason.startswith("проект "), note
     assert "адаптера нет" not in reason, note
     assert reason == expected, note
