@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 2 (spec_sha b9bc04bb): решения гейта 1–10 сняли Д1–Д11 прошлого аудита.
-- Якоря верны: runner.py:1246/1819-1827, doctor/cli.py:221-226/305-331, __init__.py:152-155, test_doctor_closed_ref_fix.py:152-200, sandbox.py:1639-1642, lease.py:399-416.
-- role_env с task_id зовётся только из runner.py:1820; песочничные тесты cmd_doctor(fix=True) без compose — skip.
-- Вердикт concerns, Д1–Д7: каталоги версий в compose_role_dir и обход doctor; формат `compose version`; распознавание отказа config; компоненты в строке записи; испорченные метки → ValueError в process_alive; окружение пропуска AC-6; DOCKER_HOST tcp:// пульта.
+- Визит 3 (spec_sha 0de2b3a3): решения гейта №2.1–2.7 внесены в SPEC; вердикт concerns, Д1–Д9.
+- Якоря верны: runner.py:1186/1246/1364/1819-1827, doctor/cli.py:221-226/305-331, __init__.py:152-155, lease.py:399/414, acceptance.py:156; sandbox.py — подмена config на 1639-1641 (в SPEC 1638-1641).
+- SPEC части 1 и родителя читаются `git show refs/artifacts/<id>:tasks/<id>/SPEC.md` из worktree.
+- Главные: Д2 — гонка `doctor --fix` с собираемой версией `.v<нс>` (нет метки владельца); Д7 — `process_alive`=False для чужого хоста (lease.py:409) при общем демоне → снятие чужих живых стендов; Д1 — AC-4 без живой tmp-ссылки; Д3 — AC-5 не ловит неснятый `v` и сравнение по major.minor; Д4 — красная фаза AC-1 доходит до spawn_agent; Д5 — DOCKER_CONFIG пульта не задан; Д6 — cwd у `down` без `-f`; Д8 — строка в составе check_orphans уронит test_doctor.py:1040-1043.
 
 ## Не сработало
-- Docker в окружении шага нет; системные пути (/usr/bin/which, /bin/test) отклоняются — опыт с Docker CLI невозможен.
+- docker в шаге не запускается (требует подтверждения) — опыт с CLI невозможен.
 
 ## Где остановился
-- SPEC-AUDIT.md написан (status: ready), guard прогоняется.
+- SPEC-AUDIT.md готов (status: ready), guard ок, временные файлы убраны.
 
 ## Чего не хватило
-- Нормальной оболочки: ls/cd в каталог документов отклоняются, читать только Read/git grep.
+- Опыта с Docker CLI в шаге (`context inspect --format`, `down` без `-f`).
