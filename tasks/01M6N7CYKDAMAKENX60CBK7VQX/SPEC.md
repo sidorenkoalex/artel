@@ -52,8 +52,16 @@ run watch`, `orchestrator/ci.py:1793-1837`), поле `policy.ci_required_jobs`,
    хостинга: GitLab — файл `.gitlab-ci.yml`, как сейчас; GitHub — каталог
    `.github/workflows/`: `ok`, если
    `config.is_protected_path(".github/workflows/<любой файл>", no_paths
-   записи)` истинно (любой записью `no_paths`, для которой формула истинна);
-   иначе `fail` с именем каталога. Маски вида `*` для GitHub не принимаются.
+   записи)` истинно для КАЖДОГО имени файла каталога (любой записью
+   `no_paths`, для которой формула истинна); иначе `fail` с именем каталога.
+   Проба одним или несколькими конкретными именами файла этого не
+   доказывает. По формуле `config.is_protected_path`
+   (`orchestrator/config.py:818-849`) это ровно записи трёх видов: строка,
+   которая является префиксом `.github/workflows/` (включая саму
+   `.github/workflows/`, `.github/`, `.github`); `**/workflows/`;
+   `**/.github/`. Записи `**/<имя файла>` и префиксы, длиннее
+   `.github/workflows/` (например `.github/workflows/c`), каталог не
+   покрывают — `fail`. Маски вида `*` для GitHub не принимаются.
 4. **Явные исходы прочих строк `doctor` для GitHub `target-human`** —
    закрепляются тестами без правки кода: `project-support` — `ok`;
    `project-submodules` и строки хука `pre-push` — есть;
@@ -73,25 +81,49 @@ run watch`, `orchestrator/ci.py:1793-1837`), поле `policy.ci_required_jobs`,
    GitLab). Исход гейта мержа на красном CI — прежний путь неудачного
    повтора (`orchestrator/fsm_merge_gate.py:320-338`): запись `flake-rate`
    «повтор не запущен: …», выход «merge отклонён: <статус> … задача осталась
-   на гейте merge», задача на `merge_gate`. Команда Оператора `ci-rerun` для
-   такого проекта отказывает тем же текстом, не вызвав `gh` (в том числе на
-   пути зависшей проверки, где сейчас `ci.check_run_workflow_run` зовётся до
-   `trigger_rerun`, `orchestrator/ci_rerun.py:220-231`). Для артели и
-   записей `operator` (в том числе GitHub) поведение прежнее.
+   на гейте merge», задача на `merge_gate`. Чтения статуса CI на этом пути
+   (`ci.branch_status` → `gh api …/check-runs`, `orchestrator/ci.py:257-282`,
+   `orchestrator/fsm_merge_gate.py:316`, `:372`) остаются: модуль гейта
+   только для чтения, без них нет и красного статуса; запрет — на вызовы
+   `gh` из самого `trigger_rerun` (поиск прогона, `run rerun`, `run watch`).
+   Команда Оператора `ci-rerun` для такого проекта отказывает текстом,
+   начинающимся с «ре-ран CI не запущен: », не вызвав `gh` ни разу. Сейчас
+   `gh` зовётся до `trigger_rerun` на каждом пути команды: чтение статуса
+   `ci.verifying_status` (`orchestrator/ci_rerun.py:156`) — до проверки
+   состояния `verifying` (`:158-162`), затем `ci.check_run_workflow_run` на
+   пути зависшей проверки (`:223`), `ci.head_sha`/`ci.failed_check_names`
+   на красном пути (`:250`, `:274`, `:289`). Поэтому отказ проекта людей
+   стоит после проверок `--reason` (`:136-151`, они `gh` не зовут) и до
+   чтения статуса на `:156`, в любом состоянии задачи: для задачи проекта
+   людей вне `verifying` прежний отказ «задача в состоянии …, а повтор CI
+   допустим только в verifying; статус CI ветки …» сменяется этим отказом.
+   Для артели и записей `operator` (в том числе GitHub) поведение команды и
+   гейта прежнее.
 8. **`ci_required_jobs` только у хостинга, который его читает.** Запись
    проекта людей (`targets.merged_by_project_people`) с заданным
    `policy.ci_required_jobs`, у которой реализация хостинга в реестре
    `forge` это поле не читает (признак реализации по образцу
    `_check_full_suite_source`, не литерал), отказывает при загрузке с именем
-   поля и хостинга. GitLab и записи `operator` (в том числе `github` +
+   поля и хостинга. Решение читается из реализации в реестре
+   `forge.IMPLEMENTATIONS` (`orchestrator/forge.py:365`, через
+   `targets._hosting_registry`, `orchestrator/targets.py:1163-1170`):
+   подменённая в реестре реализация с признаком чтения поля принимает
+   запись, без признака — отказывает, какое бы имя хостинга ни стояло в
+   записи. GitLab и записи `operator` (в том числе `github` +
    `operator`) — без изменений.
 9. **`kill` не закрывает PR проекта людей.** Для записи с
    `targets.merged_by_project_people` уборка не зовёт `gh pr close` ни до,
    ни после отправки ветки; до отправки удаляется только ветка origin
-   задачи, если она есть. Для записи, у которой прежде закрывался бы PR
-   (хостинг без конвейеров), журнал уборки называет «PR не тронут: MR
-   вливают люди проекта»; для GitLab `target-human` запись журнала прежняя.
-   Для `github` + `operator` закрытие PR прежнее.
+   задачи, если она есть. Для записи хостинга без конвейеров
+   (`not forge.ci_by_pipeline`, у которой до отправки прежде закрывался бы
+   PR) запись журнала уборки содержит «PR не тронут: MR вливают люди
+   проекта» и до отправки, и после неё: до отправки — рядом с исходом
+   удаления ветки origin; после отправки — в дополнение к прежнему тексту
+   «сервер проекта не тронут: ветка <ветка> отправлена, MR вливают люди
+   проекта — ветка origin и MR оставлены (…)» (`orchestrator/cleanup.py:297-299`),
+   который остаётся. Для GitLab `target-human` записи журнала до и после
+   отправки прежние (без «PR не тронут»). Для `github` + `operator`
+   закрытие PR прежнее.
 10. **Правка трёх существующих файлов тестов — только в объёме мандата
     `ANSWER-1.md`.** В `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py`,
     `tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py`,
@@ -99,8 +131,17 @@ run watch`, `orchestrator/ci.py:1793-1837`), поле `policy.ci_required_jobs`,
     `github` + `target-human` переходит из отказных случаев в поддержанные,
     утверждения состава констант поддержки и тексты причин — к новому
     перечню пар «github + operator, github + target-human, gitlab +
-    target-human». Число случаев `gitlab` + `operator` не уменьшается, их
-    утверждения остаются точными равенствами; удаление случаев `gitlab` +
+    target-human». Число случаев `gitlab` + `operator` не уменьшается, вид
+    их утверждений — как на main: равенство там, где на main равенство
+    (`unsupported_reason`, константы поддержки, `test_ac3_*_reason_exact`,
+    случай `gitlab-operator` в
+    `test_ac4_reason_text_names_pair_and_supported_list`), вхождение
+    полного текста причины в вывод там, где на main вхождение (действия
+    `new`, `run`, `auto`, `approve`, `epic draft promote`, строка
+    `project-support` — `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:200`,
+    `:231`, `:259`, `:291`, `:314`, `:391`,
+    `tests/test_epic_draft_promote_unsupported_project.py:87`,
+    `tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py:131`); удаление случаев `gitlab` +
     `operator`, `skip`/`xfail` и иные правки этих и прочих существующих
     тестов не делаются. Поддержанные случаи `run`, `auto`, `approve` не
     доходят до настоящего `gh` (подделка `ci.gh` или ранний `Halt` после
@@ -117,9 +158,11 @@ AC-1. (Условие-замена (б) мандата.) Для вымышлен
 
 AC-2. (Условие-замена (а) мандата.) Для вымышленного проекта `gitlab` +
 `operator` `new`, `run`, `auto`, `approve` и `epic draft promote` отказывают,
-строка `project-support-<проект>` — `fail`; причина равна точно «гейт мержа
-operator не поддержан для хостинга gitlab (поддержаны: github + operator,
-github + target-human, gitlab + target-human)».
+строка `project-support-<проект>` — `fail`. `targets.unsupported_reason`
+равен точно «гейт мержа operator не поддержан для хостинга gitlab
+(поддержаны: github + operator, github + target-human, gitlab +
+target-human)»; вывод каждого действия и причина строки `project-support`
+содержат этот текст целиком.
 
 AC-3. Каждый отказ `_check_delivery` из перечня полей (`branch_template`,
 `ref_pattern`, `squash_before_mr`, `freshness`, `commit_template`,
@@ -133,9 +176,11 @@ AC-3. Каждый отказ `_check_delivery` из перечня полей (
 
 AC-4. Для записи GitHub `target-human` строка
 `project-ci-file-no-paths-<проект>` есть без компонента с `full_suite`
-ci/both; при `no_paths` с `.github/workflows/`, с `.github/` или с
-`**/workflows/` — `ok`; без них и с маской `.github/*` — `fail`, в причине
-названо имя каталога `.github/workflows/`. Для записи GitLab `target-human`
+ci/both; при `no_paths` с `.github/workflows/`, с `.github/`, с `.github`
+(без `/`), с `**/workflows/` или с `**/.github/` — `ok`; без них, с маской
+`.github/*`, с `**/ci.yml`, с `.github/workflows/c` и с
+`.github/workflows/ci.yml` — `fail`, в причине названо имя каталога
+`.github/workflows/`. Для записи GitLab `target-human`
 — прежние условие построения строки и исходы по `.gitlab-ci.yml`.
 
 AC-5. Для записи GitHub `target-human` в выводе `doctor` есть строки
@@ -148,26 +193,37 @@ AC-6. Полный цикл требования 5 в песочнице про�
 входа в `awaiting_human`; `kill` такой задачи после отправки оставляет ветку
 origin и PR, `gh pr close` не вызван.
 
-AC-7. Красный CI ветки задачи `github` + `target-human` на `approve`
-`merge_gate`: `trigger_rerun` возвращает текст, начинающийся с «ре-ран CI не
-запущен: », `gh` не вызван, в журнале запись `flake-rate` «повтор не
-запущен», выход «merge отклонён: …», задача остаётся на `merge_gate`.
-`ci-rerun` такой задачи (в том числе при зависшей проверке) отказывает тем
-же текстом без вызова `gh`. У задачи `github` + `operator` (подделка `ci.gh`)
-— прежний вызов `gh run rerun --failed`.
+AC-7. Прямой вызов `ci.trigger_rerun` для клона проекта `github` +
+`target-human` (с `run_id` и без него) возвращает текст, начинающийся с
+«ре-ран CI не запущен: », а шпион `ci.gh` не видит ни одного вызова. Красный
+CI ветки такой задачи на `approve` `merge_gate` (подделка `ci.gh` отвечает
+на `api`-чтения статуса красным): шпион не видит вызовов `run rerun` и
+`run watch`, в журнале запись `flake-rate` с «повтор не запущен», выход
+содержит «merge отклонён: », задача остаётся на `merge_gate`. `ci-rerun`
+такой задачи с непустым новым `--reason` — и в `verifying` при красном
+и при зависшем CI, и в состоянии не `verifying` — отказывает текстом,
+содержащим «ре-ран CI не запущен: », шпион `ci.gh` не видит ни одного
+вызова. У задачи `github` + `operator` (подделка `ci.gh`) — прежний вызов
+`gh run rerun <id> --failed`.
 
 AC-8. Запись `github` + `target-human` с `policy.ci_required_jobs` отказывает
 при загрузке; текст отказа называет поле `ci_required_jobs` и хостинг
 `github`. Та же запись с `forge: gitlab` и запись `github` + `operator` с
-этим полем загружаются.
+этим полем загружаются. Признак, не литерал: при подмене в
+`forge.IMPLEMENTATIONS` реализации `github` на реализацию с признаком
+чтения поля запись `github` + `target-human` с этим полем загружается, а
+при подмене реализации `gitlab` на реализацию без признака запись
+`gitlab` + `target-human` с этим полем отказывает при загрузке.
 
 AC-9. `kill` задачи `github` + `target-human` до отправки ветки и после неё:
-`gh pr close` не вызван, журнал уборки содержит «PR не тронут: MR вливают
-люди проекта»; до отправки ветка origin задачи, если она есть, удалена.
+`gh pr close` не вызван, запись журнала «уборка» содержит «PR не тронут: MR
+вливают люди проекта»; до отправки ветка origin задачи, если она есть,
+удалена; после отправки ветка origin цела, а запись журнала содержит и
+прежний текст «сервер проекта не тронут: ветка <ветка> отправлена».
 `kill` задачи `github` + `operator` вызывает `gh pr close`, как сейчас.
 
-AC-10. `kill` задачи `gitlab` + `target-human` до отправки ветки: запись
-журнала уборки прежняя (без «PR не тронут»), `gh` не вызван.
+AC-10. `kill` задачи `gitlab` + `target-human` до отправки ветки и после
+неё: записи журнала уборки прежние (без «PR не тронут»), `gh` не вызван.
 
 AC-11. Закрытый список вызовов `gh` части 1 (`forge._github_form_allowed`):
 форма `pr create` с лишним аргументом после разрешённого хвоста —
@@ -186,13 +242,17 @@ AC-12. Сторож литералов `forge`/`merge_gate` вне `orchestrator
 AC-13. Дифф трёх файлов мандата (требование 10) против main: число случаев
 `gitlab` + `operator` в каждом файле не меньше, чем на main; в каждом
 действии (`new`, `run`, `auto`, `approve`, `epic draft promote`, строка
-`project-support`) для `gitlab` + `operator` утверждается точный текст
-причины (равенство, не «содержит»); `test_ac3_*`,
-`test_ac4_support_constants_exact` и
+`project-support`) для `gitlab` + `operator` утверждается вхождение
+полного нового текста причины в вывод — тот же вид утверждения, что на
+main (`assert reason in out`/`in found[0].detail`, `check_refusal`), с
+константой нового текста целиком; `test_ac3_*_reason_exact`,
+`test_ac4_support_constants_exact`,
 `test_ac4_reason_text_names_pair_and_supported_list` (случай
-`gitlab-operator`) и утверждения констант поддержки
+`gitlab-operator`: `reason == expected`) и утверждения констант поддержки
 `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:172-174`
-сравнивают точно с новым составом; новых `skip`/`xfail` нет.
+сравнивают равенством с новым составом и новым текстом; ни одно
+утверждение случаев `gitlab` + `operator` не сменило вид на более слабый;
+новых `skip`/`xfail` нет.
 
 ## Оценка объёма и деление
 
