@@ -2,97 +2,69 @@
 task: 01M6PFGA0GR4ZMGT3H7PKS7SN5
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Канарейка: синтетический ответ на батч вопросов аналитика ставит признак «батч отвечен»
 
 ## Фаза A — план
-- Покрытие: требования 1–3 → шаг 1; таблица полна.
-- Шаг один, размера MR — для правки в 11 строк адекватно.
-- Подход (вызов того же узла `fsm._mark_questions_answered` при дословном
-  условии `fsm._cmd_approve`, `orchestrator/fsm.py:1870`) не конфликтует с
-  архитектурой; дублирования логики хэша/номера нет.
-- Дефект плана: раздел «Риски» утверждает, что переименование/выпадение
-  вызова «ловит планка/тесты признака», а «Покрытие» — что отдельный тест в
-  `tests/` не нужен, т.к. «шов — закрытое имя, которое долгоживущему файлу
-  запрещено». Оба утверждения неверны — см. R1-F1.
+- Покрытие: требования 1–3 → шаги 1–2; таблица полна.
+- Шаги размера MR: правка функции + сторож в `tests/`.
+- «Риски» исправлены: сторожем после мержа названа
+  `tests/test_canary_synthetic_answer_batch_mark.py`, а не разовая планка.
+- «Влияние на систему» = diff: итерация 2 добавила только новый файл
+  `tests/`; `fsm.py`, `fsm_advance.py`, `answer.py`,
+  `tests/test_canary_synthetic_answer.py` не тронуты.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `orchestrator/canary.py:1489-1493`: после `answer.cmd_answer` и `store.get_task`, до `store.update_task`/`store.set_state`; условие `escalated_from == "spec_writing" and answer_baseline is not None` — как у approve. |
-| 2 | OK | Иные `escalated_from` и `answer_baseline = None` вызова не получают (AC-3 зелёный, мутация «только escalated_from» планкой краснеет). |
-| 3 | OK | Остальное тело функции не тронуто (diff — только вставка); докстринг дополнен абзацем `canary.py:1463-1467`. |
+| 1 | OK | `orchestrator/canary.py:1488-1493`: вызов `fsm._mark_questions_answered` после `answer.cmd_answer`/`store.get_task`, до `update_task`/`set_state`; условие как у approve (`fsm.py:1870`). |
+| 2 | OK | Иные `escalated_from` и `answer_baseline = None` вызова не получают — планка AC-3 и подтесты сторожа зелёные. |
+| 3 | OK | Остальное тело функции не изменено; докстринг дополнен. |
 
 ## Замечания
 
-- major — `orchestrator/canary.py:1491-1493` (тест отсутствует в `tests/`) —
-  свойство «синтетический ответ канарейки ставит признак батча» закрыто
-  только планкой, а планка помечена `Группа: разовый` и после мержа не
-  гоняется ни CI, ни гейтами (ADR-0018 п. 3). Проверено временной мутацией:
-  вызов `fsm._mark_questions_answered` заменён на `pass` —
-  `tests/test_canary_synthetic_answer.py`, `tests/test_canary.py`,
-  `tests/test_canary_budget_ceiling.py`,
-  `tests/test_01m4r4jkc28j80z82tza62rf2j_answered_batch.py` — 140 passed,
-  ни один не покраснел; `grep` по `tests/` на `_mark_questions_answered`/
-  `QUESTIONS_ANSWERED_ACTION` в связке с canary — пусто. Сценарий: следующая
-  правка `_pass_escalated_with_synthetic_answer` (PLAN сам называет её
-  вероятной — «вынести общий узел») молча теряет вызов, CI зелёный, прогон
-  канарейки снова red четырьмя эскалациями, как 03.11. Обоснование PLAN
-  («закрытое имя запрещено долгоживущему файлу») относится к долгоживущим
-  файлам планки `tests/test_<id>_*.py`, а не к тестам разработчика в
-  `tests/`: `tests/test_canary_synthetic_answer.py` уже зовёт
-  `canary._pass_escalated_with_synthetic_answer` напрямую. Предложение:
-  новый файл разработчика в `tests/` (зона SPEC `tests/`;
-  `tests/test_canary_synthetic_answer.py` по SPEC не трогать), например
-  `tests/test_canary_synthetic_answer_batch_mark.py`, с минимум двумя
-  методами: (а) `spec_writing` + `answer_baseline = 0` → ровно одна строка
-  `fsm.QUESTIONS_ANSWERED_ACTION` до записи смены состояния (ловит
-  «вызов удалён» и «по истинности»); (б) `in_dev`/`answer_baseline = None` →
-  строки нет (ловит «безусловный вызов»). Каждому — «Ловит мутацию: …» с
-  наблюдаемым расхождением. Поправить и раздел PLAN «Риски».
+Нет. Сторож `tests/test_canary_synthetic_answer_batch_mark.py`:
+заявки «Ловит мутацию» называют наблюдаемое расхождение (нет строки /
+строка позже `state -> spec_writing` / строка в подтесте) и подтверждены
+временными мутациями (см. ниже). Свойство в `tests/` не повторяет
+долгоживущий файл задачи — такого файла нет (планка разовая).
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/canary.py:1491-1493; tests/ (нет файла) | Признак батча в канарейке закрыт только разовой планкой; ни один тест `tests/` не краснеет при удалении вызова (проверено мутацией, 140 passed) | После мержа регрессия возвращается незамеченной CI — канарейка снова red на повторных эскалациях `QUESTIONS.md` | Добавить тест разработчика в новый файл `tests/` (положительный случай `answer_baseline = 0` с порядком «признак раньше смены состояния» + отрицательный), с заявками «Ловит мутацию»; исправить «Риски» PLAN. Разработчик (итерация 2): добавлен `tests/test_canary_synthetic_answer_batch_mark.py` — `spec_writing`/`0` → одна строка признака раньше `state -> spec_writing`; подтесты `in_dev`/`0` и `spec_writing`/`None` → строки нет; шесть мутаций (удалён, по истинности, после `set_state`, только `escalated_from`, только `answer_baseline`, безусловный) краснят файл; «Риски» PLAN исправлены |
+| R1-F1 | accepted | orchestrator/canary.py:1491-1493; tests/test_canary_synthetic_answer_batch_mark.py | Признак батча в канарейке закрыт только разовой планкой | Регрессия после мержа не ловилась бы CI | Закрыто: новый сторож в `tests/`; мутации «вызов удалён», «по истинности», «безусловный вызов» краснят его (проверено ревьювером); «Риски» PLAN исправлены |
 
 ## Вердикт
-changes_requested — закрыть R1-F1 (сторож свойства в `tests/`). Код
-функции по существу корректен, правка не требуется.
+approved.
 
-Наблюдение для Оператора (не замечание разработчику): планка помечена
-`Группа: разовый` при том, что проверяет свойство кода; по
-skills/test-authoring (ADR-0020) свойство кода — долгоживущее. Автор
-планки обосновал выбор запретом закрытых имён в долгоживущем файле; планка
-залочена, правка — `amend-tests` Оператора. R1-F1 закрывает пробел со
-стороны разработчика независимо от этого.
+Наблюдение для Оператора (повтор итерации 1, не замечание разработчику):
+планка помечена `Группа: разовый`, хотя проверяет свойство кода; пробел
+со стороны сторожа закрыт тестом разработчика в `tests/`.
 
 ## Проверено исполнением
-- `artel.py plank-run 01M6PFGA0GR4ZMGT3H7PKS7SN5` — 7 passed, код выхода 0.
-- Временная мутация «`answer_baseline` по истинности» (`canary.py:1492`) —
-  планка 2 failed / 5 passed; мутация «только `escalated_from`» — 1 failed /
-  6 passed. Код возвращён `git checkout`, `git status` чистый.
-- Временная мутация «вызов удалён» (`pass` вместо
-  `fsm._mark_questions_answered`): `python3 -m pytest
-  tests/test_canary_synthetic_answer.py tests/test_canary.py
-  tests/test_canary_budget_ceiling.py
+- `python3 -m pytest tests/test_canary_synthetic_answer_batch_mark.py
+  tests/test_canary_synthetic_answer.py
   tests/test_01m4r4jkc28j80z82tza62rf2j_answered_batch.py -p no:cacheprovider`
-  — 140 passed (основание R1-F1). Код возвращён.
-- Без мутаций: `tests/test_canary_synthetic_answer.py
-  tests/test_01m4r4jkc28j80z82tza62rf2j_answered_batch.py` — 26 passed.
-- `python3 scripts/codebase_map.py` — расхождение с закоммиченной картой
-  только в `built_at_sha` (не дефект); файл возвращён.
-- Сверено с `orchestrator/fsm.py:613-626` и `:1866-1871`: тот же узел, то
-  же условие, тот же актор журнала (`operator`, внутри узла).
+  — 28 passed, 34 subtests passed.
+- `artel.py plank-run 01M6PFGA0GR4ZMGT3H7PKS7SN5` — 7 passed, код выхода 0.
+- Временные мутации `orchestrator/canary.py` (Edit), прогон только
+  `tests/test_canary_synthetic_answer_batch_mark.py`:
+  - `answer_baseline` по истинности — 1 failed
+    (`test_first_escalation_…`);
+  - условие `if True:` (безусловный вызов) — оба подтеста SUBFAILED
+    (`in_dev/0`, `spec_writing/None`);
+  - вызов заменён на `pass` — 1 failed (`test_first_escalation_…`).
+  Код возвращён `git checkout -- orchestrator/canary.py`, `git status` чистый.
+- `python3 scripts/codebase_map.py` — расхождений с закоммиченной картой
+  нет (кроме, возможно, `built_at_sha`); файл возвращён.
+- CI коммита 827a2478 — зелёный (16 проверок, по пакету).
 
 ## Предложения системе
-- Класс «свойство закрыто только разовой планкой, PLAN считает планку
-  сторожем после мержа»: формулировку «закрытое имя запрещено
-  долгоживущему файлу» роли читают как запрет на тест разработчика в
-  `tests/`; стоит явно развести это в skills/test-authoring.md.
+- Повтор итерации 1: развести в skills/test-authoring.md запрет закрытых
+  имён в долгоживущем файле планки и тесты разработчика в `tests/`.
