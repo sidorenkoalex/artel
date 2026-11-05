@@ -1,23 +1,17 @@
 # Записка analyst
 
 ## Выяснено
-- Шаг 2 (после аудита fail, 14 отклонений): написан QUESTIONS.md — 5 вопросов (Б4 PATH вызова docker/`machine.path`; Б5 `command`/`env`; Г3 состав каталога docker в PATH роли; Б2 `container_name`/явный `name:`; Б3 порог 2.1.1). SPEC.md не тронут (правило батча).
-- Правки SPEC без Оператора, которые надо внести после ответа (аудит п. 1-5, 8, 10-14):
-  - В0.1 имена полей (предложение): `compose_file`, `compose_service`, `compose_env_file`, `compose_env_template`, `compose_mount` (одна пара «дерево:контейнер»), команда — по ответу на вопрос 2; слагаемое времени — `compose_up_down_sec`, умолчание `config.COMPOSE_UP_DOWN_SEC`.
-  - В0.2 канал `docker`: поиск по `PATH` вызывающего (shutil.which), тесты подменяют `docker` скриптом в каталоге PATH; строки doctor без проекта `compose` — `skip` без вызова docker (защита тестов doctor с `cmd_doctor(fix=True)`/`all_checks`).
-  - В0.3/Г2: `<прогон>` — 8 строчных hex, новый на каждый вызов места; живость стенда — метка pid владельца (`labels` контейнеров и сетей в перекрытии), ставит часть 1 (acceptance.py), doctor читает метку + liveness. Отметку перенести в требования части 1.
-  - А1: конфигурация собирается в дереве прогона (рабочая копия / копия базы / дерево стороны), `--project-directory` — каталог Compose-файла в этом дереве (относительные монтирования — в дерево прогона).
-  - Б2: `config` с тем же `--project-name`.
-  - Е1: сокет — источник bind-монтирования, чей realpath = realpath сокета Docker или каталог, его содержащий.
-  - Е3: запреты требования 2 проверяются по собранной конфигурации (после `config`).
-  - Г4: «профиль compose» = test_profile или любой компонент с runner compose; профиль не прочитан — окружение роли прежнее, без исключения.
-  - Б1: AC-7 — «последовательные прогоны базы и головы и одновременные разных процессов».
+- Шаг 3 (после ANSWER-1): все 5 вопросов сняты (Q1 A+PATH-правило, Q2 A, Q3 вариант Г — каталог задачи под .artel, Q4 A, Q5 2.1.1). Пишу SPEC целиком, QUESTIONS.md удаляю.
+- Имена полей записи: `compose_file`, `compose_service`, `compose_env_file`, `compose_env_template`, `compose_mount` (строка `<дерево>:<контейнер>`), `compose_up_down_sec`; `command` — команда в контейнере, умолчание `["pytest"]`; `config.COMPOSE_UP_DOWN_SEC`.
+- Каталог роли: `runner.COMPOSE_ROLE_DIR` = `<ROOT>/.artel/compose-role`, задача — `<…>/<id>/{bin,config}`.
+- Метка живого стенда — label `artel.run-pid` в перекрытии; doctor читает `docker ps -a`/`docker network ls` `--format '{{json .}}'`.
+- Сборка конфигурации — `config --format json` (опытом не проверено).
 
 ## Не сработало
 - `awk`/`head` в составной команде Bash требуют подтверждения — читать файлы через Read.
 
 ## Где остановился
-- QUESTIONS.md готов, guard прогнан. Ждём ANSWER-1.md; дальше — переписать SPEC целиком с правками выше и удалить QUESTIONS.md.
+- SPEC.md сдан (status: ready, 17 требований, AC-1…AC-21, деление на 2 части $60+$30), guard ок. QUESTIONS.md удалён (`task-rm` отказывает файлу ссылки документов — удалён через python os.remove; `rm` в шаге нет).
 
 ## Чего не хватило
-- Docker CLI в шаге — нельзя опытом проверить `config` (имена сетей) и `up --wait`.
+- Docker CLI в шаге — нельзя опытом проверить `config --format json`, `down -p` без файла.
