@@ -1,16 +1,17 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ — часть 2 деления родителя 01M6P22XBCQS49HE92YGAB25N9; требования 12–17 и AC-17…AC-22 родительского SPEC (refs/artifacts/01M6P22XBCQS49HE92YGAB25N9) переносятся дословно.
-- Зависимость мержа «после части 1» записана пультом: 01M6PAJ61D4PYAP79ADRPA6MWV (часть 1, в spec_writing на 05.11).
-- Публичных помощников compose в orchestrator/acceptance.py на этом main ещё нет — их вводит часть 1.
-- Якоря runner.py (role_env :1246, in_role_environment :1364), doctor/__init__.py :152-155 сверены по worktree.
+- Итерация 2: возврат со spec_gate с 10 решениями Оператора; все внесены в SPEC (требования 12–15, 17; AC-1, AC-2, AC-4, AC-5, AC-6; «Не входит»; «Материалы» — карта решение → критерий).
+- Якоря решений сверены по worktree 54fe44ebb: runner.py:1819-1827 (только OSError из role_env), merge_after.py:654-660, targets.py:83 (нет compose), doctor/cli.py:221-226.
+- Метка пульта части 1 = тройка `artel.run-pid/host/started`, `<прогон>` = 8 строчных hex (SPEC части 1, требования 3–4, refs/artifacts/01M6PAJ61D4PYAP79ADRPA6MWV).
+- Решение 4 «тома не удаляются» → `down --remove-orphans` без `-v` (прежде было `down -v`).
+- Решение 9 (ссылка `<id>` на каталог версии) → починка doctor удаляет и ссылку, и её каталог версии (логическое следствие).
 
 ## Не сработало
-- —
+- `cd … && python3 …` отклонён песочницей (simple_expansion); guard запускать без `cd`.
 
 ## Где остановился
-- SPEC.md написан (требования 12–17 с прежней нумерацией, AC-1…AC-6 = AC-17…AC-21 + часть AC-22), guard прогнан.
+- SPEC.md переписан, status: ready, guard ок.
 
 ## Чего не хватило
-- id части 1 нашёл через `artel.py show` (строка «зависимости мержа»), в ТЗ только «после части 1».
+- Имени «метки пульта» в решении 4 — нашёл в SPEC части 1 (`git show refs/artifacts/<id>:tasks/<id>/SPEC.md`).
