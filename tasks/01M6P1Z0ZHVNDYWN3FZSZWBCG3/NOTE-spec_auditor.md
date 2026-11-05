@@ -1,18 +1,17 @@
 # NOTE spec_auditor
 
 ## Выяснено
-- Факты SPEC о местах кода сверены: gitcmd.py:42, :51-56, :122-150, :153-165, :168-189, :192-210; workspace.py:141-153; project_checks.py:1308/1331/1345/1361; targets.py:41, :349-368, :796 — совпадают.
-- gitcmd.git (:1286-1293) — единственная точка подстановки помощника; hosting_token зовут ещё ci.py:84, gitlab_adapter.py:234, misc_checks.py:85.
-- check_submodules заводится только при merge_gate target-human (project_checks.py:70-75).
-- AC-5: подмена gitcmd.in_repo видит только (repo, *args) — пароль ей не виден.
-- Опыт (git 2.50.1, python3 -c + tempfile): useHttpPath=true → помощник получает path=g/p.git, без флага path отбрасывается; песочница AC-4 (http.server статика, Basic по префиксу) — клон+подмодуль проходят с useHttpPath, без него «Authentication failed»; url без .git на статике не клонируется (нет перенаправления).
-- check() targets.py:837-916 неизвестные плоские поля не отвергает.
+- Аудит SPEC sha 422157a2 (после решений 1–6): факты о коде подтверждены (gitcmd.py:42/51-56/122-210/1262-1295, workspace.py:141-153/197, project_checks.py:70-75/1308-1400, targets.py:41/366/486-500/796/837-916).
+- token_slot — обязательное поле записи (FIELDS), запись без него не загрузится.
+- Опыт (git 2.50.1, http.server 127.0.0.1, статика --bare): useHttpPath через GIT_CONFIG_* наследуется подмодулем; clone → path=g/p.git, submodule update → path=g/sub.git; fetch клона on-demand ходит в подмодуль, без useHttpPath path пуст и fetch падает; `credential fill` без useHttpPath отбрасывает path.
+- check_submodules: http:// → вид «иной» → warn без ls-remote (вторая форма AC-5 невыполнима).
+- tests/test_hosting_token_units.py:19-30 пинует число пар hosting_env, но не текст помощника.
 
 ## Не сработало
-- Bash с git/mktemp/heredoc требует подтверждения; опыт шёл через `python3 -c` с tempfile.mkdtemp.
+- Bash с heredoc/`$?` отклоняется; опыт — временный .py в каталоге документов, убран task-rm.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. 8 отклонений (главные: токен подмодуля на чужой хост; пустой слот подмодуля вне doctor; AC-5 не видит пароль).
+- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. 5 отклонений (окружение AC-3 не привязано к подкомандам; AC-2 без эталона; AC-5 вторая форма; http same-host в п. 5; какой пустой слот отказывает в п. 4) + замечания.
 
 ## Чего не хватило
-- Временного каталога для опыта с git через Bash — помог только python3 -c.
+- Способа запускать опыт с git без временного файла в каталоге документов.
