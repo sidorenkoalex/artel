@@ -606,7 +606,8 @@ def _base(task_id: str, target: str, branch: str, command,
             return None, refusal
         green, output = acceptance.run_full_suite(
             copy, command=command, targets=("tests",),
-            extra=_extra_flags(command), log=base_log, limit=limit)
+            extra=_extra_flags(command), log=base_log, limit=limit,
+            task_id=task_id)
     parsed = parse(green, output,
                    reported=acceptance.reported(command) is not None)
     if not parsed.finished:
@@ -680,6 +681,7 @@ def _run(task_id: str, run_no: int, mode: str, log: Path) -> tuple[str, bool]:
             green, output = acceptance.run_full_suite(
                 tree.root, command=command, targets=targets,
                 extra=_extra_flags(command), log=log, limit=limit,
+                task_id=task_id,
                 **({"test_ids": test_ids} if test_ids else {}))
     metrics = acceptance._last_full_suite_metrics
     parsed = parse(green, output,
