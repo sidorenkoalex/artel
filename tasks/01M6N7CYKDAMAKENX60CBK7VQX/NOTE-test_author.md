@@ -1,6 +1,11 @@
 # Записка test_author
 
-## Выяснено
+## Визит после ANSWER-2 (вариант B) — сделано
+- AC-9 возвращён в tests/test_01m6n7cykdamakenx60cbk7vqx_people_flow.py: до отправки — ветка в origin остаётся, запись «уборка» несёт «ветка origin <ветка>: …» и «PR не тронут…», `gh pr close` не вызван; после отправки и github+operator — как в черновике ниже. Пометка `# AC-9: escalate` снята из acceptance_tests/test_mandate_files.py.
+- До кода: оба теста target-human красны (gh pr close вызван / нет «PR не тронут»), github+operator зелёный. Временный стаб в cleanup.py (не закрывать PR и дописать фразу при merged_by_project_people) — AC-9/AC-10 зелёные; стаб снят, cleanup.py не изменён.
+- preflight: все проверки пройдены; plank-run: 3 failed (AC-13, ждут реализации), 7 passed.
+
+## Выяснено (прошлый визит)
 - AC-9 эскалирован (пометка `# AC-9: escalate` в acceptance_tests/test_mandate_files.py): белый список отправок (orchestrator/gitcmd.py:836-841, :866-876) у любой записи с merge_gate не operator отказывает `-c` перед push и `--delete` всего, кроме refs/artifacts/<id>; уборка kill удаляет ветку именно так (cleanup.py:253-276) → «ветка origin <ветка>: удалена» до отправки недостижимо без правки gitcmd.py (только чтение по SPEC). Стенд подтвердил: GitLab target-human сейчас пишет «ветка origin …: оставлено — отказ: … глобальная опция git -c перед push». Варианты A/B/C и дефолт B — в пометке.
 - Образцы стенда: tests/test_01m6m1799ycy5hxmhhd71shjet_github_mr_gate.py (Stand: RealGitSandbox, FakeGh, make_project_repo, url https на время approve/advance).
 - Красный CI на гейте людей: _approve_for_project_people → ("wait") → _wait_for_branch_ci_green → _ci_confirm_red_or_flake (fsm_merge_gate.py:297-338). До реализации trigger_rerun для GitHub людей: find_run_id (gh api actions/runs) → run rerun --failed → run watch.
