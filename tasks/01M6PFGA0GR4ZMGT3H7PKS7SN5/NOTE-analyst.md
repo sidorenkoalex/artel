@@ -1,13 +1,12 @@
 ## Выяснено
-- Факты ТЗ сверены с кодом: `fsm._mark_questions_answered` — fsm.py:613-626 (без QUESTIONS.md — печать и return, без номера ANSWER — return), вызов в approve — fsm.py:1870-1871; `canary._pass_escalated_with_synthetic_answer` — canary.py:1445-1488; `QUESTIONS_SKIPPED_ACTION` — fsm_advance.py:94.
-- Возврат с гейта (решение 1): AC-3/AC-4 переписаны — отрицательные сценарии при всём остальном условии AC-1 (QUESTIONS.md + новый синтетический ANSWER); AC-3 (а) spec_writing + baseline None, (б) in_dev + baseline не None; мутации «вызов безусловный», «только escalated_from», «только answer_baseline» красят AC-3. AC-4 — без QUESTIONS.md, но с новым ANSWER.
-- Образец формулировки: tests/test_01m4r4jkc28j80z82tza62rf2j_answered_batch.py:424-444.
+- Факты ТЗ сверены с кодом: `fsm._mark_questions_answered` — fsm.py:613-626 (без QUESTIONS.md или номера ANSWER — return), вызов в approve — fsm.py:1870-1871, baseline — fsm.py:1834; `_answer_baseline_or_refuse` fsm.py:545-563 (первая эскалация — 0); `canary._pass_escalated_with_synthetic_answer` — canary.py:1445-1488.
+- Второй возврат с гейта: Решение 1 — AC-1/AC-2 в двух случаях answer_baseline (0 и >0), мутация «проверка по истинности» красит AC-1 при 0; AC-3 (б) in_dev с baseline = 0. Решение 2 — два пути синтетического ANSWER в «Материалах» (подмена канала по test_canary_synthetic_answer.py:139-143, либо настоящий answer.cmd_answer + подмены commit_files и mandate._tree_files; без второй — sandbox.py:841). Утверждения сверены: mandate.py:178 зовёт ls_tree_files(code_branch, ".").
 
 ## Не сработало
-- Составная команда Bash с переменной отклонена — читать файлы через Read.
+- Bash с `$?`/переменными отклоняется — без расширений.
 
 ## Где остановился
-- SPEC.md status: ready, guard ок. Решение 1 отмечено в «Материалах».
+- SPEC.md status: ready, guard ок.
 
 ## Чего не хватило
 - Ничего существенного.

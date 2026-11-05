@@ -51,9 +51,14 @@ AC-1. Задача канарейки в песочнице пульта в `esc
 новая строка `fsm.QUESTIONS_ANSWERED_ACTION` с detail `sha256=<хэш этого
 QUESTIONS.md>; ANSWER-<номер только что записанного синтетического
 ANSWER>`, эта строка записана раньше записи о смене состояния, задача в
-`spec_writing`.
+`spec_writing`. Критерий проверяется в двух случаях значения
+`answer_baseline`: `0` (первая эскалация батча, до неё ANSWER не было —
+основной случай прогона 03.11) и значение больше нуля. Намеренная ошибка
+«`answer_baseline` проверяется по истинности вместо `is not None`» делает
+этот критерий красным в случае `0`.
 
-AC-2. Продолжение сценария AC-1: после шага аналитика (запись журнала шага
+AC-2. Продолжение сценария AC-1 (в обоих его случаях значения
+`answer_baseline`, `0` и больше нуля): после шага аналитика (запись журнала шага
 analyst, подменённая так же, как в существующих тестах SPEC
 01M4R4JKC28J80Z82TZA62RF2J, `tests/test_01m4r4jkc28j80z82tza62rf2j_answered_batch.py`)
 с тем же `QUESTIONS.md` переход `spec_writing` не эскалирует задачу, в
@@ -66,7 +71,7 @@ AC-3. Два сценария, в каждом всё остальное усл�
 записывает новый синтетический ANSWER после эскалации, — различается
 только проверяемая половина условия: (а) `escalated_from = spec_writing`
 при `answer_baseline = None`; (б) `escalated_from = in_dev` при
-`answer_baseline`, не равном `None`. В обоих после
+`answer_baseline = 0` — том же значении, что основной случай AC-1. В обоих после
 `_pass_escalated_with_synthetic_answer` новой строки
 `fsm.QUESTIONS_ANSWERED_ACTION` в журнале нет, задача возвращена в прежнее
 состояние (`escalated_from`, при его отсутствии `in_dev`) — как до правки.
@@ -117,4 +122,26 @@ ANSWER, но `QUESTIONS.md` в документах задачи нет: стр�
   Проверяется AC-3 и AC-4 тестами задачи против временного дублёра
   (песочница пульта `tests/sandbox.py`), настоящие `tasks/` и `.artel/`
   не меняются. С требованиями 1-3 и зонами не расходится.
+- Решение 1 Оператора на гейте SPEC (второй возврат; случаи
+  `answer_baseline` в AC-1/AC-2, значение `0` в AC-3 (б)): сверено с кодом —
+  `orchestrator/fsm.py:545-563` (`_answer_baseline_or_refuse` возвращает
+  число ANSWER на момент эскалации, у первой эскалации это `0`),
+  `orchestrator/fsm.py:1834` и `:1870` (условие approve `baseline is not
+  None`). Проверяется AC-1, AC-2, AC-3 тестами задачи против временного
+  дублёра (песочница пульта `tests/sandbox.py`). С требованиями 1-3,
+  прежним решением и зонами не расходится.
+- Синтетический ANSWER в тестах (Решение 2 Оператора на гейте SPEC) пишется
+  любым из двух путей: (1) подменой канала ответа `canary.answer.cmd_answer`,
+  как в `tests/test_canary_synthetic_answer.py:139-143` (подменённый канал
+  сам кладёт `ANSWER-<n>.md` в документы задачи — без файла
+  `_mark_questions_answered` номера ANSWER не найдёт, `orchestrator/fsm.py:617-624`); (2) настоящим
+  `answer.cmd_answer` с двумя подменами — `artifact_branch.commit_files` на
+  запись на диск (образец
+  `tests/test_01m4kaymw2yrfb7g0442wfvsha_answer_in_dev_gate.py`, докстринг
+  модуля) и `orchestrator.advance_gates.mandate._tree_files` на пустой
+  список. Без второй подмены настоящий `answer.cmd_answer` в песочнице
+  падает на `tests/sandbox.py:841` («неожиданный rel: '.'»):
+  `orchestrator/advance_gates/mandate.py:178` зовёт
+  `gitcmd.ls_tree_files(code_branch, ".")`, песочница такой путь не
+  подменяет. Проверяется AC-1, AC-2 против того же дублёра.
 - Журнал прогона-основания: `.artel/logs/canary/run-20261103T222709Z-*.log`.
