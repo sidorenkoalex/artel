@@ -138,13 +138,28 @@ def write_push_policy(clone: Path, target: str) -> str | None:
     return None
 
 
-def _clone_submodules(clone: Path, entry: dict) -> str | None:
+def _clone_submodules(clone: Path, entry: dict, target: str) -> str | None:
     """Подмодули клона внешнего проекта со `token_slot` — тем же токеном
     слота (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, требование 10; ANSWER-1 п. 3):
     `submodule update` идёт через `gitcmd`, хостинговым вызовом проекта.
-    Записи без слота и клону без `.gitmodules` — ничего. `None` — успех."""
+    Записи без слота и клону без `.gitmodules` — ничего. `None` — успех.
+
+    Запись с `submodule_tokens` (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3,
+    требования 4, 6): сначала прежний отказ процесса роли (`hosting_token`,
+    связка не читается), затем слоты подмодулей — пустой слот подмодуля,
+    которому помощник выдал бы токен слота, — отказ до запуска git."""
     if not entry.get("token_slot") or not (clone / ".gitmodules").is_file():
         return None
+    if entry.get(targets.SUBMODULE_TOKENS_FIELD):
+        _token, refusal = gitcmd.hosting_token(target, entry)
+        if refusal is not None:
+            return refusal
+        for sub_path, slot, _key, token in gitcmd.submodule_credentials(
+                target, entry):
+            if not token:
+                return (f"слот {slot} связки ключей пуст — подмодуль "
+                        f"{sub_path} не извлечён (submodule_tokens записи "
+                        f"проекта {target})")
     res = gitcmd.in_repo(clone, "submodule", "update", "--init", "--recursive",
                          "--quiet")
     if res is None or res.returncode != 0:
@@ -194,7 +209,7 @@ def ensure_clone(target: str) -> tuple[Path, str | None]:
                   else "git не ответил")
         return clone, f"клон {clone} из {url} не заведён: {detail}"
     if target != config.DEFAULT_TARGET:
-        sub_error = _clone_submodules(clone, entry)
+        sub_error = _clone_submodules(clone, entry, target)
         if sub_error is not None:
             shutil.rmtree(clone, ignore_errors=True)
             return clone, (f"клон {clone} из {url} не заведён: подмодули не "

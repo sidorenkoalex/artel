@@ -1,6 +1,7 @@
 """Вызовы git в корне репозитория, вопросы к ветке задачи и к произвольному
 репозиторию (артефактные git-репо внешних target, ADR-0003 3д, tasks/T021)."""
 import os
+import posixpath
 import re
 import shlex
 import sqlite3
@@ -54,6 +55,30 @@ HOSTING_CREDENTIAL_HELPER = (
     f'test "$h" = "${{{HOSTING_HOST_ENV}}}" || exit 0; '
     'echo username=x-access-token; '
     f'echo "password=${{{HOSTING_TOKEN_ENV}}}"; }}; f')
+# Выбор токена по адресу (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3, требования 2-3):
+# только для записи с `submodule_tokens`. Помощник видит путь запроса
+# (`credential.useHttpPath=true`), снимает с него `/` и `.git` и ищет среди
+# `ARTEL_HOSTING_SUB_PATH_n`: совпал — токен `ARTEL_HOSTING_SUB_TOKEN_n`
+# (пустой — ничего, не токен проекта), не совпал — токен проекта. Хост
+# сравнивается без учёта регистра: `ARTEL_HOSTING_HOST` здесь — в нижнем
+# регистре. `eval` раскрывает только имя переменной с номером — значения
+# путей и токенов через него не проходят.
+HOSTING_SUB_COUNT_ENV = "ARTEL_HOSTING_SUB_COUNT"
+HOSTING_SUB_PATH_ENV = "ARTEL_HOSTING_SUB_PATH_"
+HOSTING_SUB_TOKEN_ENV = "ARTEL_HOSTING_SUB_TOKEN_"
+HOSTING_PATH_CREDENTIAL_HELPER = (
+    '!f() { test "$1" = get || exit 0; h=; p=; while IFS= read -r l; do '
+    'case "$l" in host=*) h="${l#host=}";; path=*) p="${l#path=}";; esac; '
+    "done; h=$(printf '%s' \"$h\" | tr '[:upper:]' '[:lower:]'); "
+    f'test "$h" = "${{{HOSTING_HOST_ENV}}}" || exit 0; '
+    'p="${p%/}"; p="${p%.git}"; i=0; '
+    f'while test "$i" -lt "${{{HOSTING_SUB_COUNT_ENV}:-0}}"; do '
+    f'eval "s=\\${{{HOSTING_SUB_PATH_ENV}$i}}"; '
+    f'if test "$p" = "$s"; then eval "t=\\${{{HOSTING_SUB_TOKEN_ENV}$i}}"; '
+    'test -n "$t" || exit 0; echo username=x-access-token; '
+    'echo "password=$t"; exit 0; fi; i=$((i+1)); done; '
+    'echo username=x-access-token; '
+    f'echo "password=${{{HOSTING_TOKEN_ENV}}}"; }}; f')
 
 
 def url_host(url: str) -> str:
@@ -74,6 +99,96 @@ def url_host(url: str) -> str:
 def url_key(url: str) -> str:
     """Адрес remote для сравнения: без завершающей черты и `.git`."""
     return url.strip().rstrip("/").removesuffix(".git")
+
+
+def gitmodules_entries(text: str) -> list:
+    """[(путь, адрес)] подмодулей текста `.gitmodules`."""
+    sections: dict = {}
+    current = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        m = re.match(r'^\[submodule\s+"(.+)"\]$', line)
+        if m:
+            current = sections.setdefault(m.group(1), {})
+        elif line.startswith("["):
+            current = None
+        elif current is not None and "=" in line:
+            key, value = line.split("=", 1)
+            current[key.strip().lower()] = value.strip().strip('"')
+    return [(fields.get("path", name), fields["url"])
+            for name, fields in sections.items() if fields.get("url")]
+
+
+SCP_URL_RE = re.compile(r"^((?:[^@/:\s]+@)?([^/:\s]+)):(.*)$")
+
+
+def resolve_submodule_url(url: str, base: str) -> str:
+    """Относительный адрес `./…`/`../…` — от адреса записи, как у git."""
+    if not url.startswith(("./", "../")):
+        return url
+    base = base.rstrip("/")
+    if "://" in base:
+        parts = urllib.parse.urlsplit(base)
+        path = posixpath.normpath(posixpath.join(parts.path or "/", url))
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    m = SCP_URL_RE.match(base)
+    if m:
+        path = posixpath.normpath(posixpath.join("/" + m.group(3), url)).lstrip("/")
+        return f"{m.group(1)}:{path}"
+    return url
+
+
+def submodule_scheme(url: str) -> str:
+    """Схема адреса подмодуля в нижнем регистре; вид scp — `ssh`; адрес
+    без схемы — пустая строка."""
+    if "://" in url:
+        return urllib.parse.urlsplit(url).scheme.lower()
+    return "ssh" if SCP_URL_RE.match(url) else ""
+
+
+def same_host(url: str, base: str) -> bool:
+    """`url` — на хосте адреса `base`: `url_host` (с портом), имя без учёта
+    регистра (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3, требование 2)."""
+    host = url_host(base).lower()
+    return bool(host) and url_host(url).lower() == host
+
+
+def clone_gitmodules(name: str) -> list | None:
+    """[(путь, адрес)] `.gitmodules` клона проекта `name`; `None` — файла
+    нет или он не читается."""
+    from . import repo_context  # лениво: `repo_context` импортирует этот модуль
+    path = repo_context.clone_path(name) / ".gitmodules"
+    try:
+        return gitmodules_entries(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def submodule_credentials(name: str, entry: dict) -> list:
+    """[(путь подмодуля, слот, путь адреса без `.git`, токен)] подмодулей
+    поля `submodule_tokens` записи `entry`, которым помощник выдаёт токен
+    их слота (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3, требования 2, 4): путь есть в
+    `.gitmodules` клона проекта, адрес (относительный — от `url` записи) —
+    `http(s)://` на хосте записи. Прочим слот не читается. Токен пустого
+    слота — пустая строка."""
+    field = entry.get("submodule_tokens") or {}
+    if not field:
+        return []
+    base = str(entry.get("url") or "")
+    found = []
+    for sub_path, raw in clone_gitmodules(name) or []:
+        slot = field.get(sub_path)
+        if not slot:
+            continue
+        address = resolve_submodule_url(raw, base)
+        if (submodule_scheme(address) not in ("http", "https")
+                or not same_host(address, base)):
+            continue
+        key = url_key(urllib.parse.urlsplit(address).path).lstrip("/")
+        found.append((sub_path, slot, key, keychain.token(slot) or ""))
+    return found
 
 
 def _under(path: Path, root: Path) -> tuple | None:
@@ -207,6 +322,32 @@ def hosting_env(env: dict, token: str, host: str = "") -> dict:
     env["GIT_CONFIG_COUNT"] = str(count)
     env[HOSTING_TOKEN_ENV] = token
     env[HOSTING_HOST_ENV] = host
+    return env
+
+
+def hosting_path_env(env: dict, token: str, host: str, subs: list) -> dict:
+    """Окружение хостингового git-вызова записи с `submodule_tokens`: как
+    у `hosting_env`, но помощник выбирает токен по пути запроса
+    (`HOSTING_PATH_CREDENTIAL_HELPER`, `credential.useHttpPath=true`).
+    `subs` — `submodule_credentials` записи."""
+    env = dict(env)
+    try:
+        count = int(env.get("GIT_CONFIG_COUNT") or 0)
+    except ValueError:
+        count = 0
+    for key, value in (("credential.helper", ""),
+                       ("credential.helper", HOSTING_PATH_CREDENTIAL_HELPER),
+                       ("credential.useHttpPath", "true")):
+        env[f"GIT_CONFIG_KEY_{count}"] = key
+        env[f"GIT_CONFIG_VALUE_{count}"] = value
+        count += 1
+    env["GIT_CONFIG_COUNT"] = str(count)
+    env[HOSTING_TOKEN_ENV] = token
+    env[HOSTING_HOST_ENV] = host.lower()
+    env[HOSTING_SUB_COUNT_ENV] = str(len(subs))
+    for i, (_path, _slot, key, sub_token) in enumerate(subs):
+        env[f"{HOSTING_SUB_PATH_ENV}{i}"] = key
+        env[f"{HOSTING_SUB_TOKEN_ENV}{i}"] = sub_token
     return env
 
 
@@ -1289,8 +1430,12 @@ def git(*args: str, task_id: str | None = None) -> subprocess.CompletedProcess:
         if refusal is not None:
             return subprocess.CompletedProcess(args, 1, "", refusal)
         if token is not None:
-            env = hosting_env(env, token,
-                              url_host(str(project[1].get("url") or "")))
+            host = url_host(str(project[1].get("url") or ""))
+            if project[1].get("submodule_tokens"):
+                env = hosting_path_env(env, token, host,
+                                       submodule_credentials(*project))
+            else:
+                env = hosting_env(env, token, host)
     try:
         res = subprocess.run(["git", *args], cwd=config.ROOT, env=env,
                              capture_output=True, text=True)

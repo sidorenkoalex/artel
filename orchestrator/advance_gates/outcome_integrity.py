@@ -428,11 +428,12 @@ def _full_run(task_id: str, profile, side: str, tree: Path) -> list:
 
 
 def _rerun(profile, trees: dict, red: list, history: dict,
-           sides: tuple = (HEAD, BASE)) -> int:
+           sides: tuple = (HEAD, BASE), *, task_id: str | None = None) -> int:
     """Перепрогоны красных тестов `red` по их файлам (требование 3) на
     сторонах `sides` (сторона ветки и база): дописывает в `history` {id:
     {сторона: [(красный, исход)]}}; число прогонов файлов. Отказ
-    подготовки — `_Prepare`."""
+    подготовки — `_Prepare`. `task_id` — id задачи для имени проекта
+    Compose у компонента `compose` (`acceptance.report_run`)."""
     files: dict = {}
     for cid in red:
         path = project_profile.parse_test_id(cid)[1]
@@ -442,7 +443,8 @@ def _rerun(profile, trees: dict, red: list, history: dict,
     for _round in range(RERUNS):
         for side in sides:
             for path in sorted(files):
-                run = acceptance.report_run(profile, trees[side], [path], limit)
+                run = acceptance.report_run(profile, trees[side], [path], limit,
+                                            task_id=task_id)
                 count += 1
                 where = f"перепрогон {path} на стороне «{side}»"
                 if run.refusal:
@@ -733,7 +735,8 @@ def _prior_versions(task_id: str, profile, trees: dict, tree: Path,
         ran = None
     else:
         limit = project_profile.component_limit(profile)[0]
-        run = acceptance.report_run(profile, tree, list(paths), limit)
+        run = acceptance.report_run(profile, tree, list(paths), limit,
+                                    task_id=task_id)
         where = f"прогон прежних версий {len(paths)} файлов"
         if run.refusal:
             raise _Prepare(f"{where}: {run.refusal}")
@@ -754,7 +757,8 @@ def _prior_versions(task_id: str, profile, trees: dict, tree: Path,
         history[b.id] = {PRIOR: [(not green, describe(case))],
                          BASE: [(False, describe(b))]}
     red = sorted(cid for cid, sides in history.items() if sides[PRIOR][0][0])
-    reruns = (_rerun(profile, trees, red, history, sides=(PRIOR, BASE))
+    reruns = (_rerun(profile, trees, red, history, sides=(PRIOR, BASE),
+                     task_id=task_id)
               if red else 0)
     return history, red, 1 + reruns // 2
 
@@ -969,7 +973,8 @@ def _judge(conn, task_id: str, branch: str, artifact_branch: str, profile,
                      BASE: [(False, describe(next(c for c in base
                                                   if c.id == cid)))]}
                for cid in red}
-    file_runs = _rerun(profile, trees, red, history) if red else 0
+    file_runs = (_rerun(profile, trees, red, history, task_id=task_id)
+                 if red else 0)
     senior, flaky = _redness(red, history)
     taken = {f.id for f in senior}
     findings = senior + [f for f in compare(base, head) if f.id not in taken]
