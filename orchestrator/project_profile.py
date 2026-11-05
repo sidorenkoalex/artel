@@ -81,6 +81,14 @@ class Profile:
     env: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), hash=False)
     long_lived_imports: tuple = ()
+    # Поля раннера `compose` (`targets.COMPOSE_FIELDS`; SPEC
+    # 01M6PAJ61D4PYAP79ADRPA6MWV, требование 1): у прочих раннеров пусто.
+    compose_file: str = ""
+    compose_service: str = ""
+    compose_env_file: str = ""
+    compose_env_template: str = ""
+    compose_mount: str = ""
+    compose_up_down_sec: int | None = None
     # Объявленные инструменты компонента «имя → версия» (SPEC
     # 01M58PG72PG64GS790XM2EWS61, требование 9): заполняет `with_tools`, у
     # записей с `test_profile` пусто. Вне хэша — по той же причине, что `env`.
@@ -141,7 +149,8 @@ class Profile:
                    workdir=values.get("workdir") or "",
                    env=MappingProxyType(dict(values.get("env") or {})),
                    long_lived_imports=tuple(
-                       values.get("long_lived_imports") or ()))
+                       values.get("long_lived_imports") or ()),
+                   **_compose_values(values))
 
     def in_weakening_scope(self, path: str | None) -> bool:
         return bool(path) and any(mask_matches(mask, path)
@@ -175,6 +184,13 @@ class Profile:
     def is_long_lived(self, task_id: str, rel: str) -> bool:
         return guard.is_long_lived_test_path(task_id, rel, self.long_lived_dir,
                                              self.long_lived_name)
+
+
+def _compose_values(values: dict) -> dict:
+    """Поля `compose_*` записи для `Profile` (пустые — значения по
+    умолчанию)."""
+    return {sub: values[sub] for sub in targets.COMPOSE_FIELDS
+            if values.get(sub) is not None}
 
 
 @dataclass(frozen=True)
@@ -494,7 +510,7 @@ def component_profiles(target: str, names=None) -> tuple:
             workdir=fields.get("workdir") or "",
             env=MappingProxyType(dict(fields.get("env") or {})),
             long_lived_imports=tuple(fields.get("long_lived_imports") or ()),
-            project=target)
+            project=target, **_compose_values(fields))
         chosen.append(_with_component_fields(profile, comp))
     return tuple(chosen)
 
@@ -511,13 +527,14 @@ JUNIT_DEFAULT_REPORT_ARGS = ("--junitxml", "{path}")
 def reported(profile) -> bool:
     """Итог прогона по профилю читается только из отчёта (требование 4):
     `report` объявлен у компонента записи `components:` либо у записи
-    `test_profile` с `runner: pytest-own`. Запись артели (`pult-pytest`) и
-    записи без `report` — прежний разбор по коду возврата и тексту
-    pytest."""
+    `test_profile` с `runner: pytest-own` или `compose` (SPEC
+    01M6PAJ61D4PYAP79ADRPA6MWV, требование 1). Запись артели
+    (`pult-pytest`) и записи без `report` — прежний разбор по коду возврата
+    и тексту pytest."""
     if not getattr(profile, "report", ""):
         return False
     return bool(getattr(profile, "from_components", False)) or \
-        getattr(profile, "runner", "") == targets.PROFILE_RUNNER_OWN
+        getattr(profile, "runner", "") in targets.PROFILE_PROJECT_RUNNERS
 
 
 def report_args_of(profile) -> tuple:

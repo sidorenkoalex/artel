@@ -74,19 +74,47 @@ PROFILE_FIELDS = {
     # 01M5633WZ3Y3A0P4KKBZDB3KER): список идентификаторов, возможно пустой.
     "long_lived_imports": "identifiers",
 }
+# Поля раннера `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV, требование 1;
+# ADR-0023, поправка 05.11.2026): одни имена у подполя профиля и у поля
+# компонента. "path" — относительный путь файла в дереве, "mount" — ровно
+# одна пара `<каталог дерева>:<абсолютный каталог в контейнере>`.
+COMPOSE_FIELDS = {
+    "compose_file": "path",           # Compose-файл проекта в дереве
+    "compose_service": "text",        # сервис, в контейнере которого pytest
+    "compose_env_file": "path",       # файл окружения Compose в дереве
+    "compose_env_template": "path",   # шаблон, из которого его копирует пульт
+    "compose_mount": "mount",         # каталог дерева, смонтированный сервису
+    "compose_up_down_sec": "positive_int",  # слагаемое предела на стенд
+}
+PROFILE_FIELDS.update(COMPOSE_FIELDS)
 # `report` и `install` описываются и проверяются, но пультом не
 # исполняются — их отсутствие поведения пульта не меняет. Так же пока
 # `runner`, `workdir`, `env`: потребители — следующие части D0.
 PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec", "runner",
-                    "workdir", "env", "long_lived_imports")
+                    "workdir", "env", "long_lived_imports", *COMPOSE_FIELDS)
 # Подполе, недопустимое у артели: её правило импортов — правило пульта.
 PROFILE_EXTERNAL_ONLY = ("long_lived_imports",)
 PROFILE_REPORTS = ("junit-xml",)
 PROFILE_RUNNER_DEFAULT = "pult-pytest"
 PROFILE_RUNNER_OWN = "pytest-own"
-PROFILE_RUNNERS = (PROFILE_RUNNER_DEFAULT, PROFILE_RUNNER_OWN)
+PROFILE_RUNNER_COMPOSE = "compose"
+PROFILE_RUNNERS = (PROFILE_RUNNER_DEFAULT, PROFILE_RUNNER_OWN,
+                   PROFILE_RUNNER_COMPOSE)
 # Подполя, осмысленные только у собственного раннера проекта.
 PROFILE_OWN_RUNNER_ONLY = ("workdir", "env")
+# Раннеры, которым `PROFILE_OWN_RUNNER_ONLY` и `machine.path` допустимы:
+# `compose` проходит те же проверки, что `pytest-own` (требование 1);
+# `env` у него — только PATH из `machine.path` (`_check_compose`).
+PROFILE_PROJECT_RUNNERS = (PROFILE_RUNNER_OWN, PROFILE_RUNNER_COMPOSE)
+# Обязательные поля записи `compose` и умолчание её команды в контейнере.
+COMPOSE_REQUIRED = ("compose_file", "compose_service", "compose_env_file",
+                    "compose_env_template", "compose_mount")
+COMPOSE_DEFAULT_COMMAND = ("pytest",)
+# Поля, которых у `compose` нет: зависимости ставит образ сервиса, проверки
+# пульт в контейнере не исполняет.
+COMPOSE_FORBIDDEN = ("install", "tools", "checks_local")
+COMPOSE_ENV_NOTE = ("недопустимо при 'runner: compose': окружение pytest в "
+                    "контейнере задают Compose-файл и файл окружения проекта")
 
 # Компоненты проекта — необязательное поле записи вместо `test_profile`
 # (ADR-0026 пп. 1-3; SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 1-3):
@@ -272,7 +300,9 @@ def load() -> dict:
     # Производная пара шаблона `long_lived` — только в отданной копии
     # (SPEC 01M5AA5TS90RDJ2AFXB882WTPD, требование 2): её читают
     # `repo_context.profile_of` и `project_profile` без смены своей логики.
-    return {name: _with_long_lived_pairs(entry)
+    # Умолчание команды записи `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV,
+    # требование 1) — тем же приёмом: все читатели видят `["pytest"]`.
+    return {name: _with_compose_command(_with_long_lived_pairs(entry))
             for name, entry in entries.items()}
 
 
@@ -764,13 +794,24 @@ def _check_local_values(name: str, where: str, entry: dict) -> None:
     machine = entry["machine"]
     description = entry["description"]
     profile = description.get(PROFILE_FIELD)
+    # `env` записи `compose` — по разделу `description` до сведения: после
+    # него в `env` лежит PATH из `machine.path` (SPEC
+    # 01M6PAJ61D4PYAP79ADRPA6MWV, требование 2).
+    comps = description.get(COMPONENTS_FIELD)
+    described = [(f"description.{PROFILE_FIELD}", profile)]
+    if isinstance(comps, dict):
+        described += [(f"description.{COMPONENTS_FIELD}.{comp}", fields)
+                      for comp, fields in comps.items()]
+    for here, fields in described:
+        if isinstance(fields, dict) and "env" in fields and \
+                fields.get("runner") == PROFILE_RUNNER_COMPOSE:
+            raise TargetsError(f"{where}: поле '{here}.env' — {COMPOSE_ENV_NOTE}")
     if isinstance(profile, dict) and "path" in machine:
         runner = profile.get("runner", PROFILE_RUNNER_DEFAULT)
-        if runner != PROFILE_RUNNER_OWN:
+        if runner not in PROFILE_PROJECT_RUNNERS:
             raise TargetsError(
                 f"{where}: поле 'machine.path' — PATH профиля допустим только "
                 f"при 'runner: {PROFILE_RUNNER_OWN}' (runner — '{runner}')")
-    comps = description.get(COMPONENTS_FIELD)
     if isinstance(comps, dict) and len(comps) == 1:
         comp, fields = next(iter(comps.items()))
         own = (machine.get(COMPONENTS_FIELD) or {}).get(comp) or {}
@@ -778,7 +819,7 @@ def _check_local_values(name: str, where: str, entry: dict) -> None:
                  else "machine.path" if "path" in machine else None)
         runner = (fields.get("runner", PROFILE_RUNNER_DEFAULT)
                   if isinstance(fields, dict) else PROFILE_RUNNER_DEFAULT)
-        if field and runner != PROFILE_RUNNER_OWN:
+        if field and runner not in PROFILE_PROJECT_RUNNERS:
             raise TargetsError(
                 f"{where}: поле '{field}' — PATH единственного компонента "
                 f"допустим только при 'runner: {PROFILE_RUNNER_OWN}' (runner "
@@ -911,7 +952,7 @@ def check(name: str, entry: object, source: Path | None = None, *,
                            f"ожидается {' | '.join(MERGE_GATES)}")
     _check_ci_required_jobs(where, entry)
     if PROFILE_FIELD in entry:
-        _check_profile(where, entry[PROFILE_FIELD])
+        _check_profile(where, entry[PROFILE_FIELD], local=local)
         if name == config.DEFAULT_TARGET:
             for sub in PROFILE_EXTERNAL_ONLY:
                 if sub in entry[PROFILE_FIELD]:
@@ -925,7 +966,7 @@ def check(name: str, entry: object, source: Path | None = None, *,
                                f"'{COMPONENTS_FIELD}' вместе недопустимы — "
                                f"оставь одно")
         _check_components(name, where, entry[COMPONENTS_FIELD],
-                          hosting=entry["forge"])
+                          hosting=entry["forge"], local=local)
         if name != config.DEFAULT_TARGET:
             _check_knowledge_outside_wrapper(where, entry)
     if KNOWLEDGE_FIELD in entry:
@@ -1107,9 +1148,10 @@ def _knowledge_error(name: str, value: object) -> str:
     return "" if ok else f"'{value}', ожидается ровно {expected}"
 
 
-def _check_profile(where: str, profile: object) -> None:
+def _check_profile(where: str, profile: object, *, local: bool = False) -> None:
     """Проверка поля `test_profile` записи: причина называет поле и
-    подполе (требование 1)."""
+    подполе (требование 1). `local` — запись сведена из локального слоя
+    (`check`)."""
     if not isinstance(profile, dict):
         raise TargetsError(f"{where}: поле '{PROFILE_FIELD}' — не набор "
                            f"подполей")
@@ -1118,17 +1160,20 @@ def _check_profile(where: str, profile: object) -> None:
             raise TargetsError(f"{where}: поле '{PROFILE_FIELD}': неизвестное "
                                f"подполе '{sub}' (известны: "
                                f"{', '.join(PROFILE_FIELDS)})")
+    compose = profile.get("runner") == PROFILE_RUNNER_COMPOSE
     for sub, kind in PROFILE_FIELDS.items():
         name = f"'{PROFILE_FIELD}.{sub}'"
         if sub not in profile:
-            if sub in PROFILE_OPTIONAL:
+            # Без `command` у `compose` — `COMPOSE_DEFAULT_COMMAND`.
+            if sub in PROFILE_OPTIONAL or (compose and sub == "command"):
                 continue
             raise TargetsError(f"{where}: нет подполя {name}")
         reason = _profile_value_error(kind, profile[sub])
         if reason:
             raise TargetsError(f"{where}: подполе {name} — {reason}")
+    _check_compose(where, profile, f"{PROFILE_FIELD}.", local=local)
     runner = profile.get("runner", PROFILE_RUNNER_DEFAULT)
-    if runner != PROFILE_RUNNER_OWN:
+    if runner not in PROFILE_PROJECT_RUNNERS:
         for sub in PROFILE_OWN_RUNNER_ONLY:
             if sub in profile:
                 raise TargetsError(
@@ -1138,10 +1183,13 @@ def _check_profile(where: str, profile: object) -> None:
 
 
 def _check_components(name: str, where: str, comps: object,
-                      hosting: str = "") -> None:
+                      hosting: str = "", *, local: bool = False) -> None:
     """Проверка поля `components:` записи: отказ называет проект,
     компонент и поле (SPEC 01M58FNWBV25FF26E7AZ9Q9912, требования 2-3).
-    `hosting` — значение `forge` записи для правила `full_suite`."""
+    `hosting` — значение `forge` записи для правила `full_suite`. Правила
+    команды (`layers`, запрет повторов) у `compose` без `command` идут по
+    `COMPOSE_DEFAULT_COMMAND` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV, решение
+    гейта 6)."""
     if not isinstance(comps, dict) or not comps:
         raise TargetsError(f"{where}: поле '{COMPONENTS_FIELD}' — не непустое "
                            f"отображение «имя компонента → поля»")
@@ -1163,9 +1211,89 @@ def _check_components(name: str, where: str, comps: object,
                                             comp, comps)
             if reason:
                 raise TargetsError(f"{here}: поле '{field}' — {reason}")
-        _check_component_rules(name, here, fields, single)
+        _check_compose(here, fields, "", local=local)
+        _check_component_rules(name, here, _compose_fields(fields), single)
         _check_full_suite_source(here, fields, hosting)
-        _check_rerun_ban(here, fields)
+        _check_rerun_ban(here, _compose_fields(fields))
+
+
+def compose_mount_pair(value: str) -> tuple[str, str]:
+    """(каталог дерева, каталог в контейнере) поля `compose_mount`, уже
+    проверенного видом "mount"."""
+    left, _sep, right = value.partition(":")
+    return left, right
+
+
+def _path_inside(path: str, folder: str) -> bool:
+    """Относительный путь дерева `path` лежит в каталоге дерева `folder`
+    (`.` — корень дерева)."""
+    path, folder = posixpath.normpath(path), posixpath.normpath(folder)
+    return folder == "." or path == folder or path.startswith(folder + "/")
+
+
+# Образец id задачи для сверки каталогов планки с монтированием: правило
+# не зависит от id — каталог задачи лежит под теми же родителями.
+_COMPOSE_SAMPLE_ID = "0" * 26
+
+
+def _check_compose(here: str, fields: dict, prefix: str, *,
+                   local: bool) -> None:
+    """Правила записи `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV,
+    требования 1-2): у другого раннера полей `compose_*` нет; у `compose` —
+    все обязательные поля, `workdir`, `report: junit-xml`, нет полей
+    `COMPOSE_FORBIDDEN` и `env` (кроме PATH из `machine.path` локального
+    слоя); `workdir`, `long_lived_dir` и каталог планки после раскладки —
+    под левой частью `compose_mount`. `prefix` — начало имени поля в тексте
+    (`test_profile.` у профиля, пусто у компонента)."""
+    def named(sub: str) -> str:
+        return f"'{prefix}{sub}'"
+    runner = fields.get("runner", PROFILE_RUNNER_DEFAULT)
+    if runner != PROFILE_RUNNER_COMPOSE:
+        for sub in COMPOSE_FIELDS:
+            if sub in fields:
+                raise TargetsError(
+                    f"{here}: поле {named(sub)} — допустимо только при "
+                    f"'runner: {PROFILE_RUNNER_COMPOSE}' (runner — '{runner}')")
+        return
+    for sub in (*COMPOSE_REQUIRED, "workdir"):
+        if sub not in fields:
+            raise TargetsError(f"{here}: нет поля {named(sub)} — обязательно "
+                               f"при 'runner: {PROFILE_RUNNER_COMPOSE}'")
+    if fields.get("report") != PROFILE_REPORTS[0]:
+        raise TargetsError(f"{here}: поле {named('report')} — при 'runner: "
+                           f"{PROFILE_RUNNER_COMPOSE}' обязательно "
+                           f"'{PROFILE_REPORTS[0]}' (итог — по отчёту)")
+    for sub in COMPOSE_FORBIDDEN:
+        if sub in fields:
+            raise TargetsError(f"{here}: поле {named(sub)} — недопустимо при "
+                               f"'runner: {PROFILE_RUNNER_COMPOSE}'")
+    env = fields.get("env")
+    if env is not None and not (local and set(env) == {"PATH"}):
+        raise TargetsError(f"{here}: поле {named('env')} — {COMPOSE_ENV_NOTE}")
+    left, _right = compose_mount_pair(fields["compose_mount"])
+    workdir = fields["workdir"]
+    lld = fields.get("long_lived_dir")
+    if lld is None and isinstance(fields.get("long_lived"), str):
+        lld = long_lived_pair(fields["long_lived"])[0]
+    outside = (f"не лежит под левой частью {named('compose_mount')} "
+               f"«{left}» — контейнер его не видит")
+    for sub, value in (("workdir", workdir), ("long_lived_dir", lld)):
+        if value is not None and not _path_inside(value, left):
+            raise TargetsError(f"{here}: поле {named(sub)} — '{value}' "
+                               f"{outside}")
+    layout = fields.get("plank_layout") if not prefix else None
+    if layout and "report" in fields:
+        laid = layout.replace("<id>", _COMPOSE_SAMPLE_ID)
+        if not _path_inside(laid, left):
+            raise TargetsError(f"{here}: поле {named('plank_layout')} — "
+                               f"'{layout}' {outside}")
+    elif lld is not None and not _path_inside(lld, workdir):
+        plank = f"tasks/{_COMPOSE_SAMPLE_ID}/acceptance_tests"
+        if not _path_inside(plank, left):
+            raise TargetsError(
+                f"{here}: поле {named('long_lived_dir')} — '{lld}' вне "
+                f"workdir: планка идёт без раскладки из tasks/<id>/"
+                f"acceptance_tests дерева, а этот каталог {outside}")
 
 
 def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
@@ -1306,7 +1434,7 @@ def _check_component_rules(name: str, here: str, fields: dict,
                 raise TargetsError(f"{here}: нет поля '{sub}' — обязательно "
                                    f"у единственного компонента записи")
         runner = fields.get("runner", PROFILE_RUNNER_DEFAULT)
-        if runner != PROFILE_RUNNER_OWN:
+        if runner not in PROFILE_PROJECT_RUNNERS:
             for sub in PROFILE_OWN_RUNNER_ONLY:
                 if sub in fields:
                     raise TargetsError(
@@ -1393,6 +1521,33 @@ def _with_long_lived_pairs(entry: dict) -> dict:
                           long_lived_name=name)
         copied[comp] = fields
     return dict(entry, **{COMPONENTS_FIELD: copied})
+
+
+def _compose_fields(fields: object) -> object:
+    """Поля профиля или компонента `compose` без `command` — копия с
+    `COMPOSE_DEFAULT_COMMAND`; прочие — как есть."""
+    if isinstance(fields, dict) and \
+            fields.get("runner") == PROFILE_RUNNER_COMPOSE and \
+            "command" not in fields:
+        return dict(fields, command=list(COMPOSE_DEFAULT_COMMAND))
+    return fields
+
+
+def _with_compose_command(entry: dict) -> dict:
+    """Копия записи, у профиля и компонентов `compose` которой без
+    `command` подставлено `COMPOSE_DEFAULT_COMMAND` (SPEC
+    01M6PAJ61D4PYAP79ADRPA6MWV, требование 1): записи на диске и словарю,
+    поданному `check`, команда не дописывается."""
+    out = entry
+    profile = entry.get(PROFILE_FIELD)
+    if _compose_fields(profile) is not profile:
+        out = dict(out, **{PROFILE_FIELD: _compose_fields(profile)})
+    comps = entry.get(COMPONENTS_FIELD)
+    if isinstance(comps, dict) and any(
+            _compose_fields(f) is not f for f in comps.values()):
+        out = dict(out, **{COMPONENTS_FIELD: {
+            comp: _compose_fields(f) for comp, f in comps.items()}})
+    return out
 
 
 # Повторы `guard._mask_segment_matches` и `acceptance.is_pytest_command`:
@@ -1598,8 +1753,29 @@ def _profile_value_error(kind: str, value: object) -> str:
             return "пустой список"
         return ""
     if not isinstance(value, str) or not value.strip():
+        if kind == "mount":
+            return ("не строка «<каталог дерева>:<каталог в контейнере>» — "
+                    "ровно одна пара")
         return "не непустая строка"
-    if kind == "dir":
+    if kind == "path":
+        parts = value.split("/")
+        if value.startswith("/") or ".." in parts or "" in parts:
+            return (f"'{value}' — не относительный путь файла в дереве (без "
+                    f"ведущего '/', '..' и пустых сегментов)")
+    elif kind == "mount":
+        parts = value.split(":")
+        if len(parts) != 2:
+            return (f"'{value}' — нужна ровно одна пара «<каталог дерева>:"
+                    f"<каталог в контейнере>»")
+        left, right = parts
+        if left != "." and _profile_value_error("dir", left):
+            return (f"'{value}' — левая часть '{left}' не относительный путь "
+                    f"каталога дерева (без ведущего '/', '..' и пустых "
+                    f"сегментов; '.' — корень дерева)")
+        if not right.startswith("/") or ".." in right.split("/"):
+            return (f"'{value}' — правая часть '{right}' не абсолютный путь "
+                    f"каталога в контейнере")
+    elif kind == "dir":
         parts = value.split("/")
         if value.startswith("/") or ".." in parts or "" in parts:
             return (f"'{value}' — не относительный путь каталога (без "
