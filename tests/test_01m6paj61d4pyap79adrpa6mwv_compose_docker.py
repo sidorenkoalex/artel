@@ -256,7 +256,7 @@ def compose_projects(prefix: str, env: dict) -> list:
             if row.get("Name", "").startswith(prefix)]
 
 
-@pytest.mark.skipif(SKIP_REASON is not None, reason=SKIP_REASON or "")
+@pytest.mark.skipif(SKIP_REASON is not None, reason="настоящий Docker недоступен: Docker не отвечает, образа нет в локальном кэше или выставлена CI")
 def test_ac17_real_docker_compose_run(real_git, monkeypatch):
     """Настоящий Docker: прогон вымышленного Compose-файла — зелёный итог по отчёту, стенд снят.
 
