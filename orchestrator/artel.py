@@ -2655,24 +2655,39 @@ def _cmd_reject(rest: list) -> None:
     01M6KB0SJHDA4D4GNEM7PGZ40P, требования 1, 10). Ключ разбирается явно,
     а не текстом причины: без значения и вместе с позиционной причиной —
     отказ до lease и журнала. Чтение файла и проверка состояния — в
-    `fsm._cmd_reject`."""
+    `fsm._cmd_reject`.
+
+    Форма `--decision=<файл>` равносильна форме через пробел (SPEC
+    01M6PFGZHEQYFEZH6XACBXS7YD): порядок отказов — повтор ключа, пустое
+    значение или значение с `--`, позиционная причина."""
     if not rest:
         sys.exit('reject: не передан id задачи; синтаксис: reject <id> '
                  '"<причина>" | reject <id> --decision <файл>')
     task_id, args = rest[0], rest[1:]
-    if DECISION_FLAG not in args:
+    syntax = f"синтаксис: reject {task_id} {DECISION_FLAG} <файл>"
+    prefix = DECISION_FLAG + "="
+    keys = [i for i, arg in enumerate(args)
+            if arg == DECISION_FLAG or arg.startswith(prefix)]
+    if not keys:
         fsm.cmd_reject(task_id, args[0] if args else "")
         return
-    at = args.index(DECISION_FLAG)
-    if at + 1 >= len(args) or args[at + 1].startswith("--"):
-        sys.exit(f"reject: {DECISION_FLAG} без значения; синтаксис: "
-                 f"reject {task_id} {DECISION_FLAG} <файл>")
-    extra = args[:at] + args[at + 2:]
+    if len(keys) > 1:
+        sys.exit(f"reject: ключ {DECISION_FLAG} повторён — файл решения "
+                 f"один; {syntax}")
+    at = keys[0]
+    if args[at] == DECISION_FLAG:
+        value = args[at + 1] if at + 1 < len(args) else ""
+        extra = args[:at] + args[at + 2:]
+    else:
+        value = args[at][len(prefix):]
+        extra = args[:at] + args[at + 1:]
+    if not value or value.startswith("--"):
+        sys.exit(f"reject: {DECISION_FLAG} без значения; {syntax}")
     if extra:
         sys.exit(f"reject: {DECISION_FLAG} не сочетается с позиционной "
                  f"причиной ({' '.join(extra)}) — решение целиком в файле; "
-                 f"синтаксис: reject {task_id} {DECISION_FLAG} <файл>")
-    fsm.cmd_reject(task_id, "", decision_file=args[at + 1])
+                 f"{syntax}")
+    fsm.cmd_reject(task_id, "", decision_file=value)
 
 
 def _verify_args(rest: list, count: int, command: str) -> list:

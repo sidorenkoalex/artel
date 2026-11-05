@@ -183,7 +183,10 @@ def parse(text: str) -> list[dict]:
         raise DecisionError(f"в разделе «{SECTION}» нет подразделов "
                             f"«{SUBSECTION} <n>»")
     for i, (number, _body) in enumerate(blocks, 1):
-        if not number.isdigit():
+        # `isdigit()` истинно и для цифр Юникода вне ASCII: надстрочные
+        # роняют `int()` трассировкой, полноширинные он принимает (SPEC
+        # 01M6PFGZHEQYFEZH6XACBXS7YD, требование 1).
+        if not (number.isascii() and number.isdigit()):
             raise DecisionError(f"номер подраздела «{SUBSECTION} {number}» — "
                                 f"не целое")
         if int(number) != i or number != str(i):
