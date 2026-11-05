@@ -1,16 +1,15 @@
 # Записка аудитора SPEC 01M6PAJ61D4PYAP79ADRPA6MWV
 
 ## Выяснено
-- Шестой визит, SPEC 8b7154d2: решение шестого круга 1 (`compose_task_id` у `run_plank`, долгоживущий вызов plank_run.py:267-269) внесено; пункт визита 5 закрыт.
-- Остаток: вызов планки plank_run.py:283-286 передаёт только `task_id`; `compose` идёт `_run_plank_reported` → `_report_run` (acceptance.py:2090, :2103) — SPEC не задаёт, откуда имя проекта (task_id или compose_task_id). Вердикт concerns, дефолт (а) `compose_task_id or task_id`.
-- Якоря SPEC сверены; `_with_long_lived_pairs` определена :1329, `:268-272` — место вызова в `load` (верно).
-- `run()`/`collect()` берут id из `Path(tdir).name` (acceptance.py:1590).
+- Седьмой визит, SPEC 5a67fea4: решение 7.1 (`compose_task_id`, иначе `task_id`) закрыло пункт визита 6.
+- Решение 7.2 (отказ compose в роли): `runner.in_role_environment` runner.py:1364-1381 (ARTEL_ROLE или HOME == config.ROLE_HOME); фоновый suite-run снимает только ARTEL_ROLE (suite_run.py:921-922).
+- Остаток: треб. 3 «чтобы suite-run/plank-run у compose работали» vs треб. 7 «отказ в роли, в т.ч. фоновый suite-run»; и «окружение docker (треб. 6–7)» для runner.py части 2. Вердикт concerns, дефолт: треб. 7 первично, вне роли работают.
 
 ## Не сработало
-- Составные bash-команды с `cd`/`head` требуют подтверждения — использовать абсолютные пути и Read.
+- `ls` в этой оболочке нет; составные bash с `cd &&` проходят.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready.
+- SPEC-AUDIT.md: verdict concerns, status ready, guard прогнан.
 
 ## Чего не хватило
-- Явного перечня в SPEC всех вызовов `run_plank` (оба в plank_run.py) с источником id имени.
+- Явного «вне процесса роли» в цели канала id треб. 3.
