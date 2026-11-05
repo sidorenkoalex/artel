@@ -368,7 +368,16 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 TARGET_SET_USAGE = ("target-set <проект> <путь поля> <значение> | "
+                    "target-set <проект> <раздел>.<поле> --key <ключ> "
+                    "<значение> | "
+                    "target-set <проект> <раздел>.<поле> --drop-key <ключ> | "
                     "target-set --show <проект> [<путь>]")
+KEY_FLAG = "--key"
+DROP_KEY_FLAG = "--drop-key"
+# Поля-отображения строк, ключи которых пишут `--key`/`--drop-key`; прочие
+# отображения (`env`, `tools`, …) перечнем не охвачены (SPEC
+# 01M6PHS9XQTPPZ73V80ACGSZJS, «Не входит»).
+KEY_FIELDS = (f"machine.{targets.SUBMODULE_TOKENS_FIELD}",)
 TARGET_SET_ABSENT = "(нет)"
 NO_COMPONENT = "компонента {comp} нет в записи; добавление компонентов не входит"
 # Виды полей компонента, значение которых — отображение (`targets.
@@ -397,6 +406,9 @@ def cmd_target_set(rest: list) -> None:
     if rest[:1] == ["--show"]:
         _target_set_show(rest[1:])
         return
+    if len(rest) >= 3 and rest[2] in (KEY_FLAG, DROP_KEY_FLAG):
+        _target_set_key(rest)
+        return
     if len(rest) < 3:
         sys.exit(f"target-set: нужны проект, путь поля и значение\n"
                  f"{TARGET_SET_USAGE}")
@@ -405,6 +417,34 @@ def cmd_target_set(rest: list) -> None:
                  f"{len(rest) - 2}: {' '.join(rest[2:])} — возьми значение в "
                  f"кавычки, например '[a, b]'; файл не записан")
     name, field_path, raw = rest
+    path, data = _target_set_load(name)
+    entry = data["targets"][name]
+    keys = _field_keys(entry, field_path)
+    value = _argument_value(raw, field_path)
+    try:
+        new_text = _literal(value, field_path)
+    except _Unwritable:
+        sys.exit(f"target-set: значение {raw!r} поля {field_path} не записать "
+                 f"подмножеством YAML пульта; файл не записан")
+    found, current = _lookup(entry, keys)
+    if found and not _differences(current, value, field_path):
+        print(f"target-set: {name} {field_path}: без изменений ({new_text})")
+        return
+    was = _was_text(found, current, field_path)
+    if not store.db_usable():
+        sys.exit(f"target-set: {NO_JOURNAL}; файл не записан")
+    edited = copy.deepcopy(data)
+    _assign(edited["targets"][name], keys, value)
+    text = _rendered(edited, path)
+    problems = _target_set_mismatches(data, text, name, keys, value, path)
+    _target_set_write(path, text, problems, name,
+                      f"{field_path}: {was} → {new_text}")
+
+
+def _target_set_load(name: str) -> tuple[Path, dict]:
+    """(путь локального слоя, его разобранный текст) для правки записи
+    `name`; отказ — запись артели, слой не загружается, записи в нём нет,
+    файл не прочитан или несёт комментарий."""
     if name == config.DEFAULT_TARGET:
         sys.exit(f"target-set: запись {name} — в targets.yaml репозитория, "
                  f"правка — doc-commit; файл не записан")
@@ -426,32 +466,30 @@ def cmd_target_set(rest: list) -> None:
         sys.exit(f"target-set: в {path} комментарий (строка {comment}) — "
                  f"пересборка файла его сотрёт; убери комментарий вручную; "
                  f"файл не записан")
-    entry = data["targets"][name]
-    keys = _field_keys(entry, field_path)
-    value = _argument_value(raw, field_path)
+    return path, data
+
+
+def _was_text(found: bool, current: object, field: str) -> str:
+    """Прежнее значение для строки журнала: литерал, `(нет)` или repr."""
     try:
-        new_text = _literal(value, field_path)
+        return _literal(current, field) if found else TARGET_SET_ABSENT
     except _Unwritable:
-        sys.exit(f"target-set: значение {raw!r} поля {field_path} не записать "
-                 f"подмножеством YAML пульта; файл не записан")
-    found, current = _lookup(entry, keys)
-    if found and not _differences(current, value, field_path):
-        print(f"target-set: {name} {field_path}: без изменений ({new_text})")
-        return
+        return repr(current)
+
+
+def _rendered(data: dict, path: Path) -> str:
+    """Текст слоя пересборкой `_render`; отказ — поле не записать."""
     try:
-        was = _literal(current, field_path) if found else TARGET_SET_ABSENT
-    except _Unwritable:
-        was = repr(current)
-    if not store.db_usable():
-        sys.exit(f"target-set: {NO_JOURNAL}; файл не записан")
-    edited = copy.deepcopy(data)
-    _assign(edited["targets"][name], keys, value)
-    try:
-        text = "".join(line + "\n" for line in _render(edited, 0, ""))
+        return "".join(line + "\n" for line in _render(data, 0, ""))
     except _Unwritable as exc:
         sys.exit(f"target-set: поле {exc} файла {path} не записать "
                  f"подмножеством YAML пульта; файл не записан")
-    problems = _target_set_mismatches(data, text, name, keys, value, path)
+
+
+def _target_set_write(path: Path, text: str, problems: list, name: str,
+                      detail: str) -> None:
+    """Хвост правки: отказ сверки, копия прежнего файла, атомарная запись,
+    строка журнала и вывода."""
     if problems:
         sys.exit(f"target-set: сверка не прошла — {'; '.join(problems)}; "
                  f"файл не записан")
@@ -465,10 +503,75 @@ def cmd_target_set(rest: list) -> None:
         _write_atomic(path, text)
     except OSError as exc:
         sys.exit(f"target-set: {path} не записан: {exc}")
-    detail = f"{field_path}: {was} → {new_text}"
     store.journal(store.db(), None, "operator", "target-set", detail,
                   target=name)
     print(f"target-set: {detail}")
+
+
+def _target_set_key(rest: list) -> None:
+    """`target-set <проект> <раздел>.<поле> --key <ключ> <значение>` и
+    `… --drop-key <ключ>`: запись и снятие одного ключа поля-отображения
+    из `KEY_FIELDS` (SPEC 01M6PHS9XQTPPZ73V80ACGSZJS). Ключ — аргумент
+    целиком, по точке не делится."""
+    flag = rest[2]
+    if len(rest) != (5 if flag == KEY_FLAG else 4):
+        sys.exit(f"target-set: {flag} — неверное число аргументов\n"
+                 f"{TARGET_SET_USAGE}")
+    name, field_path, _flag, key = rest[:4]
+    if field_path not in KEY_FIELDS:
+        sys.exit(f"target-set: поле {field_path} — не поле-отображение для "
+                 f"{KEY_FLAG}/{DROP_KEY_FLAG}; допустимые: "
+                 f"{', '.join(KEY_FIELDS)}; файл не записан")
+    path, data = _target_set_load(name)
+    keys = [*field_path.split("."), key]
+    label = f"{field_path}[{key}]"
+    entry = data["targets"][name]
+    found, current = _lookup(entry, keys)
+    edited = copy.deepcopy(data)
+    if flag == DROP_KEY_FLAG:
+        if not found:
+            sys.exit(f"target-set: ключа {key!r} нет в {field_path} записи "
+                     f"{name}; файл не записан")
+        was = _was_text(found, current, label)
+        if not store.db_usable():
+            sys.exit(f"target-set: {NO_JOURNAL}; файл не записан")
+        holder = _lookup(edited["targets"][name], keys[:-1])[1]
+        del holder[key]
+        if not holder:
+            del _lookup(edited["targets"][name], keys[:-2])[1][keys[-2]]
+        text = _rendered(edited, path)
+        problems = _drop_key_mismatches(data, text, name, keys, path)
+        _target_set_write(path, text, problems, name,
+                          f"{label}: {was} → {TARGET_SET_ABSENT}")
+        return
+    try:
+        # Пробная строка `_render` — то же правило записываемости ключа,
+        # что у пересборки файла, без его копии здесь.
+        _render({key: None}, 0, "")
+    except _Unwritable:
+        sys.exit(f"target-set: ключ {key!r} поля {field_path} не записать "
+                 f"подмножеством YAML пульта; файл не записан")
+    raw = rest[4]
+    value = _argument_value(raw, label)
+    reason = targets._submodule_tokens_error({key: value})
+    if reason:
+        sys.exit(f"target-set: поле {field_path} — {reason}; файл не записан")
+    try:
+        new_text = _literal(value, label)
+    except _Unwritable:
+        sys.exit(f"target-set: значение {raw!r} поля {label} не записать "
+                 f"подмножеством YAML пульта; файл не записан")
+    if found and not _differences(current, value, label):
+        print(f"target-set: {name} {label}: без изменений ({new_text})")
+        return
+    was = _was_text(found, current, label)
+    if not store.db_usable():
+        sys.exit(f"target-set: {NO_JOURNAL}; файл не записан")
+    _assign(edited["targets"][name], keys, value)
+    text = _rendered(edited, path)
+    problems = _target_set_mismatches(data, text, name, keys, value, path)
+    _target_set_write(path, text, problems, name,
+                      f"{label}: {was} → {new_text}")
 
 
 def _target_set_show(rest: list) -> None:
@@ -666,16 +769,51 @@ def _target_set_mismatches(data: dict, text: str, name: str, keys: list,
         return [f"собранный текст не разобран: {exc}"]
     target = ("targets", name, *keys)
     old_leaves, new_leaves = _leaves(data), _leaves(new)
-    changed = [".".join(map(str, key)) for key in
-               dict.fromkeys([*old_leaves, *new_leaves])
-               if key not in old_leaves or key not in new_leaves
-               or _differences(old_leaves[key], new_leaves[key], "")]
+    changed = [".".join(map(str, key))
+               for key in _changed_leaves(old_leaves, new_leaves)]
     if changed != [".".join(target)]:
         return [f"изменились листы {', '.join(changed) or '(никакие)'}, "
                 f"ожидался один — {'.'.join(target)}"]
     if _differences(value, new_leaves[target], ".".join(keys)):
         return [f"{'.'.join(keys)} читается как {new_leaves[target]!r}, "
                 f"задано {value!r}"]
+    return _merge_mismatches(data, new, name, path)
+
+
+def _drop_key_mismatches(data: dict, text: str, name: str, keys: list,
+                         path: Path) -> list[str]:
+    """Сверка текста снятия ключа до записи (SPEC 01M6PHS9XQTPPZ73V80ACGSZJS,
+    требование 6): разобранный текст отличается от прежнего ровно
+    отсутствием листа `targets.<name>.<keys>`; сведение слоя на нём
+    проходит, сведённые записи прочих проектов равны прежним."""
+    try:
+        new = yamlmini.mapping(text)
+    except yamlmini.YamlError as exc:
+        return [f"собранный текст не разобран: {exc}"]
+    target = ("targets", name, *keys)
+    old_leaves, new_leaves = _leaves(data), _leaves(new)
+    # Сравнение по кортежам ключей: ключ с точкой (`a.b`) не должен
+    # совпасть с вложенным путём `a` → `b`.
+    changed = _changed_leaves(old_leaves, new_leaves)
+    if (changed != [target] or target not in old_leaves
+            or target in new_leaves):
+        shown = ", ".join(".".join(map(str, key)) for key in changed)
+        return [f"изменились листы {shown or '(никакие)'}, ожидалось снятие "
+                f"одного — {'.'.join(map(str, target))}"]
+    return _merge_mismatches(data, new, name, path)
+
+
+def _changed_leaves(old_leaves: dict, new_leaves: dict) -> list[tuple]:
+    """Пути листьев, которые есть только с одной стороны или отличаются."""
+    return [key for key in dict.fromkeys([*old_leaves, *new_leaves])
+            if key not in old_leaves or key not in new_leaves
+            or _differences(old_leaves[key], new_leaves[key], "")]
+
+
+def _merge_mismatches(data: dict, new: dict, name: str,
+                      path: Path) -> list[str]:
+    """Сведение записей нового текста `merge_local`: состав записей
+    прежний, все сводятся, записи кроме `name` — как до правки."""
     entries = new.get("targets")
     if not isinstance(entries, dict) or list(entries) != list(data["targets"]):
         return ["записи собранного текста расходятся с прежними"]
