@@ -13,6 +13,7 @@
 - Задачные tests/test_01m6n7cyk* — 54+ зелёные; мандатные три файла — 29 зелёные; карта регенерирована.
 - 31 смежный файл tests/ (kill, ci-rerun, ci status, gitlab forge/doctor, mr-sync, push hook, github mr gate) — 802 passed.
 - Код закоммичен be0277fb5; plank-run — 10 passed; guard PLAN.md — ок; PLAN status: ready.
+- Шаг после ANSWER-3: `scripts/codebase_map.py` перезапущен — изменилась только строка `built_at_sha` (содержимое карты уже было свежим после подтяжки c7fb134d2); в PLAN шаг 6 отмечено исполнение ANSWER-3; guard — ок.
 
 ## Чего не хватило
 - Что AC-13 сверяет HEAD, а не дерево — видно только в теле планки.
