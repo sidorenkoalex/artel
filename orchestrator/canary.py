@@ -1460,6 +1460,12 @@ def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
     оригинала в `fsm.py` это стоит перепроверить (REVIEW.md итерации 1,
     R1-F3).
 
+    Признак «батч вопросов отвечен» (`fsm.QUESTIONS_ANSWERED_ACTION`)
+    ставится тем же узлом, что `approve`, — `fsm._mark_questions_answered`
+    при том же условии (эскалация из `spec_writing`, `answer_baseline` не
+    `None`) и до смены состояния: иначе `spec_writing` эскалирует тот же
+    `QUESTIONS.md` снова (SPEC 01M6PFGA0GR4ZMGT3H7PKS7SN5).
+
     `answer.cmd_answer` коммитит ANSWER-n.md в артефактную ветку
     (best-effort push уходит в origin-заглушку клона, требование 3) —
     он не требует ни sha, ни фиксации, только `state == "escalated"`.
@@ -1480,6 +1486,11 @@ def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
         Path(tmp.name).unlink(missing_ok=True)
 
     t = store.get_task(conn, task_id)
+    # Условие то же, что у approve, и читается до сброса полей ниже:
+    # `answer.cmd_answer` их не меняет (SPEC 01M6PFGA0GR4ZMGT3H7PKS7SN5).
+    if (t["escalated_from"] == "spec_writing"
+            and t["answer_baseline"] is not None):
+        fsm._mark_questions_answered(conn, task_id)
     back = t["escalated_from"] or "in_dev"
     store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
     store.set_state(conn, task_id, back, CANARY_MARK_ACTOR,
