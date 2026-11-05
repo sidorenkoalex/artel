@@ -1,17 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде верны (outcome.py:106-133/117/123-124, :256-268/263; advance_gates/acceptance.py:251-257, 335-348; фикстура fail_to_pass.py:392 с `file`).
-- Опыт pytest 9.1.1 в mkdtemp: xunit2 — `classname="tests..artel-plank.ID.test_x"` без `file`; корень — `.artel-plank.ID.test_x`; xunit1 — тот же classname + `file`.
-- Два `test_x.py` в одной песочнице — ошибка сбора (import mismatch); каталог аргументом не собирается (`norecursedirs` `.*`); /var→/private/var при `--rootdir` портит xunit1 `file`.
-- В существующих тестах classname с пустыми сегментами нет — не сломаются.
-- Вердикт concerns: (1) `..x` без AC; (2) все AC с литералом `.artel-plank` — обход хардкодом.
+- Второй аудит, SPEC ce6608da: решения Оператора 1–4 перенесены в SPEC полностью (AC-6, второе имя `<H>`, запись из настоящего отчёта, «Постановка опыта»).
+- Опыт с pytest 9.1.1 в mkdtemp: `tests/..x/…` → `tests...x.…`, `..x/…` → `..x.…`, `.zq-plank` — аналогично `.artel-plank`. Текущий код: xunit2 → путь всем именем, forge → None; xunit1 уже верен (AC-5 зелёный с рождения).
+- Правило «пустая часть = одна точка к следующей» даёт нужные пути; склейка одной точки на `...x` краснеет.
+- Существующие тесты (4 файла с parse_junit/forge) без пустых сегментов — не сломаются.
+- Вердикт pass; одно замечание: диапазон `_plank_record_rel` на деле 249-255, не 251-257.
 
 ## Не сработало
-- Bash с `$var` отклоняется песочницей — опыты гонял через `python3 - <<'EOF'`.
+- `cd /tmp` и `$var` в Bash отклоняются — опыт через `python3 - <<'EOF'` с tempfile, пути абсолютные.
 
 ## Где остановился
-- SPEC-AUDIT.md готов (status: ready, verdict: concerns); guard прогнан.
+- SPEC-AUDIT.md: status ready, verdict pass, guard ок.
 
 ## Чего не хватило
-- Ничего существенного.
+- Ничего.
