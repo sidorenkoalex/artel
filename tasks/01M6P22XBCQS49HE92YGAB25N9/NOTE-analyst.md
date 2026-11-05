@@ -1,17 +1,15 @@
 # Записка analyst
 
 ## Выяснено
-- Шаг 4 (возврат с spec_gate, 13 решений Оператора): вношу все 13 в SPEC; якоря решений сверены по worktree (sandbox.py:1638-1641 подменяет атрибуты config; test_doctor_closed_ref_fix.py:177-183 подменяет починки; doctor/__init__.py:152-155 перечень orphans; targets.py:1194-1199 _check_rerun_ban по command; runner.role_env уже принимает provider; codex.py:136/143).
-- COMPOSE_ROLE_DIR → функция `runner.compose_role_dir()` от config.ROOT (решение 1).
-- config.json копии = `{}` (решение 11) — заменяет «копию без credsStore…» ANSWER-1.
-- Новый AC-22 (решение 3, необязательные тесты с Docker), зоны + orchestrator/doctor/__init__.py (решение 5).
-- Имена полей записи: compose_file, compose_service, compose_env_file, compose_env_template, compose_mount, compose_up_down_sec; config.COMPOSE_UP_DOWN_SEC.
+- Шаг 5 (второй возврат с spec_gate, 6 решений, в SPEC — «решение гейта 2.N»): все шесть внесены. Якоря сверены по worktree: doctor/cli.py:305-331 (починки безусловно), test_doctor_closed_ref_fix.py:152-195 (store.db→None, без песочницы), plank_helper.py:35-71 (git по путям машины), plank_layout.py:41-47, acceptance.py:1277-1301 и :2068, test_01m5n8…_plank_layout_names.py:331-373 (закрытые имена acceptance).
+- 2.1 → треб. 14, AC-20 (conn=None — ничего); 2.2 → «Не входит» (_pult.py); 2.3 → треб. 2, AC-2 (отказ с именем `long_lived_dir`/`plank_layout`); 2.4 → треб. 17, AC-5 (канал — ответ `config` подменённого docker, сокет-файл песочницы); 2.5 → треб. 14, 15, AC-20, AC-21 (warn «Docker не отвечает» / fail с текстом вызова); 2.6 → треб. 3 (публичные помощники acceptance), 12, 17, AC-17/20/21.
+- Константу предела назвал `runner.DOCKER_CALL_TIMEOUT_SEC` (10 с) — имя выбрано аналитиком, место — runner (зона части 2), config.py не трогается.
 
 ## Не сработало
-- `awk`/`head` в составной команде Bash требуют подтверждения — читать через Read/sed.
+- `cd … && …` в Bash отказывает (simple_expansion) — guard звать абсолютным путём без cd.
 
 ## Где остановился
-- SPEC.md третьего варианта сдан (status: ready, 17 требований, AC-1…AC-22, зоны +doctor/__init__.py, деление 2 части $60+$30), guard ок. Каждое решение гейта 1–13 привязано к требованию и AC в «Материалах».
+- SPEC.md четвёртого варианта сдан (status: ready, 17 требований, AC-1…AC-22, деление 2 части $60+$30), guard ок.
 
 ## Чего не хватило
-- Docker CLI в шаге — `config --format json`, `down -p` без файла опытом не проверены.
+- Docker CLI в шаге — `config --format json`, `down -p` без файла опытом не проверены (аудитор проверил в своём шаге).
