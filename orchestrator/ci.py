@@ -212,6 +212,32 @@ def _pipeline_project(repo: Path | None) -> str:
     return ctx.target
 
 
+def _people_project(repo: Path | None) -> str:
+    """Имя проекта клона `repo`, MR которого вливают люди проекта
+    (`targets.merged_by_project_people`); "" — артель, запись `operator`,
+    неразрешённый клон. Без вызова `gh` (SPEC 01M6N7CYKDAMAKENX60CBK7VQX,
+    требование 7)."""
+    ctx, _refusal = _project_context(repo)
+    if ctx is None:
+        return ""
+    try:
+        entry = targets.target(ctx.target)
+    except targets.TargetsError:
+        return ""
+    return ctx.target if targets.merged_by_project_people(entry) else ""
+
+
+def people_rerun_refusal(repo: Path | None) -> str:
+    """Отказ повтора CI пультом для клона проекта людей; "" — повтор
+    допустим. CI в проекте людей — их конвейер: пульт его не перезапускает
+    (SPEC 01M6N7CYKDAMAKENX60CBK7VQX, требование 7)."""
+    name = _people_project(repo)
+    if not name:
+        return ""
+    return (f"ре-ран CI не запущен: проект {name} — MR вливают люди проекта, "
+            f"повтор CI пультом не делается")
+
+
 def _forge_refusal(name: str, what: str) -> str:
     """Отказ функции `ci`, у которой для хостинга проекта `name` нет
     реализации: без `gh` и без HTTP (требование 8)."""
@@ -1815,6 +1841,9 @@ def trigger_rerun(branch: str, run_id: str = "",
     name = _pipeline_project(repo)
     if name:
         return f"ре-ран CI не запущен: {_forge_refusal(name, 'повтор прогона')}"
+    refusal = people_rerun_refusal(repo)
+    if refusal:
+        return refusal
     if run_id:
         rerun = _gh_at(repo, "run", "rerun", run_id)
     else:
