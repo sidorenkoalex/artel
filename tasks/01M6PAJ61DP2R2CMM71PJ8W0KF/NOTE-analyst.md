@@ -1,12 +1,11 @@
 # Записка analyst
 
 ## Выяснено
-- Итерация 7 (пятый возврат, решения №5.1–№5.5) внесена в SPEC; AC по-прежнему три.
-- №5.1: подменённый docker пишет свой os.getpgrp(); тест сверяет его с os.getpgrp() теста; os.getpgid — только зависшему; finally — только pid зависших (у зависшего down — и дочерний).
-- №5.2: по пределу os.killpg группы; предел down — COMPOSE_TEARDOWN_TIMEOUT_SEC части 1 (120 с, в main пока нет — константа части 1), прочие — DOCKER_CALL_TIMEOUT_SEC 10 с. AC-2: зависший down с дочерним процессом.
-- №5.3: строки в all_checks, cmd_doctor(fix=True) с подменой прочих починок (test_doctor_closed_ref_fix.py:177-183, сверено).
-- №5.4: docker не найден — warn (стенды) / fail (запись); PATH строки записи — правило части 1 + machine.path; зависание network ls/context inspect в AC-2.
-- №5.5: живость без хоста (lease.py:408 сравнивает хост — сверено); process_alive не меняется, lease.py в «Не входит».
+- Итерация 8 (шестой возврат, решения №6.1–№6.4) внесена в SPEC; AC по-прежнему три.
+- №6.1: os.getpgid после killpg убран из треб. 17, AC-2, AC-3; группа — только записанная подменённым docker; любой зависший вызов порождает дочерний процесс, после предела тест утверждает «дочерний не жив» (AC-2: ps/network ls/context inspect/down; AC-3: строка записи).
+- №6.2: предел down — config.COMPOSE_TEARDOWN_TIMEOUT_SEC (orchestrator/config.py, SPEC части 1 треб. 8, 9); исправлены «Контекст», треб. 14, 17, «Не входит», «Материалы».
+- №6.3: runner.in_role_environment() (runner.py:1364-1381: ARTEL_ROLE или HOME == дом роли) — обе строки skip «в шаге роли Docker не вызывается»; тесты прочих случаев без ARTEL_ROLE/дома роли.
+- №6.4: подмена починок по test_doctor_closed_ref_fix.py:154-160 + :177-183, включая _fix_canary_live (cli.py:322).
 
 ## Не сработало
 - —
