@@ -5,3 +5,4 @@
 2026-11-05 10:58:02Z  spec_audit  actor=fsm
 2026-11-05 11:04:16Z  spec_writing  actor=fsm
 2026-11-05 11:07:11Z  spec_audit  actor=fsm
+2026-11-05 11:15:23Z  spec_gate  actor=fsm
