@@ -26,11 +26,15 @@ MERGE_GATES = ("operator", "target-human")
 # 01M5W27CY7K7NR9347NKD8F0NX): запись принимает весь `FORGES`/`MERGE_GATES`,
 # а задачу, отправку и мерж ведёт только множество пар `SUPPORTED_PAIRS`:
 # значение, исполняемое в одной паре, не исполняется в другой (свой мерж и
-# отправка `base` на GitLab не проверены, гейт людей проекта на GitHub не
-# реализован — SPEC 01M6EZXVFG405Y1BTFDSGBKS8E, ADR-0029 п. 14).
+# отправка `base` на GitLab не проверены — SPEC 01M6EZXVFG405Y1BTFDSGBKS8E,
+# ADR-0029 п. 14). Гейт людей проекта на GitHub открыт SPEC
+# 01M6N7CYKDAMAKENX60CBK7VQX: повтор CI пультом, закрытие PR при `kill` и
+# поле `policy.ci_required_jobs` у такой записи закрыты признаками, а не
+# парой.
 SUPPORTED_FORGES = ("github", "gitlab")
 SUPPORTED_MERGE_GATES = ("operator", "target-human")
-SUPPORTED_PAIRS = {("github", "operator"), ("gitlab", "target-human")}
+SUPPORTED_PAIRS = {("github", "operator"), ("github", "target-human"),
+                   ("gitlab", "target-human")}
 
 # Поля записи (ADR-0003 п.2) и их вид. "text" — непустая строка,
 # "list" — список строк (возможно пустой).
@@ -343,6 +347,14 @@ def core_reference(name: str) -> dict | None:
 REF_REQUIRED_FIELD = "ref_required"
 REF_SYSTEMS_FIELD = "ref_systems"
 
+# Токены подмодулей (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3, требование 1):
+# необязательное поле раздела `machine` — «путь подмодуля верхнего уровня
+# в `.gitmodules` → слот связки ключей». Подмодуль из поля с адресом
+# `http(s)://` на хосте записи получает токен своего слота, а не токен
+# проекта (`gitcmd.submodule_credentials`); ssh-адрес и другой хост токена
+# не получают. Поле — только локального слоя: слоты машины Оператора.
+SUBMODULE_TOKENS_FIELD = "submodule_tokens"
+
 # Формат записи локального слоя (требование 2): ровно три раздела.
 # Значение — обязательна ли запись поля в разделе.
 LOCAL_SECTIONS = ("description", "policy", "machine")
@@ -365,7 +377,7 @@ LOCAL_FIELDS = {
                "mr_sync_interval_min": False},
     "machine": {"forge": True, "url": True, "token_slot": True,
                 "path": False, COMPONENTS_FIELD: False,
-                "commit_author": False},
+                "commit_author": False, SUBMODULE_TOKENS_FIELD: False},
 }
 
 # Доставка через MR (SPEC 01M5WDB7F14SQ30QVWJY2XYBG2, требование 1; ADR-0029
@@ -804,7 +816,7 @@ def _flatten(name: str, description: dict, policy: dict,
                   *DELIVERY_POLICY_FIELDS):
         if field in policy:
             flat[field] = policy[field]
-    for field in DELIVERY_MACHINE_FIELDS:
+    for field in (*DELIVERY_MACHINE_FIELDS, SUBMODULE_TOKENS_FIELD):
         if field in machine:
             flat[field] = machine[field]
     common = machine.get("path")
@@ -854,6 +866,15 @@ def check(name: str, entry: object, source: Path | None = None, *,
         if reason:
             raise TargetsError(f"{where}: поле 'description.{VERIFY_FIELD}' "
                                f"— {reason}")
+    if SUBMODULE_TOKENS_FIELD in entry:
+        if not local:
+            raise TargetsError(
+                f"{where}: поле '{SUBMODULE_TOKENS_FIELD}' — только в разделе "
+                f"'machine' записи локального слоя {local_path()}")
+        reason = _submodule_tokens_error(entry[SUBMODULE_TOKENS_FIELD])
+        if reason:
+            raise TargetsError(f"{where}: поле 'machine."
+                               f"{SUBMODULE_TOKENS_FIELD}' — {reason}")
     for field, kind in FIELDS.items():
         if field not in entry:
             raise TargetsError(f"{where}: нет поля '{field}'")
@@ -888,6 +909,7 @@ def check(name: str, entry: object, source: Path | None = None, *,
         raise TargetsError(f"{where}: поле 'merge_gate' — "
                            f"'{entry['merge_gate']}', "
                            f"ожидается {' | '.join(MERGE_GATES)}")
+    _check_ci_required_jobs(where, entry)
     if PROFILE_FIELD in entry:
         _check_profile(where, entry[PROFILE_FIELD])
         if name == config.DEFAULT_TARGET:
@@ -912,6 +934,18 @@ def check(name: str, entry: object, source: Path | None = None, *,
             raise TargetsError(f"{where}: поле '{KNOWLEDGE_FIELD}' — {reason}")
     if REFERENCE_FIELD in entry:
         _check_reference(where, entry[REFERENCE_FIELD])
+
+
+def _submodule_tokens_error(value: object) -> str:
+    """Причина отказа значения поля `submodule_tokens`; "" — годно."""
+    if not isinstance(value, dict):
+        return f"{value!r}, не отображение «путь подмодуля → слот»"
+    for path, slot in value.items():
+        if not isinstance(path, str) or not path.strip():
+            return f"путь {path!r} — не непустая строка"
+        if not isinstance(slot, str) or not slot.strip():
+            return f"слот пути {path} — {slot!r}, не непустая строка"
+    return ""
 
 
 def _verify_error(value: object) -> str:
@@ -1158,6 +1192,22 @@ def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
         raise TargetsError(f"{here}: поле 'full_suite' — '{mode}': реализация "
                            f"хостинга '{hosting}' не читает отчёт тестов "
                            f"задания CI")
+
+
+def _check_ci_required_jobs(where: str, entry: dict) -> None:
+    """`policy.ci_required_jobs` записи проекта людей — только у хостинга,
+    реализация которого в реестре `forge` поле читает (признак
+    `READS_CI_REQUIRED_JOBS`; SPEC 01M6N7CYKDAMAKENX60CBK7VQX, требование 8):
+    иначе гейт мержа молча не ждал бы названных заданий. Запись `operator`
+    поле не ограничивает — прежнее поведение."""
+    if not entry.get("ci_required_jobs") or not merged_by_project_people(entry):
+        return
+    hosting = entry["forge"]
+    if getattr(_hosting_registry().get(hosting), "READS_CI_REQUIRED_JOBS",
+               False) is not True:
+        raise TargetsError(f"{where}: поле 'policy.ci_required_jobs' — "
+                           f"реализация хостинга '{hosting}' это поле не "
+                           f"читает (обязательные задания CI не ждутся)")
 
 
 def _hosting_registry() -> dict:

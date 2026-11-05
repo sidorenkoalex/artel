@@ -5,7 +5,7 @@ import signal
 import socket
 import sys
 
-from . import (ci, config, fixation, fsm, gitcmd, lease, liveness,
+from . import (ci, config, fixation, forge, fsm, gitcmd, lease, liveness,
                repo_context, store, targets, workspace)
 
 
@@ -234,11 +234,16 @@ def _left_reason(res, silent: bool, what: str) -> str:
     return f"отказ: {text}"
 
 
-def _forge_of(target: str) -> str:
+# PR проекта, MR которого вливают люди проекта, пульт не закрывает (SPEC
+# 01M6N7CYKDAMAKENX60CBK7VQX, требование 9).
+PR_LEFT_TO_PROJECT_PEOPLE = "PR не тронут: MR вливают люди проекта"
+
+
+def _merged_by_people(target: str) -> bool:
     try:
-        return targets.target(target).get("forge") or ""
+        return targets.merged_by_project_people(targets.target(target))
     except targets.TargetsError:
-        return ""
+        return False
 
 
 def _close_project_pr(branch: str, url: str, task_id: str) -> str:
@@ -293,22 +298,33 @@ def cleanup_project_remote(conn, task_id: str, branch: str) -> None:
     if repo_context.is_artel(t) or not branch:
         return
     target = t["target"]
+    # PR пульт заводит только у хостинга без конвейеров
+    # (`github_adapter.ensure_draft_mr`) — признак реализации, не литерал.
+    # Хостинг не определён — PR не закрывался и прежде.
+    pr_hosting = bool(forge.hosting(target)) and not forge.ci_by_pipeline(target)
+    people = _merged_by_people(target)
     if _server_left_to_project_people(conn, task_id, target):
         mr = store.mr_link_text(t) or "ссылки на MR в БД нет"
         note = (f"сервер проекта не тронут: ветка {branch} отправлена, MR "
                 f"вливают люди проекта — ветка origin и MR оставлены ({mr})")
+        if pr_hosting:
+            note += f"; {PR_LEFT_TO_PROJECT_PEOPLE}"
         store.journal(conn, task_id, "orchestrator", "уборка", note)
         print(f"  {note}")
         return
     ctx = repo_context.resolve(target)
     if ctx is None:
-        notes = [f"PR {branch}: оставлено — {repo_context.unresolved_reason(target)}",
+        pr_note = (PR_LEFT_TO_PROJECT_PEOPLE if pr_hosting and people else
+                   f"PR {branch}: оставлено — "
+                   f"{repo_context.unresolved_reason(target)}")
+        notes = [pr_note,
                  f"ветка origin {branch}: оставлено — "
                  f"{repo_context.unresolved_reason(target)}"]
     else:
         notes = []
-        # Не GitHub — PR пульт там не заводит (`github_adapter.ensure_draft_mr`).
-        if _forge_of(target) == "github":
+        if pr_hosting and people:
+            notes.append(PR_LEFT_TO_PROJECT_PEOPLE)
+        elif pr_hosting:
             notes.append(_close_project_pr(branch, ctx.remote, task_id))
         notes.append(_delete_origin_branch(workspace.task_repo(task_id), branch))
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))

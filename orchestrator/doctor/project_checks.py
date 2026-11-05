@@ -8,7 +8,6 @@ SPEC 01M574A6YQHAPASS9716Z11G4Q, требование 8; версии инстр
 """
 import json
 import os
-import posixpath
 import re
 import shlex
 import time
@@ -68,9 +67,20 @@ def project_entry_checks(name: str, entry: dict) -> list:
         check_project_skills(skills_name, name, entry),
     ]
     if doctor.targets.merged_by_project_people(entry):
-        if _ci_components(entry):
+        # Хостинг без конвейеров (GitHub): каталог workflow правит любой
+        # прогон CI ветки, а не только полный набор компонента — строка
+        # всегда (SPEC 01M6N7CYKDAMAKENX60CBK7VQX, требование 3).
+        if not by_pipeline:
+            checks.append(check_workflows_dir_no_paths(
+                f"project-ci-file-no-paths-{name}", entry))
+        elif _ci_components(entry):
             checks.append(check_ci_file_no_paths(
                 f"project-ci-file-no-paths-{name}", entry))
+        checks.append(check_submodules(f"project-submodules-{name}", clone,
+                                       entry, in_role))
+    elif entry.get(doctor.targets.SUBMODULE_TOKENS_FIELD):
+        # Подмодули с токенами своих слотов (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3,
+        # требование 5): строка — при любом `merge_gate`.
         checks.append(check_submodules(f"project-submodules-{name}", clone,
                                        entry, in_role))
     return checks
@@ -750,6 +760,48 @@ def check_ci_file_no_paths(check_name: str, entry: dict):
                         f"править файл CI, по которому идёт полный прогон")
 
 
+CI_WORKFLOWS_DIR = ".github/workflows/"
+# Алфавит пробного имени файла каталога workflow.
+_PROBE_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+
+
+def _probe_file_name(entries: list) -> str:
+    """Имя файла, которое не покрывает ни одна запись `entries`, кроме
+    покрывающих весь каталог `CI_WORKFLOWS_DIR`: длиннее любой записи (не
+    равно ни одному `**/<имя>`) и с первым символом, отличным от символа
+    сразу после каталога в записях с этим началом (не под префиксом,
+    длиннее каталога). "" — записи заняли весь `_PROBE_CHARS`: такой набор
+    префиксов каталог одной записью не покрывает, строка — `fail`."""
+    taken = {e[len(CI_WORKFLOWS_DIR)] for e in entries
+             if e.startswith(CI_WORKFLOWS_DIR) and len(e) > len(CI_WORKFLOWS_DIR)}
+    first = next((c for c in _PROBE_CHARS if c not in taken), None)
+    if first is None:
+        return ""
+    return first * (max((len(e) for e in entries), default=0) + 1)
+
+
+def check_workflows_dir_no_paths(check_name: str, entry: dict):
+    """Каталог workflow GitHub покрыт `no_paths` записи для КАЖДОГО имени
+    файла под ним по формуле гейта `config.is_protected_path` (SPEC
+    01M6N7CYKDAMAKENX60CBK7VQX, требование 3): иначе роль может править
+    workflow своей ветки. Проба самим путём каталога истинна и для `**/`,
+    одним фиксированным именем — и для записи на отдельный файл; поэтому
+    проба — имя, которого ни одна запись на отдельный файл не покрывает."""
+    entries = [str(rel) for rel in entry.get("no_paths") or []]
+    name = _probe_file_name(entries)
+    probe = CI_WORKFLOWS_DIR + name
+    covering = [rel for rel in entries
+                if name and doctor.config.is_protected_path(probe, [rel])]
+    if covering:
+        return doctor.Check(check_name, "ok",
+                            f"каталог {CI_WORKFLOWS_DIR} покрыт no_paths "
+                            f"записи ({covering[0]})")
+    return doctor.Check(check_name, "fail",
+                        f"каталог {CI_WORKFLOWS_DIR} не покрыт no_paths "
+                        f"записи целиком — роль может править workflow CI "
+                        f"своей ветки")
+
+
 # --- разбор файла CI (требование 12) ---------------------------------------
 
 class CiFileError(Exception):
@@ -1307,22 +1359,7 @@ def check_ci_reruns(check_name: str, clone: Path, fields: dict):
 
 def gitmodules(text: str) -> list:
     """[(путь, адрес)] подмодулей текста `.gitmodules`."""
-    sections: dict = {}
-    current = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line[0] in "#;":
-            continue
-        m = re.match(r'^\[submodule\s+"(.+)"\]$', line)
-        if m:
-            current = sections.setdefault(m.group(1), {})
-        elif line.startswith("["):
-            current = None
-        elif current is not None and "=" in line:
-            key, value = line.split("=", 1)
-            current[key.strip().lower()] = value.strip().strip('"')
-    return [(fields.get("path", name), fields["url"])
-            for name, fields in sections.items() if fields.get("url")]
+    return doctor.gitcmd.gitmodules_entries(text)
 
 
 _SCP_RE = re.compile(r"^((?:[^@/:\s]+@)?([^/:\s]+)):(.*)$")
@@ -1344,53 +1381,61 @@ def _remote_kind(url: str) -> tuple[str, str]:
 
 def _resolve_submodule(url: str, base: str) -> str:
     """Относительный адрес `./…`/`../…` — от адреса записи, как у git."""
-    if not url.startswith(("./", "../")):
-        return url
-    base = base.rstrip("/")
-    if "://" in base:
-        parts = urllib.parse.urlsplit(base)
-        path = posixpath.normpath(posixpath.join(parts.path or "/", url))
-        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
-    m = _SCP_RE.match(base)
-    if m:
-        path = posixpath.normpath(posixpath.join("/" + m.group(3), url)).lstrip("/")
-        return f"{m.group(1)}:{path}"
-    return url
+    return doctor.gitcmd.resolve_submodule_url(url, base)
 
 
 def check_submodules(check_name: str, clone: Path, entry: dict, in_role: bool):
     """Подмодули клона на хосте записи доступны токену слота: проба
     `gitcmd.in_repo(клон, "ls-remote", адрес)` (требование 10); ssh-адрес и
-    чужой хост — `warn` (ANSWER-1 пп. 1, 4). Только чтение."""
+    чужой хост — `warn` (ANSWER-1 пп. 1, 4). Только чтение.
+
+    Подмодуль из `submodule_tokens` (SPEC 01M6P1Z0ZHVNDYWN3FZSZWBCG3,
+    требование 5) — правилом помощника: проба идёт с токеном его слота,
+    другой хост (`url_host` с портом) — `fail`; путь поля вне `.gitmodules`
+    — `warn`, ранних `ok` «подмодулей нет» у такой записи нет."""
     if in_role:
         return doctor.Check(check_name, "skip", ROLE_SKIP)
     if not entry.get("token_slot"):
         return doctor.Check(check_name, "skip", f"подмодули не проверены — {NO_TOKEN_SLOT}")
     if not clone.is_dir():
         return doctor.Check(check_name, "skip", f"клона нет: {clone}")
+    field = entry.get(doctor.targets.SUBMODULE_TOKENS_FIELD) or {}
     path = clone / ".gitmodules"
-    if not path.is_file():
+    if not path.is_file() and not field:
         return doctor.Check(check_name, "ok", "подмодулей нет: .gitmodules в клоне нет")
-    try:
-        found = gitmodules(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError) as exc:
-        return doctor.Check(check_name, "warn", f".gitmodules не прочитан: {exc}")
-    if not found:
+    found = []
+    if path.is_file():
+        try:
+            found = gitmodules(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            return doctor.Check(check_name, "warn", f".gitmodules не прочитан: {exc}")
+    if not found and not field:
         return doctor.Check(check_name, "ok", "подмодулей нет: в .gitmodules нет адресов")
     base = str(entry.get("url", ""))
     _kind, host = _remote_kind(base)
     probed, warns, fails = [], [], []
+    listed = {sub_path for sub_path, _raw in found}
+    for sub_path in field:
+        if sub_path not in listed:
+            warns.append(f"подмодуль {sub_path}: путь не в .gitmodules клона")
     for sub_path, raw in found:
         address = _resolve_submodule(raw, base)
-        kind, sub_host = _remote_kind(address)
-        if kind == "иной" or sub_host != host:
-            warns.append(f"подмодуль {sub_path}: адрес {address} не на хосте "
-                         f"записи {host or '(не разобран)'}, токеном слота не "
-                         f"проверяется")
-            continue
-        if kind == "ssh":
-            warns.append(f"подмодуль {sub_path}: ssh-адрес, токеном слота не проверяется")
-            continue
+        if sub_path in field:
+            problem = _field_submodule_problem(sub_path, address, base,
+                                               field[sub_path])
+            if problem is not None:
+                (fails if problem[0] == "fail" else warns).append(problem[1])
+                continue
+        else:
+            kind, sub_host = _remote_kind(address)
+            if kind == "иной" or sub_host != host:
+                warns.append(f"подмодуль {sub_path}: адрес {address} не на хосте "
+                             f"записи {host or '(не разобран)'}, токеном слота не "
+                             f"проверяется")
+                continue
+            if kind == "ssh":
+                warns.append(f"подмодуль {sub_path}: ssh-адрес, токеном слота не проверяется")
+                continue
         res = doctor.gitcmd.in_repo(clone, "ls-remote", address)
         if res is None or res.returncode != 0:
             err = (res.stderr or res.stdout).strip()[:200] if res is not None else ""
@@ -1405,3 +1450,30 @@ def check_submodules(check_name: str, clone: Path, entry: dict, in_role: bool):
     return doctor.Check(check_name, "ok",
                         f"подмодули на хосте записи доступны токену слота: "
                         f"{', '.join(probed)}")
+
+
+def _field_submodule_problem(sub_path: str, address: str, base: str,
+                             slot: str) -> tuple | None:
+    """(статус, текст) подмодуля из `submodule_tokens`, который не
+    проверяется пробой; `None` — проба `ls-remote` токеном его слота.
+    Хост — правилом помощника (`gitcmd.same_host`: с портом, имя без учёта
+    регистра); пустой слот сильнее `warn` для `http://`."""
+    gitcmd = doctor.gitcmd
+    if not gitcmd.same_host(address, base):
+        return "fail", (f"подмодуль {sub_path}: адрес {address} — другой хост "
+                        f"{gitcmd.url_host(address) or '(не разобран)'}, не хост "
+                        f"записи {gitcmd.url_host(base) or '(не разобран)'}: "
+                        f"токен слота {slot} ему не выдаётся")
+    scheme = gitcmd.submodule_scheme(address)
+    if scheme in ("ssh", "git+ssh", "ssh+git"):
+        return "warn", f"подмодуль {sub_path}: ssh-адрес, токеном слота не проверяется"
+    if scheme not in ("http", "https"):
+        return "warn", (f"подмодуль {sub_path}: адрес {address} не http(s), "
+                        f"токеном слота не проверяется")
+    if not doctor.keychain.token(slot):
+        return "fail", (f"подмодуль {sub_path}: слот {slot} связки ключей пуст "
+                        f"(submodule_tokens записи)")
+    if scheme == "http":
+        return "warn", (f"подмодуль {sub_path}: адрес http://, токеном слота "
+                        f"не проверяется")
+    return None

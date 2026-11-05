@@ -1,4 +1,4 @@
-"""Проект с неподдержанным хостингом (`forge: gitlab`) или гейтом мержа людьми проекта (`merge_gate: target-human`): запись читается, а `new`, `run`, `auto`, `approve` отказывают именованной причиной `targets.unsupported_reason`; `doctor` выводит строку `project-support-<проект>`.
+"""Проект неподдержанной пары (`forge: gitlab` + `merge_gate: operator`): запись читается, а `new`, `run`, `auto`, `approve` отказывают именованной причиной `targets.unsupported_reason`; `doctor` выводит строку `project-support-<проект>`.
 
 Группа: долгоживущий
 Красен до реализации: в `orchestrator/targets.py` нет `unsupported_reason`, `SUPPORTED_FORGES`, `SUPPORTED_MERGE_GATES` — обращение падает `AttributeError`; `new`/`run`/`auto`/`approve` проект не проверяют (идут к клону, git, агенту, `fsm.cmd_advance`), строки `project-support-<проект>` у `doctor` нет.
@@ -39,15 +39,14 @@ from tests.sandbox import artel_target_entry, strip_dash_c
 
 LETTERS = "abcdefghijkmnopqrstuvwxyz"
 GITLAB_REASON = ("гейт мержа operator не поддержан для хостинга gitlab "
-                 "(поддержаны: github + operator, gitlab + target-human)")
-TARGET_HUMAN_REASON = ("гейт мержа target-human не поддержан для хостинга github "
-                       "(поддержаны: github + operator, gitlab + target-human)")
-# (forge, merge_gate, ожидаемая причина) — две неподдержанные записи AC.
+                 "(поддержаны: github + operator, github + target-human, "
+                 "gitlab + target-human)")
+# (forge, merge_gate, ожидаемая причина) — неподдержанная запись AC; пара
+# `github` + `target-human` поддержана с SPEC 01M6N7CYKDAMAKENX60CBK7VQX.
 UNSUPPORTED = [
     ("gitlab", "operator", GITLAB_REASON),
-    ("github", "target-human", TARGET_HUMAN_REASON),
 ]
-UNSUPPORTED_IDS = ["gitlab", "target-human"]
+UNSUPPORTED_IDS = ["gitlab"]
 NETWORK_GIT = {"clone", "fetch", "push", "pull", "ls-remote"}
 
 
@@ -144,8 +143,10 @@ def unsupported_project(seed: int, forge: str, gate: str) -> str:
 
 @pytest.mark.parametrize("forge,gate,reason",
                          UNSUPPORTED + [("github", "operator", None),
-                                        ("gitlab", "target-human", None)],
-                         ids=UNSUPPORTED_IDS + ["supported", "supported-gitlab"])
+                                        ("gitlab", "target-human", None),
+                                        ("github", "target-human", None)],
+                         ids=UNSUPPORTED_IDS + ["supported", "supported-gitlab",
+                                                "supported-github-target-human"])
 def test_ac1_entry_loads_and_reason_names_unsupported_value(tmp_root, seed, forge, gate, reason):
     """Запись неподдержанной пары загружается, а `unsupported_reason` называет причину.
 
@@ -153,10 +154,11 @@ def test_ac1_entry_loads_and_reason_names_unsupported_value(tmp_root, seed, forg
     случайным именем и парой (`forge`, `merge_gate`). `targets.target`
     возвращает запись без исключения с теми же значениями полей;
     `targets.unsupported_reason` — точный текст причины для `gitlab` +
-    `operator` и для `github` + `target-human`, `None` — для поддержанных
-    `github` + `operator` и `gitlab` + `target-human`. Константы поддержки
-    — ровно `("github", "gitlab")`, `("operator", "target-human")` и
-    множество пар `{("github", "operator"), ("gitlab", "target-human")}`.
+    `operator`, `None` — для поддержанных `github` + `operator`, `gitlab` +
+    `target-human` и `github` + `target-human`. Константы поддержки — ровно
+    `("github", "gitlab")`, `("operator", "target-human")` и множество пар
+    `{("github", "operator"), ("github", "target-human"), ("gitlab",
+    "target-human")}`.
 
     Ловит мутацию: отказ поставлен в проверку записи (`targets.check`) —
     `targets.target` поднимет `TargetsError`; `unsupported_reason` решает по
@@ -171,7 +173,8 @@ def test_ac1_entry_loads_and_reason_names_unsupported_value(tmp_root, seed, forg
     assert targets.unsupported_reason(name) == reason, f"зерно: {seed}; {name}"
     assert targets.SUPPORTED_FORGES == ("github", "gitlab")
     assert targets.SUPPORTED_MERGE_GATES == ("operator", "target-human")
-    assert targets.SUPPORTED_PAIRS == {("github", "operator"), ("gitlab", "target-human")}
+    assert targets.SUPPORTED_PAIRS == {("github", "operator"), ("github", "target-human"),
+                                       ("gitlab", "target-human")}
 
 
 # --- AC-2 ---
@@ -355,12 +358,11 @@ def test_ac7_doctor_project_support_line(pult, seed):
     """`doctor` выводит строку `project-support-<проект>` для каждой записи.
 
     Сценарий: в `targets.yaml` песочницы — артель и четыре внешние записи
-    со случайными именами: неподдержанные `gitlab` + `operator` и `github` +
-    `target-human`, поддержанные `github` + `operator` и `gitlab` +
-    `target-human`. Среди строк `doctor.all_checks` у каждой записи ровно
+    со случайными именами: неподдержанная `gitlab` + `operator`,
+    поддержанные `github` + `operator`, `gitlab` + `target-human` и `github`
+    + `target-human`. Среди строк `doctor.all_checks` у каждой записи ровно
     одна строка `project-support-<проект>`: `fail` с причиной
-    `unsupported_reason` у двух неподдержанных, `ok` у двух поддержанных и у
-    артели.
+    `unsupported_reason` у неподдержанной, `ok` у поддержанных и у артели.
 
     Ловит мутацию: строка не добавлена в `all_checks`; статус `warn`/`skip`
     вместо `fail` у неподдержанной записи; в тексте `fail` нет причины;
@@ -371,7 +373,8 @@ def test_ac7_doctor_project_support_line(pult, seed):
     rng = random.Random(seed)
     names = {}
     for forge, gate, reason in UNSUPPORTED + [("github", "operator", None),
-                                              ("gitlab", "target-human", None)]:
+                                              ("gitlab", "target-human", None),
+                                              ("github", "target-human", None)]:
         name = project_name(rng)
         while name in names:
             name = project_name(rng)
