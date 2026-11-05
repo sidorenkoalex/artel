@@ -68,7 +68,13 @@ def project_entry_checks(name: str, entry: dict) -> list:
         check_project_skills(skills_name, name, entry),
     ]
     if doctor.targets.merged_by_project_people(entry):
-        if _ci_components(entry):
+        # Хостинг без конвейеров (GitHub): каталог workflow правит любой
+        # прогон CI ветки, а не только полный набор компонента — строка
+        # всегда (SPEC 01M6N7CYKDAMAKENX60CBK7VQX, требование 3).
+        if not by_pipeline:
+            checks.append(check_workflows_dir_no_paths(
+                f"project-ci-file-no-paths-{name}", entry))
+        elif _ci_components(entry):
             checks.append(check_ci_file_no_paths(
                 f"project-ci-file-no-paths-{name}", entry))
         checks.append(check_submodules(f"project-submodules-{name}", clone,
@@ -748,6 +754,48 @@ def check_ci_file_no_paths(check_name: str, entry: dict):
     return doctor.Check(check_name, "fail",
                         f"{CI_FILE} не покрыт no_paths записи — роль может "
                         f"править файл CI, по которому идёт полный прогон")
+
+
+CI_WORKFLOWS_DIR = ".github/workflows/"
+# Алфавит пробного имени файла каталога workflow.
+_PROBE_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+
+
+def _probe_file_name(entries: list) -> str:
+    """Имя файла, которое не покрывает ни одна запись `entries`, кроме
+    покрывающих весь каталог `CI_WORKFLOWS_DIR`: длиннее любой записи (не
+    равно ни одному `**/<имя>`) и с первым символом, отличным от символа
+    сразу после каталога в записях с этим началом (не под префиксом,
+    длиннее каталога). "" — записи заняли весь `_PROBE_CHARS`: такой набор
+    префиксов каталог одной записью не покрывает, строка — `fail`."""
+    taken = {e[len(CI_WORKFLOWS_DIR)] for e in entries
+             if e.startswith(CI_WORKFLOWS_DIR) and len(e) > len(CI_WORKFLOWS_DIR)}
+    first = next((c for c in _PROBE_CHARS if c not in taken), None)
+    if first is None:
+        return ""
+    return first * (max((len(e) for e in entries), default=0) + 1)
+
+
+def check_workflows_dir_no_paths(check_name: str, entry: dict):
+    """Каталог workflow GitHub покрыт `no_paths` записи для КАЖДОГО имени
+    файла под ним по формуле гейта `config.is_protected_path` (SPEC
+    01M6N7CYKDAMAKENX60CBK7VQX, требование 3): иначе роль может править
+    workflow своей ветки. Проба самим путём каталога истинна и для `**/`,
+    одним фиксированным именем — и для записи на отдельный файл; поэтому
+    проба — имя, которого ни одна запись на отдельный файл не покрывает."""
+    entries = [str(rel) for rel in entry.get("no_paths") or []]
+    name = _probe_file_name(entries)
+    probe = CI_WORKFLOWS_DIR + name
+    covering = [rel for rel in entries
+                if name and doctor.config.is_protected_path(probe, [rel])]
+    if covering:
+        return doctor.Check(check_name, "ok",
+                            f"каталог {CI_WORKFLOWS_DIR} покрыт no_paths "
+                            f"записи ({covering[0]})")
+    return doctor.Check(check_name, "fail",
+                        f"каталог {CI_WORKFLOWS_DIR} не покрыт no_paths "
+                        f"записи целиком — роль может править workflow CI "
+                        f"своей ветки")
 
 
 # --- разбор файла CI (требование 12) ---------------------------------------

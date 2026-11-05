@@ -1,4 +1,4 @@
-"""`epic draft promote` черновика эпика неподдержанного проекта (`forge: gitlab` или `merge_gate: target-human`) отказывает причиной `targets.unsupported_reason`: проверка стоит в `catalog.cmd_new`, а не в CLI-обёртке `new`, и путь черновика её не обходит (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование 3; решение гейта SPEC).
+"""`epic draft promote` черновика эпика неподдержанного проекта (`forge: gitlab` + `merge_gate: operator`) отказывает причиной `targets.unsupported_reason`: проверка стоит в `catalog.cmd_new`, а не в CLI-обёртке `new`, и путь черновика её не обходит (SPEC 01M5W27CY7K7NR9347NKD8F0NX, требование 3; решение гейта SPEC).
 
 Песочница — `initialized_tmp_root`: `subprocess.run` подменён шпионом
 `git_spy`, который записывает каждую команду процесса. Эпик и черновик
@@ -20,8 +20,9 @@ from orchestrator import artel, config, epics, repo_context, store, targets
 from tests.sandbox import artel_target_entry
 
 LETTERS = "abcdefghijkmnopqrstuvwxyz"
-# (forge, merge_gate) — две неподдержанные записи.
-UNSUPPORTED = [("gitlab", "operator"), ("github", "target-human")]
+# (forge, merge_gate) — неподдержанная запись; `github` + `target-human`
+# поддержана с SPEC 01M6N7CYKDAMAKENX60CBK7VQX.
+UNSUPPORTED = [("gitlab", "operator")]
 
 
 def declare(name: str, forge: str, gate: str) -> None:
@@ -55,7 +56,7 @@ def table(name: str) -> list:
     return [tuple(r) for r in store.db().execute(f"SELECT * FROM {name} ORDER BY rowid")]
 
 
-@pytest.mark.parametrize("forge,gate", UNSUPPORTED, ids=["gitlab", "target-human"])
+@pytest.mark.parametrize("forge,gate", UNSUPPORTED, ids=["gitlab"])
 def test_draft_promote_of_unsupported_project_refuses(initialized_tmp_root, forge, gate):
     """`epic draft promote` черновика эпика неподдержанного проекта: код выхода 1, в выводе — причина `unsupported_reason`; строки `tasks` не изменились, черновик остался `draft`, клона проекта нет, шпион процессов не видел ни одной команды git.
 

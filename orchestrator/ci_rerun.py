@@ -150,6 +150,13 @@ def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
             f"повтора этой задачи ({previous!r}) — повторный ci-rerun "
             f"допустим только с новым основанием")
 
+    # Проект людей: CI — их конвейер, пульт его не повторяет. Отказ — до
+    # первого чтения статуса через `gh` и в любом состоянии задачи (SPEC
+    # 01M6N7CYKDAMAKENX60CBK7VQX, требование 7).
+    refusal = ci.people_rerun_refusal(workspace.task_repo(task_id))
+    if refusal:
+        _ci_rerun_refuse(conn, task_id, refusal)
+
     # Требование 2: команда работает только в `verifying` и только при
     # завершённом красном CI. Статус читается до проверки состояния —
     # отказ обязан назвать и состояние, и статус (AC-1).

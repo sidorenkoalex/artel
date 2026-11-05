@@ -42,6 +42,10 @@ TOKEN_NO_EXPIRY_TASKS_WARN = 10
 
 # Итог CI проекта даёт `pipeline_status` этого модуля (`forge.ci_by_pipeline`).
 CI_BY_PIPELINE = True
+# Поле `policy.ci_required_jobs` записи читает `pipeline_status` этого
+# модуля (`_required`); запись проекта людей с этим полем у хостинга без
+# признака отказывает при загрузке (`targets._check_ci_required_jobs`).
+READS_CI_REQUIRED_JOBS = True
 
 DRAFT_PREFIX = "Draft: "
 NO_PIPELINE = "конвейер не создан (ветка не под правилом workflow?)"
