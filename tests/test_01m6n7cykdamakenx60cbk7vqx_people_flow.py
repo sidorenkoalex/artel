@@ -1,7 +1,7 @@
 """Проект людей на GitHub (`forge: github` + `merge_gate: target-human`): полный цикл до `done` и `kill` после отправки без закрытия PR, запрет повтора CI пультом (`ci.trigger_rerun`, гейт мержа на красном CI, команда `ci-rerun`); GitLab с `target-human` и `github` + `operator` — прежние.
 
 Группа: долгоживущий
-Красен до реализации: пара `github` + `target-human` не в `targets.SUPPORTED_PAIRS` — `approve` на `merge_gate` отказывает причиной поддержки (до `awaiting_human`, до записи `flake-rate`), а `ci.trigger_rerun` и `ci-rerun` для клона проекта людей зовут `gh` (поиск прогона, `run rerun`, `run watch`, чтение статуса); методы `gitlab` + `target-human` и `github` + `operator` зелены с рождения — они держат прежнее поведение.
+Красен до реализации: пара `github` + `target-human` не в `targets.SUPPORTED_PAIRS` — `approve` на `merge_gate` отказывает причиной поддержки (до `awaiting_human`, до записи `flake-rate`), а `ci.trigger_rerun` и `ci-rerun` для клона проекта людей зовут `gh` (поиск прогона, `run rerun`, `run watch`, чтение статуса), а `kill` проекта людей на GitHub зовёт `gh pr close` и не пишет «PR не тронут»; методы `gitlab` + `target-human` и `github` + `operator` зелены с рождения — они держат прежнее поведение.
 
 Связка «команда пульта — FSM — база — git»: каждый сценарий идёт через
 публичный вход (`fsm.cmd_advance`, `fsm.cmd_approve`, `artel.main` с
@@ -875,8 +875,82 @@ def test_ac7_github_operator_trigger_rerun_keeps_failed_rerun(real_git):
 
 
 # ------------------------------------------------------------------- AC-9
-# Критерий AC-9 эскалирован (пометка в планке задачи): тесты `kill`
-# проекта людей на GitHub — после ответа Оператора.
+
+
+def test_ac9_kill_before_send_keeps_pr_notes_branch_outcome(stand):
+    """`kill` задачи `github` + `target-human` до отправки: `gh pr close` не вызван, ветка в `origin` остаётся, одна запись «уборка» несёт прежний исход удаления «ветка origin <ветка>: …» и «PR не тронут: MR вливают люди проекта».
+
+    Сценарий: задача в `in_dev`; ветка задачи заведена в голом `origin`
+    git-командой стенда, записи «ветка отправлена» в журнале нет. `kill`:
+    задача `killed`, шпион `gh` не видел `pr close`, ветка задачи в
+    `origin` цела (белый список отправок проекта людей отказывает её
+    удаление, как у `gitlab` + `target-human`); среди записей журнала
+    «уборка» есть одна, несущая обе фразы. Ветка заведена заранее, чтобы
+    исход попытки удаления был в записи, а не пропущен.
+
+    Ловит мутацию: уборка до отправки закрывает PR по хостингу GitHub
+    (`gh pr close`, прежнее поведение); фраза «PR не тронут» не пишется,
+    пишется отдельной записью без исхода удаления ветки или заменяет его;
+    уборка проекта людей перестаёт пробовать удаление ветки origin (исхода
+    «ветка origin <ветка>: …» в записи нет).
+    """
+    task = stand.new_task(state="in_dev", published=False)
+    stand.publish_branch(task)
+    branch = stand.branch(task)
+    assert stand.origin_has(branch), stand.context(task, "предусловие: ветка в origin")
+    out = stand.kill(task)
+    where = stand.context(task, out)
+    assert stand.state(task) == "killed", where
+    assert stand.origin_has(branch), where
+    assert stand.gh.seen("pr", "close") == [], where
+    outcome = BRANCH_OUTCOME.format(branch=branch)
+    assert any(outcome in r and PR_UNTOUCHED in r
+               for r in stand.cleanup_records(task)), where
+
+
+def test_ac9_kill_after_send_keeps_branch_notes_both(stand):
+    """`kill` задачи `github` + `target-human` после отправки: ветка в `origin` цела, `gh pr close` не вызван, запись «уборка» несёт прежнее «сервер проекта не тронут: ветка <ветка> отправлена» и «PR не тронут: MR вливают люди проекта».
+
+    Сценарий: задача в `in_dev`, ветка на сервере с записью «ветка
+    отправлена». `kill`: задача `killed`, ветка в `origin` есть, шпион `gh`
+    не видел `pr close`; среди записей «уборка» есть одна с обеими фразами.
+
+    Ловит мутацию: после отправки фраза «PR не тронут» не дописана к
+    прежнему тексту (или прежний текст заменён ею); уборка после отправки
+    удаляет ветку либо закрывает PR.
+    """
+    task = stand.new_task(state="in_dev")
+    branch = stand.branch(task)
+    out = stand.kill(task)
+    where = stand.context(task, out)
+    assert stand.state(task) == "killed", where
+    assert stand.origin_has(branch), where
+    assert stand.gh.seen("pr", "close") == [], where
+    left = SERVER_LEFT.format(branch=branch)
+    assert any(left in r and PR_UNTOUCHED in r
+               for r in stand.cleanup_records(task)), where
+
+
+@pytest.mark.parametrize("published", [False, True], ids=["до отправки", "после отправки"])
+def test_ac9_github_operator_kill_closes_pr(real_git, published):
+    """`kill` задачи `github` + `operator` зовёт `gh pr close` ветки задачи, как прежде.
+
+    Сценарий: стенд `github` + `operator`; задача в `in_dev` с веткой в
+    `origin` (с записью «ветка отправлена» и без неё). `kill`: шпион `gh`
+    видел `pr close` с веткой задачи.
+
+    Ловит мутацию: запрет закрытия PR поставлен по хостингу GitHub без
+    признака проекта людей — `gh pr close` у записи `operator` не вызван.
+    """
+    stand = Stand(real_git, gate="operator")
+    task = stand.new_task(state="in_dev", published=published)
+    if not published:
+        stand.publish_branch(task)
+    branch = stand.branch(task)
+    out = stand.kill(task)
+    where = stand.context(task, out)
+    closes = stand.gh.seen("pr", "close")
+    assert closes and branch in closes[0], where
 
 
 # ------------------------------------------------------------------ AC-10
