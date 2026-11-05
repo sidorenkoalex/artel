@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import time
 import urllib.parse
 from pathlib import Path
@@ -461,6 +462,164 @@ def component_checks(name: str, entry: dict) -> list:
             checks.append(check_ci_reruns(f"project-ci-reruns-{prefix}", clone,
                                           fields))
     return checks
+
+
+# Вызовы `docker` строк doctor (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF, требования
+# 14-15): предел `context inspect`/`ps`/`network ls`/`compose config`/
+# `compose version` и число проб исчезновения группы после снятия по пределу.
+# Обе читаются при каждом вызове — подмена атрибута модуля действует.
+DOCKER_CALL_TIMEOUT_SEC = 10
+# На macOS в окне исчезновения группы проба отвечает `PermissionError`;
+# пауз между пробами нет.
+GROUP_GONE_PROBES = 100000
+DOCKER_ROLE_SKIP = "в шаге роли Docker не вызывается"
+DOCKER_NOT_FOUND = "программа docker не найдена"
+COMPOSE_MIN_VERSION = (2, 1, 1)
+_COMPOSE_VERSION_RE = re.compile(r"[0-9.]*")
+
+
+def _drop_group(pgid: int) -> None:
+    """`SIGKILL` группе и не больше `GROUP_GONE_PROBES` проб её исчезновения
+    сигналом 0 — разбор исхода пробы как у `liveness._group_exists`."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+    for _ in range(GROUP_GONE_PROBES):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            continue
+        except OSError:
+            return
+
+
+def _docker_call(argv: list, env: dict, cwd, timeout: float
+                 ) -> tuple[int | None, str, str]:
+    """(код или `None` по пределу, stdout, stderr) вызова `docker` в новой
+    сессии процесса; по пределу снимается вся группа вызова."""
+    try:
+        proc = doctor.subprocess.Popen(
+            argv, cwd=cwd, env=env, stdin=doctor.subprocess.DEVNULL,
+            stdout=doctor.subprocess.PIPE, stderr=doctor.subprocess.PIPE,
+            text=True, errors="replace", start_new_session=True)
+    except OSError as exc:
+        return -1, "", f"запуск не удался: {exc}"
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except doctor.subprocess.TimeoutExpired:
+        _drop_group(proc.pid)
+        proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            stream.close()
+        return None, "", ""
+    except BaseException:
+        _drop_group(proc.pid)
+        proc.wait()
+        raise
+    return proc.returncode, out or "", err or ""
+
+
+def _call_text(argv: list) -> str:
+    return " ".join(["docker", *argv[1:]])
+
+
+def _call_failure(argv: list, code: int | None, out: str, err: str,
+                  timeout: float) -> str | None:
+    """Текст провала вызова; `None` — вызов ответил нулевым кодом."""
+    if code is None:
+        return f"{_call_text(argv)} не уложился в предел {timeout:g} с"
+    if code != 0:
+        text = (err.strip() or out.strip())[:300]
+        return f"{_call_text(argv)} вернул код {code}: {text or '(вывода нет)'}"
+    return None
+
+
+def _compose_version(text: str) -> tuple | None:
+    """Версия из первой строки ответа `docker compose version --short`:
+    начало до первого знака не из `[0-9.]`, префикс `v` допускается."""
+    line = (text.strip().splitlines() or [""])[0].strip()
+    shown = _COMPOSE_VERSION_RE.match(line.removeprefix("v")).group(0)
+    parts = shown.split(".")
+    if not shown or not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def compose_record_checks(name: str) -> list:
+    """Строка записи `compose` проекта `name` (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF,
+    требование 15): одна на проект, у которого `test_profile` или компонент
+    несёт `runner: compose`; исход — худший из проверенных компонентов.
+    Проект без `compose` строки не получает."""
+    try:
+        profiles = [p for p in doctor.project_profile.component_profiles(name)
+                    if p.runner == doctor.targets.PROFILE_RUNNER_COMPOSE]
+    except doctor.targets.TargetsError:
+        return []
+    if not profiles:
+        return []
+    check_name = f"project-compose-{name}"
+    if doctor.runner.in_role_environment():
+        return [doctor.Check(check_name, "skip", DOCKER_ROLE_SKIP)]
+    docker = doctor.acceptance.find_docker()
+    if docker is None:
+        return [doctor.Check(check_name, "fail", DOCKER_NOT_FOUND)]
+    clone = doctor.repo_context.clone_path(name)
+    cwd = clone if clone.is_dir() else None
+    fails, oks = [], []
+    for profile in profiles:
+        env = doctor.acceptance.compose_env(profile, docker)
+        problem = _compose_component_problem(profile, clone, docker, env)
+        where = f"компонент {profile.component}"
+        if problem:
+            fails.append(f"{where}: {problem}")
+        else:
+            oks.append(f"{where}: сервис {profile.compose_service} есть")
+    env = doctor.acceptance.compose_env(profiles[0], docker)
+    argv = [docker, "compose", "version", "--short"]
+    timeout = DOCKER_CALL_TIMEOUT_SEC
+    code, out, err = _docker_call(argv, env, cwd, timeout)
+    failure = _call_failure(argv, code, out, err, timeout)
+    if failure is None:
+        version = _compose_version(out)
+        if version is None:
+            failure = f"{_call_text(argv)}: версия не разобрана в «{out.strip()}»"
+        elif version < COMPOSE_MIN_VERSION:
+            failure = (f"Compose {'.'.join(map(str, version))} ниже "
+                       f"{'.'.join(map(str, COMPOSE_MIN_VERSION))} (нужен "
+                       f"up --wait)")
+        else:
+            oks.append(f"Compose {'.'.join(map(str, version))}")
+    if failure is not None:
+        fails.append(failure)
+    if fails:
+        return [doctor.Check(check_name, "fail", "; ".join(fails))]
+    return [doctor.Check(check_name, "ok", "; ".join(oks))]
+
+
+def _compose_component_problem(profile, clone: Path, docker: str,
+                               env: dict) -> str | None:
+    """Провал компонента `compose`: файлы клона и сервис в
+    `config --services`; `None` — компонент годен."""
+    missing = [f"нет {field} {getattr(profile, field)} в клоне {clone}"
+               for field in ("compose_file", "compose_env_template")
+               if not (clone / getattr(profile, field)).is_file()]
+    if missing:
+        return "; ".join(missing)
+    argv = [docker, "compose", "-f", str(clone / profile.compose_file),
+            "--env-file", str(clone / profile.compose_env_template),
+            "config", "--services"]
+    timeout = DOCKER_CALL_TIMEOUT_SEC
+    code, out, err = _docker_call(argv, env, clone, timeout)
+    failure = _call_failure(argv, code, out, err, timeout)
+    if failure is not None:
+        return failure
+    if profile.compose_service not in [s.strip() for s in out.splitlines()]:
+        return (f"сервиса {profile.compose_service} нет в ответе "
+                f"{_call_text(argv)}")
+    return None
 
 
 def version_matches(required: str, shown: str) -> bool:

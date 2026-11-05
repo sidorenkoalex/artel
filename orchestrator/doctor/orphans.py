@@ -3,7 +3,11 @@
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
+from datetime import datetime, timezone
 from pathlib import Path
+import json
+import os
+import re
 import tempfile
 
 from orchestrator import doctor, fsm
@@ -229,3 +233,178 @@ def check_orphans(conn) -> list[doctor.Check]:
                           lambda msg: msg.removesuffix(" без живого владельца")
                           in current)
     return results
+
+
+# --- забытые стенды Compose (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF, требование 14)
+#
+# Предмет строки — только стенды Docker: каталоги пульта под `.artel/` она не
+# обходит. Стенд пульта — проект Compose формы части 1
+# (`acceptance.compose_project_name`) с хотя бы одной меткой живого прогона.
+
+COMPOSE_STANDS_CHECK = "compose-stands"
+_COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+_STAND_NAME_RE = re.compile(r"artel-[0-9a-z]{26}-[0-9a-f]{8}")
+# Формат `store.now()`: проверяется до `strptime`, чужой формат — порча меток.
+_RUN_STARTED_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z")
+STANDS_REMOTE = "демон Docker не локальный"
+STANDS_NOT_ANSWERING = "Docker не отвечает"
+STANDS_LAYER_BROKEN = "слой проектов не прочитан"
+STANDS_LABELS_BROKEN = "метки стенда не разобраны"
+
+
+def _docker_labels(text) -> dict:
+    """Поле `Labels` Docker — `ключ=значение` через запятую; фрагмент без
+    `=` — продолжение значения предыдущей метки (значение с запятой)."""
+    labels, last = {}, None
+    for part in (text or "").split(","):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            labels[key] = value
+            last = key
+        elif last is not None:
+            labels[last] += "," + part
+    return labels
+
+
+def _run_verdict(run: dict) -> str:
+    """`broken` | `alive` | `dead` по меткам `artel.run-*` ресурса стенда.
+    Имя хоста на живость не влияет: имя хоста macOS меняется со сетью."""
+    pid_label, _host_label, started_label = doctor.acceptance.COMPOSE_RUN_LABELS
+    if any(label not in run for label in doctor.acceptance.COMPOSE_RUN_LABELS):
+        return "broken"
+    pid_text, started_text = run[pid_label], run[started_label]
+    if not re.fullmatch(r"\d+", pid_text) or int(pid_text) <= 0 \
+            or not _RUN_STARTED_RE.fullmatch(started_text):
+        return "broken"
+    try:
+        recorded = datetime.strptime(started_text, "%Y-%m-%d %H:%M:%SZ"
+                                     ).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "broken"
+    pid = int(pid_text)
+    if not doctor.liveness._pid_alive(pid):
+        return "dead"
+    started = doctor.process_start_time(pid)
+    if started is None or started > recorded:
+        return "dead"
+    return "alive"
+
+
+def _has_compose_project(declared) -> bool:
+    for project in declared:
+        try:
+            comps = doctor.project_profile.components(project)
+        except doctor.targets.TargetsError:
+            continue
+        if any(c.fields.get("runner") == doctor.targets.PROFILE_RUNNER_COMPOSE
+               for c in comps):
+            return True
+    return False
+
+
+def _stands_survey():
+    """(строка, мёртвые стенды {проект: имена ресурсов}, docker, окружение
+    вызова). Мёртвые стенды непусты, только если Docker опрошен."""
+    def done(status, detail):
+        return doctor.Check(COMPOSE_STANDS_CHECK, status, detail), {}, None, None
+    project_checks = doctor.project_checks
+    if doctor.runner.in_role_environment():
+        return done("skip", project_checks.DOCKER_ROLE_SKIP)
+    try:
+        declared = doctor.targets.load()
+    except doctor.targets.TargetsError as exc:
+        return done("warn", f"{STANDS_LAYER_BROKEN}: {exc}")
+    if not _has_compose_project(declared):
+        return done("skip", "нет проектов с раннером compose")
+    docker = doctor.acceptance.find_docker()
+    if docker is None:
+        return done("warn", project_checks.DOCKER_NOT_FOUND)
+    env = doctor.acceptance.compose_env(None, docker)
+
+    def ask(argv):
+        timeout = project_checks.DOCKER_CALL_TIMEOUT_SEC
+        code, out, err = project_checks._docker_call(argv, env, None, timeout)
+        return out, project_checks._call_failure(argv, code, out, err, timeout)
+    host = os.environ.get("DOCKER_HOST") or ""
+    if not host:
+        out, failure = ask([docker, "context", "inspect", "--format",
+                            "{{.Endpoints.docker.Host}}"])
+        if failure is not None:
+            return done("warn", f"{STANDS_NOT_ANSWERING}: {failure}")
+        host = out.strip()
+    if not host.startswith("unix://"):
+        return done("skip", f"{STANDS_REMOTE} ({host or 'адрес пуст'}) — "
+                            f"живость прогона по pid не решается")
+    records = []
+    for argv, key in (([docker, "ps", "-a"], "Names"),
+                      ([docker, "network", "ls"], "Name")):
+        out, failure = ask([*argv, "--filter",
+                            f"label={_COMPOSE_PROJECT_LABEL}",
+                            "--format", "{{json .}}"])
+        if failure is not None:
+            return done("warn", f"{STANDS_NOT_ANSWERING}: {failure}")
+        for line in out.splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                records.append((str(record.get(key) or ""),
+                                _docker_labels(record.get("Labels"))))
+    resources, verdicts = {}, {}
+    for name, labels in records:
+        project = labels.get(_COMPOSE_PROJECT_LABEL, "")
+        if not _STAND_NAME_RE.fullmatch(project):
+            continue
+        resources.setdefault(project, []).append(name)
+        run = {k: labels[k] for k in doctor.acceptance.COMPOSE_RUN_LABELS
+               if k in labels}
+        if run:
+            verdicts.setdefault(project, set()).add(_run_verdict(run))
+    broken = sorted(p for p, v in verdicts.items() if "broken" in v)
+    dead = {p: resources[p] for p, v in sorted(verdicts.items())
+            if v == {"dead"}}
+    parts = [f"забытый стенд {p}: {', '.join(names)}"
+             for p, names in dead.items()]
+    if dead:
+        parts.append("снимет doctor --fix (down --remove-orphans, тома "
+                     "остаются)")
+    if broken:
+        parts.append(f"{STANDS_LABELS_BROKEN}: {', '.join(broken)} — --fix "
+                     f"их не снимает")
+    if parts:
+        return (doctor.Check(COMPOSE_STANDS_CHECK, "warn", "; ".join(parts)),
+                dead, docker, env)
+    return (doctor.Check(COMPOSE_STANDS_CHECK, "ok", "забытых стендов нет"),
+            {}, docker, env)
+
+
+def check_compose_stands(conn) -> doctor.Check:
+    """Строка «забытые стенды пульта» (требование 14): только чтение."""
+    return _stands_survey()[0]
+
+
+def _fix_compose_stands(conn) -> None:
+    """`docker compose --project-name <имя> down --remove-orphans` на каждый
+    забытый стенд — без `-v` и `-f`, в пустом временном каталоге, чтобы
+    Compose не прочитал посторонний Compose-файл. Без соединения с БД
+    (`cmd_doctor` зовёт починки безусловно) — ничего."""
+    if conn is None:
+        return
+    _check, dead, docker, env = _stands_survey()
+    for project in dead:
+        argv = [docker, "compose", "--project-name", project, "down",
+                "--remove-orphans"]
+        timeout = doctor.config.COMPOSE_TEARDOWN_TIMEOUT_SEC
+        empty = tempfile.mkdtemp(prefix="artel-compose-down-")
+        try:
+            code, out, err = doctor.project_checks._docker_call(
+                argv, env, empty, timeout)
+        finally:
+            doctor.shutil.rmtree(empty, ignore_errors=True)
+        failure = doctor.project_checks._call_failure(argv, code, out, err,
+                                                      timeout)
+        if failure is None:
+            print(f"  [FIX] забытый стенд compose снят: {project}")
+        else:
+            print(f"  [FIX] забытый стенд compose не снят: {failure}")

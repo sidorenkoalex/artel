@@ -214,6 +214,9 @@ def all_checks(conn) -> list[doctor.Check]:
         # (SPEC 01M58PG72PG64GS790XM2EWS61, требования 2-8) — следом за
         # строками записи: предмет тот же, клон проекта.
         checks.extend(doctor.project_checks.component_checks(name, entry))
+        # Запись раннера `compose` (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF,
+        # требование 15) — следом: предмет тот же, клон проекта.
+        checks.extend(doctor.project_checks.compose_record_checks(name))
         # Дрейф конвенций проекта (SPEC 01M5T18K1YFBYA7MM1BBRV869A,
         # требование 8) — следом: предмет тот же, база клона проекта.
         checks.extend(doctor.check_project_conventions(name))
@@ -224,6 +227,10 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.append(target_failure_errors_check())
 
     checks.extend(doctor.check_orphans(conn))
+    # Забытые стенды Compose (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF, требование
+    # 14) — рядом с сиротами, но вне `check_orphans` и вне ветки годного
+    # `targets.load()`: при сломанном слое строка есть с `warn`.
+    checks.append(doctor.check_compose_stands(conn))
     # Файлы БД пульта в рабочих копиях задач (SPEC
     # 01M4FYTB8QWJNHYCP35K8QC4E3, требование 6) — рядом с сиротами: тот же
     # предмет «в области проектов лежит то, чего там быть не должно».
@@ -316,6 +323,9 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
         doctor._fix_orphan_temp_dirs()
+        # Забытые стенды Compose (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF,
+        # требование 14); при `conn=None` починка ничего не делает.
+        doctor._fix_compose_stands(conn)
         # Мёртвые записи и метки реестра живой канарейки (SPEC
         # 01M5FA4NR91PCF47SZT6V0Q9HS, требование 4) — до `all_checks`:
         # строка `canary-live` того же прогона видит уже убранный реестр.
