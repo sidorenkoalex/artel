@@ -1,15 +1,16 @@
 # Записка analyst
 
 ## Выяснено
-- ТЗ — часть 1 деления родителя 01M6P22XBCQS49HE92YGAB25N9 (killed после деления); его SPEC/ANSWER-1 читаются только `git show refs/artifacts/01M6P22XBCQS49HE92YGAB25N9:tasks/01M6P22XBCQS49HE92YGAB25N9/SPEC.md` (команда `docs` роли недоступна, чтение каталога родителя запрещено).
-- Якоря родительского SPEC сверены с worktree: acceptance.py `_own`:121, `_OWN_SYSTEM_PATH_DIRS`:156, `_report_run`:806, `_report_suite_result_key`:3069; targets.py :56/:83/:85/:776/:1194; runner.py `in_role_environment`:1364; lease.py `process_alive`:399 — совпадают.
-- Требования 1–11 перенесены с тем же номером; 16→12, 17→13 (без тестовых форм doctor/role_env — часть 2); AC-1…AC-16 те же, AC-22 → AC-17.
+- ТЗ — часть 1 деления родителя 01M6P22XBCQS49HE92YGAB25N9; его SPEC читается `git show refs/artifacts/01M6P22XBCQS49HE92YGAB25N9:tasks/01M6P22XBCQS49HE92YGAB25N9/SPEC.md`.
+- Шаг 2 (возврат с гейта, второй круг, решения 1–6): внесены в требования 1, 2, 4, 5, 8, 13 и AC-2, AC-5, AC-8, AC-11, AC-13, AC-17 с пометкой «решение второго круга N»; «снятие группы процессов» перенесено в «Не входит».
+- Якорь решения 1 сверен: `targets.load` :255-271 отдаёт копии через `_with_long_lived_pairs` (:1329); `repo_context.profile_of` :183-188 требует `command` у единственного компонента.
+- «Плоская запись слоя репозитория» = прежний вид без разделов (targets.py:228, `_flatten` :796).
 
 ## Не сработало
-- `artel.py docs` из роли — «команда недоступна процессу роли analyst».
+- `artel.py docs` из роли недоступна.
 
 ## Где остановился
-- SPEC.md написан, status: ready, guard прогнан.
+- SPEC.md обновлён, status: ready, guard ок. Число AC прежнее (17), бюджет $60 (рамка деления).
 
 ## Чего не хватило
-- Пути к родительскому SPEC: в брифе нет, нашёл через refs/artifacts.
+- Ничего существенного.
