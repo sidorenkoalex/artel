@@ -1,18 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 6 (spec_sha ad48adbc): решения №5.1–5.5 внесены в SPEC; якоря верны (cli.py:224/226, :305-331; __init__.py:152-155; lease.py:399-416; acceptance.py:156; test_doctor_closed_ref_fix.py:152-195, :177-183; test_doctor.py:1040-1043; stale_cycles.py:42; targets.TargetsError :180).
-- role_env (runner.py:1246-1361) от раннера не зависит — AC-1 зелёный с рождения.
-- Опыт (tmp, без Docker): после os.killpg по пределу os.getpgid(<pid зависшего>) → ProcessLookupError; дочерний процесс снят. AC-2/AC-3 «getpgid ≠ getpgrp» после завершения строки неисполним на верной реализации.
-- SPEC части 1 (refs/artifacts/01M6PAJ61D4PYAP79ADRPA6MWV): COMPOSE_TEARDOWN_TIMEOUT_SEC — в orchestrator/config.py (треб. 8, 9), а не в acceptance; помощник окружения — «требования 6–7» (7 — отказ в процессе роли).
-- Вердикт: concerns (Д1 getpgid; Д2 модуль константы; Д3 строки doctor в процессе роли не заданы; Д4 «все прочие починки» против образца без _fix_canary_live).
+- Визит 7 (spec_sha 5b25dbeb): решения №6.1–6.4 внесены; Д1–Д4 прошлого визита сняты.
+- Якоря верны: cli.py:189-226, :305-331 (:322 `_fix_canary_live`); runner.py:1364-1381; acceptance.py:156; targets.py:83, :180; stale_cycles.py:42.
+- Образец test_doctor_closed_ref_fix.py:154-162 НЕ подменяет `_fix_canary_live`, а уводит `canary._live_dir` во временный каталог: настоящая починка исполняется. SPEC (треб. 17, AC-2) говорит «подменяет… не исполняется» — неоднозначно.
+- Опыт /tmp: после os.killpg(SIGKILL)+wait() os.kill(<дочерний>,0) успешен в 37 из 40 сразу; дочерний пропадает через ~1.3 мс (доразбирает launchd). Тест «после предела дочерний не жив» без формы ожидания красен на верной реализации; test_lint запрещает sleep/цикл по часам.
 
 ## Не сработало
-- heredoc в Bash отклоняется парсером — временный скрипт писать файлом и убирать task-rm.
-- Docker в шаге не запускал сознательно (решение №4.1).
+- `cd …; sed` и составные команды Bash отклоняются — читать Read, grep одной командой; `sh` не в PATH — /bin/sh.
 
 ## Где остановился
-- SPEC-AUDIT.md записан (status: ready, verdict: concerns, Д1, Д1-бис AC-3 без снятия группы, Д2–Д4), guard — ок.
+- SPEC-AUDIT.md записан: status ready, verdict concerns (Д1 гонка «не жив» — дефолт: реализация ждёт исчезновения группы; Д2 `_fix_canary_live` — дефолт: подмена по имени); guard — ок.
 
 ## Чего не хватило
-- Текста SPEC части 1 в брифе — читал git show refs/artifacts/<id части 1>.
+- Текста SPEC части 1 в брифе — `git show refs/artifacts/01M6PAJ61D4PYAP79ADRPA6MWV:tasks/…/SPEC.md`.
