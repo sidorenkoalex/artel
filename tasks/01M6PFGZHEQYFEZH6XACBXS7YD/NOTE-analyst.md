@@ -1,14 +1,14 @@
 ## Выяснено
 - Факты ТЗ подтверждены по коду: `orchestrator/spec_gate_decision.py:186-192` (`isdigit` + `int`), `orchestrator/artel.py:2650-2675` (`DECISION_FLAG`, `_cmd_reject`).
-- Сейчас `--decision a --decision b` отказывает текстом «не сочетается с позиционной причиной (--decision b)» — ТЗ требует для двух ключей указание на повтор.
-- `tests/test_01m6kb0sjhda4d4gnem7pgz40p_decision_reject.py::test_ac8_help_names_decision_form` ждёт в `--help` строку «reject <id> --decision <файл>» — дополняя справку формой с «=», её не убирать.
-- SPEC: 9 AC, 4 зоны, budget 25 (рамка ТЗ), сигналов деления нет; guard ок.
+- Возврат с spec_gate (3 решения Оператора) внесён: тр.3 (`--decision=--x` → «без значения», значение по первому «=»), тр.4 (ключ = `--decision` или `--decision=…`; два ключа в любой форме → «ключ --decision повторён», проверка первой), тр.5 (`--decisions` — причина). AC-4..AC-7 дополнены.
+- Утверждения решений сверены с artel.py:2663-2675 — верны. Существующие тесты текст отказа не сверяют (`assert_refused(..., 0)`), «не сочетается» в tests/ нет → «Меняемое поведение» не нужен.
+- `test_ac8_help_names_decision_form` ждёт в `--help` строку «reject <id> --decision <файл>» — не убирать.
 
 ## Не сработало
 - нет
 
 ## Где остановился
-- SPEC.md сдан со status: ready.
+- SPEC.md обновлён, status: ready, guard ок.
 
 ## Чего не хватило
 - нет
