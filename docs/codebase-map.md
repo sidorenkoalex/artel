@@ -1,5 +1,5 @@
 ---
-built_at_sha: 46261d1a3dd91ad5332f879a65a9005270ee1455
+built_at_sha: 272b012d2547f0de259434db5ebfaeb3f9762661
 ---
 
 # Codebase-map пульта
@@ -9544,6 +9544,7 @@ built_at_sha: 46261d1a3dd91ad5332f879a65a9005270ee1455
 - `calls`
 - `compose_projects`
 - `compose_text`
+- `docker_config_sandbox`
 - `docker_skip_reason`
 - `fake_docker`
 - `test_ac17_fictional_compose_file_never_pulls`
@@ -9554,7 +9555,7 @@ built_at_sha: 46261d1a3dd91ad5332f879a65a9005270ee1455
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/config.py`, `orchestrator/project_profile.py`, `orchestrator/targets.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** —
+**Импортируется:** `tests/test_01m6prdzh17wq6syabjfzrdcww_docker_config_sandbox.py`
 
 ## tests/test_01m6paj61d4pyap79adrpa6mwv_compose_record.py
 
@@ -9682,6 +9683,26 @@ built_at_sha: 46261d1a3dd91ad5332f879a65a9005270ee1455
 - `write_file`
 
 **Импортирует:** `orchestrator/artel.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/spec_gate_decision.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/components_outcome_sandbox.py`, `tests/fixtures.py`, `tests/outcome_gate_sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_01m6prdzh17wq6syabjfzrdcww_docker_config_sandbox.py
+
+**Назначение:** Подставной `DOCKER_CONFIG` теста compose с настоящим Docker: ссылка `cli-plugins` и её место в тесте.
+
+**Публичные функции:**
+- `call_name`
+- `call_sandbox`
+- `fictional_config`
+- `is_str_of`
+- `test_ac1_only_symlink_to_cli_plugins_of_docker_config`
+- `test_ac2_home_docker_cli_plugins_when_docker_config_unset_or_empty`
+- `test_ac3_no_cli_plugins_gives_empty_dir`
+- `test_ac4_each_call_reads_environment_anew`
+- `test_ac5_compose_test_takes_docker_config_from_helper`
+- `word`
+
+**Импортирует:** `tests/test_01m6paj61d4pyap79adrpa6mwv_compose_docker.py`
 
 **Импортируется:** —
 
