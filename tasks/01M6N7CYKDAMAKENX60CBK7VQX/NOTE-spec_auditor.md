@@ -1,14 +1,16 @@
 # Записка аудитора SPEC
 
 ## Выяснено
-- AC-7 «gh не вызван» на approve невыполним буквально: `ci.branch_status` GitHub читает check-runs через `ci.gh("api", …)` (ci.py:1206+, :257-282) до и после `trigger_rerun` (fsm_merge_gate.py:316, :372).
-- ci-rerun: `ci.verifying_status` (ci_rerun.py:~150) и на красном пути `failed_check_names` зовут gh раньше `trigger_rerun`; SPEC называет только путь зависшей проверки.
-- AC-13 «равенство, не содержит» — в действиях тесты утверждают `reason in out` (unsupported_project.py:200,231,259,291,314,391; epic_draft_promote:87; pair_support check_refusal :131) — невыполнимо при запрете правок (треб. 10).
-- Требование 3 «<любой файл>»: одна проба имени не доказывает покрытие каталога (`**/ci.yml`, префикс `.github/workflows/c`).
-- cleanup: после отправки текст «сервер проекта не тронут…» (cleanup.py:296-302), «PR не тронут» после отправки — новое; тестов на этот текст нет.
+- Визит 2 (spec_sha 2b14ff61): шесть отклонений визита 1 сняты в SPEC (AC-13 «вхождение как на main», AC-7 без «gh не вызван» на approve, ci-rerun отказ до ci_rerun.py:156, «для каждого имени файла», подмена реестра в AC-8, текст kill после отправки).
+- Формула is_protected_path проверена опытом: «ровно три вида» верно (плюс любые строковые префиксы `.github/workflows/`).
+- Остались concerns: AC-4 не ловит пробу одним фиксированным именем (например `.github/workflows/x`); AC-13 «с константой» против файла эпика (там причина вычисляется, epic:72,87); `ci_required_jobs: []` — «задано»?; AC-1 ограничивает только gh, не сетевой git (url https://localhost в файлах мандата); `ci.head_sha` — git, не gh.
+- Существующих тестов, которые сломаются вне мандата, не нашёл; tests/test_doctor_gitlab_ci_file.py:152-173 подменяет doctor.forge.ci_by_pipeline — условие строки должно идти через него.
+
+## Не сработало
+- Составные команды bash с cd/пайпами требуют подтверждения — только одиночные grep по абсолютному пути.
 
 ## Где остановился
-SPEC-AUDIT.md сдан: verdict fail, status ready, guard ок. Шесть отклонений (AC-13 равенство, AC-7 gh, ci-rerun :156, проба файла, литерал в targets.py, текст kill после отправки).
+SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-Где gh зовётся на пути статуса CI — искал по ci.py вручную.
+Где gh зовётся на путях ci-rerun — пришлось читать ci_rerun.py целиком.
