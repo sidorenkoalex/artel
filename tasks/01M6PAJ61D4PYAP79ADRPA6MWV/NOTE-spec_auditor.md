@@ -1,14 +1,13 @@
 # Записка аудитора SPEC 01M6PAJ61D4PYAP79ADRPA6MWV
 
 ## Выяснено
-- Четвёртый визит, SPEC 49608e20: решения четвёртого круга 1–2 внесены; два пункта визита 3 (канал id, соотношение пределов) закрыты по содержанию.
-- Новое: вызывающие узла `_report_run` ВНЕ зон без id задачи: `advance_gates/acceptance.py:174` → `run_repeat(seeded, run_cwd, command=)` (у `run_repeat` :1731 нет параметра id; файл вне зон, SPEC «Не входит»); `suite_run.py:607`, `:680` → `run_full_suite` (только чтение, нет id); `plank_run.py:267-269` → `run_plank` без `task_id` (долгоживущий файл, вне зон). С правилом «compose без id — отказ» эти места для compose всегда отказывают; повтор зерна → красный повтор → эскалация задачи.
-- `run()`/`collect()` берут id из `Path(tdir).name` (acceptance.py:1424) — канал есть.
-- `outcome_integrity._rerun` (:430) id не получает — передача требует параметра `_rerun` и правки двух вызовов (:757, :972).
-- Подмен `report_run` в tests/ нет — сигнатурный аргумент не ломает тесты.
+- Пятый визит, SPEC 79b39475: решения пятого круга 1–2 (решение гейта №4) внесены; пункты визита 4 (места вне зон без id, `_rerun`) закрыты по содержанию; якоря :174, :607, :680, :267-269, :430, :757, :972, :1731, :2042, :2338 сверены.
+- Новое: `run_plank(task_id=…)` (acceptance.py:2056-2073) уже значит «цели в планке задачи, выкладка `_plank_layout`», не «id для имени проекта». Передача `task_id` в вызов долгоживущего файла (plank_run.py:267-269), как велит SPEC треб. 3, у pytest-own с `long_lived_dir` под `workdir` зовёт `plank_layout.plank_layout` → `shutil.copytree` несуществующего `tasks/<id>/acceptance_tests` → FileNotFoundError (проверено опытом: copytree отсутствующего каталога — FileNotFoundError). Ломается `tests/test_01m56g23zqdhv2bkevwwc22r96_plank_run_long_lived.py::test_ac5…` при безусловной передаче; для compose — тот же путь, если compose идёт через `_own`/`layout_mode`.
+- `mutation_run.py:516` зовёт `run_full_suite` без id — для compose отказ; mutation_run в контейнере вне задачи — не отклонение.
+- Подмены `run_full_suite` в tests/ — MagicMock/лямбды; suite_run-тесты читают только kwargs `limit`.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан для spec_sha 49608e20: verdict concerns, status ready. П.1 — три места вне зон без id (run_repeat ← advance_gates/acceptance.py:174, suite_run.py:607/680, plank_run.py:267-269); п.2 мелкое — новый параметр `_rerun` в outcome_integrity.
+- SPEC-AUDIT.md: verdict concerns, status ready, п.1 — смысл `task_id` у `run_plank`.
 
 ## Чего не хватило
-- Перечня всех вызывающих `run_repeat`/`run_full_suite` вне acceptance.py в SPEC.
+- В SPEC — смысла существующего параметра `run_plank.task_id` (докстринг acceptance.py:2056-2061).
