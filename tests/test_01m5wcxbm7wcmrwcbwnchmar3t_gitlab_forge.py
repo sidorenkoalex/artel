@@ -370,11 +370,6 @@ GL_CALL_NAMES = list(GL_CALLS)
 GH_CALLS = {
     "job_result": lambda: forge().job_result(GH, SHA, "test"),
     "job_test_report": lambda: forge().job_test_report(GH, SHA, "test"),
-    "open_mr": lambda: forge().open_mr(GH, "task/abc", config.MAIN_BRANCH, TITLE,
-                                     "Описание", True, 42),
-    "undraft_mr": lambda: forge().undraft_mr(GH, MR),
-    "assign_mr": lambda: forge().assign_mr(GH, MR, 42),
-    "mr_status": lambda: forge().mr_status(GH, MR),
     "token_user": lambda: forge().token_user(GH),
     "token_expiry": lambda: forge().token_expiry(GH),
     "protections": lambda: forge().protections(GH),

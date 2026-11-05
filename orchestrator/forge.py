@@ -10,7 +10,11 @@
 Функция, которой у реализации нет, — результат того же типа с причиной
 «не реализовано для <хостинг>», без обращения к хостингу.
 """
+import dataclasses
 import datetime
+import json
+import re
+import subprocess
 from dataclasses import dataclass, field
 
 from . import ci, gitlab_adapter, repo_context, targets
@@ -82,6 +86,10 @@ class MergeRequest:
     sha: str | None = None
     merge_commit_sha: str | None = None
     squash_commit_sha: str | None = None
+    # Отказ открытия: MR этой ветки на хостинге уже есть (SPEC
+    # 01M6M1799YCY5HXMHHD71SHJET, требование 3) — ставит только GitHub; у
+    # GitLab тот же случай — код 409 в тексте причины.
+    already_exists: bool = False
 
 
 @dataclass
@@ -124,11 +132,96 @@ class BranchPipeline:
     http_status: int | None = None
 
 
+# Закрытый список вызовов `gh` функций MR GitHub (SPEC
+# 01M6M1799YCY5HXMHHD71SHJET, требование 7): набор полей чтения PR, правило
+# имён исполнителя и текст отказа `github_call`.
+GH_PR_FIELDS = ("number,url,title,state,isDraft,assignees,baseRefName,"
+                "headRefName,headRefOid,mergeCommit")
+GH_CALL_REFUSAL = "вызов gh не разрешён адаптеру GitHub — gh не запущен: "
+_GH_NAME_RE = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9])*")
+_GH_NAME_MAX = 39
+_DECIMAL_RE = re.compile(r"[0-9]+")
+# Адрес PR в stdout `pr create`: хвост — ровно десятичный номер.
+_GH_PR_URL_RE = re.compile(
+    r"^https://[^/@\s]+/([^/\s]+)/([^/\s]+)/pull/([0-9]+)$")
+# «Не найден» — только код выхода 1 с этим текстом в stderr (ANSWER-1,
+# вопрос 2): та же строка при ином коде — не «не найден».
+_GH_PR_NOT_FOUND = "Could not resolve to a PullRequest"
+_NOT_FOUND_CODE = "(404)"
+_GH_STATES = {"OPEN": "opened", "MERGED": "merged", "CLOSED": "closed"}
+
+
+def github_name_ok(value) -> bool:
+    """Значение — имя пользователя GitHub: латинские буквы, цифры, одиночные
+    `-` не в начале и не в конце, до 39 знаков."""
+    return (isinstance(value, str) and len(value) <= _GH_NAME_MAX
+            and _GH_NAME_RE.fullmatch(value) is not None)
+
+
+def _decimal(value: str) -> bool:
+    return _DECIMAL_RE.fullmatch(value) is not None
+
+
+def _github_form_allowed(args: tuple) -> bool:
+    """argv целиком — форма закрытого списка, включая хвост."""
+    argv = list(args)
+    if not all(isinstance(a, str) for a in argv):
+        return False
+    if argv[:3] == ["pr", "create", "--head"]:
+        if len(argv) < 10 or [argv[i] for i in (4, 6, 8)] != [
+                "--base", "--title", "--body"]:
+            return False
+        rest = argv[10:]
+        if rest[:1] == ["--draft"]:
+            rest = rest[1:]
+        if rest and rest[0].startswith("--assignee="):
+            if not github_name_ok(rest[0].split("=", 1)[1]):
+                return False
+            rest = rest[1:]
+        return rest == []
+    if argv[:2] == ["pr", "view"]:
+        return (len(argv) == 5 and _decimal(argv[2])
+                and argv[3:] == ["--json", GH_PR_FIELDS])
+    if argv[:2] == ["pr", "ready"]:
+        return len(argv) == 3 and _decimal(argv[2])
+    if argv[:2] == ["pr", "edit"]:
+        return (len(argv) == 4 and _decimal(argv[2])
+                and argv[3].startswith("--add-assignee=")
+                and github_name_ok(argv[3].split("=", 1)[1]))
+    return False
+
+
+def github_call(target: str, *args) -> subprocess.CompletedProcess:
+    """Единственный вход `gh` функций MR GitHub: форма вне закрытого списка,
+    артель и проект без контекста — отказ без запуска `gh`. `repo` задан у
+    каждого вызова: `ci.gh` без него работает в корне артели и изменил бы PR
+    с тем же номером в её репозитории."""
+    if not _github_form_allowed(args):
+        return subprocess.CompletedProcess(
+            args, 1, "", GH_CALL_REFUSAL + " ".join(str(a) for a in args))
+    if repo_context.is_artel(target):
+        return subprocess.CompletedProcess(args, 1, "", (
+            f"проект {target} — артель: адреса её форджа у пульта нет, "
+            f"функции MR GitHub ей не служат — gh не запущен"))
+    ctx = repo_context.resolve(target)
+    if ctx is None or not ctx.remote:
+        return subprocess.CompletedProcess(
+            args, 1, "", f"адрес проекта {target} не разрешён — gh не запущен")
+    return ci.gh(*args, repo=ctx.remote)
+
+
+def _gh_text(res: subprocess.CompletedProcess) -> str:
+    return (res.stderr or res.stdout or "").strip()[:300]
+
+
 class _GitHub:
-    """Хостинг GitHub: итог CI — чтение check runs `ci`; прочих функций
-    пока нет (их отказ собирает `_call`)."""
+    """Хостинг GitHub: итог CI — чтение check runs `ci`; функции MR — `gh pr`
+    через `github_call`; прочих функций пока нет (их отказ собирает
+    `_call`)."""
 
     CI_BY_PIPELINE = False
+    # Исполнитель MR — имя пользователя (`github_adapter.mr_assignee`).
+    ASSIGNEE_BY_NAME = True
 
     # Порядок требования 2: красный исход старше идущей проверки.
     RED_CONCLUSIONS = {"failure", "cancelled", "timed_out"}
@@ -162,6 +255,110 @@ class _GitHub:
                       or r.get("conclusion") not in ci.GREEN})
         return PipelineStatus(UNKNOWN, f"исход проверок не установлен: "
                                        f"{', '.join(odd)}", jobs)
+
+    @staticmethod
+    def mr_status(target: str, mr) -> MergeRequest:
+        res = github_call(target, "pr", "view", str(mr), "--json",
+                          GH_PR_FIELDS)
+        if res.returncode != 0:
+            if res.returncode == 1 and _GH_PR_NOT_FOUND in (res.stderr or ""):
+                return MergeRequest(reason=f"PR #{mr} не найден "
+                                           f"{_NOT_FOUND_CODE}: {_gh_text(res)}")
+            # Текст `gh` сам не делает отказ «не найден»: `mr-sync` ищет код
+            # в причине.
+            text = _gh_text(res).replace(_NOT_FOUND_CODE, "404")
+            return MergeRequest(reason=f"PR #{mr} не прочитан: gh pr view "
+                                       f"завершился кодом {res.returncode}: "
+                                       f"{text}")
+        try:
+            data = json.loads(res.stdout or "")
+        except ValueError:
+            data = None
+        number = data.get("number") if isinstance(data, dict) else None
+        if not isinstance(number, int) or isinstance(number, bool):
+            return MergeRequest(reason=f"PR #{mr} не прочитан: ответ gh pr "
+                                       f"view — не JSON PR с полем number")
+        assignees = data.get("assignees")
+        first = assignees[0] if isinstance(assignees, list) and assignees else None
+        merge_commit = data.get("mergeCommit")
+        state = data.get("state")
+        return MergeRequest(
+            iid=number, url=data.get("url"), title=data.get("title"),
+            state=_GH_STATES.get(state, state),
+            draft=data.get("isDraft") is True,
+            assignee=first.get("login") if isinstance(first, dict) else None,
+            target_branch=data.get("baseRefName"),
+            source_branch=data.get("headRefName"), sha=data.get("headRefOid"),
+            merge_commit_sha=(merge_commit.get("oid")
+                              if isinstance(merge_commit, dict) else None),
+            # GitHub отдаёт коммит вливания одним полем при любом методе.
+            squash_commit_sha=None)
+
+    @staticmethod
+    def open_mr(target: str, branch: str, base: str, title: str, body: str,
+                draft: bool, assignee) -> MergeRequest:
+        argv = ["pr", "create", "--head", branch, "--base", base,
+                "--title", title, "--body", body]
+        if draft:
+            argv.append("--draft")
+        if assignee is not None:
+            argv.append(f"--assignee={assignee}")
+        res = github_call(target, *argv)
+        if res.returncode != 0:
+            # Адрес PR в stderr («already exists») не разбирается: номер —
+            # только из stdout успешного создания (требование 1).
+            stderr = res.stderr or ""
+            exists = (f'a pull request for branch "{branch}" into branch '
+                      f'"{base}" already exists' in stderr
+                      or "A pull request already exists" in stderr)
+            return MergeRequest(reason=f"gh pr create завершился кодом "
+                                       f"{res.returncode}: {_gh_text(res)}",
+                                already_exists=exists)
+        lines = [line.strip() for line in (res.stdout or "").splitlines()
+                 if line.strip()]
+        match = _GH_PR_URL_RE.match(lines[-1]) if lines else None
+        if match is None:
+            return MergeRequest(reason=f"gh pr create: адрес PR в выводе не "
+                                       f"разобран: "
+                                       f"{(res.stdout or '').strip()[:300]!r}")
+        # Владелец и имя — разбором адреса проекта, не префиксом: `.git`, scp
+        # и регистр букв адреса записи не должны терять номер.
+        project = ci._owner_and_name(repo_context.resolve(target).remote)
+        url, pr_project = match.group(0), f"{match.group(1)}/{match.group(2)}"
+        if project is None or project.lower() != pr_project.lower():
+            return MergeRequest(reason=f"gh pr create: адрес PR {url} — не "
+                                       f"репозиторий проекта "
+                                       f"{project or target}")
+        number = int(match.group(3))
+        status = _GitHub.mr_status(target, number)
+        if status.reason:
+            # Частичный успех: PR открыт, чтение отказало — номер и адрес
+            # остаются в результате вместе с причиной (требование 2).
+            return MergeRequest(iid=number, url=url,
+                                reason=f"PR #{number} {url} открыт, чтение не "
+                                       f"удалось: {status.reason}")
+        return dataclasses.replace(status, iid=number, url=url)
+
+    @staticmethod
+    def undraft_mr(target: str, mr) -> MergeRequest:
+        current = _GitHub.mr_status(target, mr)
+        if current.reason or not current.draft:
+            return current
+        res = github_call(target, "pr", "ready", str(mr))
+        if res.returncode != 0:
+            return MergeRequest(reason=f"gh pr ready {mr} завершился кодом "
+                                       f"{res.returncode}: {_gh_text(res)}")
+        return _GitHub.mr_status(target, mr)
+
+    @staticmethod
+    def assign_mr(target: str, mr, assignee) -> MergeRequest:
+        # `--add-assignee` добавляет исполнителя, не заменяет (требование 6).
+        res = github_call(target, "pr", "edit", str(mr),
+                          f"--add-assignee={assignee}")
+        if res.returncode != 0:
+            return MergeRequest(reason=f"gh pr edit {mr} завершился кодом "
+                                       f"{res.returncode}: {_gh_text(res)}")
+        return _GitHub.mr_status(target, mr)
 
 
 # Единственный реестр реализаций: ключ — значение поля `forge` записи.
@@ -200,6 +397,14 @@ def ci_by_pipeline(target: str) -> bool:
     check runs `ci`."""
     value, _why = _hosting(target)
     return value is not None and IMPLEMENTATIONS[value].CI_BY_PIPELINE
+
+
+def assignee_by_name(target: str) -> bool:
+    """Исполнитель MR проекта — имя пользователя: признак `ASSIGNEE_BY_NAME`
+    реализации в реестре; хостинг не определён — нет."""
+    value, _why = _hosting(target)
+    return (value is not None and getattr(IMPLEMENTATIONS[value],
+                                          "ASSIGNEE_BY_NAME", False) is True)
 
 
 def _call(name: str, target: str, *args):
