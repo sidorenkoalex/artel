@@ -59,9 +59,14 @@ run watch`, `orchestrator/ci.py:1793-1837`), поле `policy.ci_required_jobs`,
    (`orchestrator/config.py:818-849`) это ровно записи трёх видов: строка,
    которая является префиксом `.github/workflows/` (включая саму
    `.github/workflows/`, `.github/`, `.github`); `**/workflows/`;
-   `**/.github/`. Записи `**/<имя файла>` и префиксы, длиннее
+   `**/.github/`. Записи `**/`, `**/<имя файла>` и префиксы, длиннее
    `.github/workflows/` (например `.github/workflows/c`), каталог не
-   покрывают — `fail`. Маски вида `*` для GitHub не принимаются.
+   покрывают — `fail`. Маски вида `*` для GitHub не принимаются. Проверка
+   выполняется не пробой самим путём каталога `.github/workflows/` (она
+   истинна для записи `**/`, хотя ни один файл под каталогом ей не покрыт)
+   и не одним фиксированным именем файла (оно пропускает записи на
+   отдельный файл вида `**/<имя>` и `.github/workflows/<имя>`): запись
+   `**/` и записи на отдельный файл дают `fail` при любом имени.
 4. **Явные исходы прочих строк `doctor` для GitHub `target-human`** —
    закрепляются тестами без правки кода: `project-support` — `ok`;
    `project-submodules` и строки хука `pre-push` — есть;
@@ -102,15 +107,17 @@ run watch`, `orchestrator/ci.py:1793-1837`), поле `policy.ci_required_jobs`,
 8. **`ci_required_jobs` только у хостинга, который его читает.** Запись
    проекта людей (`targets.merged_by_project_people`) с заданным
    `policy.ci_required_jobs`, у которой реализация хостинга в реестре
-   `forge` это поле не читает (признак реализации по образцу
-   `_check_full_suite_source`, не литерал), отказывает при загрузке с именем
-   поля и хостинга. Решение читается из реализации в реестре
-   `forge.IMPLEMENTATIONS` (`orchestrator/forge.py:365`, через
-   `targets._hosting_registry`, `orchestrator/targets.py:1163-1170`):
-   подменённая в реестре реализация с признаком чтения поля принимает
-   запись, без признака — отказывает, какое бы имя хостинга ни стояло в
-   записи. GitLab и записи `operator` (в том числе `github` +
-   `operator`) — без изменений.
+   `forge` это поле не читает, отказывает при загрузке с именем поля и
+   хостинга. Признак реализации (по образцу `_check_full_suite_source`,
+   `orchestrator/targets.py:1137-1160`) — атрибут модуля или класса
+   реализации `READS_CI_REQUIRED_JOBS`: у `gitlab_adapter` — `True`, у
+   `_GitHub` его нет или `False`. Решение —
+   `getattr(_hosting_registry().get(hosting), "READS_CI_REQUIRED_JOBS",
+   False)` по реестру `forge.IMPLEMENTATIONS` (`orchestrator/forge.py:365`,
+   через `targets._hosting_registry`, `orchestrator/targets.py:1163-1170`),
+   не литерал хостинга и не `CI_BY_PIPELINE`. GitLab и записи `operator`
+   (в том числе `github` + `operator`) — без изменений. Исход для пустого
+   списка `ci_required_jobs: []` не закрепляется.
 9. **`kill` не закрывает PR проекта людей.** Для записи с
    `targets.merged_by_project_people` уборка не зовёт `gh pr close` ни до,
    ни после отправки ветки; до отправки удаляется только ветка origin
@@ -177,10 +184,11 @@ AC-3. Каждый отказ `_check_delivery` из перечня полей (
 AC-4. Для записи GitHub `target-human` строка
 `project-ci-file-no-paths-<проект>` есть без компонента с `full_suite`
 ci/both; при `no_paths` с `.github/workflows/`, с `.github/`, с `.github`
-(без `/`), с `**/workflows/` или с `**/.github/` — `ok`; без них, с маской
-`.github/*`, с `**/ci.yml`, с `.github/workflows/c` и с
-`.github/workflows/ci.yml` — `fail`, в причине названо имя каталога
-`.github/workflows/`. Для записи GitLab `target-human`
+(без `/`), с `**/workflows/` или с `**/.github/` — `ok`; без подходящей
+записи, с маской `.github/*`, с `**/`, с `**/ci.yml`, `**/x`, `**/a`,
+`**/main.yml`, с `.github/workflows/c`, `.github/workflows/ci.yml`,
+`.github/workflows/x`, `.github/workflows/a` — `fail`, в причине названо
+имя каталога `.github/workflows/`. Для записи GitLab `target-human`
 — прежние условие построения строки и исходы по `.gitlab-ci.yml`.
 
 AC-5. Для записи GitHub `target-human` в выводе `doctor` есть строки
@@ -209,11 +217,16 @@ CI ветки такой задачи на `approve` `merge_gate` (поддел�
 AC-8. Запись `github` + `target-human` с `policy.ci_required_jobs` отказывает
 при загрузке; текст отказа называет поле `ci_required_jobs` и хостинг
 `github`. Та же запись с `forge: gitlab` и запись `github` + `operator` с
-этим полем загружаются. Признак, не литерал: при подмене в
-`forge.IMPLEMENTATIONS` реализации `github` на реализацию с признаком
-чтения поля запись `github` + `target-human` с этим полем загружается, а
-при подмене реализации `gitlab` на реализацию без признака запись
-`gitlab` + `target-human` с этим полем отказывает при загрузке.
+этим полем загружаются. Признак, не литерал и не `CI_BY_PIPELINE`: в
+`forge.IMPLEMENTATIONS["github"]` подставлен подкласс `_GitHub` с
+`READS_CI_REQUIRED_JOBS = True` (`CI_BY_PIPELINE` прежний, `False`) —
+запись `github` + `target-human` с непустым `policy.ci_required_jobs`
+загружается; в `IMPLEMENTATIONS["gitlab"]` подставлено пространство имён с
+атрибутами `gitlab_adapter`, но `READS_CI_REQUIRED_JOBS = False`
+(`CI_BY_PIPELINE = True`) — запись `gitlab` + `target-human` с этим полем
+отказывает при загрузке с именем поля и хостинга. Подстановка — во
+временной песочнице `config` теста, настоящие файлы не меняются. Исход для
+пустого списка `[]` не закрепляется.
 
 AC-9. `kill` задачи `github` + `target-human` до отправки ветки и после неё:
 `gh pr close` не вызван, запись журнала «уборка» содержит «PR не тронут: MR
@@ -243,9 +256,15 @@ AC-13. Дифф трёх файлов мандата (требование 10) �
 `gitlab` + `operator` в каждом файле не меньше, чем на main; в каждом
 действии (`new`, `run`, `auto`, `approve`, `epic draft promote`, строка
 `project-support`) для `gitlab` + `operator` утверждается вхождение
-полного нового текста причины в вывод — тот же вид утверждения, что на
-main (`assert reason in out`/`in found[0].detail`, `check_refusal`), с
-константой нового текста целиком; `test_ac3_*_reason_exact`,
+полного текста причины в вывод — тот же вид утверждения, что на main
+(`assert reason in out`/`in found[0].detail`, `check_refusal`). В
+`tests/test_epic_draft_promote_unsupported_project.py` вид проверки
+причины остаётся как на main: `reason = targets.unsupported_reason(name)`,
+`assert reason`, `assert reason in out` (`:72-73`, `:87`); новая константа
+текста причины в этом файле не вводится, правка файла — только перенос
+параметра `target-human` (точный текст причины `gitlab` + `operator`
+держат равенства AC-2 в двух других файлах мандата). В двух других
+файлах вхождение — константой нового текста целиком; `test_ac3_*_reason_exact`,
 `test_ac4_support_constants_exact`,
 `test_ac4_reason_text_names_pair_and_supported_list` (случай
 `gitlab-operator`: `reason == expected`) и утверждения констант поддержки
@@ -306,6 +325,14 @@ main (`assert reason in out`/`in found[0].detail`, `check_refusal`), с
 - `tasks/01M6N7CYKDAMAKENX60CBK7VQX/ANSWER-1.md` — мандат «Ослабление тестов
   разрешено» на три файла и матрица неослабления (условия — требование 10,
   AC-1, AC-2, AC-13); решение «монолит, $85».
+- Записки разработчику (решение 4 Оператора на гейте SPEC 05.11; проверку
+  тестов не меняют): `ci.head_sha` читает голову через git, а не через `gh`
+  (`orchestrator/ci.py:237-254`); `branch_status` —
+  `orchestrator/ci.py:1206`; в `orchestrator/cleanup.py` условие закрытия
+  PR лучше строить по признаку реализации (`forge.ci_by_pipeline`), а не
+  литералом `_forge_of(target) == "github"` (`:311-312`), хотя литерал
+  допущен исключением сторожа; сетевой git в тестах недостижим песочницей
+  (`tests/sandbox.py:996-1010`, `:1337-1341`).
 - Безопасность тестов (ТЗ): ни настоящего GitHub, ни настоящего `gh` —
   подделка `ci.gh`; связка ключей не читается; проекты вымышленные во
   временной песочнице `config`, `origin` — локальный голый репозиторий;
