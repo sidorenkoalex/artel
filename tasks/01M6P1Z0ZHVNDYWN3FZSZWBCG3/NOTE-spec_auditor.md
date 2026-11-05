@@ -1,16 +1,19 @@
 # NOTE spec_auditor
 
 ## Выяснено
-- Аудит SPEC sha c709af8a (после четырёх возвратов). Файлы зоны, `tests/test_push_hook_*.py`, `tests/test_hosting_token_units.py`, `tests/test_01m545…` совпадают с 77e9ca9c (diff пуст); цитаты строк SPEC подтверждены.
-- Опыт (git 2.50.1, локальный http-сервер 401 + помощник-журнал, useHttpPath=true): помощник получает `host` с портом в исходном регистре (`LOCALHOST:port`, `GIT.Example.test:8443`), `path` — путь адреса без ведущей и завершающей косой черты, `.git` как в адресе. Сравнение хоста без учёта регистра в помощнике нужно делать самому.
-- yamlmini: ключ `"x"` в кавычках остаётся с кавычками (`'"x"'`); пустой ключ — форма `  : slot`; `{}` — строка `'{}'` (не отображение → отказ).
-- `test_01m6kbd9fc36warwsy9z0jdmg5_target_set.py:270-272` берёт LOCAL_FIELDS динамически — не ломается.
+- Аудит SPEC sha 4fad4f01 (после пяти возвратов). Код зоны и шесть файлов AC-9 совпадают с 77e9ca9c (diff пуст).
+- Три отклонения прошлого аудита (c709af8a) сняты решением №5.1: http:// + пустой слот — fail (треб. 5, AC-5), пятый случай AC-8, фраза AC-2 исправлена.
+- Опыт AC-4 (git 2.50.1): статический http.server с Basic по префиксу пути, два bare после update-server-info: с useHttpPath и помощником по пути clone+submodule update+fetch --recurse-submodules проходят; без useHttpPath — «Authentication failed», git повторяет клон подмодуля один раз («a second time»), петли нет. Помощник получает path=grp/proj.git, grp/sub.git.
+- `token_slot` обязателен (FIELDS :41, проверка :865) — случая «поле без token_slot» у загруженной записи нет.
+- Тесты, вызывающие project_entry_checks (`test_01m574a6…doctor_ci_token`), берут строку по имени — не ломаются.
 
 ## Не сработало
-- Bash с `$VAR`/`cd /tmp` отклоняется; опыт — временный exp_audit.py в каталоге документов, убран task-rm.
+- Bash с `$VAR`/`cd` отклоняется; опыт — временный exp_audit.py в каталоге документов, убран task-rm.
+
+- Опыт: при GIT_TERMINAL_PROMPT=0 git всё равно вызывает GIT_ASKPASS (и запасной SSH_ASKPASS), если помощник ничего не отдал; ответ askpass становится паролем. SPEC не требует снимать их (образец 01m545:226-229 снимает).
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready. Отклонения: исход doctor при пустом слоте у подмодуля из поля с `http://`/ssh-адресом не задан (два правила req 5); AC-8 не покрывает отказ для `http://` на хосте записи; испорченная фраза в AC-2.
+- SPEC-AUDIT.md готов: verdict concerns, status ready, guard ок. Отклонения: 1) снять GIT_ASKPASS/SSH_ASKPASS в безопасной форме (случаи «пусто» AC-3/AC-8); 2) ранний ok «в .gitmodules нет адресов» (project_checks.py:1378) при поле не ловится AC-5.
 
 ## Чего не хватило
 - Способа гонять опыт с git без временного файла в каталоге документов.
