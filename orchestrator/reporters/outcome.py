@@ -103,6 +103,24 @@ class _Ids:
             self.component, _root_path(self.workdir, rel), name, count + 1)
 
 
+def _classname_parts(classname: str) -> list[str]:
+    """Части точечного `classname`: пустая часть (точка в начале или точка
+    за точкой) — не разделитель, а точка в начале имени следующей части:
+    `tests..artel-plank.x` → `tests`, `.artel-plank`, `x` — каталог с точки
+    в начале имени (SPEC 01M6MZAEG0M8Q2GPBX4RSAK71Z, требование 1)."""
+    parts: list[str] = []
+    dots = ""
+    for part in classname.split("."):
+        if not part:
+            dots += "."
+            continue
+        parts.append(dots + part)
+        dots = ""
+    if dots and parts:
+        parts[-1] += dots
+    return parts
+
+
 def _junit_location(case, cwd: Path) -> tuple[str, str]:
     """(путь файла от `workdir`, полное имя) теста отчёта JUnit: файл — из
     атрибута `file`, иначе из `classname` (путь с `/` либо точечный путь
@@ -114,7 +132,7 @@ def _junit_location(case, cwd: Path) -> tuple[str, str]:
         if "/" in classname:
             path, classname = classname, ""
         else:
-            parts = classname.split(".")
+            parts = _classname_parts(classname)
             for size in range(len(parts), 0, -1):
                 candidate = "/".join(parts[:size]) + ".py"
                 if (Path(cwd) / candidate).is_file():
@@ -260,7 +278,7 @@ def _forge_location(classname: str, name: str, workdir: str,
     длинный префикс частей, чей `.py` есть файлом под `workdir`."""
     if "/" in classname:
         return classname, name
-    parts = classname.split(".")
+    parts = _classname_parts(classname)
     for size in range(len(parts), 0, -1):
         candidate = "/".join(parts[:size]) + ".py"
         if _root_path(workdir, candidate) in tree_files:
