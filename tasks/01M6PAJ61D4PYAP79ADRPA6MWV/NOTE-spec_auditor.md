@@ -1,13 +1,16 @@
 # Записка аудитора SPEC 01M6PAJ61D4PYAP79ADRPA6MWV
 
 ## Выяснено
-- Пятый визит, SPEC 79b39475: решения пятого круга 1–2 (решение гейта №4) внесены; пункты визита 4 (места вне зон без id, `_rerun`) закрыты по содержанию; якоря :174, :607, :680, :267-269, :430, :757, :972, :1731, :2042, :2338 сверены.
-- Новое: `run_plank(task_id=…)` (acceptance.py:2056-2073) уже значит «цели в планке задачи, выкладка `_plank_layout`», не «id для имени проекта». Передача `task_id` в вызов долгоживущего файла (plank_run.py:267-269), как велит SPEC треб. 3, у pytest-own с `long_lived_dir` под `workdir` зовёт `plank_layout.plank_layout` → `shutil.copytree` несуществующего `tasks/<id>/acceptance_tests` → FileNotFoundError (проверено опытом: copytree отсутствующего каталога — FileNotFoundError). Ломается `tests/test_01m56g23zqdhv2bkevwwc22r96_plank_run_long_lived.py::test_ac5…` при безусловной передаче; для compose — тот же путь, если compose идёт через `_own`/`layout_mode`.
-- `mutation_run.py:516` зовёт `run_full_suite` без id — для compose отказ; mutation_run в контейнере вне задачи — не отклонение.
-- Подмены `run_full_suite` в tests/ — MagicMock/лямбды; suite_run-тесты читают только kwargs `limit`.
+- Шестой визит, SPEC 8b7154d2: решение шестого круга 1 (`compose_task_id` у `run_plank`, долгоживущий вызов plank_run.py:267-269) внесено; пункт визита 5 закрыт.
+- Остаток: вызов планки plank_run.py:283-286 передаёт только `task_id`; `compose` идёт `_run_plank_reported` → `_report_run` (acceptance.py:2090, :2103) — SPEC не задаёт, откуда имя проекта (task_id или compose_task_id). Вердикт concerns, дефолт (а) `compose_task_id or task_id`.
+- Якоря SPEC сверены; `_with_long_lived_pairs` определена :1329, `:268-272` — место вызова в `load` (верно).
+- `run()`/`collect()` берут id из `Path(tdir).name` (acceptance.py:1590).
+
+## Не сработало
+- Составные bash-команды с `cd`/`head` требуют подтверждения — использовать абсолютные пути и Read.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready, п.1 — смысл `task_id` у `run_plank`.
+- SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Чего не хватило
-- В SPEC — смысла существующего параметра `run_plank.task_id` (докстринг acceptance.py:2056-2061).
+- Явного перечня в SPEC всех вызовов `run_plank` (оба в plank_run.py) с источником id имени.
