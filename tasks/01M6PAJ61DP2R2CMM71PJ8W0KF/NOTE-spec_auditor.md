@@ -1,15 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Визит 8 (spec_sha 711cfbf7): решения №7.1, №7.2 внесены; Д1/Д2 визита 7 сняты.
-- Якоря верны: cli.py:221-226, :305-331 (:322 `doctor._fix_canary_live`); __init__.py:152-159; runner.py:1364-1381; acceptance.py:156; lease.py:399/408/414; test_lint.py:75-94; test_doctor_closed_ref_fix.py:154-162 (уводит canary._live_dir), :177-183.
-- Опыт (tempfile.mkdtemp, python3 -c, 40 запусков): после killpg(SIGKILL)+wait() пробы os.killpg(pgid,0) отвечают PermissionError (EPERM) в 35/40, 1–116 проб подряд, до 0,33 мс; затем ProcessLookupError, и os.kill(дочерний,0) → ProcessLookupError 40/40. Правило №7.1 «до ProcessLookupError» молчит об EPERM: либо исключение наружу, либо ранний выход. liveness.py:75-86 `_group_exists` уже трактует EPERM как «группа есть».
+- Визит 9 (spec_sha 7028feb8): решение №8.1 внесено (требования 14, 15, 17, AC-2, AC-3); Д1/Д2 визита 8 сняты. Прочий текст SPEC против 711cfbf7 не менялся (git diff 12593cdec 00d5ce99e).
+- Якоря верны по 54fe44ebb: cli.py:221-226, :305-331 (:322); __init__.py:152-159; runner.py:1364-1381; acceptance.py:156; lease.py:399/408/414; liveness.py:75-86; test_doctor_closed_ref_fix.py:154-162, :177-183.
+- Опыт: 100 000 проб os.killpg(g,0) без пауз — 0,05 с; без wait() лидер-зомби держит группу (EPERM на все пробы), с wait() — ESRCH; в обоих режимах дочерний процесс формы теста не виден (20/20).
+- Новое: константа числа проб без имени (тест должен подменить её до кода) — Д1; «либо подменена liveness._group_exists» и неразличимость малой константы от 100 000 — Д2.
 
 ## Не сработало
-- Heredoc в Bash отклоняется парсером; Write в /tmp — нет прав; `ls` нет в PATH; `$?` в команде отклоняется. Опыт — `python3 -c '…'` с tempfile.
+- `$`-подстановки и `for … do` в Bash отклоняются; списки каталогов — `python3 -c`.
 
 ## Где остановился
-- SPEC-AUDIT.md записан: status ready, verdict concerns (Д1 EPERM в пробах группы — дефолт: EPERM = группа есть; Д2 число проб не задано — дефолт ≥100000); guard — ок.
+- SPEC-AUDIT.md: status ready, verdict concerns (Д1 имя константы проб — дефолт GROUP_GONE_PROBES; Д2 тест исчерпания — только подмена os.killpg и счёт проб); guard — ок.
 
 ## Чего не хватило
-- Текста SPEC части 1 в брифе (требование 6, правило PATH) — `git show refs/artifacts/01M6PAJ61D4PYAP79ADRPA6MWV:tasks/…/SPEC.md`.
+- Ничего существенного; история SPEC — `git log refs/artifacts/<id> -- tasks/<id>/SPEC.md`.
