@@ -1,15 +1,14 @@
 ## Выяснено
-- Четвёртый аудит (spec fb05dac1). Решения гейта №3.1/№3.2 закрыли оба прежних замечания (сигнатура `_drop_key_mismatches`, связь `--drop-key` со сверкой).
-- Опыт (tempfile + подмена config.TARGETS): `_target_set_mismatches` для `--key` со значением 123 / [a, b] отдаёт текст `_submodule_tokens_error` — требование 3 выполнимо через сверку.
-- `machine` не опустеет после снятия последнего ключа: forge/url/token_slot обязательны (targets.py:378).
-- Прежние тесты target-set не сверяют TARGET_SET_USAGE и не передают `--key` — не краснеют.
-- Вердикт concerns: у `--key` нет критерия, что ветка зовёт `_target_set_mismatches` (симметрично решению №3.2).
+- Пятый аудит (spec f4ae6aba). Решение гейта №4.1 закрыло прежнее замечание (связь `--key` с `_target_set_mismatches` через атрибут модуля, вызов по имени — projects.py:454).
+- Факты SPEC о коде сверены на 75ec08d4 — расхождений нет; KeyError прежней сверки — projects.py:676.
+- Прежние тесты не сверяют TARGET_SET_USAGE и не передают `--key`; тест справки (help_registry:93) новые альтернативы `target-set …` не краснят.
+- Вердикт pass.
 
 ## Не сработало
-- Опытная фикстура: `profile` → нужно `test_profile` (отображение), `merge_gate` — operator | target-human.
+- Ничего.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан status: ready, verdict: concerns; guard ок.
+- SPEC-AUDIT.md сдан status: ready, verdict: pass; guard ок.
 
 ## Чего не хватило
-- Готовой минимальной валидной записи локального слоя для опыта (искал поля merge_local).
+- Ничего существенного.
