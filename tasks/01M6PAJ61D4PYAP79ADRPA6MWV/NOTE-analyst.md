@@ -11,6 +11,8 @@
 
 - Шаг 5 (пятый круг, решения 1–2) внесён с пометкой «решение пятого круга N»: канал task_id до run_repeat (advance_gates/acceptance.py:174), run_full_suite (suite_run.py:607/:680; у run_full_suite acceptance.py:2338 нужен необязательный task_id), run_plank долгоживущего файла (plank_run.py:267-269; у run_plank task_id уже есть), outcome_integrity._rerun (:430, вызовы :757/:972). Зоны +3 файла (12), AC-9 расширен. Прочие вызывающие run_full_suite — mutation_run.py:516 (вне объёма), notes.py:1102 (полный набор артели, не compose).
 
+- Шаг 6 (шестой круг, решение 1) внесён с пометкой «решение шестого круга 1»: у `run_plank` (acceptance.py:2042) новый необязательный параметр id для имени проекта Compose (напр. `compose_task_id`), без раскладки; `task_id` прежний (цели в `tasks/<id>/acceptance_tests`, раскладка). plank_run.py:267-269 передаёт только новый параметр. Треб. 3, AC-9, «Не входит», шапка.
+
 ## Не сработало
 - awk и цепочки команд в Bash требуют подтверждения — одиночный grep работает.
 - `artel.py docs` из роли недоступна.
