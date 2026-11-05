@@ -89,6 +89,14 @@ schema_version: 5
 `git fetch` песочницы под нагрузкой (`test_ac18_watch_notifies_once_on_outcome_change`),
 повтор отдельно — зелёный.
 
+ANSWER-2 (мандат на `test_ac3_no_token_no_request` и
+`test_ac18_network_down_reason` — ложное срабатывание гейта неослабления на
+правку `GH_CALLS`): условия мандата выполнены без новых правок — `git diff
+main...HEAD` по `tests/test_01m5wcxbm7wcmrwcbwnchmar3t_gitlab_forge.py` —
+только удаление четырёх ключей `GH_CALLS`; `GL_CALLS`, `GL_CALL_NAMES` и тела
+обоих методов не тронуты. Повторный прогон этого файла и
+`…_github_mr_units.py` — 262 passed.
+
 ## Влияние на систему
 - GitLab: реализация не отдаёт `iid` с причиной, поэтому новая ветвь
   `open_forge_mr`/`_deliver_mr` для него не срабатывает; распознавание 409 и

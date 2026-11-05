@@ -1,16 +1,14 @@
 # Записка developer
 
 ## Выяснено
-- Реализация: forge.py (github_call + _github_form_allowed, _GitHub.mr_status/open_mr/undraft_mr/assign_mr, MergeRequest.already_exists, ASSIGNEE_BY_NAME, assignee_by_name), github_adapter.py (mr_assignee(policy, target), ASSIGNEE_NOT_NAME, ссылка при iid с причиной), fsm_merge_gate.py (_deliver_mr: ветвь MR_PARTIAL_DETAIL, эскалация по already_exists; _ready_existing_mr передаёт target).
-- GH_CALLS: удалены 4 ключа по мандату. Код закоммичен ролью (57735472f) — планка AC-17 читает git show HEAD.
-- Долгоживущие 96 passed, AC-17 passed, соседние модули зелёные.
+- Реализация (прошлый шаг, коммиты 57735472f, 79d518ea6): forge.py (github_call + _github_form_allowed, четыре функции _GitHub, MergeRequest.already_exists, ASSIGNEE_BY_NAME, assignee_by_name), github_adapter.py (mr_assignee(policy, target), ASSIGNEE_NOT_NAME, ссылка при iid с причиной), fsm_merge_gate.py (_deliver_mr: ветвь MR_PARTIAL_DETAIL, эскалация по already_exists).
+- Шаг по ANSWER-2: гейт неослабления ложно отнёс правку GH_CALLS к test_ac3_no_token_no_request/test_ac18_network_down_reason (они параметризованы GL_CALL_NAMES). Условия мандата выполнены без правок: diff файла против main — только удаление четырёх ключей GH_CALLS. Код не менялся; gitlab_forge + github_mr_units — 262 passed.
 
 ## Не сработало
 - `pytest -n 4` в шаге роли: сторож conftest роняет воркеры — гонять без -n.
-- test_01m6ab4ve2r0q2v5d4mmjgngh7_mr_sync.py::test_ac18_watch_notifies_once_on_outcome_change упал на git fetch под нагрузкой, отдельно зелёный.
 
 ## Где остановился
-PLAN.md status: ready. Карта перегенерирована (после коммита изменилась только строка built_at_sha — оставлена незакоммиченной).
+PLAN.md дополнен абзацем про ANSWER-2, status: ready, guard ок. Карта: после регенерации меняется только built_at_sha (оставлено незакоммиченным, пульт закоммитит).
 
 ## Чего не хватило
-Ничего существенного.
+Ничего.
