@@ -1,16 +1,14 @@
 # Записка аудитора SPEC 01M6PAJ61D4PYAP79ADRPA6MWV
 
 ## Выяснено
-- Третий визит: SPEC faa9184d вносит решения третьего круга 1–4; пять пунктов вердикта второго визита (94e9bb21) закрыты по содержанию.
-- Новая находка: `acceptance._report_run(profile, tree, subset, timeout, …)` (acceptance.py:806) не получает id задачи, `Profile` (project_profile.py:66) его не несёт. `outcome_integrity._rerun` (:445) и `_prior_versions` (:736) — только чтение — зовут `report_run` без id, профили из `component_profiles(target, …)` (:1349). Канал id для имени проекта `artel-<id>-<прогон>` (треб. 3) и для «записи журнала» при зависшем снятии (треб. 8) не задан. `two_sided.run` (:433) — в зонах, id выводим из ветки или передаётся.
-- Мелкое: предел `up` (300 с) не связан с остатком предела места — остаток для `run` может быть ≤ 0, исход не задан; учёт времени `config` в пределе места не сказан; предел `docker context inspect` не задан.
-- vars(config)-перебор в тестах новые COMPOSE_* константы не ловит (observation:108 — фильтр OBSERV/HEARTBEAT).
-
-## Не сработало
-- cd + grep в Bash отклоняется; работают одиночные команды с абсолютными путями.
+- Четвёртый визит, SPEC 49608e20: решения четвёртого круга 1–2 внесены; два пункта визита 3 (канал id, соотношение пределов) закрыты по содержанию.
+- Новое: вызывающие узла `_report_run` ВНЕ зон без id задачи: `advance_gates/acceptance.py:174` → `run_repeat(seeded, run_cwd, command=)` (у `run_repeat` :1731 нет параметра id; файл вне зон, SPEC «Не входит»); `suite_run.py:607`, `:680` → `run_full_suite` (только чтение, нет id); `plank_run.py:267-269` → `run_plank` без `task_id` (долгоживущий файл, вне зон). С правилом «compose без id — отказ» эти места для compose всегда отказывают; повтор зерна → красный повтор → эскалация задачи.
+- `run()`/`collect()` берут id из `Path(tdir).name` (acceptance.py:1424) — канал есть.
+- `outcome_integrity._rerun` (:430) id не получает — передача требует параметра `_rerun` и правки двух вызовов (:757, :972).
+- Подмен `report_run` в tests/ нет — сигнатурный аргумент не ломает тесты.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан для spec_sha faa9184d…: verdict concerns, status ready, guard ок. Два пункта: канал id задачи в `_report_run` (+ носитель записи журнала); соотношение пределов (остаток ≤ 0, время `config`, предел `context inspect`).
+- SPEC-AUDIT.md сдан для spec_sha 49608e20: verdict concerns, status ready. П.1 — три места вне зон без id (run_repeat ← advance_gates/acceptance.py:174, suite_run.py:607/680, plank_run.py:267-269); п.2 мелкое — новый параметр `_rerun` в outcome_integrity.
 
 ## Чего не хватило
-- Канала id задачи в узле `_report_run` — искал по вызывающим.
+- Перечня всех вызывающих `run_repeat`/`run_full_suite` вне acceptance.py в SPEC.
