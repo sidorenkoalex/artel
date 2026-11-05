@@ -264,7 +264,10 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
         print(f"{head}: долгоживущий файл {file_arg}, cwd {code_dir}",
               flush=True)
         target_arg = _long_lived_target(file_arg, code_dir, own)
-        code, output = (acceptance.run_plank([target_arg], code_dir, profile=own)
+        # `compose_task_id` — только имя проекта Compose: раскладку планки
+        # он не включает, в отличие от `task_id`.
+        code, output = (acceptance.run_plank([target_arg], code_dir, profile=own,
+                                             compose_task_id=task_id)
                         if own is not None
                         else acceptance.run_plank([target_arg], code_dir))
     else:

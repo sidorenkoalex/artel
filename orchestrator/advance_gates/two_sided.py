@@ -273,7 +273,8 @@ def _location(records: list, nodeid: str) -> dict:
 
 
 def _run_side(tree: Path, nodes: list, plugin_dir: Path,
-              report: Path, timeout: float, profile=None) -> tuple:
+              report: Path, timeout: float, profile=None,
+              task_id: str | None = None) -> tuple:
     """(записи отчёта, причина сбоя) одного прогона pytest по `nodes` в
     дереве `tree`. Команда и окружение — те же, что у прогона планки
     (`acceptance._pytest_command`/`_pytest_env`).
@@ -285,10 +286,12 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
     дерева — сбой стороны без прогона.
 
     Профиль с итогом из отчёта (SPEC 01M590GJAF0EDV4NBC4C99MFVH,
-    требование 8) — `_run_side_report`."""
+    требование 8) — `_run_side_report`; `task_id` — id задачи для имени
+    проекта Compose у профиля `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV,
+    требование 3)."""
     reported = acceptance.reported(profile)
     if reported is not None:
-        return _run_side_report(tree, nodes, reported, timeout)
+        return _run_side_report(tree, nodes, reported, timeout, task_id)
     own = acceptance.own(profile)
     cwd = tree
     if own is not None:
@@ -338,7 +341,7 @@ def _run_side(tree: Path, nodes: list, plugin_dir: Path,
 
 
 def _run_side_report(tree: Path, nodes: list, profile,
-                     timeout: float) -> tuple:
+                     timeout: float, task_id: str | None = None) -> tuple:
     """(записи в форме плагина, причина сбоя) стороны по профилю с отчётом:
     файлы узлов гонятся подмножеством компонента, итог узла — запись
     отчёта с тем же путём и именем (`passed`/`failed`/`skipped`; ошибка —
@@ -356,7 +359,7 @@ def _run_side_report(tree: Path, nodes: list, profile,
     from .tests_writing import _check_failure_kind
     strict = in_outcome_bounds(profile)
     files = sorted({node.partition("::")[0] for node in nodes})
-    run = acceptance.report_run(profile, tree, files, timeout)
+    run = acceptance.report_run(profile, tree, files, timeout, task_id=task_id)
     if run.refusal:
         return [], run.refusal
     if run.timed_out:
@@ -431,7 +434,8 @@ def _side_timeout(deadline: float | None) -> float:
 
 
 def run(repo: Path, code_branch: str, base_sha: str, methods: list,
-        deadline: float | None = None, profile=None) -> Outcome:
+        deadline: float | None = None, profile=None,
+        task_id: str | None = None) -> Outcome:
     """Двусторонний прогон `methods` (список `Method`) на деревьях базы
     сравнения `base_sha` и головы `code_branch` в клоне `repo`.
 
@@ -441,7 +445,9 @@ def run(repo: Path, code_branch: str, base_sha: str, methods: list,
     без него — таймаут стороны прежний.
 
     `profile` — профиль тестов проекта от вызывающего (`_run_side`); не
-    передан — раннер пульта, как до SPEC 01M52EEFNA1WH31962HVNT0YZ9."""
+    передан — раннер пульта, как до SPEC 01M52EEFNA1WH31962HVNT0YZ9.
+    `task_id` — id задачи для имени проекта Compose сторон у профиля
+    `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV, требование 3)."""
     head_sha = gitcmd.branch_head_sha(code_branch, repo=repo)
     if not head_sha:
         return _failed(methods, f"git не ответил на голову ветки {code_branch}",
@@ -497,7 +503,7 @@ def run(repo: Path, code_branch: str, base_sha: str, methods: list,
             else:
                 runs[label] = _run_side(
                     tree, sorted(set(nodes.values())), plugin_dir, report,
-                    timeout, profile)
+                    timeout, profile, task_id)
         judged = {}
         for method in methods:
             judged[method.address] = _common_variants(

@@ -61,7 +61,7 @@ from .. import artifact_branch as docs_ref
 from .. import (config, gitcmd, project_profile, repo_context, store,
                targets, workspace)
 from . import two_sided
-from ..targets import PROFILE_RUNNER_OWN
+from ..targets import PROFILE_PROJECT_RUNNERS
 from ._base import GateRefusal, _run_gates
 # Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
@@ -1651,8 +1651,10 @@ def _same_sides(outcome: str) -> dict:
 def _own_profile(profile):
     """Профиль проекта задачи для двустороннего прогона: `pytest-own` —
     он сам (стороны идут по профилю, SPEC 01M52EEHSRD93WMPHWB5VJYRKD);
-    `pult-pytest` — `None`, стороны идут раннером пульта, как прежде."""
-    return profile if profile.runner == PROFILE_RUNNER_OWN else None
+    `pult-pytest` — `None`, стороны идут раннером пульта, как прежде.
+    `compose` — тоже он сам: стороны идут веткой отчёта в контейнере (SPEC
+    01M6PAJ61D4PYAP79ADRPA6MWV, требование 8)."""
+    return profile if profile.runner in PROFILE_PROJECT_RUNNERS else None
 
 
 def _observe_methods(conn, task_id: str, branch: str, ev: _Evaluation,
@@ -1677,7 +1679,8 @@ def _observe_methods(conn, task_id: str, branch: str, ev: _Evaluation,
         else:
             try:
                 result = (two_sided.run(repo, branch, ev.cmp.base, [target],
-                                        deadline=deadline, profile=profile)
+                                        deadline=deadline, profile=profile,
+                                        task_id=task_id)
                           if profile is not None else
                           two_sided.run(repo, branch, ev.cmp.base, [target],
                                         deadline=deadline))
@@ -1782,7 +1785,8 @@ def _test_integrity_gate(conn, task_id: str, t,
         return None
     methods = _two_sided_methods(ev)
     result = (two_sided.run(workspace.task_repo(task_id), t["branch"],
-                            ev.cmp.base, methods, profile=own)
+                            ev.cmp.base, methods, profile=own,
+                            task_id=task_id)
               if own is not None else
               two_sided.run(workspace.task_repo(task_id), t["branch"],
                             ev.cmp.base, methods))
