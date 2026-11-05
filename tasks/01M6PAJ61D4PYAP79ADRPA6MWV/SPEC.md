@@ -4,7 +4,7 @@ type: spec
 author_role: analyst
 status: ready
 schema_version: 5
-zones: orchestrator/targets.py, orchestrator/project_profile.py, orchestrator/acceptance.py, orchestrator/advance_gates/two_sided.py, orchestrator/advance_gates/test_integrity.py, orchestrator/advance_gates/outcome_integrity.py, orchestrator/config.py, docs/codebase-map.md, tests/
+zones: orchestrator/targets.py, orchestrator/project_profile.py, orchestrator/acceptance.py, orchestrator/advance_gates/two_sided.py, orchestrator/advance_gates/test_integrity.py, orchestrator/advance_gates/outcome_integrity.py, orchestrator/advance_gates/acceptance.py, orchestrator/suite_run.py, orchestrator/plank_run.py, orchestrator/config.py, docs/codebase-map.md, tests/
 budget_usd: 60
 ---
 
@@ -38,7 +38,8 @@ budget_usd: 60
 второго круга N»; решения третьего круга гейта SPEC этой задачи 05.11
 (1–4) — с пометкой «решение третьего круга N»; решения четвёртого круга
 гейта SPEC этой задачи 05.11 (1–2) — с пометкой «решение четвёртого
-круга N»; требования родителя
+круга N»; решения пятого круга гейта SPEC этой задачи 05.11 (1–2) — с
+пометкой «решение пятого круга N»; требования родителя
 16 и 17 — здесь 12 и 13, AC-22 родителя (часть прогона вымышленного
 Compose-файла) — здесь AC-17. Из перенесённых текстов убраны только
 предложения о вызовах `doctor` и `runner.role_env` (часть 2). Утверждения
@@ -125,11 +126,28 @@ Compose-файла) — здесь AC-17. Из перенесённых текс
    по умолчанию, вызовы и поведение прежние. Все вызывающие места
    `compose` передают id задачи: `acceptance.run_repeat`
    (`acceptance.py:1731`), гейт исходов `outcome_integrity`
-   (`orchestrator/advance_gates/outcome_integrity.py:445`, `:736` — в этом
-   файле правится только передача `task_id` в вызовы `report_run`),
+   (`orchestrator/advance_gates/outcome_integrity.py:445`, `:736`),
    двусторонний прогон (`two_sided.py:359`) и прочие вызовы `_report_run`
    модуля `acceptance`. Вызов `_report_run` с профилем `compose` без id
    задачи — отказ запуска с текстом, `docker` не вызывается.
+   Канал id доводится до всех мест вызова прогона `compose` (решение
+   пятого круга 1), чтобы повтор файла с зерном, фоновый `suite-run` и
+   `plank-run` долгоживущего файла у `compose` работали, а не отказывали:
+   - `acceptance.run_repeat` получает необязательный параметр `task_id`;
+     `orchestrator/advance_gates/acceptance.py` передаёт id задачи в вызов
+     `run_repeat` в `_seed_repeats_escalate` (`:174`);
+   - `orchestrator/suite_run.py` передаёт id задачи в вызовы
+     `acceptance.run_full_suite` (`:607`, `:680`); `run_full_suite`
+     (`acceptance.py:2338`) для этого получает необязательный параметр
+     `task_id`;
+   - `orchestrator/plank_run.py` передаёт id задачи в вызов `run_plank`
+     долгоживущего файла (`:267-269`; у `run_plank`, `acceptance.py:2042`,
+     параметр `task_id` уже есть);
+   - `orchestrator/advance_gates/outcome_integrity.py` (решение пятого
+     круга 2): передача `task_id` до вызовов `report_run`, включая новый
+     параметр `_rerun` (`:430`) и правку его вызовов (`:757`, `:972`).
+   В этих четырёх файлах — только передача id задачи, иных правок нет;
+   параметры необязательны, у прочих профилей поведение прежнее.
    Деревом прогона здесь и ниже названо дерево, в котором идёт место
    (рабочая копия, копия базы, дерево стороны `two_sided`/гейта исходов).
    Помощники части 1, которые берут `runner.py` и `doctor` (часть 2), —
@@ -349,7 +367,7 @@ AC-7. Путь машины в аргументах места вне левой
 
 AC-8. `down -v --remove-orphans` с тем же именем проекта вызывается при зелёном исходе, красном исходе, таймауте и исключении; у сервиса без `image:` — с `--rmi local`; на таймауте и на исключении внутри прогона порядок argv — `kill` с тем же именем проекта, затем `down -v --remove-orphans`. Провал `up` — отказ прогона с текстом вывода Compose, исход тестов не засчитан, и в argv после `up` есть `down -v --remove-orphans` с тем же именем проекта. С подменёнными константами пределов: зависающий `up` — отказ по таймауту за предел `COMPOSE_UP_TIMEOUT_SEC`, затем `down` с тем же именем проекта; зависающий `down` — прогон завершается за предел `COMPOSE_TEARDOWN_TIMEOUT_SEC`, не висит, в журнале задачи, id которой передан в `_report_run` (`store.journal`), — запись с именем проекта Compose. Соотношение пределов (решение четвёртого круга 2): остаток предела места для `run` после `up` не больше нуля — отказ по таймауту, `run` в argv нет, `kill` и `down -v --remove-orphans` с тем же именем проекта вызваны; предел `up` не больше остатка предела места; зависающий `docker context inspect` (при не заданном `DOCKER_HOST`) — отказ за предел `COMPOSE_CONFIG_TIMEOUT_SEC` (тест подменяет константу малым значением).
 
-AC-9. Последовательные прогоны базы и головы одного места и одновременные прогоны разных процессов получают разные имена проекта Compose; имя — из id задачи строчными, только `[a-z0-9-]`. Имя проекта Compose в argv каждого места `compose` — прогон планки, полный набор, `run_repeat`, двусторонний прогон и гейт исходов (`outcome_integrity`, оба вызова `report_run`) — несёт id задачи, переданный аргументом `task_id` (решение четвёртого круга 1). Вызов `report_run` с профилем `compose` без `task_id` — отказ запуска с текстом, `docker` не вызван. Профили `pytest-own` и `pult-pytest` вызываются без `task_id` прежним образом.
+AC-9. Последовательные прогоны базы и головы одного места и одновременные прогоны разных процессов получают разные имена проекта Compose; имя — из id задачи строчными, только `[a-z0-9-]`. Имя проекта Compose в argv каждого места `compose` — прогон планки, полный набор, `run_repeat`, двусторонний прогон и гейт исходов (`outcome_integrity`, оба вызова `report_run`, в том числе перепрогон стороны через `_rerun`) — несёт id задачи, переданный аргументом `task_id` (решение четвёртого круга 1); в том числе повтор файла с зерном (`_seed_repeats_escalate` → `run_repeat`), фоновый `suite-run` (`run_full_suite`) и `plank-run` долгоживущего файла (`run_plank`) задачи с профилем `compose` — `docker` подменён временным дублёром, настоящие файлы не меняются (решения пятого круга 1–2). Вызов `report_run` с профилем `compose` без `task_id` — отказ запуска с текстом, `docker` не вызван. Профили `pytest-own` и `pult-pytest` вызываются без `task_id` прежним образом.
 
 AC-10. Двусторонний прогон (`two_sided`) для профиля `compose` и гейт исходов (`outcome_integrity`) для компонента `compose` идут веткой отчёта: в argv нет `-p <плагин пульта>`, в окружении нет `PYTHONPATH` пульта. Гейт исходов проверяется только на компоненте `compose`: `test_profile` вне границы `in_outcome_bounds` (`orchestrator/advance_gates/acceptance.py:213-218`; решение третьего круга 4).
 
@@ -369,9 +387,11 @@ AC-17. Необязательные тесты с настоящим Docker — 
 
 ## Оценка объёма и деление
 
-Сработавшие сигналы: файлов зоны — 9 (порог 5; девятый —
-`outcome_integrity.py`, решение четвёртого круга 1, только передача
-`task_id`); критериев приёмки — 17
+Сработавшие сигналы: файлов зоны — 12 (порог 5; `outcome_integrity.py` —
+решения четвёртого круга 1 и пятого круга 2,
+`advance_gates/acceptance.py`, `suite_run.py`, `plank_run.py` — решение
+пятого круга 1; во всех четырёх только передача `task_id`); критериев
+приёмки — 17
 (порог 10); `budget_usd` $60 ≥ $30.
 
 Материал для решения Оператора — **обоснование монолита**: задача уже
@@ -403,13 +423,16 @@ AC-17. Необязательные тесты с настоящим Docker — 
 - Помощник планки `_pult.py` в контейнере (решение гейта 2.2).
 - Правки ADR-0023 и ADR-0026.
 - Раннеры не на pytest; недоверенные проекты (D1б).
-- Правка файлов «только чтение» ТЗ: `orchestrator/suite_run.py`,
-  `orchestrator/mutation_run.py`,
+- Правка файлов «только чтение» ТЗ: `orchestrator/mutation_run.py`,
+  `orchestrator/suite_run.py` и `orchestrator/plank_run.py` сверх
+  передачи `task_id` (решение пятого круга 1),
   `orchestrator/advance_gates/outcome_integrity.py` сверх передачи
-  `task_id` в вызовы `report_run` (решение четвёртого круга 1 расширило
-  зоны этим файлом только на эту передачу),
-  `orchestrator/advance_gates/acceptance.py` (`in_outcome_bounds` — граница
-  не меняется, решение третьего круга 4),
+  `task_id` до вызовов `report_run`, включая параметр `_rerun` (решения
+  четвёртого круга 1 и пятого круга 2 расширили зоны этим файлом только
+  на эту передачу),
+  `orchestrator/advance_gates/acceptance.py` сверх передачи `task_id` в
+  вызов `run_repeat` (решение пятого круга 1; `in_outcome_bounds` —
+  граница не меняется, решение третьего круга 4),
   `orchestrator/reporters/outcome.py`, `orchestrator/fsm_merge_gate.py`,
   `orchestrator/stack.py`, `orchestrator/runner.py`
   (`in_role_environment` — вызывается, не правится).
@@ -429,9 +452,14 @@ AC-17. Необязательные тесты с настоящим Docker — 
   — `_own` :121, `_OWN_SYSTEM_PATH_DIRS` :156, `_own_path` :159,
   `_own_env` :189, `_link_deps` :583, `_report_env` :626, `_report_argv`
   :736, `_report_run` :806, `run_repeat` :1731,
-  `_report_suite_result_key` :3069, `report_run` :3706;
+  `_report_suite_result_key` :3069, `report_run` :3706, `run_plank` :2042,
+  `run_full_suite` :2338;
   `orchestrator/advance_gates/outcome_integrity.py` — вызовы
-  `report_run` :445, :736; `orchestrator/advance_gates/two_sided.py` —
+  `report_run` :445, :736, `_rerun` :430, его вызовы :757, :972;
+  `orchestrator/advance_gates/acceptance.py` — вызов `run_repeat` :174;
+  `orchestrator/suite_run.py` — вызовы `run_full_suite` :607, :680;
+  `orchestrator/plank_run.py` — вызов `run_plank` долгоживущего файла
+  :267-269; `orchestrator/advance_gates/two_sided.py` —
   вызов `report_run` :359; `orchestrator/store.py` — `journal` :1610;
   `orchestrator/targets.py` — `PROFILE_FIELDS` :56, `PROFILE_OPTIONAL`
   :76-77, `PROFILE_RUNNERS` :83, `PROFILE_OWN_RUNNER_ONLY` :85,
