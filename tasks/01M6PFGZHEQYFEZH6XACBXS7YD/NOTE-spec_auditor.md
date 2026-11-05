@@ -1,14 +1,13 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Второй визит (после возврата Оператора, решения 1–3): все решения внесены в SPEC (тр. 3–5, AC-4..AC-7).
-- Факты подтверждены: spec_gate_decision.py:186-190, artel.py:2650-2675, fsm.py:2079-2081 ловит только DecisionError; numbered() (spec_gate_decision.py:307) тоже через parse.
-- Опыт python3: '²' isdigit True/int ValueError; '３','١' isdecimal True, int ок, != str(i) → «не по порядку».
-- Тексты «не сочетается»/«без значения» в tests/ только в докстрингах; assert_refused без names — не ломаются.
-- Вердикт pass.
+- Третий визит (после второго возврата Оператора, решения №2.1–2.3): внесены в SPEC тр. 3–4, AC-5, AC-6, AC-8, AC-9.
+- Факты подтверждены: artel.py:2650-2675 (`""` через пробел уходит в fsm), spec_gate_decision.py:186-192, fsm.py:2080 ловит только DecisionError, cli() теста ловит только SystemExit.
+- Справка artel.py:190 закреплена test_ac8_help_names_decision_form (:989).
+- Существующие тесты отказа не сверяют текст — не ломаются. Вердикт pass.
 
 ## Не сработало
-- `ls` в оболочке недоступен (command not found) — пользоваться grep/sed.
+- Цепочки команд через `;`/`|head` требуют подтверждения — использовать `&&` или Read.
 
 ## Где остановился
 SPEC-AUDIT.md сдан (status: ready, verdict: pass), guard прогнан.
