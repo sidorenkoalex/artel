@@ -828,10 +828,15 @@ COMPOSE_REPORT_DIR = ".artel-report"
 # входит в ключ итога (требование 10): любая правка `_compose_override` или
 # `_compose_config_refusal` меняет и эту строку.
 COMPOSE_OVERRIDE_RULE = (
-    "1: services -ports +labels; networks +internal +labels, default "
+    "2: services -ports +labels; networks +internal +labels, default "
     "добавляется; отказ: network_mode, volumes_from, container_name, сеть "
     "external, чужое name сети и тома, driver_opts тома local, сокет Docker "
-    "в bind, secrets.file, configs.file")
+    "в bind, secrets.file, configs.file; вне дерева прогона: источник bind, "
+    "secrets.file, configs.file, build.context (и адрес git), "
+    "build.additional_contexts (кроме service:); неверная форма поля; "
+    "привилегии: privileged, pid/ipc/userns_mode/cgroup/uts host, "
+    "security_opt unconfined/label disable, cap_add, devices, build.ssh, "
+    "build.privileged, build.entitlements")
 # Поля записи `compose` в ключе итога (`compose_up_down_sec` — предел, не
 # итог).
 _COMPOSE_KEY_FIELDS = ("compose_file", "compose_service", "compose_env_file",
@@ -1060,9 +1065,10 @@ def _socket_source(source: object, sockets: set) -> bool:
                for sock in sockets)
 
 
-def _bind_sources(service: dict) -> list:
-    """Источники bind-монтирований сервиса собранной конфигурации."""
-    found = []
+def _bind_entries(service: dict) -> tuple[list, str]:
+    """(источники bind сервиса, отказ по форме элемента `volumes`; пусто —
+    форма годна). Элемент не словарь и не строка в источники не попадает."""
+    found, refusal = [], ""
     for volume in service.get("volumes") or ():
         if isinstance(volume, dict):
             if volume.get("type", "bind") == "bind":
@@ -1071,12 +1077,21 @@ def _bind_sources(service: dict) -> list:
             source = volume.split(":", 1)[0]
             if source.startswith(("/", ".", "~")):
                 found.append(source)
-    return found
+        elif not refusal:
+            refusal = f"элемент volumes ({volume!r}) не словарь и не строка"
+    return found, refusal
 
 
-def _compose_config_refusal(cfg: dict, project: str, sockets: set) -> str:
+def _bind_sources(service: dict) -> list:
+    """Источники bind-монтирований сервиса собранной конфигурации."""
+    return _bind_entries(service)[0]
+
+
+def _compose_config_refusal(cfg: dict, project: str, sockets: set,
+                            tree) -> str:
     """Отказ запуска по собранной конфигурации (требование 5); пусто —
-    годна. Текст называет сервис, сеть, том, секрет или конфигурацию."""
+    годна. Текст называет сервис, сеть, том, секрет или конфигурацию.
+    `tree` — дерево прогона: файлы машины разрешены только в нём."""
     head = "отказ запуска compose по собранной конфигурации:"
     own = (project, f"{project}_")
 
@@ -1111,9 +1126,123 @@ def _compose_config_refusal(cfg: dict, project: str, sockets: set) -> str:
                     f"проекта {project} и не начинается с {project}_")
     for section, what in (("secrets", "секрет"), ("configs", "конфигурация")):
         for name, item in (cfg.get(section) or {}).items():
-            if _socket_source((item or {}).get("file"), sockets):
+            item = item if isinstance(item, dict) else {}
+            if _socket_source(item.get("file"), sockets):
                 return (f"{head} {what} {name} — file на сокет Docker или его "
                         f"каталог ({item['file']})")
+    # Новые проверки — отдельным проходом после прежних: порядок и тексты
+    # прежних отказов (и сокетный отказ раньше «вне дерева») не меняются.
+    return _compose_tree_refusal(cfg, tree, head)
+
+
+# Значения изоляции, отдающие стенду пространство имён машины.
+_HOST_NAMESPACE_FIELDS = ("pid", "ipc", "userns_mode", "cgroup", "uts")
+_UNSAFE_SECURITY_OPT = ("unconfined", "label=disable", "label:disable")
+_URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _inside_tree(value: object, real_tree: str) -> bool:
+    """Абсолютный путь `value` по `realpath` — само дерево или под ним по
+    границе компонента; прочее (не строка, пусто, относительный путь, `~`)
+    — не внутри: закрыто по умолчанию, без `realpath` от рабочего каталога
+    процесса."""
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return False
+    real = os.path.realpath(value)
+    return real == real_tree or \
+        real.startswith(real_tree.rstrip(os.sep) + os.sep)
+
+
+def _git_address(value: str) -> bool:
+    """Адрес git по виду значения, а не по тому, что путь не абсолютный:
+    `<дерево>/r.git#main` лежит в дереве по `realpath`, но это адрес."""
+    return bool(_URL_SCHEME.match(value) or value.startswith("git@") or
+                re.search(r"\.git(#|$)", value))
+
+
+
+
+def _build_refusal(build: object, real_tree: str) -> str:
+    """Отказ по `build` сервиса (без заголовка и имени сервиса); пусто —
+    годен."""
+    if build is None:
+        return ""
+    if isinstance(build, str):
+        build = {"context": build}
+    if not isinstance(build, dict):
+        return f"build ({build!r}) не словарь и не строка"
+    context = build.get("context")
+    if isinstance(context, str) and _git_address(context):
+        return f"build.context ({context}) — адрес git, сборка не из дерева прогона"
+    if not _inside_tree(context, real_tree):
+        return f"build.context ({context}) вне дерева прогона"
+    extra = build.get("additional_contexts")
+    if extra is not None and not isinstance(extra, dict):
+        return f"build.additional_contexts ({extra!r}) не словарь"
+    for key, value in (extra or {}).items():
+        if isinstance(value, str) and value.startswith("service:"):
+            continue
+        path = value
+        if isinstance(value, str) and value.startswith("oci-layout://"):
+            path = value[len("oci-layout://"):]
+        elif isinstance(value, str) and _git_address(value):
+            return (f"build.additional_contexts {key} ({value}) — не путь "
+                    f"дерева прогона")
+        if not _inside_tree(path, real_tree):
+            return (f"build.additional_contexts {key} ({value}) вне дерева "
+                    f"прогона")
+    if build.get("ssh"):
+        return (f"build.ssh ({build['ssh']}) — SSH-агент или ключи машины в "
+                f"сборке")
+    if build.get("privileged"):
+        return "build.privileged — привилегированная сборка"
+    if build.get("entitlements"):
+        return f"build.entitlements ({build['entitlements']}) — привилегия сборки"
+    return ""
+
+
+def _privilege_refusal(service: dict) -> str:
+    """Отказ по привилегиям сервиса (без заголовка и имени); пусто — нет."""
+    if service.get("privileged"):
+        return "privileged — привилегированный контейнер"
+    for field in _HOST_NAMESPACE_FIELDS:
+        if service.get(field) == "host":
+            return f"{field}: host — привилегия, пространство имён машины"
+    opts = service.get("security_opt") or ()
+    for opt in [opts] if isinstance(opts, str) else opts:
+        if any(mark in str(opt) for mark in _UNSAFE_SECURITY_OPT):
+            return f"security_opt {opt} — привилегия, снята защита контейнера"
+    for field in ("cap_add", "devices"):
+        if service.get(field):
+            return f"{field} ({service[field]}) — привилегия"
+    return ""
+
+
+def _compose_tree_refusal(cfg: dict, tree, head: str) -> str:
+    """Файлы машины — только в дереве прогона `tree`, привилегии стенда —
+    отказ (SPEC 01M6QRMYW4JH23MVWF3RDD7VGW); пусто — годна."""
+    real_tree = os.path.realpath(tree)
+    for name, service in (cfg.get("services") or {}).items():
+        service = service or {}
+        sources, refusal = _bind_entries(service)
+        if refusal:
+            return f"{head} сервис {name} — {refusal}"
+        for source in sources:
+            if not _inside_tree(source, real_tree):
+                return (f"{head} сервис {name} — volumes.source bind ({source}) "
+                        f"вне дерева прогона {tree}")
+        refusal = _build_refusal(service.get("build"), real_tree) or \
+            _privilege_refusal(service)
+        if refusal:
+            return f"{head} сервис {name} — {refusal}"
+    for section, what in (("secrets", "секрет"), ("configs", "конфигурация")):
+        for name, item in (cfg.get(section) or {}).items():
+            if not isinstance(item, dict):
+                return (f"{head} {what} {name} — элемент {section} ({item!r}) "
+                        f"не словарь")
+            if "file" in item and not _inside_tree(item["file"], real_tree):
+                return (f"{head} {what} {name} — {section}.file "
+                        f"({item['file']}) вне дерева прогона {tree}")
     return ""
 
 
@@ -1283,7 +1412,7 @@ def _compose_report_run(profile, tree: Path, subset: list | None,
         return ReportRun(refusal=(f"отказ запуска compose: вывод {call} — не "
                                   f"JSON конфигурации: {_bounded(out)}; стенд "
                                   f"не поднимался"))
-    refusal = _compose_config_refusal(cfg, project, sockets)
+    refusal = _compose_config_refusal(cfg, project, sockets, tree)
     if not refusal and profile.compose_service not in cfg["services"]:
         refusal = (f"отказ запуска compose: сервиса {profile.compose_service} "
                    f"нет в собранной конфигурации")
