@@ -1,15 +1,15 @@
-# NOTE-reviewer (итерация 1)
+# NOTE-reviewer (итерация 2)
 
 ## Выяснено
-- plank-run: 30 passed; долгоживущие + test_doctor*.py (2 файла): 145 passed; карта свежая (разница только built_at_sha).
-- project_checks._drop_group зовётся ДО proc.wait(): лидер — незабранный зомби, на macOS killpg(g,0) отвечает PermissionError до wait → цикл всегда исчерпывает все 100000 проб (опыт: {'ok':1,'perm':99999}, ~0.08 с), ProcessLookupError не наблюдается. PLAN говорил «сбор лидера до проб». → major.
-- Планка AC-2 (стенды) — «Группа: разовый»; в tests/ сторожа строки «забытые стенды» нет (down без -v, живость) → major.
+- R1-F1 исправлен: `_drop_group(proc)` — SIGKILL → wait → пробы; опыт `{'gone': 1}`.
+- R1-F2 исправлен: `tests/test_doctor_compose_stands.py`, мутация `-v` в `down` его красит.
+- plank-run 30 passed; 5 файлов тестов задачи/doctor — 149 passed; карта свежая.
 
 ## Не сработало
-- find/ls с cd в составной команде — отклоняются; работать абсолютными путями.
+- Составные bash-команды с `sed -i`/`cp` отклоняются — временную мутацию делал через Edit.
 
 ## Где остановился
-- REVIEW.md записан: changes_requested, R1-F1 (порядок wait/пробы), R1-F2 (сторож стендов в tests/). Следующей итерации — проверить оба.
+- REVIEW.md итерации 2: approved, R1-F1 и R1-F2 — accepted.
 
 ## Чего не хватило
-- Поведение killpg(0) на группе с зомби-лидером на macOS — проверено опытом.
+- Ничего существенного.
