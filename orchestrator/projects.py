@@ -371,9 +371,13 @@ TARGET_SET_USAGE = ("target-set <проект> <путь поля> <значен
                     "target-set <проект> <раздел>.<поле> --key <ключ> "
                     "<значение> | "
                     "target-set <проект> <раздел>.<поле> --drop-key <ключ> | "
+                    "target-set <проект> <путь блока> --from-file <файл> | "
                     "target-set --show <проект> [<путь>]")
 KEY_FLAG = "--key"
 DROP_KEY_FLAG = "--drop-key"
+FROM_FILE_FLAG = "--from-file"
+BLOCK_PATHS = ("допустимые пути блока: description.test_profile, "
+               "description.components.<имя>")
 # Поля-отображения строк, ключи которых пишут `--key`/`--drop-key`; прочие
 # отображения (`env`, `tools`, …) перечнем не охвачены (SPEC
 # 01M6PHS9XQTPPZ73V80ACGSZJS, «Не входит»).
@@ -408,6 +412,9 @@ def cmd_target_set(rest: list) -> None:
         return
     if len(rest) >= 3 and rest[2] in (KEY_FLAG, DROP_KEY_FLAG):
         _target_set_key(rest)
+        return
+    if len(rest) >= 3 and rest[2] == FROM_FILE_FLAG:
+        _target_set_block(rest)
         return
     if len(rest) < 3:
         sys.exit(f"target-set: нужны проект, путь поля и значение\n"
@@ -607,6 +614,116 @@ def _target_set_show(rest: list) -> None:
     print("\n".join(lines))
 
 
+def _target_set_block(rest: list) -> None:
+    """`target-set <проект> <путь блока> --from-file <файл>`: замена блока
+    `description.test_profile` или `description.components.<имя>` целиком
+    отображением из файла (SPEC 01M6QZ4RR80B2BYM9AXG5ZMAS4). Аргумент файла
+    читается от текущего каталога и в журнал идёт дословно."""
+    if len(rest) != 4:
+        sys.exit(f"target-set: {FROM_FILE_FLAG} — неверное число аргументов\n"
+                 f"{TARGET_SET_USAGE}")
+    name, block_path, _flag, file_arg = rest
+    keys = _block_keys(block_path)
+    block = _block_file(file_arg)
+    path, data = _target_set_load(name)
+    found, current = _lookup(data["targets"][name], keys)
+    if found and not _differences(current, block, block_path):
+        print(f"target-set: {name} {block_path}: без изменений "
+              f"(блок из {file_arg})")
+        return
+    was = len(_leaves(current)) if found else TARGET_SET_ABSENT
+    if not store.db_usable():
+        sys.exit(f"target-set: {NO_JOURNAL}; файл не записан")
+    edited = copy.deepcopy(data)
+    holder = edited["targets"][name]
+    for key in keys[:-1]:
+        if not isinstance(holder.get(key), dict):
+            holder[key] = {}
+        holder = holder[key]
+    # Присваивание по существующему ключу оставляет компонент на его месте
+    # среди `description.components`, новый ключ уходит в конец.
+    holder[keys[-1]] = copy.deepcopy(block)
+    order = list(holder)
+    text = _rendered(edited, path)
+    problems = _target_set_block_mismatches(data, text, name, keys, block,
+                                            order, path)
+    _target_set_write(path, text, problems, name,
+                      f"{block_path}: блок из {file_arg} (листов было {was} "
+                      f"→ стало {len(_leaves(block))})")
+
+
+def _block_keys(block_path: str) -> list[str]:
+    """Ключи пути блока от записи; отказ — путь не из двух видов или имя
+    компонента не записать ключом (до сборки текста слоя)."""
+    keys = block_path.split(".")
+    if keys == ["description", targets.PROFILE_FIELD]:
+        return keys
+    if len(keys) == 3 and keys[:2] == ["description", targets.COMPONENTS_FIELD]:
+        try:
+            # Пробная строка — то же правило записываемости ключа, что у
+            # пересборки слоя.
+            _render({keys[2]: None}, 0, "")
+            return keys
+        except _Unwritable:
+            pass
+    sys.exit(f"target-set: путь {block_path!r} — не путь блока; {BLOCK_PATHS}; "
+             f"файл не записан")
+
+
+def _block_file(file_arg: str) -> dict:
+    """Разобранное отображение файла блока; отказ — файл не прочитан, пуст,
+    несёт комментарий или повтор ключа, не разобран."""
+    try:
+        text = Path(file_arg).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"target-set: файл блока {file_arg} не прочитан: {exc}; "
+                 f"файл не записан")
+    if not text.strip():
+        sys.exit(f"target-set: файл блока {file_arg} пуст; файл не записан")
+    comment = _comment_line(text)
+    if comment is not None:
+        sys.exit(f"target-set: в файле блока {file_arg} комментарий (строка "
+                 f"{comment}) — разбор его молча отбросит; файл не записан")
+    try:
+        block = yamlmini.mapping(text)
+    except yamlmini.YamlError as exc:
+        sys.exit(f"target-set: файл блока {file_arg} не разобран: {exc}; "
+                 f"файл не записан")
+    duplicate = _duplicate_key(text)
+    if duplicate is not None:
+        key, number = duplicate
+        sys.exit(f"target-set: в файле блока {file_arg} ключ {key!r} повторён "
+                 f"(строка {number}) — разбор оставит последнее значение; "
+                 f"файл не записан")
+    if not block:
+        sys.exit(f"target-set: файл блока {file_arg} — пустое отображение; "
+                 f"файл не записан")
+    return block
+
+
+def _duplicate_key(text: str) -> tuple[str, int] | None:
+    """(ключ, номер строки второго вхождения) первого повтора ключа у одного
+    родительского отображения; None — повторов нет. Текст уже разобран
+    `yamlmini.mapping` и без комментариев: каждая непустая строка — пара
+    «ключ: значение», отступ вложенного блока глубже родителя."""
+    frames: list[tuple[int, set]] = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        while frames and frames[-1][0] > indent:
+            frames.pop()
+        if not frames or frames[-1][0] < indent:
+            frames.append((indent, set()))
+        key = stripped.partition(":")[0].strip()
+        seen = frames[-1][1]
+        if key in seen:
+            return key, number
+        seen.add(key)
+    return None
+
+
 def _comment_line(text: str) -> int | None:
     """Номер первой строки с комментарием по правилу `yamlmini` (строка с
     `#` первым непробельным символом; `#` в начале значения или после
@@ -777,6 +894,36 @@ def _target_set_mismatches(data: dict, text: str, name: str, keys: list,
     if _differences(value, new_leaves[target], ".".join(keys)):
         return [f"{'.'.join(keys)} читается как {new_leaves[target]!r}, "
                 f"задано {value!r}"]
+    return _merge_mismatches(data, new, name, path)
+
+
+def _target_set_block_mismatches(data: dict, text: str, name: str, keys: list,
+                                 block: dict, order: list,
+                                 path: Path) -> list[str]:
+    """Сверка текста замены блока до записи (SPEC 01M6QZ4RR80B2BYM9AXG5ZMAS4,
+    требование 5): все изменённые, добавленные и снятые листы лежат под
+    путём блока (префикс кортежа ключей, не строки); значение по пути равно
+    файлу; ключи родителя блока идут в ожидаемом порядке; сведение слоя
+    проходит, сведённые записи прочих проектов равны прежним."""
+    try:
+        new = yamlmini.mapping(text)
+    except yamlmini.YamlError as exc:
+        return [f"собранный текст не разобран: {exc}"]
+    target = ("targets", name, *keys)
+    shown = ".".join(target)
+    outside = [".".join(map(str, key))
+               for key in _changed_leaves(_leaves(data), _leaves(new))
+               if key[:len(target)] != target]
+    if outside:
+        return [f"изменились листы вне {shown}: {', '.join(outside)}"]
+    found, got = _lookup(new, list(target))
+    if not found or _differences(block, got, shown):
+        return [f"{shown} читается как {got!r}, в файле {block!r}"]
+    parent = _lookup(new, list(target[:-1]))[1]
+    if not isinstance(parent, dict) or list(parent) != order:
+        return [f"{'.'.join(target[:-1])}: порядок ключей "
+                f"{', '.join(parent) if isinstance(parent, dict) else parent!r}"
+                f", ожидался {', '.join(order)}"]
     return _merge_mismatches(data, new, name, path)
 
 
