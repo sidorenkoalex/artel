@@ -197,6 +197,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-set <проект> <путь поля> <значение> |
   target-set <проект> <раздел>.<поле> --key <ключ> <значение> |
   target-set <проект> <раздел>.<поле> --drop-key <ключ> |
+  target-set <проект> <путь блока> --from-file <файл> |
   target-set --show <проект> [<путь>] |
   reference <проект> [--sha <sha>] | conventions-stamp <проект> <файл>… |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
