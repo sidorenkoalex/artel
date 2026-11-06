@@ -195,6 +195,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | targets-migrate <проект> |
   target-set <проект> <путь поля> <значение> |
+  target-set <проект> <раздел>.<поле> --key <ключ> <значение> |
+  target-set <проект> <раздел>.<поле> --drop-key <ключ> |
   target-set --show <проект> [<путь>] |
   reference <проект> [--sha <sha>] | conventions-stamp <проект> <файл>… |
   doctor [--restore] [--fix] | alert-ack <id> "<решение>" |

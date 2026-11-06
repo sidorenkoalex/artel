@@ -5,8 +5,10 @@
 `test_ac17_real_docker_compose_run` гоняет место `acceptance.report_run` с
 профилем `compose` настоящим Docker: вымышленный проект во временной
 песочнице (`real_git`), образ `IMAGE` только из локального кэша (у каждого
-сервиса `pull_policy: never`, сети нет), `DOCKER_CONFIG` — каталог песочницы,
-`down -v` стендов прогона — в `finally`. Он пропускается с именованной
+сервиса `pull_policy: never`, сети нет), `DOCKER_CONFIG` — каталог песочницы
+(`docker_config_sandbox`) с единственной символической ссылкой `cli-plugins`
+на каталог дополнений настоящей конфигурации — без неё Docker Desktop не
+находит дополнение `compose`, `down -v` стендов прогона — в `finally`. Он пропускается с именованной
 причиной (`docker_skip_reason`): выставлена переменная `CI`, Docker не
 отвечает на пробу за `PROBE_TIMEOUT_SEC` (10 с), образа нет в локальном кэше
 (`docker image inspect`).
@@ -124,6 +126,24 @@ def docker_skip_reason() -> str | None:
 
 
 SKIP_REASON = docker_skip_reason()
+
+
+def docker_config_sandbox() -> Path:
+    """Пустой временный каталог для `DOCKER_CONFIG` прогона с настоящим Docker.
+
+    Docker Desktop ищет дополнение `compose` в `<DOCKER_CONFIG>/cli-plugins`,
+    поэтому в каталог кладётся единственная символическая ссылка
+    `cli-plugins` на каталог дополнений настоящей конфигурации — если он
+    есть. Настоящая конфигурация — по окружению в момент вызова, тем же
+    правилом, что у пульта (`orchestrator/acceptance.py`): `DOCKER_CONFIG`,
+    иначе `<HOME>/.docker`. `config.json` и прочее не копируется."""
+    sandbox = Path(tempfile.mkdtemp(prefix="artel-docker-config-"))
+    real = os.environ.get("DOCKER_CONFIG") or str(
+        Path(os.environ.get("HOME") or Path.home()) / ".docker")
+    plugins = Path(real) / "cli-plugins"
+    if plugins.is_dir():
+        os.symlink(plugins, sandbox / "cli-plugins")
+    return sandbox
 
 
 def word(rng, k: int = 6) -> str:
@@ -264,7 +284,9 @@ def test_ac17_real_docker_compose_run(real_git, monkeypatch):
     образе `IMAGE` из кэша), команда записи — сценарий `sh`, пишущий отчёт
     JUnit по пути `--junitxml`. `report_run` с `task_id` — зелёный, без
     отказа; после прогона проектов Compose с префиксом `artel-<id>-` нет. В
-    `finally` — `down -v` каждого такого проекта.
+    `finally` — `down -v` каждого такого проекта. `DOCKER_CONFIG` — от
+    `docker_config_sandbox()`: в нём ссылка `cli-plugins` на каталог
+    дополнений настоящей конфигурации, иначе `docker compose` неизвестна.
 
     Ловит мутацию: перекрытие ломает настоящую конфигурацию Compose (сеть,
     метки, путь отчёта под монтированием) — `config`/`run` настоящего Docker
@@ -311,7 +333,7 @@ def test_ac17_real_docker_compose_run(real_git, monkeypatch):
     values = targets.target(name)[targets.PROFILE_FIELD]
     profile = project_profile.with_tools(
         name, project_profile.Profile.from_values(values))
-    docker_config = Path(tempfile.mkdtemp(prefix="artel-docker-config-"))
+    docker_config = docker_config_sandbox()
     real_git.addCleanup(shutil.rmtree, docker_config, True)
     monkeypatch.setenv("DOCKER_CONFIG", str(docker_config))
     monkeypatch.setenv("HOME", str(docker_config.parent))
