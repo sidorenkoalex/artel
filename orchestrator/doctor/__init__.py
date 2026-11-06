@@ -152,7 +152,8 @@ from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,
 from .orphans import (_is_legit_task_worktree, _orphan_worktrees,
                        _project_clones, _canary_temp_directory,
                        _orphan_temp_dirs, _temp_owner_alive,
-                       _fix_orphan_temp_dirs, check_orphans)
+                       _fix_orphan_temp_dirs, check_orphans,
+                       check_compose_stands, _fix_compose_stands)
 from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
                           check_token_repo_scope, check_canary_trigger,
                           CANARY_LIVE_CHECK, check_canary_live,
