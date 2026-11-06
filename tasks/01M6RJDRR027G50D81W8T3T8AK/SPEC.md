@@ -33,8 +33,16 @@ GitLab). Соглашения проектов на хостинге часто 
    побайтно совпадающий с прежним.
 3. Подстановки: `{id}` — id задачи в том же виде (регистре), что сейчас
    стоит в заголовке; `{title}` — название задачи (`t['title']`), а при пустом
-   названии — id задачи, как сейчас; `{ref}` — ключ ссылки системы
-   `policy.ref_required` этой задачи — тот же, что подставляется в имя ветки.
+   названии — id задачи, как сейчас; `{ref}` — ключ первой в порядке записи
+   (`store.external_refs`, `orchestrator/store.py:751`) ссылки системы
+   `policy.ref_required` этой задачи — тем же правилом, что
+   `pull.commit_title` (`orchestrator/pull.py:926-939`); от шаблона ветки ключ
+   не зависит (решение Оператора 1 на гейте SPEC).
+   Ссылки задачи читаются только тогда, когда шаблон заголовка содержит
+   `{ref}`; при шаблоне без `{ref}` (в том числе по умолчанию) к ссылкам
+   задачи обращения нет. Порядок подстановки — `{id}`, затем `{ref}`,
+   последним `{title}`: подстановки внутри названия задачи не раскрываются
+   повторно (образец — `pull.py:938-939`).
 4. Заголовок по шаблону используется в обоих местах сборки заголовка:
    черновой MR через `forge.open_mr` (`github_adapter.py:441`) и
    `gh pr create` (`github_adapter.py:186`). Префикс черновика `Draft: `
@@ -54,25 +62,32 @@ GitLab). Соглашения проектов на хостинге часто 
 
 AC-1. Given вымышленная запись GitLab с `policy.ref_required: tracker`,
 `policy.mr_title_template: "{ref}: {title}"` и задача со ссылкой
-`tracker:ABC-12`, When открывается черновой MR (подменённый `forge.open_mr` /
-транспорт адаптера `gitlab_adapter.request`), Then заголовок MR —
-`Draft: ABC-12: <название задачи>`; после снятия черновика —
-`ABC-12: <название задачи>`.
+`tracker:ABC-12`, When открывается черновой MR через транспорт адаптера
+GitLab (`gitlab_adapter.request` подменён сервером-дублёром в процессе
+теста, который хранит заголовок MR; подмена `forge.open_mr` в этом критерии
+не используется), Then заголовок MR у дублёра — `Draft: ABC-12: <название
+задачи>`; после снятия черновика тем же транспортом — `ABC-12: <название
+задачи>` (префикс и снятие — `orchestrator/gitlab_adapter.py:546-547`,
+`:554-562`; решение Оператора 2).
 
 AC-2. Given запись без `policy.mr_title_template`, When открывается MR задачи,
 Then заголовок побайтно прежний `<id>: <название>`, а при пустом названии
 задачи — `<id>: <id>`.
 
 AC-3. Given значение `policy.mr_title_template` с неизвестной подстановкой
-`{foo}`, When загрузка записи, Then отказ, текст которого называет поле
-`policy.mr_title_template`.
+`{foo}`, When загрузка записи, Then отказ, текст которого несёт полное имя
+поля в форме отказа `_check_delivery` — `поле 'policy.mr_title_template'`
+(`orchestrator/targets.py:667-669`), а не отказ «неизвестное поле»
+(`targets.py:539-541`).
 
 AC-4. Given значение `policy.mr_title_template` — пустая строка, When загрузка
-записи, Then отказ, текст которого называет поле `policy.mr_title_template`.
+записи, Then отказ, текст которого несёт `поле 'policy.mr_title_template'` в
+форме отказа `_check_delivery`, а не отказ «неизвестное поле».
 
 AC-5. Given значение `policy.mr_title_template` с `{ref}` в записи без
 `policy.ref_required`, When загрузка записи, Then отказ, текст которого
-называет поле `policy.mr_title_template`.
+несёт `поле 'policy.mr_title_template'` в форме отказа `_check_delivery`, а не
+отказ «неизвестное поле».
 
 AC-6. Given запись с `policy.ref_required` и шаблоном с `{ref}` и задача без
 ссылки системы `ref_required`, When открывается MR, Then MR открыт с
@@ -81,15 +96,26 @@ AC-6. Given запись с `policy.ref_required` и шаблоном с `{ref}`
 
 AC-7. Given `target-set <проект> policy.mr_title_template "{ref}: {title}"`
 для вымышленного проекта с `ref_required` в песочнице, Then поле записано в
-локальный слой и рядом сохранена копия прежнего файла.
+локальный слой, а копия прежнего файла сохранена в
+`config.LOGS/targets-<время>.yaml` (`orchestrator/projects.py:986-996`).
 
 AC-8. Given `target-set <проект> policy.mr_title_template` с недопустимым
-значением (например `{foo}`), Then отказ команды, файл локального слоя
+значением (например `{foo}`), Then отказ команды, текст которого несёт
+`поле 'policy.mr_title_template'` в форме отказа `_check_delivery` (не отказ
+«неизвестное поле», `orchestrator/projects.py:781-783`), файл локального слоя
 побайтно прежний.
 
-AC-9. Given запись с `policy.mr_title_template: "{ref}: {title}"` и задача со
-ссылкой `tracker:ABC-12`, When MR открывается путём `gh pr create`
-(подменённый `ci.gh`), Then переданный заголовок — `ABC-12: <название задачи>`.
+AC-9. Given запись `forge: github` без гейта людей проекта с
+`policy.ref_required: tracker` и `policy.mr_title_template: "{ref}: {title}"`,
+задача с двумя ссылками системы `tracker` — первой по порядку записи
+`tracker:ABC-12`, второй `tracker:ABC-99` — и названием, в тексте которого
+стоит `{ref}`, и ветка задачи с коммитом над базой, When MR открывается путём
+`gh pr create` (`orchestrator/github_adapter.py:186`; песочница
+`RealGitSandbox` с голым origin по `init_bare_origin` — образец
+`tests/test_draft_mr_commits.py:55-67`, `ci.gh` подменён; настоящей отправки
+в сеть нет), Then заголовок в аргументах подменённого `gh pr create` —
+`ABC-12: <название задачи>`, где `{ref}` из названия остался буквальным
+(решения Оператора 1 и 3).
 
 Безопасность тестов (из ТЗ): вымышленные проекты и ключи; локальный слой —
 во временной песочнице (`tests.sandbox`); хостинг — подмена
@@ -122,6 +148,8 @@ AC-9. Given запись с `policy.mr_title_template: "{ref}: {title}"` и за
 - Правка `orchestrator/gitlab_adapter.py`, `orchestrator/forge.py`,
   `orchestrator/catalog.py`, `orchestrator/store.py`,
   `orchestrator/projects.py`, `tests/sandbox.py` — по ТЗ только чтение.
+- Правка `orchestrator/pull.py` — только образец правила ключа `{ref}`
+  (`commit_title`), не меняется.
 - Изменение справки `target-set`.
 - Зелёный полный набор `tests/` без правки существующих тестов — её держит
   пульт; покраснел существующий тест — эскалация с именем теста, без правки.

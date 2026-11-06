@@ -1,15 +1,16 @@
 # Записка аналитика
 
 ## Выяснено
-- ТЗ достаточно; факты сверены: `github_adapter.py:186` и `:441` — `f"{task_id}: {t['title'] or task_id}"`; `targets.py:391-428` — LOCAL_FIELDS, BRANCH/COMMIT_PLACEHOLDERS, DELIVERY_POLICY_FIELDS.
-- `target-set` берёт допустимые имена полей из `targets.LOCAL_FIELDS[section]` (`projects.py:780`) — projects.py по ТЗ только чтение.
-- SPEC: 9 AC, budget_usd 28 (рамка ТЗ $30), status ready, guard ок.
+- Возврат с spec_gate: 4 решения Оператора внесены в SPEC. Факты сверены по коду: `pull.py:926-939` (commit_title — первая ссылка системы, порядок {id}→{ref}→{text}), `targets.py:667-669` (форма отказа `поле 'policy.<имя>'`), `projects.py:986-996` (копия в config.LOGS/targets-<время>.yaml), `github_adapter.py:140-186` (условия входа и push), `tests/test_draft_mr_commits.py:55-67` (образец голого origin).
+- Требование 3: первая ссылка в порядке записи, ссылки читаются только при `{ref}` в шаблоне, порядок подстановки {id}, {ref}, {title}.
+- AC-1 — транспорт GitLab с сервером-дублёром, без подмены forge.open_mr; AC-3/4/5/8 — текст `поле 'policy.mr_title_template'`; AC-7 — копия в config.LOGS; AC-9 — RealGitSandbox + init_bare_origin + подмена ci.gh, две ссылки, `{ref}` в названии.
+- 9 AC, budget_usd 28, status ready, guard ок.
 
 ## Не сработало
-- Первый прогон guard: сигнал объёма (зона `tests/` + нет прогноза диффа) — добавлены «Прогноз диффа: 12 КиБ» и обоснование монолита.
+- guard: `orchestrator/pull.py` упомянут без классификации — добавлен в «Не входит» как образец.
 
 ## Где остановился
-- SPEC.md написан, guard ок. Шаг завершён.
+- SPEC.md исправлен, guard ок. Шаг завершён.
 
 ## Чего не хватило
-- Bash с `cd`/переменной в составной команде требует подтверждения — только абсолютные пути и одна команда.
+- —
