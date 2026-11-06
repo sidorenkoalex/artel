@@ -478,13 +478,18 @@ COMPOSE_MIN_VERSION = (2, 1, 1)
 _COMPOSE_VERSION_RE = re.compile(r"[0-9.]*")
 
 
-def _drop_group(pgid: int) -> None:
-    """`SIGKILL` группе и не больше `GROUP_GONE_PROBES` проб её исчезновения
-    сигналом 0 — разбор исхода пробы как у `liveness._group_exists`."""
+def _drop_group(proc) -> None:
+    """`SIGKILL` группе вызова, сбор её лидера и не больше `GROUP_GONE_PROBES`
+    проб исчезновения группы сигналом 0 — разбор исхода пробы как у
+    `liveness._group_exists`."""
+    pgid = proc.pid
     try:
         os.killpg(pgid, signal.SIGKILL)
     except OSError:
         pass
+    # Несобранный лидер-зомби держит группу: до `wait()` проба не увидит
+    # `ProcessLookupError`, и пробы выродятся в прокрутку до исчерпания.
+    proc.wait()
     for _ in range(GROUP_GONE_PROBES):
         try:
             os.killpg(pgid, 0)
@@ -494,6 +499,8 @@ def _drop_group(pgid: int) -> None:
             continue
         except OSError:
             return
+        # Проба без исключения — в группе ещё есть живой участник.
+        continue
 
 
 def _docker_call(argv: list, env: dict, cwd, timeout: float
@@ -510,14 +517,12 @@ def _docker_call(argv: list, env: dict, cwd, timeout: float
     try:
         out, err = proc.communicate(timeout=timeout)
     except doctor.subprocess.TimeoutExpired:
-        _drop_group(proc.pid)
-        proc.wait()
+        _drop_group(proc)
         for stream in (proc.stdout, proc.stderr):
             stream.close()
         return None, "", ""
     except BaseException:
-        _drop_group(proc.pid)
-        proc.wait()
+        _drop_group(proc)
         raise
     return proc.returncode, out or "", err or ""
 
