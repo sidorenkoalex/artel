@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Факты SPEC о коде подтвердились: github_adapter.py:186/:441, targets.py:377/391/417-419/424, projects.py:780, catalog._branch_ref_key :642.
-- Ключ {ref} у задачи может быть не один (catalog.cmd_link, new без {ref} в ветке); образец выбора — pull.commit_title (pull.py:926-939, первая по порядку записи).
-- target-set: значение `{ref}: {title}` проходит разбор и пишется в кавычках (проверено _argument_value/_literal); копия — в config.LOGS, не рядом.
-- tests/test_github_adapter.py EnsureDraftMrTest: conn=mock.Mock() — чтение ссылок без {ref} сломает тесты.
+- Аудит 2 (spec_sha 0cce178f): все семь отклонений аудита 1 закрыты решениями Оператора 1–4. Факты подтверждены: github_adapter.py:186/:441/:144/:163/:172; targets.py:667-669, :539-541; projects.py:500-502 (отказ сверки несёт текст TargetsError), :986-996.
+- EnsureDraftMrTest: conn=mock.Mock(); чтение external_refs без {ref} даст TypeError — утверждение решения 1 верно.
+- Новые мелкие отклонения: AC-6 не называет путь (gh или forge), а запасной заголовок нужен в обоих; pull.commit_title — :926-940, а не :926-939.
+- Общий слой targets.yaml неизвестные поля не проверяет (targets.check), _check_delivery работает только в merge_local — свойство уже было до задачи.
 
 ## Не сработало
-- —
+- Составные bash-команды с cd/head/ls требуют подтверждения — нужны одиночные команды с абсолютными путями.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready.
+- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-- Нет одного места, где описано, какие пути ensure_draft_mr делают git push (пришлось читать github_adapter.py:130-200).
+- Нет одного места, где сказано, что общий слой targets.yaml пропускает поля доставки без проверки; пришлось читать targets.check целиком.
