@@ -21,7 +21,7 @@
 (`docs/adr/`, ADR-0001–0015; якоря — ADR-0003 п.1–18 и 3а–3к, ADR-0004
 п.1–9) — здесь они не пересказываются, только применяются.
 Отложенные механизмы — `docs/deferred/` (publication, spaces,
-prod-loop, executors); триггеры их возврата — `docs/triggers.md`;
+prod-loop, executors, untrusted-project-isolation); триггеры их возврата — `docs/triggers.md`;
 история аудитов — `docs/audits/README.md`.
 
 ## 1. Где мы
