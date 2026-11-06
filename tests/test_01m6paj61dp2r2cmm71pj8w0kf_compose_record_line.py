@@ -25,6 +25,7 @@
 import json
 import os
 import random
+import shutil
 import signal
 import subprocess
 import sys
@@ -466,6 +467,22 @@ def test_ac3_version_not_answering_fails(pult, seed):
     assert text in line.detail, note
 
 
+def system_path_without_docker(nobin: Path) -> str:
+    """PATH из одного каталога `nobin` со ссылками на программы системных
+    каталогов, кроме `docker*`: на раннере CI `/usr/bin/docker` есть, и
+    системные каталоги в PATH целиком его бы находили."""
+    for system in ("/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        src = Path(system)
+        if not src.is_dir():
+            continue
+        for entry in src.iterdir():
+            link = nobin / entry.name
+            if entry.name.startswith("docker") or os.path.lexists(link):
+                continue
+            link.symlink_to(entry)
+    return str(nobin)
+
+
 def test_ac3_docker_not_found_fails(pult, seed, monkeypatch):
     """Программы `docker` в PATH нет — `fail` «программа docker не найдена».
 
@@ -476,8 +493,8 @@ def test_ac3_docker_not_found_fails(pult, seed, monkeypatch):
     project = make_project(rng)
     scenario(pult, {})
     base = rows(project, twin=True)
-    monkeypatch.setenv("PATH", os.pathsep.join([str(pult["nobin"]), "/usr/bin",
-                                                "/bin", "/usr/sbin", "/sbin"]))
+    monkeypatch.setenv("PATH", system_path_without_docker(pult["nobin"]))
+    assert shutil.which("docker") is None, f"зерно: {seed}; docker в PATH"
     found = rows(project)
     extra = [c for n, c in found.items() if n not in base]
     note = f"зерно: {seed}; {extra}"
