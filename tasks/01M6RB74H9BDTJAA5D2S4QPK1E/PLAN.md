@@ -74,6 +74,14 @@ passed; `tests/test_commit_author_units.py` — 4 passed, оба сторожа
 покраснели на своих мутациях (снят `ci_by_pipeline` из условия; снята
 проверка комментария в `_local_layer_for`) и вернулись в зелёный.
 
+ANSWER-3 (номера строк `projects.py` сверять по `origin/main`) отработан:
+`origin/main` — предок ветки задачи (подтяжка ee271edf3); на нём
+`_target_set_block_mismatches` — `:905`, `_backup_copy` — `:991`, как в
+ответе. `set_commit_author` зовёт именно их (сверка блока
+`machine.commit_author` целиком, копия в `config.LOGS`) — правки кода
+ответ не требует. Повторный прогон после ответа: три файла тестов
+задачи — 33 passed.
+
 ## Влияние на систему
 - `doctor`: на каждый проект GitLab с `token_slot` добавляется один запрос
   `GET /user` в проверках и ещё один в `--fix` (только при отсутствии
