@@ -1,19 +1,17 @@
-# Записка spec_auditor — 01M6TT4FKD1JWSJFVJ7328K03Y
+# Записка spec_auditor — 01M6TT4FKD1JWSJFVJ7328K03Y (аудит 2, spec_sha dd14a9f1)
 
 ## Выяснено
-- Хук `scripts/git-hooks/target-human/pre-push:96-100` отказывает ветке не по шаблону; читает только 4 ключа политики (:38-46). Отправка в `ci_base_branch` без правки хука невозможна, а хука нет в зонах SPEC (и ТЗ).
-- `_ci_base_report` (outcome_integrity.py:1115-1133) отбрасывает признак `pending` и бросает `_Prepare`; на verifying `_Prepare` -> эскалация сразу (`verifying_gate`, :1572-1580). «не нашёл» в требовании 2 включает «задание B идёт» -> повторные отправки на каждом опросе.
-- `_CI_FIT_STATUSES = ("success", "failed")` (:1045): красное задание — годный отчёт; «задание красное -> отказ» в требовании 6 спорит с этим.
-- Потолок verifying считается от входа в verifying (fsm_advance.py:516-517); на in_dev потолка и опроса нет.
-- Вход в in_dev — и из fsm.py:1607 (skip_tests), fsm.py:1877, fsm_merge_gate.py, verify.py — вне зон.
-- policy.push_options добавляются только к веткам задач (gitcmd.py:1351-1356): не-задачная ветка их и так не получит.
-- GitLab-адаптер читает конвейеры по `sha` без `ref` (gitlab_adapter.py:429-430, 457-458) — отчёт по sha после ухода ветки читается: подтверждено.
+- Все 10 отклонений аудита 1 закрыты по ANSWER-1; хук в зонах; факты SPEC о коде подтверждены.
+- Остаток (concerns): SPEC 3 «ждать до потолка» против SPEC 7 «прежний отказ» (эскалация сразу) для негодного задания базы (canceled, allow_failure, «отчёт не разобран» — у головы проходяще, outcome_integrity.py:1096-1097).
+- `gitcmd.diff_base` считает базу от origin/main (gitcmd.py:1977, config.MAIN_BRANCH), а проверка предка — от origin/<base>: при base≠main отправка базы не пройдёт.
+- Проверка предка читает локальный refs/remotes/origin/<base> клона, пульт его перед проверкой не обновляет (gitcmd.py:1943-1948) — PLAUSIBLE обход ответа 7.
+- Очередь по журналу: `store.steps_of_action` (store.py:1529) — правка store.py не нужна.
 
 ## Не сработало
-- Опыт с git во временном каталоге (хук, повторная отправка того же sha) отклонён правами шага.
+- `cd … && python3 …` в Bash отклонён («simple_expansion»); guard прогнан абсолютным путём — ок.
 
 ## Где остановился
-- Вердикт fail, SPEC-AUDIT.md написан.
+- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
 
 ## Чего не хватило
-- Где пульт ждёт «конвейер предыдущего sha создан» (требование 4) без фонового процесса — в коде такого механизма нет.
+- Может ли роль в своём шаге сдвинуть refs/remotes/origin/<base> клона (role_git) — не проверял.
