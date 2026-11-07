@@ -119,8 +119,26 @@ def _templated_pull_subject(conn, task_id: str) -> str | None:
     base = entry.get("base")
     if not entry.get("commit_message_template") or not base:
         return None
-    return checkpoint.pult_subject(conn, task_id, f"подтяжка {base}",
-                                   journal=False)
+    return _git_subject(checkpoint.pult_subject(
+        conn, task_id, f"подтяжка {base}", journal=False))
+
+
+def _git_subject(message: str) -> str:
+    """Тема `message` в том виде, в каком её отдаёт `git log --format=%s`
+    после `commit -m`: пробелы в конце строк срезаны, ведущие пустые строки
+    отброшены, строки первого абзаца склеены через пробел. Без этого тема
+    подтяжки по шаблону с пробелом в конце (или с переводом строки в
+    названии задачи) не совпала бы с темой коммита — и подтяжка была бы
+    засчитана шагом developer (R1-F1 ревью)."""
+    lines = [line.rstrip() for line in message.splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    paragraph = []
+    for line in lines:
+        if not line:
+            break
+        paragraph.append(line)
+    return " ".join(paragraph)
 
 
 def _latest_developer_commit_iso_date(branch: str, task_id: str, conn=None):
@@ -140,7 +158,8 @@ def _latest_developer_commit_iso_date(branch: str, task_id: str, conn=None):
     templated = _templated_pull_subject(conn, task_id)
     for line in res.stdout.splitlines():
         ts, sep, subject = line.partition("\x1f")
-        if not sep or subject.startswith(prefix) or subject == templated:
+        if not sep or subject.startswith(prefix) or (
+                templated is not None and subject.rstrip() == templated):
             continue
         try:
             return datetime.fromisoformat(ts)

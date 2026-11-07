@@ -749,6 +749,11 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
         message = policy["commit_message_template"]
         if not isinstance(message, str) or not message.strip():
             refuse("commit_message_template", "не непустая строка")
+        # Шаблон описывает первую строку сообщения (требование 3): перевод
+        # строки увёл бы часть шаблона в тело коммита.
+        if "\n" in message or "\r" in message:
+            refuse("commit_message_template",
+                   f"{message!r}: перевод строки — шаблон первой строки")
         rest = _PLACEHOLDER.sub("", message)
         if "{" in rest or "}" in rest:
             refuse("commit_message_template",
