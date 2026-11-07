@@ -2,7 +2,7 @@
 task: 01M6TR3Q3SQSS1ZNGA4T7V39RW
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -129,8 +129,21 @@ schema_version: 5
 
 - `tests/test_01m6tr3q3sqss1znga4t7v39rw_role_requests.py` — 32 passed.
 - Планка (`artel.py plank-run 01M6TR3Q3SQSS1ZNGA4T7V39RW`) — 6 passed, код 0.
-- Тесты затронутых модулей (plank_run/suite_run/runner/compose/agent_failure/
-  step_cost, 28 файлов) — итог ниже.
+- Тесты затронутых модулей, пачками в переднем плане (`-o timeout=120`):
+  plank_run (6 файлов) + suite_run/developer/readonly_db/deferred_journal +
+  `test_cmd_approve_dispatch.py` — 75 passed; `test_agent_failure.py`,
+  `test_step_cost.py`, `test_agent_failure_cli_isolation.py`, compose_run/
+  compose_docker/role_env_compose, `test_doctor_compose_stands.py` — 175
+  passed, 1 skipped.
+- `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py` и
+  `tests/test_01m46c776szemypbqgpnjn1txy_suite_run_appendix.py` в шаге роли
+  не проходят: отвязанный фон `suite_run.background` копии пульта виснет на
+  `git show refs/artifacts/…:PLAN.md` через обёртку `role_bin/role_git.py`,
+  унаследованную из PATH процесса роли (`/bin/ps`: фон → `python3 -I -S
+  …/role_bin/../role_git.py … show …`, лог прогона пуст 4 мин). Путь
+  `background`/`appendix_tree` этой задачей не меняется (в `suite_run.py`
+  вне режима запроса тронут только номер `_new_log` → `_next_number`);
+  вердикт по ним — CI и гейт приёмки, вне окружения роли.
 
 ## Предложения системе
 
@@ -138,3 +151,9 @@ schema_version: 5
   дольше 10 минут последовательно, а `-n` в шаге рубит `conftest.py`
   (все воркеры «node down»): нужен штатный путь параллельного прогона
   выбранных файлов для роли (класс «нет команды пульта»).
+- Тесты, запускающие копию пульта с отвязанным фоном `suite-run`
+  (`tests/test_01m462…_suite_run.py`, `tests/test_01m46c…_suite_run_appendix.py`),
+  в шаге роли виснут на обёртке `role_git` из PATH роли и оставляют
+  осиротевшие фоны в `$TMPDIR` (у меня их набралось шесть, старшему —
+  1,5 ч); `cli()` таких тестов снимает только свою группу. Нужна либо
+  очистка PATH роли в песочнице теста, либо пометка «не для шага роли».
