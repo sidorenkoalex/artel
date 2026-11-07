@@ -159,6 +159,14 @@ class CiAcceptanceTest(RealGitSandbox):
                                   "success")
                 self.full_suite_done = condition != "suite_skipped"
                 if condition == "stale":
+                    # Свежесть при `merge_gate: operator` держит merge_gate
+                    # (SPEC 01M6TRKY1A41QSZMCXY9TKYXG7, требование 1; мандат
+                    # ANSWER-1) — отставшая ветка проверяется на записи
+                    # `target-human`.
+                    config.TARGETS.write_text(
+                        config.TARGETS.read_text(encoding="utf-8").replace(
+                            "merge_gate: operator", "merge_gate: target-human"),
+                        encoding="utf-8")
                     self.git("checkout", "-q", config.MAIN_BRANCH)
                     (self.root / "later.txt").write_text("новый main\n",
                                                            encoding="utf-8")

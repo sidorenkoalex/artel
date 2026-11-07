@@ -210,6 +210,10 @@ def all_checks(conn) -> list[doctor.Check]:
         # записи проекта (SPEC 01M545EDTHS47HSB59AKC1EZ9C, требования 5-7)
         # — рядом с base-branch: предмет тот же, хостинг проекта.
         checks.extend(doctor.project_entry_checks(name, entry))
+        # Автор коммитов пульта против владельца токена (SPEC
+        # 01M6RB74H9BDTJAA5D2S4QPK1E, требование 4) — следом за строкой
+        # токена: предмет тот же, учётная запись токена.
+        checks.extend(doctor.project_checks.commit_author_checks(name, entry))
         # Версии инструментов, карта путей CI и каталоги компонентов
         # (SPEC 01M58PG72PG64GS790XM2EWS61, требования 2-8) — следом за
         # строками записи: предмет тот же, клон проекта.
@@ -330,6 +334,11 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         # 01M5FA4NR91PCF47SZT6V0Q9HS, требование 4) — до `all_checks`:
         # строка `canary-live` того же прогона видит уже убранный реестр.
         doctor._fix_canary_live()
+        # Автопоиск автора коммитов проектов GitLab (SPEC
+        # 01M6RB74H9BDTJAA5D2S4QPK1E, требование 2) — до `all_checks`:
+        # строка `project-commit-author` того же прогона видит записанное.
+        print("Автор коммитов проектов по владельцу токена:")
+        doctor.project_checks.fix_commit_authors()
         # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
         # требование 7) — до `all_checks` ниже, чтобы проверка
         # «models-local» в том же прогоне уже видела положенный шаблон

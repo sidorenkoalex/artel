@@ -40,6 +40,16 @@ PATH в текущем каталоге (чекаут `actions/checkout`).
   документов подтягивается в объектную базу без имени назначения, правка
   остаётся только в рабочем дереве раннера (требование 4).
 
+Публикация для приёмки (SPEC 01M6TRKY1A41QSZMCXY9TKYXG7, требование 2;
+ANSWER-4 п. 1): прогон ветки задачи печатает ровно одну строку аннотации
+`::notice title=plan-appendix-docs::ref=<sha X>; outcome=<исход>;
+diffs=<h1,…>` — sha ссылки документов, исход (`applied` | `no-plan` |
+`no-appendices` | `no-ref`) и при `applied` упорядоченный список sha256
+текстов диффов приложений (`appendix_digests`). По ней приёмка пульта
+принимает итог CI для дерева с приложениями PLAN. Подтянутый коммит ссылки
+(`FETCH_HEAD`) сверяется с sha `ls-remote`: ссылка, сдвинутая между ними, —
+код 1, а не «PLAN.md нет» по коммиту, которого нет в мелком клоне.
+
 Сбой git на чтении `origin` — код 1, а не «приложений нет»: молча зелёный
 CI при недоступном PLAN пропустил бы ровно тот случай, ради которого
 сценарий написан (fail-closed, ADR-0002).
@@ -52,6 +62,7 @@ jobs `python` и `python-min` файла `.github/workflows/ci.yml` шаг
 у шага приложений) сторож сперва накладывает приложения PLAN на дерево
 чекаута и проверяет файл после них (`check_workflow_on_run`).
 """
+import hashlib
 import json
 import os
 import re
@@ -79,6 +90,14 @@ EPIC_REF_NAME_PREFIX = "epic-"
 WORKFLOW_REL = ".github/workflows/ci.yml"
 SCRIPT_REL = "scripts/plan_appendix_ci.py"
 WORKFLOW_JOBS = ("python", "python-min")
+# Заголовок и исходы публикации для приёмки (ANSWER-4 п. 1). Литералы
+# совпадают с `orchestrator/ci.py` (`PUBLICATION_TITLE`,
+# `PUBLICATION_OUTCOMES`): сценарий пульт не импортирует.
+PUBLICATION_TITLE = "plan-appendix-docs"
+OUTCOME_APPLIED = "applied"
+OUTCOME_NO_PLAN = "no-plan"
+OUTCOME_NO_APPENDICES = "no-appendices"
+OUTCOME_NO_REF = "no-ref"
 
 
 class CiError(Exception):
@@ -189,10 +208,20 @@ def plan_text(task_id: str, sha: str) -> str | None:
     """PLAN.md из ссылки документов; None — PLAN.md в ней нет.
 
     Fetch — без имени назначения: ссылка уходит только в объектную базу
-    (и FETCH_HEAD), ни одна ссылка раннера не заводится и не двигается."""
+    (и FETCH_HEAD), ни одна ссылка раннера не заводится и не двигается.
+
+    Подтянутый коммит (`FETCH_HEAD`) — ровно `sha` из `ls-remote`; иначе
+    ссылка сдвинулась между чтением и подтяжкой, и `sha` в мелком клоне
+    может не быть вовсе — `CiError` одной строкой, а не «PLAN.md нет»."""
     _git_or_fail("ссылка документов задачи не подтянута", "fetch", "-q",
                  "--no-tags", "--depth=1", "origin",
                  f"{DOCS_REF_PREFIX}{task_id}")
+    fetched = _git_or_fail("подтянутый коммит ссылки документов не прочитан",
+                           "rev-parse", "--verify", "FETCH_HEAD").strip()
+    if fetched != sha:
+        raise CiError(f"ссылка документов {DOCS_REF_PREFIX}{task_id} "
+                      f"сдвинулась между чтением и подтяжкой: ls-remote дал "
+                      f"{sha}, подтянут {fetched}")
     rel = f"tasks/{task_id}/PLAN.md"
     if _git("cat-file", "-e", f"{sha}:{rel}").returncode != 0:
         return None
@@ -233,11 +262,13 @@ def run(event_name: str, ref: str) -> int:
     if owned is None:
         print(f"ссылки документов задачи ветки task/{branch_rest} в origin "
               f"нет — приложений нет")
+        print(publication_line("", OUTCOME_NO_REF, []))
         return 0
     task_id, sha = owned
     text = plan_text(task_id, sha)
     if text is None:
         print(f"[{task_id}] PLAN.md в ссылке документов нет — приложений нет")
+        print(publication_line(sha, OUTCOME_NO_PLAN, []))
         return 0
     appendices, errors = guard.plan_appendices(text)
     if errors:
@@ -246,6 +277,7 @@ def run(event_name: str, ref: str) -> int:
         return 1
     if not appendices:
         print(f"[{task_id}] в PLAN нет приложений — дерево ветки как есть")
+        print(publication_line(sha, OUTCOME_NO_APPENDICES, []))
         return 0
     applied = 0
     for number, appendix in enumerate(appendices, 1):
@@ -265,7 +297,24 @@ def run(event_name: str, ref: str) -> int:
         print(f"[{task_id}] приложение {number} наложено: {paths}")
     print(f"[{task_id}] приложений наложено: {applied} — только в "
           f"рабочем дереве раннера, без коммита")
+    print(publication_line(sha, OUTCOME_APPLIED, appendix_digests(appendices)))
     return 0
+
+
+def appendix_digests(appendices: list) -> list[str]:
+    """sha256 текстов диффов приложений в порядке PLAN — шестнадцатеричный
+    дайджест байтов UTF-8 `PlanAppendix.diff` (SPEC
+    01M6TRKY1A41QSZMCXY9TKYXG7, требование 2). Та же форма — у
+    `acceptance.appendix_digests` пульта: их равенство и есть сверка 3з."""
+    return [hashlib.sha256(a.diff.encode("utf-8")).hexdigest()
+            for a in appendices]
+
+
+def publication_line(ref: str, outcome: str, digests: list[str]) -> str:
+    """Строка аннотации проверки для приёмки (ANSWER-4 п. 1): ровно одна
+    за прогон ветки задачи; `ref` пуст — ссылки документов нет."""
+    return (f"::notice title={PUBLICATION_TITLE}::ref={ref}; "
+            f"outcome={outcome}; diffs={','.join(digests)}")
 
 
 def _job_block(text: str, job: str) -> list[str]:

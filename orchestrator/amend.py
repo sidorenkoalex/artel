@@ -33,9 +33,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifact_branch, fixation, gitcmd,
-               github_adapter, lease, project_profile, repo_context, store,
-               workspace, yamlmini)
+from . import (acceptance, alerts, artifact_branch, checkpoint, fixation,
+               gitcmd, github_adapter, lease, project_profile, repo_context,
+               store, workspace, yamlmini)
 from .advance_gates import acceptance as acceptance_gates
 
 AMEND_ACTION = "правка планки"
@@ -790,11 +790,13 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
 
 
 def _commit_long_lived(conn, task_id: str, wt_path: Path, paths: list[str],
-                       message: str) -> bool:
+                       text: str) -> bool:
     """Коммит в worktree кодовой ветки ровно `paths` (включая удаления) —
     запись (а) требования 1; сбой снимает их со сцены и отдаёт `False`.
     Коммит пульта (SPEC 01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-5):
-    автор `commit_author` проекта, соавтор и трейлер — в сообщении."""
+    автор `commit_author` проекта, соавтор и трейлер — в сообщении; `text`
+    — служебный текст без префикса `<id>: `, первая строка — по шаблону
+    проекта задачи (SPEC 01M6RN8EY72K25GZ60NSJVVEGG, требование 3)."""
     project = store.task_target(conn, task_id)
     added = gitcmd.in_repo(wt_path, "add", "-A", "--", *paths)
     commit = None
@@ -803,7 +805,8 @@ def _commit_long_lived(conn, task_id: str, wt_path: Path, paths: list[str],
             wt_path, *gitcmd.pult_identity_args(
                 project, fixation.FIXATION_AUTHOR_NAME,
                 fixation.FIXATION_AUTHOR_EMAIL),
-            "commit", "-q", "-m", gitcmd.pult_message(message, project),
+            "commit", "-q", "-m", gitcmd.pult_message(
+                checkpoint.pult_subject(conn, task_id, text), project),
             "--", *paths)
     if commit is None or commit.returncode != 0:
         gitcmd.in_repo(wt_path, "reset", "-q", "--", *paths)
@@ -1103,7 +1106,7 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     if long_changed:
         if not _commit_long_lived(
                 conn, task_id, wt_path, long_changed,
-                f"{task_id}: правка долгоживущих тестов — {reason}"):
+                f"правка долгоживущих тестов — {reason}"):
             sys.exit(f"[{task_id}] amend-tests: коммит правки "
                      f"{', '.join(long_changed)} в кодовую ветку не удался — "
                      f"ничего не записано")
