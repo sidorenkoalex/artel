@@ -29,6 +29,11 @@ schema_version: 5
   значение `operator` снимает условие. Не прочитано (поля нет, файл не
   разобран) — свежесть проверяется прежним текстом. В `local` сверка с
   `config.MAIN_BRANCH`, в `ci`/`both` — с `base` записи, как раньше.
+  Значение сравнивает только `targets` (сторож
+  `test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py::test_ac9_no_support_literals_outside_targets`):
+  `_freshness_held` зовёт существующий предикат
+  `targets.push_whitelisted` (ложь ровно при `merge_gate: operator`; поля
+  нет — истина, свежесть проверяется), без литерала в `acceptance.py`.
 - Приложения (только `local`, только артель, только при непустом списке
   приложений из `appendix_tree.read_plan`): по порядку проверяются чистота
   рабочей копии (3а), источник PLAN (3е), сценарий-публикатор в голове
@@ -128,7 +133,18 @@ schema_version: 5
   та через PATH находит прокладку теста, рекурсия до тайм-аута; от правки
   не зависит (CI без обёртки роли).
 
+- Возврат из verifying (литерал `merge_gate == 'operator'` в
+  `acceptance._freshness_held`) закрыт вызовом `targets.push_whitelisted`;
+  после правки зелёные: сторож `test_01m5w27…_unsupported_project.py`,
+  `…ci_result.py`, `…ci_publication.py`, `test_01m4begq…_ci_acceptance.py`,
+  `test_01m5xzskk…_ci_full_suite.py`, `test_ci_publication_parse.py` —
+  115 passed.
+
 ## Предложения системе
+
+- В `targets.py` нет предиката «мержит пульт» (`merge_gate: operator`)
+  под своим именем — приёмке пришлось звать `push_whitelisted`, чьё имя
+  про белый список отправок; стоит завести `merged_by_pult(entry)`.
 
 - `python3 -c "from orchestrator import checkpoint"` падает циклом импорта
   (`fixation` → `workspace` → `lease` → `artifact_branch` →
