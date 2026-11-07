@@ -1,11 +1,13 @@
 # Записка analyst
 
 ## Выяснено
-- Шаг 5 (третий возврат со spec_gate, решения 1–5): SPEC дополнен, не переписан. Сверено: forge_guards.py:424 (сторож читает только ci.py и forge.py), :306 (ci_violations), ci.py:72-89 (GH_REPO только при repo и `api`; GH_TOKEN из слота), project_checks.py:53-66 (ROLE_SKIP), ci.py:720-745 (_unexecuted_full_suite). В project_checks.py литералов "github"/"gitlab" сейчас нет — новый тест AC-6 не красен на main по этой причине.
-- Куда легли решения: 1 → треб. 8 (нет литералов) + AC-6 (AST-тест, мутация) + Материалы (сторож уточнён); 2 → AC-3 (поток 1 МБ при пределе 1 КБ, затем сон; причина — размер); 3 → AC-1 (запись GH_REPO/GH_TOKEN каждого вызова, мутация); 4 → AC-3 (pid gh, ≤5 с, процесса нет); 5 → треб. 3 (окно включительно), треб. 8 (ROLE_SKIP), Материалы (риск одиночного skipped — этап 4б).
+- Шаг 6 (четвёртый возврат со spec_gate, решения 1–2): SPEC дополнен, не переписан.
+- Решение 1 → AC-3, случай предела размера: возврат раньше подменённого CI_REPORT_DOWNLOAD_TIMEOUT_SEC, сон gh ≤ 5 с, pid снят; мутация `subprocess.run(capture_output, timeout)` + сверка длины по TimeoutExpired красная. Прежняя фраза «так ловится чтение целиком» убрана.
+- Решение 2 → AC-6: вымышленная запись GitLab с report+full_suite:ci — список имён строк project_entry_checks + component_checks прежний; мутация «строка добавлена любой записи» красная. Сверено: gitlab_doctor_lines.py:152-161 — компонент с report/full_suite: ci есть.
+- Материалы: пункт о четвёртом возврате.
 
 ## Не сработало
-- `cd … && python3 …` в Bash отклоняется (simple_expansion) — звать guard абсолютным путём.
+- `cd … && python3 …` в Bash отклоняется — guard звать абсолютным путём.
 
 ## Где остановился
 - Готово: SPEC.md, status ready, guard ок. AC-1..AC-9, budget 50 без изменений.
