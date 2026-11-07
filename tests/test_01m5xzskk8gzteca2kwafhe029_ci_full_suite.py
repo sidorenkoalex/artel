@@ -399,6 +399,15 @@ def break_condition(s, condition: str) -> None:
     elif condition == "tree_differs":
         s.gate_tree = f"{s.rng.getrandbits(160):040x}"
     else:
+        # Свежесть при `merge_gate: operator` держит merge_gate (SPEC
+        # 01M6TRKY1A41QSZMCXY9TKYXG7, требование 1; мандат ANSWER-1) —
+        # отставание от базы проверяется на записи проекта `target-human`
+        # (запись проекта — последняя в файле, `write_entry`).
+        head, gate, tail = config.TARGETS.read_text(
+            encoding="utf-8").rpartition("    merge_gate: operator\n")
+        assert gate, f"merge_gate записи не найден; зерно: {s.seed}"
+        config.TARGETS.write_text(
+            f"{head}    merge_gate: target-human\n{tail}", encoding="utf-8")
         s.contains = {config.MAIN_BRANCH}
 
 
