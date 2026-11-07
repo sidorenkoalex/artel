@@ -23,6 +23,35 @@ from . import (alerts, artifact_branch, ci, config, forge, gitcmd,
 # уровня: ни `_incident`, ни алерта, потому что пропускать тут нечего
 # чинить, это штатное состояние ветки до первого коммита разработчика.
 DRAFT_MR_SKIPPED_ACTION = "Draft MR пропущен: в ветке нет коммитов"
+# Шаблон заголовка с `{ref}` у задачи без ссылки системы `ref_required`
+# (SPEC 01M6RJDRR027G50D81W8T3T8AK, требование 5): MR открывается с
+# заголовком по умолчанию, задача не останавливается.
+MR_TITLE_NOT_APPLIED_ACTION = "шаблон заголовка MR не применён"
+
+
+def _mr_title(conn, task_id: str, t, entry: dict) -> str:
+    """Заголовок MR задачи по `policy.mr_title_template` (SPEC
+    01M6RJDRR027G50D81W8T3T8AK, требования 2-5). `{ref}` — ключ первой в
+    порядке записи ссылки системы `ref_required` (правило
+    `pull.commit_title`); ссылки читаются только при `{ref}` в шаблоне.
+    `{title}` подставляется последним: подстановки внутри названия не
+    раскрываются."""
+    template = (entry.get("mr_title_template")
+                or targets.DEFAULT_MR_TITLE_TEMPLATE)
+    ref = ""
+    if "{ref}" in template:
+        system = entry.get(targets.REF_REQUIRED_FIELD)
+        for row in store.external_refs(conn, store.REF_KIND_TASK, task_id):
+            if row["system"] == system:
+                ref = row["key"]
+                break
+        if not ref:
+            store.journal(conn, task_id, "orchestrator",
+                          MR_TITLE_NOT_APPLIED_ACTION,
+                          f"нет ссылки системы {system}")
+            template = targets.DEFAULT_MR_TITLE_TEMPLATE
+    return (template.replace("{id}", task_id).replace("{ref}", ref)
+            .replace("{title}", t["title"] or task_id))
 
 
 def _commits_over_base(branch: str, base: str, repo=None) -> int | None:
@@ -183,7 +212,7 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
                   f"{push.stderr.strip()[:300] if push is not None else 'git не ответил'}")
         return
 
-    title = f"{task_id}: {t['title'] or task_id}"
+    title = _mr_title(conn, task_id, t, entry)
     create = ci.gh("pr", "create", "--draft", "--title", title,
                    "--head", branch, "--base", base, "--body",
                    f"Draft MR задачи {task_id} (заведён автоматически "
@@ -438,7 +467,7 @@ def open_forge_mr(conn, task_id: str, t, head: str, *,
     protected = repo_context.protected_paths(ctx) if ctx is not None else ()
     assignee, note = mr_assignee(targets.delivery_policy(entry), target_name)
     body = mr_description(task_id, t["branch"], head, repo, protected)
-    title = f"{task_id}: {t['title'] or task_id}"
+    title = _mr_title(conn, task_id, t, entry)
     result = forge.open_mr(target_name, t["branch"], entry["base"], title,
                            body, draft, assignee)
     if result.iid is not None:
