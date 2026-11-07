@@ -584,12 +584,18 @@ def pult_identity_args(project: str | None, name: str | None = None,
 
 def pult_message(message: str, project: str | None) -> str:
     """Сообщение коммита пульта: строка `co_author` и трейлер пульта
-    последним абзацем."""
+    последним абзацем. Трейлер — `policy.commit_trailer` записи проекта
+    (пустое значение — трейлера нет), без поля — `PULT_ACTOR_TRAILER`."""
+    entry = _project_entry(project)
     lines = []
-    co_author = _project_entry(project).get("co_author")
+    co_author = entry.get("co_author")
     if isinstance(co_author, str) and co_author.strip():
         lines.append(co_author.strip())
-    lines.append(PULT_ACTOR_TRAILER)
+    trailer = entry.get("commit_trailer", PULT_ACTOR_TRAILER)
+    if trailer:
+        lines.append(trailer)
+    if not lines:
+        return message.rstrip("\n") + "\n"
     return message.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
 
 
