@@ -377,7 +377,7 @@ KEY_FLAG = "--key"
 DROP_KEY_FLAG = "--drop-key"
 FROM_FILE_FLAG = "--from-file"
 BLOCK_PATHS = ("допустимые пути блока: description.test_profile, "
-               "description.components.<имя>")
+               "description.components.<имя>, machine.commit_author")
 # Поля-отображения строк, ключи которых пишут `--key`/`--drop-key`; прочие
 # отображения (`env`, `tools`, …) перечнем не охвачены (SPEC
 # 01M6PHS9XQTPPZ73V80ACGSZJS, «Не входит»).
@@ -616,8 +616,9 @@ def _target_set_show(rest: list) -> None:
 
 def _target_set_block(rest: list) -> None:
     """`target-set <проект> <путь блока> --from-file <файл>`: замена блока
-    `description.test_profile` или `description.components.<имя>` целиком
-    отображением из файла (SPEC 01M6QZ4RR80B2BYM9AXG5ZMAS4). Аргумент файла
+    `description.test_profile`, `description.components.<имя>` или
+    `machine.commit_author` целиком отображением из файла (SPEC
+    01M6QZ4RR80B2BYM9AXG5ZMAS4, 01M6R8W7TSA6G85PVZZFDMRY25). Аргумент файла
     читается от текущего каталога и в журнал идёт дословно."""
     if len(rest) != 4:
         sys.exit(f"target-set: {FROM_FILE_FLAG} — неверное число аргументов\n"
@@ -653,10 +654,14 @@ def _target_set_block(rest: list) -> None:
 
 
 def _block_keys(block_path: str) -> list[str]:
-    """Ключи пути блока от записи; отказ — путь не из двух видов или имя
-    компонента не записать ключом (до сборки текста слоя)."""
+    """Ключи пути блока от записи; отказ — путь не из трёх видов или имя
+    компонента не записать ключом (до сборки текста слоя). Форму
+    `machine.commit_author` проверяет `targets.merge_local` при пересборке
+    слоя (SPEC 01M6R8W7TSA6G85PVZZFDMRY25)."""
     keys = block_path.split(".")
     if keys == ["description", targets.PROFILE_FIELD]:
+        return keys
+    if keys == ["machine", "commit_author"]:
         return keys
     if len(keys) == 3 and keys[:2] == ["description", targets.COMPONENTS_FIELD]:
         try:
