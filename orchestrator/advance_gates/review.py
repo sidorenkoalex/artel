@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 
 from scripts import guard
 
-from .. import (auto, budget, config, cycle_hint, gitcmd, project_profile,
-                store, workspace, yamlmini)
+from .. import (auto, budget, checkpoint, config, cycle_hint, gitcmd,
+                project_profile, store, workspace, yamlmini)
 from ._base import GateRefusal, _run_gates
 from .refusal_classes import (ANSWER_UNPROCESSED_REFUSAL_ACTION,
                               MUTATION_CLAIM_GIT_REFUSAL_ACTION)
@@ -107,20 +107,40 @@ def _commit_iso_date(ref: str, *path: str, repo=None):
         return None
 
 
-def _latest_developer_commit_iso_date(branch: str, task_id: str):
+def _templated_pull_subject(conn, task_id: str) -> str | None:
+    """Тема коммита подтяжки по `policy.commit_message_template` проекта
+    задачи для ветки подтяжки — `base` записи (SPEC
+    01M6RN8EY72K25GZ60NSJVVEGG, требование 6); `None` — нет соединения,
+    строки задачи, записи проекта или поля шаблона: тогда подтяжку
+    опознаёт только прежний префикс."""
+    if conn is None:
+        return None
+    entry = checkpoint.task_project_entry(conn, task_id)
+    base = entry.get("base")
+    if not entry.get("commit_message_template") or not base:
+        return None
+    return checkpoint.pult_subject(conn, task_id, f"подтяжка {base}",
+                                   journal=False)
+
+
+def _latest_developer_commit_iso_date(branch: str, task_id: str, conn=None):
     """Дата последнего коммита КОДОВОЙ ветки `branch`, который НЕ является
     автослиянием «подтяжка main» (`_PULL_MAIN_COMMIT_INFIX`) — иначе гейт
     принял бы рутинную подтяжку main за настоящий шаг developer (см.
-    докстринг `_PULL_MAIN_COMMIT_INFIX`). `None` — git не ответил, либо на
-    ветке нет ни одного коммита, кроме подтяжек."""
+    докстринг `_PULL_MAIN_COMMIT_INFIX`). Подтяжка с темой по шаблону
+    проекта (`_templated_pull_subject`) опознаётся полным совпадением темы:
+    шаблон с текстом после `{text}` и `base`, отличная от main, тоже
+    отсеиваются, а прочие коммиты пульта по шаблону — нет. `None` — git не
+    ответил, либо на ветке нет ни одного коммита, кроме подтяжек."""
     repo = workspace.task_repo(task_id)
     res = gitcmd.in_repo(repo, "log", "--format=%cI\x1f%s", branch)
     if res is None or res.returncode != 0:
         return None
     prefix = f"{task_id}{_PULL_MAIN_COMMIT_INFIX}"
+    templated = _templated_pull_subject(conn, task_id)
     for line in res.stdout.splitlines():
         ts, sep, subject = line.partition("\x1f")
-        if not sep or subject.startswith(prefix):
+        if not sep or subject.startswith(prefix) or subject == templated:
             continue
         try:
             return datetime.fromisoformat(ts)
@@ -367,7 +387,7 @@ def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | Non
         baseline_source = "последний коммит REVIEW.md"
     if review_ts is None:
         return None
-    code_ts = _latest_developer_commit_iso_date(t["branch"], task_id)
+    code_ts = _latest_developer_commit_iso_date(t["branch"], task_id, conn)
     if code_ts is not None and code_ts > review_ts:
         return None
     ran, _detail = auto._role_step_since_state_entry(conn, task_id, "in_dev",
