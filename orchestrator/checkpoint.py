@@ -1793,12 +1793,10 @@ COMMIT_MESSAGE_NOT_APPLIED_ACTION = "шаблон сообщения не при
 def task_project_entry(conn, task_id: str) -> dict:
     """Плоская запись проекта задачи; `{}` — строки задачи в БД нет или
     запись не читается (деградация `gitcmd._project_entry`)."""
-    row = conn.execute("SELECT target FROM tasks WHERE id=?",
-                       (task_id,)).fetchone()
-    if row is None:
+    if not store.task_exists(conn, task_id):
         return {}
     try:
-        entry = targets.target(row["target"] or config.DEFAULT_TARGET)
+        entry = targets.target(store.task_target(conn, task_id))
     except targets.TargetsError:
         return {}
     return entry if isinstance(entry, dict) else {}
@@ -1829,8 +1827,8 @@ def pult_subject(conn, task_id: str, text: str, *, journal: bool = True) -> str:
                               COMMIT_MESSAGE_NOT_APPLIED_ACTION,
                               f"нет ссылки системы {system}")
             return default
-    title = conn.execute("SELECT title FROM tasks WHERE id=?",
-                         (task_id,)).fetchone()["title"]
+    # Строка задачи есть: без неё `task_project_entry` вернула `{}`.
+    title = store.get_task(conn, task_id)["title"]
     return targets.render_template(template, {
         "id": task_id, "ref": ref, "title": title or task_id, "text": text})
 
