@@ -67,7 +67,7 @@ from orchestrator import (artel, artifact_branch, catalog, config, doctor,
                           fixation, fsm_merge_gate, store)
 from scripts import guard
 from tests.sandbox import (ARTEL_TEST_PROFILE, RealGitSandbox, capture,
-                           patch_pult_sleep)
+                           patch_pult_sleep, patch_sleep)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -774,22 +774,60 @@ class MergeWaitsForMainCiTest(MergeSandbox):
                 if config.MAIN_BRANCH in r or names_commit(r, new_head)]
 
     def test_ac4_green_after_running_is_reported_green(self):
-        """CI новой головы main первые 1–3 опроса ещё идёт, затем зелёный.
+        """Два мержа подряд: CI головы main после первого мержа идёт, пока
+        второй `approve` не начнёт его ждать, затем зелёный.
 
-        Голова main опрашивалась; в журнале задачи и в выводе — зелёный
-        исход CI main.
+        Запись «CI main после мержа» первой задачи — «цвет сверит
+        следующий мерж»; второй `approve` опрашивает эту голову больше
+        одного раза с паузой, в журнале второй задачи — начало и исход
+        ожидания с её sha, вторая задача в `done`; голова после второго
+        мержа опрошена, в журнале и в выводе — зелёный исход CI main.
 
-        Ловит мутацию: CI новой головы main не ждут (или ждут CI ветки
-        задачи) — опроса новой головы нет, зелёного итога main в журнале
-        и выводе нет.
+        Ловит мутацию: идущий CI main — проход без ожидания (голова
+        опрошена вторым `approve` один раз, пауз и записей ожидания нет)
+        либо ожидание после мержа оставлено (записи «цвет сверит
+        следующий мерж» нет).
         """
-        self.set_default(self.green(), pending_polls=self.rng.randint(1, 3))
-        task = self.make_task()
+        # Однократное чтение после первого мержа тратит один «идёт» из
+        # счётчика головы, второму `approve` остаётся хотя бы один.
+        self.set_default(self.green(), pending_polls=self.rng.randint(2, 4))
+        first = self.make_task()
+        self.cli("approve", first["id"])
+        head = self.origin_main()
+        after_merge = [r for r in self.journal_text(first)
+                       if r.startswith(f"{fsm_merge_gate.MAIN_CI_AFTER_MERGE_ACTION} |")]
+        self.assertTrue([r for r in after_merge if "цвет сверит следующий мерж" in r],
+                        self.msg(f"записи после мержа: {after_merge}"))
 
-        ok, out = self.cli("approve", task["id"])
+        task = self.make_task()
+        calls_before = len(self.gh_calls())
+        pauses = []
+
+        def sleep(seconds):
+            # Ожидание началось: голова первого мержа зеленеет, новая
+            # голова после второго мержа — сразу зелёная.
+            pauses.append(seconds)
+            self.set_checks(head, self.green())
+            self.set_default(self.green(), 0)
+            self.fake_sleep(seconds)
+
+        with patch_sleep(fsm_merge_gate, sleep):
+            ok, out = self.cli("approve", task["id"])
         new_head = self.origin_main()
 
         self.assertEqual(self.state_of(task), "done", self.msg(out))
+        head_polls = [c for c in self.gh_calls()[calls_before:]
+                      if names_commit(" ".join(c), head) and "check-runs" in " ".join(c)]
+        self.assertGreater(len(head_polls), 1, self.msg(
+            f"голова {head[:8]} опрошена вторым approve: {head_polls}"))
+        self.assertTrue(pauses, self.msg("пауза ожидания не вызвана"))
+        rows = self.journal_text(task)
+        starts = [i for i, r in enumerate(rows)
+                  if names_commit(r, head) and "ожидание" in r]
+        outcomes = [i for i, r in enumerate(rows)
+                    if r.startswith("ожидание CI main: исход |") and names_commit(r, head)]
+        self.assertTrue(starts and outcomes and outcomes[-1] > starts[0], self.msg(
+            f"нет начала и исхода ожидания с {head[:8]}: {rows}"))
         polled = [c for c in self.gh_calls()
                   if names_commit(" ".join(c), new_head) and "check-runs" in " ".join(c)]
         self.assertTrue(polled, self.msg(f"CI головы {new_head[:8]} не опрошен"))
@@ -829,29 +867,41 @@ class MergeWaitsForMainCiTest(MergeSandbox):
                         self.msg(f"нет строки вывода о красном CI main: {out}"))
 
     def test_ac4_unfinished_ci_is_reported_after_15_to_20_minutes(self):
-        """CI новой головы main не завершается никогда.
+        """CI головы main после первого мержа не завершается никогда;
+        второй `approve`.
 
-        Ожидание кончается исходом «не дождался» — в журнале задачи и в
-        выводе; по подставным часам ожидание длилось от 15 до 20 минут
-        (с точностью до одной паузы опроса), то есть не потолок
+        Второй мерж ждёт идущий CI main и получает отказ «CI main <sha> не
+        завершён за N мин — повтори approve» — в журнале задачи и в
+        выводе; задача на `merge_gate`, origin/main не сдвинут; по
+        подставным часам ожидание длилось от 15 до 20 минут (с точностью
+        до одной паузы опроса), то есть не потолок
         `MERGE_GATE_CI_WAIT_CEILING_SEC`.
 
         Ловит мутацию: предел ожидания взят из
         `MERGE_GATE_CI_WAIT_CEILING_SEC` (час) либо ожидание не ограничено
-        — исход наступает позже 20 минут или не наступает вовсе.
+        — исход наступает позже 20 минут или не наступает вовсе; идущий CI
+        — проход без ожидания — задача смержена.
         """
         self.set_default(self.green(), pending_polls=10 ** 9)
+        first = self.make_task()
+        self.cli("approve", first["id"])
+        new_head = self.origin_main()
         task = self.make_task()
+        clock_before = self.clock
 
         ok, out = self.cli("approve", task["id"])
-        new_head = self.origin_main()
-        elapsed = self.clock
+        elapsed = self.clock - clock_before
 
+        self.assertFalse(ok, self.msg(f"мерж при идущем CI main прошёл: {out}"))
+        self.assertEqual(self.state_of(task), "merge_gate", self.msg(out))
+        self.assertEqual(self.origin_main(), new_head, self.msg(out))
+        self.assertTrue(names_commit(out, new_head), self.msg(out))
+        self.assertIn("повтори approve", out, self.msg(out))
         self.assertTrue([r for r in self.main_records(task, new_head)
-                         if "не дождал" in r],
-                        self.msg(f"нет записи «не дождался»: "
+                         if "не завершён" in r],
+                        self.msg(f"нет записи «не завершён»: "
                                  f"{self.journal_text(task)}"))
-        self.assertIn("не дождал", out, self.msg(out))
+        self.assertIn("не завершён", out, self.msg(out))
         slack = max(config.VERIFYING_POLL_INTERVAL_SEC,
                     config.MERGE_GATE_CI_WAIT_POLL_SEC)
         self.assertGreaterEqual(elapsed, WAIT_MIN_SEC, self.msg(f"{elapsed} с"))
