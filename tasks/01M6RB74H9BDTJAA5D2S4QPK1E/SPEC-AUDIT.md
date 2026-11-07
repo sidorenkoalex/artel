@@ -3,176 +3,139 @@ task: 01M6RB74H9BDTJAA5D2S4QPK1E
 type: spec_audit
 author_role: spec_auditor
 status: ready
-verdict: concerns
-signals: б) мандат в ANSWER: Ослабление тестов разрешено: tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py; в) пути-признаки (тесты): tests/, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py, tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py; г) budget_usd 45 ≥ 45
-spec_sha: 5e078eb2f6be8b0cb01207eb35947820c195d02d
+verdict: pass
+signals: "б) мандат в ANSWER: Ослабление тестов разрешено: tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py; в) пути-признаки (тесты): tests/, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py, tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py; г) budget_usd 45 ≥ 45."
+spec_sha: 7e7c818bf53d4a166b5b1d2674464e919039dfe9
 schema_version: 5
 ---
 
 # SPEC-AUDIT: Автор коммитов пульта для проекта на GitLab: автопоиск, сторож, отказ new
 
+Ветка задачи отстаёт от main (HEAD e3c56fd71, main 6bde2b9e6). SPEC ссылается
+на строки main, поэтому факты сверены по `git show main:<путь>`.
+
 ## ТЗ и SPEC
-Сверено в обе стороны с ТЗ, ANSWER-1, ANSWER-2 и решениями Оператора
-№1.1–№1.4 и №2.1–№2.4 на гейте SPEC.
-
-- ТЗ «Требуется» 1 → SPEC тр. 1. Совпадает.
-- ТЗ 2 (`name: <name пользователя токена>`) → SPEC тр. 2
-  (`name: <username>`). Смена законна по решению №1.1.
-- ТЗ 2 (копия, сверка, журнал путём `target-set`) → SPEC тр. 3. Уточнения
-  взяты из решений №1.4 и №2.1: функция без `sys.exit`, копия в
-  `config.LOGS`, сверка блока целиком, причина «сверка до записи не
-  прошла».
-- ТЗ 3 → SPEC тр. 4. Сверка имени взята из решения №1.1, текст `fail` —
-  из №1.4. Деление `fail`/`warn` — из №1.2 и №2.3. Пропуск в роли — из
-  №1.4 и №2.3. Литерал запрещён решением №2.4.
-- ТЗ 4 → SPEC тр. 5. Порядок после `unsupported_reason` — решение №1.4,
-  путь `epic draft promote` — решение №2.2.
-- ТЗ 5 и 6 → SPEC тр. 7 и «Не входит». ТЗ 5 снят решением №1.3. Критерий
-  «gitcmd.py не меняется» снят решением №2.3: свойство держит гейт зон.
-- ТЗ «существующие тесты зелёные без правки» → SPEC тр. 6. Мандат ANSWER-2
-  сохранён, но им запрещено пользоваться (решение №2.4).
-- Зоны SPEC = зоны ТЗ без `orchestrator/gitcmd.py` (решение №1.3).
-
-Требований SPEC вне ТЗ и решений нет. Решения Оператора между собой не
-противоречат. Решение №1.2 (мандат) и решение №2.4 («не пользоваться») —
-уточнение, не спор.
+- Требование ТЗ 1 → SPEC 1. Совпадает.
+- Требование ТЗ 2 → SPEC 2, 3. Имя автора — `username`, а не `name`: так
+  решил Оператор (гейт №1, решение 1). Копия файла — в `config.LOGS`,
+  сверка блока целиком, функция возвращает причину без `sys.exit`: гейт №1,
+  решение 4.
+- Требование ТЗ 3 → SPEC 4. Сверяются имя и адрес (№1.1). Текст `fail`
+  заменён решением №1.4. «Поля нет, API без адреса» — `warn` (№2.3).
+  Пропуск в процессе роли — №1.4 и №2.3. Выбор GitLab через
+  `ci_by_pipeline` — №2.4.
+- Требование ТЗ 4 → SPEC 5. Добавлен путь `epic draft promote` (№2.2).
+  Отказ идёт после `unsupported_reason` (№1.4).
+- Требования ТЗ 5 и 6 (сверка в `_push_plan`) сняты решением №1.3 и
+  перенесены в «Не входит» и требование 7. Это согласовано.
+- Мандат ANSWER-1/2 в SPEC 6 сохранён, но им не пользуются (решение №2.4).
+  Расхождения нет: мандат разрешает правку, не обязывает к ней.
+- Причина отказа записи и её триггер (пробельный `username`) взяты из
+  решений №2.1 и №3.1. Записка о сдвиге строк — из №3.2.
+- В SPEC нет требований сверх ТЗ и решений Оператора. Противоречий между
+  решениями Оператора не нашёл.
 
 ## Факты против кода
-Подтвердилось по рабочему каталогу:
-- `orchestrator/targets.py:715-720`: `commit_author` — `{name, email}`, обе
-  строки непустые после `strip()`.
-- `orchestrator/gitcmd.py:559` `commit_author`, `:572`
-  `pult_identity_args`, `:625` `_author_check_refusal` (отказ при
-  `username != name`). Решение №1.1 верно.
-- `orchestrator/forge.py:96`: `TokenUser(username, reason)`.
-- `orchestrator/gitlab_adapter.py:579-586`: `token_user` проверяет только,
-  что `username` — строка (`:583`), и ничего больше не читает.
-- `orchestrator/doctor/project_checks.py:51`:
-  `by_pipeline = doctor.forge.ci_by_pipeline(name)`; `:53-66` — `ROLE_SKIP`
-  у строк проекта в роли; `:31-34` — `_names`.
-- `orchestrator/forge.py:395-399`: `ci_by_pipeline(target)` принимает имя
-  проекта. Форма из решения №2.4 верна.
-- `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:491` —
-  `test_ac9_no_support_literals_outside_targets`. Он ловит
-  `forge == 'gitlab'` (образец `:512`).
-- `orchestrator/epics.py:796`: `cmd_draft_promote` зовёт `catalog.cmd_new`
-  напрямую. До вызова ничего не пишет (`:785-795`): отказ из `cmd_new` не
-  оставляет следа promote.
-- `orchestrator/catalog.py:855-857`: `unsupported_reason` в `cmd_new` до
-  `_new_refs`, БД, ТЗ, id и ссылки документов.
-- `orchestrator/projects.py:889-893` — сверка одного листа; `:900-926` —
-  `_target_set_block_mismatches`; `:986` — `_backup_copy` в `config.LOGS`;
-  `:451-515` — `sys.exit` во всех отказах `_target_set_load`, `_rendered`,
-  `_target_set_write`; `:473` — отказ из-за строки-комментария.
-- `orchestrator/doctor/cli.py:312-341`: починки `--fix` идут до
-  `all_checks`; `:352-355` — `sys.exit(1)` при любом `fail`. Решение
-  №2.1 верно, и порядок строк AC-3 достижим без перестановки кода.
-
-Неточность в решении Оператора, не в SPEC (Ф-1): решение №1.4 называет
-копию `orchestrator/projects.py:996`. На деле `def _backup_copy` стоит на
-`:986`, как и пишет SPEC. На суть решения не влияет.
-
-Опыт (временный процесс, без записи на диск): `projects._render` пишет
-`name: "   "` в кавычках, а `yamlmini.mapping` читает его обратно как
-`'   '`. Это опора для В-1 ниже.
-
-Утверждений о поведении git или ОС в SPEC нет. Поведение GitLab
-(`commit_email` в `GET /user`) взято из опыта Оператора 06.11. Тесты его
-подменяют.
+Все утверждения сверены по main, все подтвердились:
+- `forge.TokenUser` — `orchestrator/forge.py:96-98`: поля `username` и
+  `reason`. `forge.token_user` — `:452-453`, диспетчер `_call`.
+- `gitlab_adapter.token_user` — `orchestrator/gitlab_adapter.py:579-586`.
+  Строка `:584` проверяет только `isinstance(username, str)`, так что
+  `"   "` проходит (решение №3.1 верно). У GitHub реализации `token_user`
+  нет: «не реализовано для github» закрепляет
+  `tests/test_01m6m1799ycy5hxmhhd71shjet_github_mr_units.py:936-951`.
+- `targets._check_delivery` — `orchestrator/targets.py:715-720`: при
+  пустом или пробельном значении (`v.strip()`) отказ
+  «нужно {name, email} — обе непустые строки».
+- `projects.py` на main:
+  - `:380` — `BLOCK_PATHS` с `machine.commit_author`;
+  - `:451-475` — `_target_set_load` (`sys.exit`, комментарий слоя `:473`);
+  - `:487-493` — `_rendered`;
+  - `:496-513` — `_target_set_write`: `sys.exit`, копия, журнал
+    `store.journal`;
+  - `:656-674` — `_block_keys` принимает `["machine","commit_author"]`;
+  - `:894-898` — сверка одного листа;
+  - `:905-932` — `_target_set_block_mismatches`, сводится к
+    `_merge_mismatches` (`:965`) → `targets.merge_local`;
+  - `:991` — `_backup_copy` в `config.LOGS`.
+- `gitcmd.commit_author`, `pult_identity`, `pult_identity_args` —
+  `orchestrator/gitcmd.py:559`, `:567`, `:572`. `_author_check_refusal` —
+  `:625-660`, отказ при `username != name` (`:657-659`).
+- `project_checks.py:48-51` — `by_pipeline = doctor.forge.ci_by_pipeline(name)`.
+  `:53-66` — `ROLE_SKIP` для clone, push, token, ci-token.
+- `catalog.cmd_new` — `orchestrator/catalog.py:775`; `unsupported_reason` —
+  `:856-858`. `epics.py:796` зовёт `catalog.cmd_new` напрямую.
+- `doctor/cli.py:312-341`: починки идут до `all_checks`. `:352-355`:
+  `sys.exit(1)` при любом `fail`.
+- Поведение песочницы, от которого зависит требование 6:
+  `isolate_keychain_and_role` (`tests/sandbox.py:676-696`) ставит
+  `refused_gitlab_transport` (`:668-673`). Это `URLError` без повтора, то
+  есть сторож даёт `warn`. Решение №2.4 этим подтверждается.
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да | нет запасного `email`; `name` подставлен в `username`; поля заполнены у GitHub. До кода: у `TokenUser` нет полей → красный, без побочных эффектов |
-| AC-2 | да | в `name` пишется `name`, а не `username`; нет копии в `config.LOGS`; нет строки журнала; повтор переписывает файл или плодит копии. До кода: слой не меняется → красный |
-| AC-3 | частично (В-1) | API отказал, а слой переписан; `sys.exit` обрывает `doctor` до `all_checks`. Ветка «сверка до записи не прошла» — см. В-1 |
-| AC-4 | да | сверяется только адрес; `--fix` перезаписывает несовпадение; в тексте нет обоих значений; `test-token-<слот>` (`tests/sandbox.py:657-660`) в выводе; в роли нет `skip` или идёт вызов API. Безопасная форма «не зовёт `token_user`» — счётчик вызовов подменённого транспорта: он ловит и `forge.token_user`, и прямой `gitlab_adapter.token_user` |
-| AC-5 | да | отказ положен в `new_cli_target`, а не в `cmd_new` (ловит путь promote); отказ после строки `tasks` или ссылки документов; отказ раньше `unsupported_reason` (меняется текст у неподдержанного). До кода: задача заводится → красный |
-| AC-6 | да | `warn` приравнен к `fail`; предупреждение не печатается |
+| AC-1 | да | `commit_email` не берётся из ответа; нет запасного `email`; `name` не заполняется. До кода — красный: у `TokenUser` нет полей. Часть про «прочие адаптеры» у GitHub пуста (`token_user` нет); добавление реализации ловит существующий `github_mr_units.py:936`. |
+| AC-2 | да | В `name` пишется `name` вместо `username` (они различны); нет копии в `config.LOGS`; нет строки журнала; повтор переписывает файл или дописывает журнал. До кода — красный: поля в слое нет. |
+| AC-3 | да | Нет запасного `email`. Запись идёт при отказе API. Адаптер или автопоиск отбраковывает пробельный `username` раньше сверки, и причина уже не «сверка до записи не прошла». `sys.exit` обрывает `doctor`, и строк проверок после отказа нет. До кода — красный по строке причины. |
+| AC-4 | да | `ok` только по адресу без имени (ловит ветка «адрес совпадает, имя = `name`»). `--fix` перезаписывает расхождение. Поле не задано и API без адреса — `fail` вместо `warn`. В роли зовётся `token_user` (шпион). Утечка токена (проверка по фикстурному токену). До кода — красный: строки проверки нет. |
+| AC-5 | да | Отказ стоит в обёртке `artel.py`, а не в `cmd_new`: `epic draft promote` заводит задачу. Отказ после создания ссылки документов. Проверка стоит до `unsupported_reason`, и текст отказа неподдержанного проекта меняется. До кода — красный: задача заводится, текста отказа нет. Тест обязан сверять текст отказа: одно «задачи нет» в красной фазе может пройти по посторонней причине. |
+| AC-6 | да | `warn` трактуется как отказ; предупреждения в выводе нет. До кода — красный по предупреждению. |
 
-Красная фаза безопасна: рекурсии, хуков и порождения процессов критерии
-не требуют. API подменяется транспортом, а песочница по умолчанию
-отказывает в HTTP (`tests/sandbox.py:668-696`). Тестам AC-2 и AC-3 через
-полный `cmd_doctor(fix=True)` стоит заранее завести каталог клона
-(`_fix_project_clones`, `orchestrator/doctor/cli.py:318`), как это
-делает `tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py:176`.
-
-В-1 (AC-3). Решение №2.1 задало текст причины, но не задало, чем отказ
-вызвать. При верной сборке текста сверка по построению проходит.
-Внешний триггер есть, хотя SPEC его не называет: ответ `GET /user` с
-`username` из одних пробелов. Тогда `token_user` его примет
-(`gitlab_adapter.py:583`), а `_render` запишет его в кавычках (проверено
-опытом). Дальше `_merge_mismatches` → `targets.merge_local` →
-`_check_delivery` (`orchestrator/targets.py:517`, `:715-720`) отклонит
-запись → «сверка до записи не прошла». Но и реализация, которая сверяет
-ответ API заранее (пустое имя — «в ответе нет имени»), тоже честно
-выполняет SPEC — и даёт другую причину. Без названного в критерии
-триггера автор теста либо подменяет внутренний помощник (тогда тест
-навязывает устройство, skills/escalation-rules.md), либо выбирает
-триггер, на который SPEC не обязывает отвечать этой причиной. Стоит
-назвать триггер в AC-3 (например, `username` из пробелов) или снять
-ветку «отказ записи» с этой причиной из долгоживущего теста.
-
-Примечание (не отклонение): AC-2 «в журнале — строка записи» не задаёт
-актора и действие строки. Тест может проверить только, что появилась
-новая строка журнала с `target=<проект>`. Сверять с `"target-set"` и
-`"operator"` (`orchestrator/projects.py:513`) значило бы навязать
-устройство.
+Опасных форм нет: красная фаза не порождает рекурсии и процессов git.
+Ответы API подменяются, в сеть тесты не ходят (транспорт песочницы
+отказывает), отправки в настоящий origin нет.
 
 ## Зоны
-- Тр. 1 → `forge.py`, `gitlab_adapter.py`. Тр. 2–4 →
-  `doctor/project_checks.py`, `doctor/cli.py` (вход `--fix`, `:312-341`),
-  `projects.py`. Тр. 5 → `catalog.py`. Тесты → `tests/`. Всё в зонах.
-- `orchestrator/doctor/__init__.py` вне зон. Прочие `_fix_*` зовутся
-  через него, но `cli.py` уже зовёт модуль напрямую
-  (`doctor.project_checks.component_checks`, `cli.py:216`), так что
-  новую починку можно звать так же.
-- `orchestrator/epics.py` вне зон и не нужен: отказ идёт через
-  `cmd_new` (`epics.py:796`).
-- `gitcmd.py` вне зон, согласно тр. 7. Защищённых путей задача не
-  трогает. Песочница ролей не расширяется.
+- Зоны SPEC: `forge.py`, `gitlab_adapter.py`, `doctor/project_checks.py`,
+  `doctor/cli.py`, `projects.py`, `catalog.py`, `docs/codebase-map.md`,
+  `tests/`. Они покрывают все требования: функция записи без `sys.exit` —
+  в `projects.py`, отказ — в `catalog.py`.
+- `orchestrator/gitcmd.py` справедливо вне зон (решение №1.3). Чтение
+  `forge.token_user` правки `gitcmd.py` не требует. `epics.py` правка не
+  нужна (отказ в `cmd_new`).
+- Защищённых путей (`config.PROTECTED_PATHS`) зоны не трогают. Песочница
+  ролей не расширяется.
 
 ## Матрица неослабления
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `forge.TokenUser` — поля `name`, `commit_email` | `TokenUser("probe-user")` — tests/test_01m6ezxvfgh5z2876xwmqg35fp_forge_probe_ref_sha.py:82; `TokenUser(data["username"])` — orchestrator/gitlab_adapter.py:586 | да, если новые поля идут после `username` и имеют значение по умолчанию | тот же тест | ок |
-| `gitlab_adapter.token_user` | один `GET /user`, повтор 5xx, причина — tests/test_01m5wcxbm7wcmrwcbwnchmar3t_gitlab_forge.py:1018-1085; tests/test_01m5wcxbr9k8cn586w1ap3zn6q_sandbox_no_http.py:154,176 | да: запрос прежний | те же тесты | ок |
-| `project_entry_checks` — новая строка | точный список строк github и восемь строк `skip` артели — tests/test_01m6ezxvfgh5z2876xwmqg35fp_gitlab_doctor_lines.py:813,819 | да: тр. 4 «строка только у GitLab», выбор через `ci_by_pipeline` (решение №2.4) | те же тесты | ок |
-| `all_checks` — строка у GitLab | разность `warn` двух прогонов — tests/test_01m5wcxbr9k8cn586w1ap3zn6q_gitlab_doctor_probe.py:262-270 (`/user` без адреса, `:143-144`) | да: «нет адреса» — `warn` в обоих прогонах | тот же тест | ок |
-| `cmd_new` — отказ по сторожу | `new` GitLab заводит задачу — tests/test_01m6ezxvfg405y1btfdsgbks8e_pair_support.py:161, tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:401; отказ неподдержанного прежним текстом — tests/test_epic_draft_promote_unsupported_project.py:60, tests/test_01m6n7cykdamakenx60cbk7vqx_pair_open.py:345 | да: песочница отказывает транспорту (tests/sandbox.py:692-696, :1643) → `warn` → задача заводится; утверждения — подстроки, не точный вывод; у неподдержанного отказ раньше сторожа | те же тесты без правки | ок |
-| `test_ac9` — запрет литерала `forge` | tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:491 | да: тр. 4 требует `ci_by_pipeline` | тот же тест | ок |
-| `gitcmd._push_plan`, `_author_check_refusal` | сверка автора до первой отправки — tests/test_01m5wdb7jy0vjghvkcaba2qc5t_rewrite_flow.py:1404-1530 | да: файл не меняется | те же тесты; гейт зон | ок |
-| `cmd_doctor(fix=True)` — новая починка | выводы `--fix` существующих тестов — записи артели и github | да: починка только для GitLab с `token_slot` без поля | те же тесты | ок |
+| `forge.TokenUser`: новые поля | позиционная сборка `TokenUser("probe-user")` — `tests/test_01m6ezxvfgh5z2876xwmqg35fp_forge_probe_ref_sha.py:82` | да, если поля идут после `username` с дефолтом `None` | тот же тест | ок |
+| `gitlab_adapter.token_user` | единственный вызов `GET /user` — `tests/test_01m5wcxbm7wcmrwcbwnchmar3t_gitlab_forge.py:1623`; набор пар `ALLOWED_PAIRS` — `tests/test_forge_gitlab_request.py:174-187` | да: адрес берётся из того же ответа `GET /user` (требование 1) | те же тесты | ок |
+| `project_entry_checks`: новая строка | точный список 8 строк для github и артели — `tests/test_01m6ezxvfgh5z2876xwmqg35fp_gitlab_doctor_lines.py:813`, `:819` | да: строка есть только у GitLab (требование 4), в `_names()` не входит | те же тесты | ок |
+| `project_entry_checks` без `token_slot` в роли | `tests/test_doctor_gitlab_ci_file.py:153-172` | да: условие «`forge: gitlab` и `token_slot`» и пропуск в роли | тот же тест | ок |
+| сравнение `forge` с литералом | `tests/test_01m5w27cy7k7nr9347nkd8f0nx_unsupported_project.py:491` (`test_ac9`) | да: `ci_by_pipeline` (требование 4) | тот же тест | ок |
+| `cmd_new`: новый отказ | отказ неподдержанного проекта — `unsupported_project.py:199`, `:399`; `pair_support.py:134-141`, `:161`; `tests/test_epic_draft_promote_unsupported_project.py:90-97` | да: проверка после `unsupported_reason`, в песочнице `warn` | те же тесты, без правки | ок |
+| `doctor` для GitLab с ответом API | `tests/test_01m5wcxbr9k8cn586w1ap3zn6q_gitlab_doctor_probe.py:298-325` (утечка токена; строки `warn` по сроку токена) | да: новая строка `fail` в обоих прогонах, отбор строк по сроку её не берёт; значения токена в вывод не идут | тот же тест | ок |
+| хелперы `target-set` (`projects.py:451-513`) при выделении функции без `sys.exit` | тексты отказов CLI `target-set` — тесты `target-set` | да: тексты CLI не меняются (требование 3 добавляет функцию) | существующие тесты `target-set` | ок |
 
-Раздела «Меняемое поведение» в SPEC нет и не нужно: существующие
-утверждения не меняются.
+Раздела «Меняемое поведение» в SPEC нет и не нужно: ни одно утверждение
+существующих тестов не меняется (требование 6). Поиск по `tests/` на main
+сломанных существующих тестов не нашёл.
 
 ## Пути обхода гейтов
-- Прошлые Е-1 (promote мимо обёртки) и Е-2 (`--fix` в роли) закрыты:
-  тр. 5 и AC-5 называют `cmd_new` и `epic draft promote`, тр. 4 и AC-4 —
-  поведение `--fix` в роли.
-- Е-1 (продолжение В-1). Реализация может вовсе не сверять текст до
-  записи. AC-3 поймает это только на триггере, который ведёт в
-  `merge_local`, а SPEC его не называет.
-- Обход через `warn` («API не ответил» → задача заводится) — осознанное
-  решение №1.2, не отклонение.
+- Буквального обхода не нашёл. Отказ ставится в `cmd_new`, так что его не
+  обходит ни `epic draft promote`, ни `canary_drive.py:54`. Гейт зон
+  держит неизменность `gitcmd.py`. Требование 6 без правки тестов держат
+  гейт неослабления и требование зелёного набора.
+- Наблюдение, не отклонение (вне ТЗ). `catalog.spawn_subtask`
+  (`orchestrator/catalog.py:1082`) заводит части деления через
+  `_new_task_row`, в обход `cmd_new`. Так он уже обходит и
+  `unsupported_reason`. Родитель прошёл сторож при `new`; смена токена
+  между `new` и делением сторожем `new` не ловится, её увидит `doctor`.
+- Наблюдение, не отклонение. Поле задано, API ответил без адреса →
+  `warn`, даже если имя расходится с `username`. Это буквально по
+  требованию ТЗ 3 («API не дал адреса» — `warn`).
 
 ## Вердикт
-concerns. Возврат аналитику не нужен, оба пункта Оператор может решить на
-гейте:
-
-1. В-1 / Е-1: в AC-3 у ветки «отказ записи — сверка до записи не прошла»
-   нет названного внешнего триггера (SPEC.md, AC-3; решение №2.1).
-   Внешний триггер существует: ответ `GET /user` с `username` из одних
-   пробелов (`orchestrator/gitlab_adapter.py:583`, `orchestrator/targets.py:517`,
-   `:715-720`). Но SPEC не обязывает реализацию отвечать на него именно
-   этой причиной. Стоит назвать триггер в AC-3 или убрать эту ветку из
-   долгоживущего теста.
-2. Ф-1 (к сведению): решение №1.4 ссылается на `orchestrator/projects.py:996`,
-   а `_backup_copy` стоит на `:986`. SPEC ссылается верно.
-
-Отклонения прошлого аудита (spec_sha 0f70a2a1) — В-1 о тексте и коде
-выхода, В-2, Д-1, Д-2, Е-1, Е-2 — сняты решениями №2.1–№2.4 и правкой
-SPEC.
+`pass` — отклонений нет. Все утверждения SPEC о коде подтвердились по
+main. Каждое требование ТЗ отражено в SPEC либо снято решением Оператора,
+у каждого AC есть ловимая мутация и красная фаза без опасных форм.
+Существующие тесты не краснеют без правки. Разработчику стоит учесть
+ловушки из матрицы:
+- новую строку не включать в `_names()`;
+- поля `TokenUser` ставить после `username`;
+- адрес брать только из одного `GET /user`;
+- проверку в `cmd_new` ставить после `unsupported_reason`.

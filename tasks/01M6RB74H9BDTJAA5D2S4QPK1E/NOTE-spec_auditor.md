@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Третий визит (spec_sha 5e078eb2). Все шесть отклонений прошлого аудита закрыты решениями гейта №2 и правкой SPEC.
-- Факты подтвердились: forge.py:96, project_checks.py:51 (ci_by_pipeline), unsupported_project.py:491 (test_ac9), epics.py:796 (cmd_new в обход обёртки), catalog.py:856, projects.py:986/:889-893/:900-926, cli.py:312-355 (починки до all_checks, sys.exit(1) при fail).
-- Внешний триггер «сверка до записи не прошла»: GET /user с username "   " — token_user принимает любую строку (gitlab_adapter.py:583), _render пишет его в кавычках (проверено опытом), merge_local → _check_delivery (targets.py:517, :715-720) отказывает → _merge_mismatches. SPEC этот триггер не называет.
-- Существующие тесты new на GitLab — только pair_support:161 и unsupported_project:401; подмены /user с адресом нет → warn → зелёные.
+- Визит по spec_sha 7e7c818b. Ветка задачи отстаёт от main (main 6bde2b9e6); факты SPEC сверены по `git show main:` — все подтвердились: projects.py:380/:451-512/:894-898/:905-932/:965/:991, gitlab_adapter.py:579-586, forge.py:96-98/:452, gitcmd.py:559-582/:625-660, targets.py:715-720, catalog.py:856, epics.py:796, project_checks.py:48-66, cli.py:312-355.
+- Песочница: `isolate_keychain_and_role` (tests/sandbox.py:676) ставит `refused_gitlab_transport` → URLError без повтора → сторож `warn`; pair_support/unsupported_project зелёные без правки.
+- Ловушки для разработчика (не отклонения SPEC): новую строку не добавлять в `_names()` (test_01m6ezxvfgh5z2876xwmqg35fp_gitlab_doctor_lines.py:813 точный список для github/артели); поля TokenUser — после username с дефолтом None (forge_probe_ref_sha.py:82 позиционно); только один GET /user (gitlab_forge.py:1623, test_forge_gitlab_request.py:174-187).
+- `spawn_subtask` (catalog.py:1082) заводит задачу через `_new_task_row` в обход cmd_new — вне ТЗ, отмечено как наблюдение.
 
 ## Не сработало
-- —
+- Записи в /tmp и `$(...)` в Bash отклоняются — читать через `git show main:<путь> | sed`.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: concerns, ready.
+- SPEC-AUDIT.md сдан: pass, ready.
 
 ## Чего не хватило
-- Цепочка merge_local → _check_delivery (targets.py:486-518) — не сразу.
+- Карта существующих тестов, задевающих project_entry_checks для GitLab, — собрал поиском по tests/.
