@@ -4141,12 +4141,20 @@ def _acceptance_suite_run(conn, root: Path, task_id: str, branch: str,
                                  actor=actor, fresh=fresh)
     reason = "запрошен свежий локальный прогон" if fresh else ""
     if not reason:
-        sha, reason = _ci_result_conditions(root, branch, repo,
-                                            config.MAIN_BRANCH)
+        entry = _project_entry(task_id)
+        base = (entry or {}).get("base") or config.MAIN_BRANCH
+        # Свежесть в `local` по-прежнему сверяется с `config.MAIN_BRANCH`
+        # (требование 1); база записи — только у сверки сценария CI (3ж).
+        sha, reason, bases = _ci_result_conditions(
+            root, branch, repo, config.MAIN_BRANCH,
+            freshness_held=_freshness_held(entry),
+            appendix_refusal=lambda head: _appendix_ci_refusal(
+                conn, task_id, repo, head, base))
         if not reason:
             run_id, reason = ci.accepted_full_suite(sha, repo=repo)
             if run_id:
-                detail = f"полный набор: принят итог CI {sha}, прогон {run_id}"
+                detail = (f"полный набор: принят итог CI {sha}, прогон "
+                          f"{run_id}{_basis_suffix(bases)}")
                 if isinstance(conn, sqlite3.Connection):
                     store.journal(conn, task_id, actor,
                                   "приёмка: полный набор принят из CI", detail)
@@ -4163,26 +4171,164 @@ def _acceptance_suite_run(conn, root: Path, task_id: str, branch: str,
             else full_suite(root, task_id))
 
 
-def _ci_result_conditions(root: Path, branch: str, repo: Path,
-                          base: str) -> tuple[str, str]:
-    """(sha головы, причина): три условия принятия итога CI — дерево гейта
-    равно дереву головного коммита, голова свежа относительно
-    `origin/<base>`. Пустая причина — условия выполнены."""
+def _ci_result_conditions(root: Path, branch: str, repo: Path, base: str, *,
+                          freshness_held: bool = False,
+                          appendix_refusal=None) -> tuple[str, str, tuple]:
+    """(sha головы, причина, основания): условия принятия итога CI —
+    дерево гейта равно дереву головного коммита, голова свежа относительно
+    `origin/<base>`. Пустая причина — условия выполнены.
+
+    `appendix_refusal(sha)` — проверка доказательства CI для дерева гейта,
+    отличного от дерева головы (приложения PLAN, SPEC
+    01M6TRKY1A41QSZMCXY9TKYXG7, требование 3): пустая строка — доказано,
+    основание `CI_BASIS_APPENDICES`; иначе причина. Не задана — прежнее
+    равенство деревьев. `freshness_held` — свежесть держит `merge_gate`
+    проекта (требование 1): несвежая голова не отказывает, а даёт основание
+    `CI_BASIS_FRESHNESS`."""
     sha, _ = ci.head_sha(branch, repo=repo)
     if not sha:
-        return "", "голова ветки не прочитана"
+        return "", "голова ветки не прочитана", ()
     try:
         gate_tree = suite_tree_hash(root)
         head_tree = suite_tree_hash(root, ref=sha, worktree=False)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         gate_tree = head_tree = None
     if not head_tree or not gate_tree:
-        return sha, "дерево гейта или головного коммита не прочитано"
+        return sha, "дерево гейта или головного коммита не прочитано", ()
+    bases = []
     if gate_tree != head_tree:
-        return sha, "дерево гейта отличается от дерева головного коммита"
+        reason = (appendix_refusal(sha) if appendix_refusal is not None
+                  else TREE_DIFFERS)
+        if reason:
+            return sha, reason, ()
+        bases.append(CI_BASIS_APPENDICES)
     if not gitcmd.is_ancestor(f"refs/remotes/origin/{base}", sha, repo=repo):
-        return sha, f"ветка не свежа относительно origin/{base}"
-    return sha, ""
+        if not freshness_held:
+            return sha, f"ветка не свежа относительно origin/{base}", ()
+        bases.append(CI_BASIS_FRESHNESS)
+    return sha, "", tuple(bases)
+
+
+TREE_DIFFERS = "дерево гейта отличается от дерева головного коммита"
+# Основания принятия итога CI в записи журнала — после прежнего начала
+# записи (SPEC 01M6TRKY1A41QSZMCXY9TKYXG7, требование 4).
+CI_BASIS_APPENDICES = "для дерева с приложениями PLAN"
+CI_BASIS_FRESHNESS = "без проверки свежести: её держит merge_gate"
+# Сценарий-публикатор CI (условие 3ж): исполняется из проверяемой ветки.
+CI_PUBLISHER_REL = "scripts/plan_appendix_ci.py"
+_APPENDIX_REFUSAL = "итог CI для дерева с приложениями PLAN не принят: "
+
+
+def _basis_suffix(bases) -> str:
+    return f"; основание: {'; '.join(bases)}" if bases else ""
+
+
+def _project_entry(task_id: str) -> dict | None:
+    """Запись проекта задачи; None — не прочитана."""
+    from . import workspace
+    try:
+        return targets.target(workspace.task_target(task_id))
+    except targets.TargetsError:
+        return None
+
+
+def _freshness_held(entry: dict | None) -> bool:
+    """Свежесть ветки держит `merge_gate` пульта (`fsm_merge_gate.
+    _sync_main_or_wait`): только прочитанное значение `operator`. Поля нет
+    или запись не прочитана — свежесть проверяется (требование 1).
+    Значение сравнивает `targets`: белый список отправок не действует
+    ровно при `merge_gate: operator`."""
+    return entry is not None and not targets.push_whitelisted(entry)
+
+
+def appendix_digests(appendices: list) -> list[str]:
+    """sha256 текстов диффов приложений в порядке PLAN — шестнадцатеричный
+    дайджест байтов UTF-8 `PlanAppendix.diff` (требование 2): та же форма,
+    что публикует `scripts/plan_appendix_ci.appendix_digests`."""
+    return [hashlib.sha256(a.diff.encode("utf-8")).hexdigest()
+            for a in appendices]
+
+
+def _blob(repo: Path, rev: str, rel: str) -> str:
+    """id blob `rel` в `rev`; пустая строка — нет или git не ответил."""
+    res = gitcmd.in_repo(repo, "rev-parse", "--verify", "-q", f"{rev}:{rel}")
+    return res.stdout.strip() if res is not None and res.returncode == 0 else ""
+
+
+def _worktree_dirt(wt: Path) -> str:
+    """Чем грязна рабочая копия задачи (условие 3а); пусто — чиста.
+    Неотслеживаемые под `tasks/` не считаются — то же правило, что у
+    снимка дерева гейта `suite_tree_hash`."""
+    res = gitcmd.in_repo(wt, "diff", "--name-only", "HEAD")
+    if res is None or res.returncode != 0:
+        return "правки рабочей копии не прочитаны"
+    if res.stdout.strip():
+        return "в рабочей копии незакоммиченные правки"
+    res = gitcmd.in_repo(wt, "ls-files", "--others", "--exclude-standard",
+                         "-z")
+    if res is None or res.returncode != 0:
+        return "неотслеживаемые файлы рабочей копии не прочитаны"
+    if any(p and not p.startswith("tasks/") for p in res.stdout.split("\0")):
+        return "в рабочей копии неотслеживаемые файлы"
+    return ""
+
+
+def _appendix_ci_refusal(conn, task_id: str, repo: Path, sha: str,
+                         base: str) -> str:
+    """Причина не принять итог CI головы `sha` для дерева гейта с
+    приложениями PLAN; пусто — CI доказал наложение тех же приложений
+    (условия 3а–3з требования 3). Без приложений и не у артели — прежняя
+    причина `TREE_DIFFERS`. Ссылка документов и её `origin` только
+    читаются: `artifact_branch.origin_sync_refusal` сам отправлял бы
+    отстающую ссылку."""
+    from . import appendix_tree, artifact_source, repo_context, workspace
+    ctx = repo_context.resolve(workspace.task_target(task_id))
+    if not repo_context.is_artel(ctx):
+        return TREE_DIFFERS
+    appendices, errors, unread = appendix_tree.read_plan(
+        conn, task_id, repo_context.protected_paths(ctx))
+    if errors or unread or not appendices:
+        return TREE_DIFFERS
+    dirt = _worktree_dirt(workspace.path(task_id))
+    if dirt:
+        return f"{TREE_DIFFERS}: {dirt}"
+    docs_ref = artifact_branch.branch_name(task_id)
+    source, _foreign = artifact_source.resolve(conn, task_id)
+    if source != docs_ref:
+        return f"{_APPENDIX_REFUSAL}источник PLAN — {source}, не {docs_ref}"
+    script = _blob(repo, sha, CI_PUBLISHER_REL)
+    if not script or script != _blob(repo, f"refs/remotes/origin/{base}",
+                                     CI_PUBLISHER_REL):
+        return (f"{_APPENDIX_REFUSAL}{CI_PUBLISHER_REL} головы не равен "
+                f"origin/{base} или не прочитан")
+    published, why = ci.full_suite_publication(sha, repo=repo)
+    if published is None:
+        return f"{_APPENDIX_REFUSAL}{why}"
+    if published.outcome != ci.PUBLICATION_APPLIED or not published.ref:
+        return (f"{_APPENDIX_REFUSAL}CI опубликовал исход "
+                f"{published.outcome}, не {ci.PUBLICATION_APPLIED}")
+    x = published.ref
+    docs_repo = artifact_branch.task_repo(task_id)
+    local = artifact_branch.ref_head(task_id)
+    remote, why = gitcmd.remote_ref_state(docs_ref, repo=docs_repo)
+    if why:
+        return f"{_APPENDIX_REFUSAL}origin не ответил на сверку {docs_ref}: {why}"
+    if not remote or local != remote:
+        return (f"{_APPENDIX_REFUSAL}{docs_ref} локально {local or '(нет)'}, "
+                f"в origin {remote or '(нет)'}")
+    if not gitcmd.is_ancestor(x, remote, repo=docs_repo):
+        return (f"{_APPENDIX_REFUSAL}опубликованный {x} не предок головы "
+                f"{docs_ref} в origin {remote}")
+    plan_rel = f"tasks/{task_id}/PLAN.md"
+    plan_x = _blob(docs_repo, x, plan_rel)
+    if not plan_x or plan_x != _blob(docs_repo, remote, plan_rel):
+        return (f"{_APPENDIX_REFUSAL}PLAN.md в {x} не равен PLAN.md головы "
+                f"{docs_ref} {remote}")
+    if list(published.diffs) != appendix_digests(appendices):
+        return (f"{_APPENDIX_REFUSAL}список диффов CI "
+                f"({len(published.diffs)}) не равен разбору приёмки "
+                f"({len(appendices)}) по порядку")
+    return ""
 
 
 # Начало записи журнала зелёного итога задания CI (SPEC
@@ -4247,12 +4393,15 @@ def _ci_job_run(conn, root: Path, task_id: str, branch: str, repo: Path,
     недоказанный итог — «неизвестно» с причиной (инвариант 41)."""
     from . import store
     job = profile.ci_job
+    bases = ()
     try:
-        base = targets.target(profile.project).get("base") or config.MAIN_BRANCH
+        entry = targets.target(profile.project)
     except targets.TargetsError as exc:
         sha, reason = "", f"запись проекта {profile.project} не прочитана: {exc}"
     else:
-        sha, reason = _ci_result_conditions(root, branch, repo, base)
+        sha, reason, bases = _ci_result_conditions(
+            root, branch, repo, entry.get("base") or config.MAIN_BRANCH,
+            freshness_held=_freshness_held(entry))
     result = None
     if not reason:
         result = ci.job_full_suite(profile.project, sha, job)
@@ -4273,6 +4422,7 @@ def _ci_job_run(conn, root: Path, task_id: str, branch: str, repo: Path,
         if isinstance(conn, sqlite3.Connection):
             store.journal(conn, task_id, actor, CI_JOB_RED_ACTION, detail)
         return FullSuiteRun(False, FULL_SUITE_RED, digest, None, detail)
+    record += _basis_suffix(bases)
     if isinstance(conn, sqlite3.Connection):
         store.journal(conn, task_id, actor, CI_JOB_ACCEPTED_ACTION, record)
     return FullSuiteRun(True, FULL_SUITE_GREEN, record, None, record)

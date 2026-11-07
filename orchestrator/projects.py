@@ -452,28 +452,87 @@ def _target_set_load(name: str) -> tuple[Path, dict]:
     """(путь локального слоя, его разобранный текст) для правки записи
     `name`; отказ — запись артели, слой не загружается, записи в нём нет,
     файл не прочитан или несёт комментарий."""
+    path, data, refusal = _local_layer_for(name)
+    if refusal:
+        sys.exit(f"target-set: {refusal}")
+    return path, data
+
+
+def _local_layer_for(name: str) -> tuple[Path | None, dict | None, str]:
+    """`_target_set_load` без завершения процесса: (путь, разобранный
+    текст, "") либо (…, причина отказа) — для записи из `doctor --fix`."""
     if name == config.DEFAULT_TARGET:
-        sys.exit(f"target-set: запись {name} — в targets.yaml репозитория, "
-                 f"правка — doc-commit; файл не записан")
+        return None, None, (f"запись {name} — в targets.yaml репозитория, "
+                            f"правка — doc-commit; файл не записан")
     try:
         _repo, local = targets.layers()
     except targets.TargetsError as exc:
-        sys.exit(f"target-set: {exc}; файл не записан")
+        return None, None, f"{exc}; файл не записан"
     path = targets.local_path()
     if local is None or name not in local:
-        sys.exit(f"target-set: записи {name} нет в локальном слое {path}; "
-                 f"файл не записан")
+        return path, None, (f"записи {name} нет в локальном слое {path}; "
+                            f"файл не записан")
     try:
         old = path.read_text(encoding="utf-8")
         data = yamlmini.mapping(old)
     except (OSError, UnicodeDecodeError, yamlmini.YamlError) as exc:
-        sys.exit(f"target-set: {path} не прочитан: {exc}")
+        return path, None, f"{path} не прочитан: {exc}"
     comment = _comment_line(old)
     if comment is not None:
-        sys.exit(f"target-set: в {path} комментарий (строка {comment}) — "
-                 f"пересборка файла его сотрёт; убери комментарий вручную; "
-                 f"файл не записан")
-    return path, data
+        return path, None, (f"в {path} комментарий (строка {comment}) — "
+                            f"пересборка файла его сотрёт; убери комментарий "
+                            f"вручную; файл не записан")
+    return path, data, ""
+
+
+COMMIT_AUTHOR_KEYS = ["machine", "commit_author"]
+WRITE_CHECK_FAILED = "сверка до записи не прошла"
+
+
+def set_commit_author(name: str, author: dict) -> tuple[str, str]:
+    """Запись `machine.commit_author` записи `name` путём `target-set` для
+    `doctor --fix` (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E, требование 3): копия
+    прежнего файла в `config.LOGS`, сверка блока целиком до записи, строка
+    журнала. Процесс не завершается: ("", текст записи) либо (причина
+    отказа, "") — `doctor` выводит её строкой и идёт дальше."""
+    path, data, refusal = _local_layer_for(name)
+    if refusal:
+        return refusal, ""
+    found, current = _lookup(data["targets"][name], COMMIT_AUTHOR_KEYS)
+    if found:
+        # Заданное поле автопоиск не перезаписывает (требование 2).
+        return "поле machine.commit_author уже задано; файл не записан", ""
+    if not store.db_usable():
+        return f"{NO_JOURNAL}; файл не записан", ""
+    edited = copy.deepcopy(data)
+    holder = edited["targets"][name].setdefault("machine", {})
+    holder["commit_author"] = dict(author)
+    order = list(holder)
+    try:
+        text = "".join(line + "\n" for line in _render(edited, 0, ""))
+    except _Unwritable as exc:
+        return (f"поле {exc} файла {path} не записать подмножеством YAML "
+                f"пульта; файл не записан"), ""
+    problems = _target_set_block_mismatches(data, text, name,
+                                            COMMIT_AUTHOR_KEYS, author, order,
+                                            path)
+    if problems:
+        return (f"{WRITE_CHECK_FAILED} — {'; '.join(problems)}; файл не "
+                f"записан"), ""
+    try:
+        backup = _backup_copy(path)
+    except OSError as exc:
+        return (f"копия {path} в {config.LOGS} не создана: {exc}; файл не "
+                f"записан"), ""
+    try:
+        _write_atomic(path, text)
+    except OSError as exc:
+        return f"{path} не записан: {exc}", ""
+    detail = (f"machine.commit_author: {TARGET_SET_ABSENT} → "
+              f"{{name: {author['name']}, email: {author['email']}}} "
+              f"(doctor --fix, владелец токена)")
+    store.journal(store.db(), None, "doctor", "target-set", detail, target=name)
+    return "", f"{detail}; копия прежнего файла — {backup}"
 
 
 def _was_text(found: bool, current: object, field: str) -> str:
