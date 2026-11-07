@@ -1784,6 +1784,64 @@ def pult_commit_failed_paths(conn, task_id: str) -> list[str] | None:
     return [p for p in paths if p not in stray]
 
 
+# Шаблон первой строки коммитов пульта в кодовой ветке задачи (SPEC
+# 01M6RN8EY72K25GZ60NSJVVEGG, требования 2-4): `{ref}` без ссылки системы
+# `ref_required` — коммит по умолчанию и эта запись, шаг не останавливается.
+COMMIT_MESSAGE_NOT_APPLIED_ACTION = "шаблон сообщения не применён"
+
+
+def task_project_entry(conn, task_id: str) -> dict:
+    """Плоская запись проекта задачи; `{}` — строки задачи в БД нет или
+    запись не читается (деградация `gitcmd._project_entry`)."""
+    if not store.task_exists(conn, task_id):
+        return {}
+    try:
+        entry = targets.target(store.task_target(conn, task_id))
+    except targets.TargetsError:
+        return {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def pult_subject(conn, task_id: str, text: str, *, journal: bool = True) -> str:
+    """Первая строка коммита пульта в кодовой ветке задачи по
+    `policy.commit_message_template`; `text` — служебный текст без префикса
+    `<id>: `. Без поля, записи или строки задачи — прежняя `<id>: <text>`.
+    `{ref}` — ключ первой ссылки системы `ref_required` (правило
+    `pull.commit_title`); её нет — умолчание и, при `journal`, запись
+    `COMMIT_MESSAGE_NOT_APPLIED_ACTION`."""
+    default = f"{task_id}: {text}"
+    entry = task_project_entry(conn, task_id)
+    template = entry.get("commit_message_template")
+    if not template:
+        return default
+    ref = ""
+    if "{ref}" in template:
+        system = entry.get(targets.REF_REQUIRED_FIELD)
+        for ext in store.external_refs(conn, store.REF_KIND_TASK, task_id):
+            if ext["system"] == system:
+                ref = ext["key"]
+                break
+        if not ref:
+            if journal:
+                store.journal(conn, task_id, "orchestrator",
+                              COMMIT_MESSAGE_NOT_APPLIED_ACTION,
+                              f"нет ссылки системы {system}")
+            return default
+    # Строка задачи есть: без неё `task_project_entry` вернула `{}`.
+    title = store.get_task(conn, task_id)["title"]
+    return targets.render_template(template, {
+        "id": task_id, "ref": ref, "title": title or task_id, "text": text})
+
+
+def _templated_message(conn, task_id: str, message: str) -> str:
+    """Сообщение чекпоинта `<id>: <текст>` с первой строкой по шаблону
+    проекта задачи; сообщение иного вида — как есть."""
+    prefix = f"{task_id}: "
+    if not message.startswith(prefix):
+        return message
+    return pult_subject(conn, task_id, message[len(prefix):])
+
+
 def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
                             exclude: str | None = None,
                             refuse_on_stray: bool = False,
@@ -1884,7 +1942,8 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     commit = gitcmd.in_repo(
         wt, *gitcmd.pult_identity_args(project, fixation.FIXATION_AUTHOR_NAME,
                                        fixation.FIXATION_AUTHOR_EMAIL),
-        "commit", "-q", "-m", gitcmd.pult_message(message, project))
+        "commit", "-q", "-m",
+        gitcmd.pult_message(_templated_message(conn, task_id, message), project))
     if commit.returncode != 0:
         return False, "", stray, _journal_git_failure(
             conn, task_id, "commit", commit), mandated

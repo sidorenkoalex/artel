@@ -284,6 +284,100 @@ def check_project_token(check_name: str, name: str, entry: dict,
                         f"токена gh Оператора")
 
 
+COMMIT_AUTHOR_MISSING = "автор коммитов не задан: doctor --fix"
+COMMIT_AUTHOR_NOT_OVERWRITTEN = ("doctor --fix не перезаписывает — правка поля "
+                                 "machine.commit_author локального слоя "
+                                 "Оператором")
+NO_TOKEN_ADDRESS = ("в ответе GET /user нет адреса учётной записи "
+                    "(commit_email, email)")
+
+
+def commit_author_applies(name: str, entry: dict) -> bool:
+    """Строка автора коммитов — только у проекта GitLab с `token_slot`
+    (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E, требование 4). Хостинг — по
+    `forge.ci_by_pipeline`, без сравнения `forge` с литералом."""
+    return (not doctor.repo_context.is_artel(name)
+            and bool(entry.get("token_slot"))
+            and doctor.forge.ci_by_pipeline(name))
+
+
+def check_commit_author(name: str, entry: dict) -> doctor.Check:
+    """`project-commit-author-<проект>`: `machine.commit_author` против
+    владельца токена — имя = `username`, адрес = адрес учётной записи.
+    В процессе роли — пропуск без запроса API. Токен в текст не идёт."""
+    check_name = f"project-commit-author-{name}"
+    if doctor.runner.in_role_environment():
+        return doctor.Check(check_name, "skip", ROLE_SKIP)
+    user = doctor.forge.token_user(name)
+    if user.reason:
+        return doctor.Check(check_name, "warn",
+                            f"владелец токена проекта {name} не прочитан: "
+                            f"{user.reason} — автор коммитов не сверен")
+    if not user.commit_email:
+        return doctor.Check(check_name, "warn",
+                            f"проект {name}: {NO_TOKEN_ADDRESS} — автор "
+                            f"коммитов не сверен")
+    author = entry.get("commit_author")
+    if not isinstance(author, dict):
+        return doctor.Check(check_name, "fail",
+                            f"проект {name}: {COMMIT_AUTHOR_MISSING}")
+    mismatches = []
+    if author.get("name") != user.username:
+        mismatches.append(f"имя записано {author.get('name')!r}, у владельца "
+                          f"токена username {user.username!r}")
+    if author.get("email") != user.commit_email:
+        mismatches.append(f"адрес записан {author.get('email')!r}, у "
+                          f"владельца токена {user.commit_email!r}")
+    if mismatches:
+        return doctor.Check(check_name, "fail",
+                            f"проект {name}: machine.commit_author не "
+                            f"совпадает с владельцем токена — "
+                            f"{'; '.join(mismatches)}; "
+                            f"{COMMIT_AUTHOR_NOT_OVERWRITTEN}")
+    return doctor.Check(check_name, "ok",
+                        f"проект {name}: автор коммитов совпадает с "
+                        f"владельцем токена")
+
+
+def commit_author_checks(name: str, entry: dict) -> list:
+    """Строка сторожа автора коммитов, если она проекту положена."""
+    if not commit_author_applies(name, entry):
+        return []
+    return [check_commit_author(name, entry)]
+
+
+def fix_commit_authors() -> None:
+    """`doctor --fix`: автопоиск `machine.commit_author` проектов GitLab
+    без поля по владельцу токена (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E,
+    требование 2). Заданное поле не трогается; в процессе роли `token_user`
+    не зовётся. Отказ — строка с причиной, прочие починки идут дальше."""
+    if doctor.runner.in_role_environment():
+        return
+    try:
+        declared = doctor.targets.load()
+    except doctor.targets.TargetsError:
+        return
+    for name, entry in declared.items():
+        if entry.get("commit_author") is not None \
+                or not commit_author_applies(name, entry):
+            continue
+        prefix = f"Автор коммитов проекта {name}"
+        user = doctor.forge.token_user(name)
+        if user.reason:
+            print(f"{prefix}: не записан — владелец токена не прочитан: "
+                  f"{user.reason}")
+            continue
+        if not user.commit_email:
+            print(f"{prefix}: не записан — {NO_TOKEN_ADDRESS}")
+            continue
+        refusal, done = doctor.projects.set_commit_author(
+            name, {"name": user.username, "email": user.commit_email})
+        if refusal:
+            print(f"{prefix}: не записан — {refusal}")
+        else:
+            print(f"{prefix}: записан — {done}")
+
+
 CI_TOKEN_ACTIONS_WARNING = ("CI читается по Actions runs; для check-runs "
                             "токену нужно право Checks: read")
 _HTTP_CODE_RE = re.compile(r"\(HTTP ([1-5][0-9][0-9])\)")

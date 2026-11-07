@@ -96,6 +96,10 @@ class MergeRequest:
 class TokenUser:
     username: str | None = None
     reason: str = ""
+    # Отображаемое имя и адрес учётной записи (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E,
+    # требование 1): заполняет только адаптер GitLab.
+    name: str | None = None
+    commit_email: str | None = None
 
 
 @dataclass

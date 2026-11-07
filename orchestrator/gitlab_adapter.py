@@ -583,7 +583,12 @@ def token_user(target: str) -> forge.TokenUser:
     data = reply.data if isinstance(reply.data, dict) else {}
     if not isinstance(data.get("username"), str):
         return forge.TokenUser(reason="в ответе GET /user нет имени пользователя")
-    return forge.TokenUser(data["username"])
+    # Адрес, с которым GitLab сверяет автора коммита в `pre-receive`, —
+    # `commit_email`; без него — основной `email` учётной записи.
+    address = next((data[key] for key in ("commit_email", "email")
+                    if isinstance(data.get(key), str) and data[key].strip()), None)
+    name = data.get("name") if isinstance(data.get("name"), str) else None
+    return forge.TokenUser(data["username"], name=name, commit_email=address)
 
 
 def token_expiry(target: str) -> forge.TokenExpiry:

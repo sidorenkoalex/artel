@@ -47,12 +47,11 @@ _fresh_suite_for_cycle: ContextVar[bool] = ContextVar(
 _mr_incident_checked: ContextVar[set | None] = ContextVar(
     "mr_incident_checked_for_merge_gate_cycle", default=None)
 
-# Предел ожидания CI новой головы main после push мержа (SPEC
-# 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-4): полный прогон CI main идёт 3–4
-# минуты, очередь раннеров добавляет столько же. Это не
-# `MERGE_GATE_CI_WAIT_CEILING_SEC` (час на CI ветки до мержа): здесь мерж
-# уже состоялся, и ждать дольше — держать мьютекс мержа ради исхода,
-# который следующий мерж всё равно сверит сам.
+# Предел ожидания идущего CI головы main следующим мержем (SPEC
+# 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-4; SPEC 01M6TRM2EKZJV2FXP6C5YNE9FC,
+# требование 2): отсчёт — от начала этого ожидания. Это не
+# `MERGE_GATE_CI_WAIT_CEILING_SEC` (час на CI ветки до мержа): ожидание
+# держит мьютекс мержа, и прочие мержи стоят за ним в очереди.
 MAIN_CI_WAIT_LIMIT_SEC = 18 * 60
 
 # Предел одного прогона `guard.py --all` по дереву мержа (на дереве пульта
@@ -613,11 +612,13 @@ def _refuse_if_main_red(conn, task_id: str, ctx: repo_context.RepoContext,
     перед плотницким merge. Мерж поверх красного main маскирует, чей
     дефект краснит main, и добавляет к нему следующий.
 
-    Отказ — только на красном: идущий и неизвестный CI (сбой `gh`) — запись
-    журнала и проход, иначе недоступный `gh` останавливал бы весь пульт.
-    `fixes_main` — основание `approve <id> <sha> --fixes-main
-    "<основание>"`: Оператор чинит main этой задачей; основание пишется в
-    журнал задачи, а сверка снимается только для этого вызова.
+    Идущий CI мерж дожидается (`_await_running_main_ci`, ADR-0031 этап 2):
+    мерж поверх него лёг бы без сверки. Отказ — на красном и на пределе
+    ожидания; неизвестный CI (сбой `gh`) — запись журнала и проход, иначе
+    недоступный `gh` останавливал бы весь пульт. `fixes_main` — основание
+    `approve <id> <sha> --fixes-main "<основание>"`: Оператор чинит main
+    этой задачей; основание пишется в журнал задачи, а сверка и ожидание
+    снимаются только для этого вызова.
 
     Только self target: CI main — пульта; у внешнего target'а свой форж."""
     if not repo_context.is_artel(ctx):
@@ -636,6 +637,9 @@ def _refuse_if_main_red(conn, task_id: str, ctx: repo_context.RepoContext,
         print(f"[{task_id}] сверка CI main снята (--fixes-main): "
               f"{fixes_main}; {status.note}")
         return
+    if status.kind == ci.MAIN_RUNNING:
+        status = _await_running_main_ci(conn, task_id, origin_sha, ctx,
+                                        status)
     if status.kind != ci.MAIN_RED:
         store.journal(conn, task_id, "orchestrator", "сверка CI main",
                       status.note)
@@ -650,46 +654,77 @@ def _refuse_if_main_red(conn, task_id: str, ctx: repo_context.RepoContext,
              f"\"<основание>\"")
 
 
+def _await_running_main_ci(conn, task_id: str, origin_sha: str,
+                           ctx: repo_context.RepoContext,
+                           status: ci.MainLineStatus) -> ci.MainLineStatus:
+    """Идущий CI головы main дожидается следующий мерж под мьютексом
+    (ADR-0031, этап 2 и п. 6; SPEC 01M6TRM2EKZJV2FXP6C5YNE9FC, требования
+    2–3): опрос с паузой `config.VERIFYING_POLL_INTERVAL_SEC`, heartbeat
+    мьютекса продлевается, предел `MAIN_CI_WAIT_LIMIT_SEC` — от начала
+    этого ожидания, не от входа в `approve`: ожидание CI ветки до него
+    своё. Возвращает первый не «идёт» исход; неизвестный (сбой `gh`) —
+    сразу, как и до ожидания. Предел исчерпан — отказ мержа, задача на
+    гейте.
+
+    Перед ожиданием — досылка документов (ADR-0021 п. 3), как перед
+    прочими долгими этапами гейта."""
+    artifact_branch.send_pending()
+    short = origin_sha[:8]
+    store.journal(conn, task_id, "orchestrator", "ожидание CI main",
+                  f"CI main {short} идёт — ожидание до "
+                  f"{MAIN_CI_WAIT_LIMIT_SEC // 60} мин: {status.note}")
+    print(f"[{task_id}] CI main {short} идёт — жду до "
+          f"{MAIN_CI_WAIT_LIMIT_SEC // 60} мин")
+    start = time.monotonic()
+    while status.kind == ci.MAIN_RUNNING:
+        if time.monotonic() - start >= MAIN_CI_WAIT_LIMIT_SEC:
+            detail = (f"CI main {short} не завершён за "
+                      f"{MAIN_CI_WAIT_LIMIT_SEC // 60} мин — повтори approve "
+                      f"({status.note})")
+            store.journal(conn, task_id, "orchestrator",
+                          "ожидание CI main: исход", detail)
+            store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                          detail)
+            sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+                     f"  задача осталась на гейте merge; повтори: "
+                     f"artel.py approve {task_id}")
+        time.sleep(config.VERIFYING_POLL_INTERVAL_SEC)
+        merge_lock.touch_heartbeat(conn, task_id,
+                                   session.resolve_session_id())
+        status = ci.main_line_status(origin_sha, repo=ctx.path)
+    store.journal(conn, task_id, "orchestrator", "ожидание CI main: исход",
+                  f"CI main {short}: {status.note}")
+    return status
+
+
 def _await_main_ci(conn, task_id: str, head: str,
                    ctx: repo_context.RepoContext) -> None:
-    """Ожидание CI новой головы main после push мержа (SPEC
-    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 4, AC-4) — тем же опросом, что
-    ожидание `verifying` (пауза `config.VERIFYING_POLL_INTERVAL_SEC`), до
-    `MAIN_CI_WAIT_LIMIT_SEC`. Задача к этому моменту уже `done` — исход
-    мерж не откатывает, а называет: зелёный, красный с упавшими
-    проверками либо «не дождался» — записью журнала задачи и строкой
-    вывода. Мьютекс мержа держится всё ожидание (heartbeat продлевается):
-    следующий мерж начнётся, когда цвет новой головы уже известен.
-
-    `gh` не ответил — «не дождался» сразу: опросить нечем, и ждать до
-    предела значило бы держать мьютекс впустую. Только self target."""
+    """Цвет CI новой головы main после push мержа (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 4; SPEC
+    01M6TRM2EKZJV2FXP6C5YNE9FC, требование 1) — одно чтение, без опроса:
+    задача уже `done`, исход мерж не откатывает, а называет записью
+    журнала задачи и строкой вывода. Мьютекс ради исхода не держится:
+    идущий CI дожидается следующий мерж (`_await_running_main_ci`).
+    Только self target."""
     artifact_branch.send_pending()
     if not repo_context.is_artel(ctx):
         return
-    start = time.monotonic()
-    while True:
-        status = ci.main_line_status(head, repo=ctx.path) if head else None
-        merge_lock.touch_heartbeat(conn, task_id,
-                                   session.resolve_session_id())
-        if status is None:
-            outcome = "CI main не дождался: голова main после мержа не определена"
-        elif status.kind == ci.MAIN_GREEN:
-            outcome = f"CI main {head[:8]} после мержа: {status.note}"
-        elif status.kind == ci.MAIN_RED:
-            outcome = (f"CI main {head[:8]} после мержа красный — "
-                       f"{status.note}")
-        elif status.kind == ci.MAIN_UNKNOWN:
-            outcome = f"CI main {head[:8]} не дождался — {status.note}"
-        elif time.monotonic() - start >= MAIN_CI_WAIT_LIMIT_SEC:
-            outcome = (f"CI main {head[:8]} не дождался за "
-                       f"{MAIN_CI_WAIT_LIMIT_SEC // 60} мин — {status.note}")
-        else:
-            time.sleep(config.VERIFYING_POLL_INTERVAL_SEC)
-            continue
-        store.journal(conn, task_id, "orchestrator",
-                      MAIN_CI_AFTER_MERGE_ACTION, outcome)
-        print(f"[{task_id}] {outcome}")
-        return
+    status = ci.main_line_status(head, repo=ctx.path) if head else None
+    if status is None:
+        outcome = "CI main не дождался: голова main после мержа не определена"
+    elif status.kind == ci.MAIN_GREEN:
+        outcome = f"CI main {head[:8]} после мержа: {status.note}"
+    elif status.kind == ci.MAIN_RED:
+        outcome = (f"CI main {head[:8]} после мержа красный — "
+                   f"{status.note}")
+    elif status.kind == ci.MAIN_UNKNOWN:
+        outcome = f"CI main {head[:8]} не дождался — {status.note}"
+    else:
+        outcome = (f"CI main {head[:8]} после мержа: идёт — цвет сверит "
+                   f"следующий мерж ({status.note})")
+    store.journal(conn, task_id, "orchestrator",
+                  MAIN_CI_AFTER_MERGE_ACTION, outcome)
+    print(f"[{task_id}] {outcome}")
 
 
 def _ensure_branch_head_published(conn, task_id: str, branch: str) -> str:

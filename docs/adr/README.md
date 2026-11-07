@@ -53,3 +53,5 @@
 | [0028](0028-epics-and-board-projection.md) | Эпики — линия задач в пульте и проекция доски | принят 25.10.2026, исполнен 26.10.2026 (Э0–Э4: 01M5TB6VDV, 01M5TBBDFS, 01M5TBCY7W, 01M5TBF7JR, 01M5TBFCVF, 01M5TBFH5V) | дополняет docs/design.md, ADR-0005 п. 3, ADR-0021, ADR-0026; копия эпика — refs/artifacts/epic-<id> |
 
 | [0029](0029-external-delivery-via-mr.md) | Проект на GitLab с гейтом мержа людьми проекта | принят 26.10.2026, не исполнен | исполняет ADR-0003 п. 7 и п. 10; пересматривает ADR-0003 п. 5–7 и ADR-0028 (closed_as у done, waiting_on human) |
+
+| [0031](0031-test-runs-strategy.md) | Стратегия прогонов тестов — один полный прогон на дерево кода | принят 07.11.2026, не исполнен; этап 3 — 01M6TR3Q3SQSS1ZNGA4T7V39RW | дополняет ADR-0015, ADR-0016, ADR-0026, ADR-0029; пересматривает условие свежести приёмки SPEC 01M4BEGQAVVWCHFCW6BEBB0XVT |
