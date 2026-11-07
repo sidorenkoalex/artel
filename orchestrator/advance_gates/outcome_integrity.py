@@ -58,6 +58,7 @@ G3б-2 (SPEC 01M5J0JYW3GZSSHHK3TYCYTQ3J; ADR-0026, «Решение» пп. 6-7)
 `_judge_ci` с базой `_diff_base`. У `both` локальная часть остаётся на
 `in_dev`, часть по отчётам CI — на `verifying`.
 """
+import fcntl
 import hashlib
 import os
 import re
@@ -65,6 +66,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -177,6 +179,21 @@ class _Pending(_Prepare):
     завершено, его нет, отчёт не разобран, сбой чтения, перезапуск во время
     чтения): на `verifying` — ожидание, на гейте мержа — сбой подготовки,
     как прежде (SPEC 01M6BMG29KZV1RX21HFAXZG3CM, требования 6-7)."""
+
+
+class _BasePending(_Pending):
+    """Отчёт базы `ci_base: branch` ещё не годен по проходящей причине (SPEC
+    01M6TT4FKD1JWSJFVJ7328K03Y, требования 3, 7): на `verifying` — ожидание
+    своим действием журнала, не действием ожидания головы."""
+
+
+class _NoBaseReport(_Prepare):
+    """Отчёт базы не найден ни у точки ответвления, ни у её родителей с тем
+    же деревом; `at_point` — исход чтения задания точки ответвления."""
+
+    def __init__(self, text: str, at_point):
+        super().__init__(text)
+        self.at_point = at_point
 
 
 def describe(case) -> str:
@@ -1062,40 +1079,65 @@ class _CiReport(NamedTuple):
     outcomes: dict
 
 
-def _ci_report(target: str, sha: str, job: str):
-    """(`_CiReport` ровно `sha`, "", False) либо (`None`, причина
-    негодности, проходящая ли она) — требование 2. Попытка — наибольший
-    `id` заданий `job` в `forge.pipeline_status(sha).jobs`; номер до и
-    после чтения отчёта совпадает, иначе статус и отчёт могли быть от
-    разных попыток. Проходящая негодность (SPEC 01M6BMG29KZV1RX21HFAXZG3CM,
-    требование 6) — задания нет, оно не завершено, статус или отчёт не
-    прочитан, перезапуск во время чтения."""
-    def last_attempt():
-        res = forge.pipeline_status(target, sha)
-        mine = [j for j in res.jobs if j.name == job]
-        why = f" ({res.reason})" if res.reason else ""
-        return (max(mine, key=lambda j: j.id or 0) if mine else None,
-                f"задания CI «{job}» нет в конвейере коммита {sha[:12]}{why}")
-    last, why = last_attempt()
+class _CiAttempt(NamedTuple):
+    """Исход чтения задания `ci_job` коммита: годный отчёт либо причина
+    негодности и её вид; `job` — последняя попытка (None — задания нет),
+    `status` — прочитанный статус попытки."""
+    report: _CiReport | None
+    why: str
+    pending: bool
+    job: object = None
+    status: str | None = None
+
+
+def _ci_last_attempt(target: str, sha: str, job: str) -> tuple:
+    """(последняя попытка задания `job` коммита `sha` или None, причина её
+    отсутствия): наибольший `id` в `forge.pipeline_status(sha).jobs`."""
+    res = forge.pipeline_status(target, sha)
+    mine = [j for j in res.jobs if j.name == job]
+    why = f" ({res.reason})" if res.reason else ""
+    return (max(mine, key=lambda j: j.id or 0) if mine else None,
+            f"задания CI «{job}» нет в конвейере коммита {sha[:12]}{why}")
+
+
+def _ci_attempt(target: str, sha: str, job: str) -> _CiAttempt:
+    """Чтение задания `job` коммита `sha` (требование 2): номер последней
+    попытки до и после чтения отчёта совпадает, иначе статус и отчёт могли
+    быть от разных попыток. Проходящая негодность (SPEC
+    01M6BMG29KZV1RX21HFAXZG3CM, требование 6) — задания нет, оно не
+    завершено, статус или отчёт не прочитан, перезапуск во время чтения."""
+    last, why = _ci_last_attempt(target, sha, job)
     if last is None:
-        return None, why, True
+        return _CiAttempt(None, why, True)
     where = f"задание CI «{job}» {last.id} коммита {sha[:12]}"
     result = forge.job_result(target, sha, job)
     report = forge.job_test_report(target, sha, job)
-    again, _why = last_attempt()
+    again, _why = _ci_last_attempt(target, sha, job)
     if again is None or again.id != last.id:
-        return None, f"{where} перезапущено во время чтения", True
+        return _CiAttempt(None, f"{where} перезапущено во время чтения", True,
+                          last)
     status = result.status
     if status is None:
-        return None, f"{where}: статус не прочитан — {result.reason}", True
+        return _CiAttempt(None, f"{where}: статус не прочитан — "
+                                f"{result.reason}", True, last)
     if status not in _CI_FIT_STATUSES:
-        return (None, f"{where} в статусе {status}",
-                status in _CI_PENDING_STATUSES)
+        return _CiAttempt(None, f"{where} в статусе {status}",
+                          status in _CI_PENDING_STATUSES, last, status)
     if status == "failed" and last.allow_failure:
-        return None, f"{where} упало с правом падать (allow_failure)", False
+        return _CiAttempt(None, f"{where} упало с правом падать "
+                                f"(allow_failure)", False, last, status)
     if report.outcomes is None:
-        return None, f"{where}: отчёт не разобран — {report.reason}", True
-    return _CiReport(sha, last.id, dict(report.outcomes)), "", False
+        return _CiAttempt(None, f"{where}: отчёт не разобран — "
+                                f"{report.reason}", True, last, status)
+    return _CiAttempt(_CiReport(sha, last.id, dict(report.outcomes)), "",
+                      False, last, status)
+
+
+def _ci_report(target: str, sha: str, job: str):
+    """(`_CiReport` ровно `sha`, "", False) либо (`None`, причина
+    негодности, проходящая ли она) — требование 2 (`_ci_attempt`)."""
+    attempt = _ci_attempt(target, sha, job)
+    return attempt.report, attempt.why, attempt.pending
 
 
 def _rev(repo: Path, *args: str) -> str:
@@ -1110,12 +1152,12 @@ def _ci_base_report(conn, task_id: str, repo: Path, target: str,
                     point: str, job: str) -> tuple:
     """(`_CiReport` базы, строка о родителе или "") — требование 4: отчёт
     точки ответвления, иначе родителя (`rev-list --parents`) с тем же
-    деревом; поиск только чтением git и `forge`. Не найден — `_Prepare`
-    «нет отчёта базы»."""
-    found, why, _pending = _ci_report(target, point, job)
-    if found is not None:
-        return found, ""
-    reasons = [f"точка ответвления {point[:12]}: {why}"]
+    деревом; поиск только чтением git и `forge`. Не найден —
+    `_NoBaseReport` «нет отчёта базы» с исходом точки ответвления."""
+    at_point = _ci_attempt(target, point, job)
+    if at_point.report is not None:
+        return at_point.report, ""
+    reasons = [f"точка ответвления {point[:12]}: {at_point.why}"]
     parents = _rev(repo, "rev-list", "--parents", "-n1", point).split()[1:]
     point_tree = _rev(repo, "rev-parse", f"{point}^{{tree}}")
     for parent in parents:
@@ -1130,7 +1172,183 @@ def _ci_base_report(conn, task_id: str, repo: Path, target: str,
                                        point=point)
         store.journal(conn, task_id, "fsm", BASE_REPORT_ACTION, line)
         return found, line
-    raise _Prepare(f"{NO_BASE_REPORT}: {'; '.join(reasons)}")
+    raise _NoBaseReport(f"{NO_BASE_REPORT}: {'; '.join(reasons)}", at_point)
+
+
+# Источник отчёта базы `ci_base: branch` (SPEC 01M6TT4FKD1JWSJFVJ7328K03Y):
+# базу пульт отправляет в ветку отчёта базы проекта и ждёт отчёт её
+# задания `ci_job`; записи журнала — требование 7.
+BASE_PENDING_ACTION = "гейт исходов на verifying: ожидание отчёта CI базы"
+BASE_SENT_ACTION = "отчёт базы: отправка"
+BASE_SEND_REFUSED_ACTION = "отчёт базы: отправка отказана"
+BASE_JOB_LINE = "отчёт базы: задание {job} коммита {sha} (статус {status})"
+BASE_CANCELED = "задание отменено"
+BASE_MERGE_WAIT = "отчёт базы ожидается, повтори approve"
+# Замок отправок базы проекта — только на время проверки очереди и самой
+# отправки (требование 5); не `merge_lock`: отправка не ждёт окно мержа.
+CI_BASE_LOCK_NAME = "ci_base.lock"
+_CI_STARTED_STATUS = "running"
+
+
+def _ci_base_entry(target: str, profile) -> tuple:
+    """(запись проекта, ветка отчёта базы компонента `profile`) — ветка
+    только при `ci_base: branch`, иначе None (прежнее поведение)."""
+    entry = targets.target(target)
+    return entry, targets.ci_base_branch(entry, profile.component)
+
+
+def _steps_age_seconds(ts: str) -> float:
+    """Секунды с отметки времени записи журнала `ts` (`store.now()`)."""
+    for form in ("%Y-%m-%d %H:%M:%SZ", "%Y-%m-%d %H:%M:%S.%fZ"):
+        try:
+            stamp = datetime.strptime(ts, form).replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        return (datetime.now(timezone.utc) - stamp).total_seconds()
+    return float("inf")
+
+
+def _ci_base_queue_holder(conn, target: str, entry: dict) -> str:
+    """Причина отложить отправку базы (требование 5): последняя отправка
+    базы задач проекта моложе `config.VERIFYING_CEILING_SEC`, а задание
+    `ci_job` её sha (любого компонента `ci_base: branch`) ещё не запущено;
+    пусто — очередь свободна. Отчёт sha читается и после ухода ветки на
+    другой коммит — по sha, не по ветке."""
+    ids = {row["id"] for row in store.project_tasks(conn, target)}
+    sent = [r for r in store.steps_of_action(conn, BASE_SENT_ACTION)
+            if r["task_id"] in ids]
+    if not sent:
+        return ""
+    last = sent[-1]
+    if _steps_age_seconds(last["ts"]) >= config.VERIFYING_CEILING_SEC:
+        return ""
+    previous = (last["detail"] or "").split(" ")[0]
+    names = set(targets.ci_base_jobs(entry))
+    jobs = [j for j in forge.pipeline_status(target, previous).jobs
+            if j.name in names]
+    for name in names:
+        mine = [j for j in jobs if j.name == name]
+        if not mine:
+            continue
+        status = max(mine, key=lambda j: j.id or 0).status
+        if status == _CI_STARTED_STATUS or status not in _CI_PENDING_STATUSES:
+            return ""
+    return (f"очередь отправок базы проекта: задание CI предыдущей отправки "
+            f"{previous[:12]} (задача {last['task_id']}) ещё не запущено — "
+            f"отправка на следующем опросе")
+
+
+def _push_ci_base(conn, task_id: str, repo: Path, target: str, entry: dict,
+                  sha: str) -> str:
+    """Отправка базы `sha` в ветку отчёта базы проекта (требования 2, 5):
+    под неблокирующим замком проекта, после очереди, через единую точку
+    `gitcmd` с `ci_base_push_options` и без `policy.push_options`. Исход —
+    текст для причины ожидания; отправка и отказ — записи журнала задачи.
+    Ничего не ждёт: замок занят или очередь держит — отправки нет."""
+    branch = targets.ci_base_branch(entry)
+    lock_path = config.PROJECTS / target / CI_BASE_LOCK_NAME
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a", encoding="utf-8")
+    except OSError as exc:
+        reason = f"замок отправок базы {lock_path} не открыт: {exc}"
+        store.journal(conn, task_id, "fsm", BASE_SEND_REFUSED_ACTION,
+                      f"{sha} в {branch}: {reason}")
+        return f"отправка {sha[:12]} в {branch} отказана: {reason}"
+    with handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return ("очередь отправок базы проекта занята другой отправкой — "
+                    "отправка на следующем опросе")
+        try:
+            held = _ci_base_queue_holder(conn, target, entry)
+            if held:
+                return held
+            options = [w for o in targets.ci_base_push_options(entry)
+                       for w in ("-o", o)]
+            res = gitcmd.in_repo(repo, "push", "--force", *options, "origin",
+                                 f"{sha}:refs/heads/{branch}", task_id=task_id)
+            if res is None or res.returncode != 0:
+                reason = _git_reason(res)
+                store.journal(conn, task_id, "fsm", BASE_SEND_REFUSED_ACTION,
+                              f"{sha} в {branch}: {reason}")
+                return f"отправка {sha[:12]} в {branch} отказана: {reason}"
+            store.journal(conn, task_id, "fsm", BASE_SENT_ACTION,
+                          f"{sha} в {branch}")
+            return f"база {sha[:12]} отправлена в {branch}, жду задание CI"
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _journal_base_job(conn, task_id: str, job_id, sha: str,
+                      status: str) -> None:
+    """Запись «отчёт базы: задание <id> коммита <sha>» — одна на попытку и
+    статус: опрос `verifying` её не повторяет."""
+    line = BASE_JOB_LINE.format(job=job_id, sha=sha, status=status)
+    last = store.last_task_step_of(conn, task_id, (BASE_REPORT_ACTION,))
+    if last is None or (last["detail"] or "") != line:
+        store.journal(conn, task_id, "fsm", BASE_REPORT_ACTION, line)
+
+
+def _ci_base_unfit(conn, task_id: str, repo: Path, target: str, entry: dict,
+                   point: str, missing: _NoBaseReport, verifying: bool):
+    """Отчёта базы `ci_base: branch` нет (требования 2, 7, 8) — всегда
+    исключение. Задания у точки ответвления нет — попытка отправки и
+    ожидание; задание есть и негодность проходящая — ожидание; иначе —
+    «нет отчёта базы: <причина>» (у `canceled` — «задание отменено»).
+    Ожидание на мерже — сбой подготовки «отчёт базы ожидается, повтори
+    approve»: окно мержа не ждёт."""
+    at_point = missing.at_point
+    if at_point.job is None:
+        reason = (f"{at_point.why}; "
+                  f"{_push_ci_base(conn, task_id, repo, target, entry, point)}")
+    else:
+        _journal_base_job(conn, task_id, at_point.job.id, point,
+                          at_point.status or at_point.job.status)
+        reason = at_point.why
+        if not at_point.pending:
+            if at_point.status == "canceled":
+                reason = f"{reason} — {BASE_CANCELED}"
+            raise _Prepare(f"{NO_BASE_REPORT}: {reason}")
+    if verifying:
+        raise _BasePending(f"{NO_BASE_REPORT}: {reason}")
+    raise _Prepare(f"{NO_BASE_REPORT}: {BASE_MERGE_WAIT} — {reason}")
+
+
+def early_base_push(conn, task_id: str, t) -> None:
+    """Ранний запуск (требование 4): на входе в `in_dev` из
+    `tests_writing` — одна неблокирующая попытка отправить базу
+    `diff_base` ветки, если у неё нет задания `ci_job`. Сбой переход не
+    трогает: причина — в журнал задачи."""
+    if t["is_canary"]:
+        return
+    target = t["target"] or config.DEFAULT_TARGET
+    try:
+        entry = targets.target(target)
+    except targets.TargetsError:
+        return
+    branch = targets.ci_base_branch(entry)
+    if not branch:
+        return
+    try:
+        repo = workspace.task_repo(task_id)
+        point = gitcmd.diff_base(t["branch"], repo=repo)
+        if not point:
+            store.journal(conn, task_id, "fsm", BASE_SEND_REFUSED_ACTION,
+                          f"база ветки {t['branch']} (diff_base) не "
+                          f"определена — отправка в {branch} на verifying")
+            return
+        for job in targets.ci_base_jobs(entry):
+            found, _why = _ci_last_attempt(target, point, job)
+            if found is not None:
+                return
+        print(f"[{task_id}] "
+              f"{_push_ci_base(conn, task_id, repo, target, entry, point)}")
+    except Exception as exc:  # noqa: BLE001 — ранняя отправка не держит переход
+        store.journal(conn, task_id, "fsm", BASE_SEND_REFUSED_ACTION,
+                      f"ранняя отправка базы в {branch} не выполнена: "
+                      f"сбой {exc!r}")
 
 
 def _ci_cases(repo: Path, profile, report: _CiReport) -> tuple:
@@ -1171,10 +1389,13 @@ def _ci_replacement_findings(replacements: dict, base_map: dict) -> list:
 
 
 def _judge_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
-              repo: Path, base_of, extra: tuple = ()) -> GateRefusal | None:
+              repo: Path, base_of, extra: tuple = (),
+              verifying: bool = False) -> GateRefusal | None:
     """Ядро гейта мержа компонента `full_suite: ci` (требования 1-8):
     исходы — отчёты задания `ci_job` головы и базы, читаются заново при
-    каждом прогоне; находки G3б-2 — по диффу git без выписок."""
+    каждом прогоне; находки G3б-2 — по диффу git без выписок. Отчёта базы
+    нет у компонента `ci_base: branch` — `_ci_base_unfit` (SPEC
+    01M6TT4FKD1JWSJFVJ7328K03Y)."""
     head_sha = gitcmd.branch_head_sha(branch, repo=repo)
     if not head_sha:
         raise _Prepare(f"голова кодовой ветки {branch} не прочитана")
@@ -1185,8 +1406,18 @@ def _judge_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
     if head_report is None:
         raise (_Pending if pending else _Prepare)(
             f"{NO_HEAD_REPORT}: голова {head_sha[:12]}: {why}")
-    base_report, parent_line = _ci_base_report(conn, task_id, repo, target,
-                                               base_sha, job)
+    entry, ci_base = _ci_base_entry(target, profile)
+    try:
+        base_report, parent_line = _ci_base_report(conn, task_id, repo,
+                                                   target, base_sha, job)
+    except _NoBaseReport as missing:
+        if not ci_base:
+            raise
+        _ci_base_unfit(conn, task_id, repo, target, entry, base_sha, missing,
+                       verifying)
+    if ci_base and base_report.sha == base_sha:
+        _journal_base_job(conn, task_id, base_report.job_id, base_sha,
+                          "отчёт годен")
     base, unresolved, base_ids = _ci_cases(repo, profile, base_report)
     odd = [key for key, _why in unresolved] + \
         [c.id for c in base if c.outcome == outcome.UNKNOWN]
@@ -1435,7 +1666,9 @@ def _gate_ci(conn, task_id: str, branch: str, artifact_branch: str, profile,
     command = "advance" if verifying else "approve"
     try:
         return _judge_ci(conn, task_id, branch, artifact_branch, profile,
-                         repo, base_of, extra)
+                         repo, base_of, extra, verifying=verifying)
+    except _BasePending as exc:
+        return GateRefusal(BASE_PENDING_ACTION, str(exc), "")
     except _Pending as exc:
         if verifying:
             return GateRefusal(PENDING_ACTION, str(exc), "")
@@ -1558,8 +1791,10 @@ def verifying_gate(conn, task_id: str, t, state: str) -> VerifyingVerdict:
     refusal = _verifying_refusal(conn, task_id, t)
     if refusal is None:
         return VerifyingVerdict(False, "")
-    if refusal.action == PENDING_ACTION:
-        store.journal(conn, task_id, "fsm", PENDING_ACTION, refusal.detail)
+    # Ожидание отчёта базы `ci_base: branch` (SPEC 01M6TT4FKD1JWSJFVJ7328K03Y,
+    # требование 3) — тем же путём, что ожидание головы, своим действием.
+    if refusal.action in (PENDING_ACTION, BASE_PENDING_ACTION):
+        store.journal(conn, task_id, "fsm", refusal.action, refusal.detail)
         return VerifyingVerdict(False, refusal.detail)
     reason = ""
     if refusal.action == BROKEN_REFUSAL_ACTION:

@@ -6,6 +6,7 @@ SPEC 01M574A6YQHAPASS9716Z11G4Q, требование 8; версии инстр
 требования 2-8. Коллаборанты читаются лениво через фасад doctor (см.
 докстринг orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
+import fnmatch
 import json
 import os
 import re
@@ -555,7 +556,68 @@ def component_checks(name: str, entry: dict) -> list:
         if human and fields.get("full_suite") in CI_FULL_SUITES:
             checks.append(check_ci_reruns(f"project-ci-reruns-{prefix}", clone,
                                           fields))
+        if doctor.targets.ci_base_branch(entry, comp):
+            checks.append(check_ci_base_branch(f"project-ci-base-{prefix}",
+                                               name, entry, clone))
     return checks
+
+
+def check_ci_base_branch(check_name: str, name: str, entry: dict,
+                         clone: Path):
+    """Ветка отчёта базы компонента `ci_base: branch` (SPEC
+    01M6TT4FKD1JWSJFVJ7328K03Y, требование 9), только чтением: не защищена
+    на хостинге (`forge.protections`, маски ветвей — как у хостинга), а у
+    проекта `target-human` файл политики клона несёт ключ
+    `ci_base_branch=` — без него хук `pre-push` отправку базы откажет.
+    Белый список единой точки пропускает ветку по записи. Невыполненное
+    условие — `warn` с причиной."""
+    branch = doctor.targets.ci_base_branch(entry)
+    problems = []
+    if not entry.get("token_slot"):
+        problems.append(f"защиты не проверены — {NO_TOKEN_SLOT}")
+    else:
+        info = doctor.forge.project_info(name)
+        prot = doctor.forge.protections(name)
+        if info.reason or info.access_level is None or \
+                info.access_level < MAINTAINER_LEVEL:
+            problems.append(f"защиты не проверены — "
+                            f"{info.reason or 'нужна роль Maintainer токена'}")
+        elif prot.reason:
+            problems.append(f"защиты не прочитаны — {prot.reason}")
+        else:
+            hit = [p for p in prot.branches or []
+                   if fnmatch.fnmatchcase(branch, str(p))]
+            if hit:
+                problems.append(f"ветка защищена на хостинге "
+                                f"({', '.join(hit)}) — отправка базы будет "
+                                f"отказана")
+    human = doctor.targets.merged_by_project_people(entry)
+    if human:
+        path, error = doctor.workspace.push_policy_path(clone)
+        text = ""
+        if error is None:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                error = f"файл политики {path} не читается: {exc}"
+        if error is not None:
+            problems.append(error)
+        elif f"ci_base_branch={branch}" not in text.splitlines():
+            problems.append(f"файл политики клона {path} без ключа "
+                            f"ci_base_branch={branch} — хук pre-push откажет "
+                            f"отправке базы (восстановить: artel.py doctor "
+                            f"--fix)")
+    if problems:
+        return doctor.Check(check_name, "warn",
+                            f"ветка отчёта базы {branch}: "
+                            f"{'; '.join(problems)}")
+    rules = ("отправку в неё пропускают белый список единой точки и "
+             "политика клона" if human else
+             "отправку в неё пропускают белый список единой точки и "
+             "запись проекта")
+    return doctor.Check(check_name, "ok",
+                        f"ветка отчёта базы {branch}: не защищена на "
+                        f"хостинге; {rules}")
 
 
 # Вызовы `docker` строк doctor (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF, требования
