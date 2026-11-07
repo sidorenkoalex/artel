@@ -1,15 +1,14 @@
 ## Выяснено
-- Шаг 3 (возврат со spec_gate 07.11, решения 1–4): SPEC правлен, осталось 6 AC (прежний AC-7 про gitcmd.py снят, его держит гейт зон), budget 45, guard ок, status: ready.
-- AC-3: причина отказа записи — «сверка до записи не прошла»; строки прочих проверок выводятся после строки отказа; код выхода не проверяется (cli.py:352-355 — exit 1 при fail).
-- AC-5: в отказ добавлен путь `epic draft promote` (epics.py:796 зовёт catalog.cmd_new напрямую), отказ ставится в cmd_new, epics.py вне зон.
-- AC-4: «поля нет, API без адреса» — warn; в роли --fix не пишет и не зовёт token_user.
-- Требование 6: тесты не правятся, мандатом ANSWER-2 не пользоваться (в песочнице warn). GitLab определять через forge.ci_by_pipeline (project_checks.py:48-51), литерал запрещает unsupported_project.py:491. Сверку блока брать из projects.py:900 `_target_set_block_mismatches`.
+- Шаг 4 (второй возврат со spec_gate 07.11, решения 1–2): SPEC правлен, 6 AC, budget 45, guard ок, status: ready.
+- AC-3: отказ записи вызывается GET /user с username "   " и годным commit_email. gitlab_adapter.py:584 проверяет только тип, targets.merge_local (:517) → _check_delivery (:715-720) отказывает. Причина — «сверка до записи не прошла».
+- Номера projects.py на main сдвинуты на +5 от рабочей копии ветки (ветка ещё без мержа 01M6R8W7TSA6G85PVZZFDMRY25): на main одиночный лист 894-898, _target_set_block_mismatches 905-932, _backup_copy 991, _block_keys уже принимает machine.commit_author (:380, :664).
+- Прежнее остаётся: требование 6 — тесты не правятся; GitLab определять через forge.ci_by_pipeline; отказ new — в catalog.cmd_new (epics.py:796).
 
 ## Не сработало
-- `ls` в shell не найден, обошёлся Read.
+- В Bash отклоняется `$?` (simple_expansion), guard запускал без него.
 
 ## Где остановился
 - Шаг завершён.
 
 ## Чего не хватило
-- —
+- Рабочая копия отстаёт от main: номера строк сверял через `git show main:orchestrator/projects.py`.
