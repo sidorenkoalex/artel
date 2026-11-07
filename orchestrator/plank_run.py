@@ -24,6 +24,11 @@
 Только чтение для пульта: строка задачи, журнал, ссылки и ветка задачи не
 меняются, lease не берётся — поэтому команда в перечне команд роли
 (`artel._ROLE_ALLOWED_COMMANDS`).
+
+Процесс роли задачи с раннером `compose` планку сам не гонит: команда пишет
+запрос в очередь каталога `suite-run`, исполняет его процесс пульта,
+ведущий шаг роли, а итог читает `plank-run <id> --wait <минуты>` (SPEC
+01M6TR3Q3SQSS1ZNGA4T7V39RW; очередь — `suite_run`, раздел «запросы роли»).
 """
 import sys
 from pathlib import Path
@@ -31,6 +36,7 @@ from pathlib import Path
 from . import (acceptance, agent_log, artifact_branch, config,
                project_profile, store, workspace)
 
+USAGE = "plank-run <id> [<файл> | --wait <минуты>]"
 NO_PLANK = "планки нет"
 NO_SUMMARY_LINE = "итоговой строки нет"
 
@@ -161,7 +167,118 @@ def _drift_from_ref(task_id: str, own_dir: Path) -> list[str] | None:
                   if disk.get(rel) != fixed.get(rel))
 
 
-def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
+def _plank_source(task_id: str, t, target: str, *,
+                  ref_if_no_draft: bool = False) -> tuple:
+    """(файлы черновика или `None`, имена файлов планки, источник словами)
+    — черновик каталога документов в `tests_writing`, иначе зафиксированная
+    планка ссылки документов; имена `None` — ссылка не прочитана.
+
+    `ref_if_no_draft` — прогон по запросу роли: каталога черновика на диске
+    нет (автокоммит прошлого шага перенёс его в ссылку и убрал, а выкладка
+    каталога документов этого шага не состоялась) — зафиксированная планка."""
+    if t["state"] == "tests_writing":
+        docs_plank = (artifact_branch.docs_dir(task_id, target)
+                      / "acceptance_tests")
+        if not (ref_if_no_draft and not docs_plank.is_dir()):
+            draft = _draft_files(docs_plank)
+            return draft, sorted(draft), f"черновик {docs_plank}"
+    ref = artifact_branch.branch_name(task_id)
+    prefix = f"tasks/{task_id}/acceptance_tests/"
+    paths = artifact_branch.ls_tree(task_id, ref, prefix.rstrip("/"))
+    if paths is None and not artifact_branch.rev_sha(task_id, ref):
+        paths = []  # ссылки нет — нет и зафиксированной планки
+    if paths is None:
+        return None, None, f"ссылка документов {ref}"
+    names = sorted(p[len(prefix):] for p in paths if p.startswith(prefix))
+    return None, names, f"зафиксированная планка {ref}"
+
+
+def _pult_command(task_id: str) -> str:
+    return f"python3 {config.ROOT / 'orchestrator' / 'artel.py'} plank-run {task_id}"
+
+
+def request_file_refusal(conn, task_id: str, file_arg: str) -> str:
+    """Причина отказа запросу роли с файлом `file_arg` (SPEC
+    01M6TR3Q3SQSS1ZNGA4T7V39RW, требование 11): допустимы только файл
+    планки задачи и её долгоживущий файл — тот же выбор, что у
+    `cmd_plank_run`. Пусто — файл допустим."""
+    t = store.get_task(conn, task_id)
+    target = store.task_target(conn, task_id)
+    if _long_lived_arg(file_arg, task_id, target):
+        return ""
+    _draft, names, source = _plank_source(task_id, t, target,
+                                          ref_if_no_draft=True)
+    if names is None:
+        return (f"{source} не прочитана (git не ответил) — файл {file_arg} "
+                f"не сверить с планкой задачи")
+    if _selected(file_arg, task_id, names) is None:
+        return (f"файл {file_arg} — не файл планки задачи ({source}: "
+                f"{', '.join(names) or 'пусто'}) и не её долгоживущий файл")
+    return ""
+
+
+def _wait_minutes(text: str) -> int:
+    limit = config.SUITE_RUN_MAX_WAIT_MIN
+    try:
+        minutes = int(text)
+    except ValueError:
+        minutes = -1
+    if not 0 <= minutes <= limit:
+        sys.exit(f"plank-run --wait: отказ — «{text}» не число минут от 0 до "
+                 f"{limit} (config.SUITE_RUN_MAX_WAIT_MIN = {limit}: одно "
+                 f"ожидание укладывается в вызов инструмента роли); прогон не "
+                 f"тронут, жди повторным --wait")
+    return minutes
+
+
+def _cmd_wait(task_arg: str, extra: tuple) -> None:
+    """`plank-run <id> --wait <минуты>`: итог последнего запроса планки
+    задачи (SPEC 01M6TR3Q3SQSS1ZNGA4T7V39RW, требования 4, 17)."""
+    from . import suite_run  # suite_run -> suite_lock -> acceptance
+    if len(extra) != 1:
+        sys.exit(f"{USAGE}: --wait требует одно число минут")
+    minutes = _wait_minutes(extra[0])
+    conn = suite_run._db()
+    task_id = store.resolve_task_id(conn, task_arg)
+    head = f"[{task_id}] plank-run"
+    number = suite_run.latest_request(task_id, (suite_run.KIND_PLANK,))
+    if number is None:
+        sys.exit(f"{head}: отказ — у задачи {task_id} нет запроса plank-run, "
+                 f"ждать нечего: запрос пишет `plank-run <id>` в шаге роли "
+                 f"задачи с раннером compose")
+    suite_run.wait_request(task_id, number, minutes, head,
+                           _pult_command(task_id))
+
+
+def _submitted(task_arg: str, file_arg: str | None) -> bool:
+    """Процесс роли и раннер `compose` профиля задачи — запрос в очередь
+    исполнителя шага вместо прогона (требование 1); `False` — прежний путь."""
+    from . import runner, suite_run  # runner -> ... -> plank_run
+    if not runner.in_role_environment():
+        return False
+    # БД — как у `suite-run`: у роли на Codex она открыта только на чтение.
+    conn = suite_run._db()
+    task_id = store.resolve_task_id(conn, task_arg)
+    target = store.task_target(conn, task_id)
+    if not suite_run.request_mode(conn, task_id, target):
+        return False
+    suite_run.submit_request(conn, task_id, suite_run.KIND_PLANK, file_arg,
+                             f"[{task_id}] plank-run", _pult_command(task_id))
+    return True
+
+
+def cmd_plank_run(task_id: str, file_arg: str | None = None,
+                  *extra: str, ref_if_no_draft: bool = False) -> None:
+    """`ref_if_no_draft` — дочерний прогон исполнителя запросов роли
+    (`_plank_source`)."""
+    if file_arg == "--wait":
+        _cmd_wait(task_id, extra)
+        return
+    if extra:
+        sys.exit(f"plank-run: отказ — лишний аргумент «{extra[0]}»; "
+                 f"использование: {USAGE}")
+    if _submitted(task_id, file_arg):
+        return
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
@@ -173,24 +290,11 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
         sys.exit(f"{head}: отказ — рабочей копии кода задачи нет ({code_dir}); "
                  f"планку выложить некуда")
 
-    draft = None
-    if t["state"] == "tests_writing":
-        docs_plank = (artifact_branch.docs_dir(task_id, target)
-                      / "acceptance_tests")
-        draft = _draft_files(docs_plank)
-        names = sorted(draft)
-        source = f"черновик {docs_plank}"
-    else:
-        ref = artifact_branch.branch_name(task_id)
-        prefix = f"tasks/{task_id}/acceptance_tests/"
-        paths = artifact_branch.ls_tree(task_id, ref, prefix.rstrip("/"))
-        if paths is None and not artifact_branch.rev_sha(task_id, ref):
-            paths = []  # ссылки нет — нет и зафиксированной планки
-        if paths is None:
-            sys.exit(f"{head}: отказ — ссылка документов {ref} не прочитана "
-                     f"(git не ответил); планка не выложена")
-        names = sorted(p[len(prefix):] for p in paths if p.startswith(prefix))
-        source = f"зафиксированная планка {ref}"
+    draft, names, source = _plank_source(task_id, t, target,
+                                         ref_if_no_draft=ref_if_no_draft)
+    if names is None:
+        sys.exit(f"{head}: отказ — {source} не прочитана "
+                 f"(git не ответил); планка не выложена")
     long_lived = _long_lived_arg(file_arg, task_id, target)
     if long_lived:
         # Своему долгоживущему файлу планка не нужна (требование 6), а
