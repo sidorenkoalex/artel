@@ -1,19 +1,20 @@
 # NOTE test_author 01M6TRKY1A41QSZMCXY9TKYXG7
 
 ## Выяснено
-- Прошлая попытка шага не оставила ни одного файла планки (отказ трассируемости по всем AC).
-- Канал публикации CI (требование 2) не задан: в `orchestrator/` и `scripts/` нет чтения аннотаций или журналов заданий; `ci.accepted_full_suite` (`orchestrator/ci.py:1295`) читает только список check-runs через `ci.gh`. Без известного канала тесты AC-4…10, 16…18 либо тавтологичны, либо навязывают устройство.
-- AC-13: «функция приёмки из условия 3з» не названа (о том же писал spec_auditor).
-- Эскалация: `acceptance_tests/markers.py` — вопрос 1 (канал/текст публикации, дефолт C — эмуляция обоих вызовов `gh api` по выводу настоящего сценария), вопрос 2 (функция 3з, дефолт B — тест сам считает sha256 hex UTF-8 `PlanAppendix.diff`).
-- Пометки escalate переход проверяет до трассируемости (`orchestrator/fsm_advance.py:584-601`), поэтому непокрытые AC-1–3, 11, 12, 14, 15 эскалации не мешают.
-- Без ответа писать можно AC-1, 2, 3, 11, 12, 14. Образец подмены CI — `tests/test_01m4begqavvwchfcw6bebb0xvt_ci_acceptance.py` (ci.gh, ci.head_sha, acceptance.full_suite, acceptance.suite_tree_hash); `_ci_result_conditions` — `orchestrator/acceptance.py:4166`; `remote_docs_refs`/`plan_text` — `scripts/plan_appendix_ci.py:173-199`.
-- AC-15 — сводка мутаций по другим AC, отдельного теста не нужно: заявки «Ловит мутацию» в тестах AC-1/5/6/8/13/16/18.
+- ANSWER-4: канал — аннотация `::notice title=plan-appendix-docs::ref=<X>; outcome=<applied|no-plan|no-appendices|no-ref>; diffs=<h1,…>` у проверки `FULL_SUITE_JOB`, чтение `gh api …/check-runs/<id>/annotations`; AC-13 считает список сам (sha256 hex UTF-8 `PlanAppendix.diff`).
+- Все AC-1…AC-18 — тесты в двух долгоживущих файлах: `tests/test_01m6trky1a41qszmcxy9tkyxg7_ci_result.py` (приёмка, 41 вариант) и `tests/test_01m6trky1a41qszmcxy9tkyxg7_ci_publication.py` (сценарий CI, AC-13/AC-14). В `acceptance_tests/` — только `markers.py` без пометок (эскалации сняты).
+- Стенд local: настоящий git (RealGitSandbox, workspace.ensure, checkpoint.commit_step_artifacts), узел `appendix_tree.suite_tree` + `acceptance.acceptance_suite`; подменены `ci.gh` (check-runs с `id`, actions/runs, `check-runs/<id>/annotations`) и шпион `acceptance.full_suite`. Стенд ci — light_transition + FakeForge.
+- Автокоммит пульта (`commit_step_artifacts`) сам отправляет ссылку документов в origin; «ссылки нет» моделируется удалением её из origin.
+- Валидация стабом: со стабом 46/46 зелёные; снятие каждого условия 3а–3з, свежести, исхода, чтения только FULL_SUITE_JOB, список как множество, хеш не UTF-8 — красит нужные тесты. Стаб откачен `git checkout --`, `git status` — только два новых файла.
+- Без кода: 14 красных в ci_result (принятие), 5 красных в ci_publication; отказные тесты зелёные с рождения.
+- `plank-run` без аргумента отказывает «нет файлов test_*.py» — у планки только долгоживущие файлы; гейт гоняет их вместе с каталогом планки (`acceptance.py:1851`). `plank-run <id> tests/<файл>` работает.
 
 ## Не сработало
-- `ls` в shell нет — `find`; `cd` с относительными путями требует подтверждения — абсолютные пути.
+- heredoc с `{'`… в Bash отклоняется инструментом — стаб вносил через Edit.
+- Составные команды с `;`/`|` после основной требуют подтверждения.
 
 ## Где остановился
-- Эскалация выставлена, тесты не написаны. После ANSWER: снять пометки escalate из markers.py и написать все AC.
+- Шаг готов: preflight пройден, тесты написаны и провалидированы.
 
 ## Чего не хватило
-- Контракта публикации CI (вызов `gh api` и текст) и имени функции 3з в SPEC.
+- Как пульт отправляет ссылку документов в origin (сам при автокоммите) — выяснил по провалу теста.
