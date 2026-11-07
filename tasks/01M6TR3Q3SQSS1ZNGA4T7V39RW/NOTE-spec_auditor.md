@@ -1,17 +1,16 @@
-# Записка spec_auditor — 01M6TR3Q3SQSS1ZNGA4T7V39RW (аудит, spec_sha 30570dd6)
+# Записка spec_auditor — 01M6TR3Q3SQSS1ZNGA4T7V39RW (аудит, spec_sha bd7b21ff)
 
 ## Выяснено
-- sha SPEC на диске = 30570dd65d07c47009bad35e685606b0961daa9e (сверено git hash-object).
-- Факты SPEC о коде сходятся: acceptance.py:817/825/885/889-930/1306-1327/1330-1342/1365/1421-1423/1464-1473; suite_run.py:78-79/169-179/254-286/710-738/824-858/860-942; plank_run.py:164-165/233-235; artel.py:207/2562-2593/2797-2798; suite_lock.py:40-44/93-115/200-222; runner.py:1364-1380/1700/1993/1997/2017; sandbox.py:929-938.
-- Опыт: SIGINT дочернему python (process_group=0) — finally идёт, rc -2; если родитель (пульт) унаследовал SIGINT=SIG_IGN, ребёнок SIGINT игнорирует (handler 1), finally сигналом не запускается.
-- suite_lock.release снимает замок только своего pid (suite_lock.py:146-151); брошенный замок (мёртвый pid) acquire берёт заново (:104-110).
-- AC-3 красная фаза: фон suite-run уходит в свою сессию (suite_run.py:930) — снятие группы процесса cli его не задевает; образец test_01m462…:409-423 добирает pid по файлу вызовов.
-
-- Дочерний прогон (process_group=0) переживает pause --now (pause.py:270,282) и kill (cleanup.py:615,676) — снимаются только pid lease и группа агента.
-- Предел снятия ребёнка (acceptance.py:1312) равен пределу ожидания исполнителя — ребёнок с зависшим down выходит сам, явный down может не случиться.
+- sha SPEC на диске = bd7b21ff4eb08ad6fc2ee3e56f3f75fab32fa2b7. Дифф к прошлой проверенной версии 30570dd6 — `git diff c4b0634b5 ca95d86e5 -- tasks/<id>/SPEC.md` (ссылка refs/artifacts/<id>).
+- Решения гейта №4.1–4.3 внесены: треб. 13 (ожидание TEARDOWN+запас, затем всегда docker ps + down без -v, до `_account_step` runner.py:1762), треб. 1/7 по компоненту, AC-20/22/26, формы AC-3/AC-15, записка про pause/kill.
+- `_compose_teardown` (acceptance.py:1306-1327): kill+down вместе в одном пределе TEARDOWN — запас исполнителя сверх него корректен.
+- Компонент задачи один (project_profile.py:384-385: несколько — отказ), выбор — for_task_target; plank_run (:210) и suite_run._component_command (:623-640) уже его зовут.
+- Раннеров `pytest` нет: PROFILE_RUNNERS = pult-pytest, pytest-own, compose (targets.py:98-102). У pult-pytest pytest — интерпретатор venv пульта (acceptance._pytest_command), подмена PATH его не ловит.
+- Опыт: SIGINT ребёнку process_group=0 — finally идёт, rc -2, та же сессия.
+- Не снято с прошлого аудита: В3 (ветка «прогон не прерван» без AC; `plank-run --wait` без запроса не задан).
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок. Отклонения: В2, Е1, А1 (смешанный проект: команда по проекту, исполнитель по компоненту), В1, Е2, В3, мелкое (Д1, ссылки, Б1).
+- SPEC-AUDIT.md сдан: verdict concerns, status ready.
 
 ## Чего не хватило
-- Как Оператор запускает цикл auto (фоном sh или нет) — от этого зависит, дойдёт ли SIGINT до ребёнка; не выяснял.
+- Ничего существенного; дифф версий по артефактной ссылке сэкономил время.
