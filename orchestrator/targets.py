@@ -401,7 +401,8 @@ LOCAL_FIELDS = {
                "freshness": False, "squash_before_mr": False,
                "commit_template": False, "mr_title_template": False,
                "commit_message_template": False,
-               "co_author": False, "push_options": False, "push_options_forbidden": False,
+               "co_author": False, "commit_trailer": False,
+               "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
                "draft_mr": False, "max_in_flight": False,
                "max_awaiting": False, "awaiting_holds_zones": False,
@@ -430,12 +431,15 @@ COMMIT_MESSAGE_PLACEHOLDERS = ("{id}", "{ref}", "{title}", "{text}")
 _PLACEHOLDER = re.compile(r"\{(id|ref|title|text)\}")
 FRESHNESS = ("merge", "rebase")
 CO_AUTHOR_PREFIX = "Co-authored-by: "
+# Служебная строка коммитов пульта (SPEC 01M6RN8AMHNX6TVYRNJGMTAKXC,
+# требования 1-2): `<Ключ>: <значение>` одной строкой; `""` — строки нет.
+COMMIT_TRAILER = re.compile(r"[A-Za-z0-9-]+: [^\n\r]*\S[^\n\r]*")
 PUSH_OPTION_CI_VARIABLE = "ci.variable="
 PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
     "commit_template", "mr_title_template", "commit_message_template",
-    "co_author", "push_options", "push_options_forbidden",
+    "co_author", "commit_trailer", "push_options", "push_options_forbidden",
     "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
     "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
 # Умолчания полей доставки, которые читает `delivery_policy` (SPEC
@@ -775,6 +779,13 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
                 and co_author[len(CO_AUTHOR_PREFIX):].strip()):
             refuse("co_author", f"{co_author!r}: нужна строка, начинающаяся "
                                 f"с {CO_AUTHOR_PREFIX!r}")
+    if "commit_trailer" in policy:
+        trailer = policy["commit_trailer"]
+        if not (isinstance(trailer, str)
+                and (trailer == "" or COMMIT_TRAILER.fullmatch(trailer))):
+            refuse("commit_trailer", f"{trailer!r}: нужна пустая строка или "
+                                     f"одна строка '<Ключ>: <значение>', ключ "
+                                     f"из [A-Za-z0-9-]")
     forbidden = policy.get("push_options_forbidden", [])
     if not _string_list(forbidden):
         refuse("push_options_forbidden", "не список строк")
