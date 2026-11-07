@@ -7,15 +7,18 @@
   (`_auto_resolve_conflict`, `_run_merge` теперь с `conn` первым
   аргументом), amend.py (`_commit_long_lived` принимает текст без `<id>: `),
   advance_gates/review.py (`_templated_pull_subject`, полное равенство темы).
-- Долгоживущие файлы задачи: 37/37 зелёные (commits-файл идёт ~20 минут
-  последовательно; `-n` xdist падает «node down»).
+- Возврат из verifying (CI: SqlOnlyInStoreTest): два прямых SQL в
+  checkpoint.py (`task_project_entry`, `pult_subject`) заменены на
+  `store.task_exists`/`store.task_target`/`store.get_task` — store.py не
+  тронут. `tests/test_multitarget.py -k SqlOnlyInStore` зелёный.
 
 ## Не сработало
 - `timeout 590` над pytest обрезал вывод без итоговой строки — длинный файл
   гонять в фоне.
 
 ## Где остановился
-- Прогон тестов затронутых модулей, карта, guard, PLAN ready.
+- Шаг завершён: долгоживущие файлы 37/37 зелёные после правки (3:46),
+  tests/test_multitarget.py 51/51, карта регенерирована, guard ок, PLAN ready.
 
 ## Чего не хватило
-- Время прогона commits-файла (13 мин на AC-7/AC-8) нигде не указано.
+- Сторож «SQL только в store» не гоняется в шаге developer — узнали от CI.

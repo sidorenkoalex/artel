@@ -31,7 +31,11 @@ schema_version: 5
   Применяется в общей обвязке `_commit_worktree_change` — через неё идут
   все шесть чекпоинтов (`:369`, `:776`, `:821`, `:925-934`, `:1572`):
   сообщение `<id>: <текст>` разбирается на текст и собирается шаблоном.
-  Подпись `gitcmd.pult_message` не трогаю.
+  Подпись `gitcmd.pult_message` не трогаю. Строка задачи читается только
+  функциями `store` (`task_exists`, `task_target`, `get_task`) — SQL вне
+  `store.py` запрещён сторожем `tests/test_multitarget.py::SqlOnlyInStoreTest`
+  (возврат из verifying: прямой `conn.execute` в `task_project_entry` и
+  `pult_subject` заменён на эти функции, `store.py` не тронут).
 - `orchestrator/pull.py` (`_auto_resolve_conflict`, `_run_merge`) и
   `orchestrator/amend.py` (`_commit_long_lived`) зовут
   `checkpoint.pult_subject` для своего служебного текста; `_run_merge`
