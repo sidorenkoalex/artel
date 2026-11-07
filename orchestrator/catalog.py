@@ -772,6 +772,24 @@ def cmd_link(rest: list) -> None:
         print(f"[{obj}] ссылка {system}:{key} уже есть — не дублируется")
 
 
+def _commit_author_gate(target: str) -> None:
+    """Сторож автора коммитов `doctor` (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E,
+    требование 5): `fail` — отказ текстом проверки до клона, id и ссылки
+    документов; `warn` — предупреждение, задача заводится. Здесь, а не в
+    обёртке CLI: `epic draft promote` зовёт `cmd_new` в обход неё."""
+    # Пакет doctor тянет за собой catalog — импорт ленивый.
+    from orchestrator.doctor import project_checks
+    try:
+        entry = targets.target(target)
+    except targets.TargetsError:
+        return
+    for check in project_checks.commit_author_checks(target, entry):
+        if check.status == "fail":
+            sys.exit(f"new: [{check.name}] {check.detail} — задача не заведена")
+        if check.status == "warn":
+            print(f"new: предупреждение [{check.name}] {check.detail}")
+
+
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None,
            model_set: str | None = None, strict_tz: bool = False,
@@ -856,6 +874,7 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     unsupported = targets.unsupported_reason(target)
     if unsupported is not None:
         sys.exit(f"new: проект {target}: {unsupported} — задача не заведена")
+    _commit_author_gate(target)
     ref_pairs = _new_refs(refs or [], target, canary)
     template = branch_template(target)
     ref_key = _branch_ref_key(target, template, ref_pairs)
