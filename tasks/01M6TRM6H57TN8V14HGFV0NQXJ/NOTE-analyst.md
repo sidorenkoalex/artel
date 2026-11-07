@@ -1,17 +1,15 @@
 # Записка analyst
 
 ## Выяснено
-- Шаг 3 (возврат со spec_gate, 6 решений + ANSWER-2): переписываю SPEC. Решения сверены с кодом: ci.py:1352-1360 (_last_job, max id), :1384 (сверка), outcome_integrity.py:1045-1048, :1073-1087; forge.py:238-240 (Job без id); hosting_registry test :32-33, :114 (skipif по WITHOUT_REPORT).
-- forge импортирует ci (forge.py:20), targets берёт реестр импортом forge при вызове (targets.py:1341-1348) — тест-замена AC-9 подменяет реестр в процессе теста; механизм подмены — дело test_author.
-- config.py — общая зона (config.py:883), но по решению 3 добавлена в zones явно.
-- Пути gh api для подмены: commits/<sha>/check-runs (ci.py:293), actions/jobs/<id> (ci.py:1805, run_id), actions/runs/<run_id>/artifacts, actions/artifacts/<id>/zip, actions/runs?branch=<base>&status=success.
+- Шаг 4 (второй возврат со spec_gate, решения 1–7): SPEC дополнен правками, не переписан. Сверено с кодом: forge.py:202-205 (github_call отказывает артели), :232-233 (pipeline_status: артель без repo), project_checks.py:461 (условие human у ci_reruns), gitlab_adapter.py:512-515 (повтор ключа — отказ), acceptance.py:4266 (job_id в записи приёмки).
+- Куда легли решения: 1 → треб. 3 (окно created_at между started_at/completed_at; «больше одного годного» — отказ), AC-3; 2 → треб. 5, 8, AC-1/AC-6 (вариант артели в песочнице); 3 → треб. 3, 5 (фактические байты, таймаут), AC-3; 4 → таблица треб. 2 (requested, «иное значение»), AC-4; 5 → треб. 3, AC-3; 6 → треб. 7, AC-7, пункт Материалов о согласовании снят; 7 → Материалы + AC-3 (сверка причины по путям).
+- Пути gh api в преамбуле AC дополнены полями started_at, completed_at, created_at.
 
 ## Не сработало
-- `ls` в Bash недоступен — читаю файлы Read.
+- —
 
 ## Где остановился
-- Готово: SPEC.md переписан (11 требований, AC-1..AC-9, budget 50, ready), guard — ок. Решения гейта: 1 → треб. 11 + AC-9; 2 → треб. 1–2 + AC-1, AC-4; 3 → треб. 3, 5 + AC-3 (константы CI_REPORT_ARCHIVE_MAX_BYTES, CI_REPORT_UNPACKED_MAX_BYTES, CI_REPORT_DOWNLOAD_TIMEOUT_SEC); 4 → треб. 8 + AC-6; 5 → AC-7 + перечень путей gh api перед AC; 6 → треб. 4, 5.
-- Оставлено разработчику (Материалы): согласование max Job.id (включая skipped) в ci._last_job с попыткой «наибольший среди исполненных».
+- Готово: SPEC.md, status ready, guard ок. AC-1..AC-9, budget 50 без изменений.
 
 ## Чего не хватило
 - —
