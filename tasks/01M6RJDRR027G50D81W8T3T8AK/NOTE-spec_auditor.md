@@ -1,16 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Аудит 2 (spec_sha 0cce178f): все семь отклонений аудита 1 закрыты решениями Оператора 1–4. Факты подтверждены: github_adapter.py:186/:441/:144/:163/:172; targets.py:667-669, :539-541; projects.py:500-502 (отказ сверки несёт текст TargetsError), :986-996.
-- EnsureDraftMrTest: conn=mock.Mock(); чтение external_refs без {ref} даст TypeError — утверждение решения 1 верно.
-- Новые мелкие отклонения: AC-6 не называет путь (gh или forge), а запасной заголовок нужен в обоих; pull.commit_title — :926-940, а не :926-939.
-- Общий слой targets.yaml неизвестные поля не проверяет (targets.check), _check_delivery работает только в merge_local — свойство уже было до задачи.
+- Аудит 3 (spec_sha 751cfd36): оба отклонения аудита 2 сняты решением Оператора №2 — AC-6 на обоих путях (gitlab-транспорт и gh pr create), ссылки pull.py:926-940/:939-940 верны (commit_title :926, последний replace :940).
+- store.journal(conn, task_id, actor, action, detail) — store.py:1610; conn есть в обоих местах сборки заголовка (github_adapter.py:186, :441).
+- test_target_set читает LOCAL_FIELDS динамически (:270-272) — не сломается.
+- Вердикт pass.
 
 ## Не сработало
-- Составные bash-команды с cd/head/ls требуют подтверждения — нужны одиночные команды с абсолютными путями.
+- `ls` в shell недоступен; составные команды с cd проходят, если без head/ls.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
+- SPEC-AUDIT.md: verdict pass, status ready; guard прогнан.
 
 ## Чего не хватило
-- Нет одного места, где сказано, что общий слой targets.yaml пропускает поля доставки без проверки; пришлось читать targets.check целиком.
+- Ничего существенного: факты сверены на том же коммите 01bcd65cd, что и аудит 2.
