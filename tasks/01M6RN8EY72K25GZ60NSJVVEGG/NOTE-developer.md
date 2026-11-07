@@ -3,22 +3,24 @@
 ## Выяснено
 - Реализация: targets.py (поле, проверка, `render_template` — один `re.sub`),
   checkpoint.py (`task_project_entry`, `pult_subject`, применение в
-  `_commit_worktree_change` — через неё идут все чекпоинты), pull.py
-  (`_auto_resolve_conflict`, `_run_merge` теперь с `conn` первым
-  аргументом), amend.py (`_commit_long_lived` принимает текст без `<id>: `),
-  advance_gates/review.py (`_templated_pull_subject`, полное равенство темы).
-- Возврат из verifying (CI: SqlOnlyInStoreTest): два прямых SQL в
-  checkpoint.py (`task_project_entry`, `pult_subject`) заменены на
-  `store.task_exists`/`store.task_target`/`store.get_task` — store.py не
-  тронут. `tests/test_multitarget.py -k SqlOnlyInStore` зелёный.
+  `_commit_worktree_change`), pull.py, amend.py, advance_gates/review.py
+  (`_templated_pull_subject`).
+- Итерация ревью 1, R1-F1 закрыт: отказ шаблону с `\n`/`\r` в
+  `_check_delivery`; `_git_subject` в review.py нормализует ожидаемую тему как
+  git (`%s`), тема лога сравнивается после `rstrip()`. Новый тест
+  `tests/test_commit_message_template_subject.py` (9 тестов, 3 мутации красят).
+- `target-set` уже сам отказывает многострочному значению («в одну строку»),
+  yamlmini не раскрывает `\n` в кавычках — поэтому отказ загрузчика
+  тестируется прямо через `targets._check_delivery`.
+- Тест-модуль, импортирующий `orchestrator.checkpoint` первым, ловит цикл
+  импорта — сначала `from orchestrator import artel`.
 
 ## Не сработало
-- `timeout 590` над pytest обрезал вывод без итоговой строки — длинный файл
-  гонять в фоне.
+- Составные Bash-команды с `cp`/`;`/редиректом отклоняются — мутации делал
+  одним python-скриптом с восстановлением файла в `finally`.
 
 ## Где остановился
-- Шаг завершён: долгоживущие файлы 37/37 зелёные после правки (3:46),
-  tests/test_multitarget.py 51/51, карта регенерирована, guard ок, PLAN ready.
+- Код, тест, карта, PLAN/REVIEW-реестр обновлены; см. итог прогона в PLAN.
 
 ## Чего не хватило
-- Сторож «SQL только в store» не гоняется в шаге developer — узнали от CI.
+- Ничего существенного.
