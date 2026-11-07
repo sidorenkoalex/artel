@@ -4235,8 +4235,10 @@ def _project_entry(task_id: str) -> dict | None:
 def _freshness_held(entry: dict | None) -> bool:
     """Свежесть ветки держит `merge_gate` пульта (`fsm_merge_gate.
     _sync_main_or_wait`): только прочитанное значение `operator`. Поля нет
-    или запись не прочитана — свежесть проверяется (требование 1)."""
-    return entry is not None and entry.get("merge_gate") == "operator"
+    или запись не прочитана — свежесть проверяется (требование 1).
+    Значение сравнивает `targets`: белый список отправок не действует
+    ровно при `merge_gate: operator`."""
+    return entry is not None and not targets.push_whitelisted(entry)
 
 
 def appendix_digests(appendices: list) -> list[str]:
