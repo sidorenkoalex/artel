@@ -470,8 +470,10 @@ def _auto_resolve_conflict(conn, task_id: str, wt_path, source_branch: str,
     project = store.task_target(conn, task_id)
     if not _git_step_ok(conn, task_id, wt_path,
                         *gitcmd.pult_identity_args(project), "commit", "-m",
-                        gitcmd.pult_message(f"{task_id}: подтяжка {source_branch}",
-                                            project)):
+                        gitcmd.pult_message(
+                            checkpoint.pult_subject(
+                                conn, task_id, f"подтяжка {source_branch}"),
+                            project)):
         return False
     gitcmd.journal_pult_commit(conn, task_id, project, gitcmd.head_sha(wt_path),
                                "авторазрешение конфликта подтяжки")
@@ -545,16 +547,19 @@ def _clean_worktree_before_merge(conn, task_id: str, wt_path) -> str | None:
     return None
 
 
-def _run_merge(wt_path, base: str, task_id: str, source_branch: str,
+def _run_merge(conn, wt_path, base: str, task_id: str, source_branch: str,
                project: str | None = None):
     """`git merge --no-ff` зафетченного sha main в worktree задачи —
     не rebase, ветка задачи в аргументах не упоминается и не трогает
     main ни байтом (ADR-0006 п.2). Merge-коммит — коммит пульта (SPEC
-    01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-4)."""
+    01M5WDB7JY0VJGHVKCABA2QC5T, требования 2-4), первая строка — по
+    шаблону проекта задачи (SPEC 01M6RN8EY72K25GZ60NSJVVEGG, требование 3)."""
     return gitcmd.in_repo(wt_path, *gitcmd.pult_identity_args(project),
                           "merge", "--no-ff", base, "-m",
                           gitcmd.pult_message(
-                              f"{task_id}: подтяжка {source_branch}", project))
+                              checkpoint.pult_subject(
+                                  conn, task_id, f"подтяжка {source_branch}"),
+                              project))
 
 
 def _handle_merge_failure(conn, task_id: str, state: str, branch: str,
@@ -875,7 +880,7 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     if not merge_main:
         return Pulled(base)
     project = store.task_target(conn, task_id)
-    merge = _run_merge(wt_path, base, task_id, source_branch, project)
+    merge = _run_merge(conn, wt_path, base, task_id, source_branch, project)
     if merge is None or merge.returncode != 0:
         outcome = _handle_merge_failure(conn, task_id, state, branch,
                                         source_branch, merge, wt_path)
