@@ -1,19 +1,19 @@
-# Записка spec_auditor — 01M6TR3Q3SQSS1ZNGA4T7V39RW
+# Записка spec_auditor — 01M6TR3Q3SQSS1ZNGA4T7V39RW (аудит 2, spec_sha dceee4c6)
 
 ## Выяснено
-- artel.py:2797-2798 передаёт plank-run только rest[0], rest[1]: `plank-run <id> --wait 5` даёт file_arg="--wait", минуты теряются; artel.py вне зон SPEC.
-- Треб. 1 SPEC («запрос несёт время») против треб. 7 («поле сверх вида, файла и id — отказ») — противоречие, унаследовано из ТЗ пп. 1/3.
-- «Путь прерванного прогона гейта со снятием стенда» в коде нет: снятие — только finally `_compose_report_run` (acceptance.py:1464-1473); опыт: SIGTERM процессу Python без обработчика finally не исполняет (rc -15). Забытые стенды снимает doctor --fix (doctor/orphans.py:387).
-- suite_lock.deferrable (suite_lock.py:212-222) — закрытый перечень; новое действие журнала туда не входит, defer_journal вернёт False.
-- Песочница Codex открывает на запись только suite_lock.directory() (providers/codex.py:416-440, вне зон).
-- suite-run --wait читает run.json/result.json (suite_run.py:824-857): до взятия запроса исполнителем вернёт итог прошлого прогона или «прогона нет».
-- tests/sandbox.py:930-938 FakeProc — только wait(), без poll/pid.
+- Новый SPEC закрывает отклонения аудита 1 (А1, Б1, Б5, В1, В2, Г1/Г2, Е1, Е2, AC-3) по ANSWER-1.
+- compose_project_name(task_id, run_id) (acceptance.py:885): run_id = os.urandom(4).hex() внутри _compose_report_run (:1365) — исполнитель «сам» имя не вычислит; ложный факт ANSWER-1 п.2 / SPEC треб. 13.
+- Опыт: SIGTERM -> rc -15, finally не исполнен; SIGINT -> finally исполнен.
+- Предел снятия стенда — COMPOSE_TEARDOWN_TIMEOUT_SEC=120 (config.py:238), не COMPOSE_UP_DOWN_SEC; teardown — down -v (acceptance.py:1313), явный down SPEC — без -v (как doctor).
+- run.json/result.json/failed.json — общие для suite-run задачи (suite_run.py:127-139); как в них живут запросы планки — не задано.
+- cmd_plank_run(task_id, file_arg) зовут позиционно 6 тестов.
+- Гейты каталог suite-run не читают (только fullsuite-results, acceptance.py:3537).
 
 ## Не сработало
-- Составные bash-команды с cd/переменными отклоняются — только одиночные команды с абсолютными путями.
+- ls / составные команды с xargs/awk требуют подтверждения.
 
 ## Где остановился
-- SPEC-AUDIT.md сдан: status ready, verdict fail, guard — ок. Восемь отклонений и замечания перечислены в «Вердикте».
+- SPEC-AUDIT.md сдан: verdict concerns, status ready.
 
 ## Чего не хватило
-- Явного места «хозяйства пульта задачи» для запросов в SPEC.
+- Как тест доберётся до исполнителя (FakeProc.wait возвращается сразу) — в SPEC не задано.
