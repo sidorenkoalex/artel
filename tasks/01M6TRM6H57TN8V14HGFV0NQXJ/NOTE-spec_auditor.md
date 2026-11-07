@@ -1,15 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- tests/test_01m6ezxvfgxc6wbda9qjesazrw_hosting_registry.py:32-33,114-117: WITHOUT_REPORT пустеет, когда у _GitHub появится job_test_report → оба варианта test_ac15_* из passed становятся skipped; гейт исходов (outcome_integrity.compare :226 BECAME_SKIPPED) на in_dev→verifying артели (targets.yaml:51 report: junit-xml) откажет — мандата на этот файл нет.
-- parse_junit (reporters/outcome.py:163-201) отдаёт список CaseResult с id компонента и исходом passed, не «classname::name → success»; ТЗ/SPEC требование 2 о нём неверно.
-- ci.gh (ci.py:91-93) text=True: бинарный zip даёт UnicodeDecodeError (опыт), не пойман — нужен отдельный бинарный вызов gh.
-- Требование 1 «последний по времени завершения» против ci._last_job/outcome_integrity._ci_report (max Job.id) — расхождение ТЗ и ANSWER-1 п.2.
-- Отображение заключений GitHub в статусы GitLab не задано (JOB_FINISHED ci.py:1339; _CI_FIT_STATUSES outcome_integrity.py:1045).
-- zipfile.extractall сам чистит '..' и '/' (опыт) — отказа не даёт, AC-3 это ловит.
+- Визит 2 (spec_sha 1917115c). Прежние находки (мандат ANSWER-2, parse_junit, ci.gh text=True, max id, таблица заключений) сняты SPEC и решениями 1–6.
+- ci.trigger_rerun (ci.py:1819-1848) — `gh run rerun <run_id> --failed`: перезапуск в том же run_id — штатный путь пульта; правило «>1 артефакта с именем — отказ» (SPEC тр.3) не привязывает артефакт к попытке: либо после ci-rerun отчёт навсегда «неизвестно», либо один артефакт прежней попытки приписан новой. Поведение artifacts API при rerun не проверено (сети нет).
+- forge.github_call отказывает артели (forge.py:202-205); _GitHub.pipeline_status для артели зовёт check_runs без repo (forge.py:232-233). AC SPEC — только на вымышленной внешней записи; путь артели (цель ADR-0031 строка 54) не задан и не проверен.
+- Предел размера: AC-3 не требует, чтобы предел держал фактические байты, а не `size_in_bytes`; предел времени не проверяется ни одним AC.
+- Таблица тр.2 без `requested` и без строки «иное значение».
+- zipfile.extractall снимает `..` и `/` (опыт, повторён): «файлов вне каталога нет» в AC-3 мутацию «нет проверки путей» не ловит — ловит только причина.
+- Существующие тесты: test_ac13_github_verdict_from_check_runs сравнивает только verdict (gitlab_forge.py:1177-1181) — от Job.id не краснеет; target_set ALLOWED выводится из COMPONENT_FIELDS — новое поле не ломает.
 ## Не сработало
-- `cd W && grep` отклоняется песочницей — абсолютные пути.
+- `cd W && grep … | head` с несколькими операциями — отклоняется; одиночные команды с абсолютными путями проходят.
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns.
+- SPEC-AUDIT.md: verdict concerns, status ready.
 ## Чего не хватило
-- Поиск тестов, которые станут skip (не red) от реализации — нигде не описан как класс.
+- Документированного поведения artifacts API GitHub при rerun задания (сохраняются ли артефакты прежней попытки).
