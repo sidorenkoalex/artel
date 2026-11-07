@@ -399,8 +399,8 @@ LOCAL_FIELDS = {
                REF_REQUIRED_FIELD: False, REF_SYSTEMS_FIELD: False,
                "branch_template": False, "ref_pattern": False,
                "freshness": False, "squash_before_mr": False,
-               "commit_template": False, "co_author": False,
-               "push_options": False, "push_options_forbidden": False,
+               "commit_template": False, "mr_title_template": False,
+               "co_author": False, "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
                "draft_mr": False, "max_in_flight": False,
                "max_awaiting": False, "awaiting_holds_zones": False,
@@ -417,13 +417,18 @@ DEFAULT_BRANCH_TEMPLATE = "task/{id}-{slug}"
 BRANCH_PLACEHOLDERS = ("{id}", "{slug}", "{ref}")
 DEFAULT_COMMIT_TEMPLATE = "{id}: {text}"
 COMMIT_PLACEHOLDERS = ("{id}", "{ref}", "{text}")
+# Заголовок MR задачи (SPEC 01M6RJDRR027G50D81W8T3T8AK, требования 1-2):
+# умолчание побайтно равно прежнему жёсткому заголовку.
+DEFAULT_MR_TITLE_TEMPLATE = "{id}: {title}"
+MR_TITLE_PLACEHOLDERS = ("{id}", "{ref}", "{title}")
 FRESHNESS = ("merge", "rebase")
 CO_AUTHOR_PREFIX = "Co-authored-by: "
 PUSH_OPTION_CI_VARIABLE = "ci.variable="
 PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
-    "commit_template", "co_author", "push_options", "push_options_forbidden",
+    "commit_template", "mr_title_template", "co_author", "push_options",
+    "push_options_forbidden",
     "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
     "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
 # Умолчания полей доставки, которые читает `delivery_policy` (SPEC
@@ -712,6 +717,19 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
         if commit != DEFAULT_COMMIT_TEMPLATE and not squash:
             refuse("commit_template", "отличный от умолчания — только при "
                                       "squash_before_mr: true")
+    if "mr_title_template" in policy:
+        title = policy["mr_title_template"]
+        if not isinstance(title, str) or not title.strip():
+            refuse("mr_title_template", "не непустая строка")
+        rest = title
+        for mark in MR_TITLE_PLACEHOLDERS:
+            rest = rest.replace(mark, "")
+        if "{" in rest or "}" in rest:
+            refuse("mr_title_template", f"{title!r}: подстановки — только "
+                                        f"{', '.join(MR_TITLE_PLACEHOLDERS)}")
+        if "{ref}" in title and REF_REQUIRED_FIELD not in policy:
+            refuse("mr_title_template", f"{title!r}: {{ref}} без "
+                                        f"policy.{REF_REQUIRED_FIELD}")
     if "commit_author" in machine:
         author = machine["commit_author"]
         if not (isinstance(author, dict) and set(author) == {"name", "email"}
