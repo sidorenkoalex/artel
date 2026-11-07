@@ -400,6 +400,7 @@ LOCAL_FIELDS = {
                "branch_template": False, "ref_pattern": False,
                "freshness": False, "squash_before_mr": False,
                "commit_template": False, "mr_title_template": False,
+               "commit_message_template": False,
                "co_author": False, "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
                "draft_mr": False, "max_in_flight": False,
@@ -421,14 +422,20 @@ COMMIT_PLACEHOLDERS = ("{id}", "{ref}", "{text}")
 # умолчание побайтно равно прежнему жёсткому заголовку.
 DEFAULT_MR_TITLE_TEMPLATE = "{id}: {title}"
 MR_TITLE_PLACEHOLDERS = ("{id}", "{ref}", "{title}")
+# Первая строка коммитов пульта в кодовой ветке задачи (SPEC
+# 01M6RN8EY72K25GZ60NSJVVEGG, требования 1-3): умолчание побайтно равно
+# прежнему `<id>: <служебный текст>`.
+DEFAULT_COMMIT_MESSAGE_TEMPLATE = "{id}: {text}"
+COMMIT_MESSAGE_PLACEHOLDERS = ("{id}", "{ref}", "{title}", "{text}")
+_PLACEHOLDER = re.compile(r"\{(id|ref|title|text)\}")
 FRESHNESS = ("merge", "rebase")
 CO_AUTHOR_PREFIX = "Co-authored-by: "
 PUSH_OPTION_CI_VARIABLE = "ci.variable="
 PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
-    "commit_template", "mr_title_template", "co_author", "push_options",
-    "push_options_forbidden",
+    "commit_template", "mr_title_template", "commit_message_template",
+    "co_author", "push_options", "push_options_forbidden",
     "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
     "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
 # Умолчания полей доставки, которые читает `delivery_policy` (SPEC
@@ -640,6 +647,14 @@ def delivery_policy(entry: dict) -> dict:
     return policy
 
 
+def render_template(template: str, values: dict) -> str:
+    """`template` с подстановками `{id}`, `{ref}`, `{title}`, `{text}` из
+    `values` (SPEC 01M6RN8EY72K25GZ60NSJVVEGG, требование 2): каждая
+    раскрывается ровно один раз за один проход, литералы `{…}` внутри
+    подставленных значений остаются как есть при любом порядке подстановок."""
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], template)
+
+
 def push_option_error(option: object, forbidden: list | tuple = ()) -> str | None:
     """Причина отказа опции отправки `option` — та же норма для элемента
     `policy.push_options` при загрузке и для `-o` в argv отправки; None —
@@ -730,6 +745,23 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
         if "{ref}" in title and REF_REQUIRED_FIELD not in policy:
             refuse("mr_title_template", f"{title!r}: {{ref}} без "
                                         f"policy.{REF_REQUIRED_FIELD}")
+    if "commit_message_template" in policy:
+        message = policy["commit_message_template"]
+        if not isinstance(message, str) or not message.strip():
+            refuse("commit_message_template", "не непустая строка")
+        # Шаблон описывает первую строку сообщения (требование 3): перевод
+        # строки увёл бы часть шаблона в тело коммита.
+        if "\n" in message or "\r" in message:
+            refuse("commit_message_template",
+                   f"{message!r}: перевод строки — шаблон первой строки")
+        rest = _PLACEHOLDER.sub("", message)
+        if "{" in rest or "}" in rest:
+            refuse("commit_message_template",
+                   f"{message!r}: подстановки — только "
+                   f"{', '.join(COMMIT_MESSAGE_PLACEHOLDERS)}")
+        if "{ref}" in message and REF_REQUIRED_FIELD not in policy:
+            refuse("commit_message_template", f"{message!r}: {{ref}} без "
+                                              f"policy.{REF_REQUIRED_FIELD}")
     if "commit_author" in machine:
         author = machine["commit_author"]
         if not (isinstance(author, dict) and set(author) == {"name", "email"}
