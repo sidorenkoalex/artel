@@ -1,0 +1,22 @@
+# Записка developer — 01M6TR3Q3SQSS1ZNGA4T7V39RW
+
+## Выяснено
+- Долгоживущий файл tests/test_01m6tr3q3sqss1znga4t7v39rw_role_requests.py задаёт форму: очередь
+  suite-run/<id>/requests/<n>.json, итог <n>.result.json (поля свободные — тест читает flat_text),
+  фразы-константы в его шапке (NOT_IN_FLIGHT, STEP_OVER, INTERRUPTED, LOCK_BUSY, QUEUED, STILL_RUNNING
+  «прогон не прерван, повтори», REQUEST_ACTION).
+- Исполнитель должен звать docker из процесса пульта (ppid=драйвер), дочерний прогон — в той же сессии.
+- PLAN написан: очередь/ожидание — suite_run.py, исполнитель — runner.RoleRequestExecutor.
+
+- Автокоммит конца шага переносит черновик планки в ссылку и убирает каталог документов; в драйвере
+  теста role_cwd подменён — выкладки нет. Поэтому дочерний прогон planка — cmd_plank_run(...,
+  ref_if_no_draft=True): нет каталога черновика → зафиксированная планка ссылки.
+
+## Не сработало
+
+## Где остановился
+- Код готов (suite_run: очередь/wait; plank_run: --wait, лишний аргумент, режим запроса;
+  runner.RoleRequestExecutor; artel.py диспетчер/справка/комментарий). Долгоживущий файл: 32/32 зелёные.
+- Дальше: планка plank-run, тесты затронутых модулей, карта, guard, PLAN ready.
+
+## Чего не хватило
