@@ -1,17 +1,17 @@
-# Записка spec_auditor — 01M6TT4FKD1JWSJFVJ7328K03Y (аудит 2, spec_sha dd14a9f1)
+# Записка spec_auditor — 01M6TT4FKD1JWSJFVJ7328K03Y (аудит 3, spec_sha ce1c52ef)
 
 ## Выяснено
-- Все 10 отклонений аудита 1 закрыты по ANSWER-1; хук в зонах; факты SPEC о коде подтверждены.
-- Остаток (concerns): SPEC 3 «ждать до потолка» против SPEC 7 «прежний отказ» (эскалация сразу) для негодного задания базы (canceled, allow_failure, «отчёт не разобран» — у головы проходяще, outcome_integrity.py:1096-1097).
-- `gitcmd.diff_base` считает базу от origin/main (gitcmd.py:1977, config.MAIN_BRANCH), а проверка предка — от origin/<base>: при base≠main отправка базы не пройдёт.
-- Проверка предка читает локальный refs/remotes/origin/<base> клона, пульт его перед проверкой не обновляет (gitcmd.py:1943-1948) — PLAUSIBLE обход ответа 7.
-- Очередь по журналу: `store.steps_of_action` (store.py:1529) — правка store.py не нужна.
+- Решения 1–5 гейта SPEC перенесены в требования 1, 3, 4, 6, 7 и AC-5, 7, 9, 10. Ссылки на строки кода сходятся (outcome_integrity.py:1065/1173/1186/1465/820; fsm_advance.py:516-523; gitcmd.py:1943-1979, 2112-2153; config.py:361/372/544; store.py:1529).
+- Опыт (git 2.50.1, временный каталог): fetch с явной refspec в приватную ссылку попутно и принудительно возвращает сдвинутый refs/remotes/origin/main на sha origin; с `--refmap=` не трогает. Поправка SPEC к решению 6 верна, у самого решения 6 утверждение ложное.
+- Новая находка: поля ci_base* заданы на уровне компонента (ANSWER 9), а ветка, очередь и ключ политики заданы на проект. При is_multi с разными ci_base_branch/ci_base_push_options поведение не определено (push_policy_text(project, entry) — один ключ).
+- AC-5 требует «через store.steps_of_action» — это устройство кода, а не поведение.
+- GitLab auto-cancel: следующая отправка при `running` отменит прерываемое (interruptible) задание → canceled → эскалация (PLAUSIBLE, сети нет).
 
 ## Не сработало
-- `cd … && python3 …` в Bash отклонён («simple_expansion»); guard прогнан абсолютным путём — ок.
+- Цепочки Bash с `;` и `cd` отклоняются. Опыт провёл python-скриптом в каталоге документов, потом удалил его через task-rm.
 
 ## Где остановился
-- SPEC-AUDIT.md: verdict concerns, status ready, guard ок.
+- SPEC-AUDIT.md: verdict concerns.
 
 ## Чего не хватило
-- Может ли роль в своём шаге сдвинуть refs/remotes/origin/<base> клона (role_git) — не проверял.
+- Есть ли у внешнего GitLab-проекта несколько компонентов `ci` — записи не видно (настоящий targets.yaml не читается).
