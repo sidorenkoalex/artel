@@ -1,17 +1,17 @@
 # Записка spec_auditor
 
 ## Выяснено
-- SPEC e54f64d0: факты о строках gitcmd.py/targets.py верны; snapshot.py:281 передаёт config.DEFAULT_TARGET (не проект задачи) — снимки истории всегда с Artel-Actor.
-- yamlmini: значение из двух строк из файла недостижимо (`|` -> YamlError, кавычки через перевод строки -> два ключа, `\n` буквальный) — AC-4 «две строки» только через targets.merge_local(dict).
-- Прежний отказ «раздел 'policy': неизвестное поле 'commit_trailer'» не содержит подстроки `policy.commit_trailer` — красная фаза AC-4 честная при полной форме.
-- target-set: `Harness-Actor: orchestrator` читается строкой, _literal кавычит, обратное чтение то же.
-- Существующие тесты (test_pult_commit_signature, rewrite_flow:76, target_set LOCAL_FIELDS динамически) не ломаются.
+- SPEC be95c4fa: факты о строках gitcmd.py (544, 585-593, 539-543), targets.py (391, 424, 664, 721, 849/855-859, 492-494 отказ артели в merge_local) и вызовах pult_message верны; snapshot.py:281 — config.DEFAULT_TARGET.
+- yamlmini (опыт): `""`->'', `"Key: "`->'Key: ', `"Key:   "`, `42`->int, `[x, y]`->list, `"  "`->'  ', `"a\nb"` в кавычках — буквальный `\n`.
+- projects._argument_value:819 отказывает пустому аргументу; target-set допустимые поля берёт из LOCAL_FIELDS динамически (projects.py:780).
+- check() слоя репозитория (targets.py:890) неизвестные поля не отвергает — commit_trailer в targets.yaml артели прошёл бы без проверки (как и co_author сейчас).
+- Существующие тесты (test_pult_commit_signature:77/98, rewrite_flow:76/687/1324, entry_checks DELIVERY_REFUSALS, target_set ALLOWED) не ломаются: записи без поля.
 
 ## Не сработало
-- Bash с `echo` между командами и `$VAR` требует подтверждения — использовать Read и абсолютные пути.
+- Bash с `cd` + относительным путём, `;`/`|` между командами требует подтверждения — абсолютные пути, одна команда.
 
 ## Где остановился
-- SPEC-AUDIT.md написан, verdict concerns (4 пункта), guard прогнан.
+- SPEC-AUDIT.md написан, verdict concerns (К1 пробельное всё поле, К2 порядок с co_author в AC-1, К3 образец Key:v в AC-4, К4 слой репозитория не проверяет поле), guard ок.
 
 ## Чего не хватило
 - Нет.
