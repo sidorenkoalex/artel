@@ -1,19 +1,15 @@
-# Записка spec_auditor — 01M6TR3Q3SQSS1ZNGA4T7V39RW (аудит 2, spec_sha dceee4c6)
+# Записка spec_auditor — 01M6TR3Q3SQSS1ZNGA4T7V39RW (аудит 3, spec_sha b4de9641)
 
 ## Выяснено
-- Новый SPEC закрывает отклонения аудита 1 (А1, Б1, Б5, В1, В2, Г1/Г2, Е1, Е2, AC-3) по ANSWER-1.
-- compose_project_name(task_id, run_id) (acceptance.py:885): run_id = os.urandom(4).hex() внутри _compose_report_run (:1365) — исполнитель «сам» имя не вычислит; ложный факт ANSWER-1 п.2 / SPEC треб. 13.
-- Опыт: SIGTERM -> rc -15, finally не исполнен; SIGINT -> finally исполнен.
-- Предел снятия стенда — COMPOSE_TEARDOWN_TIMEOUT_SEC=120 (config.py:238), не COMPOSE_UP_DOWN_SEC; teardown — down -v (acceptance.py:1313), явный down SPEC — без -v (как doctor).
-- run.json/result.json/failed.json — общие для suite-run задачи (suite_run.py:127-139); как в них живут запросы планки — не задано.
-- cmd_plank_run(task_id, file_arg) зовут позиционно 6 тестов.
-- Гейты каталог suite-run не читают (только fullsuite-results, acceptance.py:3537).
-
-## Не сработало
-- ls / составные команды с xargs/awk требуют подтверждения.
+- Факты SPEC о коде сверены: acceptance.py:817/825/885/1306/1330-1342/1365/1421/1464-1473, config.py:209/235/238/270, artel.py:207/2562-2593/2797-2798, suite_run.py:127-166/824-858/916-930, suite_lock.py:40-44/200-222, sandbox.py:930-938 — сходятся.
+- В1: tests.sandbox подменяет config.* через mock.patch.object в процессе теста (sandbox.py:728,1182,1640); отвязанный фон suite-run — новый интерпретатор (suite_run.py:78-79,926-930), config.LOGS/DB у него настоящие (config.py:11-14), suite_lock.adopt без своего замка берёт настоящий lock.json (suite_lock.py:172-181). Красная фаза AC-3 в форме «тест подменяет config.LOGS» трогает настоящий замок машины и БД. Существующие тесты обходят это копией пульта (test_01m462…_suite_run.py:313-330) или подменой Popen (test_suite_run.py:250).
+- Тот же класс у дочернего прогона исполнителя: канал передачи песочницы не задан.
+- Е1: разработчик пишет файл запроса полного набора прямо в каталог suite-run (он открыт на запись) — исполнитель не проверяет роль шага; запрет полного прогона разработчику (треб. 6) обходится.
+- Полный набор через отвязанный cmd_suite_run: метка artel.run-pid = pid внука, известный только из run.json (пишет и роль) — против треб. 13.
+- Треб. 5 (отказ на третий аргумент) против треб. 7 («побайтно» у проектов без compose): сейчас rest[2:] молча отбрасывается.
 
 ## Где остановился
 - SPEC-AUDIT.md сдан: verdict concerns, status ready.
 
 ## Чего не хватило
-- Как тест доберётся до исполнителя (FakeProc.wait возвращается сразу) — в SPEC не задано.
+- Как фон/дочерний процесс получает песочницу теста — нигде в SPEC; искал по suite_run._CHILD и tests/sandbox.py.
