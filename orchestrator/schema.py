@@ -193,6 +193,19 @@ CREATE TABLE IF NOT EXISTS verify_marks (
 );
 """
 
+# Сводки цены набора тестов по отчёту junit CI `main` (SPEC
+# 01M6Y44ZPXPQCNYDXQG6FMZPK5, требование 5): одна строка на пару «проект,
+# sha» — повтор записи её не меняет; `summary` — JSON вывода
+# `suite_cost.summarize`, `reason` — причина отсутствия отчёта. Тем же
+# литералом в `SCHEMA` и `migrate()` (см. `MODEL_TARIFFS_DDL`).
+SUITE_COSTS_DDL = """
+CREATE TABLE IF NOT EXISTS suite_costs (
+  target TEXT NOT NULL, sha TEXT NOT NULL, recorded_at TEXT NOT NULL,
+  summary TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (target, sha)
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -253,6 +266,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 {MODEL_TARIFFS_DDL}
 {OBSERVATIONS_DDL}
 {PAIR_SUSPENSION_DDL}
+{SUITE_COSTS_DDL}
 """
 
 
@@ -580,6 +594,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(EPIC_SUPERVISION_DDL)
     conn.executescript(EXTERNAL_REFS_DDL)
     conn.executescript(VERIFY_MARKS_DDL)
+    conn.executescript(SUITE_COSTS_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:

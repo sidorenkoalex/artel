@@ -101,6 +101,9 @@ from .. import (acceptance, alerts, artifact_branch, brief, canary, ci, coldstar
                 repo_context, roles,
                 runner, snapshot, spend, stack, store, targets, workspace,
                 zone_lock)
+# Сводка цены набора — под другим именем: `doctor.suite_cost` — подмодуль
+# этого пакета (его импорт ниже перезаписал бы атрибут фасада).
+from .. import suite_cost as suite_cost_core
 # Провайдер `codex` — ЕДИНСТВЕННЫЙ провайдер, чьи проверки этот пакет
 # ведёт поимённо (его имена строк не совпадают с именами Claude, SPEC
 # 01M32NH6P053978AER66P0X4GN, требование 12), поэтому его константы
@@ -211,5 +214,6 @@ from .map_growth import (MAP_SIZE_ACTION, MAP_GROWTH_SOURCE, _FAR_FUTURE_TS,
 from .machine_load import check_machine_load
 from .role_nproc import ROLE_NPROC_CHECK, check_role_nproc
 from .suite_duration import check_suite_duration
+from .suite_cost import check_suite_cost
 from .worktree_db import WORKTREE_DB_CHECK, check_worktree_db_files
 from .cli import all_checks, LABELS, cmd_doctor, cmd_alert_ack
