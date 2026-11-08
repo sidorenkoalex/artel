@@ -184,7 +184,8 @@ def _plank_label(task_id: str, rel: str) -> str:
 
 
 def _groups(task_id: str, docs: Path, profile, rule,
-            network_addresses: bool, project_imports) -> list[str]:
+            network_addresses: bool, project_imports,
+            sandbox_sources: dict[str, str] | None = None) -> list[str]:
     """Состав и порядок `_tests_writing_test_groups_gate`; метка —
     `acceptance_tests/<файл>`, как у выложенной для сбора планки."""
     files = [(label, text) for label, text
@@ -197,12 +198,15 @@ def _groups(task_id: str, docs: Path, profile, rule,
                 example=profile.long_lived_hint(task_id))
             + guard.long_lived_errors_from_files(
                 files, task_id, network_addresses=network_addresses,
-                project_imports=project_imports, rule=rule)
+                project_imports=project_imports, rule=rule,
+                size_marks=project_profile.size_marks_required(profile),
+                sandbox_sources=sandbox_sources)
             + guard.plank_ban_errors(files, rule))
 
 
 def _long_lived(task_id: str, files: list[tuple[str, str]], profile, rule,
-                network_addresses: bool, project_imports) -> list[str]:
+                network_addresses: bool, project_imports,
+                sandbox_sources: dict[str, str] | None = None) -> list[str]:
     """Проверки `_tests_writing_long_lived_gate`, исполнимые без git: строка
     группы каждого файла, затем ядро долгоживущих файлов; `rule` — как у
     перехода (`project_profile.long_lived_rule`)."""
@@ -212,7 +216,9 @@ def _long_lived(task_id: str, files: list[tuple[str, str]], profile, rule,
                                                 profile.long_lived_dir, rule)
     return (errors + guard.long_lived_errors_from_files(
         files, task_id, network_addresses=network_addresses,
-        project_imports=project_imports, rule=rule)
+        project_imports=project_imports, rule=rule,
+        size_marks=project_profile.size_marks_required(profile),
+        sandbox_sources=sandbox_sources)
         + guard.plank_ban_errors(files, rule))
 
 
@@ -250,9 +256,13 @@ def cmd_preflight(arg: str) -> None:
 
     long_lived: list[tuple[str, str]] = []
     long_lived_read_errors: list[str] = []
+    # Модули песочниц для метки размера (ADR-0032 п. 2) — с того же диска
+    # рабочей копии кода, что долгоживущие файлы.
+    sandbox_sources: dict[str, str] = {}
     if profile is not None:
         code_copy = workspace.path(task_id, target)
         if code_copy.is_dir():
+            sandbox_sources = guard.sandbox_sources_from_dir(code_copy)
             long_lived, long_lived_read_errors = _long_lived_files(
                 task_id, code_copy, profile)
         else:
@@ -283,10 +293,11 @@ def cmd_preflight(arg: str) -> None:
         long_lived_rule = project_profile.long_lived_rule(target, profile)
         refused |= _report(CHECK_LONG_LIVED, long_lived_read_errors + _long_lived(
             task_id, long_lived, profile, long_lived_rule, network_addresses,
-            project_imports))
+            project_imports, sandbox_sources))
         refused |= _report(CHECK_GROUPS, _groups(task_id, docs, profile, rule,
                                                  network_addresses,
-                                                 project_imports))
+                                                 project_imports,
+                                                 sandbox_sources))
 
     for name, functions in NOT_CHECKED:
         suffix = f" — {', '.join(functions)}" if functions else ""

@@ -23,7 +23,7 @@ from types import MappingProxyType
 
 from scripts import guard
 
-from . import config, repo_context, store, targets
+from . import config, gitcmd, repo_context, store, targets, test_lint
 
 # Действие журнала отказа перехода по профилю или контексту проекта —
 # класс «чинит Оператор» (`advance_gates.refusal_classes`): чинится
@@ -81,6 +81,10 @@ class Profile:
     env: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), hash=False)
     long_lived_imports: tuple = ()
+    # Подполе `size_marks` (ADR-0032 п. 2; SPEC 01M6XHJH6EJ8D0BR5PRNGZAY8C):
+    # `required` — правила метки размера долгоживущих файлов включены;
+    # пусто — выключены. Вне сравнения: оно не меняет прогон.
+    size_marks: str = field(default="", compare=False)
     # Поля раннера `compose` (`targets.COMPOSE_FIELDS`; SPEC
     # 01M6PAJ61D4PYAP79ADRPA6MWV, требование 1): у прочих раннеров пусто.
     compose_file: str = ""
@@ -150,6 +154,7 @@ class Profile:
                    env=MappingProxyType(dict(values.get("env") or {})),
                    long_lived_imports=tuple(
                        values.get("long_lived_imports") or ()),
+                   size_marks=values.get("size_marks") or "",
                    **_compose_values(values))
 
     def in_weakening_scope(self, path: str | None) -> bool:
@@ -254,6 +259,32 @@ def long_lived_imports(target: str, profile: Profile | None):
     if repo_context.is_artel(target):
         return None
     return profile.long_lived_imports if profile is not None else ()
+
+
+def size_marks_required(profile: Profile | None) -> bool:
+    """Правила метки размера долгоживущих файлов включены подполем
+    `size_marks: required` профиля (ADR-0032 п. 2; SPEC
+    01M6XHJH6EJ8D0BR5PRNGZAY8C) — флаг `size_marks` у
+    `guard.long_lived_errors_from_files`."""
+    return getattr(profile, "size_marks", "") == targets.SIZE_MARKS_REQUIRED
+
+
+def sandbox_sources_at(rev: str, repo) -> dict[str, str] | None:
+    """{путь: текст} модулей песочниц (`tests/sandbox.py`,
+    `tests/*_sandbox.py`) в дереве ревизии `rev` клона `repo` —
+    `sandbox_sources` guard для дерева кодовой ветки; `None` — git не
+    ответил."""
+    present = gitcmd.ls_tree_files(rev, "tests", repo=repo) if rev else None
+    if present is None:
+        return None
+    sources: dict[str, str] = {}
+    for rel in present:
+        if test_lint.is_sandbox_source_path(rel):
+            text, _reason = gitcmd.show(rev, rel, repo=repo)
+            if text is None:
+                return None
+            sources[rel] = text
+    return sources
 
 
 def for_task(conn, task_id: str) -> Decision:
@@ -510,6 +541,7 @@ def component_profiles(target: str, names=None) -> tuple:
             workdir=fields.get("workdir") or "",
             env=MappingProxyType(dict(fields.get("env") or {})),
             long_lived_imports=tuple(fields.get("long_lived_imports") or ()),
+            size_marks=fields.get("size_marks") or "",
             project=target, **_compose_values(fields))
         chosen.append(_with_component_fields(profile, comp))
     return tuple(chosen)

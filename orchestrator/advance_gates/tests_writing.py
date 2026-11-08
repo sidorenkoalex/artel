@@ -518,7 +518,12 @@ def _tests_writing_test_groups_gate(acc_tdir, task_id: str, profile, *,
               + guard.long_lived_errors_from_files(
                   files, task_id, network_addresses=network_addresses,
                   project_imports=_project_imports(task_id, profile),
-                  rule=rule)
+                  rule=rule,
+                  # Файлы планки правилам размера не подлежат (их группа
+                  # не «долгоживущий»); флаг и дерево — для единообразия.
+                  size_marks=project_profile.size_marks_required(profile),
+                  sandbox_sources=guard.sandbox_sources_from_dir(
+                      workspace.path(task_id)))
               # Запреты в тексте файлов с меткой `AC-<n>: ` (SPEC
               # 01M5AQH8M2DKBV30NBY86J34A7, требование 7).
               + guard.plank_ban_errors(files, rule))
@@ -640,10 +645,21 @@ def _tests_writing_long_lived_gate(task_id: str, code_branch: str, entries,
                 errors.append(f"{path}: путь уже существует в {main_ref}")
             errors += guard.long_lived_group_errors(
                 [(path, files[path])], profile.long_lived_dir, rule)
+        # Метка размера (ADR-0032 п. 2): перечень песочниц — из дерева той
+        # же головы кодовой ветки, что и проверяемые файлы.
+        size_marks = project_profile.size_marks_required(profile)
+        sandbox_sources = (project_profile.sandbox_sources_at(code_branch, repo)
+                           if size_marks else {})
+        if sandbox_sources is None:
+            return _long_lived_git_refusal(
+                task_id, f"модули песочниц tests/ на голове {code_branch} не "
+                         f"прочитаны — git не ответил, проверка метки "
+                         f"размера невозможна")
         errors += guard.long_lived_errors_from_files(
             sorted(files.items()), task_id,
             network_addresses=network_addresses,
-            project_imports=_project_imports(task_id, profile), rule=rule)
+            project_imports=_project_imports(task_id, profile), rule=rule,
+            size_marks=size_marks, sandbox_sources=sandbox_sources)
         errors += guard.plank_ban_errors(sorted(files.items()), rule)
         if workspace.on_task_branch(task_id, code_branch) is not True:
             errors.append(f"рабочая копия кодовой ветки {code_branch} не "

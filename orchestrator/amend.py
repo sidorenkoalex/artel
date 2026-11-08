@@ -294,14 +294,41 @@ def _rule_plank_errors(task_id: str, files: list[tuple[str, str]], rule,
                 files, task_id, network_addresses=repo_context.is_artel(target),
                 project_imports=project_profile.long_lived_imports(target,
                                                                    profile),
-                rule=rule)
+                rule=rule,
+                # Файлы планки правилам размера не подлежат (их группа не
+                # «долгоживущий»); флаг и дерево — для единообразия.
+                size_marks=project_profile.size_marks_required(profile),
+                sandbox_sources=_sandbox_sources(
+                    task_id, profile, wt_path=workspace.path(task_id)))
             + guard.plank_ban_errors(files, rule))
+
+
+def _sandbox_sources(task_id: str, profile, *, wt_path: Path | None = None,
+                     rev: str = "") -> dict[str, str]:
+    """Модули песочниц дерева проверки для метки размера (ADR-0032 п. 2;
+    SPEC 01M6XHJH6EJ8D0BR5PRNGZAY8C, требование 3): с диска рабочей копии
+    `wt_path` либо из дерева ревизии `rev` кодовой ветки — того же дерева,
+    что проверяемые файлы. Правило выключено — пусто, дерево не читается;
+    git не ответил — отказ команды."""
+    if not project_profile.size_marks_required(profile):
+        return {}
+    if wt_path is not None:
+        return guard.sandbox_sources_from_dir(wt_path)
+    sources = project_profile.sandbox_sources_at(rev,
+                                                 workspace.task_repo(task_id))
+    if sources is None:
+        sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на модули "
+                 f"песочниц tests/ ревизии {rev} (метка размера)")
+    return sources
 
 
 def _labelled_long_lived_errors(task_id: str, files: dict[str, str],
                                 deleted: dict[str, str | None],
                                 plank_files: list[tuple[str, str]], rule,
-                                profile) -> list[str]:
+                                profile, *,
+                                lint_base: dict[str, str] | None = None,
+                                sandbox_sources: dict[str, str] | None = None
+                                ) -> list[str]:
     """Долгоживущие файлы с меткой итогового состояния (`rule` —
     `project_profile.long_lived_rule`): строка группы каждого файла,
     признаки и запреты, затем удаление — одной суммой, группа
@@ -317,7 +344,9 @@ def _labelled_long_lived_errors(task_id: str, files: dict[str, str],
     errors += guard.long_lived_errors_from_files(
         items, task_id, network_addresses=repo_context.is_artel(target),
         project_imports=project_profile.long_lived_imports(target, profile),
-        rule=rule)
+        rule=rule, lint_base=lint_base,
+        size_marks=project_profile.size_marks_required(profile),
+        sandbox_sources=sandbox_sources)
     errors += guard.plank_ban_errors(items, rule)
     kept_names: set[str] = set()
     kept_methods: set[str] = set()
@@ -701,7 +730,9 @@ def _method_names(source: str) -> set[str]:
 def _long_lived_errors(task_id: str, files: dict[str, str],
                        deleted: dict[str, str | None],
                        plank_sources: list[str], profile=None, *,
-                       lint_base: dict[str, str] | None = None) -> list[str]:
+                       lint_base: dict[str, str] | None = None,
+                       sandbox_sources: dict[str, str] | None = None
+                       ) -> list[str]:
     """Проверки итогового состояния долгоживущих файлов (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): в `tests/` — только
     «Группа: долгоживущий»; признаки и «Ловит мутацию» — узлом выхода из
@@ -726,7 +757,9 @@ def _long_lived_errors(task_id: str, files: dict[str, str],
         sorted(files.items()), task_id,
         network_addresses=repo_context.is_artel(target),
         project_imports=project_profile.long_lived_imports(target, profile),
-        lint_base=lint_base)
+        lint_base=lint_base,
+        size_marks=project_profile.size_marks_required(profile),
+        sandbox_sources=sandbox_sources)
     kept: set[str] = set()
     for source in [*plank_sources, *files.values()]:
         kept |= _method_names(source)
@@ -1086,18 +1119,21 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
     long_rule = (project_profile.long_lived_rule(workspace.task_target(task_id),
                                                  profile)
                  if _by_rule(rule) else None)
+    # База линта и исключения метки размера — голова кодовой ветки до
+    # правки: правка ещё не закоммичена, её несёт только рабочая копия.
+    code = _code_head_long_lived(t["branch"], task_id, profile)
+    sandbox_sources = _sandbox_sources(task_id, profile, wt_path=wt_path)
     if long_rule is not None:
         errors = _labelled_long_lived_errors(
             task_id, files, deleted, guard.acceptance_test_files(tdir, rule),
-            long_rule, profile)
+            long_rule, profile, lint_base=code[1] if code else None,
+            sandbox_sources=sandbox_sources)
     else:
-        # База линта — голова кодовой ветки до правки: правка ещё не
-        # закоммичена, её несёт только рабочая копия.
-        code = _code_head_long_lived(t["branch"], task_id, profile)
         errors = _long_lived_errors(task_id, files, deleted,
                                     [text for _rel, text in plank_files],
                                     profile,
-                                    lint_base=code[1] if code else None)
+                                    lint_base=code[1] if code else None,
+                                    sandbox_sources=sandbox_sources)
     if errors:
         _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files,
@@ -1345,6 +1381,14 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     long_rule = (project_profile.long_lived_rule(workspace.task_target(task_id),
                                                  profile)
                  if by_rule and manifest else None)
+    # Залоченные тексты (база линта и исключения метки размера) и модули
+    # песочниц — по голове кодовой ветки, как и проверяемые файлы.
+    checked = bool(manifest) and (long_rule is not None or bool(long_diverged))
+    locked_texts = (_locked_long_lived_texts(task_id, code_head, head_files,
+                                             head_digests, manifest)
+                    if checked else {})
+    sandbox_sources = (_sandbox_sources(task_id, profile, rev=code_head)
+                       if checked else {})
     if long_rule is not None:
         # Статические проверки долгоживущих файлов с меткой — при каждом
         # вызове, и без расхождения с перечнем лока (перенос 7): правка
@@ -1353,15 +1397,16 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
                                              workspace.task_repo(task_id))
                    for rel in manifest if rel not in head_files}
         errors = _labelled_long_lived_errors(task_id, head_files, deleted,
-                                             rule_files, long_rule, profile)
+                                             rule_files, long_rule, profile,
+                                             lint_base=locked_texts,
+                                             sandbox_sources=sandbox_sources)
         if errors:
             _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     if long_diverged:
         _check_code_head_long_lived(
             conn, t, task_id, branch, code_head, head_files, manifest,
             plank_files, profile, rule, static=long_rule is None,
-            lint_base=_locked_long_lived_texts(task_id, code_head, head_files,
-                                               head_digests, manifest))
+            lint_base=locked_texts, sandbox_sources=sandbox_sources)
         _push_code_head(conn, t, task_id)
 
     if manifest:
@@ -1395,7 +1440,8 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                                 plank_files: list[tuple[str, str]],
                                 profile=None, rule=None,
                                 static: bool = True,
-                                lint_base: dict[str, str] | None = None
+                                lint_base: dict[str, str] | None = None,
+                                sandbox_sources: dict[str, str] | None = None
                                 ) -> None:
     """Проверки требования 1 по долгоживущим файлам головы кодовой ветки
     для `--from-branch` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
@@ -1407,7 +1453,8 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
     `static=False` — статические проверки файлов с меткой вызывающий уже
     выполнил (`_labelled_long_lived_errors`), здесь — только сбор и
     прогон. `lint_base` — залоченные тексты долгоживущих файлов для линта
-    детерминизма (`_locked_long_lived_texts`)."""
+    детерминизма (`_locked_long_lived_texts`); `sandbox_sources` — модули
+    песочниц головы кодовой ветки для метки размера."""
     profile = profile or _task_profile(task_id)
     if static:
         deleted = {rel: _deleted_file_text(code_head, rel,
@@ -1415,7 +1462,8 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
                    for rel in manifest if rel not in head_files}
         errors = _long_lived_errors(task_id, head_files, deleted,
                                     [text for _rel, text in plank_files],
-                                    profile, lint_base=lint_base)
+                                    profile, lint_base=lint_base,
+                                    sandbox_sources=sandbox_sources)
         if errors:
             _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
     wt_path, error = workspace.ensure(task_id, t["branch"])
