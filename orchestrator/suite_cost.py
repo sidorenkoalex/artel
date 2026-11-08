@@ -78,8 +78,8 @@ def merged_tasks(prev_sha, sha) -> list:
     с id, которого в БД пульта нет, не входят. `prev_sha` пуст — `[]`."""
     if not prev_sha:
         return []
-    res = gitcmd.git("log", "--first-parent", "--format=%s",
-                     f"{prev_sha}..{sha}")
+    res = gitcmd.in_repo(config.ROOT, "log", "--first-parent",
+                         "--format=%s", f"{prev_sha}..{sha}")
     if res is None or res.returncode != 0:
         return []
     conn = store.db()
@@ -96,7 +96,8 @@ def merged_tasks(prev_sha, sha) -> list:
 
 
 def _full_sha(sha: str) -> str | None:
-    res = gitcmd.git("rev-parse", "--verify", f"{sha}^{{commit}}")
+    res = gitcmd.in_repo(config.ROOT, "rev-parse", "--verify",
+                         f"{sha}^{{commit}}")
     if res is None or res.returncode != 0:
         return None
     return res.stdout.strip() or None
@@ -112,7 +113,7 @@ def _previous(conn, target: str, sha: str):
             with_report[row["sha"]] = row
     if not with_report:
         return None
-    res = gitcmd.git("rev-list", "--first-parent", sha)
+    res = gitcmd.in_repo(config.ROOT, "rev-list", "--first-parent", sha)
     if res is None or res.returncode != 0:
         return None
     for ancestor in res.stdout.split()[1:]:
