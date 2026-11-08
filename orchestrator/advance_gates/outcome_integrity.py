@@ -1082,22 +1082,36 @@ class _CiReport(NamedTuple):
 class _CiAttempt(NamedTuple):
     """Исход чтения задания `ci_job` коммита: годный отчёт либо причина
     негодности и её вид; `job` — последняя попытка (None — задания нет),
-    `status` — прочитанный статус попытки."""
+    `status` — прочитанный статус попытки; `unread` — задания не видно,
+    потому что конвейер коммита не прочитан (не «задания нет вовсе»)."""
     report: _CiReport | None
     why: str
     pending: bool
     job: object = None
     status: str | None = None
+    unread: bool = False
+
+
+def _pipeline_unread(res) -> bool:
+    """Выдача конвейеров коммита не прочитана целиком: итог `unknown` без
+    единого задания или с отказом HTTP (SPEC 01M6TT4FKD1JWSJFVJ7328K03Y,
+    требование 2) — отсутствие задания в ней ничего не доказывает."""
+    return res.verdict == forge.UNKNOWN and (
+        not res.jobs or res.http_status is not None)
 
 
 def _ci_last_attempt(target: str, sha: str, job: str) -> tuple:
     """(последняя попытка задания `job` коммита `sha` или None, причина её
-    отсутствия): наибольший `id` в `forge.pipeline_status(sha).jobs`."""
+    отсутствия, конвейер не прочитан): наибольший `id` в
+    `forge.pipeline_status(sha).jobs`."""
     res = forge.pipeline_status(target, sha)
     mine = [j for j in res.jobs if j.name == job]
     why = f" ({res.reason})" if res.reason else ""
+    # Текст причины прежний и при несчитанном конвейере: он входит в отказы
+    # гейта записей без `ci_base` (требование 1 — поведение побайтно).
     return (max(mine, key=lambda j: j.id or 0) if mine else None,
-            f"задания CI «{job}» нет в конвейере коммита {sha[:12]}{why}")
+            f"задания CI «{job}» нет в конвейере коммита {sha[:12]}{why}",
+            not mine and _pipeline_unread(res))
 
 
 def _ci_attempt(target: str, sha: str, job: str) -> _CiAttempt:
@@ -1106,13 +1120,13 @@ def _ci_attempt(target: str, sha: str, job: str) -> _CiAttempt:
     быть от разных попыток. Проходящая негодность (SPEC
     01M6BMG29KZV1RX21HFAXZG3CM, требование 6) — задания нет, оно не
     завершено, статус или отчёт не прочитан, перезапуск во время чтения."""
-    last, why = _ci_last_attempt(target, sha, job)
+    last, why, unread = _ci_last_attempt(target, sha, job)
     if last is None:
-        return _CiAttempt(None, why, True)
+        return _CiAttempt(None, why, True, unread=unread)
     where = f"задание CI «{job}» {last.id} коммита {sha[:12]}"
     result = forge.job_result(target, sha, job)
     report = forge.job_test_report(target, sha, job)
-    again, _why = _ci_last_attempt(target, sha, job)
+    again, _why, _unread = _ci_last_attempt(target, sha, job)
     if again is None or again.id != last.id:
         return _CiAttempt(None, f"{where} перезапущено во время чтения", True,
                           last)
@@ -1184,6 +1198,7 @@ BASE_SEND_REFUSED_ACTION = "отчёт базы: отправка отказан
 BASE_JOB_LINE = "отчёт базы: задание {job} коммита {sha} (статус {status})"
 BASE_CANCELED = "задание отменено"
 BASE_MERGE_WAIT = "отчёт базы ожидается, повтори approve"
+BASE_UNREAD = "конвейер не прочитан — отправка отложена до следующего опроса"
 # Замок отправок базы проекта — только на время проверки очереди и самой
 # отправки (требование 5); не `merge_lock`: отправка не ждёт окно мержа.
 CI_BASE_LOCK_NAME = "ci_base.lock"
@@ -1300,7 +1315,12 @@ def _ci_base_unfit(conn, task_id: str, repo: Path, target: str, entry: dict,
     Ожидание на мерже — сбой подготовки «отчёт базы ожидается, повтори
     approve»: окно мержа не ждёт."""
     at_point = missing.at_point
-    if at_point.job is None:
+    if at_point.unread:
+        # Сбой чтения конвейера — проходящая негодность «статус не
+        # прочитан»: задание базы могло уже идти, отправка дала бы лишний
+        # конвейер (требование 2 — отправка только когда задания нет).
+        reason = f"{at_point.why}; {BASE_UNREAD}"
+    elif at_point.job is None:
         reason = (f"{at_point.why}; "
                   f"{_push_ci_base(conn, task_id, repo, target, entry, point)}")
     else:
@@ -1340,7 +1360,12 @@ def early_base_push(conn, task_id: str, t) -> None:
                           f"определена — отправка в {branch} на verifying")
             return
         for job in targets.ci_base_jobs(entry):
-            found, _why = _ci_last_attempt(target, point, job)
+            found, why, unread = _ci_last_attempt(target, point, job)
+            if unread:
+                store.journal(conn, task_id, "fsm", BASE_SEND_REFUSED_ACTION,
+                              f"ранняя отправка базы {point} в {branch} не "
+                              f"выполнена: {why}; {BASE_UNREAD}")
+                return
             if found is not None:
                 return
         print(f"[{task_id}] "
