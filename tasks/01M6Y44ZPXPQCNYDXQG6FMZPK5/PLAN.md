@@ -75,8 +75,35 @@ schema_version: 5
 - Откат — revert merge-коммита; таблица `suite_costs` в БД остаётся
   неиспользуемой (безвредно).
 
+## Возврат из verifying (CI 42511586844)
+1. `tests/test_01m42pencs26d0656x8fr7dfa7_gitcmd_explicit_repo.py::…::test_ac8_every_call_without_repo_is_in_the_allow_list`
+   — исправлено: три вызова в `orchestrator/suite_cost.py`
+   (`merged_tasks`, `_full_sha`, `_previous`) идут через
+   `gitcmd.in_repo(config.ROOT, …)` — репозиторий пульта явный, перечень
+   разрешённых не тронут. Тест зелёный.
+2. `tests/test_01m574a6yqhapass9716z11g4q_actions_verdict.py::ArtelUnchangedTest::test_ac10_artel_check_runs_refusals_keep_previous_texts`
+   («403 rate limit») — путь отказов check-runs задача не меняла:
+   `git diff main -- orchestrator/ci.py` пуст, а дифф `forge.py` касается
+   только `job_test_report` (вынос `_gh_attempt_archive`/`_junit_xml` с
+   побайтно прежними текстами) и новых функций; `ci.verifying_status`/
+   `branch_status`/`failed_check_names` артели в `forge` не заходят
+   (`ci._pipeline_project` для артели отдаёт `""` до `forge`). Локально тест
+   зелёный: 150 прогонов файла подряд (каждый со своим зерном), прогон в
+   одном процессе с тестами задачи и `gitcmd_explicit_repo`, прогон с
+   окружением CI (`CI`, `GITHUB_ACTIONS`, `GH_TOKEN`, `GH_REPO`). Лог CI
+   роли недоступен (`gh run view` требует подтверждения) — текста
+   расхождения в CI я не видел. Возвращать нечего: тексты уже прежние.
+   Если тест краснеет в CI снова — нужен текст расхождения из лога (зерно
+   печатается тестом «зерно: N»), чтобы воспроизвести его локально.
+
 ## Риски
 - В репозитории пульта может не быть sha из GitHub (не сделан fetch) —
   `--record` отказывает с причиной, а не пишет сводку с ложным приростом.
+- `actions_verdict` AC-10 в CI может оказаться зависимым от порядка в
+  воркере xdist (локально не воспроизводится, см. «Возврат»).
 
 ## Предложения системе
+- Причина возврата из verifying по красному CI называет упавший тест, но
+  не несёт текста ассерта и зерна; роли `gh run view --log-failed`
+  недоступен — нечем воспроизвести падение, зависящее от зерна или порядка
+  (`orchestrator/fsm_advance.py` verifying → причина возврата).
