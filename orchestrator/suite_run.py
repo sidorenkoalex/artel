@@ -78,7 +78,6 @@ MODE_FAILED = "failed"
 # info» без обрезки по ширине терминала (признак группы ошибки).
 _PYTEST_FLAGS = ("-vv",)
 
-_POLL_SEC = 1.0
 _FRESH_LOCK_SEC = suite_lock.FRESH_SEC
 
 _CHILD = ("import sys; from orchestrator import suite_run; "
@@ -950,7 +949,7 @@ def wait_request(task_id: str, number: int, minutes: int, head: str,
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        time.sleep(min(_POLL_SEC, remaining))
+        time.sleep(min(config.SUITE_RUN_POLL_SEC, remaining))
     again = f"{command} --wait <минуты>"
     if request_taken_path(task_id, number).exists():
         sys.exit(f"{head}: запрос №{number} взят исполнителем шага роли, "
@@ -1098,7 +1097,7 @@ def _wait(task_id: str, minutes: int) -> None:
                   f"{_progress_text(state)}; лог: {state.get('log')}")
             sys.exit(f"{head}: прогон не прерван; отчёт — повторным "
                      f"{_pult_command(task_id)} --wait <минуты>")
-        time.sleep(min(_POLL_SEC, remaining))
+        time.sleep(min(config.SUITE_RUN_POLL_SEC, remaining))
 
 
 def cmd_suite_run(rest: list) -> None:

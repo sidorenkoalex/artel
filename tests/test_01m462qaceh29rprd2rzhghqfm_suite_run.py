@@ -59,6 +59,9 @@ STILL_RUNNING = "ещё идёт"
 NO_BASE = "база не посчитана"
 NEW_ON_BRANCH = "новые на ветке"
 ALSO_ON_BASE = "падают и на базе"
+# Итоговая строка pytest: «N passed/failed/error… in T s» — прогон дошёл до
+# конца, а не оборван пределом.
+PYTEST_SUMMARY = r"\b\d+ (?:passed|failed|errors?)\b[^\n]* in \d+(?:\.\d+)?s"
 EXCEPTIONS = ("ValueError", "RuntimeError", "TypeError", "LookupError",
               "ArithmeticError", "BufferError", "EOFError")
 
@@ -210,7 +213,8 @@ class SuiteRunSandbox(RealGitSandbox):
                   encoding="utf-8") as fh:
             fh.write(f"\n\n# Песочница теста suite-run.\n"
                      f"FULL_SUITE_WORKERS = {str(self.workers)!r}\n"
-                     f"FULL_SUITE_TIMEOUT_SEC = {self.TIMEOUT_SEC}\n")
+                     f"FULL_SUITE_TIMEOUT_SEC = {self.TIMEOUT_SEC}\n"
+                     f"SUITE_RUN_POLL_SEC = 0.1\n")
         with open(self.root / "orchestrator" / "acceptance.py", "a",
                   encoding="utf-8") as fh:
             fh.write(NODE_PROBE.format(path=str(self.node_file)))
@@ -406,11 +410,52 @@ class SuiteRunSandbox(RealGitSandbox):
         self.wait_until(lambda: not pid_alive(pid),
                         f"фоновый процесс {pid} завершился", timeout)
 
+    def process_snapshot(self) -> list:
+        """(pid, ppid, argv) живых процессов машины одним снимком `ps`."""
+        proc = subprocess.run(
+            ["/bin/ps", "-axww", "-o", "pid=,ppid=,command="],
+            capture_output=True, text=True, timeout=30,
+            start_new_session=True)
+        rows = []
+        for line in proc.stdout.splitlines():
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                rows.append((int(parts[0]), int(parts[1]),
+                             parts[2] if len(parts) > 2 else ""))
+        self.assertIn(os.getpid(), {pid for pid, _ppid, _argv in rows},
+                      f"снимок процессов не получен: код {proc.returncode}, "
+                      f"{proc.stderr[-500:]}; зерно: {self.seed}")
+        return rows
+
+    def path_needles(self, *paths) -> list:
+        """Пути как их может назвать argv: как есть и после разыменования."""
+        found = []
+        for path in paths:
+            for text in (str(path), os.path.realpath(path)):
+                if text not in found:
+                    found.append(text)
+        return found
+
+    def assert_no_process(self, rows: list, needles: list, out: str,
+                          spared: set = frozenset()) -> None:
+        """Ни у одного процесса снимка `rows`, кроме `spared`, в argv нет
+        ни одной строки `needles` (путь — целым, не префиксом чужого)."""
+        for pid, ppid, argv in rows:
+            if pid in spared:
+                continue
+            for needle in needles:
+                if re.search(re.escape(needle) + r"(?![\w.-])", argv):
+                    self.fail(f"живой процесс {pid} (ppid {ppid}) несёт "
+                              f"«{needle}»: {argv[:300]}; {self.explain(out)}")
+
     def stop_everything(self) -> None:
         self.release()
         pids = set()
         for call in self.read_jsonl(self.calls_file):
             pids.update((call["pid"], call["ppid"]))
+        # Процесс теста сам пишет журнал (ac13 зовёт `full_suite` в нём) и
+        # до конца уборки жив: ждать его — потерять весь срок впустую.
+        pids.discard(os.getpid())
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and any(pid_alive(p) for p in pids):
             time.sleep(0.2)
@@ -493,8 +538,12 @@ class RunShapeTest(SuiteRunSandbox):
 
 class ProfileRefusalTest(SuiteRunSandbox):
 
-    def assert_no_run(self, out: str) -> None:
-        time.sleep(3)
+    def assert_no_run(self, out: str, task_id: str) -> None:
+        # Фон `suite-run` заводится до возврата команды: снимок процессов
+        # сразу после неё видит его, а обёртка пишет журнал до `execv`.
+        self.assert_no_process(
+            self.process_snapshot(),
+            [task_id, *self.path_needles(self.probe, self.root)], out)
         self.assertEqual(self.calls(), [], f"команда профиля вызвана; "
                                            f"{self.explain(out)}")
         self.assertEqual(self.read_jsonl(self.pytest_file), [],
@@ -518,7 +567,7 @@ class ProfileRefusalTest(SuiteRunSandbox):
         code, out, _ = self.cli("suite-run", task_id, cwd=wt, timeout=60)
         self.assertNotEqual(code, 0, self.explain(out))
         self.assertRegex(out.lower(), r"профил", self.explain(out))
-        self.assert_no_run(out)
+        self.assert_no_run(out, task_id)
 
     def test_ac4_non_pytest_profile_command_is_refused(self):
         """Команда профиля, не запускающая pytest, — отказ без прогона.
@@ -541,7 +590,7 @@ class ProfileRefusalTest(SuiteRunSandbox):
         code, out, _ = self.cli("suite-run", task_id, cwd=wt, timeout=60)
         self.assertNotEqual(code, 0, f"команда {command}; {self.explain(out)}")
         self.assertIn("pytest", out, self.explain(out))
-        self.assert_no_run(out)
+        self.assert_no_run(out, task_id)
 
 
 class RoleEnvironmentTest(SuiteRunSandbox):
@@ -738,8 +787,12 @@ class BackgroundTest(SuiteRunSandbox):
         self.assertNotEqual(code, 0, self.explain(out))
         self.assertIn("suite-run", out, self.explain(out))
         self.assertIn(task_id, out, self.explain(out))
-        time.sleep(2)
+        self.assert_no_process(
+            self.process_snapshot(),
+            [task_id, *self.path_needles(self.probe, self.root)], out)
         self.assertEqual(self.calls(), [], self.explain(out))
+        self.assertEqual(self.read_jsonl(self.pytest_file), [],
+                         self.explain(out))
 
     def test_ac10_wait_above_limit_is_refused_without_waiting(self):
         """`--wait` больше `SUITE_RUN_MAX_WAIT_MIN` — отказ без ожидания.
@@ -768,13 +821,13 @@ class BackgroundTest(SuiteRunSandbox):
 
 
 class TimeoutTest(SuiteRunSandbox):
-    TIMEOUT_SEC = 15
+    TIMEOUT_SEC = 8
     WORKERS = 1
 
     def test_ac11_branch_run_over_limit_reports_partial_numbers(self):
         """Прогон ветки сверх предела — «не уложился» с числами успевшего.
 
-        Сценарий: предел прогона копии — 15 с, параллель 1. На ветке — P
+        Сценарий: предел прогона копии — 8 с, параллель 1. На ветке — P
         зелёных и F падающих быстрых тестов и последним по порядку тест,
         висящий до разрешения (его не дают); на базе — один зелёный тест.
         Отчёт `--wait` несёт «не уложился», числа P + 1 и F и путь к
@@ -959,7 +1012,7 @@ class BaseComparisonTest(SuiteRunSandbox):
 
 
 class BaseTimeoutTest(SuiteRunSandbox):
-    TIMEOUT_SEC = 15
+    TIMEOUT_SEC = 8
     WORKERS = 1
 
     def blocking_base_project(self) -> tuple:
@@ -974,7 +1027,7 @@ class BaseTimeoutTest(SuiteRunSandbox):
     def test_ac16_timed_out_base_is_not_saved(self):
         """Незавершённый прогон базы — «база не посчитана», итог не сохранён.
 
-        Сценарий: предел копии — 15 с; на базе тест висит до разрешения, на
+        Сценарий: предел копии — 8 с; на базе тест висит до разрешения, на
         ветке он переписан быстрым, ещё один тест падает и там, и там.
         Первый отчёт: «база не посчитана», числа рядом с «падают и на базе»
         нет. Разрешение дано; второй `suite-run` той же задачи прогоняет
@@ -1002,21 +1055,25 @@ class BaseTimeoutTest(SuiteRunSandbox):
         """Прогон гейта сверх предела итога по своей sha не сохраняет.
 
         Сценарий: на базе тест висит до разрешения; `acceptance.full_suite`
-        гейта (в процессе теста, предел 5 с) на рабочей копии клона с sha
-        базы не укладывается. Затем разрешение дано, и `suite-run` задачи с
+        гейта (в процессе теста, предел 3 с) на рабочей копии клона с sha
+        базы не укладывается — исход «таймаут прогона». Затем разрешение дано, и `suite-run` задачи с
         этой базой прогоняет базу сам — обёртка вызвана вне рабочей копии.
 
         Ловит мутацию: `full_suite` сохраняет перечень упавших и для
-        таймаута — `suite-run` берёт пустой итог гейта и базу не гонит.
+        таймаута — `suite-run` берёт пустой итог гейта и базу не гонит;
+        превышение предела гейта отдаёт иной исход (красный, «прогон не
+        начат») — `outcome` не `FULL_SUITE_TIMEOUT`.
         """
         target, block, _fail = self.blocking_base_project()
         gate = self.probe / f"gate-{self.word()}"
         self.git("-C", str(self.clone(target)), "worktree", "add", "-q",
                  "--detach", str(gate), self.base_sha(target))
         with mock.patch.object(config, "FULL_SUITE_WORKERS", "1"), \
-                mock.patch.object(config, "FULL_SUITE_TIMEOUT_SEC", 5):
+                mock.patch.object(config, "FULL_SUITE_TIMEOUT_SEC", 3):
             result = acceptance.full_suite(gate, self.task_id())
         self.assertFalse(result.green, result.detail)
+        self.assertEqual(result.outcome, acceptance.FULL_SUITE_TIMEOUT,
+                         result.detail)
         self.release()
         task_id, wt = self.add_task(target, committed={block: passing(block)})
         self.launch(task_id, cwd=wt)
@@ -1226,7 +1283,9 @@ class FailedRerunTest(SuiteRunSandbox):
         self.assertNotEqual(code, 0, self.explain(out))
         self.assertIn("suite-run", out, self.explain(out))
         self.assertIn(task_id, out, self.explain(out))
-        time.sleep(3)
+        self.assert_no_process(
+            self.process_snapshot(),
+            [task_id, *self.path_needles(self.probe, self.root)], out)
         self.assertEqual(self.calls(), [], self.explain(out))
         self.assertEqual(self.read_jsonl(self.pytest_file), [],
                          self.explain(out))
@@ -1263,7 +1322,20 @@ class LockTest(SuiteRunSandbox):
         self.assertIn(task_a, out, self.explain(out))
         self.assertTrue(standalone(holder, out),
                         f"pid держателя {holder} не назван; {self.explain(out)}")
-        time.sleep(2)
+        rows = self.process_snapshot()
+        # Процессы живого прогона A — его фон и потомки по цепочке ppid: им
+        # путь пробы и корень песочницы в argv законны, задача B — нет.
+        run_a = {holder}
+        grown = True
+        while grown:
+            grown = False
+            for pid, ppid, _argv in rows:
+                if ppid in run_a and pid not in run_a:
+                    run_a.add(pid)
+                    grown = True
+        self.assert_no_process(rows, [task_b, *self.path_needles(wt_b)], out)
+        self.assert_no_process(rows, self.path_needles(self.probe, self.root),
+                               out, spared=run_a)
         self.assertEqual(self.branch_calls(wt_b), [], self.explain(out))
 
         self.release()
@@ -1287,7 +1359,7 @@ class LockTest(SuiteRunSandbox):
 
 
 class FootprintTest(SuiteRunSandbox):
-    TIMEOUT_SEC = 15
+    TIMEOUT_SEC = 8
     WORKERS = 1
 
     def outside_state(self) -> dict:
@@ -1361,15 +1433,21 @@ class FootprintTest(SuiteRunSandbox):
         """Временная копия базы убрана на любом исходе фонового прогона.
 
         Сценарий: четыре проекта со своими базами — база зелёная; база
-        красная; база висит до разрешения дольше предела 15 с; прогон базы
+        красная; база висит до разрешения дольше предела 8 с; прогон базы
         отдаёт байты не UTF-8 (исключение разбора вывода в фоновом
         процессе). Для каждого: после смерти фонового процесса каталога, где
-        шёл прогон базы, нет, и клон не числит его рабочей копией.
+        шёл прогон базы, нет, и клон не числит его рабочей копией. Кроме
+        исхода «предел», в полном отчёте `--wait` нет «не уложился»; у
+        зелёной и красной базы лог прогона базы (лог прогона с суффиксом
+        `-base`) несёт итоговую строку pytest — база дошла до конца, предел
+        её не оборвал.
 
         Ловит мутацию: уборка копии стоит после разбора исхода, а не в
         `finally`, — после таймаута или исключения каталог остаётся;
         каталог удаляется без `git worktree remove`/`prune` — клон числит
-        его рабочей копией.
+        его рабочей копией; предел меньше быстрой части прогона — ветка или
+        база обрываются и там, где исход не «предел»: «не уложился» в
+        отчёте или нет итоговой строки в логе базы.
         """
         self.hold()
         outcomes = ("зелёная", "красная", "предел", "исключение")
@@ -1390,7 +1468,7 @@ class FootprintTest(SuiteRunSandbox):
                                                  encoding="utf-8")
                 try:
                     known = len(self.base_calls())
-                    self.launch(task_id, cwd=wt)
+                    launched = self.launch(task_id, cwd=wt)
                     holder = self.wait_branch_call(wt)["ppid"]
                     self.wait_dead(holder)
                 finally:
@@ -1406,6 +1484,25 @@ class FootprintTest(SuiteRunSandbox):
                                   "list", "--porcelain")
                 self.assertNotIn(place, listed, f"исход {outcome}; "
                                                 f"зерно: {self.seed}")
+                if outcome == "предел":
+                    continue
+                report = self.report(task_id, cwd=wt)
+                self.assertNotIn("не уложился", report,
+                                 f"исход {outcome}; {self.explain(report)}")
+                if outcome == "исключение":
+                    continue
+                logs = [p for p in self.paths_in(launched)
+                        if p.suffix == ".log"]
+                self.assertTrue(logs, self.explain(launched))
+                base_log = Path(str(logs[0]).removesuffix(".log") + "-base.log")
+                self.assertTrue(base_log.is_file(),
+                                f"исход {outcome}: лога базы {base_log} нет; "
+                                f"{self.explain(report)}")
+                self.assertRegex(
+                    base_log.read_text(encoding="utf-8", errors="replace"),
+                    PYTEST_SUMMARY, f"исход {outcome}: в логе базы {base_log} "
+                                    f"нет итоговой строки pytest; "
+                                    f"{self.explain(report)}")
 
 
 class MissionTest(unittest.TestCase):

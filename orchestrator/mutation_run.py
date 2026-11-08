@@ -858,7 +858,7 @@ def _wait(task_id: str, minutes: int) -> None:
                   f"{state.get('log')}")
             sys.exit(f"{head}: прогон не прерван; отчёт — повторным "
                      f"{_pult_command(task_id)} --wait <минуты>")
-        time.sleep(min(suite_run._POLL_SEC, remaining))
+        time.sleep(min(config.SUITE_RUN_POLL_SEC, remaining))
 
 
 def _take_lock(task_id: str, minutes: int, head: str) -> None:
