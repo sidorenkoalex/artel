@@ -1,16 +1,15 @@
 ## Выяснено
-- Возврат аудита 1 из 2 (11 отклонений). Пункты 1, 2 аудита — прямо «вопрос Оператору»; написан QUESTIONS.md (9 вопросов, guard ок), SPEC.md не тронут.
-- forge.green_base_commit — только status=success (forge.py:467); единственный внешний вызов — doctor/project_checks.py:580.
-- doctor.Check: ok/warn/fail/skip; fail → exit 1 (doctor/cli.py:361-364); suite_duration поднимает alerts kind=trigger (suite_duration.py:67).
-- _series: сброс по ack suite.duration, только записи с seconds_per_test, обрезка по xdist_workers.
-- targets.CI_REPORT_ARTIFACT_DEFAULT="junit" (targets.py:175); ci.yml:216 timeout-minutes: 40; full_suite_limit бросает TargetsError (project_profile.py:435).
-- Остальные отклонения аудита (3,4,7,8,9,11-справка) — правка текста SPEC после ответа: простые выходы поверхностей, ключи summarize, сверка полей TestReport, критерий migrate() создаёт таблицу, вывод команды = вывод функции, нет в белом списке роли, «Размер проверки» AC-8, блок «Команды:» artel.__doc__, фильтр «задача проекта в БД» в AC-5.
+- ANSWER-1: 1B (новая forge.last_executed_commit, любой цвет кроме skipped), 2B (warn «тревога» + alerts kind=trigger suite.cost + строка docs/triggers.md, зона расширена мандатом), 3A, 4A, 5A, 6A, 7A, 8B (config.SUITE_COST_CI_LIMIT_SEC + тест против ci.yml), 9A (targets.CI_REPORT_ARTIFACT_DEFAULT).
+- raise_alert дедуп — по (target, kind, source, message): «один открытый на проект» требует сообщения без чисел (alerts.py:93-105) — так и записано в требовании 7.
+- Выходы новых поверхностей forge — кортежи (не классы), чтобы не трогать RESULT_TYPES/_call; summarize — именованный вход и ключи выхода.
+- artel.main() без argv (artel.py:2710) — AC-9 через командную строку.
+- Все 11 отклонений аудита закрыты в SPEC (AC-1 состав полей TestReport, AC-7 выбор предыдущей, AC-8 migrate, AC-9 белый список/«Команды:», AC-10 обрыв и TargetsError, AC-12 мутации с адресами).
 
 ## Не сработало
-- Ничего.
+- `ls`/`rm` в оболочке шага нет; `task-rm` отказывает по файлу ссылки документов — QUESTIONS.md удалён через python os.remove.
 
 ## Где остановился
-- QUESTIONS.md сдан; ждём ANSWER. После ответа — переписать SPEC с учётом ответов и пунктов выше, удалить QUESTIONS.md.
+- SPEC.md status: ready, guard ок, QUESTIONS.md удалён. Шаг завершён.
 
 ## Чего не хватило
-- Как ADR-0032 «алерт» ложится на doctor — нигде не сказано; вынесено вопросом 2.
+- Как удалить файл ссылки документов штатно (task-rm его не берёт) — не описано в брифе.
