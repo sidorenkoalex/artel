@@ -1,16 +1,15 @@
-# Записка ревьювера, итерация 1
+# Записка ревьювера, итерация 2
 
 ## Выяснено
-- Планки у задачи нет: `plank-run` отказывает «нет файлов test_*.py», все тесты — долгоживущие (112 зелёных вместе с `tests/test_guard_shared_readonly_rules.py`).
-- R1-F1 (major): `long_lived_errors_from_files` передаёт `sandbox_sources={}` проверке стиля как есть → пустой перечень классов песочниц; вызывающие (`tests_writing.py:651`, `amend.py:313`, `:1390`, `preflight.py:261`) отдают `{}` при профиле без `size_marks`. Указание Оператора п. 1 — `{}` → `config.ROOT`. Подтверждено пробой.
-- R1-F2 (minor): `import tests` + `tests.sandbox.X` не распознаётся ни `_imported_names`, ни `_SandboxRefs`.
-- Временные мутации (build в `_changed_fixture_names`; `sb is not None` в `construct`) тестами ловятся.
+- R1-F1 исправлен `sandbox_sources or None` в `long_lived_errors_from_files` (`scripts/guard.py:4575`); R1-F2 — `_imported_names` и `_SandboxRefs.packages`.
+- 114 тестов зелёные (два долгоживущих файла задачи + `tests/test_guard_shared_readonly_rules.py`).
+- Временная мутация обеих правок — оба новых теста красные; код возвращён.
 
 ## Не сработало
-- Bash heredoc с `'...'` и `{}` отклоняется фильтром — пробу писал файлом в каталог документов и убрал `task-rm`.
+- Составная bash-команда с `sed -i` и heredoc требует подтверждения — мутации делал через Edit, откат `git checkout`.
 
 ## Где остановился
-- REVIEW.md сдан, `changes_requested`, реестр R1-F1, R1-F2 open.
+- REVIEW.md итерации 2 сдан: `approved`, R1-F1/R1-F2 → accepted.
 
 ## Чего не хватило
-- Указание Оператора п. 1 внутренне расходится («как для правил размера», а размер читает `{}` пустым) — записано наблюдением в REVIEW.
+- Ничего существенного.
