@@ -2,7 +2,7 @@
 task: 01M6TT4FKD1JWSJFVJ7328K03Y
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -89,6 +89,21 @@ schema_version: 5
 6. Карта `docs/codebase-map.md`, прогон долгоживущих тестов задачи,
    планки (`plank-run`) и тестов затронутых модулей.
 
+Тесты: поведение покрыто долгоживущими файлами задачи
+`tests/test_01m6tt4fkd1jwsjfvj7328k03y_ci_base_{gate,fields,doctor}.py`
+(AC-1…AC-9, AC-13, AC-14) и планкой `acceptance_tests/test_ci_base_push.py`
+(AC-10…AC-12, AC-14); своих тестов сверх них не добавляю — свойств диффа
+вне их охвата нет. Прогоны шага: `plank-run` — 17 passed; три
+долгоживущих файла задачи — зелёные; тесты затронутых модулей
+(`test_push_hook_units`, `test_push_hook_stand`,
+`test_01m5xzskk8gzteca2kwafhe029_component_fields`, `test_component_checks`,
+`test_01m58pg72pg64gs790xm2ews61_doctor_components`,
+`test_project_components`, `test_01m4s24963r9h18an2xdp6r15b_targets_field`,
+`test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate`,
+`test_01m6bmg29kzv1rx21hfaxzg3cm_verifying_outcome_gate`,
+`test_ci_job_full_suite`) — зелёные без правки. Карта
+`docs/codebase-map.md` регенерирована.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -132,4 +147,9 @@ schema_version: 5
   принятый риск SPEC: отказ «задание отменено», обхода гейта нет.
 
 ## Предложения системе
+
+- Сторож роли отказывает `pytest -n` и на перечне файлов затронутых
+  модулей: `test_01m6bmg29kzv1rx21hfaxzg3cm_verifying_outcome_gate.py`
+  последовательно идёт 7.5 мин и съедает заметную долю таймаута шага —
+  в скиле coding-standards нет пути «параллельно, но не весь набор».
 
