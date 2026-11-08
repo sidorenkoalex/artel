@@ -83,6 +83,12 @@ schema_version: 5
 4. `runner.py`: `RoleRequestExecutor` и его вызов в `run_agent_once`.
 5. Регенерация `docs/codebase-map.md`; прогоны тестов затронутых модулей и
    долгоживущего файла задачи, планки (`plank-run`).
+6. Возврат из verifying (CI 42425388008): runner.py звал закрытое
+   `acceptance._compose_call` — его ловит сторож
+   `tests/test_01m5n8asj63zkf3m9etc7a3p5v_plank_layout_names.py`. Узел
+   переименован в публичное `acceptance.compose_call` (тело и сигнатура
+   прежние), все вызовы в `acceptance.py` и `runner.py` переведены на него;
+   ни один тест закрытое имя не патчит. Сторож не тронут.
 
 ## Покрытие требований
 
@@ -103,7 +109,7 @@ schema_version: 5
 | 13 | 4 |
 | 14 | 4 |
 | 15 | 1 (гейты файл итога не читают) |
-| 16 | — (`acceptance.py` не меняется) |
+| 16 | — (отказ `COMPOSE_ROLE_REFUSAL` не меняется; в `acceptance.py` только переименование `_compose_call` → публичное `compose_call`, шаг 6) |
 | 17 | 1 |
 
 ## Влияние на систему
