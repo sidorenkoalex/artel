@@ -1,5 +1,5 @@
 ---
-built_at_sha: e98c534b90b6bc68893f76c7168f083f17033a6c
+built_at_sha: 9a2b8f301228eef121b88a4ca873e44d8751a4cf
 ---
 
 # Codebase-map пульта
@@ -27,6 +27,7 @@ built_at_sha: e98c534b90b6bc68893f76c7168f083f17033a6c
 - `clean_tree_sha`
 - `collect`
 - `components_full_suite`
+- `compose_call`
 - `compose_env`
 - `compose_project_name`
 - `drop_from_code_copy`

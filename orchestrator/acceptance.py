@@ -886,8 +886,8 @@ def compose_project_name(task_id: str, run_id: str) -> str:
     return f"{COMPOSE_PROJECT_PREFIX}{task_id.lower()}-{run_id}"
 
 
-def _compose_call(argv: list, env: dict, cwd: Path, timeout: float,
-                  log: Path | None = None) -> tuple[int | None, str]:
+def compose_call(argv: list, env: dict, cwd: Path, timeout: float,
+                 log: Path | None = None) -> tuple[int | None, str]:
     """(код возврата или `None` по пределу, вывод) вызова `docker` в своём
     сеансе: на пределе и на исключении снимается группа процессов. Остаток
     предела не больше нуля — вызова нет, `None`."""
@@ -1035,7 +1035,7 @@ def _docker_sockets(env: dict, docker: str, cwd: Path,
     else:
         argv = [docker, "context", "inspect", "--format",
                 "{{.Endpoints.docker.Host}}"]
-        code, out = _compose_call(argv, env, cwd, timeout)
+        code, out = compose_call(argv, env, cwd, timeout)
         if code is None:
             return None, (f"отказ запуска compose: {' '.join(argv)} превысил "
                           f"предел {timeout:g} с — сокет Docker не определён")
@@ -1313,8 +1313,8 @@ def _compose_teardown(base: list, env: dict, cwd: Path, *, kill: bool,
     down = ["down", "-v", "--remove-orphans", *(["--rmi", "local"] if rmi
                                                 else [])]
     for sub in ([["kill"]] if kill else []) + [down]:
-        code, _out = _compose_call([*base, *sub], env, cwd,
-                                   deadline - time.monotonic())
+        code, _out = compose_call([*base, *sub], env, cwd,
+                                  deadline - time.monotonic())
         if code is None:
             from . import store  # store -> ... -> acceptance
             with contextlib.suppress(sqlite3.Error, OSError):
@@ -1395,7 +1395,7 @@ def _compose_report_run(profile, tree: Path, subset: list | None,
     argv = [*head, "-f", str(compose_file), "--env-file",
             str(tree / profile.compose_env_file), "config", "--format", "json"]
     limit = left_sec(config.COMPOSE_CONFIG_TIMEOUT_SEC)
-    code, out = _compose_call(argv, env, cwd, limit)
+    code, out = compose_call(argv, env, cwd, limit)
     call = " ".join(argv)
     if code is None:
         return ReportRun(refusal=(f"отказ запуска compose: {call} превысил "
@@ -1432,9 +1432,9 @@ def _compose_report_run(profile, tree: Path, subset: list | None,
         pult_file.write_text(json.dumps(_compose_override(cfg, labels)),
                              encoding="utf-8")
         if depends:
-            code, out = _compose_call([*base, "up", "-d", "--wait",
-                                       *list(depends)], env, cwd,
-                                      left_sec(config.COMPOSE_UP_TIMEOUT_SEC))
+            code, out = compose_call([*base, "up", "-d", "--wait",
+                                      *list(depends)], env, cwd,
+                                     left_sec(config.COMPOSE_UP_TIMEOUT_SEC))
             if code is None:
                 return ReportRun(timed_out=True, raw=(
                     f"подъём служб compose ({project}) превысил предел\n{out}"))
@@ -1451,7 +1451,7 @@ def _compose_report_run(profile, tree: Path, subset: list | None,
         report_host.parent.mkdir(parents=True, exist_ok=True)
         run_argv = [*base, "run", "--rm", "-T", "-w", workdir,
                     profile.compose_service, *pytest_argv]
-        code, raw = _compose_call(run_argv, env, cwd, rest, log)
+        code, raw = compose_call(run_argv, env, cwd, rest, log)
         if code is None:
             return ReportRun(timed_out=True, raw=raw)
         clean = True

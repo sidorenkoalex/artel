@@ -2512,8 +2512,8 @@ class RoleRequestExecutor:
         profile = acceptance.task_own_profile(conn, self.task_id)
         env = acceptance.compose_env(profile, docker)
         limit = config.COMPOSE_TEARDOWN_TIMEOUT_SEC
-        code, out = acceptance._compose_call([docker, *_PS_ARGS], env,
-                                             config.ROOT, limit)
+        code, out = acceptance.compose_call([docker, *_PS_ARGS], env,
+                                            config.ROOT, limit)
         if code != 0:
             return (f"; docker ps не ответил (код {code}) — оставшиеся стенды "
                     f"не проверены")
@@ -2535,7 +2535,7 @@ class RoleRequestExecutor:
                 found.append(project)
         notes = []
         for project in found:
-            code, _out = acceptance._compose_call(
+            code, _out = acceptance.compose_call(
                 [docker, "compose", "--project-name", project, "down",
                  "--remove-orphans"], env, config.ROOT, limit)
             notes.append(f"{project}: down --remove-orphans "
