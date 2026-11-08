@@ -1,20 +1,15 @@
-# Записка spec_auditor 01M6XHJH6EJ8D0BR5PRNGZAY8C (визит 2, SPEC 0b13be6c)
+# Записка spec_auditor 01M6XHJH6EJ8D0BR5PRNGZAY8C (визит 3, SPEC fa883b5a)
 
 ## Выяснено
-- Места SPEC сверены повторно: guard.py:4425/4507/1400/1450/1977, test_lint.py:10/190, targets.py:93/1244, project_profile.py:66; вызывающие совпадают.
-- Канал перечня heavy не задан: guard.long_lived_errors_from_files получает только (label, текст) файлов, корня/загрузчика нет; AC-7 сигнатура без источника sandbox-текстов.
-- Цепочки подклассов межфайловые: MergeOutcomeSandbox (merge_outcome_sandbox.py:61) ← OutcomeGateSandbox; Components*/Prior*/TwoSided/Replacement/Strict — дальше. AC-2 heavy_sandbox_names не требует межфайловой цепочки.
-- Вызовы tests_writing:518, preflight:198, amend:293 — по файлам ПЛАНКИ (группа «планка»), до правил размера не доходят; amend:293/317 — только при правиле планки не по умолчанию (_by_rule). AC-6 «4 пути» = 643/725/725/213.
-- amend «из планки» :1097 передаёт lint_base = голова кодовой ветки до правки (не tests_locked_sha).
-
-- Идиома `_sandbox(<Песочница>)` (12 файлов) и make_project_repo/isolate_pult_db обходят small; `-m orchestrator.artel` обходит medium.
-- Закрытые _pytest* вне guard не зовёт никто — перенос тесты не ломает.
+- Пять отклонений визита 2 SPEC закрыл решениями второго круга (sandbox_sources, межфайловые цепочки, принятый пробел, 4 пути AC-6, несколько меток/AnnAssign).
+- Новое: (1) ни один AC не ловит «правила размера исполняются до фильтра группы» (рядом с линтом, guard.py:4469) — тогда файлы планки на :518/:198/:293 краснеют; (2) _is_pytestmark_assign/_pytestmark_marks общие с гейтом неослабления и стилем (guard.py:1417, :1512, :2160, :4670) — AnnAssign в общем помощнике меняет их, а «Не входит» запрещает менять стиль; (3) путь amend.py:317 достижим только у записи components (long_lived_rule требует long_lived_template, project_profile.py:725), значит size_marks нужен компоненту, а требование 1/AC-8 — только про test_profile; (4) TmpRootTest подменяет config.ROOT (tests/sandbox.py:92) — при None и отсутствии файлов guard не должен падать; (5) мелочь: isolate_pult_db на :720, не :718.
+- amend :725 имеет два механизма lint_base: worktree — голова кодовой ветки (:1097), from-branch — _locked_long_lived_texts (:1363); у :317 оба режима (:1090, :1355).
 
 ## Где остановился
-SPEC-AUDIT.md сдан: verdict concerns (V1 канал heavy в guard, V2 межфайловые цепочки, V3 обходы, V4 пути AC-6, V5 несколько меток), status ready, guard ок.
+SPEC-AUDIT.md: verdict concerns, status ready.
 
 ## Не сработало
-- Составные команды с `W=…;` отклоняются — по одной команде, относительные пути.
+- ls и составные команды через ; в Bash отклоняются.
 
 ## Чего не хватило
-- Где guard должен брать tests/sandbox.py — в SPEC нет.
+- Где в amend живёт база для :317 в каждом из двух режимов — искал дольше всего.
