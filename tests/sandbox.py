@@ -2536,9 +2536,12 @@ class _SharedModuleState:
         # а сам он импортирует этот модуль только внутри фикстур.
         from tests.fixtures import _cleanup_message, _run_cleanups
         children = set(_snapshot_processes())
-        sb = self.sandbox_cls()
+        # Конструктор — внутри `try`: его падение тоже выставляет `failure`,
+        # иначе следующие тесты модуля снимают отпечаток с `None`.
+        sb = None
         spawned = []
         try:
+            sb = self.sandbox_cls()
             sb.setUp()
             self.built = self.build(sb)
             spawned = [p for p in _snapshot_processes() if p not in children]
@@ -2549,7 +2552,7 @@ class _SharedModuleState:
                         f"процесс {pid} {command}" for pid, command in spawned))
         except BaseException as exc:
             _kill_processes(spawned)
-            errors = _run_cleanups(sb)
+            errors = _run_cleanups(sb) if sb is not None else []
             if errors:
                 exc.add_note(_cleanup_message(self.sandbox_cls, errors))
             self.failure = f"построение общей фикстуры упало: {exc}"
