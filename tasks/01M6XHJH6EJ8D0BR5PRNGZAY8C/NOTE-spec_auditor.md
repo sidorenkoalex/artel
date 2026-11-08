@@ -1,21 +1,20 @@
-# Записка spec_auditor 01M6XHJH6EJ8D0BR5PRNGZAY8C
+# Записка spec_auditor 01M6XHJH6EJ8D0BR5PRNGZAY8C (визит 2, SPEC 0b13be6c)
 
 ## Выяснено
-- Места SPEC сверены: guard.py:4425/4507/1400/1450/1977, test_lint.py:190, targets.py:60/93/1244, project_profile.py:66, вызывающие tests_writing:518/643, amend:293/317/725, preflight:198/213 — совпадают.
-- amend.py:293, :317 зовут long_lived_errors_from_files БЕЗ lint_base — исключение залоченных файлов (треб. 3) там не сработает.
-- Песочницы sandbox.py: кроме названных есть ConnRealGitSandbox:2018, SyncedOriginConnSandbox:2027, AutoOriginSandbox:2057, GitignoreCommittedRealGitSandbox:2076, SchemaConnTmpRootTest:1861; вне sandbox.py — ReportSandbox (report_outcome_sandbox.py:335), OutcomeGateSandbox (outcome_gate_sandbox.py:251). Перечень имён в SPEC не замкнут.
-- OriginRealGitSandbox — класс sandbox.py, не «локальный подкласс» (AC-2 путает).
-- Приложения 1,2 применяются к дереву ветки; 3 — к origin/main (там 7aef13ab1, blob 91d08479f).
-- Песочница артели (sandbox.ARTEL_TEST_PROFILE:1123) без size_marks — существующие тесты не краснеют.
-- test_lint.py не импортирует guard, guard импортирует test_lint: «переиспользовать разбор pytestmark из guard» в test_lint — цикл импорта (решаемо ленивым импортом).
+- Места SPEC сверены повторно: guard.py:4425/4507/1400/1450/1977, test_lint.py:10/190, targets.py:93/1244, project_profile.py:66; вызывающие совпадают.
+- Канал перечня heavy не задан: guard.long_lived_errors_from_files получает только (label, текст) файлов, корня/загрузчика нет; AC-7 сигнатура без источника sandbox-текстов.
+- Цепочки подклассов межфайловые: MergeOutcomeSandbox (merge_outcome_sandbox.py:61) ← OutcomeGateSandbox; Components*/Prior*/TwoSided/Replacement/Strict — дальше. AC-2 heavy_sandbox_names не требует межфайловой цепочки.
+- Вызовы tests_writing:518, preflight:198, amend:293 — по файлам ПЛАНКИ (группа «планка»), до правил размера не доходят; amend:293/317 — только при правиле планки не по умолчанию (_by_rule). AC-6 «4 пути» = 643/725/725/213.
+- amend «из планки» :1097 передаёт lint_base = голова кодовой ветки до правки (не tests_locked_sha).
 
-- Не закрыты: AC-2/AC-4 покрывают часть перечня треб. 2; подключение у amend/preflight (5 из 7 вызывающих) без критерия; обходы usefixtures("real_git"), from subprocess import, псевдоним, команда в локальной переменной.
+- Идиома `_sandbox(<Песочница>)` (12 файлов) и make_project_repo/isolate_pult_db обходят small; `-m orchestrator.artel` обходит medium.
+- Закрытые _pytest* вне guard не зовёт никто — перенос тесты не ломает.
 
 ## Где остановился
-SPEC-AUDIT.md сдан: verdict concerns, status ready, guard ок.
+SPEC-AUDIT.md сдан: verdict concerns (V1 канал heavy в guard, V2 межфайловые цепочки, V3 обходы, V4 пути AC-6, V5 несколько меток), status ready, guard ок.
 
 ## Не сработало
-- grep/sed с `cd …;` в той же команде отклоняются — нужны абсолютные пути без cd и без `$W`.
+- Составные команды с `W=…;` отклоняются — по одной команде, относительные пути.
 
 ## Чего не хватило
-- Замкнутого перечня подклассов песочниц: искал по всем tests/*.py (grep `^class \w+\(.*Sandbox`).
+- Где guard должен брать tests/sandbox.py — в SPEC нет.
