@@ -51,6 +51,9 @@ targets:
       report: junit-xml
       install: []
       full_suite_timeout_sec: 1500
+      # Метка размера обязательна у новых долгоживущих файлов (ADR-0032 п. 2):
+      # guard на выходе из tests_writing; у проекта без поля правило выключено.
+      size_marks: required
     # Справочник ядра в брифе developer/test_author (SPEC
     # 01M4S24963R9H18AN2XDP6R15B, 01M4S24EBVB72B8WYJ3JY96Y0E): модули ядра и
     # константы, которые роль получает коротким ответом «как пользоваться»;

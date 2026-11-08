@@ -11,3 +11,8 @@
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 timeout = 120
+# Метка размера теста (ADR-0032 п. 2): small — чистые функции и подмены,
+# medium — песочница с настоящим git и БД пульта, large — дочерние процессы,
+# живые процессы, сигналы. Объявляется на уровне модуля новых долгоживущих
+# файлов: `pytestmark = pytest.mark.size("small")`.
+markers = ["size(name): размер теста — small, medium или large (ADR-0032)"]
