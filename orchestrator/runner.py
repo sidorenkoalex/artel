@@ -6,12 +6,17 @@ WIP-чекпоинты рабочего дерева — `orchestrator/checkpoin
 декомпозиция диспетчеров fsm/runner). Здесь остаются запуск процесса
 агента, окружение/cwd/argv шага и сам цикл попыток `cmd_run`.
 """
+import contextlib
+import json
 import os
 import resource
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
+import traceback
 from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
@@ -1752,9 +1757,18 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # назовёт только появившееся за шаг (SPEC 01M4G8KPP8DVNBCPGCAPSVMAKZ).
     watch = checkpoint.main_copy_watch_start(conn, task_id)
 
-    skip, spawn_ctx = _spawn_and_wait(
-        conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
-        model_id, project, provider, nproc_limit=nproc_limit)
+    # Исполнитель запросов роли — на всё время агента, своим потоком: агента
+    # по-прежнему ждёт единственный `proc.wait` (SPEC
+    # 01M6TR3Q3SQSS1ZNGA4T7V39RW, «Не входит»); прогон по запросу снят и
+    # итог записан до учёта шага (требование 13).
+    executor = RoleRequestExecutor(task_id, role, attempt)
+    executor.start()
+    try:
+        skip, spawn_ctx = _spawn_and_wait(
+            conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
+            model_id, project, provider, nproc_limit=nproc_limit)
+    finally:
+        executor.stop()
     if skip is not None:
         return skip
     proc, pump, rc, timed_out, killed_group = spawn_ctx
@@ -2260,3 +2274,308 @@ def close_pump(conn, task_id: str, role: str, pump: agent_log.OutputPump,
         return
     store.journal(conn, task_id, role, "agent log INCOMPLETE", detail)
     print(f"[{task_id}] {detail}")
+
+
+# ------------------------------------------------ исполнитель запросов роли
+#
+# Раннер `compose` в процессе роли не исполняется; `plank-run`/`suite-run`
+# роли такой задачи пишут запрос в очередь каталога `suite-run`
+# (`suite_run`, раздел «запросы роли»), а исполняет его этот процесс пульта,
+# пока идёт шаг (SPEC 01M6TR3Q3SQSS1ZNGA4T7V39RW; ADR-0023, пятая поправка).
+# От роли берутся только вид прогона и файл задачи: имя проекта Compose, pid
+# и прочее из файлов каталога `suite-run` (их пишет роль) не читаются.
+
+REQUEST_POLL_SEC = 0.2
+# Запас ожидания выхода дочернего прогона сверх его снятия стенда
+# (`config.COMPOSE_TEARDOWN_TIMEOUT_SEC`): выход интерпретатора и `finally`.
+REQUEST_TEARDOWN_MARGIN_SEC = 15
+REQUEST_ACTOR = "orchestrator"
+_PS_ARGS = ("ps", "-a", "--filter", "label=com.docker.compose.project",
+            "--format", "{{json .}}")
+
+
+class RoleRequestExecutor:
+    """Исполнитель запросов роли одного шага задачи (требования 8-14).
+
+    `start` — до запуска агента: запросы, уже лежащие в очереди, отказаны
+    итогом «без шага роли в полёте» по собственному перечню файлов, затем
+    поток берёт новые по одному. `stop` — после выхода агента, до учёта
+    шага: идущий прогон снят, оставшимся — «шаг роли завершён». На пустой
+    очереди исполнитель не создаёт файлов, не открывает БД и не пишет
+    журнал."""
+
+    def __init__(self, task_id: str, role: str, attempt: int):
+        self.task_id, self.role, self.attempt = task_id, role, attempt
+        self._stop = threading.Event()
+        self._thread = None
+        self._seen: set[int] = set()
+
+    # --- жизненный цикл
+    def start(self) -> None:
+        from . import suite_run  # suite_run -> ... -> runner
+        try:
+            stale = suite_run.pending_requests(self.task_id)
+            self._seen.update(stale)
+            for number in stale:
+                self._finish(number, self._kind_of(number), "отказ",
+                             suite_run.REQUEST_NOT_IN_FLIGHT)
+        except Exception:  # исполнитель не роняет шаг роли
+            traceback.print_exc()
+        self._thread = threading.Thread(
+            target=self._loop, name=f"role-requests-{self.task_id}",
+            daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        from . import suite_run  # suite_run -> ... -> runner
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        try:
+            for number in suite_run.pending_requests(self.task_id):
+                self._finish(number, self._kind_of(number), "не исполнен",
+                             suite_run.REQUEST_STEP_OVER)
+        except Exception:
+            traceback.print_exc()
+
+    def _loop(self) -> None:
+        from . import suite_run  # suite_run -> ... -> runner
+        while not self._stop.is_set():
+            try:
+                fresh = [n for n in suite_run.queued_requests(self.task_id)
+                         if n not in self._seen]
+                if not fresh:
+                    self._stop.wait(REQUEST_POLL_SEC)
+                    continue
+                number = fresh[0]
+                self._seen.add(number)
+                self._handle(number)
+            except Exception:
+                traceback.print_exc()
+                self._stop.wait(REQUEST_POLL_SEC)
+
+    # --- один запрос
+    def _kind_of(self, number: int) -> str:
+        from . import suite_run
+        data = suite_run.read_request(self.task_id, number)
+        kind = data.get("kind") if isinstance(data, dict) else None
+        return kind if kind in suite_run.REQUEST_KINDS else "?"
+
+    def _refusal(self, conn, data) -> str:
+        """Причина отказа запросу (требование 11); пусто — исполнить."""
+        from . import plank_run, suite_run
+        if not isinstance(data, dict):
+            return "файл запроса не читается как объект JSON"
+        extra = sorted(str(key) for key in set(data) - suite_run.REQUEST_KEYS)
+        if extra:
+            return (f"лишний ключ запроса {', '.join(extra)} — допустимы только "
+                    f"{', '.join(sorted(suite_run.REQUEST_KEYS))}")
+        missing = sorted(suite_run.REQUEST_KEYS - set(data))
+        if missing:
+            return f"в запросе нет ключа {', '.join(missing)}"
+        kind = data["kind"]
+        if kind not in suite_run.REQUEST_KINDS:
+            return (f"вид запроса «{kind}» вне допустимых "
+                    f"({', '.join(suite_run.REQUEST_KINDS)})")
+        if data["task_id"] != self.task_id:
+            return (f"запрос чужой задачи {data['task_id']} — шаг ведёт задачу "
+                    f"{self.task_id}")
+        runner_name = suite_run.task_runner(
+            conn, self.task_id, store.task_target(conn, self.task_id))
+        if runner_name != targets.PROFILE_RUNNER_COMPOSE:
+            shown = runner_name or "не определён"
+            return (f"раннер профиля прогона задачи — {shown}, "
+                    f"не {targets.PROFILE_RUNNER_COMPOSE}: по "
+                    f"запросу роли исполняется только прогон в контейнере")
+        if kind == suite_run.MODE_FULL and \
+                self.role == config.STATE_ROLE["in_dev"]:
+            return (f"вид {kind} (новый полный прогон) запрещён роли "
+                    f"{self.role} своего шага")
+        file_arg = data["file"]
+        if file_arg is None:
+            return ""
+        if kind != suite_run.KIND_PLANK:
+            return f"файл {file_arg} у вида {kind} не допускается"
+        if not isinstance(file_arg, str) or not file_arg:
+            return f"файл {file_arg!r} — не путь строкой"
+        return plank_run.request_file_refusal(conn, self.task_id, file_arg)
+
+    def _handle(self, number: int) -> None:
+        from . import suite_lock, suite_run
+        data = suite_run.read_request(self.task_id, number)
+        conn = store.db()
+        try:
+            refusal = self._refusal(conn, data)
+            if refusal:
+                self._finish(number, self._kind_of(number), "отказ", refusal,
+                             conn=conn)
+                return
+            kind, file_arg = data["kind"], data["file"]
+            full = kind != suite_run.KIND_PLANK
+            if full:
+                # Замок полных прогонов — без ожидания (требование 9).
+                holder = suite_lock.acquire(self.task_id, number)
+                if holder is not None:
+                    self._finish(number, kind, "отказ",
+                                 f"{suite_run.REQUEST_LOCK_BUSY} "
+                                 f"{suite_lock.describe(holder)}", conn=conn)
+                    return
+            lease_row = store.lease_row(conn, self.task_id)
+            session = lease_row["session_id"] if lease_row is not None else "?"
+            accepted = (f"принят шагом {session}/{self.attempt}, "
+                        f"{store.now()}")
+            suite_run.mark_taken(self.task_id, number, accepted)
+            self._run_child(conn, number, kind, file_arg, accepted, full)
+        finally:
+            conn.close()
+
+    def _run_child(self, conn, number: int, kind: str, file_arg,
+                   accepted: str, full: bool) -> None:
+        from . import suite_lock, suite_run
+        log = suite_run.request_log_path(self.task_id, number)
+        # Окружение пульта, не роли: дочерний прогон — прогон пульта.
+        env = {k: v for k, v in os.environ.items()
+               if k != config.ARTEL_ROLE_ENV}
+        try:
+            with open(log, "wb") as out:
+                # Своя группа в той же сессии (требование 13): сигнал конца
+                # шага до него доходит, а снимается только эта группа.
+                child = subprocess.Popen(
+                    [sys.executable, "-c", suite_run.REQUEST_CHILD, kind,
+                     self.task_id, str(number), file_arg or ""],
+                    cwd=str(config.ROOT), env=env, stdin=subprocess.DEVNULL,
+                    stdout=out, stderr=subprocess.STDOUT, process_group=0)
+        except OSError as exc:
+            if full:
+                suite_lock.release()
+            self._finish(number, kind, "отказ",
+                         f"дочерний прогон не запущен: {exc}", conn=conn,
+                         accepted=accepted)
+            return
+        if full:
+            suite_lock.hand(self.task_id, number, child.pid)
+        interrupted = self._await(child)
+        leftovers = self._down_leftovers(conn, child.pid) if interrupted else ""
+        if full:
+            self._drop_child_lock(child.pid)
+        if interrupted:
+            self._finish(number, kind, suite_run.REQUEST_INTERRUPTED,
+                         suite_run.REQUEST_INTERRUPTED + leftovers,
+                         conn=conn, accepted=accepted)
+            return
+        output = log.read_bytes().decode("utf-8", errors="replace").rstrip()
+        if full:
+            result = suite_run._read_json(suite_run._result_path(self.task_id))
+            if result is not None and result.get("run") == number:
+                green, report = bool(result.get("green")), result.get("report", "")
+            else:
+                green, report = False, (
+                    f"[{self.task_id}] suite-run №{number}: прогон оборван — "
+                    f"дочерний прогон вышел с кодом {child.returncode} без "
+                    f"отчёта; вывод: {log}")
+            self._finish(number, kind, "исполнен, " + ("зелёный" if green
+                                                       else "красный"),
+                         report, conn=conn, accepted=accepted, green=green)
+            return
+        code = child.returncode
+        self._finish(number, kind, f"исполнен, код выхода {code}", output,
+                     conn=conn, accepted=accepted, green=code == 0, code=code)
+
+    def _await(self, child) -> bool:
+        """Ждёт дочерний прогон; `True` — шаг кончился раньше, прогон снят."""
+        while child.poll() is None:
+            if self._stop.wait(REQUEST_POLL_SEC):
+                break
+        if child.poll() is not None:
+            return False
+        # SIGTERM дочерний прогон превращает в исключение: `finally`
+        # `_compose_report_run` снимает стенд прежним `_compose_teardown`;
+        # ждём дольше этого снятия, и только потом снимаем его группу.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(child.pid, signal.SIGTERM)
+        try:
+            child.wait(timeout=config.COMPOSE_TEARDOWN_TIMEOUT_SEC
+                       + REQUEST_TEARDOWN_MARGIN_SEC)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+        return True
+
+    def _down_leftovers(self, conn, child_pid: int) -> str:
+        """Запасной путь снятия (требование 13): проекты Compose этой задачи
+        с меткой pid своего дочернего прогона (pid — из объекта процесса)
+        — явный `down --remove-orphans` без `-v`. Пояснение для итога."""
+        from . import acceptance
+        docker = acceptance.find_docker()
+        if docker is None:
+            return "; программа docker не найдена — оставшиеся стенды не проверены"
+        profile = acceptance.task_own_profile(conn, self.task_id)
+        env = acceptance.compose_env(profile, docker)
+        limit = config.COMPOSE_TEARDOWN_TIMEOUT_SEC
+        code, out = acceptance.compose_call([docker, *_PS_ARGS], env,
+                                            config.ROOT, limit)
+        if code != 0:
+            return (f"; docker ps не ответил (код {code}) — оставшиеся стенды "
+                    f"не проверены")
+        prefix = acceptance.compose_project_name(self.task_id, "")
+        found = []
+        for line in out.splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            labels = record.get("Labels") if isinstance(record, dict) else None
+            if not isinstance(labels, str):
+                continue
+            pairs = dict(part.split("=", 1) for part in labels.split(",")
+                         if "=" in part)
+            project = pairs.get("com.docker.compose.project", "")
+            if project.startswith(prefix) and project not in found and \
+                    pairs.get(acceptance.COMPOSE_RUN_LABELS[0]) == str(child_pid):
+                found.append(project)
+        notes = []
+        for project in found:
+            code, _out = acceptance.compose_call(
+                [docker, "compose", "--project-name", project, "down",
+                 "--remove-orphans"], env, config.ROOT, limit)
+            notes.append(f"{project}: down --remove-orphans "
+                         f"{'выполнен' if code == 0 else f'код {code}'}")
+        return f"; оставшийся стенд снят — {', '.join(notes)}" if notes else ""
+
+    @staticmethod
+    def _drop_child_lock(child_pid: int) -> None:
+        """Замок, оставшийся за вышедшим дочерним прогоном, снимается."""
+        from . import suite_lock
+        holder = suite_lock.holder()
+        if holder is not None and holder.get("pid") == child_pid:
+            suite_lock.hand(holder.get("task_id"), holder.get("run"),
+                            os.getpid())
+            suite_lock.release()
+
+    def _finish(self, number: int, kind: str, outcome: str, report: str, *,
+                conn=None, accepted: str | None = None, green: bool = False,
+                code: int | None = None) -> None:
+        """Итог запроса и запись журнала (требование 14) — только здесь."""
+        from . import suite_run
+        reason = report if outcome == "отказ" else ""
+        if reason:
+            report = f"отказ — {reason}"
+        if not report.startswith(f"[{self.task_id}]"):
+            report = f"[{self.task_id}] запрос №{number} ({kind}): {report}"
+        if accepted:
+            report = f"{report}\n{accepted}"
+        suite_run.write_request_result(self.task_id, number, {
+            "kind": kind, "outcome": outcome, "green": green, "code": code,
+            "report": report})
+        own = conn is None
+        conn = store.db() if own else conn
+        try:
+            store.journal(conn, self.task_id, REQUEST_ACTOR,
+                          suite_run.REQUEST_ACTION,
+                          f"{kind}, итог {outcome}"
+                          f"{f' — {reason}' if reason else ''} "
+                          f"(запрос №{number})")
+        finally:
+            if own:
+                conn.close()

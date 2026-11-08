@@ -204,7 +204,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
   workspace <id> | report | acceptance-dry-run <id> |
-  plank-run <id> [<файл>] | suite-run <id> [--wait <минуты> | --failed] |
+  plank-run <id> [<файл> | --wait <минуты>] |
+  suite-run <id> [--wait <минуты> | --failed] |
   mutation-run <id> --ref <base|head|worktree> --tests <путь>[,<путь>…]
         [--patches <a>-<b>] [--wait <минуты>] [--wait-lock <минуты>]
         [--copy-table] [--workers <n>] |
@@ -2570,7 +2571,11 @@ def _cmd_guard(rest: list) -> None:
 #: упавших, итог базы, состояние прогона и замок) и досылает очередь
 #: отложенных записей журнала (`suite_lock.deliver_journal`); состояния
 #: задачи и lease не меняет (SPEC 01M462QACEH29RPRD2RZHGHQFM, требование
-#: 14). `preflight` только читает: БД — `mode=ro`, без lease, записей,
+#: 14). Для задачи с раннером `compose` в процессе роли `plank-run` и
+#: `suite-run` пишут запрос в каталог `suite-run`, состояния задачи и lease
+#: не меняют (SPEC 01M6TR3Q3SQSS1ZNGA4T7V39RW, требование 5); для прочих
+#: проектов `plank-run` по-прежнему пишет временную выкладку `tasks/<id>/`.
+#: `preflight` только читает: БД — `mode=ro`, без lease, записей,
 #: коммитов и выкладки планки (SPEC 01M4P4ZP37WV81410YTZHKQC8D,
 #: требования 7, 9, 10). `knowledge` читает БД `mode=ro` и пишет одну
 #: запись обращения постоянным автором `knowledge_cards.JOURNAL_ACTOR`,
@@ -2794,8 +2799,7 @@ def main() -> None:
         # ролей (SPEC 01M4RZAYH3SWJW4WFBW4QW15FP, требование 7).
         "explore-stats": lambda: explore_metric.cmd_explore_stats(rest),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
-        "plank-run": lambda: plank_run.cmd_plank_run(
-            rest[0], rest[1] if len(rest) > 1 else None),
+        "plank-run": lambda: plank_run.cmd_plank_run(rest[0], *rest[1:]),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
         "mutation-run": lambda: mutation_run.cmd_mutation_run(rest),
         "preflight": lambda: preflight.cmd_preflight(rest[0]),

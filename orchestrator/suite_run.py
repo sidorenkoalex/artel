@@ -35,6 +35,11 @@
 Шагу разработчика (маркер `ARTEL_ROLE=developer`) новый полный прогон не
 положен (SPEC 01M5HDB1GSFDKFM7QB9JZMCCWJ, ADR-0024): `suite-run <id>` без
 флагов отказывает до любой записи; `--wait` и `--failed` — прежние.
+
+Процесс роли задачи с раннером `compose` прогон сам не ведёт: команда пишет
+запрос в очередь задачи этого каталога, исполняет его процесс пульта,
+ведущий шаг роли, а `--wait` ждёт итог именно этого запроса (раздел
+«запросы роли», SPEC 01M6TR3Q3SQSS1ZNGA4T7V39RW).
 """
 import contextlib
 import json
@@ -53,7 +58,8 @@ from typing import NamedTuple
 from . import (acceptance, appendix_tree, config, gitcmd, liveness,
                project_profile, repo_context, session, store, suite_lock,
                workspace)
-from .targets import PROFILE_RUNNER_OWN, TargetsError
+from .targets import (PROFILE_RUNNER_COMPOSE, PROFILE_RUNNER_OWN,
+                      TargetsError)
 
 # Вид в имени лога прогона: `.artel/logs/suite-run/<id>/<id>-suiterun-<n>.log`
 # — имя прежнее, каталог — хозяйство команды (`_new_log`).
@@ -145,15 +151,12 @@ def _log_path(task_id: str, run_no: int, suffix: str = "") -> Path:
     return _task_dir(task_id) / f"{task_id}-{LOG_KIND}-{run_no}{suffix}.log"
 
 
-def _new_log(task_id: str) -> Path:
-    """Лог следующего прогона задачи, файл создаётся сразу (как у
-    `agent_log.new_agent_log`). Номер — следующий за наибольшим из логов
-    каталога задачи и номеров `run.json`/`result.json`: прогон, начатый до
-    переноса логов из `config.LOGS`, номер не повторит, а `--wait` узнаёт
-    свой отчёт именно по номеру."""
+def _next_number(task_id: str) -> int:
+    """Номер следующего прогона задачи — следующий за наибольшим из логов
+    каталога задачи, номеров `run.json`/`result.json` и запросов роли
+    (`request_numbers`): у прогона и запроса одна нумерация."""
     prefix = f"{task_id}-{LOG_KIND}-"
     folder = _task_dir(task_id)
-    folder.mkdir(parents=True, exist_ok=True)
     used = [int(p.stem[len(prefix):]) for p in folder.glob(f"{prefix}*.log")
             if p.stem[len(prefix):].isdigit()]
     for state in (_read_json(_run_path(task_id)),
@@ -161,7 +164,17 @@ def _new_log(task_id: str) -> Path:
         run = (state or {}).get("run")
         if isinstance(run, int) and not isinstance(run, bool):
             used.append(run)
-    path = _log_path(task_id, max(used, default=0) + 1)
+    used += request_numbers(task_id)
+    return max(used, default=0) + 1
+
+
+def _new_log(task_id: str) -> Path:
+    """Лог следующего прогона задачи, файл создаётся сразу (как у
+    `agent_log.new_agent_log`). Номер — `_next_number`: прогон, начатый до
+    переноса логов из `config.LOGS`, номер не повторит, а `--wait` узнаёт
+    свой отчёт именно по номеру."""
+    _task_dir(task_id).mkdir(parents=True, exist_ok=True)
+    path = _log_path(task_id, _next_number(task_id))
     path.touch()
     return path
 
@@ -738,6 +751,231 @@ def background(task_id: str, run_text: str, mode: str) -> None:
         _release_lock()
 
 
+# ------------------------------------------------- запросы роли (compose)
+#
+# Раннер `compose` в процессе роли не исполняется (`acceptance.
+# COMPOSE_ROLE_REFUSAL`), поэтому `plank-run`/`suite-run` шага роли для
+# задачи с таким раннером пишут запрос, а исполняет его процесс пульта,
+# ведущий шаг роли (`runner.RoleRequestExecutor`; SPEC
+# 01M6TR3Q3SQSS1ZNGA4T7V39RW, ADR-0023, пятая поправка). Очередь задачи —
+# `requests/` её каталога: `<n>.json` — запрос (ровно `REQUEST_KEYS`),
+# `<n>.taken.json` — взят исполнителем, `<n>.result.json` — итог. Файлы
+# очереди пишет и роль: это данные, итог запроса — сведения роли, не
+# свидетельство для гейтов (требование 15).
+
+KIND_PLANK = "plank"
+REQUEST_KINDS = (KIND_PLANK, MODE_FULL, MODE_FAILED)
+REQUEST_KEYS = frozenset(("kind", "file", "task_id", "time"))
+REQUEST_QUEUE_MAX = 3
+REQUEST_ACTION = "прогон по запросу роли"
+REQUEST_NOT_IN_FLIGHT = "запрос без шага роли этой задачи в полёте"
+REQUEST_STEP_OVER = "не исполнен: шаг роли завершён"
+REQUEST_INTERRUPTED = "прерван: шаг роли завершён"
+REQUEST_LOCK_BUSY = "прогон не начат: замок занят"
+_REQUEST_NAME = re.compile(r"(\d+)\.json")
+
+# Дочерний прогон исполнителя: SIGTERM конца шага — исключение, а не
+# немедленная смерть процесса, иначе `finally` `_compose_report_run` не
+# снимет стенд. Родитель пропал (`pause --now`, `kill` процесса пульта
+# снимают его, а не этот процесс) — тот же путь.
+REQUEST_CHILD = (
+    "import os, signal, sys, threading, time\n"
+    "def _stop(*_):\n"
+    "    raise KeyboardInterrupt('конец шага роли')\n"
+    "signal.signal(signal.SIGTERM, _stop)\n"
+    "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+    "_parent = os.getppid()\n"
+    "def _watch():\n"
+    "    while os.getppid() == _parent:\n"
+    "        time.sleep(1)\n"
+    "    os.kill(os.getpid(), signal.SIGTERM)\n"
+    "threading.Thread(target=_watch, daemon=True).start()\n"
+    "sys.path.insert(0, os.getcwd())\n"
+    "from orchestrator import suite_run\n"
+    "suite_run.request_child(*sys.argv[1:])\n")
+
+
+def requests_dir(task_id: str) -> Path:
+    return _task_dir(task_id) / "requests"
+
+
+def request_path(task_id: str, number: int) -> Path:
+    return requests_dir(task_id) / f"{number}.json"
+
+
+def request_taken_path(task_id: str, number: int) -> Path:
+    return requests_dir(task_id) / f"{number}.taken.json"
+
+
+def request_result_path(task_id: str, number: int) -> Path:
+    return requests_dir(task_id) / f"{number}.result.json"
+
+
+def request_log_path(task_id: str, number: int) -> Path:
+    return requests_dir(task_id) / f"{number}.log"
+
+
+def request_numbers(task_id: str) -> list[int]:
+    """Номера запросов очереди задачи по возрастанию."""
+    folder = requests_dir(task_id)
+    if not folder.is_dir():
+        return []
+    return sorted(int(m.group(1)) for m in
+                  (_REQUEST_NAME.fullmatch(p.name) for p in folder.iterdir())
+                  if m)
+
+
+def pending_requests(task_id: str) -> list[int]:
+    """Запросы без итога (взятые исполнителем и ждущие его)."""
+    return [n for n in request_numbers(task_id)
+            if not request_result_path(task_id, n).exists()]
+
+
+def queued_requests(task_id: str) -> list[int]:
+    """Запросы без итога, ещё не взятые исполнителем, — очередь по порядку."""
+    return [n for n in pending_requests(task_id)
+            if not request_taken_path(task_id, n).exists()]
+
+
+def read_request(task_id: str, number: int):
+    """Содержимое файла запроса как есть (JSON) либо `None` — не прочитан."""
+    try:
+        return json.loads(request_path(task_id, number)
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def mark_taken(task_id: str, number: int, accepted: str) -> None:
+    _write_json(request_taken_path(task_id, number), {"accepted": accepted})
+
+
+def write_request_result(task_id: str, number: int, data: dict) -> None:
+    _write_json(request_result_path(task_id, number), data)
+
+
+def task_runner(conn, task_id: str, target: str) -> str | None:
+    """Раннер профиля прогона задачи — у записи из компонентов раннер
+    компонента задачи (`project_profile.for_task_target`); `None` — профиль
+    не определён."""
+    try:
+        profile = project_profile.for_task_target(target, task_id,
+                                                  conn).profile
+    except (TargetsError, OSError, sqlite3.Error, ValueError) as exc:
+        print(f"[{task_id}] профиль прогона задачи не прочитан: {exc}",
+              file=sys.stderr)
+        return None
+    return getattr(profile, "runner", None)
+
+
+def request_mode(conn, task_id: str, target: str) -> bool:
+    """Команда прогона пишет запрос, а не гонит сама: процесс роли и раннер
+    `compose` профиля задачи (требование 1)."""
+    from . import runner  # runner -> ... -> suite_lock -> suite_run
+    return runner.in_role_environment() and \
+        task_runner(conn, task_id, target) == PROFILE_RUNNER_COMPOSE
+
+
+def submit_request(conn, task_id: str, kind: str, file_arg: str | None,
+                   head: str, command: str) -> int:
+    """Пишет запрос роли в очередь задачи (требования 1-3, 12) и печатает
+    подсказку `--wait`; номер запроса. Без живого lease шага задачи и при
+    полной очереди — отказ до записи."""
+    from . import lease  # lease -> runner -> ... -> suite_run
+    if not lease.is_live(conn, task_id):
+        sys.exit(f"{head}: отказ — у задачи {task_id} нет живого lease шага "
+                 f"роли: запрос исполняет процесс пульта, ведущий шаг этой "
+                 f"задачи, без шага итога не будет; запрос не записан")
+    pending = pending_requests(task_id)
+    if len(pending) >= REQUEST_QUEUE_MAX:
+        sys.exit(f"{head}: отказ — в очереди запросов задачи уже "
+                 f"{len(pending)} без итога, предел очереди "
+                 f"{REQUEST_QUEUE_MAX}; дождись итога: {command} --wait "
+                 f"<минуты>; запрос не записан")
+    folder = requests_dir(task_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    data = {"kind": kind, "file": file_arg, "task_id": task_id,
+            "time": store.now()}
+    tmp = folder / f".request.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    try:
+        # `link` не перезапишет файл соседа с тем же номером, а исполнитель
+        # не увидит половину файла.
+        while True:
+            number = _next_number(task_id)
+            try:
+                os.link(tmp, request_path(task_id, number))
+            except FileExistsError:
+                continue
+            break
+    finally:
+        tmp.unlink(missing_ok=True)
+    if kind != KIND_PLANK:
+        # Номер последнего полного прогона задачи — для `suite-run --wait`;
+        # pid нет: прогон поведёт исполнитель шага.
+        _write_json(_run_path(task_id), {
+            "run": number, "pid": None,
+            "log": str(_log_path(task_id, number)), "mode": kind,
+            "started": time.time(), "request": number})
+    what = {KIND_PLANK: "планка" + (f" {file_arg}" if file_arg else ""),
+            MODE_FULL: "полный набор", MODE_FAILED: "повтор упавших"}[kind]
+    print(f"{head}: запрос №{number} ({what}) принят, ждёт исполнителя — "
+          f"прогон в контейнере ведёт процесс пульта этого шага роли; итог — "
+          f"{command} --wait <минуты, не больше "
+          f"{config.SUITE_RUN_MAX_WAIT_MIN}>")
+    return number
+
+
+def latest_request(task_id: str, kinds) -> int | None:
+    """Номер последнего запроса задачи одного из видов `kinds`."""
+    found = [n for n in request_numbers(task_id)
+             if (read_request(task_id, n) or {}).get("kind") in kinds]
+    return max(found, default=None)
+
+
+def wait_request(task_id: str, number: int, minutes: int, head: str,
+                 command: str) -> None:
+    """Итог запроса `number` (требование 4): ждёт не дольше `minutes`;
+    итог прошлого прогона за итог этого запроса не выдаётся."""
+    deadline = time.monotonic() + minutes * 60
+    while True:
+        result = _read_json(request_result_path(task_id, number))
+        if result is not None:
+            print(result.get("report", ""))
+            if not result.get("green"):
+                code = result.get("code")
+                sys.exit(code if isinstance(code, int) and
+                         not isinstance(code, bool) and code > 0 else 1)
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(_POLL_SEC, remaining))
+    again = f"{command} --wait <минуты>"
+    if request_taken_path(task_id, number).exists():
+        sys.exit(f"{head}: запрос №{number} взят исполнителем шага роли, "
+                 f"итога ещё нет — прогон не прерван, повтори {again}")
+    queued = queued_requests(task_id)
+    if number not in queued:
+        sys.exit(f"{head}: отказ — запроса №{number} в очереди задачи нет, "
+                 f"ждать нечего")
+    sys.exit(f"{head}: запрос в очереди (позиция {queued.index(number) + 1}), "
+             f"прогон не начат (запрос №{number}); итог — повтори {again}")
+
+
+def request_child(kind: str, task_id: str, number: str,
+                  file_arg: str = "") -> None:
+    """Тело дочернего прогона исполнителя (требование 8): планка — путём
+    `plank-run` целиком, полный набор и повтор — телом фона `suite-run` в
+    этом же процессе, без отвязанного фона."""
+    if kind == KIND_PLANK:
+        from . import plank_run  # plank_run -> acceptance -> suite_lock
+        plank_run.cmd_plank_run(task_id, file_arg or None,
+                                ref_if_no_draft=True)
+    else:
+        background(task_id, number, kind)
+
+
 # --------------------------------------------------------------- команда
 
 def _parse_args(rest: list) -> tuple[str, str | None, bool]:
@@ -829,6 +1067,12 @@ def _wait(task_id: str, minutes: int) -> None:
                 f"запусти прогон: {_pult_command(task_id)}")
         sys.exit(f"{head}: отказ — у задачи {task_id} нет ни одного прогона "
                  f"suite-run, ждать нечего; {hint}")
+    request = state.get("request")
+    if isinstance(request, int) and not isinstance(request, bool):
+        # Последний полный прогон задачи — запрос роли: его итог пишет
+        # исполнитель шага, а не фоновый процесс (требование 4).
+        wait_request(task_id, request, minutes, head, _pult_command(task_id))
+        return
     deadline = time.monotonic() + minutes * 60
     while True:
         result = _read_json(_result_path(task_id))
@@ -899,6 +1143,10 @@ def cmd_suite_run(rest: list) -> None:
                     f"полный прогон: {_pult_command(task_id)}")
             sys.exit(f"{head}: отказ — в прошлом прогоне упавших нет, "
                      f"повторять нечего; {hint}")
+    if request_mode(conn, task_id, target):
+        submit_request(conn, task_id, MODE_FAILED if failed else MODE_FULL,
+                       None, head, _pult_command(task_id))
+        return
     running = _running(task_id)
     if running is not None:
         print(_running_text(head, task_id, running))
