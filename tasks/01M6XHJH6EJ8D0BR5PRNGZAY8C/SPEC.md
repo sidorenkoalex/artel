@@ -59,11 +59,19 @@ pytest, живые процессы, сигналы). Новые долгожи�
      `:2076`, `ReportSandbox` `tests/report_outcome_sandbox.py:335`,
      `OutcomeGateSandbox` `tests/outcome_gate_sandbox.py:251`); классы, не
      наследующие корень (например, `TmpRootTest`), в перечень не входят;
+     цепочки замыкаются между файлами словаря (подкласс в одном исходнике,
+     его база — в другом, как `MergeOutcomeSandbox`
+     `tests/merge_outcome_sandbox.py:61` ← `OutcomeGateSandbox`), и
+     результат не зависит от порядка словаря (решение 2 второго круга);
    - `size_findings(source, label, heavy)` — список пар (номер строки,
      нарушение), `heavy` — перечень `heavy_sandbox_names`:
    - нет метки размера на уровне модуля (`pytestmark =
      pytest.mark.size("<имя>")`, в том числе в списке `pytestmark = [...]`,
-     с псевдонимом модуля pytest) — нарушение «нет метки размера», строка 1;
+     с псевдонимом модуля pytest, в том числе присваивание с аннотацией
+     `pytestmark: list = [...]`) — нарушение «нет метки размера», строка 1;
+   - несколько меток размера в одном файле (несколько на уровне модуля
+     либо метка модуля плюс метка теста) — нарушение «несколько меток
+     размера» с найденными значениями (решение 5 второго круга);
    - имя вне `small`, `medium`, `large` или не строковый литерал —
      нарушение с найденным значением;
    - `small`: класс файла наследует имя из `heavy` — по имени базы, в том
@@ -88,16 +96,29 @@ pytest, живые процессы, сигналы). Новые долгожи�
    False` у `guard.long_lived_errors_from_files`; вызывающие
    (`tests_writing.py:518`, `:643`; `amend.py:293`, `:317`, `:725`;
    `preflight.py:198`, `:213`) передают `True`, когда профиль проекта
-   задачи несёт `size_marks: required`. guard строит перечень
-   `heavy_sandbox_names` по дереву проверки один раз на вызов и передаёт
-   его в `size_findings`. Правила применяются к `.py` долгоживущей группы.
+   задачи несёт `size_marks: required`. Второй новый именованный параметр
+   — `sandbox_sources: dict[str, str] | None = None`: словарь путь → текст
+   файлов `tests/sandbox.py` и `tests/*_sandbox.py` дерева проверки;
+   вызывающие читают его из того же дерева, из которого берут проверяемые
+   файлы (кодовая ветка или рабочая копия задачи), при `None` guard читает
+   эти файлы из `config.ROOT`. guard строит по нему перечень
+   `heavy_sandbox_names` один раз на вызов и передаёт его в
+   `size_findings` (решение 1 второго круга). Правила размера относятся
+   только к долгоживущим файлам кодовой ветки (`tests/`), не к файлам
+   планки: они исполняются на путях `tests_writing.py:643`, `amend.py:317`
+   (правило планки не по умолчанию), `amend.py:725`, `preflight.py:213`;
+   пути по файлам планки (`tests_writing.py:518`, `preflight.py:198`,
+   `amend.py:293`) получают `size_marks` и `sandbox_sources` для
+   единообразия, но правил размера не исполняют — файлы иной группы
+   функция пропускает (решение 4 второго круга).
    Залоченный файл: если `lint_base[label]` есть и не несёт метки размера
    на уровне модуля (залочен до правила), правила размера к файлу не
-   применяются; если несёт — применяются в полном объёме. На путях
-   `amend-tests`, где `lint_base` сейчас не передаётся (`amend.py:293`,
-   `:317`), вызывающий передаёт залоченные тексты так же, как на пути
-   `amend.py:725`, — исключение залоченных файлов действует на всех путях
-   (решение 5). Текст отказа — «<файл>:<строка>: размер — <нарушение>
+   применяются; если несёт — применяются в полном объёме. На пути
+   `amend.py:317`, где `lint_base` сейчас не передаётся, вызывающий
+   передаёт залоченные тексты тем же механизмом, что на пути
+   `amend.py:725`, — исключение залоченных файлов действует на всех путях,
+   где правила исполняются (решение 5 первого круга, решение 4 второго).
+   Текст отказа — «<файл>:<строка>: размер — <нарушение>
    (ADR-0032 п. 2)».
 4. **Приложения 1–3** (раздел «Материалы» ниже) — в PLAN.md без
    изменений текста: регистрация метки в `pyproject.toml`, включение
@@ -111,21 +132,21 @@ pytest, живые процессы, сигналы). Новые долгожи�
 
 AC-1. Given исходник без метки, When `size_findings`, Then нарушение «нет метки размера» в строке 1 (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; Размер проверки: малый).
 
-AC-2. Given исходник `small` — отдельными случаями: класс наследует каждый из `RealGitSandbox`, `InitializedTmpRootTest`, `SchemaTmpRootTest`, `SchemaSeededTmpRootTest`, `TaskIdSchemaConnTmpRootTest`, `TaskSeededTmpRootTest`, `BudgetSeededTmpRootTest`, `OriginRealGitSandbox`, `SchemaConnTmpRootTest`, `ConnRealGitSandbox`, `SyncedOriginConnSandbox`, `AutoOriginSandbox`, `GitignoreCommittedRealGitSandbox`, `ReportSandbox`, `OutcomeGateSandbox` (перечень `heavy` — те же имена литералом); класс наследует локальный подкласс файла, а тот — песочницу из перечня; класс наследует локальный класс, который наследует другой локальный класс, а тот — песочницу (два уровня); песочница импортирована как `from tests.sandbox import RealGitSandbox as R` и через `import tests.sandbox as sb` с базой `sb.RealGitSandbox`; функция с параметром каждой из `real_git`, `origin_real_git`, `initialized_tmp_root`; `pytest.mark.usefixtures("<фикстура>")` для каждой из них на уровне модуля и на уровне теста; `import subprocess`, `import subprocess as sp`, `from subprocess import run`, `import multiprocessing`, `import multiprocessing as mp`, `from multiprocessing import Process`; вызовы `os.system`, `os.popen`, `os.fork`, `os.spawnl`, `os.spawnv`, — Then нарушение называет найденное; тот же исходник с `medium` — без нарушений по ресурсам. Отдельно: Given исходники-образцы строками в памяти (корень, подкласс через примесь, подкласс второго уровня, посторонний класс), When `heavy_sandbox_names`, Then перечень несёт корень и оба подкласса и не несёт постороннего класса (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; orchestrator.test_lint.heavy_sandbox_names(sources) -> frozenset; Размер проверки: малый).
+AC-2. Given исходник `small` — отдельными случаями: класс наследует каждый из `RealGitSandbox`, `InitializedTmpRootTest`, `SchemaTmpRootTest`, `SchemaSeededTmpRootTest`, `TaskIdSchemaConnTmpRootTest`, `TaskSeededTmpRootTest`, `BudgetSeededTmpRootTest`, `OriginRealGitSandbox`, `SchemaConnTmpRootTest`, `ConnRealGitSandbox`, `SyncedOriginConnSandbox`, `AutoOriginSandbox`, `GitignoreCommittedRealGitSandbox`, `ReportSandbox`, `OutcomeGateSandbox` (перечень `heavy` — те же имена литералом); класс наследует локальный подкласс файла, а тот — песочницу из перечня; класс наследует локальный класс, который наследует другой локальный класс, а тот — песочницу (два уровня); песочница импортирована как `from tests.sandbox import RealGitSandbox as R` и через `import tests.sandbox as sb` с базой `sb.RealGitSandbox`; функция с параметром каждой из `real_git`, `origin_real_git`, `initialized_tmp_root`; `pytest.mark.usefixtures("<фикстура>")` для каждой из них на уровне модуля и на уровне теста; `import subprocess`, `import subprocess as sp`, `from subprocess import run`, `import multiprocessing`, `import multiprocessing as mp`, `from multiprocessing import Process`; вызовы `os.system`, `os.popen`, `os.fork`, `os.spawnl`, `os.spawnv`, — Then нарушение называет найденное; тот же исходник с `medium` — без нарушений по ресурсам. Отдельно: Given исходники-образцы строками в памяти (корень, подкласс через примесь, подкласс второго уровня, посторонний класс), When `heavy_sandbox_names`, Then перечень несёт корень и оба подкласса и не несёт постороннего класса; Given два исходника, где подкласс лежит в одном, его база — в другом, и исходник наследника идёт в словаре раньше исходника базы, Then перечень несёт и базу, и подкласс (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; orchestrator.test_lint.heavy_sandbox_names(sources) -> frozenset; Размер проверки: малый).
 
 AC-3. Given `small` с фикстурами `tmp_root`, `tmp_dir` и `from tests.sandbox import FakeProc`, Then нарушений нет (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; Размер проверки: малый).
 
 AC-4. Given `medium` — отдельными случаями: каждая из `subprocess.run`, `subprocess.Popen`, `subprocess.call`, `subprocess.check_call`, `subprocess.check_output` с литералом `"orchestrator/artel.py"` и с литералом `"pytest"` в аргументах (например, `[sys.executable, "orchestrator/artel.py", "status"]`, `[sys.executable, "-m", "pytest", path]`); `subprocess.run([sys.executable, str(ROOT / "orchestrator" / "artel.py")])`; константа модуля `ARTEL = str(ROOT / "artel.py")` и `subprocess.run([sys.executable, ARTEL])`; имя, присвоенное в теле той же функции выражению с литералом `artel.py` и с литералом `"pytest"` и переданное вызову, — Then нарушение; тот же исходник `large` — без нарушений (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; Размер проверки: малый).
 
-AC-5. Given `pytestmark = [pytest.mark.size("small"), pytest.mark.slow]` и `import pytest as pt` с `pt.mark.size("small")`, Then метка распознана; `size("huge")` и `size(NAME)` — нарушение с найденным значением (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; Размер проверки: малый).
+AC-5. Given `pytestmark = [pytest.mark.size("small"), pytest.mark.slow]` и `import pytest as pt` с `pt.mark.size("small")`, и `pytestmark: list = [pytest.mark.size("small")]` (присваивание с аннотацией), Then метка распознана; `size("huge")` и `size(NAME)` — нарушение с найденным значением; две метки размера на уровне модуля и метка модуля плюс метка теста — отдельными случаями — нарушение «несколько меток размера» с найденными значениями (Поверхность решения: orchestrator.test_lint.size_findings(source, label, heavy) -> list[tuple[int, str]]; Размер проверки: малый).
 
-AC-6. Given профиль вымышленного проекта с `size_marks: required` и новый долгоживущий файл без метки — отдельными случаями каждого пути вызова: выход из `tests_writing`, `amend-tests` с ветки, `amend-tests` из планки, `preflight`, — Then отказ называет файл и «нет метки размера»; профиль без поля, тот же файл — отказа нет. Отдельно: путь `amend-tests` из планки, залоченный текст без метки — отказа нет (Размер проверки: средний — каждый путь в песочнице вымышленного проекта).
+AC-6. Given профиль вымышленного проекта с `size_marks: required` и новый долгоживущий файл без метки — отдельными случаями каждого пути, где правила размера исполняются: выход из `tests_writing` (`tests_writing.py:643`), `amend-tests` с ветки (`amend.py:725`), `amend-tests` с правилом планки не по умолчанию (`amend.py:317`, профиль вымышленного проекта с таким правилом), `preflight` (`preflight.py:213`), — Then отказ называет файл и «нет метки размера»; профиль без поля, тот же файл — отказа нет. Отдельно: путь `amend.py:317`, залоченный текст без метки — отказа нет. Отдельно на пути выхода из `tests_writing`: малый долгоживущий файл, класс которого наследует `RealGitSandbox` (песочница лежит в дереве вымышленного проекта), — отказ с именем базы; тот же файл при пустом `sandbox_sources` — отказа нет только потому, что перечень пуст (Размер проверки: средний — каждый путь в песочнице вымышленного проекта).
 
-AC-7. Given `guard.long_lived_errors_from_files(files, task_id, network_addresses=True, lint_base={label: text}, size_marks=True)`, где залоченный текст без метки и новый текст без метки, Then нарушений размера нет; где залоченный текст несёт `size("small")`, а новый — добавляет параметр `real_git` или снимает метку, Then отказ (Поверхность решения: scripts.guard.long_lived_errors_from_files(files, task_id, ..., lint_base, size_marks) -> list; Размер проверки: малый).
+AC-7. Given `guard.long_lived_errors_from_files(files, task_id, network_addresses=True, lint_base={label: text}, size_marks=True)`, где залоченный текст без метки и новый текст без метки, Then нарушений размера нет; где залоченный текст несёт `size("small")`, а новый — добавляет параметр `real_git` или снимает метку, Then отказ (Поверхность решения: scripts.guard.long_lived_errors_from_files(files, task_id, ..., lint_base, size_marks, sandbox_sources) -> list; Размер проверки: малый).
 
 AC-8. Given `size_marks: other`, When разбор профиля, Then отказ называет `test_profile.size_marks`, значение `other` и ожидаемое `required`, текста «неизвестное подполе» нет (Размер проверки: малый).
 
-AC-9. Мутации «правило размера применяется без `size_marks`», «подкласс песочницы из требования 2 не распознан», «`pytestmark` списком не распознан», «залоченный файл с меткой пропускается» — красные.
+AC-9. Мутации «правило размера применяется без `size_marks`», «подкласс песочницы из требования 2 не распознан», «`pytestmark` списком не распознан», «залоченный файл с меткой пропускается», «guard передаёт пустой перечень при непустом дереве», «цепочка подклассов между файлами не замкнута» — красные.
 
 Безопасность тестов (из ТЗ): исходники — строками в памяти; вымышленный проект и рабочие копии — во временной песочнице (`tests.sandbox`); без сети; настоящая запись проектов пульта и его локальный слой не читаются;
 настоящие файлы `tests/` не меняются.
@@ -153,6 +174,25 @@ AC-9. Мутации «правило размера применяется бе
 - Все проверки — против временного дублёра: исходники строками в памяти,
   вымышленный проект во временной песочнице.
 
+Второй круг (решения 1–5 уточняют решения первого круга, те в силе):
+- Решение 1 (канал `sandbox_sources`, при `None` — `config.ROOT`) —
+  требование 3; AC-6 (случай `RealGitSandbox` на пути `tests_writing` и
+  пустой перечень), AC-7 (поверхность), AC-9 (мутация пустого перечня).
+  Сверено: `scripts/guard.py:4425-4431` — сейчас функция принимает только
+  пары файлов и `lint_base`, канала исходников песочниц нет.
+- Решение 2 (межфайловые цепочки, независимость от порядка) —
+  требование 2; AC-2 (образец «наследник раньше базы»), AC-9. Сверено:
+  `MergeOutcomeSandbox(OutcomeGateSandbox)` `tests/merge_outcome_sandbox.py:61`.
+- Решение 3 (обходы статики — принятый пробел) — «Не входит»; перечень
+  признаков требования 2 не расширен.
+- Решение 4 (правила — только долгоживущие файлы `tests/`; четыре пути)
+  — требование 3; AC-6. Сверено: `tests_writing.py:518`, `preflight.py:198`,
+  `amend.py:293` проверяют файлы планки; `tests_writing.py:643`,
+  `preflight.py:213`, `amend.py:317`, `amend.py:725` — долгоживущие файлы;
+  `lint_base` сейчас передаёт только `amend.py:725`.
+- Решение 5 (несколько меток, `pytestmark` с аннотацией) — требование 2;
+  AC-5.
+
 ## Оценка объёма и деление
 Сработавший сигнал: число файлов зоны ≥ 5 (7 модулей кода плюс
 `docs/codebase-map.md` и `tests/`). Прочие сигналы: критериев 9 (< 10),
@@ -175,6 +215,14 @@ AC-6; часть «подключение без поля профиля» не�
 - Сверка времени теста с ориентиром размера.
 - Правила о фикстурах общего состояния (этап 5).
 - Изменение линта детерминизма и правил стиля pytest.
+- Обходы статики правилом не ловятся — принятый пробел (ADR-0032 п. 2:
+  размер — сигнал, не гарантия; такие тесты выдаст замер этапа 1):
+  вызов `_sandbox(<песочница>)`, функции модуля песочниц с настоящим git
+  или БД пульта в малом файле (например, `isolate_pult_db`
+  `tests/sandbox.py:718`, `init_bare_origin` `:1160`, `make_project_repo`
+  `:1246`), `-m orchestrator.artel` в среднем файле. Перечень признаков требования 2 не расширяется.
+- Правила размера для файлов планки (пути `tests_writing.py:518`,
+  `preflight.py:198`, `amend.py:293`) — только долгоживущие файлы `tests/`.
 - Правка локального слоя записей проектов (`.artel/targets.yaml`).
 - Правка существующих тестов: если краснеет тест, сверяющий точный
   перечень подполей профиля или текст отказов
