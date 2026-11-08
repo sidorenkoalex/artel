@@ -1,17 +1,16 @@
-# Записка developer
+# Записка developer (итерация 2)
 
 ## Выяснено
-- Долгоживущие тесты: tests/test_01m6y2p1jdcffc88nr1jcrwwh9_shared_state_rules.py (статика, 107) и …_construct_failure.py (подпроцесс, 2) — все 109 зелёные.
-- Сделано: tests/sandbox.py `_SharedModuleState.construct` (sb=None до try); scripts/guard.py — `_shared_readonly_calls`, `_Fixture.shared`, `_fixture_table`, `_FixtureScope.records` (без параметров build), `_changed_fixture_names`, `_shared_state_violations`, `_SandboxRefs`, `_sandbox_class_names`, `sandbox_sources` у `pytest_style_errors_from_files`, поле `_StyleViolation.statements` (освобождение lint_base требует присваивание в базе), `_size_rules_apply` + `PLANK_LABEL_RE`.
-- Свой тест: tests/test_guard_shared_readonly_rules.py (3 теста, мутации проверены — краснеют).
-- Затронутые существующие тесты (guard-фикстуры, assertion_changes, size rules, preflight, tests_writing, network, test_lint и др.) — зелёные.
-- Приложения 1–2 в PLAN.md: `git apply --check` — 0; guard PLAN.md — ок.
+- R1-F1: `scripts/guard.py::long_lived_errors_from_files` теперь передаёт проверке стиля `sandbox_sources or None` (`{}` вызывающих = «правила размера выключены» → классы песочниц из `config.ROOT`). Прямой `pytest_style_errors_from_files(…, {})` — пустой перечень, как требует AC-4.
+- R1-F2: `_imported_names` понимает `import tests[.x]` без псевдонима и `import tests as p`; `_SandboxRefs.packages` — то же для классов песочниц.
+- Новые тесты в tests/test_guard_shared_readonly_rules.py (5 всего), мутации проверены — краснеют. Долгоживущие файлы задачи + затронутые модули зелёные. Карта регенерирована.
+- Реестр REVIEW.md: R1-F1, R1-F2 → fixed с описанием; PLAN.md шаг 6, status: ready; guard ок.
 
 ## Не сработало
-- `pytest -n 4` по списку файлов — сторож роли считает это полным прогоном; без `-n` пачками по ~10 файлов проходит.
+- Bash с heredoc/`cp`/`$?` в одной команде отклоняется фильтром — мутации делал через Edit.
 
 ## Где остановился
-- Шаг завершён, PLAN.md status: ready.
+- Шаг завершён.
 
 ## Чего не хватило
 - —

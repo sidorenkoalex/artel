@@ -63,6 +63,16 @@ schema_version: 5
    залоченного файла, параметр `build` не фикстура), каждая заявка
    мутации проверена временной мутацией (все три теста краснели).
    Карта регенерирована.
+6. Итерация 2 (ревью R1-F1, R1-F2): `long_lived_errors_from_files`
+   передаёт проверке стиля `sandbox_sources or None` — `{}` вызывающих
+   (профиль без правил размера) означает «правила размера выключены», и
+   перечень классов песочниц берётся из `config.ROOT` (решение Оператора на
+   гейте SPEC, 1); прямой вход `pytest_style_errors_from_files(…, {})` —
+   по-прежнему пустой перечень (AC-4). `_imported_names` и `_SandboxRefs`
+   распознают `import tests[.<модуль>]` и `import tests as p` с вызовом
+   `tests.sandbox.<имя>`/`p.sandbox.<имя>`. Два новых теста в
+   `tests/test_guard_shared_readonly_rules.py`, мутации проверены (оба
+   краснели).
 
 ## Покрытие требований
 
@@ -70,7 +80,7 @@ schema_version: 5
 |---|---|
 | 1 | 3 |
 | 2 | 2, 3 |
-| 3 | 3 |
+| 3 | 3, 6 |
 | 4 | 1 |
 | 5 | 4 |
 | 6 | 3 (граница — вызывающие не менялись; копилка ниже) |
@@ -91,6 +101,12 @@ shared_readonly части а, size_marks_sources, helper_scope(_modes),
 test_ast, test_groups, test_integrity_helper_heirs, declared_change,
 long_lived_template_shape, test_lint, preflight, tests_writing
 test_groups, network_address(-gate), amend_network_scope — все зелёные.
+Итерация 2 только расширяет охват (пустой `sandbox_sources` на пути
+долгоживущих файлов и форма `import tests`); повторно прогнаны долгоживущие
+файлы задачи, свой файл, preflight, helper_scope(_modes), test_lint,
+fixture_records, plank_forms, size_rules/size_gate_paths, shared_readonly
+части а, assertion_changes, test_ast, size_marks_sources, amend_long_lived,
+long_lived_template_shape/imports/transitions — все зелёные.
 Откат — revert коммита задачи.
 
 ## Риски
