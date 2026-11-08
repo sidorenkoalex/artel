@@ -1,22 +1,18 @@
-# NOTE-reviewer (итерация 1)
+# NOTE-reviewer (итерация 2)
 
 ## Выяснено
-- plank-run: 17 passed; долгоживущие файлы задачи + test_push_hook_units: 58 passed.
-- Код по SPEC 1–9 соответствует. Вердикт — changes_requested.
-- R1-F1 (major): ограничения отправки в ci_base_branch (force только туда,
-  источник — предок свежего origin/<base>, проверка предка в хуке,
-  неудаление при kill/уборке) стережёт только планка `Группа: разовый`.
-  Временная мутация обеих проверок предка: tests/test_gitcmd_push_point.py,
-  test_push_hook_units.py, test_push_hook_stand.py, *_ci_base_doctor.py —
-  84 passed (не красные). Код возвращён.
-- R1-F2 (minor): сбой pipeline_status (reason) = «задания нет» → отправка.
+- tests/test_ci_base_push_guard.py — 7 passed; шесть временных мутаций (all→any, без предка,
+  tracking_refs=True, локальная ссылка, хук true, unread=False) — каждая красная.
+- Не стережётся только `if unread:` в early_base_push (minor, наблюдение, не в реестре).
+- plank-run 17 passed; файлы задачи + push_hook/gitcmd/ci_outcome — 107 passed.
+- Вердикт: approved, R1-F1 и R1-F2 → accepted.
 
 ## Не сработало
-- Составные bash-команды с `cd … && ls` отклоняются: используй абсолютные пути.
+- bash с `${…}`/кавычками отклоняется сторожем; /tmp на запись закрыт — скрипт мутаций
+  писал в рабочий каталог и убрал `task-rm`.
 
 ## Где остановился
-- REVIEW.md записан (iteration 1, changes_requested).
+- REVIEW.md записан (iteration 2, approved).
 
 ## Чего не хватило
-- Не было сразу видно, что планка помечена разовой: смотреть строку 3
-  acceptance_tests/test_ci_base_push.py.
+- —
