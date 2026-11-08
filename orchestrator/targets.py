@@ -73,6 +73,10 @@ PROFILE_FIELDS = {
     # стандартной библиотеки и пакетов пульта (SPEC
     # 01M5633WZ3Y3A0P4KKBZDB3KER): список идентификаторов, возможно пустой.
     "long_lived_imports": "identifiers",
+    # Метка размера обязательна у новых долгоживущих файлов (ADR-0032 п. 2;
+    # SPEC 01M6XHJH6EJ8D0BR5PRNGZAY8C): единственное значение `required`,
+    # без подполя правило выключено.
+    "size_marks": "size_marks",
 }
 # Поля раннера `compose` (SPEC 01M6PAJ61D4PYAP79ADRPA6MWV, требование 1;
 # ADR-0023, поправка 05.11.2026): одни имена у подполя профиля и у поля
@@ -91,10 +95,12 @@ PROFILE_FIELDS.update(COMPOSE_FIELDS)
 # исполняются — их отсутствие поведения пульта не меняет. Так же пока
 # `runner`, `workdir`, `env`: потребители — следующие части D0.
 PROFILE_OPTIONAL = ("report", "install", "full_suite_timeout_sec", "runner",
-                    "workdir", "env", "long_lived_imports", *COMPOSE_FIELDS)
+                    "workdir", "env", "long_lived_imports", "size_marks",
+                    *COMPOSE_FIELDS)
 # Подполе, недопустимое у артели: её правило импортов — правило пульта.
 PROFILE_EXTERNAL_ONLY = ("long_lived_imports",)
 PROFILE_REPORTS = ("junit-xml",)
+SIZE_MARKS_REQUIRED = "required"
 PROFILE_RUNNER_DEFAULT = "pult-pytest"
 PROFILE_RUNNER_OWN = "pytest-own"
 PROFILE_RUNNER_COMPOSE = "compose"
@@ -1958,6 +1964,9 @@ def _profile_value_error(kind: str, value: object) -> str:
         if kind == "list" and not value:
             return "пустой список"
         return ""
+    if kind == "size_marks":
+        return ("" if value == SIZE_MARKS_REQUIRED
+                else f"'{value}', ожидается {SIZE_MARKS_REQUIRED}")
     if not isinstance(value, str) or not value.strip():
         if kind == "mount":
             return ("не строка «<каталог дерева>:<каталог в контейнере>» — "

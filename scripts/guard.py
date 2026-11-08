@@ -1190,7 +1190,7 @@ def test_skip_markers(source) -> dict[str, set]:
 # pytest и вызовы пропуска уровня модуля: `pytest.skip` — тем же точным
 # именем, что в теле метода; `importorskip` — последним сегментом, имя
 # однозначно.
-PYTESTMARK_NAME = "pytestmark"
+PYTESTMARK_NAME = test_lint.PYTESTMARK_NAME
 MODULE_SKIP_CALL_NAMES = frozenset(("pytest.skip",))
 MODULE_IMPORTORSKIP_NAME = "importorskip"
 MODULE_LEVEL_NOTE = "уровня модуля"
@@ -1397,10 +1397,10 @@ def _is_parametrize(node: ast.AST) -> bool:
         _called_dotted_name(node.func).rsplit(".", 1)[-1] == PARAMETRIZE_NAME
 
 
-def _is_pytestmark_assign(node: ast.AST) -> bool:
-    return isinstance(node, ast.Assign) and any(
-        isinstance(t, ast.Name) and t.id == PYTESTMARK_NAME
-        for t in node.targets)
+# Разбор `pytestmark` и псевдонимов pytest живёт в `orchestrator/test_lint.py`
+# (SPEC 01M6XHJH6EJ8D0BR5PRNGZAY8C, решение Оператора 7): им пользуются и
+# правила метки размера, а импорт guard оттуда замкнул бы цикл.
+_is_pytestmark_assign = test_lint.is_pytestmark_assign
 
 
 def _module_statements(tree: ast.Module) -> list:
@@ -1447,16 +1447,7 @@ def _bindings(call: ast.Call, statements: list) -> tuple:
                  if mentioned & names)
 
 
-def _pytestmark_marks(body: list) -> list:
-    """Элементы последнего присваивания `pytestmark = …` тела `body`
-    (модуля или класса) — одна марка либо элементы списка/кортежа."""
-    value = None
-    for node in body:
-        if _is_pytestmark_assign(node):
-            value = node.value
-    if value is None:
-        return []
-    return value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+_pytestmark_marks = test_lint.pytestmark_marks
 
 
 def _variant_skipped(node: ast.AST) -> bool:
@@ -1955,7 +1946,7 @@ def _helper_calls(func: ast.AST, scope: _HelperScope, chain: list) -> list:
 # фикстуры и её помощников первого уровня. Имена pytest распознаются и
 # через псевдонимы импорта (`import pytest as pt`, `from pytest import
 # fixture`).
-PYTEST_MODULE = "pytest"
+PYTEST_MODULE = test_lint.PYTEST_MODULE
 FIXTURE_DECORATOR = "pytest.fixture"
 USEFIXTURES_MARK = "pytest.mark.usefixtures"
 FIXTURES_MODULE_PATH = "tests/fixtures.py"
@@ -1974,24 +1965,7 @@ class _FixtureDatum(ast.AST):
     _fields = ("value",)
 
 
-def _pytest_aliases(tree: ast.Module) -> dict:
-    """{имя: точечное имя pytest, к которому оно привязано}: `import
-    pytest as pt` → `pt: pytest`, `from pytest import mark as m` → `m:
-    pytest.mark`. Само `pytest` видно всегда."""
-    names = {PYTEST_MODULE: PYTEST_MODULE}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.asname and alias.name.split(".", 1)[0] == PYTEST_MODULE:
-                    names[alias.asname] = alias.name
-        elif isinstance(node, ast.ImportFrom) and not node.level and \
-                node.module and \
-                node.module.split(".", 1)[0] == PYTEST_MODULE:
-            for alias in node.names:
-                if alias.name != "*":
-                    names[alias.asname or alias.name] = \
-                        f"{node.module}.{alias.name}"
-    return names
+_pytest_aliases = test_lint.pytest_aliases
 
 
 def _pytest_name(node: ast.AST, aliases: dict) -> str:
@@ -4427,7 +4401,9 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
                                  network_addresses: bool = True,
                                  project_imports=None,
                                  rule: "PlankRule | None" = None,
-                                 lint_base: dict[str, str] | None = None
+                                 lint_base: dict[str, str] | None = None,
+                                 size_marks: bool = False,
+                                 sandbox_sources: dict[str, str] | None = None
                                  ) -> list[str]:
     """Ошибки долгоживущих файлов планки (требования 3, 4) по (label,
     текст) парам `test_*.py`: файлы иной группы (и без распознанной
@@ -4457,9 +4433,23 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
     `lint_base` — {метка: залоченный текст}; см. `lint_errors_from_files`.
     Там же и при том же условии — стиль pytest
     (`pytest_style_errors_from_files`, SPEC 01M5N9WK9SGB7KDYJP736DP6CV,
-    требования 6-7)."""
+    требования 6-7).
+
+    `size_marks` — правила метки размера (ADR-0032 п. 2; SPEC
+    01M6XHJH6EJ8D0BR5PRNGZAY8C): вызывающий включает их по подполю
+    профиля `size_marks: required`. Они относятся к Python-файлам группы
+    «долгоживущий» без метки `AC-<n>: `; залоченный текст `lint_base` без
+    метки размера на уровне модуля освобождает файл (залочен до правила).
+    `sandbox_sources` — {путь: текст} модулей песочниц дерева проверки
+    (`tests/sandbox.py`, `tests/*_sandbox.py`), по ним один раз на вызов
+    строится перечень `test_lint.heavy_sandbox_names`; `None` — модули
+    песочниц `config.ROOT`."""
     errors: list[str] = []
     foreign_explanation = _foreign_import_explanation(project_imports)
+    heavy = (test_lint.heavy_sandbox_names(
+        sandbox_sources if sandbox_sources is not None
+        else sandbox_sources_from_dir(config.ROOT))
+        if size_marks else frozenset())
     for label, source in files:
         labelled = _is_labelled(rule, label)
         if rule is not None and not labelled and not label.endswith(".py"):
@@ -4490,7 +4480,41 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
                           f"рождения» её не заменяет)")
         if network_addresses:
             errors += network_address_errors_from_files([(label, source)])
+        if size_marks and label.endswith(".py") and \
+                _size_rules_apply(label, lint_base):
+            errors += [f"{label}:{lineno}: размер — {finding} ({SIZE_ADR})"
+                       for lineno, finding in test_lint.size_findings(
+                           source, label, heavy)]
     return errors
+
+
+SIZE_ADR = "ADR-0032 п. 2"
+
+
+def _size_rules_apply(label: str, lint_base: dict[str, str] | None) -> bool:
+    """Файл, залоченный без метки размера на уровне модуля, правилам размера
+    не подлежит; залоченный с меткой и новый — подлежит."""
+    if lint_base is None or label not in lint_base:
+        return True
+    return test_lint.has_module_size_mark(lint_base[label])
+
+
+def sandbox_sources_from_dir(root: Path) -> dict[str, str]:
+    """{путь от `root`: текст} модулей песочниц `tests/sandbox.py` и
+    `tests/*_sandbox.py` на диске; нечитаемый файл пропускается."""
+    sources: dict[str, str] = {}
+    tests_dir = Path(root) / "tests"
+    if not tests_dir.is_dir():
+        return sources
+    for path in sorted(tests_dir.glob("*sandbox.py")):
+        rel = f"tests/{path.name}"
+        if not test_lint.is_sandbox_source_path(rel) or not path.is_file():
+            continue
+        try:
+            sources[rel] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return sources
 
 
 def _method_dumps(source: str) -> dict[str, str]:
