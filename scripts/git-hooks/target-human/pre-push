@@ -10,7 +10,10 @@
 # (его пишет пульт): проходят ветка по branch_template и ссылки с префиксом
 # artifacts_prefix (обновление и удаление); отказ — base, удаление ветки,
 # теги и прочие ссылки вне refs/heads/* и artifacts_prefix, ветка не по
-# шаблону. Маркер ARTEL_PULT_GIT=1 правил не снимает.
+# шаблону. Необязательный ключ ci_base_branch (только при `ci_base: branch`
+# записи, SPEC 01M6TT4FKD1JWSJFVJ7328K03Y) пропускает отправку ровно в эту
+# ветку — sha, предка refs/remotes/origin/<base>. Маркер ARTEL_PULT_GIT=1
+# правил не снимает.
 #
 # Только POSIX sh, git и встроенные команды оболочки: PATH роли ограничен
 # манифестом стека, посторонних интерпретаторов там нет.
@@ -35,13 +38,14 @@ broken() {
 [ -e "$policy" ] || broken "файла нет"
 [ -f "$policy" ] && [ -r "$policy" ] || broken "файл не читается"
 
-project= base= branch_template= artifacts_prefix=
+project= base= branch_template= artifacts_prefix= ci_base_branch=
 while IFS= read -r line || [ -n "$line" ]; do
     case $line in
         project=*) project=${line#project=} ;;
         base=*) base=${line#base=} ;;
         branch_template=*) branch_template=${line#branch_template=} ;;
         artifacts_prefix=*) artifacts_prefix=${line#artifacts_prefix=} ;;
+        ci_base_branch=*) ci_base_branch=${line#ci_base_branch=} ;;
     esac
 done < "$policy" || broken "файл не читается"
 
@@ -91,6 +95,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
     if [ "$name" = "$base" ]; then
         refuse "$remote_ref: отправка в base $base (проект $project)"
+    fi
+    if [ -n "$ci_base_branch" ] && [ "$name" = "$ci_base_branch" ]; then
+        git merge-base --is-ancestor "$local_sha" "refs/remotes/origin/$base" \
+            </dev/null 2>/dev/null || refuse "$remote_ref: $local_sha — не предок" \
+            "origin/$base, ветка отчёта базы (проект $project)"
+        continue
     fi
     # shellcheck disable=SC2254
     case $name in
