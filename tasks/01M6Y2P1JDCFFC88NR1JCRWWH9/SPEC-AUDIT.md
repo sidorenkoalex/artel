@@ -4,203 +4,149 @@ type: spec_audit
 author_role: spec_auditor
 status: ready
 verdict: concerns
-signals: "в) пути-признаки (тесты): tests/, tests/fixtures.py, tests/sandbox.py, tests/test_01m6xhjh6ej8d0br5prngzay8c_size_gate_paths.py, tests/test_01m6xhjh6ej8d0br5prngzay8c_size_rules.py; в) SPEC требует приложения PLAN; д) ТЗ ссылается на ADR: ADR-0032"
-spec_sha: 008324d548c7d0acf151d70fcb7c3a95c241b281
+signals: "в) пути-признаки (тесты): tests/, tests/a_sandbox.py, tests/b_sandbox.py, tests/fixtures.py, tests/outcome_gate_sandbox.py, tests/report_outcome_sandbox.py, tests/sandbox.py, tests/test_01m6xhjh6ej8d0br5prngzay8c_size_gate_paths.py, tests/test_01m6xhjh6ej8d0br5prngzay8c_size_rules.py; в) SPEC требует приложения PLAN; д) ТЗ ссылается на ADR: ADR-0032"
+spec_sha: 2fef468d8bd6fba6c77150840789f7e765e2436d
 schema_version: 5
 ---
 
 # SPEC-AUDIT: Правила guard для общего состояния: фикстуры уровня модуля только через shared_readonly, build — помощник гейта неослабления (ADR-0032, этап 5, часть б)
 
 ## ТЗ и SPEC
-SHA SPEC.md подтверждён (`git hash-object` = 008324d5…). ANSWER-n нет. Решение
-Оператора на гейте SPEC №1 (решения 1–6) — второй круг после аудита
-`70b8bce4`.
-
-- Решение 1 → требование 6 (`SPEC.md:113-122`) и «Не входит»: внесено.
-- Решение 2 → требование 2 (`SPEC.md:47-66`), AC-2 (`SPEC.md:130`): все три
-  формы импорта, отказ «иной вызов …» и отдельные случаи на каждую форму —
-  внесены.
-- Решение 3 → требование 3 (`SPEC.md:67-89`), AC-4 (`SPEC.md:134`):
-  обёртки, прямое создание, транзитивное наследование, определение класса
-  песочницы, `FakeProc` — внесены.
-- Решение 4 → `SPEC.md:90-92`, AC-4: внесено.
-- Решение 5 → AC-3 (`SPEC.md:132`), AC-7 (`SPEC.md:140`): внесено.
-- Решение 6 → требование 5 (`SPEC.md:104-112`), AC-6, AC-1, строка матрицы:
-  внесено.
-- Остальное SPEC совпадает с ТЗ: требования 4, 7, критерии AC-5, приложения
-  1–2 (символ в символ с ТЗ), «Безопасность тестов», «Заметки разработчику»,
-  «Существующие тесты». Сужение п. 3 ТЗ («класс `tests/sandbox.py`» →
-  потомки `TmpDirTest`/`TmpRootTest`) — по решению 3, не самовольно.
-
-Расхождений ТЗ/решений ↔ SPEC нет.
+- ТЗ пп. 1–7 → SPEC требования 1–7, все критерии ТЗ → AC-1…AC-7, матрица ТЗ
+  перенесена целиком, с добавленной строкой «правила размера на файлах
+  планки» (решение №1.6). Безопасность тестов и заметки разработчику
+  перенесены дословно (SPEC.md:173-183).
+- Решения Оператора первого круга №1.1–№1.6 и второго №2.1–№2.4 внесены:
+  №2.1 — SPEC.md:39-52 и AC-1 (псевдоним `pt.fixture`, присваивание
+  `pytest.fixture(scope=…)(f)`, `scope=None`); №2.2 — SPEC.md:98-114
+  (`tests/*_sandbox.py`, `sandbox_sources`, `config.ROOT`, `{}` без
+  исключения) и случаи AC-4; №2.3 — псевдонимы класса и `shared_readonly`,
+  `_sandbox`, повторное создание (SPEC.md:62-66, :88-93, «Не входит»
+  SPEC.md:231-236) и случаи AC-2/AC-4; №2.4 — регулярное выражение
+  `^(tasks/[^/]+/)?acceptance_tests/` (SPEC.md:130-143), адрес
+  `records.trace` `:2163-2177` и случай AC-6 «сегмент в середине пути».
+- Противоречий между решениями не нашёл: №2.2 и №2.3 уточняют №1.3, №2.4 —
+  №1.6, как они сами и заявляют.
+- Требований сверх ТЗ и решений нет.
 
 ## Факты против кода
-Подтверждено (рабочий каталог, `f08b762de`):
-- `scripts/guard.py:4618` `_style_violations`, `:1985` `_fixture_decorator`,
-  `:2036` `_fixture_table`, `:2228` `_fixture_helper_calls`; `tests/sandbox.py:2534`
-  `construct`, `:2539` `sb = self.sandbox_cls()` вне `try`, `:2552`
-  `_run_cleanups(sb)` в `except` (поэтому нужна проверка `sb is not None`),
-  `:2568` `shared_readonly`. `TmpDirTest` `:711`, `TmpRootTest` `:1609`;
-  `FakeProc` `:934`, `SpyRun` `:1312`, `PollGate` `:539` их не наследуют.
-- Падение конструктора → `AttributeError` у тестов 2–3 — проверено опытом в
-  прошлом круге (код не менялся).
-- Решение 1: `orchestrator/amend.py:222-232` (`_plank_lint_errors` →
-  `lint_errors_from_files`), `:1011-1016`, `:1106-1116`, `:1372-1378` —
-  в ветке правила по умолчанию к планке идёт только линт детерминизма. Верно.
-- Решение 6: `orchestrator/amend.py:386-397` — метка файла в снимке
-  `<rel_tests_dir>/…` = `tasks/<id>/acceptance_tests/…`. Верно.
-- `tests/fixtures.py:57-93` — ровно шесть фикстур из требования 3.
-- Приложения: `skills/test-authoring.md`, `skills/review-checklist.md` с
-  `a8ff5c70` не менялись (`git diff --stat` пуст) — проверка
-  `git apply --check` прошлого круга в силе.
+Подтвердилось:
+- `scripts/guard.py:1985` `_fixture_decorator` — только `decorator_list`;
+  `:2036` `_fixture_table`; `:2091` `_FixtureScope`, `records.trace` —
+  `:2163-2177` (фикстура, запрошенная фикстурой, одним уровнем);
+  `:2228` `_fixture_helper_calls`; `:2349` `_changed_fixture_names`;
+  `:2873` `assertion_changes`; `:4399-4407` `long_lived_errors_from_files`
+  с `sandbox_sources`; `:4618` `_style_violations`; `:4725`
+  `pytest_style_errors_from_files`; `:4916-4930` `is_long_lived_test_path`
+  с `<dir>/` из нуля или больше сегментов.
+- `tests/sandbox.py:711` `TmpDirTest`, `:1609` `TmpRootTest`, `:1925`
+  `RealGitSandbox(TmpRootTest)`, `:2534` `construct`, `:2539`
+  `sb = self.sandbox_cls()` вне `try` (try с `:2541`), `:2568`
+  `shared_readonly`. `tests/report_outcome_sandbox.py:335`
+  `ReportSandbox(RealGitSandbox)`, `tests/outcome_gate_sandbox.py:251`
+  `OutcomeGateSandbox(GitignoreCommittedRealGitSandbox)`; есть и цепочки
+  глубже (`tests/merge_outcome_sandbox.py:61`,
+  `tests/components_outcome_sandbox.py:43`, `tests/prior_outcome_sandbox.py:69`)
+  — определение требования 3 их покрывает транзитивностью.
+- `orchestrator/test_lint.py:292` `SANDBOX_SOURCE_PATH =
+  tests/([^/]*_)?sandbox\.py` (захватывает и `tests/test_sandbox.py`, но его
+  классы — `unittest.TestCase` без `TmpDirTest`/`TmpRootTest`, вреда нет).
+- `tests/fixtures.py:42` `_sandbox(cls)`; фикстуры `:57-93` — ровно шесть
+  названных в требовании 3.
+- Классы `tests/sandbox.py` вне определения: `TmpPlanPathTest`
+  (`:738`, временный каталог без подмен `config`), `StubTest` (`:2150`),
+  `FakeProc`/`SpyRun`/`PollGate` — исключены решением №1.3/№2.2,
+  подмен `config` не делают; отклонением не считаю.
+- Опыт: pytest 9.1.1, `inspect.signature(pytest.fixture)` — `scope`
+  только ключевой (`fixture_function=None, *, scope=…`): позиционной формы
+  обхода требования 1 нет.
+- `_pytest_aliases` (`test_lint.pytest_aliases`) с `_pytest_name`
+  (`guard.py:1971-1982`) развёртывают и `import pytest as pt`, и
+  `from pytest import fixture` — опора требования 1 на псевдонимы есть.
 
-Не подтверждено / неточно:
-- **Ф3. Ссылка `scripts/guard.py:2127-2153` (`SPEC.md:78`, решение 3)** как
-  «разбор фикстур, берущих фикстуры» — это `_FixtureScope.requested`, то есть
-  фикстуры *теста* (autouse, параметры, `usefixtures`, `pytestmark`). Фикстуры,
-  запрошенные фикстурой, разбирает `records.trace` (`guard.py:2163-2177`):
-  только параметры фикстуры и одним уровнем. Требование само говорит
-  «транзитивно», так что смысл понятен; неточность только в адресе. Мелочь.
-- **Ф4. Класс песочницы — «класс `tests/sandbox.py`» (`SPEC.md:85-89`, решение
-  3).** Классы песочниц живут и в `tests/*_sandbox.py`: `ReportSandbox(RealGitSandbox)`
-  `tests/report_outcome_sandbox.py:335`, `OutcomeGateSandbox(GitignoreCommittedRealGitSandbox)`
-  `tests/outcome_gate_sandbox.py:251`, `MergeOutcomeSandbox`, `PriorSandbox`,
-  `ComponentsOutcomeSandbox` и другие. Пульт сам считает эти модули модулями
-  песочниц (`orchestrator/test_lint.py:290-296` `SANDBOX_SOURCE_PATH`,
-  `scripts/guard.py:4502` `sandbox_sources_from_dir`). Долгоживущему файлу
-  импорт `tests.*` разрешён (`guard.py:4122-4125`). См. обход О6.
+Не подтвердилось / не сказано:
+- **Ф1. Реальный путь проверки стиля не получает `sandbox_sources`.**
+  `pytest_style_errors_from_files` вызывается в коде пульта только из
+  `long_lived_errors_from_files` (`scripts/guard.py:4462-4463`, без
+  `sandbox_sources`). Вызывающие передают дерево кодовой ветки только в
+  `long_lived_errors_from_files`: `orchestrator/advance_gates/tests_writing.py:519-526`
+  (рабочая копия), `:651-662` (`sandbox_sources_at(code_branch)`),
+  `orchestrator/preflight.py:261-300`, `orchestrator/amend.py:1125-1136`,
+  `:1390-1409`. Требование 3 (SPEC.md:108-114) требует «перечень по
+  исходникам модулей песочниц из того же дерева, что проверяемые файлы»,
+  но называет лишь новый параметр `pytest_style_errors_from_files` с
+  `None` → `config.ROOT`; проброс из `long_lived_errors_from_files` не
+  назван. Буквальная реализация оставит `guard.py:4462` без аргумента, и
+  перечень на всех трёх местах требования 6 будет из `config.ROOT` —
+  корня пульта (`orchestrator/config.py:11`), а не дерева кодовой ветки:
+  класс песочницы, добавленный в ветке задачи в `tests/<имя>_sandbox.py`,
+  не распознается. Ни один AC этого не ловит (AC-4 зовёт
+  `pytest_style_errors_from_files` напрямую). Побочный эффект проброса:
+  `tests_writing.py:651-652` передаёт `{}` при выключенном `size_marks`,
+  и тогда классовая часть требования 3 молча выключится (у артели
+  `size_marks: required`, `targets.yaml:56` — сейчас не проявляется).
 
 ## Проверяемость критериев
 
 | Критерий | Проверяем | Ловимая мутация |
 |---|---|---|
-| AC-1 | да | пропуск любого из четырёх литералов или не литерала; отказ на `scope="function"`/без `scope`. До кода: отказа нет — красно; исходники в памяти, безопасно. **Не ловит** «`scope=` в форме вызова `pytest.fixture(scope=…)(f)` пропускается» (обход О7). Не задан исход для `scope=None` (литерал, но не один из пяти). |
-| AC-2 | да | одна из шести форм импорта не распознана; утверждение в `build`/его помощнике не отклоняется; лямбда/импорт пропускаются; любая из пяти иных форм вызова не отклонена. До кода безопасно. |
-| AC-3 | да | присваивание не в таблице фикстур; помощник `build` не прослеживается (новый случай); трассировка всех функций модуля. До кода: изменений не называет — красно. |
-| AC-4 | да | правило не применяется; `usefixtures` не учтён; обёртка, транзитивная обёртка, `RealGitSandbox()`, транзитивный локальный подкласс не учтены; `FakeProc` ложно отказан; вторая фикстура не отказана; добавленное присваивание освобождает. **Не ловит** класс из `tests/*_sandbox.py` (О6) и создание не вызовом имени класса (О8). |
-| AC-5 | да | конструктор вне `try`; уборка без `sb is not None` → `UnboundLocalError`. До кода красно и без зависания (проверено опытом в прошлом круге); форма подпроцесса задана. |
-| AC-6 | да | строка размера у файла планки — по обоим видам метки. Обратную мутацию «размер снят со всех» ловят `tests/test_01m6xhjh6ej8d0br5prngzay8c_size_rules.py`. |
-| AC-7 | да | сводка мутаций AC-1…AC-6, в том числе «помощник build не прослеживается». |
+| AC-1 | да | `scope=` в декораторе не проверяется; не литерал пропущен; псевдоним `pt.fixture` не развёрнут; присваивание `pytest.fixture(scope=…)(f)` пропущено; ложный отказ на `scope="function"`/`None`. До кода — красный по отсутствию отказа, без побочных процессов (строки в памяти) |
+| AC-2 | да | присваивание не распознано через `import tests.sandbox as m`/`from tests import sandbox`/псевдоним; `assert` в `build` или его помощнике не отклоняется; лямбда как `build` принята; иная форма вызова не отклонена. Красный до кода по отсутствию отказов |
+| AC-3 | да | `build` не попадает в `_fixture_table`; помощник `build` не прослеживается; прослеживается функция, которую `build` не вызывает. До кода — красный (гейт не называет изменение) |
+| AC-4 | да | `tmp_root` через параметр/`usefixtures`/обёртку/транзитивную обёртку пропущен; `RealGitSandbox()`/`R()`/`_sandbox(...)` пропущены; подкласс из `tests/*_sandbox.py`/цепочки не распознан; `FakeProc` ложно отклонён; второе присваивание принято; `lint_base` освобождает добавленное присваивание; `{}` бросает. **Не ловит** «`long_lived_errors_from_files` не передаёт `sandbox_sources`» (Ф1) |
+| AC-5 | да | конструктор вне `try`; уборка `_run_cleanups(None)` без проверки `sb is not None` (подменит исключение, `failure` не выставится). Подпроцесс pytest — с пределом времени и своей группой процессов по разделу безопасности; до кода — красный (`AttributeError` у второго/третьего теста), рекурсии и меняющих команд нет |
+| AC-6 | да | фильтр метки отсутствует; фильтр только `acceptance_tests/` без `tasks/<id>/`; фильтр «содержит `acceptance_tests`» снимает размер с `tests/acceptance_tests/…`; `long_lived_plank_errors` сломан. Красный до кода по лишней строке |
+| AC-7 | да | сводка мутаций AC-1…AC-6 |
 
 ## Зоны
-- Зоны `scripts/guard.py, tests/sandbox.py, docs/codebase-map.md, tests/`
-  покрывают требования 1–5. После решения 1 требование 6 не требует
-  `orchestrator/amend.py`.
-- Правило требования 3 нуждается в перечне классов песочниц. Поверхность
-  `pytest_style_errors_from_files(files, lint_base=None)` (AC-1, AC-2, AC-4)
-  не принимает источники песочниц, в отличие от
-  `long_lived_errors_from_files(…, sandbox_sources)` (`guard.py:4399-4407`).
-  Значит, перечень берётся либо с диска `config.ROOT`
-  (`sandbox_sources_from_dir`), либо зашивается в код. Оба способа укладываются
-  в зоны, канал SPEC не задаёт. Обойдёт это повторное использование
-  `test_lint.heavy_sandbox_names` с корнями `TmpDirTest`/`TmpRootTest`
-  (`orchestrator/test_lint.py:317-339`, только чтение, импорт допустим).
-- Защищённые пути — только приложениями PLAN. Песочница ролей не
+- Требования 1–5 меняют `scripts/guard.py` и `tests/sandbox.py` (входит и
+  в `tests/`), новые тесты — `tests/`, карта — `docs/codebase-map.md`;
+  зоны SPEC это покрывают.
+- Вызывающие в `orchestrator/` (tests_writing, preflight, amend) не
+  требуют правки: проброс Ф1 закрывается внутри `scripts/guard.py`.
+- Защищённые пути `skills/test-authoring.md`, `skills/review-checklist.md`
+  — только приложениями PLAN (требование 7); песочница ролей не
   расширяется.
 
 ## Матрица неослабления
 
 | Что меняется | Какое свойство сейчас держит (тест, гейт, лимит, проверка — файл:строка) | Остаётся ли свойство после изменения | Чем покрыто после (тест файл:строка) или «не покрыто» | Решение |
 |---|---|---|---|---|
-| `_style_violations` — запрет `scope=` | изоляция теста — своя песочница | да, усиливается | AC-1; форма вызова `pytest.fixture(scope=…)(f)` не покрыта (О7) | отклонение О7 |
-| `_fixture_table` — общая фикстура с узлом `build` | видимость правки данных фикстуры (`guard.py:2155-2225`) | да, расширяется | AC-3 (тело `build` и его помощник) | ок |
-| `_style_violations` — утверждения в `build` | `guard.py:4640-4666` | да, расширяется | AC-2 | ок |
-| Распознание формы `shared_readonly` и отказ на иные | — | новое | AC-2 | ок |
-| Правило «без других песочниц» | — | новое | AC-4; классы `tests/*_sandbox.py` и создание не вызовом имени не покрыты | отклонение О6, О8 |
-| Одна общая фикстура на модуль | — | новое | AC-4 | ок |
-| `construct` — конструктор в `try` | — (`AttributeError`) | да | AC-5 | ок |
-| `long_lived_errors_from_files` — размер не к файлам планки | `guard.py:4483-4487` | отказ сохраняет `long_lived_plank_errors` (`guard.py:4967-4987`) | AC-6, `…_size_rules.py` | ок; см. О9 про форму «содержит» |
-| Освобождение `lint_base` | `guard.py:4744-4756` | да, с оговоркой требования 3 | AC-4 | ок |
-
-Существующие тесты: `shared_readonly(` в `tests/` вне `sandbox.py` есть только
-внутри строк модулей-образцов
-(`tests/test_01m6xhm9qhegdq6fra5y8g12aq_shared_readonly.py:67,98,132,159`).
-`@pytest.fixture(scope=` в `tests/` нет. Источники
-`tests/test_guard_pytest_fixtures.py` новых правил не задевают. Путь
-`construct` с рабочим конструктором (образец `FailingCleanupSandbox`) не
-меняется. Ломающегося теста не найдено. Раздела «Меняемое поведение» нет и
-не требуется.
+| `_style_violations` (новые отказы) | стиль pytest, `scripts/guard.py:4618`; `tests/test_guard_pytest_fixtures.py:89` | да, отказы только добавляются; в образцах существующих тестов нет `scope=` и `shared_readonly(` вне `tests/test_01m6xhm9qhegdq6fra5y8g12aq_shared_readonly.py` (он правилами не проверяется) | AC-1, AC-2, AC-4 | в силе |
+| `_fixture_table` / прослеживание | гейт неослабления, `scripts/guard.py:2036`, `:2163-2177` | да, плюс `build` | AC-3 | в силе |
+| `pytest_style_errors_from_files` (параметр `sandbox_sources`) | — | да | AC-4; проброс на реальном пути — **не покрыт** (Ф1) | вопрос Оператору |
+| `_SharedModuleState.construct` | `tests/sandbox.py:2534-2557`; тесты части а `tests/test_01m6xhm9qhegdq6fra5y8g12aq_shared_readonly.py:232-481` | да, исход успешного построения не меняется | AC-5 | в силе |
+| `long_lived_errors_from_files` размер | `scripts/guard.py:4483-4487`; `tests/test_01m6xhjh6ej8d0br5prngzay8c_size_*.py` | снимается только с меток `^(tasks/[^/]+/)?acceptance_tests/`; существующие тесты размера таких меток с группой «долгоживущий» не дают | AC-6 | в силе |
+| Освобождение `lint_base` | `scripts/guard.py:4744-4757` | да, с оговоркой требования 3 | AC-4 | в силе |
 
 ## Пути обхода гейтов
-Обходы прошлого круга О1–О4 закрыты решениями 2–4. Новые:
-- **О6. Песочницы вне `tests/sandbox.py`.** В модуле с общей фикстурой
-  `from tests.report_outcome_sandbox import ReportSandbox` и
-  `class T(ReportSandbox)` или `ReportSandbox()` в тесте. По определению
-  `SPEC.md:85-89` это не класс песочницы, и отказа нет, хотя
-  `ReportSandbox` наследует `RealGitSandbox` и подменяет `config`. Так же
-  проходит наследник класса из файла-помощника планки (`acceptance_tests/_sandbox.py`,
-  `guard.py:3103-3110`): требование 3 прослеживает наследование только через
-  «локальные классы файла». Безопасная форма: класс песочницы — любой класс,
-  транзитивно (в том числе между файлами) наследующий `TmpDirTest`/`TmpRootTest`
-  по модулям песочниц `tests/sandbox.py`, `tests/*_sandbox.py` и
-  импортируемым помощникам.
-- **О7. `scope=` без декоратора.** `seeded = pytest.fixture(scope="module")(_seeded)`
-  на уровне модуля pytest регистрирует как фикстуру уровня модуля. Опыт во
-  временном каталоге (подпроцесс pytest, предел 60 с, своя сессия): два теста
-  зелёные, второй видит объект, построенный один раз. Так устроен и сам
-  `shared_readonly` (`tests/sandbox.py:2585-2608`). `_fixture_decorator`
-  (`guard.py:1985-1991`) смотрит только `decorator_list`, требование 1
-  (`SPEC.md:39-46`) и AC-1 (`SPEC.md:128`) — только декоратор. Получается
-  общее состояние вне помощника и без сторожа — ровно то, что запрещает
-  ADR-0032 п. 4. Безопасная форма: отказ на любом вызове `pytest.fixture(…)`
-  с `scope=` (декоратор или вызов) плюс отдельный случай AC-1.
-- **О8. Создание песочницы не вызовом её имени.** Правило «вызов-создание»
-  (`SPEC.md:79-80`) обходит псевдоним `cls = RealGitSandbox; cls()`, вызов
-  `tests.fixtures._sandbox(RealGitSandbox)` (`tests/fixtures.py:42`), а также
-  `Mine()` от собственного класса, переданного первым аргументом
-  `shared_readonly`: у файла появляется вторая песочница того же класса.
-  Безопасная форма: отказ на любой ссылке на класс песочницы, кроме первого
-  аргумента `shared_readonly` и баз локальных классов, переданных туда, и на
-  создании класса, переданного `shared_readonly`, вне него. Так же обходит
-  «иной вызов» псевдоним функции `sr = shared_readonly; x = sr(Cls, build)`:
-  требование 2 говорит о вызове, а не о ссылке.
-- **О9. «содержит `/acceptance_tests/`» (`SPEC.md:107`, решение 6).**
-  Долгоживущий файл внешнего проекта, у которого шаблон с `<dir>/`
-  (`guard.py:4916-4930`), может лежать в `tests/acceptance_tests/test_<id>_x.py`.
-  Его метка содержит `/acceptance_tests/`, и правила размера с него снимутся.
-  Узкая форма, которая этого не допускает: метка начинается с
-  `acceptance_tests/` или с `tasks/<id>/acceptance_tests/`.
-- **О10 (наблюдение, вне ТЗ).** Кэш в глобале модуля или в
-  `request.node.getparent(pytest.Module).stash` у фикстуры уровня функции —
-  тоже общее состояние без `scope=` и без сторожа. ТЗ ограничивает правило
-  ключом `scope=`, поэтому это не отклонение, а кандидат в строку копилки
-  о слепой зоне. То же наблюдение О5 прошлого круга: `seeded` не тяжёлый для
-  правил размера (`orchestrator/test_lint.py:445-475`).
+- Ф1: исполнитель добавляет параметр и проходит AC-4, не пробросив его
+  на `guard.py:4462` — правило классов песочниц работает по дереву пульта,
+  а не ветки задачи; песочница, добавленная задачей в
+  `tests/<имя>_sandbox.py`, проходит мимо требования 3.
+- Динамические формы (`getattr`, присваивание класса другому имени,
+  `pytest.fixture(**kw)`) — принятый пробел «Не входит» (SPEC.md:231-236);
+  `**kw` формально относится к требованию 1, а оговорка названа для
+  требований 2–3, но под «не литерал» её можно отнести — замечание
+  справочное, не отклонение.
+- Иных путей буквального выполнения в обход смысла не нашёл.
 
 ## Вердикт
-**concerns.** Решения Оператора 1–6 внесены в SPEC полностью, факты в них
-верны, критерии проверяемы и безопасны в красной фазе, существующие тесты не
-ломаются, приложения применяются. Отклонения — на решение Оператора на
-гейте:
+concerns — одно отклонение, решаемое Оператором на гейте:
 
-1. **О7** — запрет `scope=` (`SPEC.md:39-46`, AC-1 `SPEC.md:128`) обходится
-   фикстурой, зарегистрированной присваиванием
-   `x = pytest.fixture(scope="module")(f)`: pytest строит её раз на модуль
-   (подтверждено опытом), `_fixture_decorator` (`scripts/guard.py:1985`) её не
-   видит. Предложение: отказ на любом вызове `pytest.fixture` с `scope=` и
-   случай AC-1.
-2. **О6/Ф4** — определение класса песочницы (`SPEC.md:85-89`) охватывает
-   только `tests/sandbox.py`, а песочницы с подменами `config` есть в
-   `tests/*_sandbox.py` (`tests/report_outcome_sandbox.py:335`,
-   `tests/outcome_gate_sandbox.py:251` и др.; `orchestrator/test_lint.py:290-296`).
-   Наследник из файла-помощника планки тоже не прослеживается. Предложение:
-   все модули песочниц и транзитивное наследование между файлами.
-3. **О8** — правило «вызов-создание» (`SPEC.md:79-80`) обходят псевдоним
-   класса, `tests.fixtures._sandbox(cls)` (`tests/fixtures.py:42`) и повторное
-   создание класса, переданного `shared_readonly`. Правило «иной вызов»
-   (`SPEC.md:55-60`) обходит псевдоним функции `shared_readonly`.
-4. **Зоны/канал** — источник перечня классов песочниц для
-   `pytest_style_errors_from_files` (без параметра `sandbox_sources`) не
-   задан: диск `config.ROOT` или зашитый список (`scripts/guard.py:4399-4407`,
-   `:4502`).
-5. **О9** — форма «содержит `/acceptance_tests/`» (`SPEC.md:107`) шире нужной
-   и может снять правила размера с долгоживущего файла внешнего проекта с
-   сегментом каталога `acceptance_tests` (`scripts/guard.py:4916-4930`).
-6. Мелочи: адрес `scripts/guard.py:2127-2153` в `SPEC.md:78` указывает на
-   `requested`, а не на разбор фикстур фикстуры (`:2163-2177`, Ф3); исход для
-   `scope=None` не задан (AC-1).
-
-Предложения системе: скил `spec-audit` / аналитик — у правила «класс X
-запрещён» сразу задавать охват: все модули, где X определяется, и все
-формы ссылки, а не только вызов имени. Обходы О6 и О8 повторяют класс
-обхода О4 прошлого круга: распознана одна форма, иные не отклонены.
+1. **Ф1** — `scripts/guard.py:4462-4463` (единственный вызов
+   `pytest_style_errors_from_files` на пути `tests_writing`/`preflight`/
+   `amend-tests`) без `sandbox_sources`; SPEC.md:108-114 не требует
+   проброса из `long_lived_errors_from_files`, при `None` перечень берётся
+   из `config.ROOT` (`orchestrator/config.py:11`), а не из дерева кодовой
+   ветки, которое вызывающие уже передают
+   (`orchestrator/advance_gates/tests_writing.py:651-662`,
+   `orchestrator/preflight.py:261-300`, `orchestrator/amend.py:1125-1136`).
+   AC-4 (SPEC.md:165) проброс не ловит. Предлагаемое решение: требование 3
+   дополнить «`long_lived_errors_from_files` передаёт свой
+   `sandbox_sources` в `pytest_style_errors_from_files` (при `None` —
+   модули `config.ROOT`, как сейчас для размера)» и случаем AC-4/AC-7
+   через `long_lived_errors_from_files(..., sandbox_sources={…})` с
+   классом из `tests/<имя>_sandbox.py`; заодно решить, что делать при
+   `sandbox_sources={}` от `tests_writing.py:651-652` у проекта без
+   `size_marks` (сейчас у артели не проявляется, `targets.yaml:56`).

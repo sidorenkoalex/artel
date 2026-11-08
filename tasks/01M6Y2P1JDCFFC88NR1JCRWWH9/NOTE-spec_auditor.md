@@ -1,15 +1,16 @@
 # Записка spec_auditor
 
 ## Выяснено
-- Круг 2 (spec_sha 008324d5): решения Оператора 1–6 внесены в SPEC полностью; факты amend.py:222-232/386-397/1011-1016/1106-1116/1372-1378 верны.
-- Новые находки: (1) обход требования 1 — `seeded = pytest.fixture(scope="module")(f)` присваиванием: pytest строит один раз на модуль (опыт в tmp: 2 passed, второй тест видит тот же объект), `_fixture_decorator` (guard.py:1985) смотрит только декораторы; (2) классы песочниц живут и в `tests/*_sandbox.py` (ReportSandbox(RealGitSandbox), OutcomeGateSandbox…, test_lint.SANDBOX_SOURCE_PATH, guard.sandbox_sources_from_dir), а определение решения 3 — только `tests/sandbox.py`; импорт `tests.*` долгоживущим разрешён; (3) создание песочницы не вызовом класса (`cls = RealGitSandbox; cls()`, `tests.fixtures._sandbox(RealGitSandbox)`) мимо правила «вызов-создание»; (4) «содержит /acceptance_tests/» снимет размер с долгоживущего файла внешнего проекта с сегментом `<dir>/` = acceptance_tests (is_long_lived_test_path); (5) ссылка решения 3 на guard.py:2127-2153 — это `requested` теста, а разбор фикстур, берущих фикстуры, — `records.trace` :2163-2177, одним уровнем.
-- Существующие тесты не ломаются: `shared_readonly(`/`scope=` только в строках образцов.
+- Круг 3 (spec_sha 2fef468d): решения Оператора №2.1–№2.4 внесены в SPEC полностью; адреса guard.py:1985/2036/2163-2177/2228/4399-4407/4618/4916-4930, sandbox.py:711/1609/2534/2539/2568, test_lint.py:290-296, report_outcome_sandbox.py:335, outcome_gate_sandbox.py:251, fixtures.py:42 верны.
+- `pytest_style_errors_from_files` вызывается только из `long_lived_errors_from_files` (guard.py:4462), без `sandbox_sources`; вызывающие (tests_writing.py:519-526, :651-662, preflight.py:261-300, amend.py:301/1125/1390) передают дерево кодовой ветки только в `long_lived_errors_from_files`. SPEC не требует проброса — при `None` перечень берётся из `config.ROOT` (корень пульта, не дерево ветки). Не ловится ни одним AC. При пробросе tests_writing.py:651-652 передаёт `{}` при выключенном size_marks (у артели required, targets.yaml:56).
+- pytest 9.1.1: `scope` у `pytest.fixture` только ключевой — позиционной формы нет.
+- Существующие тесты не ломаются: `scope=` фикстур и `shared_readonly(` — только в образцах test_01m6xhm9…_shared_readonly.py (не проверяется правилами); тесты размера метками acceptance_tests/ с «Группа: долгоживущий» не пользуются.
 
 ## Не сработало
-- Bash с несколькими командами и `$var` отклоняется — по одной команде.
+- Bash с `;`/`|` между командами частично требует одобрения; cd в /tmp запрещён.
 
 ## Где остановился
 - SPEC-AUDIT.md сдан, verdict concerns.
 
 ## Чего не хватило
-- Перечня модулей песочниц (`tests/*_sandbox.py`) в SPEC/карте — нашёлся через test_lint.SANDBOX_SOURCE_PATH.
+- В SPEC нет указания, кто передаёт `sandbox_sources` в `pytest_style_errors_from_files` на реальном пути (guard.py:4462).
