@@ -2025,27 +2025,114 @@ def _parameter_names(func: ast.AST) -> list:
 
 class _Fixture(NamedTuple):
     """Объявление фикстуры: модуль, узел функции, имя регистрации,
-    класс-владелец (`None` — фикстура уровня модуля)."""
+    класс-владелец (`None` — фикстура уровня модуля). `shared` — общая
+    фикстура `shared_readonly`: узел — её функция `build`, чьи параметры
+    не фикстуры (`sb` — песочница)."""
 
     module: _Module
     node: ast.AST
     name: str
     owner: ast.ClassDef | None
+    shared: bool = False
+
+
+# Общая фикстура только для чтения (ADR-0032 п. 4; SPEC
+# 01M6Y2P1JDCFFC88NR1JCRWWH9, требование 2): распознаётся одна форма —
+# `<имя> = shared_readonly(<класс>, <функция этого файла>)` позиционными
+# аргументами на уровне модуля, `shared_readonly` — из `tests.sandbox` любым
+# способом импорта. Её `build` — фикстура `<имя>` для гейта неослабления и
+# для проверки стиля.
+SANDBOX_IMPORT_MODULE = "tests.sandbox"
+SHARED_READONLY_NAME = "shared_readonly"
+FIXTURES_IMPORT_MODULE = "tests.fixtures"
+FIXTURES_SANDBOX_NAME = "_sandbox"
+
+
+def _imported_names(tree: ast.Module, module: str, name: str) -> set:
+    """Выражения (`a.b.c`), которыми файл называет `module.name`: `from
+    module import name [as x]`, `import module [as m]`, `from <пакет>
+    import <модуль> [as m]`."""
+    package, _, leaf = module.rpartition(".")
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            for alias in node.names:
+                if node.module == module and alias.name == name:
+                    found.add(alias.asname or alias.name)
+                elif node.module == package and alias.name == leaf:
+                    found.add(f"{alias.asname or leaf}.{name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == module:
+                    found.add(f"{alias.asname or module}.{name}")
+    return found
+
+
+class _SharedFixture(NamedTuple):
+    """Распознанная общая фикстура: оператор присваивания, имя, выражение
+    класса песочницы и функция `build` файла (`None` — второй аргумент не
+    функция этого файла)."""
+
+    statement: ast.Assign
+    name: str
+    sandbox_cls: ast.AST
+    build: ast.AST | None
+
+
+def _shared_readonly_calls(tree: ast.Module) -> tuple[list, list]:
+    """(общие фикстуры файла по порядку, прочие вызовы `shared_readonly`
+    — ключевые аргументы, вызов вне оператора уровня модуля, без
+    присваивания или с несколькими целями)."""
+    names = _imported_names(tree, SANDBOX_IMPORT_MODULE, SHARED_READONLY_NAME)
+    if not names:
+        return [], []
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, _FUNCTION_NODES)}
+    shared, recognized = [], set()
+    for node in tree.body:
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and _dotted_name(node.value.func) in names):
+            continue
+        call = node.value
+        if len(call.args) != 2 or call.keywords or \
+                any(isinstance(arg, ast.Starred) for arg in call.args):
+            continue
+        sandbox_cls, build = call.args
+        func = functions.get(build.id) if isinstance(build, ast.Name) else None
+        shared.append(_SharedFixture(node, node.targets[0].id, sandbox_cls,
+                                     func))
+        recognized.add(id(call))
+    others = [call for call in ast.walk(tree)
+              if isinstance(call, ast.Call) and id(call) not in recognized
+              and _dotted_name(call.func) in names]
+    return shared, others
 
 
 def _fixture_table(module: _Module | None, body=None,
                    owner: ast.ClassDef | None = None) -> dict:
     """{имя регистрации: _Fixture} фикстур тела `body` (по умолчанию —
-    верхний уровень модуля); последнее объявление имени побеждает."""
+    верхний уровень модуля, вместе с общими фикстурами `shared_readonly`);
+    последнее объявление имени побеждает."""
     if module is None or module.tree is None:
         return {}
     aliases = _pytest_aliases(module.tree)
+    shared = {}
+    if body is None:
+        shared = {id(s.statement): s
+                  for s in _shared_readonly_calls(module.tree)[0]
+                  if s.build is not None}
     table: dict = {}
     for node in module.tree.body if body is None else body:
         if isinstance(node, _FUNCTION_NODES):
             name = _fixture_name(node, aliases)
             if name is not None:
                 table[name] = _Fixture(module, node, name, owner)
+        elif id(node) in shared:
+            found = shared[id(node)]
+            table[found.name] = _Fixture(module, found.build, found.name,
+                                         None, shared=True)
     return table
 
 
@@ -2165,7 +2252,7 @@ class _FixtureScope:
                 return
             seen.add(id(fixture.node))
             found.extend(self._data(fixture, helpers=not nested))
-            if nested:
+            if nested or fixture.shared:
                 return
             for name in _parameter_names(fixture.node):
                 if name in _NOT_FIXTURE_PARAMS:
@@ -2371,12 +2458,22 @@ def _changed_fixture_names(base_source, head_source) -> set:
     fixtures = [(owner, func, _fixture_name(func, aliases))
                 for owner, func in functions
                 if _fixture_name(func, aliases) is not None]
+    # `build` общей фикстуры — её тело: смена `build`, его помощника или
+    # самого присваивания называет имя общей фикстуры (SPEC
+    # 01M6Y2P1JDCFFC88NR1JCRWWH9, требование 2).
+    base_shared = _shared_readonly_calls(base_tree)[0]
+    fixtures += [(None, s.build, s.name) for s in base_shared
+                 if s.build is not None]
+    head_shared = {s.name: ast.dump(s.statement)
+                   for s in _shared_readonly_calls(head_tree)[0]}
 
     def altered(key) -> bool:
         return key in before and after.get(key) != before[key]
 
     changed = {name for owner, func, name in fixtures
                if altered((owner, func.name))}
+    changed |= {s.name for s in base_shared
+                if head_shared.get(s.name) != ast.dump(s.statement)}
     names = set(changed)
     for owner, func, name in fixtures:
         for call in ast.walk(func):
@@ -4442,8 +4539,9 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
     метки размера на уровне модуля освобождает файл (залочен до правила).
     `sandbox_sources` — {путь: текст} модулей песочниц дерева проверки
     (`tests/sandbox.py`, `tests/*_sandbox.py`), по ним один раз на вызов
-    строится перечень `test_lint.heavy_sandbox_names`; `None` — модули
-    песочниц `config.ROOT`."""
+    строится перечень `test_lint.heavy_sandbox_names`, и они же уходят
+    проверке стиля (классы песочниц правила общего состояния); `None` —
+    модули песочниц `config.ROOT`."""
     errors: list[str] = []
     foreign_explanation = _foreign_import_explanation(project_imports)
     heavy = (test_lint.heavy_sandbox_names(
@@ -4459,8 +4557,9 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
         if network_addresses and label.endswith(".py"):
             errors += lint_errors_from_files([(label, source)],
                                              lint_base=lint_base)
-            errors += pytest_style_errors_from_files([(label, source)],
-                                                     lint_base=lint_base)
+            errors += pytest_style_errors_from_files(
+                [(label, source)], lint_base=lint_base,
+                sandbox_sources=sandbox_sources)
         group, _error = plank_file_group(source, labelled)
         if group != GROUP_LONG_LIVED:
             continue
@@ -4493,7 +4592,12 @@ SIZE_ADR = "ADR-0032 п. 2"
 
 def _size_rules_apply(label: str, lint_base: dict[str, str] | None) -> bool:
     """Файл, залоченный без метки размера на уровне модуля, правилам размера
-    не подлежит; залоченный с меткой и новый — подлежит."""
+    не подлежит; залоченный с меткой и новый — подлежит. Файл планки
+    (`PLANK_LABEL_RE`) не подлежит никогда: отказ ему даёт
+    `long_lived_plank_errors` (SPEC 01M6Y2P1JDCFFC88NR1JCRWWH9, требование
+    5)."""
+    if PLANK_LABEL_RE.match(label):
+        return False
     if lint_base is None or label not in lint_base:
         return True
     return test_lint.has_module_size_mark(lint_base[label])
@@ -4585,13 +4689,118 @@ STYLE_MIXED = ("смешение стилей: тест-функции моду�
 class _StyleViolation(NamedTuple):
     """Нарушение стиля: адрес («Класс::функция» либо «<модуль>»), строка,
     текст и чем его прощает залоченная база: имена функций, чей `ast.dump`
-    обязан совпасть с базой, либо `ast.dump` оператора верхнего уровня."""
+    обязан совпасть с базой, либо `ast.dump` оператора верхнего уровня;
+    `statements` — операторы верхнего уровня, которые сверх того обязаны
+    быть в базе (присваивание общей фикстуры)."""
 
     name: str
     line: int
     text: str
     functions: tuple = ()
     statement: str = ""
+    statements: tuple = ()
+
+
+# Правила общего состояния (ADR-0032 п. 4; SPEC 01M6Y2P1JDCFFC88NR1JCRWWH9,
+# требования 1-3).
+SHARED_ADR = "ADR-0032 п. 4"
+WIDE_FIXTURE_SCOPES = ("class", "module", "package", "session")
+STYLE_OTHER_SHARED_CALL = (
+    "иной вызов shared_readonly — только <имя> = shared_readonly(<класс>, "
+    f"<функция>) на уровне модуля ({SHARED_ADR})")
+STYLE_BUILD_NOT_LOCAL = "build общей фикстуры — функция этого файла"
+STYLE_SECOND_SHARED = "вторая общая фикстура в модуле"
+STYLE_OTHER_SANDBOXES = "в модуле с общей фикстурой других песочниц нет"
+# Фикстуры песочниц `tests/fixtures.py` (требование 3).
+COMMON_SANDBOX_FIXTURES = frozenset((
+    "tmp_dir", "tmp_root", "initialized_tmp_root", "real_git",
+    "origin_real_git", "light_transition"))
+SANDBOX_ROOT_CLASSES = ("TmpDirTest", "TmpRootTest")
+# Метка файла планки у guard: путь от каталога задачи либо снимок
+# `amend-tests` `tasks/<id>/acceptance_tests/…` (требование 5).
+PLANK_LABEL_RE = re.compile(r"^(tasks/[^/]+/)?acceptance_tests/")
+
+
+def _fixture_scope_text(call: ast.Call) -> str | None:
+    """Уровень `scope=` вызова `pytest.fixture` шире функции — как его
+    называет отказ; `None` — уровня нет, он `None`, `"function"` или иной
+    литерал."""
+    kw = _decorator_keyword(call, "scope")
+    if kw is None:
+        return None
+    if isinstance(kw.value, ast.Constant):
+        value = kw.value.value
+        return value if value in WIDE_FIXTURE_SCOPES else None
+    return f"`{ast.unparse(kw.value)}`"
+
+
+def _sandbox_class_names(sources: dict) -> frozenset:
+    """Имена классов песочниц в исходниках `sources` ({путь: текст} модулей
+    песочниц): `TmpDirTest`, `TmpRootTest`, определённые там, и все их
+    подклассы там же — в том числе цепочкой между модулями. Сломанный
+    исходник пропускается."""
+    bases: dict[str, set] = {}
+    for text in sources.values():
+        tree = _parse_or_none(text)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                bases.setdefault(node.name, set()).update(
+                    (_dotted_name(b) or "").rsplit(".", 1)[-1]
+                    for b in node.bases)
+    found = {name for name in bases if name in SANDBOX_ROOT_CLASSES}
+    changed = True
+    while changed:
+        changed = False
+        for name, own in bases.items():
+            if name not in found and own & found:
+                found.add(name)
+                changed = True
+    return frozenset(found)
+
+
+class _SandboxRefs:
+    """Чем файл называет классы песочниц `names`: имена импорта `from
+    tests.<…> import <класс> [as x]`, атрибуты модулей `tests.<…>` и
+    локальные классы файла, наследующие их прямо или через другие
+    локальные классы."""
+
+    def __init__(self, tree: ast.Module, names: frozenset):
+        self.names = names
+        self.bound, self.modules = set(), set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and \
+                    (node.module or "").split(".", 1)[0] == TESTS_PACKAGE:
+                for alias in node.names:
+                    if node.module == TESTS_PACKAGE:
+                        self.modules.add(alias.asname or alias.name)
+                    elif alias.name in names:
+                        self.bound.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".", 1)[0] == TESTS_PACKAGE:
+                        self.modules.add(alias.asname or alias.name)
+        self.classes = [node for node in ast.walk(tree)
+                        if isinstance(node, ast.ClassDef)]
+        self.local: set = set()
+        changed = True
+        while changed:
+            changed = False
+            for cls in self.classes:
+                if cls.name not in self.local and \
+                        any(self.is_sandbox(base) for base in cls.bases):
+                    self.local.add(cls.name)
+                    changed = True
+
+    def is_sandbox(self, node: ast.AST) -> bool:
+        dotted = _dotted_name(node)
+        if dotted is None:
+            return False
+        if dotted in self.bound or dotted in self.local:
+            return True
+        prefix, _, attr = dotted.rpartition(".")
+        return prefix in self.modules and attr in self.names
 
 
 def _style_assertion(node: ast.AST, aliases: dict) -> bool:
@@ -4615,15 +4824,21 @@ def _indirect_marks(marks: list) -> list:
             and _decorator_keyword(mark, "indirect") is not None]
 
 
-def _style_violations(tree: ast.Module) -> list:
+def _style_violations(tree: ast.Module, sandbox_names=frozenset) -> list:
+    """Нарушения стиля дерева `tree`; `sandbox_names` — вызов без
+    аргументов, отдающий имена классов песочниц (`_sandbox_class_names`):
+    он нужен только файлу с общей фикстурой."""
     aliases = _pytest_aliases(tree)
     functions = dict(test_lint.top_level_functions(tree))
     tests = _collect_qualified_test_functions(tree)
+    shared, other_shared_calls = _shared_readonly_calls(tree)
+    builds = {s.build.name: s for s in shared if s.build is not None}
     found: list = []
 
-    def add(name, line, text, involved=None, statement=""):
+    def add(name, line, text, involved=None, statement="", statements=()):
         found.append(_StyleViolation(name, line, text,
-                                     tuple(involved or (name,)), statement))
+                                     tuple(involved or (name,)), statement,
+                                     tuple(statements)))
 
     def calls(node):
         return [sub for sub in ast.walk(node) if isinstance(sub, ast.Call)]
@@ -4631,20 +4846,27 @@ def _style_violations(tree: ast.Module) -> list:
     for qualname, node in functions.items():
         owner = qualname.rpartition(TEST_NAME_SEP)[0]
         decorator = _fixture_decorator(node, aliases)
+        # `build` общей фикстуры проверяется как тело фикстуры; отказ
+        # прощается базой, только если и присваивание общей фикстуры в ней.
+        build_of = builds.get(qualname)
+        extra = (ast.dump(build_of.statement),) if build_of else ()
         if decorator is not None:
             if _decorator_keyword(decorator, "params") is not None:
                 add(qualname, decorator.lineno,
                     f"@pytest.fixture(params=…) — {STYLE_HIDDEN_VARIANTS}")
             if _decorator_keyword(decorator, "name") is not None:
                 add(qualname, decorator.lineno, STYLE_FIXTURE_NAME)
+        if decorator is not None or build_of is not None:
             for sub in ast.walk(node):
                 if _style_assertion(sub, aliases):
-                    add(qualname, sub.lineno, STYLE_ASSERTION_IN_FIXTURE)
+                    add(qualname, sub.lineno, STYLE_ASSERTION_IN_FIXTURE,
+                        statements=extra)
             for call in calls(node):
                 canonical = _pytest_name(call.func, aliases)
                 if canonical in _FIXTURE_SKIP_CALLS:
                     add(qualname, call.lineno,
-                        f"{canonical}( в фикстуре — {STYLE_HIDDEN_SKIP}")
+                        f"{canonical}( в фикстуре — {STYLE_HIDDEN_SKIP}",
+                        statements=extra)
                 # Помощник первого уровня: функция модуля либо метод класса
                 # фикстуры — его утверждение тоже утверждение фикстуры.
                 callee = call.func
@@ -4663,7 +4885,8 @@ def _style_violations(tree: ast.Module) -> list:
                     if _style_assertion(sub, aliases):
                         add(helper, sub.lineno,
                             f"утверждение в помощнике фикстуры {qualname} — "
-                            f"{STYLE_ASSERTION_IN_FIXTURE}", (helper, qualname))
+                            f"{STYLE_ASSERTION_IN_FIXTURE}", (helper, qualname),
+                            statements=extra)
         if qualname in tests:
             for call in calls(node):
                 canonical = _pytest_name(call.func, aliases)
@@ -4703,6 +4926,117 @@ def _style_violations(tree: ast.Module) -> list:
                 add(PYTEST_STYLE_MODULE_LABEL, call.lineno,
                     f"{canonical}( на уровне модуля вне pytestmark — "
                     f"{STYLE_HIDDEN_SKIP}", (), statement)
+    found += _shared_state_violations(tree, aliases, shared,
+                                      other_shared_calls, sandbox_names)
+    return found
+
+
+def _statement_owners(tree: ast.Module) -> dict:
+    """{id узла: (адрес, функции, оператор)} — чем нарушение на узле
+    прощается базой: функция или класс верхнего уровня, в котором он стоит,
+    либо сам оператор уровня модуля."""
+    owners = {}
+    for statement in tree.body:
+        if isinstance(statement, (*_FUNCTION_NODES, ast.ClassDef)):
+            where = (statement.name, (statement.name,), "")
+        else:
+            where = (PYTEST_STYLE_MODULE_LABEL, (), ast.dump(statement))
+        for sub in ast.walk(statement):
+            owners[id(sub)] = where
+    return owners
+
+
+def _shared_state_violations(tree: ast.Module, aliases: dict, shared: list,
+                             other_shared_calls: list, sandbox_names) -> list:
+    """Правила общего состояния (SPEC 01M6Y2P1JDCFFC88NR1JCRWWH9,
+    требования 1-3): фикстура уровня шире функции — только через
+    `shared_readonly`; вызов `shared_readonly` — только распознанной формы,
+    одна общая фикстура на модуль, `build` — функция файла; в модуле с общей
+    фикстурой тесты не берут фикстур песочниц `tests/fixtures.py`, а файл
+    не создаёт и не наследует классов песочниц."""
+    owners = _statement_owners(tree)
+    found: list = []
+
+    def add(node, text, involved=None, statements=()):
+        name, functions, statement = owners.get(
+            id(node), (PYTEST_STYLE_MODULE_LABEL, (), ""))
+        found.append(_StyleViolation(
+            name, node.lineno, text,
+            tuple(functions if involved is None else involved), statement,
+            tuple(statements)))
+
+    for call in ast.walk(tree):
+        if isinstance(call, ast.Call) and \
+                _pytest_name(call.func, aliases) == FIXTURE_DECORATOR:
+            scope = _fixture_scope_text(call)
+            if scope is not None:
+                add(call, f"фикстура уровня {scope} — только через "
+                          f"shared_readonly ({SHARED_ADR})")
+    for call in other_shared_calls:
+        add(call, STYLE_OTHER_SHARED_CALL)
+    for second in shared[1:]:
+        add(second.statement, STYLE_SECOND_SHARED)
+    for item in shared:
+        if item.build is None:
+            add(item.statement, STYLE_BUILD_NOT_LOCAL)
+    if not shared:
+        return found
+
+    # Освобождение базой — только если в ней и то же присваивание общей
+    # фикстуры: добавленное в залоченный файл, оно освобождения не даёт.
+    anchor = (ast.dump(shared[0].statement),)
+    own = _module_entry(None, "", tree)
+    scope = _FixtureScope(own, None)
+
+    def qualified(fixture: _Fixture) -> str:
+        return f"{fixture.owner.name}{TEST_NAME_SEP}{fixture.node.name}" \
+            if fixture.owner is not None else fixture.node.name
+
+    def common_path(names, classwide, requester, seen):
+        """Фикстуры файла по пути к фикстуре `tests/fixtures.py` (пустой
+        список — взята прямо); `None` — пути нет."""
+        for name in names:
+            fixture = scope.resolve(name, classwide, requester)
+            if fixture is None:
+                if name in COMMON_SANDBOX_FIXTURES:
+                    return []
+                continue
+            if fixture.shared or id(fixture.node) in seen:
+                continue
+            seen.add(id(fixture.node))
+            inner = [p for p in _parameter_names(fixture.node)
+                     if p not in _NOT_FIXTURE_PARAMS]
+            path = common_path(
+                inner, classwide if fixture.owner is not None else {},
+                fixture, seen)
+            if path is not None:
+                return [qualified(fixture), *path]
+        return None
+
+    for qualname, func in _collect_qualified_test_functions(tree).items():
+        owner = qualname.split(TEST_NAME_SEP, 1)[0] \
+            if TEST_NAME_SEP in qualname else None
+        cls = own.defs.get(owner) if owner else None
+        cls = cls if isinstance(cls, ast.ClassDef) else None
+        classwide = _fixture_table(own, cls.body, cls) if cls else {}
+        path = common_path(scope.requested(func, cls, classwide), classwide,
+                           None, set())
+        if path is not None:
+            add(func, STYLE_OTHER_SANDBOXES, (qualname, *path), anchor)
+
+    refs = _SandboxRefs(tree, sandbox_names())
+    fixtures_sandbox = _imported_names(tree, FIXTURES_IMPORT_MODULE,
+                                       FIXTURES_SANDBOX_NAME)
+    for call in ast.walk(tree):
+        if isinstance(call, ast.Call) and \
+                (refs.is_sandbox(call.func)
+                 or _dotted_name(call.func) in fixtures_sandbox):
+            add(call, STYLE_OTHER_SANDBOXES, statements=anchor)
+    exempt = {item.sandbox_cls.id for item in shared
+              if isinstance(item.sandbox_cls, ast.Name)}
+    for cls in refs.classes:
+        if cls.name in refs.local and cls.name not in exempt:
+            add(cls, STYLE_OTHER_SANDBOXES, statements=anchor)
     return found
 
 
@@ -4723,7 +5057,8 @@ def _class_and_function_dumps(tree: ast.Module) -> dict:
 
 
 def pytest_style_errors_from_files(files: list[tuple[str, str]], *,
-                                   lint_base: dict[str, str] | None = None
+                                   lint_base: dict[str, str] | None = None,
+                                   sandbox_sources: dict[str, str] | None = None
                                    ) -> list[str]:
     """Нарушения стиля pytest (SPEC 01M5N9WK9SGB7KDYJP736DP6CV, требования
     6-7) по (label, текст) парам: «<метка>::<функция>: строка N:
@@ -4735,8 +5070,25 @@ def pytest_style_errors_from_files(files: list[tuple[str, str]], *,
     `lint_errors_from_files`: нарушение не считается, если функции, на
     которых оно стоит, в базе под тем же именем совпадают по `ast.dump`;
     модульное — если среди операторов верхнего уровня базы есть оператор с
-    тем же `ast.dump`; смешение — если залоченный текст стили смешивал."""
+    тем же `ast.dump`; смешение — если залоченный текст стили смешивал.
+    Нарушение правил общего состояния прощается, только если в базе есть и
+    то же присваивание общей фикстуры (SPEC 01M6Y2P1JDCFFC88NR1JCRWWH9,
+    требование 3).
+
+    `sandbox_sources` — {путь: текст} модулей песочниц дерева проверки
+    (`tests/sandbox.py`, `tests/*_sandbox.py`), по ним строится перечень
+    классов песочниц правила общего состояния; `None` — модули песочниц
+    `config.ROOT`. Читаются они только для файла с общей фикстурой."""
     errors: list[str] = []
+    names: list = []
+
+    def sandbox_names() -> frozenset:
+        if not names:
+            names.append(_sandbox_class_names(
+                sandbox_sources if sandbox_sources is not None
+                else sandbox_sources_from_dir(config.ROOT)))
+        return names[0]
+
     for label, source in files:
         tree = _parse_or_none(source)
         if tree is None:
@@ -4747,12 +5099,14 @@ def pytest_style_errors_from_files(files: list[tuple[str, str]], *,
         base_statements = {ast.dump(node) for node in base_tree.body} \
             if base_tree else set()
         current = _class_and_function_dumps(tree)
-        for violation in _style_violations(tree):
+        for violation in _style_violations(tree, sandbox_names):
             if violation.statement:
-                if violation.statement in base_statements:
-                    continue
-            elif all(name in base and base[name] == current.get(name)
-                     for name in violation.functions):
+                released = violation.statement in base_statements
+            else:
+                released = all(name in base and base[name] == current.get(name)
+                               for name in violation.functions)
+            if released and all(statement in base_statements
+                                for statement in violation.statements):
                 continue
             line = f"{label}::{violation.name}: строка {violation.line}: " \
                    f"{violation.text}"
