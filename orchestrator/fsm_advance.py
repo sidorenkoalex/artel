@@ -31,7 +31,7 @@ from .advance_gates.acceptance import (_acceptance_lock_refuses,
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
 from .advance_gates.outcome_integrity import (_outcome_integrity_gate_refuses,
-                                              verifying_gate)
+                                              early_base_push, verifying_gate)
 from .advance_gates.plan_appendix import (
     PLAN_APPENDIX_GATE_FAILURE_ACTION,
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION, _plan_appendix_gate,
@@ -677,6 +677,10 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                  else store.get_task(conn, task_id)["fixed_sha"])
     store.update_task(conn, task_id, tests_locked_sha=locked_sha)
     fsm._maybe_ensure_draft_mr(conn, task_id)
+    # Ранний запуск задания CI базы `ci_base: branch` (SPEC
+    # 01M6TT4FKD1JWSJFVJ7328K03Y, требование 4) — только на этом входе в
+    # `in_dev`; одна попытка без ожидания, сбой перехода не трогает.
+    early_base_push(conn, task_id, store.get_task(conn, task_id))
     return False
 
 

@@ -380,6 +380,9 @@ PUSH_SUBCOMMANDS = ("push", "send-pack")
 PUSH_RESET_CONFIG = ("-c", "push.followTags=false", "-c", "push.pushOption=")
 PUSH_ALLOWED_FLAGS = ("-u", "--set-upstream", "-q", "--delete")
 PUSH_LEASE_FLAG = "--force-with-lease"
+# Принудительная отправка — только в ветку отчёта базы записи (SPEC
+# 01M6TT4FKD1JWSJFVJ7328K03Y, требование 6).
+PUSH_FORCE_FLAGS = ("--force", "-f")
 ARTIFACT_REF_PREFIX = "refs/artifacts/"
 GIT_CONFIG_ENV_NAMES = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
 GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
@@ -437,9 +440,14 @@ def push_policy_text(project: str, entry: dict) -> str:
     `entry` (SPEC 01M6EZXVFGCHB1S4W45AWJ0QH6, «Термины»)."""
     from . import targets
     template = entry.get("branch_template") or targets.DEFAULT_BRANCH_TEMPLATE
+    # Ключ ветки отчёта базы — только при `ci_base: branch` (SPEC
+    # 01M6TT4FKD1JWSJFVJ7328K03Y, требование 6): у прочих записей текст
+    # прежний побайтно.
+    ci_base = targets.ci_base_branch(entry)
     return (f"project={project}\nbase={entry.get('base') or ''}\n"
             f"branch_template={template}\n"
-            f"artifacts_prefix={ARTIFACT_REF_PREFIX}\n")
+            f"artifacts_prefix={ARTIFACT_REF_PREFIX}\n"
+            + (f"ci_base_branch={ci_base}\n" if ci_base else ""))
 
 
 def push_policy_path(cwd: Path) -> tuple[Path | None, str | None]:
@@ -584,12 +592,18 @@ def pult_identity_args(project: str | None, name: str | None = None,
 
 def pult_message(message: str, project: str | None) -> str:
     """Сообщение коммита пульта: строка `co_author` и трейлер пульта
-    последним абзацем."""
+    последним абзацем. Трейлер — `policy.commit_trailer` записи проекта
+    (пустое значение — трейлера нет), без поля — `PULT_ACTOR_TRAILER`."""
+    entry = _project_entry(project)
     lines = []
-    co_author = _project_entry(project).get("co_author")
+    co_author = entry.get("co_author")
     if isinstance(co_author, str) and co_author.strip():
         lines.append(co_author.strip())
-    lines.append(PULT_ACTOR_TRAILER)
+    trailer = entry.get("commit_trailer", PULT_ACTOR_TRAILER)
+    if trailer:
+        lines.append(trailer)
+    if not lines:
+        return message.rstrip("\n") + "\n"
     return message.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
 
 
@@ -988,10 +1002,17 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
                    or n.startswith(GIT_CONFIG_ENV_PREFIXES)))
     if names:
         return f"переменные окружения {', '.join(names)}"
+    # Ветка отчёта базы (SPEC 01M6TT4FKD1JWSJFVJ7328K03Y, требование 6):
+    # принудительная отправка — только когда каждый refspec идёт в неё.
+    ci_base = targets.ci_base_branch(entry)
+    forcing_base = bool(ci_base) and bool(specs) and all(
+        s["kind"] == "branch" and s["name"] == ci_base for s in specs)
     leases = []
     for flag in flags:
         if flag.startswith(PUSH_LEASE_FLAG + "="):
             leases.append(flag.split("=", 1)[1])
+        elif flag in PUSH_FORCE_FLAGS and forcing_base:
+            continue
         elif flag not in PUSH_ALLOWED_FLAGS:
             return f"флаг {flag} вне белого списка"
     forbidden = entry.get("push_options_forbidden") or []
@@ -1021,6 +1042,17 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
             return f"отправка ссылки {spec['name']} (теги и иные ссылки)"
         if spec["name"] == entry.get("base"):
             return f"отправка в base {spec['name']}"
+        if ci_base and spec["name"] == ci_base:
+            src = _explicit_source(cwd, spec["src"])
+            if src is None:
+                return (f"источник {spec['src']} refspec {spec['spec']} — не "
+                        f"ветка, не HEAD и не sha коммита")
+            reason = _ci_base_source_refusal(cwd, entry, ci_base, src)
+            if reason is not None:
+                return reason
+            spec["src"] = src
+            spec["explicit"] = f"{src}:refs/heads/{ci_base}"
+            continue
         task = spec["task"]
         if task is None or task["state"] in _dead_states():
             return f"ветка {spec['name']} — не ветка живой задачи проекта"
@@ -1051,6 +1083,24 @@ def _whitelist_refusal(project: str, entry: dict, globals_: list, sub: str,
         return _config_redirect_refusal(entry, cwd)
     except _ConfigUnread as exc:
         return f"конфигурация клона не прочитана — сверка не выполнена: {exc}"
+
+
+def _ci_base_source_refusal(cwd: Path, entry: dict, ci_base: str,
+                            src: str) -> str | None:
+    """Причина отказа отправки `src` в ветку отчёта базы `ci_base`: источник
+    — не предок свежего sha `<base>` в `origin` (SPEC
+    01M6TT4FKD1JWSJFVJ7328K03Y, требование 6). Свежий — фетчем без записи
+    в ссылку отслеживания: `refs/remotes/origin/<base>` клона может сдвинуть
+    роль, общий каталог git клона под её управлением."""
+    base = str(entry.get("base") or "")
+    fresh, why = fetch_ref_sha("origin", base, repo=cwd, tracking_refs=False)
+    if not fresh:
+        return (f"ветка отчёта базы {ci_base}: sha {base} в origin не "
+                f"получен — {why}")
+    if not is_ancestor(src, fresh, repo=cwd):
+        return (f"источник {src} отправки в ветку отчёта базы {ci_base} — не "
+                f"предок {base} в origin ({fresh[:12]})")
+    return None
 
 
 def _config_redirect_refusal(entry: dict, cwd: Path) -> str | None:

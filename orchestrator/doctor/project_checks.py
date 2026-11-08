@@ -6,6 +6,7 @@ SPEC 01M574A6YQHAPASS9716Z11G4Q, требование 8; версии инстр
 требования 2-8. Коллаборанты читаются лениво через фасад doctor (см.
 докстринг orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
+import fnmatch
 import json
 import os
 import re
@@ -284,6 +285,100 @@ def check_project_token(check_name: str, name: str, entry: dict,
                         f"токена gh Оператора")
 
 
+COMMIT_AUTHOR_MISSING = "автор коммитов не задан: doctor --fix"
+COMMIT_AUTHOR_NOT_OVERWRITTEN = ("doctor --fix не перезаписывает — правка поля "
+                                 "machine.commit_author локального слоя "
+                                 "Оператором")
+NO_TOKEN_ADDRESS = ("в ответе GET /user нет адреса учётной записи "
+                    "(commit_email, email)")
+
+
+def commit_author_applies(name: str, entry: dict) -> bool:
+    """Строка автора коммитов — только у проекта GitLab с `token_slot`
+    (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E, требование 4). Хостинг — по
+    `forge.ci_by_pipeline`, без сравнения `forge` с литералом."""
+    return (not doctor.repo_context.is_artel(name)
+            and bool(entry.get("token_slot"))
+            and doctor.forge.ci_by_pipeline(name))
+
+
+def check_commit_author(name: str, entry: dict) -> doctor.Check:
+    """`project-commit-author-<проект>`: `machine.commit_author` против
+    владельца токена — имя = `username`, адрес = адрес учётной записи.
+    В процессе роли — пропуск без запроса API. Токен в текст не идёт."""
+    check_name = f"project-commit-author-{name}"
+    if doctor.runner.in_role_environment():
+        return doctor.Check(check_name, "skip", ROLE_SKIP)
+    user = doctor.forge.token_user(name)
+    if user.reason:
+        return doctor.Check(check_name, "warn",
+                            f"владелец токена проекта {name} не прочитан: "
+                            f"{user.reason} — автор коммитов не сверен")
+    if not user.commit_email:
+        return doctor.Check(check_name, "warn",
+                            f"проект {name}: {NO_TOKEN_ADDRESS} — автор "
+                            f"коммитов не сверен")
+    author = entry.get("commit_author")
+    if not isinstance(author, dict):
+        return doctor.Check(check_name, "fail",
+                            f"проект {name}: {COMMIT_AUTHOR_MISSING}")
+    mismatches = []
+    if author.get("name") != user.username:
+        mismatches.append(f"имя записано {author.get('name')!r}, у владельца "
+                          f"токена username {user.username!r}")
+    if author.get("email") != user.commit_email:
+        mismatches.append(f"адрес записан {author.get('email')!r}, у "
+                          f"владельца токена {user.commit_email!r}")
+    if mismatches:
+        return doctor.Check(check_name, "fail",
+                            f"проект {name}: machine.commit_author не "
+                            f"совпадает с владельцем токена — "
+                            f"{'; '.join(mismatches)}; "
+                            f"{COMMIT_AUTHOR_NOT_OVERWRITTEN}")
+    return doctor.Check(check_name, "ok",
+                        f"проект {name}: автор коммитов совпадает с "
+                        f"владельцем токена")
+
+
+def commit_author_checks(name: str, entry: dict) -> list:
+    """Строка сторожа автора коммитов, если она проекту положена."""
+    if not commit_author_applies(name, entry):
+        return []
+    return [check_commit_author(name, entry)]
+
+
+def fix_commit_authors() -> None:
+    """`doctor --fix`: автопоиск `machine.commit_author` проектов GitLab
+    без поля по владельцу токена (SPEC 01M6RB74H9BDTJAA5D2S4QPK1E,
+    требование 2). Заданное поле не трогается; в процессе роли `token_user`
+    не зовётся. Отказ — строка с причиной, прочие починки идут дальше."""
+    if doctor.runner.in_role_environment():
+        return
+    try:
+        declared = doctor.targets.load()
+    except doctor.targets.TargetsError:
+        return
+    for name, entry in declared.items():
+        if entry.get("commit_author") is not None \
+                or not commit_author_applies(name, entry):
+            continue
+        prefix = f"Автор коммитов проекта {name}"
+        user = doctor.forge.token_user(name)
+        if user.reason:
+            print(f"{prefix}: не записан — владелец токена не прочитан: "
+                  f"{user.reason}")
+            continue
+        if not user.commit_email:
+            print(f"{prefix}: не записан — {NO_TOKEN_ADDRESS}")
+            continue
+        refusal, done = doctor.projects.set_commit_author(
+            name, {"name": user.username, "email": user.commit_email})
+        if refusal:
+            print(f"{prefix}: не записан — {refusal}")
+        else:
+            print(f"{prefix}: записан — {done}")
+
+
 CI_TOKEN_ACTIONS_WARNING = ("CI читается по Actions runs; для check-runs "
                             "токену нужно право Checks: read")
 _HTTP_CODE_RE = re.compile(r"\(HTTP ([1-5][0-9][0-9])\)")
@@ -461,7 +556,68 @@ def component_checks(name: str, entry: dict) -> list:
         if human and fields.get("full_suite") in CI_FULL_SUITES:
             checks.append(check_ci_reruns(f"project-ci-reruns-{prefix}", clone,
                                           fields))
+        if doctor.targets.ci_base_branch(entry, comp):
+            checks.append(check_ci_base_branch(f"project-ci-base-{prefix}",
+                                               name, entry, clone))
     return checks
+
+
+def check_ci_base_branch(check_name: str, name: str, entry: dict,
+                         clone: Path):
+    """Ветка отчёта базы компонента `ci_base: branch` (SPEC
+    01M6TT4FKD1JWSJFVJ7328K03Y, требование 9), только чтением: не защищена
+    на хостинге (`forge.protections`, маски ветвей — как у хостинга), а у
+    проекта `target-human` файл политики клона несёт ключ
+    `ci_base_branch=` — без него хук `pre-push` отправку базы откажет.
+    Белый список единой точки пропускает ветку по записи. Невыполненное
+    условие — `warn` с причиной."""
+    branch = doctor.targets.ci_base_branch(entry)
+    problems = []
+    if not entry.get("token_slot"):
+        problems.append(f"защиты не проверены — {NO_TOKEN_SLOT}")
+    else:
+        info = doctor.forge.project_info(name)
+        prot = doctor.forge.protections(name)
+        if info.reason or info.access_level is None or \
+                info.access_level < MAINTAINER_LEVEL:
+            problems.append(f"защиты не проверены — "
+                            f"{info.reason or 'нужна роль Maintainer токена'}")
+        elif prot.reason:
+            problems.append(f"защиты не прочитаны — {prot.reason}")
+        else:
+            hit = [p for p in prot.branches or []
+                   if fnmatch.fnmatchcase(branch, str(p))]
+            if hit:
+                problems.append(f"ветка защищена на хостинге "
+                                f"({', '.join(hit)}) — отправка базы будет "
+                                f"отказана")
+    human = doctor.targets.merged_by_project_people(entry)
+    if human:
+        path, error = doctor.workspace.push_policy_path(clone)
+        text = ""
+        if error is None:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                error = f"файл политики {path} не читается: {exc}"
+        if error is not None:
+            problems.append(error)
+        elif f"ci_base_branch={branch}" not in text.splitlines():
+            problems.append(f"файл политики клона {path} без ключа "
+                            f"ci_base_branch={branch} — хук pre-push откажет "
+                            f"отправке базы (восстановить: artel.py doctor "
+                            f"--fix)")
+    if problems:
+        return doctor.Check(check_name, "warn",
+                            f"ветка отчёта базы {branch}: "
+                            f"{'; '.join(problems)}")
+    rules = ("отправку в неё пропускают белый список единой точки и "
+             "политика клона" if human else
+             "отправку в неё пропускают белый список единой точки и "
+             "запись проекта")
+    return doctor.Check(check_name, "ok",
+                        f"ветка отчёта базы {branch}: не защищена на "
+                        f"хостинге; {rules}")
 
 
 # Вызовы `docker` строк doctor (SPEC 01M6PAJ61DP2R2CMM71PJ8W0KF, требования

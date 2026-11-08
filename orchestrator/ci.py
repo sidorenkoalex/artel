@@ -1325,6 +1325,83 @@ def accepted_full_suite(sha: str, repo: Path | None = None) -> tuple[str, str]:
     return "", "CI не сообщил ID прогона полного набора"
 
 
+# Публикация сценария `scripts/plan_appendix_ci.py` для приёмки (SPEC
+# 01M6TRKY1A41QSZMCXY9TKYXG7, требование 2; ANSWER-4 п. 1): одна аннотация
+# проверки с этим заголовком. Литералы совпадают со сценарием — он пакет
+# пульта не импортирует.
+PUBLICATION_TITLE = "plan-appendix-docs"
+PUBLICATION_APPLIED = "applied"
+PUBLICATION_OUTCOMES = (PUBLICATION_APPLIED, "no-plan", "no-appendices",
+                        "no-ref")
+_PUBLICATION_RE = re.compile(
+    r"ref=(?P<ref>[0-9a-f]{40}|); "
+    rf"outcome=(?P<outcome>{'|'.join(map(re.escape, PUBLICATION_OUTCOMES))}); "
+    r"diffs=(?P<diffs>(?:[0-9a-f]{64}(?:,[0-9a-f]{64})*)?)")
+
+
+class CiPublication(NamedTuple):
+    """Разобранная публикация: sha ссылки документов (пусто — ссылки нет),
+    исход и упорядоченный список sha256 диффов приложений."""
+    ref: str
+    outcome: str
+    diffs: tuple
+
+
+def parse_publication(message: str) -> CiPublication | None:
+    """Текст аннотации публикации → `CiPublication`; None — не та форма."""
+    found = _PUBLICATION_RE.fullmatch(message.strip())
+    if found is None:
+        return None
+    diffs = found["diffs"]
+    return CiPublication(found["ref"], found["outcome"],
+                         tuple(diffs.split(",")) if diffs else ())
+
+
+def full_suite_publication(sha: str, repo: Path | None = None
+                           ) -> tuple[CiPublication | None, str]:
+    """(публикация, причина отказа) проверки `FULL_SUITE_JOB` коммита `sha`
+    — той, итог которой принимает `accepted_full_suite`; публикации других
+    проверок того же коммита (тот же сценарий идёт и в `python-min`) не
+    читаются. Ни одной или больше одной проверки `FULL_SUITE_JOB`, ни одной
+    или больше одной аннотации `PUBLICATION_TITLE`, текст не в форме,
+    сбой чтения — отказ одной строкой."""
+    if repo is not None and not repo_context.is_artel(repo):
+        return None, "публикация CI проекта не читается"
+    runs, why = check_runs(sha)
+    if runs is None:
+        return None, f"CI не ответил: {why}"
+    suite = [run for run in runs if run.get("name") == FULL_SUITE_JOB]
+    if len(suite) != 1:
+        return None, (f"проверок «{FULL_SUITE_JOB}» у коммита {len(suite)}, "
+                      f"ждётся одна")
+    check_id = _int_or_none(suite[0].get("id"))
+    if check_id is None:
+        return None, f"у проверки «{FULL_SUITE_JOB}» нет id"
+    res = gh("api", f"repos/{{owner}}/{{repo}}/check-runs/{check_id}/"
+                    f"annotations?per_page=100")
+    if res.returncode != 0:
+        detail = _one_line((res.stderr or res.stdout).strip()[:200])
+        return None, (f"аннотации проверки «{FULL_SUITE_JOB}» не прочитаны: "
+                      f"{detail or f'код {res.returncode}'}")
+    try:
+        annotations = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return None, f"аннотации проверки не разобраны: {_one_line(exc)}"
+    if not isinstance(annotations, list):
+        return None, "в ответе gh нет списка аннотаций"
+    mine = [a for a in annotations if isinstance(a, dict)
+            and a.get("title") == PUBLICATION_TITLE]
+    if len(mine) != 1:
+        return None, (f"публикаций «{PUBLICATION_TITLE}» у проверки "
+                      f"«{FULL_SUITE_JOB}» {len(mine)}, ждётся одна")
+    message = mine[0].get("message")
+    parsed = parse_publication(message) if isinstance(message, str) else None
+    if parsed is None:
+        return None, (f"публикация «{PUBLICATION_TITLE}» не в форме: "
+                      f"{_one_line(repr(message))[:200]}")
+    return parsed, ""
+
+
 # Итог задания CI полного набора компонента (SPEC 01M5XZSKK8GZTECA2KWAFHE029,
 # требование 2): зелёный, красный или «неизвестно» с причиной.
 JOB_GREEN = "green"

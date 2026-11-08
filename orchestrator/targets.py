@@ -149,6 +149,12 @@ COMPONENT_FIELDS = dict(PROFILE_FIELDS, **{
     # (SPEC 01M5XZSKK8GZTECA2KWAFHE029, требование 1).
     "full_suite": "full_suite",
     "ci_job": "ci_job",
+    # Источник отчёта базы гейта исходов `ci` (SPEC
+    # 01M6TT4FKD1JWSJFVJ7328K03Y, требование 1): правила записи целиком —
+    # `_check_ci_base`.
+    "ci_base": "ci_base",
+    "ci_base_branch": "ci_base_branch",
+    "ci_base_push_options": "ci_base_push_options",
 })
 # `pult-vitest` только допустим: отчётчик появится в G1б.
 COMPONENT_REPORTS = ("junit-xml", "pult-vitest")
@@ -156,6 +162,9 @@ FULL_SUITE_LOCAL = "local"
 FULL_SUITE_CI = "ci"
 FULL_SUITE_BOTH = "both"
 COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
+CI_BASE_MAIN = "main"
+CI_BASE_BRANCH = "branch"
+CI_BASES = (CI_BASE_MAIN, CI_BASE_BRANCH)
 COMPONENT_TEMPLATE_MARKS = ("<id>", "<dir>", "<name>")
 COMPONENT_DEPENDS_VIA = ("paths", "files", "contract")
 COMPONENT_PATHS_SOURCE = ("file", "key")
@@ -399,7 +408,9 @@ LOCAL_FIELDS = {
                REF_REQUIRED_FIELD: False, REF_SYSTEMS_FIELD: False,
                "branch_template": False, "ref_pattern": False,
                "freshness": False, "squash_before_mr": False,
-               "commit_template": False, "co_author": False,
+               "commit_template": False, "mr_title_template": False,
+               "commit_message_template": False,
+               "co_author": False, "commit_trailer": False,
                "push_options": False, "push_options_forbidden": False,
                "ci_required_jobs": False, "mr_assignee": False,
                "draft_mr": False, "max_in_flight": False,
@@ -417,13 +428,27 @@ DEFAULT_BRANCH_TEMPLATE = "task/{id}-{slug}"
 BRANCH_PLACEHOLDERS = ("{id}", "{slug}", "{ref}")
 DEFAULT_COMMIT_TEMPLATE = "{id}: {text}"
 COMMIT_PLACEHOLDERS = ("{id}", "{ref}", "{text}")
+# Заголовок MR задачи (SPEC 01M6RJDRR027G50D81W8T3T8AK, требования 1-2):
+# умолчание побайтно равно прежнему жёсткому заголовку.
+DEFAULT_MR_TITLE_TEMPLATE = "{id}: {title}"
+MR_TITLE_PLACEHOLDERS = ("{id}", "{ref}", "{title}")
+# Первая строка коммитов пульта в кодовой ветке задачи (SPEC
+# 01M6RN8EY72K25GZ60NSJVVEGG, требования 1-3): умолчание побайтно равно
+# прежнему `<id>: <служебный текст>`.
+DEFAULT_COMMIT_MESSAGE_TEMPLATE = "{id}: {text}"
+COMMIT_MESSAGE_PLACEHOLDERS = ("{id}", "{ref}", "{title}", "{text}")
+_PLACEHOLDER = re.compile(r"\{(id|ref|title|text)\}")
 FRESHNESS = ("merge", "rebase")
 CO_AUTHOR_PREFIX = "Co-authored-by: "
+# Служебная строка коммитов пульта (SPEC 01M6RN8AMHNX6TVYRNJGMTAKXC,
+# требования 1-2): `<Ключ>: <значение>` одной строкой; `""` — строки нет.
+COMMIT_TRAILER = re.compile(r"[A-Za-z0-9-]+: [^\n\r]*\S[^\n\r]*")
 PUSH_OPTION_CI_VARIABLE = "ci.variable="
 PUSH_OPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DELIVERY_POLICY_FIELDS = (
     "branch_template", "ref_pattern", "freshness", "squash_before_mr",
-    "commit_template", "co_author", "push_options", "push_options_forbidden",
+    "commit_template", "mr_title_template", "commit_message_template",
+    "co_author", "commit_trailer", "push_options", "push_options_forbidden",
     "ci_required_jobs", "mr_assignee", "draft_mr", "max_in_flight",
     "max_awaiting", "awaiting_holds_zones", "mr_sync_interval_min")
 # Умолчания полей доставки, которые читает `delivery_policy` (SPEC
@@ -635,6 +660,14 @@ def delivery_policy(entry: dict) -> dict:
     return policy
 
 
+def render_template(template: str, values: dict) -> str:
+    """`template` с подстановками `{id}`, `{ref}`, `{title}`, `{text}` из
+    `values` (SPEC 01M6RN8EY72K25GZ60NSJVVEGG, требование 2): каждая
+    раскрывается ровно один раз за один проход, литералы `{…}` внутри
+    подставленных значений остаются как есть при любом порядке подстановок."""
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], template)
+
+
 def push_option_error(option: object, forbidden: list | tuple = ()) -> str | None:
     """Причина отказа опции отправки `option` — та же норма для элемента
     `policy.push_options` при загрузке и для `-o` в argv отправки; None —
@@ -712,6 +745,36 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
         if commit != DEFAULT_COMMIT_TEMPLATE and not squash:
             refuse("commit_template", "отличный от умолчания — только при "
                                       "squash_before_mr: true")
+    if "mr_title_template" in policy:
+        title = policy["mr_title_template"]
+        if not isinstance(title, str) or not title.strip():
+            refuse("mr_title_template", "не непустая строка")
+        rest = title
+        for mark in MR_TITLE_PLACEHOLDERS:
+            rest = rest.replace(mark, "")
+        if "{" in rest or "}" in rest:
+            refuse("mr_title_template", f"{title!r}: подстановки — только "
+                                        f"{', '.join(MR_TITLE_PLACEHOLDERS)}")
+        if "{ref}" in title and REF_REQUIRED_FIELD not in policy:
+            refuse("mr_title_template", f"{title!r}: {{ref}} без "
+                                        f"policy.{REF_REQUIRED_FIELD}")
+    if "commit_message_template" in policy:
+        message = policy["commit_message_template"]
+        if not isinstance(message, str) or not message.strip():
+            refuse("commit_message_template", "не непустая строка")
+        # Шаблон описывает первую строку сообщения (требование 3): перевод
+        # строки увёл бы часть шаблона в тело коммита.
+        if "\n" in message or "\r" in message:
+            refuse("commit_message_template",
+                   f"{message!r}: перевод строки — шаблон первой строки")
+        rest = _PLACEHOLDER.sub("", message)
+        if "{" in rest or "}" in rest:
+            refuse("commit_message_template",
+                   f"{message!r}: подстановки — только "
+                   f"{', '.join(COMMIT_MESSAGE_PLACEHOLDERS)}")
+        if "{ref}" in message and REF_REQUIRED_FIELD not in policy:
+            refuse("commit_message_template", f"{message!r}: {{ref}} без "
+                                              f"policy.{REF_REQUIRED_FIELD}")
     if "commit_author" in machine:
         author = machine["commit_author"]
         if not (isinstance(author, dict) and set(author) == {"name", "email"}
@@ -725,6 +788,13 @@ def _check_delivery(where: str, policy: dict, machine: dict) -> None:
                 and co_author[len(CO_AUTHOR_PREFIX):].strip()):
             refuse("co_author", f"{co_author!r}: нужна строка, начинающаяся "
                                 f"с {CO_AUTHOR_PREFIX!r}")
+    if "commit_trailer" in policy:
+        trailer = policy["commit_trailer"]
+        if not (isinstance(trailer, str)
+                and (trailer == "" or COMMIT_TRAILER.fullmatch(trailer))):
+            refuse("commit_trailer", f"{trailer!r}: нужна пустая строка или "
+                                     f"одна строка '<Ключ>: <значение>', ключ "
+                                     f"из [A-Za-z0-9-]")
     forbidden = policy.get("push_options_forbidden", [])
     if not _string_list(forbidden):
         refuse("push_options_forbidden", "не список строк")
@@ -967,6 +1037,7 @@ def check(name: str, entry: object, source: Path | None = None, *,
                                f"оставь одно")
         _check_components(name, where, entry[COMPONENTS_FIELD],
                           hosting=entry["forge"], local=local)
+        _check_ci_base(where, entry)
         if name != config.DEFAULT_TARGET:
             _check_knowledge_outside_wrapper(where, entry)
     if KNOWLEDGE_FIELD in entry:
@@ -1322,6 +1393,120 @@ def _check_full_suite_source(here: str, fields: dict, hosting: str) -> None:
                            f"задания CI")
 
 
+CI_BASE_FIELDS = ("ci_base", "ci_base_branch", "ci_base_push_options")
+
+
+def branch_template_matches(template: str, name: str) -> bool:
+    """Имя ветки `name` подходит под шаблон веток задач `template` тем же
+    правилом, что у хука `pre-push` клона `target-human`: каждая
+    подстановка — непустая подстрока, прочие символы — буквально."""
+    parts = re.split(r"\{(?:id|slug|ref)\}", template)
+    return re.fullmatch(".+".join(map(re.escape, parts)), name) is not None
+
+
+def _check_ci_base(where: str, entry: dict) -> None:
+    """Поля источника отчёта базы компонентов (SPEC
+    01M6TT4FKD1JWSJFVJ7328K03Y, требование 1): `ci_base*` — только при
+    `full_suite: ci | both`; ветка и параметры — только при `ci_base:
+    branch`, ветка там обязательна, не `base` записи и не по шаблону веток
+    задач; параметры — норма `push_option_error` с запретами записи;
+    `base` записи — `config.MAIN_BRANCH`; у всех компонентов `ci_base:
+    branch` одни ветка и параметры — отправка базы одна на проект."""
+    template = entry.get("branch_template") or DEFAULT_BRANCH_TEMPLATE
+    forbidden = entry.get("push_options_forbidden") or []
+    first = None
+    for comp, fields in (entry.get(COMPONENTS_FIELD) or {}).items():
+        here = f"{where}: компонент '{comp}'"
+        present = [f for f in CI_BASE_FIELDS if f in fields]
+        if not present:
+            continue
+        mode = fields.get("full_suite", FULL_SUITE_LOCAL)
+        if mode == FULL_SUITE_LOCAL:
+            raise TargetsError(f"{here}: поле '{present[0]}' — допустимо "
+                               f"только при 'full_suite: {FULL_SUITE_CI}' или "
+                               f"'{FULL_SUITE_BOTH}' (full_suite — "
+                               f"'{FULL_SUITE_LOCAL}')")
+        if fields.get("ci_base", CI_BASE_MAIN) != CI_BASE_BRANCH:
+            for field in present:
+                if field != "ci_base":
+                    raise TargetsError(f"{here}: поле '{field}' — допустимо "
+                                       f"только при 'ci_base: "
+                                       f"{CI_BASE_BRANCH}'")
+            continue
+        if "ci_base_branch" not in fields:
+            raise TargetsError(f"{here}: поле 'ci_base_branch' — нет: "
+                               f"обязательно при 'ci_base: {CI_BASE_BRANCH}'")
+        branch = fields["ci_base_branch"]
+        if branch == entry.get("base"):
+            raise TargetsError(f"{here}: поле 'ci_base_branch' — '{branch}' "
+                               f"совпадает с base записи")
+        if branch_template_matches(template, branch):
+            raise TargetsError(f"{here}: поле 'ci_base_branch' — '{branch}' "
+                               f"подходит под шаблон веток задач "
+                               f"'{template}'")
+        options = list(fields.get("ci_base_push_options") or [])
+        for option in options:
+            reason = push_option_error(option, forbidden)
+            if reason is not None:
+                raise TargetsError(f"{here}: поле 'ci_base_push_options' — "
+                                   f"{reason}")
+        if entry.get("base") != config.MAIN_BRANCH:
+            raise TargetsError(f"{here}: поле 'ci_base' — '{CI_BASE_BRANCH}' "
+                               f"только при base записи "
+                               f"'{config.MAIN_BRANCH}' (base — "
+                               f"'{entry.get('base')}'): база verifying — "
+                               f"merge-base с origin/{config.MAIN_BRANCH}")
+        if first is None:
+            first = (comp, branch, options)
+            continue
+        if branch != first[1]:
+            raise TargetsError(f"{here}: поле 'ci_base_branch' — '{branch}' "
+                               f"отличается от '{first[1]}' компонента "
+                               f"'{first[0]}': ветка отчёта базы одна на "
+                               f"проект")
+        if options != first[2]:
+            raise TargetsError(f"{here}: поле 'ci_base_push_options' — "
+                               f"отличается от параметров компонента "
+                               f"'{first[0]}': отправка базы одна на проект")
+
+
+def _ci_base_fields(entry: dict, component: str | None) -> dict | None:
+    """Поля компонента `component` (None — первого) записи `entry` с
+    `ci_base: branch`; None — такого нет."""
+    for comp, fields in (entry.get(COMPONENTS_FIELD) or {}).items():
+        if component is not None and comp != component:
+            continue
+        if isinstance(fields, dict) and \
+                fields.get("ci_base") == CI_BASE_BRANCH:
+            return fields
+    return None
+
+
+def ci_base_branch(entry: dict, component: str | None = None) -> str | None:
+    """Ветка отчёта базы записи `entry` (компонента `component`, если
+    задан): имя только при `ci_base: branch`, иначе None — прежнее
+    поведение гейта исходов, белого списка и политики клона."""
+    fields = _ci_base_fields(entry, component)
+    return fields["ci_base_branch"] if fields is not None else None
+
+
+def ci_base_push_options(entry: dict) -> list:
+    """Параметры отправки базы записи `entry` (`ci_base_push_options`
+    компонентов `ci_base: branch`, одни на запись); пусто — их нет."""
+    fields = _ci_base_fields(entry, None)
+    return list((fields or {}).get("ci_base_push_options") or [])
+
+
+def ci_base_jobs(entry: dict) -> list:
+    """Имена заданий `ci_job` компонентов записи с `ci_base: branch` — по
+    любому из них очередь отправок базы судит о предыдущей отправке."""
+    return [fields["ci_job"]
+            for fields in (entry.get(COMPONENTS_FIELD) or {}).values()
+            if isinstance(fields, dict)
+            and fields.get("ci_base") == CI_BASE_BRANCH
+            and fields.get("ci_job")]
+
+
 def _check_ci_required_jobs(where: str, entry: dict) -> None:
     """`policy.ci_required_jobs` записи проекта людей — только у хостинга,
     реализация которого в реестре `forge` поле читает (признак
@@ -1608,6 +1793,19 @@ def _component_value_error(kind: str, value: object, comp: str,
     if kind == "ci_job":
         return "" if isinstance(value, str) and value.strip() else (
             "не непустая строка — имя задания CI")
+    if kind == "ci_base":
+        if value not in CI_BASES:
+            return f"{value!r}, ожидается {' | '.join(CI_BASES)}"
+        return ""
+    if kind == "ci_base_branch":
+        if not isinstance(value, str) or not value.strip() or \
+                value != value.strip():
+            return "не непустая строка без пробелов по краям — имя ветки"
+        if "{" in value or "}" in value:
+            return f"{value!r}: подстановки в имени ветки недопустимы"
+        return ""
+    if kind == "ci_base_push_options":
+        return "" if _string_list(value) else "не список строк"
     if kind == "paths_source":
         return _exact_strings_error(value, COMPONENT_PATHS_SOURCE)
     if kind == "depends_on":
