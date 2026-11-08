@@ -245,7 +245,7 @@ jobs:
           # Отчёт junit — источник итога полного набора и гейта исходов у
           # пульта (ADR-0031, этап 4б; forge.job_test_report): пишется вне
           # чекаута, чтобы прогон не оставлял файлов в дереве.
-          if [ -d tests ]; then python3 -m pytest tests -n auto -p no:cacheprovider -p timeout -p xdist -o timeout=120 --junitxml="$RUNNER_TEMP/junit/junit.xml"; fi
+          if [ -d tests ]; then python3 -m pytest tests -n auto --dist worksteal -p no:cacheprovider -p timeout -p xdist -o timeout=120 --junitxml="$RUNNER_TEMP/junit/junit.xml"; fi
       - name: отчёт junit полного набора — артефакт junit (ADR-0031, этап 4б)
         # Внутри этого же задания: пульт берёт только артефакт, созданный
         # между началом и концом попытки задания. `always()` — красный
