@@ -55,6 +55,14 @@ schema_version: 5
 3. Правки тестов по мандату ANSWER-1: убраны ключи `job_result`/`job_test_report`
    из параметризации `test_ac16_other_functions_not_implemented_without_gh` и
    словаря `GH_CALLS` (`test_ac13_github_other_functions_refuse`); больше ничего.
+3а. Возврат из verifying (CI прогон 42439642328), мандат ANSWER-3:
+   `tests/test_01m6n7cykdamakenx60cbk7vqx_entry_checks.py::test_ac3_github_people_full_suite_ci_refused`
+   на время метода подменяет `forge.IMPLEMENTATIONS["github"]`
+   (`monkeypatch.setitem`) пространством имён с атрибутами `_GitHub` без
+   `job_test_report` — тем же приёмом, что `test_ac8_registry_attribute_decides_not_literal`.
+   Утверждение отказа (`full_suite` в тексте), имя теста и прочие тесты файла не
+   менялись. Мутация «`_check_full_suite_source` пропускает `github`» краснит
+   метод (проверено временной правкой `targets.py`, возвращена); файл — 25 passed.
 4. Карта `docs/codebase-map.md` — генерацией `scripts/codebase_map.py`; прогон
    тестов затронутых модулей и планки.
 
@@ -86,7 +94,7 @@ schema_version: 5
 | 7 | 1 (`Job.id` в `_GitHub.pipeline_status`) |
 | 8 | 2 (`check_ci_report`, `green_base_commit`, `forge.implements`) |
 | 9 | 1, 2 (GitLab и записи без `report` не затронуты; строка doctor — только при `green_base_commit` у хостинга) |
-| 10 | 3 |
+| 10 | 3 (и 3а — мандат ANSWER-3 на `entry_checks`) |
 | 11 | 1 (в реестре нет хостинга без `job_test_report`; файл не правился) |
 
 ## Влияние на систему
