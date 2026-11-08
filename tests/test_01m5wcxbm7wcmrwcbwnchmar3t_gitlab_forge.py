@@ -368,8 +368,6 @@ GL_CALL_NAMES = list(GL_CALLS)
 
 # Те же функции, кроме `pipeline_status`, для записи `forge: github`.
 GH_CALLS = {
-    "job_result": lambda: forge().job_result(GH, SHA, "test"),
-    "job_test_report": lambda: forge().job_test_report(GH, SHA, "test"),
     "token_user": lambda: forge().token_user(GH),
     "token_expiry": lambda: forge().token_expiry(GH),
     "protections": lambda: forge().protections(GH),
