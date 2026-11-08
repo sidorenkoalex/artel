@@ -92,8 +92,10 @@ schema_version: 5
 Тесты: поведение покрыто долгоживущими файлами задачи
 `tests/test_01m6tt4fkd1jwsjfvj7328k03y_ci_base_{gate,fields,doctor}.py`
 (AC-1…AC-9, AC-13, AC-14) и планкой `acceptance_tests/test_ci_base_push.py`
-(AC-10…AC-12, AC-14); своих тестов сверх них не добавляю — свойств диффа
-вне их охвата нет. Прогоны шага: `plank-run` — 17 passed; три
+(AC-10…AC-12, AC-14). Планка — `Группа: разовый`, поэтому ограничения
+расширения прав отправки стерегут свои долгоживущие тесты в
+`tests/test_ci_base_push_guard.py` (итерация 2, R1-F1/R1-F2; ниже).
+Прогоны шага итерации 1: `plank-run` — 17 passed; три
 долгоживущих файла задачи — зелёные; тесты затронутых модулей
 (`test_push_hook_units`, `test_push_hook_stand`,
 `test_01m5xzskk8gzteca2kwafhe029_component_fields`, `test_component_checks`,
@@ -104,16 +106,43 @@ schema_version: 5
 `test_ci_job_full_suite`) — зелёные без правки. Карта
 `docs/codebase-map.md` регенерирована.
 
+7. Итерация 2 (REVIEW итерации 1):
+   - R1-F2: `_ci_last_attempt` различает «задания нет» и «конвейер не
+     прочитан» (`_pipeline_unread`: итог `unknown` без заданий или с
+     кодом HTTP отказа); `_CiAttempt.unread`. `_ci_base_unfit` и
+     `early_base_push` при несчитанном конвейере не отправляют базу —
+     проходящая негодность, ожидание до следующего опроса
+     (`BASE_UNREAD` в причине). Текст причины `_ci_last_attempt` прежний —
+     отказы записей без `ci_base` побайтно те же.
+   - R1-F1: `tests/test_ci_base_push_guard.py` (стенд `real_git`, как
+     `tests/test_push_hook_stand.py`): `--force` только когда каждый
+     refspec в `ci_base_branch`; источник не предок — отказ белого списка;
+     сверка со свежим `origin/<base>`, а не с локальной ссылкой, и ссылка
+     отслеживания не переписывается; хук пропускает в ветку только предка
+     `origin/<base>`; `kill` и уборка не удаляют ветку; отправка базы
+     только при прочитанном конвейере.
+   - Временные мутации (код возвращён): `all`→`any` в `forcing_base`;
+     снятая проверка предка; фетч с записью в ссылку отслеживания;
+     сверка с `refs/remotes/origin/<base>`; `true` вместо
+     `merge-base --is-ancestor` в хуке; `unread` всегда False — каждая
+     красит свой тест. Тест `kill`/уборки — регрессионный: `cleanup.py`
+     задача не правит, мутации в диффе для него нет.
+   - Прогоны: новый файл — 7 passed; три долгоживущих файла задачи +
+     `test_01m5xzskk8h096fd3cpn05bqnm_ci_outcome_gate` +
+     `test_ci_job_full_suite` — 96 passed;
+     `test_01m6bmg29kzv1rx21hfaxzg3cm_verifying_outcome_gate` — 45 passed;
+     `plank-run` — 17 passed. Карта регенерирована.
+
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
 | 1 | 1 |
-| 2 | 3 |
+| 2 | 3, 7 |
 | 3 | 3 |
 | 4 | 3, 4 |
 | 5 | 3 |
-| 6 | 2 |
+| 6 | 2, 7 |
 | 7 | 3 |
 | 8 | 3 |
 | 9 | 5 |
