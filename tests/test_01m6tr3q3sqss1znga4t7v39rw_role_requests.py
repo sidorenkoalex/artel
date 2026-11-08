@@ -56,8 +56,8 @@ import pytest
 import orchestrator
 from orchestrator import (acceptance, agent_log, config, stack, store,
                           suite_lock, workspace)
-from tests.sandbox import (CATALOG_FIXTURE_TEXT, artel_target_entry,
-                           make_project_repo)
+from tests.sandbox import (_REAL_WHICH, CATALOG_FIXTURE_TEXT,
+                           artel_target_entry, make_project_repo)
 
 CODE_ROOT = Path(orchestrator.__file__).resolve().parent.parent
 SLEEP = shutil.which("sleep") or "/bin/sleep"
@@ -539,7 +539,11 @@ class Pult:
                              encoding="utf-8")
         self.stub.chmod(0o755)
         for name in stack.DECLARED_TOOLS:
-            if shutil.which(name) is None:
+            # Настоящий поиск: `tests.sandbox` подменяет `shutil.which`
+            # ответом-заглушкой для `gh`/`claude`, и без этого заглушка
+            # не создаётся на машине без них (CI) — процесс-водитель
+            # резолвит инструменты по-настоящему.
+            if _REAL_WHICH(name) is None:
                 tool = self.tools / name
                 tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 tool.chmod(0o755)
