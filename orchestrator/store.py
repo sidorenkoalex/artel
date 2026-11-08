@@ -738,6 +738,31 @@ def verify_marked_names(conn: sqlite3.Connection, task_id: str, sha: str,
         "AND visit_step_id=?", (task_id, sha, visit_step_id))}
 
 
+def insert_suite_cost(conn: sqlite3.Connection, target: str, sha: str,
+                      summary: str, reason: str) -> bool:
+    """Сводка цены набора тестов коммита `sha` проекта (SPEC
+    01M6Y44ZPXPQCNYDXQG6FMZPK5, требование 5); `False` — сводка этого sha
+    уже есть, она не меняется."""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO suite_costs (target, sha, recorded_at, summary,"
+        " reason) VALUES (?,?,?,?,?)", (target, sha, now(), summary, reason))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def suite_costs(conn: sqlite3.Connection, target: str) -> list:
+    """Сводки цены набора проекта — позже записанные первыми."""
+    return conn.execute(
+        "SELECT * FROM suite_costs WHERE target=? "
+        "ORDER BY recorded_at DESC, rowid DESC", (target,)).fetchall()
+
+
+def suite_cost_targets(conn: sqlite3.Connection) -> list:
+    """Проекты, у которых есть сводка цены набора."""
+    return [row["target"] for row in conn.execute(
+        "SELECT DISTINCT target FROM suite_costs ORDER BY target")]
+
+
 def delete_external_ref(conn: sqlite3.Connection, kind: str, object_id: str,
                         system: str, key: str) -> bool:
     """Снимает ссылку; `False` — её не было."""

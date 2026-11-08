@@ -279,6 +279,10 @@ def all_checks(conn) -> list[doctor.Check]:
     # требование 6) — рядом с нагрузкой машины: оба о запасе машины.
     checks.append(doctor.check_role_nproc())
     checks.extend(doctor.check_suite_duration(conn))
+    # Цена набора против пределов CI и локального прогона (SPEC
+    # 01M6Y44ZPXPQCNYDXQG6FMZPK5, требование 7) — рядом со скоростью
+    # набора: предмет тот же, длительность полного прогона.
+    checks.extend(doctor.check_suite_cost(conn))
     return checks
 
 

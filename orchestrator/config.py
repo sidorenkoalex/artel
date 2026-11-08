@@ -266,6 +266,14 @@ FULL_SUITE_WORKERS = "auto"
 MACHINE_LOAD_PROCESS_CORES = 4
 SUITE_DURATION_CALIBRATION_RUNS = 8
 SUITE_DURATION_RATIO = 0.6
+# Цена набора тестов (ADR-0032 п. 6, SPEC 01M6Y44ZPXPQCNYDXQG6FMZPK5):
+# предел задания полного набора CI — `timeout-minutes: 40` задания
+# `ci.FULL_SUITE_JOB` в `.github/workflows/ci.yml` (сверяет тест задачи);
+# доля предела, с которой строка `doctor` «suite-cost» предупреждает, и
+# доля, с которой она поднимает алерт `suite.cost`.
+SUITE_COST_CI_LIMIT_SEC = 2400
+SUITE_COST_WARN_RATIO = 0.75
+SUITE_COST_ALERT_RATIO = 0.85
 # Предел ожидания замка полных прогонов машины прогоном гейта пульта (SPEC
 # 01M46D5T8SZ9D6S34TZFX8S46V, требование 2): два полных прогона на пределе
 # FULL_SUITE_TIMEOUT_SEC. Ожидание в предел самого прогона не входит;

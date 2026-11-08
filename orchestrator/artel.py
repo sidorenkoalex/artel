@@ -206,6 +206,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   workspace <id> | report | acceptance-dry-run <id> |
   plank-run <id> [<файл> | --wait <минуты>] |
   suite-run <id> [--wait <минуты> | --failed] |
+  suite-cost [--record <sha> | --record-latest] |
   mutation-run <id> --ref <base|head|worktree> --tests <путь>[,<путь>…]
         [--patches <a>-<b>] [--wait <минуты>] [--wait-lock <минуты>]
         [--copy-table] [--workers <n>] |
@@ -712,6 +713,9 @@ origin main или отставание ветки не определены; п
   suite_run команда `suite-run <id> [--wait <минуты> | --failed]`: полный
             прогон тестов проекта задачи фоном у пульта, сравнение с базой
             ветки, повтор упавших (SPEC 01M462QACEH29RPRD2RZHGHQFM)
+  suite_cost команда `suite-cost`: сводка цены набора тестов по отчёту
+            junit CI `main`, её запись и прирост от задач (SPEC
+            01M6Y44ZPXPQCNYDXQG6FMZPK5)
   mutation_run команда `mutation-run`: патчи мутаций задачи против
             названных тестовых файлов во временной копии фоном у пульта,
             таблица «мутация → исход» (SPEC 01M5NPKPWFEWTYMBYWVR797AM6)
@@ -862,7 +866,8 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           knowledge_cards, lease, liveness, models, mr_sync, mutation_run, notes, pause, pin, plank_run,
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
-                          report, runner, session, snapshot, store, suite_run,
+                          report, runner, session, snapshot, store,
+                          suite_cost, suite_run,
                           targets, task_files, venv, verify, version, watch,
                           workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
@@ -2801,6 +2806,10 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "plank-run": lambda: plank_run.cmd_plank_run(rest[0], *rest[1:]),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
+        # Пишет сводку цены набора в БД пульта и ходит в API хостинга —
+        # команда Оператора, вне белого списка ролей (SPEC
+        # 01M6Y44ZPXPQCNYDXQG6FMZPK5, требование 6).
+        "suite-cost": lambda: suite_cost.cmd_suite_cost(rest),
         "mutation-run": lambda: mutation_run.cmd_mutation_run(rest),
         "preflight": lambda: preflight.cmd_preflight(rest[0]),
         "guard": lambda: _cmd_guard(rest),
