@@ -15,3 +15,4 @@
 2026-11-08 13:51:49Z  escalated  actor=fsm
 2026-11-08 14:16:57Z  review  actor=operator
 2026-11-08 14:25:13Z  acceptance  actor=fsm
+2026-11-08 14:25:16Z  merge_gate  actor=autogate
