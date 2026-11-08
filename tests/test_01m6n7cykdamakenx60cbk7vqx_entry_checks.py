@@ -150,10 +150,13 @@ def flat_with_ci_component(name: str, forge_name: str) -> None:
                               + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
 
 
-def test_ac3_github_people_full_suite_ci_refused(tmp_root, seed):
+def test_ac3_github_people_full_suite_ci_refused(tmp_root, seed, monkeypatch):
     """Запись `github` + `target-human` с компонентом `full_suite: ci` отказывает при загрузке, отказ называет `full_suite`.
 
-    Сценарий: в `targets.yaml` песочницы — запись `github` +
+    Сценарий: под ключом `github` реестра `forge.IMPLEMENTATIONS` на время
+    метода — пространство имён с атрибутами прежней реализации GitHub без
+    `job_test_report` (хостинг, не читающий отчёт задания CI; мандат
+    ANSWER-3). В `targets.yaml` песочницы — запись `github` +
     `target-human` со случайным именем и компонентом `full_suite: ci`
     (`ci_job`, `report` заданы). `targets.target` поднимает `TargetsError`,
     текст несёт `full_suite`.
@@ -162,6 +165,10 @@ def test_ac3_github_people_full_suite_ci_refused(tmp_root, seed):
     проекта людей (исключение по паре или по `merge_gate`) — запись
     загружается.
     """
+    github_impl = forge.IMPLEMENTATIONS["github"]
+    fields = {k: getattr(github_impl, k) for k in dir(github_impl)
+              if not k.startswith("__") and k != "job_test_report"}
+    monkeypatch.setitem(forge.IMPLEMENTATIONS, "github", types.SimpleNamespace(**fields))
     name = project_name(random.Random(seed))
     flat_with_ci_component(name, "github")
     text = load_error(name)

@@ -12,12 +12,18 @@
 """
 import dataclasses
 import datetime
+import io
 import json
 import re
 import subprocess
+import tempfile
+import urllib.parse
+import zipfile
 from dataclasses import dataclass, field
+from pathlib import Path
+from xml.etree import ElementTree
 
-from . import ci, gitlab_adapter, repo_context, targets
+from . import ci, config, gitlab_adapter, repo_context, targets
 
 # Итоги `pipeline_status` и их старшинство (левее — старше): итог набора
 # конвейеров или заданий — старший из итогов его частей.
@@ -67,6 +73,15 @@ class JobResult:
 class TestReport:
     """«`<classname>::<name>` → исход»; `None` — отчёта нет (причина)."""
     outcomes: dict | None = None
+    reason: str = ""
+
+
+@dataclass
+class BaseCommit:
+    """Последний зелёный коммит ветки, у которого задание исполнено
+    (строка `doctor` об отчёте базы, SPEC 01M6TRM6H57TN8V14HGFV0NQXJ,
+    требование 8); `None` — не найден (причина)."""
+    sha: str | None = None
     reason: str = ""
 
 
@@ -219,9 +234,11 @@ def _gh_text(res: subprocess.CompletedProcess) -> str:
 
 
 class _GitHub:
-    """Хостинг GitHub: итог CI — чтение check runs `ci`; функции MR — `gh pr`
-    через `github_call`; прочих функций пока нет (их отказ собирает
-    `_call`)."""
+    """Хостинг GitHub: итог CI, статус и отчёт задания — чтение check runs
+    и артефактов прогона Actions через `gh api` (вход — как у
+    `pipeline_status`, не `github_call`: тот отказывает артели); функции
+    MR — `gh pr` через `github_call`; прочих функций пока нет (их отказ
+    собирает `_call`)."""
 
     CI_BY_PIPELINE = False
     # Исполнитель MR — имя пользователя (`github_adapter.mr_assignee`).
@@ -239,8 +256,11 @@ class _GitHub:
         if runs is None:
             return PipelineStatus(UNKNOWN, f"check runs коммита {sha[:8]} не "
                                            f"прочитаны: {why}")
+        # `id` — номер check run у каждого, в том числе пропущенного:
+        # сверка «одна попытка» `ci.job_full_suite` (требование 7).
         jobs = [Job(str(r.get("name", "?")),
-                    str(r.get("conclusion") or r.get("status") or ""))
+                    str(r.get("conclusion") or r.get("status") or ""),
+                    id=_check_run_number(r))
                 for r in runs]
         if not runs:
             return PipelineStatus(NONE, f"у коммита {sha[:8]} нет check runs")
@@ -364,6 +384,343 @@ class _GitHub:
                                        f"{res.returncode}: {_gh_text(res)}")
         return _GitHub.mr_status(target, mr)
 
+    @staticmethod
+    def job_result(target: str, sha: str, job_name: str) -> JobResult:
+        run, why = _gh_attempt(target, sha, job_name)
+        if run is None:
+            return JobResult(None, why)
+        return JobResult(*_gh_job_status(run, job_name))
+
+    @staticmethod
+    def job_test_report(target: str, sha: str, job_name: str) -> TestReport:
+        artifact, why = _gh_report_artifact(target, job_name)
+        if why:
+            return TestReport(None, why)
+        run, why = _gh_attempt(target, sha, job_name)
+        if run is None:
+            return TestReport(None, why)
+        number = _check_run_number(run)
+        what = f"отчёт задания «{job_name}» (check run {number})"
+        start = _gh_time(run.get("started_at"))
+        end = _gh_time(run.get("completed_at"))
+        if run.get("status") != "completed" or start is None or end is None:
+            return TestReport(None, f"{what}: попытка не завершена — окна "
+                                    f"started_at–completed_at нет")
+        remote, why = _gh_remote(target)
+        if why:
+            return TestReport(None, f"{what}: {why}")
+        job, why = _gh_json(remote, f"repos/{{owner}}/{{repo}}/actions/jobs/"
+                                    f"{number}")
+        run_id = job.get("run_id") if isinstance(job, dict) else None
+        if not isinstance(run_id, int) or isinstance(run_id, bool):
+            return TestReport(None, f"{what}: прогон Actions попытки не "
+                                    f"прочитан: {why or 'в ответе нет run_id'}")
+        items, why = _gh_run_artifacts(remote, run_id, artifact)
+        if items is None:
+            return TestReport(None, f"{what}: артефакты прогона {run_id} не "
+                                    f"прочитаны: {why}")
+        # Перезапуск задания идёт в том же прогоне: артефакт прежней попытки
+        # отсекает окно этой попытки (требование 3).
+        fit = [a for a in items if a.get("name") == artifact
+               and _in_window(_gh_time(a.get("created_at")), start, end)]
+        if not fit:
+            return TestReport(None, f"{what}: у прогона {run_id} нет годного "
+                                    f"артефакта «{artifact}», созданного между "
+                                    f"started_at и completed_at попытки")
+        if len(fit) > 1:
+            ids = ", ".join(str(a.get("id")) for a in fit)
+            return TestReport(None, f"{what}: у прогона {run_id} больше одного "
+                                    f"годного артефакта «{artifact}»: {ids}")
+        found = fit[0]
+        aid = found.get("id")
+        if found.get("expired") is not False:
+            return TestReport(None, f"{what}: срок хранения артефакта "
+                                    f"«{artifact}» {aid} истёк")
+        if not isinstance(aid, int) or isinstance(aid, bool):
+            return TestReport(None, f"{what}: у артефакта «{artifact}» нет "
+                                    f"номера")
+        limit = config.CI_REPORT_ARCHIVE_MAX_BYTES
+        declared = found.get("size_in_bytes")
+        if isinstance(declared, int) and declared > limit:
+            return TestReport(None, f"{what}: размер архива артефакта "
+                                    f"«{artifact}» {declared} байт больше "
+                                    f"предела {limit} байт")
+        got = ci.gh_bytes("api", f"repos/{{owner}}/{{repo}}/actions/artifacts/"
+                                 f"{aid}/zip",
+                          max_bytes=limit,
+                          timeout=config.CI_REPORT_DOWNLOAD_TIMEOUT_SEC,
+                          **({"repo": remote} if remote else {}))
+        if got.data is None:
+            return TestReport(None, f"{what}: архив артефакта «{artifact}» "
+                                    f"{aid} не скачан: {got.reason}")
+        return _junit_report(got.data, f"{what}: архив артефакта "
+                                       f"«{artifact}» {aid}")
+
+    @staticmethod
+    def green_base_commit(target: str, branch: str,
+                          job_name: str) -> BaseCommit:
+        remote, why = _gh_remote(target)
+        if why:
+            return BaseCommit(None, why)
+        data, why = _gh_json(remote, (
+            f"repos/{{owner}}/{{repo}}/actions/runs?branch="
+            f"{urllib.parse.quote(branch, safe='')}&status=success"
+            f"&per_page={config.CI_RUN_LIST_LIMIT}"))
+        runs = data.get("workflow_runs") if isinstance(data, dict) else None
+        if not isinstance(runs, list):
+            return BaseCommit(None, f"зелёные прогоны ветки {branch} не "
+                                    f"прочитаны: {why or 'нет workflow_runs'}")
+        for item in runs:
+            run_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(run_id, int) or isinstance(run_id, bool):
+                continue
+            jobs, why = _gh_json(remote, f"repos/{{owner}}/{{repo}}/actions/"
+                                         f"runs/{run_id}/jobs?per_page=100")
+            jobs = jobs.get("jobs") if isinstance(jobs, dict) else None
+            if not isinstance(jobs, list):
+                return BaseCommit(None, f"задания прогона {run_id} ветки "
+                                        f"{branch} не прочитаны: "
+                                        f"{why or 'нет jobs'}")
+            if any(isinstance(j, dict) and j.get("name") == job_name
+                   and j.get("conclusion") not in (None, "skipped")
+                   for j in jobs):
+                return BaseCommit(str(item.get("head_sha") or "") or None,
+                                  "" if item.get("head_sha") else
+                                  f"у прогона {run_id} нет head_sha")
+        return BaseCommit(None, f"среди {len(runs)} последних зелёных прогонов "
+                                f"ветки {branch} нет прогона с исполненным "
+                                f"заданием «{job_name}»")
+
+
+# Перевод check run в статус `JobResult` (требование 2): заключение
+# завершённого и состояние незавершённого. Прочие значения — негодный
+# статус `UNFIT_STATUS:<значение>`: не итог задания и не ожидание.
+_GH_CONCLUSION_STATUS = {"success": "success", "failure": "failed",
+                         "timed_out": "failed", "cancelled": "canceled",
+                         "skipped": "skipped"}
+_GH_UNFINISHED_STATES = ("queued", "in_progress", "waiting", "pending",
+                         "requested")
+UNFIT_STATUS = "unfit"
+
+
+def _check_run_number(run: dict) -> int | None:
+    value = run.get("id")
+    return value if isinstance(value, int) and not isinstance(value, bool) \
+        else None
+
+
+def _gh_time(value) -> datetime.datetime | None:
+    """Время ответа GitHub с точностью до секунды; `None` — не разобрано."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _in_window(moment, start, end) -> bool:
+    """Момент лежит между `start` и `end` включительно; неразобранный — нет."""
+    return moment is not None and start <= moment <= end
+
+
+def _gh_attempt(target: str, sha: str, job_name: str) -> tuple:
+    """(попытка задания `job_name` коммита `sha` — check run с наибольшим
+    номером среди исполненных, иначе среди пропущенных; причина её
+    отсутствия). Вход `gh` — как у `_GitHub.pipeline_status`."""
+    kwargs = ({} if repo_context.is_artel(target)
+              else {"repo": repo_context.clone_path(target)})
+    runs, why = ci.check_runs(sha, **kwargs)
+    if runs is None:
+        return None, (f"задание «{job_name}»: check runs коммита {sha[:8]} не "
+                      f"прочитаны: {why}")
+    mine = [r for r in runs if r.get("name") == job_name]
+    if not mine:
+        return None, (f"задания «{job_name}» нет среди check runs коммита "
+                      f"{sha[:8]}")
+    executed = [r for r in mine if r.get("conclusion") != "skipped"]
+    return max(executed or mine,
+               key=lambda r: _check_run_number(r) or 0), ""
+
+
+def _gh_job_status(run: dict, job_name: str) -> tuple[str, str]:
+    state = run.get("status")
+    what = f"check run {_check_run_number(run)} задания «{job_name}»"
+    if state == "completed":
+        conclusion = run.get("conclusion")
+        if conclusion in _GH_CONCLUSION_STATUS:
+            return _GH_CONCLUSION_STATUS[conclusion], ""
+        return (f"{UNFIT_STATUS}:{conclusion}",
+                f"{what}: заключение {conclusion!r} — не итог задания")
+    if state in _GH_UNFINISHED_STATES:
+        return "running", ""
+    return (f"{UNFIT_STATUS}:{state}",
+            f"{what}: состояние {state!r} — не итог и не ожидание")
+
+
+def _gh_report_artifact(target: str, job_name: str) -> tuple[str, str]:
+    """(имя артефакта отчёта компонента записи с `ci_job == job_name`,
+    причина отказа): компонент должен быть ровно один."""
+    try:
+        entry = targets.target(target)
+    except targets.TargetsError as exc:
+        return "", f"запись проекта {target} не прочитана: {exc}"
+    comps = entry.get(targets.COMPONENTS_FIELD)
+    mine = [fields for fields in (comps.values() if isinstance(comps, dict)
+                                  else [])
+            if isinstance(fields, dict) and fields.get("ci_job") == job_name]
+    if len(mine) != 1:
+        return "", (f"у задания «{job_name}» {len(mine)} компонентов записи "
+                    f"проекта {target} с этим ci_job — ждётся ровно один")
+    return str(mine[0].get("ci_report_artifact",
+                           targets.CI_REPORT_ARTIFACT_DEFAULT)), ""
+
+
+def _gh_remote(target: str) -> tuple[str | None, str]:
+    """(адрес проекта для `gh`, отказ): артель — `None` (вызов без `repo`,
+    как у `_GitHub.pipeline_status`), прочие — `url` записи."""
+    if repo_context.is_artel(target):
+        return None, ""
+    ctx = repo_context.resolve(target)
+    if ctx is None or not ctx.remote:
+        return None, f"адрес проекта {target} не разрешён — gh не запущен"
+    return ctx.remote, ""
+
+
+def _gh_json(remote: str | None, path: str) -> tuple:
+    """(JSON-ответ `gh api <path>`, причина его отсутствия)."""
+    res = ci.gh("api", path, **({"repo": remote} if remote else {}))
+    if res.returncode != 0:
+        return None, f"gh api завершился кодом {res.returncode}: {_gh_text(res)}"
+    try:
+        return json.loads(res.stdout or ""), ""
+    except ValueError:
+        return None, "ответ gh api — не JSON"
+
+
+def _gh_run_artifacts(remote: str | None, run_id: int,
+                      name: str) -> tuple[list | None, str]:
+    """Артефакты прогона `run_id` с именем `name` постранично, со сверкой
+    `total_count`; (None, причина) — список не прочитан целиком."""
+    items: list = []
+    quoted = urllib.parse.quote(name, safe="")
+    for page in range(1, config.CI_CHECKS_MAX_PAGES + 1):
+        data, why = _gh_json(remote, (
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts"
+            f"?name={quoted}&per_page={config.CI_CHECKS_PER_PAGE}&page={page}"))
+        batch = data.get("artifacts") if isinstance(data, dict) else None
+        if not isinstance(batch, list) or not all(isinstance(a, dict)
+                                                  for a in batch):
+            return None, why or "в ответе нет списка artifacts"
+        items.extend(batch)
+        total = data.get("total_count")
+        if isinstance(total, int) and not isinstance(total, bool) \
+                and len(items) >= total:
+            return items, ""
+        if len(batch) < config.CI_CHECKS_PER_PAGE:
+            if isinstance(total, int) and not isinstance(total, bool) \
+                    and len(items) != total:
+                return None, (f"получено {len(items)} артефактов из {total} "
+                              f"обещанных — список неполон")
+            return items, ""
+    return None, (f"артефактов больше, чем помещается в "
+                  f"{config.CI_CHECKS_MAX_PAGES} страниц")
+
+
+def _unsafe_member(name: str) -> bool:
+    """Путь элемента архива ведёт за пределы каталога распаковки."""
+    parts = name.replace("\\", "/").split("/")
+    return (name.startswith(("/", "\\")) or ".." in parts
+            or (len(name) > 1 and name[1] == ":"))
+
+
+def _junit_report(data: bytes, what: str) -> TestReport:
+    """Отчёт junit из архива артефакта: пути элементов проверяются до
+    распаковки, содержимое распаковывается во временный каталог с пределом
+    суммарного размера, ровно один `*.xml` разбирается своим кодом
+    (требования 3-5); каталог удаляется после разбора."""
+    limit = config.CI_REPORT_UNPACKED_MAX_BYTES
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except (zipfile.BadZipFile, ValueError, OSError) as exc:
+        return TestReport(None, f"{what}: архив не разобран: {exc}")
+    with archive:
+        infos = archive.infolist()
+        unsafe = [i.filename for i in infos if _unsafe_member(i.filename)]
+        if unsafe:
+            return TestReport(None, f"{what}: путь {unsafe[0]!r} в архиве ведёт "
+                                    f"за пределы каталога распаковки")
+        declared = sum(i.file_size for i in infos)
+        if declared > limit:
+            return TestReport(None, f"{what}: размер содержимого после "
+                                    f"распаковки {declared} байт больше "
+                                    f"предела {limit} байт")
+        reports = [i.filename for i in infos
+                   if not i.is_dir() and i.filename.lower().endswith(".xml")]
+        if len(reports) != 1:
+            return TestReport(None, f"{what}: в архиве {len(reports)} файлов "
+                                    f"*.xml — ждётся ровно один")
+        with tempfile.TemporaryDirectory(prefix="artel-ci-report-") as tmp:
+            root = Path(tmp).resolve()
+            written = 0
+            try:
+                for info in infos:
+                    if info.is_dir():
+                        continue
+                    path = (root / info.filename).resolve()
+                    if root not in path.parents:
+                        return TestReport(None, f"{what}: путь "
+                                                f"{info.filename!r} в архиве "
+                                                f"ведёт за пределы каталога "
+                                                f"распаковки")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(info) as src, open(path, "wb") as dst:
+                        while True:
+                            block = src.read(65536)
+                            if not block:
+                                break
+                            written += len(block)
+                            if written > limit:
+                                return TestReport(
+                                    None, f"{what}: размер содержимого после "
+                                          f"распаковки больше предела "
+                                          f"{limit} байт")
+                            dst.write(block)
+            except (zipfile.BadZipFile, OSError, EOFError,
+                    NotImplementedError, RuntimeError) as exc:
+                return TestReport(None, f"{what}: архив не распакован: {exc}")
+            text = (root / reports[0]).read_bytes()
+    return _parse_junit(text, f"{what}, файл {reports[0]}")
+
+
+# Вложенный элемент `testcase` → исход `ci.JOB_REPORT_OUTCOMES`
+# (требование 4); порядок — старшинство при нескольких вложенных.
+_JUNIT_CHILD_OUTCOMES = (("failure", "failed"), ("error", "error"),
+                         ("skipped", "skipped"))
+
+
+def _parse_junit(text: bytes, what: str) -> TestReport:
+    """«`<classname>::<name>` → исход» отчёта junit; повтор ключа — отказ,
+    как у адаптера GitLab. Объявления DTD отказываются до разбора: отчёту
+    pytest они не нужны, а сущности DTD раздувают разбор."""
+    if b"<!DOCTYPE" in text.upper() or b"<!ENTITY" in text.upper():
+        return TestReport(None, f"{what}: отчёт с объявлением DTD не "
+                                f"разбирается")
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError as exc:
+        return TestReport(None, f"{what}: отчёт junit не разобран: {exc}")
+    outcomes: dict = {}
+    for case in root.iter("testcase"):
+        key = f"{case.get('classname', '')}::{case.get('name', '')}"
+        if key in outcomes:
+            return TestReport(None, f"{what}: ключ {key} встречается в отчёте "
+                                    f"больше одного раза")
+        tags = {child.tag for child in case}
+        outcomes[key] = next((outcome for tag, outcome in _JUNIT_CHILD_OUTCOMES
+                              if tag in tags), "success")
+    return TestReport(outcomes)
+
 
 # Единственный реестр реализаций: ключ — значение поля `forge` записи.
 IMPLEMENTATIONS = {"github": _GitHub, "gitlab": gitlab_adapter}
@@ -376,6 +733,7 @@ RESULT_TYPES = {
     "mr_status": MergeRequest, "token_user": TokenUser,
     "token_expiry": TokenExpiry, "protections": Protections,
     "project_info": ProjectInfo, "branch_pipeline": BranchPipeline,
+    "green_base_commit": BaseCommit,
 }
 
 
@@ -411,6 +769,14 @@ def assignee_by_name(target: str) -> bool:
                                           "ASSIGNEE_BY_NAME", False) is True)
 
 
+def implements(target: str, name: str) -> bool:
+    """У реализации хостинга проекта в реестре есть функция `name`;
+    хостинг не определён — нет. Без обращения к хостингу."""
+    value, _why = _hosting(target)
+    return value is not None and getattr(IMPLEMENTATIONS[value], name,
+                                         None) is not None
+
+
 def _call(name: str, target: str, *args):
     value, why = _hosting(target)
     if value is None:
@@ -434,6 +800,12 @@ def job_result(target: str, sha: str, job_name: str) -> JobResult:
 def job_test_report(target: str, sha: str, job_name: str) -> TestReport:
     """Отчёт тестов задания: `<classname>::<name>` → исход."""
     return _call("job_test_report", target, sha, job_name)
+
+
+def green_base_commit(target: str, branch: str, job_name: str) -> BaseCommit:
+    """Последний зелёный коммит ветки `branch`, у которого задание
+    `job_name` исполнено."""
+    return _call("green_base_commit", target, branch, job_name)
 
 
 def open_mr(target: str, branch: str, base: str, title: str, body: str,

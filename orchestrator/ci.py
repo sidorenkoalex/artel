@@ -12,7 +12,10 @@
 import json
 import os
 import re
+import select
+import signal
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -67,25 +70,9 @@ def gh(*args: str, timeout: int | None = None,
     требование 1).
     """
     timeout_sec = config.GH_TIMEOUT_SEC if timeout is None else timeout
-    full_args = args
-    env_extra = {}
-    if repo and args[:1] == ("api",):
-        gh_repo = _owner_and_name(repo)
-        if gh_repo is None:
-            return subprocess.CompletedProcess(args, 1, "", (
-                f"адрес проекта {repo}: вид адреса не разобран — ждётся "
-                f"https://<хост>/<владелец>/<имя> или "
-                f"git@<хост>:<владелец>/<имя>; gh api не запущен"))
-        env_extra["GH_REPO"] = gh_repo
-    elif repo:
-        full_args = (*args, "--repo", repo)
-    project = gitcmd.project_by_url(repo) if repo else None
-    if project is not None:
-        token, refusal = gitcmd.hosting_token(*project)
-        if refusal is not None:
-            return subprocess.CompletedProcess(args, 1, "", refusal)
-        if token is not None:
-            env_extra["GH_TOKEN"] = token
+    full_args, env_extra, refusal = _gh_entry(args, repo)
+    if refusal is not None:
+        return subprocess.CompletedProcess(args, 1, "", refusal)
     extra = {"env": dict(os.environ, **env_extra)} if env_extra else {}
     try:
         return subprocess.run(["gh", *full_args], cwd=config.ROOT,
@@ -96,6 +83,117 @@ def gh(*args: str, timeout: int | None = None,
             args, 1, "", f"gh молчал дольше {timeout_sec} с")
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
+
+
+def _gh_entry(args: tuple, repo: str | None) -> tuple[tuple, dict, str | None]:
+    """(argv `gh` без имени программы, добавка окружения, отказ) — правило
+    входа `gh` по адресу проекта `repo`, общее для `gh` и `gh_bytes`."""
+    full_args = args
+    env_extra = {}
+    if repo and args[:1] == ("api",):
+        gh_repo = _owner_and_name(repo)
+        if gh_repo is None:
+            return args, {}, (
+                f"адрес проекта {repo}: вид адреса не разобран — ждётся "
+                f"https://<хост>/<владелец>/<имя> или "
+                f"git@<хост>:<владелец>/<имя>; gh api не запущен")
+        env_extra["GH_REPO"] = gh_repo
+    elif repo:
+        full_args = (*args, "--repo", repo)
+    project = gitcmd.project_by_url(repo) if repo else None
+    if project is not None:
+        token, refusal = gitcmd.hosting_token(*project)
+        if refusal is not None:
+            return args, {}, refusal
+        if token is not None:
+            env_extra["GH_TOKEN"] = token
+    return full_args, env_extra, None
+
+
+class GhBytes(NamedTuple):
+    """Двоичный ответ `gh`: `data` — байты stdout; `None` — ответа нет,
+    `reason` называет случай, `kind` — `GH_BYTES_*`."""
+    data: bytes | None
+    reason: str = ""
+    kind: str = ""
+
+
+GH_BYTES_SIZE = "size"
+GH_BYTES_TIMEOUT = "timeout"
+GH_BYTES_FAILED = "failed"
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+    proc.wait()
+
+
+def gh_bytes(*args: str, max_bytes: int, timeout: float,
+             repo: str | None = None) -> GhBytes:
+    """Двоичный stdout `gh` (архив артефакта прогона) с пределом размера и
+    времени (SPEC 01M6TRM6H57TN8V14HGFV0NQXJ, требование 5). `gh` работает
+    в текстовом режиме и на двоичном выводе падал бы `UnicodeDecodeError`.
+
+    Вход `gh` — тот же, что у `gh(repo=...)` (`_gh_entry`). Поток читается
+    по мере поступления: больше `max_bytes` полученных байт — процесс снят
+    сразу, не по истечении `timeout`; истёк `timeout` — процесс тоже снят.
+    `subprocess.run(timeout=…)` для этого не годится: он ждал бы весь
+    предел времени и только тогда отдал бы накопленный поток."""
+    full_args, env_extra, refusal = _gh_entry(args, repo)
+    if refusal is not None:
+        return GhBytes(None, refusal, GH_BYTES_FAILED)
+    extra = {"env": dict(os.environ, **env_extra)} if env_extra else {}
+    try:
+        proc = subprocess.Popen(["gh", *full_args], cwd=config.ROOT,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True, **extra)
+    except OSError as exc:
+        return GhBytes(None, str(exc), GH_BYTES_FAILED)
+    deadline = time.monotonic() + timeout
+    out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+    chunks = {out_fd: [], err_fd: []}
+    received = 0
+    open_fds = set(chunks)
+    try:
+        while open_fds:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                _kill_group(proc)
+                return GhBytes(None, f"скачивание не уложилось в предел "
+                                     f"времени {timeout} с", GH_BYTES_TIMEOUT)
+            ready, _w, _x = select.select(list(open_fds), [], [], left)
+            for fd in ready:
+                block = os.read(fd, 65536)
+                if not block:
+                    open_fds.discard(fd)
+                    continue
+                chunks[fd].append(block)
+                if fd == out_fd:
+                    received += len(block)
+                    if received > max_bytes:
+                        _kill_group(proc)
+                        return GhBytes(None, f"получено больше предела размера "
+                                             f"{max_bytes} байт",
+                                       GH_BYTES_SIZE)
+        left = max(deadline - time.monotonic(), 0)
+        try:
+            code = proc.wait(timeout=left)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            return GhBytes(None, f"скачивание не уложилось в предел времени "
+                                 f"{timeout} с", GH_BYTES_TIMEOUT)
+    finally:
+        proc.stdout.close()
+        proc.stderr.close()
+    if code != 0:
+        err = b"".join(chunks[err_fd]).decode("utf-8", "replace").strip()[:200]
+        return GhBytes(None, f"gh завершился кодом {code}: {err or 'без вывода'}",
+                       GH_BYTES_FAILED)
+    return GhBytes(b"".join(chunks[out_fd]))
 
 
 # Два вида адреса проекта, из которых берутся владелец и имя для `GH_REPO`

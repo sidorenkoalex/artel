@@ -934,7 +934,7 @@ def test_ac15_registry_attribute_decides_by_name(lab, monkeypatch):
 
 @pytest.mark.parametrize("call", [
     "token_user", "token_expiry", "protections", "project_info",
-    "branch_pipeline", "job_result", "job_test_report"])
+    "branch_pipeline"])
 def test_ac16_other_functions_not_implemented_without_gh(lab, call):
     """`token_user`, `token_expiry`, `protections`, `project_info`, `branch_pipeline`, `job_result`, `job_test_report` для github — «не реализовано для github», `gh` не зван.
 
