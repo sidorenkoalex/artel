@@ -2383,8 +2383,9 @@ class RoleRequestExecutor:
         runner_name = suite_run.task_runner(
             conn, self.task_id, store.task_target(conn, self.task_id))
         if runner_name != targets.PROFILE_RUNNER_COMPOSE:
-            return (f"раннер профиля прогона задачи — {runner_name or 'не '
-                    'определён'}, не {targets.PROFILE_RUNNER_COMPOSE}: по "
+            shown = runner_name or "не определён"
+            return (f"раннер профиля прогона задачи — {shown}, "
+                    f"не {targets.PROFILE_RUNNER_COMPOSE}: по "
                     f"запросу роли исполняется только прогон в контейнере")
         if kind == suite_run.MODE_FULL and \
                 self.role == config.STATE_ROLE["in_dev"]:
