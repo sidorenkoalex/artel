@@ -149,6 +149,10 @@ COMPONENT_FIELDS = dict(PROFILE_FIELDS, **{
     # (SPEC 01M5XZSKK8GZTECA2KWAFHE029, требование 1).
     "full_suite": "full_suite",
     "ci_job": "ci_job",
+    # Имя артефакта прогона Actions с отчётом junit задания `ci_job` (SPEC
+    # 01M6TRM6H57TN8V14HGFV0NQXJ, требование 6); нет поля —
+    # `CI_REPORT_ARTIFACT_DEFAULT`.
+    "ci_report_artifact": "ci_report_artifact",
     # Источник отчёта базы гейта исходов `ci` (SPEC
     # 01M6TT4FKD1JWSJFVJ7328K03Y, требование 1): правила записи целиком —
     # `_check_ci_base`.
@@ -162,6 +166,7 @@ FULL_SUITE_LOCAL = "local"
 FULL_SUITE_CI = "ci"
 FULL_SUITE_BOTH = "both"
 COMPONENT_FULL_SUITES = (FULL_SUITE_LOCAL, FULL_SUITE_CI, FULL_SUITE_BOTH)
+CI_REPORT_ARTIFACT_DEFAULT = "junit"
 CI_BASE_MAIN = "main"
 CI_BASE_BRANCH = "branch"
 CI_BASES = (CI_BASE_MAIN, CI_BASE_BRANCH)
@@ -1793,6 +1798,9 @@ def _component_value_error(kind: str, value: object, comp: str,
     if kind == "ci_job":
         return "" if isinstance(value, str) and value.strip() else (
             "не непустая строка — имя задания CI")
+    if kind == "ci_report_artifact":
+        return "" if isinstance(value, str) and value.strip() else (
+            "не непустая строка — имя артефакта прогона CI")
     if kind == "ci_base":
         if value not in CI_BASES:
             return f"{value!r}, ожидается {' | '.join(CI_BASES)}"

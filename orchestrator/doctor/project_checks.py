@@ -559,7 +559,43 @@ def component_checks(name: str, entry: dict) -> list:
         if doctor.targets.ci_base_branch(entry, comp):
             checks.append(check_ci_base_branch(f"project-ci-base-{prefix}",
                                                name, entry, clone))
+        # Хостинг, реализация которого ищет зелёный коммит базы, — по
+        # реестру `forge`, без литерала значения `forge`; запись артели и
+        # запись без мержа людьми — тоже (SPEC 01M6TRM6H57TN8V14HGFV0NQXJ,
+        # требование 8).
+        if (fields.get("report") and fields.get("full_suite") in CI_FULL_SUITES
+                and doctor.forge.implements(name, "green_base_commit")):
+            checks.append(check_ci_report(f"project-ci-report-{prefix}", name,
+                                          entry, str(fields.get("ci_job"))))
     return checks
+
+
+def check_ci_report(check_name: str, name: str, entry: dict, job: str):
+    """Отчёт задания `job` читается у последнего зелёного коммита базы
+    записи, у которого задание исполнено; только чтением. Невыполненное
+    условие — `warn` с причиной; в процессе роли — пропуск без сети."""
+    if doctor.runner.in_role_environment():
+        return doctor.Check(check_name, "skip", ROLE_SKIP)
+    base = str(entry.get("base") or doctor.config.MAIN_BRANCH)
+    commit = doctor.forge.green_base_commit(name, base, job)
+    if commit.sha is None:
+        return doctor.Check(check_name, "warn",
+                            f"отчёт задания CI «{job}» базы {base} не "
+                            f"проверен: {commit.reason}")
+    short = commit.sha[:8]
+    result = doctor.forge.job_result(name, commit.sha, job)
+    if result.status is None:
+        return doctor.Check(check_name, "warn",
+                            f"задание CI «{job}» зелёного коммита {short} "
+                            f"базы {base} не прочитано: {result.reason}")
+    report = doctor.forge.job_test_report(name, commit.sha, job)
+    if report.outcomes is None:
+        return doctor.Check(check_name, "warn",
+                            f"отчёт задания CI «{job}» зелёного коммита "
+                            f"{short} базы {base} не читается: {report.reason}")
+    return doctor.Check(check_name, "ok",
+                        f"отчёт задания CI «{job}» зелёного коммита {short} "
+                        f"базы {base} читается: тестов {len(report.outcomes)}")
 
 
 def check_ci_base_branch(check_name: str, name: str, entry: dict,

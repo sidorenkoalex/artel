@@ -156,6 +156,14 @@ PROJECT_CLONE_STALE_HOURS = 24
 # неизвестен», то есть отказ merge.
 CI_CHECKS_PER_PAGE = 100
 CI_CHECKS_MAX_PAGES = 20
+# Отчёт junit задания CI из артефакта прогона Actions (SPEC
+# 01M6TRM6H57TN8V14HGFV0NQXJ, требование 5): предел скачанного архива — по
+# фактически полученным байтам, а не по `size_in_bytes` ответа; предел
+# суммарного содержимого после распаковки; предел времени скачивания.
+# Превышение любого — «отчёта нет» с причиной, а не усечённый отчёт.
+CI_REPORT_ARCHIVE_MAX_BYTES = 32 * 1024 * 1024
+CI_REPORT_UNPACKED_MAX_BYTES = 256 * 1024 * 1024
+CI_REPORT_DOWNLOAD_TIMEOUT_SEC = 120
 # `gh run list` по ветке — второй источник статуса CI в `verifying`,
 # когда check-runs коммита пусты (роадмап P3, T040; SPEC T079 требование
 # 5, AC-6/AC-7): задержка события GitHub делает check-runs временно
