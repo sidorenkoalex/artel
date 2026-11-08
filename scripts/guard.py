@@ -2051,8 +2051,11 @@ FIXTURES_SANDBOX_NAME = "_sandbox"
 def _imported_names(tree: ast.Module, module: str, name: str) -> set:
     """Выражения (`a.b.c`), которыми файл называет `module.name`: `from
     module import name [as x]`, `import module [as m]`, `from <пакет>
-    import <модуль> [as m]`."""
+    import <модуль> [as m]`, `import <пакет>[.<модуль>]` без псевдонима
+    (связывает имя пакета: вызов `<пакет>.<модуль>.name`) и `import <пакет>
+    as p` (вызов `p.<модуль>.name`)."""
     package, _, leaf = module.rpartition(".")
+    root = module.split(".", 1)[0]
     found = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0:
@@ -2063,8 +2066,14 @@ def _imported_names(tree: ast.Module, module: str, name: str) -> set:
                     found.add(f"{alias.asname or leaf}.{name}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == module:
-                    found.add(f"{alias.asname or module}.{name}")
+                if alias.asname is None:
+                    if alias.name.split(".", 1)[0] == root:
+                        found.add(f"{module}.{name}")
+                elif alias.name == module:
+                    found.add(f"{alias.asname}.{name}")
+                elif module.startswith(f"{alias.name}."):
+                    found.add(f"{alias.asname}"
+                              f"{module[len(alias.name):]}.{name}")
     return found
 
 
@@ -4557,9 +4566,13 @@ def long_lived_errors_from_files(files: list[tuple[str, str]],
         if network_addresses and label.endswith(".py"):
             errors += lint_errors_from_files([(label, source)],
                                              lint_base=lint_base)
+            # Вызывающие отдают `{}`, когда у профиля нет правил размера, —
+            # это «правила размера выключены», а не «песочниц нет»: перечень
+            # классов песочниц тогда берётся из `config.ROOT` (решение
+            # Оператора на гейте SPEC, 1).
             errors += pytest_style_errors_from_files(
                 [(label, source)], lint_base=lint_base,
-                sandbox_sources=sandbox_sources)
+                sandbox_sources=sandbox_sources or None)
         group, _error = plank_file_group(source, labelled)
         if group != GROUP_LONG_LIVED:
             continue
@@ -4762,13 +4775,14 @@ def _sandbox_class_names(sources: dict) -> frozenset:
 
 class _SandboxRefs:
     """Чем файл называет классы песочниц `names`: имена импорта `from
-    tests.<…> import <класс> [as x]`, атрибуты модулей `tests.<…>` и
+    tests.<…> import <класс> [as x]`, атрибуты модулей `tests.<…>` (в том
+    числе через имя пакета: `import tests` → `tests.sandbox.<класс>`) и
     локальные классы файла, наследующие их прямо или через другие
     локальные классы."""
 
     def __init__(self, tree: ast.Module, names: frozenset):
         self.names = names
-        self.bound, self.modules = set(), set()
+        self.bound, self.modules, self.packages = set(), set(), set()
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.level == 0 and \
                     (node.module or "").split(".", 1)[0] == TESTS_PACKAGE:
@@ -4779,8 +4793,16 @@ class _SandboxRefs:
                         self.bound.add(alias.asname or alias.name)
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name.split(".", 1)[0] == TESTS_PACKAGE:
-                        self.modules.add(alias.asname or alias.name)
+                    if alias.name.split(".", 1)[0] != TESTS_PACKAGE:
+                        continue
+                    self.modules.add(alias.asname or alias.name)
+                    # `import tests[.x]` связывает имя пакета, `import
+                    # tests as p` — его псевдоним: через них доступен любой
+                    # модуль пакета.
+                    if alias.asname is None:
+                        self.packages.add(TESTS_PACKAGE)
+                    elif alias.name == TESTS_PACKAGE:
+                        self.packages.add(alias.asname)
         self.classes = [node for node in ast.walk(tree)
                         if isinstance(node, ast.ClassDef)]
         self.local: set = set()
@@ -4800,7 +4822,10 @@ class _SandboxRefs:
         if dotted in self.bound or dotted in self.local:
             return True
         prefix, _, attr = dotted.rpartition(".")
-        return prefix in self.modules and attr in self.names
+        if attr not in self.names:
+            return False
+        head, dot, _rest = prefix.partition(".")
+        return prefix in self.modules or (bool(dot) and head in self.packages)
 
 
 def _style_assertion(node: ast.AST, aliases: dict) -> bool:

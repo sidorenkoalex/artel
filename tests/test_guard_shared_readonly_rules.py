@@ -65,3 +65,48 @@ def test_build_parameter_is_not_traced_as_fixture():
                 guard.test_assertions(text(value), LABEL)["test_a"]]
 
     assert records(3) == records(4)
+
+
+def test_long_lived_empty_sandbox_sources_reads_root_sandboxes():
+    """`long_lived_errors_from_files(…, sandbox_sources={})` — так его зовут
+    выход из `tests_writing`, `preflight` и `amend-tests` при профиле без
+    правил размера — классы песочниц берёт из `config.ROOT`: наследник
+    `RealGitSandbox` в модуле с общей фикстурой получает отказ.
+
+    Ловит мутацию: пустой словарь `sandbox_sources` уходит проверке стиля
+    как есть — перечень классов песочниц пуст, строки отказа нет.
+    """
+    text = source().replace("def test_b(tmp_root):\n    assert tmp_root\n",
+                            "class Local(RealGitSandbox):\n    pass\n")
+    errors = guard.long_lived_errors_from_files(
+        [(LABEL, text)], "01M6Y2P1JDCFFC88NR1JCRWWH9", sandbox_sources={})
+    assert any(guard.STYLE_OTHER_SANDBOXES in line for line in errors)
+
+
+def test_bare_package_import_names_shared_fixture_and_sandbox():
+    """`import tests` (и `import tests.fixtures`, `import tests as p`):
+    вызов `tests.sandbox.shared_readonly(…)` — общая фикстура, а
+    `tests.sandbox.RealGitSandbox()` в её модуле — отказ «других песочниц
+    нет».
+
+    Ловит мутацию: имя пакета из `import tests` не ведёт к его модулям —
+    общая фикстура не распознана, утверждение в `build` и создание
+    песочницы проходят без отказа.
+    """
+    def text(header, package):
+        return (f"{header}\n\n\n"
+                f"def build(sb):\n    assert sb\n\n\n"
+                f"seeded = {package}.sandbox.shared_readonly("
+                f"{package}.sandbox.RealGitSandbox, build)\n\n\n"
+                f"def test_a(seeded):\n"
+                f"    assert {package}.sandbox.RealGitSandbox()\n")
+
+    for header, package in (("import tests", "tests"),
+                            ("import tests.fixtures", "tests"),
+                            ("import tests as p", "p")):
+        found = guard.pytest_style_errors_from_files(
+            [(LABEL, text(header, package))])
+        assert any(guard.STYLE_OTHER_SANDBOXES in line for line in found), \
+            (header, found)
+        assert any(guard.STYLE_ASSERTION_IN_FIXTURE in line
+                   for line in found), (header, found)

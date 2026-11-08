@@ -1,5 +1,5 @@
 ---
-built_at_sha: 39cfadaa484c81b22934aea0698e64789d4c63d7
+built_at_sha: 7e228e20f9e6f615f37987baa27cabb1762e27fd
 ---
 
 # Codebase-map пульта
@@ -12856,8 +12856,10 @@ built_at_sha: 39cfadaa484c81b22934aea0698e64789d4c63d7
 
 **Публичные функции:**
 - `source`
+- `test_bare_package_import_names_shared_fixture_and_sandbox`
 - `test_build_parameter_is_not_traced_as_fixture`
 - `test_locked_file_with_same_shared_fixture_is_released`
+- `test_long_lived_empty_sandbox_sources_reads_root_sandboxes`
 - `test_weakened_helpers_names_shared_fixture_on_build_change`
 
 **Импортирует:** `scripts/guard.py`
