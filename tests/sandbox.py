@@ -70,6 +70,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -77,11 +78,14 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 from orchestrator import (catalog, config, fsm, gitcmd, gitlab_adapter,
                           keychain, models, runner, stack, store, workspace)
@@ -2273,3 +2277,332 @@ class LightTransitionSandbox(TmpRootTest):
         self.write_plan_ready()
         self.set_state("in_dev")
         return self.capture(fsm.cmd_advance, self.TASK)
+
+
+# --- Общее состояние только для чтения (ADR-0032 п. 4; SPEC 01M6XHM9QHEGDQ6FRA5Y8G12AQ)
+
+# Файлы каталога песочницы, которые меняет само чтение: sqlite в режиме WAL
+# оставляет `-wal`/`-shm`, обращение к БД может создать файл БД. Таблицы БД
+# отпечаток снимает отдельно. Перечень закрыт (требование 3).
+_SNAPSHOT_SKIPPED_SUFFIXES = (".db", ".db-wal", ".db-shm", ".db-journal")
+_SNAPSHOT_SKIPPED_ENV = ("PYTEST_CURRENT_TEST",)
+# Окружение git отпечатка: чтение не пишет индекс (`git status` и прочие
+# «необязательные» записи), переменные адреса репозитория процесса не
+# уводят `-C` в чужой каталог.
+_SNAPSHOT_GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+                          "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR")
+_MISSING = object()
+
+SharedReadonly = namedtuple("SharedReadonly", "sandbox built")
+
+
+class SharedStateError(Exception):
+    """Сторож общей фикстуры `shared_readonly`: общее состояние изменилось,
+    загрязнено раньше или не построено."""
+
+
+def _snapshot_git(repo: str, *args: str) -> str | None:
+    env = {k: v for k, v in os.environ.items()
+           if k not in _SNAPSHOT_GIT_ENV_DROP}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    res = _REAL_RUN(["git", "-C", repo, *args], capture_output=True, env=env)
+    if res.returncode != 0:
+        return None
+    return res.stdout.decode("utf-8", "surrogateescape")
+
+
+def _sql_name(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _snapshot_db() -> dict | None:
+    path = Path(config.DB)
+    if not path.is_file():
+        return None
+    conn = store.db_readonly(path, rows=False)
+    try:
+        tables = [row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "ORDER BY name")]
+        part = {}
+        for table in tables:
+            info = conn.execute(
+                f"PRAGMA table_info({_sql_name(table)})").fetchall()
+            key = sorted((row[5], row[1]) for row in info if row[5])
+            order = (", ".join(_sql_name(name) for _, name in key)
+                     if key else "rowid")
+            part[table] = conn.execute(
+                f"SELECT * FROM {_sql_name(table)} ORDER BY {order}").fetchall()
+        return part
+    finally:
+        conn.close()
+
+
+def _snapshot_entry(path: str):
+    """(вид, размер, содержимое) файла; символьная ссылка не разыменовывается."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if os.path.islink(path):
+        return ("link", st.st_size, os.readlink(path))
+    if os.path.isdir(path):
+        return ("dir", 0, None)
+    with open(path, "rb") as fh:
+        return ("file", st.st_size, fh.read())
+
+
+def _is_bare_repo(path: str, dirnames: list, filenames: list) -> bool:
+    return ("HEAD" in filenames and "objects" in dirnames
+            and "refs" in dirnames and os.path.basename(path) != ".git")
+
+
+def _snapshot_tree(root: Path) -> tuple[dict, set]:
+    """Файлы каталога `root` без служебных каталогов git и файлов БД, и
+    настоящие пути найденных в нём репозиториев. Символьные ссылки — файлы
+    с содержимым-целью: обход по ним не идёт (`repo -> root`)."""
+    files, repos = {}, set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        if ".git" in dirnames or ".git" in filenames \
+                or _is_bare_repo(dirpath, dirnames, filenames):
+            repos.add(os.path.realpath(dirpath))
+        dirnames[:] = sorted(name for name in dirnames if name != ".git")
+        links = [name for name in dirnames
+                 if os.path.islink(os.path.join(dirpath, name))]
+        for name in sorted(filenames + links):
+            if name == ".git" or name.endswith(_SNAPSHOT_SKIPPED_SUFFIXES):
+                continue
+            path = os.path.join(dirpath, name)
+            files[Path(path).relative_to(root).as_posix()] = \
+                _snapshot_entry(path)
+    return files, repos
+
+
+def _local_remote_paths(repo: str) -> list[str]:
+    """Настоящие пути репозиториев, на которые указывают локальные адреса
+    (путь или `file://`) удалённых репозитория `repo`."""
+    out = _snapshot_git(repo, "config", "--get-regexp",
+                        r"^remote\..*\.url$") or ""
+    paths = []
+    for line in out.splitlines():
+        _, _, url = line.partition(" ")
+        if url.startswith("file://"):
+            path = urllib.parse.unquote(urllib.parse.urlparse(url).path)
+        elif "://" in url or (not os.path.isabs(url) and ":" in url):
+            continue
+        else:
+            path = os.path.join(repo, url)
+        if os.path.isdir(path):
+            paths.append(os.path.realpath(path))
+    return paths
+
+
+def _snapshot_repo(repo: str) -> dict:
+    refs = {}
+    for line in (_snapshot_git(repo, "for-each-ref",
+                               "--format=%(refname)%00%(objectname)")
+                 or "").splitlines():
+        name, _, sha = line.partition("\0")
+        refs[name] = sha
+    head = _snapshot_git(repo, "symbolic-ref", "-q", "HEAD")
+    if head is None:
+        head = _snapshot_git(repo, "rev-parse", "--verify", "-q", "HEAD")
+    part = {"refs": refs, "head": head, "index": None, "worktree": {}}
+    if (_snapshot_git(repo, "rev-parse", "--is-bare-repository")
+            or "").strip() == "true":
+        return part
+    # Индекс — записями `ls-files -s`, не байтами файла: `git status`
+    # переписывает устаревший индекс, не меняя ни одной записи.
+    index = _snapshot_git(repo, "ls-files", "-s", "-z")
+    part["index"] = index
+    for entry in sorted({item.partition("\t")[2]
+                         for item in (index or "").split("\0") if item}):
+        part["worktree"][entry] = _snapshot_entry(os.path.join(repo, entry))
+    return part
+
+
+def _snapshot_processes() -> list:
+    """Живые дочерние процессы процесса теста: [(pid, команда)]. Сам `ps`
+    исключён по своему pid; зомби — уже завершённые процессы — не живые.
+    `ps` — полным путём: в `PATH` шага роли `/bin` нет."""
+    ps = "/bin/ps" if os.path.exists("/bin/ps") else (_REAL_WHICH("ps") or "ps")
+    proc = _REAL_POPEN([ps, "-A", "-ww", "-o", "pid=,ppid=,stat=,command="],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                       text=True, errors="replace")
+    out, _ = proc.communicate(timeout=60)
+    me, children = os.getpid(), []
+    for line in out.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) < 3 or not (fields[0].isdigit() and fields[1].isdigit()):
+            continue
+        pid, ppid, stat = int(fields[0]), int(fields[1]), fields[2]
+        if ppid != me or pid == proc.pid or stat.startswith("Z"):
+            continue
+        children.append((pid, fields[3] if len(fields) > 3 else ""))
+    return sorted(children)
+
+
+def shared_state_snapshot(sb) -> dict:
+    """Отпечаток общего состояния песочницы `sb` (ADR-0032 п. 4; SPEC
+    01M6XHM9QHEGDQ6FRA5Y8G12AQ, требования 2-5, 8): словарь частей — таблицы
+    БД пульта (`None` — файла БД нет; открытие `mode=ro` файл не создаёт),
+    репозитории git по настоящему пути (под корнем и по локальным адресам
+    их удалённых), файлы каталога песочницы, окружение процесса, текущий
+    каталог, атрибуты `config` из `PATCHED_ATTRS`, дочерние процессы.
+    Команды — настоящим запуском (`_REAL_RUN`/`_REAL_POPEN`), мимо подмен
+    `subprocess.run` песочницы. Сам отпечаток состояния не меняет."""
+    files, found = _snapshot_tree(Path(sb.root))
+    queue, repos = sorted(found), {}
+    while queue:
+        repo = queue.pop(0)
+        if repo in repos:
+            continue
+        repos[repo] = _snapshot_repo(repo)
+        queue.extend(_local_remote_paths(repo))
+    return {
+        "db": _snapshot_db(),
+        "repos": repos,
+        "files": files,
+        "env": {name: value for name, value in os.environ.items()
+                if name not in _SNAPSHOT_SKIPPED_ENV},
+        "cwd": os.getcwd(),
+        "config": {name: getattr(config, name, _MISSING)
+                   for name in type(sb).PATCHED_ATTRS},
+        "processes": _snapshot_processes(),
+    }
+
+
+def _changed_keys(before: dict, after: dict) -> list:
+    return [key for key in sorted(set(before) | set(after), key=str)
+            if before.get(key, _MISSING) != after.get(key, _MISSING)]
+
+
+def _shared_state_changes(before: dict, after: dict) -> list[str]:
+    """Названия изменившихся частей отпечатка (требование 6)."""
+    changes = []
+    if before["db"] != after["db"]:
+        tables = _changed_keys(before["db"] or {}, after["db"] or {})
+        changes += [f"таблица {name}" for name in tables] or ["БД пульта"]
+    empty = {"refs": {}, "head": None, "index": None, "worktree": {}}
+    for repo in _changed_keys(before["repos"], after["repos"]):
+        old = before["repos"].get(repo, empty)
+        new = after["repos"].get(repo, empty)
+        changes += [f"ссылка {name} репозитория {repo}"
+                    for name in _changed_keys(old["refs"], new["refs"])]
+        if old["head"] != new["head"]:
+            changes.append(f"HEAD репозитория {repo}")
+        if old["index"] != new["index"]:
+            changes.append(f"индекс репозитория {repo}")
+        changes += [f"рабочее дерево репозитория {repo}: {path}"
+                    for path in _changed_keys(old["worktree"], new["worktree"])]
+    changes += [f"файл {path}"
+                for path in _changed_keys(before["files"], after["files"])]
+    changes += [f"переменная окружения {name}"
+                for name in _changed_keys(before["env"], after["env"])]
+    changes += [f"атрибут config.{name}"
+                for name in _changed_keys(before["config"], after["config"])]
+    if before["cwd"] != after["cwd"]:
+        changes.append("текущий каталог")
+    changes += [f"процесс {pid} {command}" for pid, command in
+                sorted(set(before["processes"]) ^ set(after["processes"]))]
+    return changes
+
+
+def _kill_processes(processes) -> None:
+    for pid, _command in processes:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+
+
+class _SharedModuleState:
+    """Песочница общей фикстуры одного модуля и метки её сторожа."""
+
+    def __init__(self, sandbox_cls, build):
+        self.sandbox_cls = sandbox_cls
+        self.build = build
+        self.sandbox = None
+        self.built = None
+        self.failure = None
+        self.polluted_by = None
+
+    def construct(self, module, key) -> None:
+        # `tests.fixtures` — лениво: его импортирует корневой `conftest.py`,
+        # а сам он импортирует этот модуль только внутри фикстур.
+        from tests.fixtures import _cleanup_message, _run_cleanups
+        children = set(_snapshot_processes())
+        sb = self.sandbox_cls()
+        spawned = []
+        try:
+            sb.setUp()
+            self.built = self.build(sb)
+            spawned = [p for p in _snapshot_processes() if p not in children]
+            if spawned:
+                raise SharedStateError(
+                    "живой процесс общим не делается — build оставил "
+                    "дочерние процессы: " + "; ".join(
+                        f"процесс {pid} {command}" for pid, command in spawned))
+        except BaseException as exc:
+            _kill_processes(spawned)
+            errors = _run_cleanups(sb)
+            if errors:
+                exc.add_note(_cleanup_message(self.sandbox_cls, errors))
+            self.failure = f"построение общей фикстуры упало: {exc}"
+            raise
+        self.sandbox = sb
+
+        def teardown():
+            del module.stash[key]
+            errors = _run_cleanups(sb)
+            if errors:
+                raise RuntimeError(_cleanup_message(self.sandbox_cls, errors))
+
+        module.addfinalizer(teardown)
+
+
+def shared_readonly(sandbox_cls, build):
+    """Фикстура общего состояния только для чтения (ADR-0032 п. 4; SPEC
+    01M6XHM9QHEGDQ6FRA5Y8G12AQ, требования 1, 6, 7): `seeded =
+    shared_readonly(RealGitSandbox, build_seeded)` на уровне модуля.
+
+    Песочница — одна на модуль: `sandbox_cls()`, `setUp()`, `build(sb)` при
+    первой выдаче; уборка — завершителем узла модуля, ошибки действий
+    собираются (`tests.fixtures._run_cleanups`). Тесту фикстура отдаётся на
+    уровне функции (`SharedReadonly(sandbox, built)`) и снимает отпечаток
+    до теста и после него: расхождение роняет завершение теста с перечнем
+    изменившихся частей, а следующие тесты фикстуры в модуле получают
+    ошибку подготовки «общее состояние загрязнено тестом <имя>». Фикстура
+    `scope="module"` здесь не годится: она не исполняется вокруг каждого
+    теста.
+    """
+    key = pytest.StashKey()
+
+    @pytest.fixture
+    def fixture(request):
+        module = request.node.getparent(pytest.Module)
+        state = module.stash.get(key, None)
+        if state is None:
+            state = _SharedModuleState(sandbox_cls, build)
+            module.stash[key] = state
+            state.construct(module, key)
+        if state.failure is not None:
+            raise SharedStateError(state.failure)
+        if state.polluted_by is not None:
+            raise SharedStateError(
+                f"общее состояние загрязнено тестом {state.polluted_by}")
+        before = shared_state_snapshot(state.sandbox)
+        yield SharedReadonly(state.sandbox, state.built)
+        changes = _shared_state_changes(
+            before, shared_state_snapshot(state.sandbox))
+        if changes:
+            state.polluted_by = request.node.name
+            raise SharedStateError(
+                f"тест {request.node.name} изменил общее состояние: "
+                + "; ".join(changes))
+
+    return fixture
