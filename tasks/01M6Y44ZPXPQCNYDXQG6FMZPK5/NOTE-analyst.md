@@ -1,15 +1,16 @@
 ## Выяснено
-- ТЗ полное; SPEC.md написан (8 AC = 8 критериев ТЗ, мутации — AC-8), status: ready, guard — ок.
-- Факты ТЗ сверены с кодом: forge.py:73 TestReport, :561 _gh_report_artifact, :637/:702/:800/:805; ci.py:39 FULL_SUITE_JOB; acceptance.py:1653 SUITE_DURATION_ACTION, :3259 _signal_near_limit; project_profile.py:431 full_suite_limit; doctor/suite_duration.py:20 _series; регистрация doctor — doctor/cli.py:281, doctor/__init__.py:213.
-- orchestrator/suite_cost.py и orchestrator/doctor/suite_cost.py на ветке ещё нет.
-- Сигналы объёма: 8 файлов зоны вне COMMON_ZONES и budget 85 ≥ 60 — в SPEC дан материал для монолита (единственный шов — forge.py, без потребителя), решение «монолит принят» — за Оператором.
-- merge_after нет: строки «Порядок: после» в ТЗ нет.
+- Возврат аудита 1 из 2 (11 отклонений). Пункты 1, 2 аудита — прямо «вопрос Оператору»; написан QUESTIONS.md (9 вопросов, guard ок), SPEC.md не тронут.
+- forge.green_base_commit — только status=success (forge.py:467); единственный внешний вызов — doctor/project_checks.py:580.
+- doctor.Check: ok/warn/fail/skip; fail → exit 1 (doctor/cli.py:361-364); suite_duration поднимает alerts kind=trigger (suite_duration.py:67).
+- _series: сброс по ack suite.duration, только записи с seconds_per_test, обрезка по xdist_workers.
+- targets.CI_REPORT_ARTIFACT_DEFAULT="junit" (targets.py:175); ci.yml:216 timeout-minutes: 40; full_suite_limit бросает TargetsError (project_profile.py:435).
+- Остальные отклонения аудита (3,4,7,8,9,11-справка) — правка текста SPEC после ответа: простые выходы поверхностей, ключи summarize, сверка полей TestReport, критерий migrate() создаёт таблицу, вывод команды = вывод функции, нет в белом списке роли, «Размер проверки» AC-8, блок «Команды:» artel.__doc__, фильтр «задача проекта в БД» в AC-5.
 
 ## Не сработало
 - Ничего.
 
 ## Где остановился
-- Шаг завершён: SPEC.md готов.
+- QUESTIONS.md сдан; ждём ANSWER. После ответа — переписать SPEC с учётом ответов и пунктов выше, удалить QUESTIONS.md.
 
 ## Чего не хватило
-- Ничего существенного; форма родителя при делении (убивается при approve) — docs/operator-gates.md:145-152.
+- Как ADR-0032 «алерт» ложится на doctor — нигде не сказано; вынесено вопросом 2.
