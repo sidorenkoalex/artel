@@ -242,7 +242,21 @@ jobs:
           # 3/AC-6): 438с -> 140с на машине разработчика. Значение таймаута
           # отдельного теста дублирует stack.PER_TEST_TIMEOUT_SEC литералом
           # — известное ограничение (YAML не читает Python-константу).
-          if [ -d tests ]; then python3 -m pytest tests -n auto -p no:cacheprovider -p timeout -p xdist -o timeout=120; fi
+          # Отчёт junit — источник итога полного набора и гейта исходов у
+          # пульта (ADR-0031, этап 4б; forge.job_test_report): пишется вне
+          # чекаута, чтобы прогон не оставлял файлов в дереве.
+          if [ -d tests ]; then python3 -m pytest tests -n auto -p no:cacheprovider -p timeout -p xdist -o timeout=120 --junitxml="$RUNNER_TEMP/junit/junit.xml"; fi
+      - name: отчёт junit полного набора — артефакт junit (ADR-0031, этап 4б)
+        # Внутри этого же задания: пульт берёт только артефакт, созданный
+        # между началом и концом попытки задания. `always()` — красный
+        # прогон тоже даёт отчёт; нет файла — нет артефакта, итог у пульта
+        # «неизвестно», не зелёный.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit
+          path: ${{ runner.temp }}/junit/junit.xml
+          if-no-files-found: ignore
       - name: прогон tests/ не меняет набор ссылок репозитория (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: |
           # Инвариант: полный прогон tests/ не пишет в объектную базу CI-
