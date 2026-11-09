@@ -2,151 +2,93 @@
 task: 01M6ZEMZB8Q1PKRXMJBJSTPR7T
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Тёплый байткод интерпретатора в прогонах pytest пульта
 
 ## Фаза A — план
-- Таблица покрытия полна: требования 1–12 привязаны к шагам. Шаги размера MR.
-- «Влияние на систему» сходится с diff: `acceptance.py`, `config.py`,
-  `tests/sandbox.py` (+2 строки, мандат ANSWER-1, прежние подмены не сняты),
-  `timeout_integrations.py` (мандат ANSWER-2), новый
-  `tests/test_acceptance_pycache_script.py` (ANSWER-3). Путь отката описан.
-- В плане нет пунктов указания Оператора на гейте SPEC 1(а), 1(б), 6, 8(а),
-  хотя указание входит в чек-лист приёмки. Код их не выполняет (R1-F1…R1-F4).
+- Таблица покрытия требований 1–12 полна. Новый раздел PLAN «Возврат из
+  ревью, итерация 1» сопоставляет каждый пункт указания Оператора на гейте
+  SPEC с кодом или тестом.
+- «Влияние на систему» сходится с инкрементальным diff 76048aa0…8ced9ac4.
+  Изменены три файла: `orchestrator/acceptance.py`, докстринг в
+  `timeout_integrations.py` (только заявка, утверждения не тронуты) и новый
+  `tests/test_acceptance_pycache_guards.py`. Залоченные файлы задачи и
+  существующие тесты не правились. Защищённых путей в diff нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `config.pycache_templates_dir`, константы, 0700 в `_place_ready`. Про строку при `None` см. наблюдение 1 |
-| 2 | OK | `tests/sandbox.py:447-452`, ставятся константа и переменная окружения |
-| 3 | OK | `template_dir`: sha256 от трёх значений |
-| 4 | OK | `manifest_intact` |
-| 5 | частично | сборка работает, но запуск идёт `-c <скрипт>` с подстрокой `pytest` и без stdin-формы из указания 1(б) (R1-F1). Удаление через `shutil.rmtree` нарушает 1(а) (R1-F2). Интерпретатор, все пути которого лежат под исключёнными каталогами, даёт неудачу сборки со строкой вместо молчаливого отказа по указанию 6 (R1-F3) |
-| 6 | OK | шаблон не обновляется |
-| 7 | OK | `_place_env`/`_own_env` с `run_dir`, все места; без `run_dir` префикс пуст |
-| 8 | частично | таблица решений верна; отметка `.failed` с нечисловым содержимым или временем в будущем не удаляется и блокирует сборку (R1-F4, указание 8(а)) |
-| 9 | OK | `command_interpreter`, `_resolve_interpreter`, `_is_script` (ANSWER-3) |
-| 10 | частично | формально `"pytest" not in argv` выполнено, но заглушка `tests/test_acceptance.py:248` ищет подстроку, и запрос она принимает за pytest (R1-F1) |
-| 11 | OK | залоченный `test_01m3y7g6…_pycache.py` зелёный без правки |
-| 12 | свидетельство | замер в PLAN (0,652 с под нагрузкой). Решение по порогу — на приёмке (ANSWER-2, ответ 2) |
+| 1 | OK | без изменений с итерации 1. Строка при `None` — см. наблюдение 1 |
+| 2 | OK | `tests/sandbox.py` не менялся |
+| 3 | OK | |
+| 4 | OK | |
+| 5 | OK | `_helper_run` запускает `[interp, "-", *args]` с `input=script`, без `-I` (указание 1(б)). Удаление идёт через `_remove_tree` (os.walk/os.remove/os.rmdir, указание 1(а)). Если `_pytest` интерпретатора лежит под исключёнными каталогами, `_interpreter_admitted` возвращает молча, сборки и `.failed` нет (указание 6) |
+| 6 | OK | |
+| 7 | OK | |
+| 8 | OK | `_failed_age`: при нечисловом значении, NaN, `inf` или времени в будущем отметка удаляется и возвращается `None` (указание 8(а)). Место, которое не является каталогом (`S_ISDIR` по `lstat`), не доверено (указание 8(в)) |
+| 9 | OK | |
+| 10 | OK | в argv процессов шаблона нет подстроки `pytest`: тест guards это утверждает, `PytestRunStub` больше не путает запрос с прогоном |
+| 11 | OK | залоченный `test_01m3y7g6…_pycache.py` зелёный |
+| 12 | свидетельство | решение на приёмке (ANSWER-2, ответ 2) |
 
 ## Замечания
-
-- **major — orchestrator/acceptance.py:379, :436 (скрипты `_INTERPRETER_INFO_SCRIPT` :183-192, `_TEMPLATE_BUILD_SCRIPT` :197-201)**.
-  Запрос и сборка запускаются как `[interp, "-c", <скрипт>]`, а `_helper_run`
-  ставит `stdin=DEVNULL`. Указание Оператора 1(б) требует другую форму:
-  `[<интерпретатор>, "-"]`, код через stdin, в argv нет ни элемента, ни
-  подстроки `pytest`. Оба скрипта несут подстроку: запрос — `pytest_timeout`
-  (проверено: `"pytest" in acceptance._INTERPRETER_INFO_SCRIPT` → `True`),
-  сборка — `'pytest'` и `run_module('pytest')`. Сценарий:
-  `PytestRunStub` (`tests/test_acceptance.py:248`, `any("pytest" in str(part)
-  for part in cmd)`) принимает вызов запроса за прогон pytest. Он отдаёт ему
-  `RED_OUTPUT`, а в режиме `timeout=True` бросает `TimeoutExpired` на
-  запросе. Тесты этого класса зелёные случайно: запрос падает в «шаблон
-  недоступен», а последний вызов остаётся прогоном. Любой тест, который
-  считает вызовы заглушки или выдаёт ей разовый исход, сломается
-  предсказуемо. Предложение: `subprocess.run([interp, "-"], input=script,
-  …)` без `stdin=DEVNULL`, аргументы сборки — через переменную или
-  `sys.argv` после `-`. Без `-I`. Существующие тесты не править.
-- **major — orchestrator/acceptance.py:297 (`publish_template`), :467 (`_build_template` finally), :513 (`_discard_template`), :571 (`_empty_prefix`)**.
-  Шаги шаблона удаляют через `shutil.rmtree`. Указание 1(а) требует своего
-  помощника на `os.remove`/`os.rmdir`/`os.walk`, чтобы подмена
-  `acceptance.shutil.rmtree` (`tests/test_acceptance_pycache.py:144-163`)
-  видела только уборку префикса прогона. Сценарий: неудачная сборка
-  (staging есть), повреждённый шаблон или сбой после частичного копирования
-  в префикс дают лишние вызовы rmtree, невидимые для теста уборки. Сейчас
-  тест проходит лишь потому, что все эти вызовы идут с `ignore_errors=True`.
-  Предложение: один помощник удаления дерева на `os.walk(topdown=False)` +
-  `os.remove`/`os.rmdir` для всех четырёх мест.
-- **major — orchestrator/acceptance.py:633-664 (`_warm_prefix_from_template`), :427-440 (`_build_template`)**.
-  Не выполнено указание 6 (Е1): если все пути интерпретатора после
-  исключений лежат под исключёнными каталогами (например, `.venv` внутри
-  рабочей копии под `config.PROJECTS`/`WORKTREES`), интерпретатор должен
-  считаться неизвестным: пустой префикс, без сборки, без строки. Сейчас
-  сборка отбирает только файлы вне `WORKTREES`/`PROJECTS`, `_pytest` в
-  набор не попадает, получается неудача сборки, строка о сбое и `.failed`.
-  Час спустя всё повторяется с новой попыткой сборки (до 60 с). Проверено
-  исполнением: `pytest-own` с интерпретатором venv пульта при
-  `config.WORKTREES`, подменённом на родителя venv, дал в первом прогоне
-  «шаблон байткода интерпретатора недоступен: сборка не дала байткода
-  пакета _pytest», во втором — «…не удалась менее 3600 с назад», в месте
-  остался `py-….failed`. Для любого целевого проекта с venv в рабочей копии
-  это шум в stderr на каждом прогоне. Предложение: после запроса сведений
-  проверить, что у интерпретатора есть путь, который не лежит целиком под
-  исключёнными (`run_dir`, `WORKTREES`, `PROJECTS`; при `run_dir=None`
-  исключение `cwd` не применять). Если такого пути нет — молча вернуться.
-  Добавить тест в `tests/` (не в залоченные файлы задачи) с заявкой мутации.
-- **major — orchestrator/acceptance.py:470-484 (`_failed_age`)**.
-  Не выполнено указание 8(а): нечисловое содержимое `.failed` молча
-  подменяется `st_mtime`, а время в будущем даёт `max(0.0, …) = 0`, то есть
-  решение `skip`. Сценарий: отметка с временем в будущем (сбитые часы,
-  ручная правка) отключает шаблон интерпретатора без единой попытки сборки,
-  пока часы не дойдут до этого времени плюс 3600 с. При отметке на годы
-  вперёд шаблон выключен навсегда, и каждый прогон печатает строку о сбое.
-  Предложение: нечисловое содержимое или `when > time.time()` — удалить
-  отметку и вернуть `None` (будет сборка). Тест в `tests/` на оба случая.
-- **minor — tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py:142-143**.
-  Заявка «в префикс копируется весь шаблон без фильтра по `self.root` —
-  байткод проекта оказывается в префиксе» в этом тесте не наблюдаема.
-  Сборка идёт в пустом временном `cwd`, поэтому в шаблоне нет байткода
-  `self.root`, и снятый фильтр ничего не меняет в префиксе. Ловится только
-  мутация, которую разработчик и проверил (PLAN): вставка байткода
-  `self.root/tests/test_case.py` в `_copy_into`. Предложение: переписать
-  заявку на эту наблюдаемую мутацию: «в префикс попадает байткод файла
-  `self.root` — утверждение `assert_prefix_admitted` краснеет».
+Blocker и major нет. Одно minor-наблюдение по тесту вынесено в
+«Наблюдения» (пункт 3). Оно касается только формулировки заявки, свойство
+кода исполнено.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/acceptance.py:379, :436 | запрос и сборка — `-c <скрипт>` с подстрокой `pytest`, нет формы `[interp, "-"]` + stdin (указание 1(б)) | `PytestRunStub` tests/test_acceptance.py:248 принимает запрос за pytest, исходы и счёт вызовов заглушек сдвигаются | `[interp, "-"]`, код через `input=`, без подстроки `pytest` в argv. Разработчик: `_helper_run(interpreter, script, args, env)` запускает `[interp, "-", *args]` с `input=script` (без `stdin=DEVNULL`, без `-I`); тест `tests/test_acceptance_pycache_guards.py::test_helpers_read_code_from_stdin_without_pytest_in_argv` |
-| R1-F2 | fixed | orchestrator/acceptance.py:297, :467, :513, :571 | `shutil.rmtree` в шагах шаблона (указание 1(а)) | подмена rmtree в tests/test_acceptance_pycache.py:144-163 видит чужие вызовы | свой помощник удаления на os.walk/os.remove/os.rmdir. Разработчик: `_remove_tree` (os.walk снизу вверх, os.remove/os.rmdir) во всех шагах шаблона — `publish_template`, staging и префикс сборки, `cwd` процессов, `_discard_template`, `_empty_prefix`; тест `…guards.py::test_template_steps_never_call_shutil_rmtree` |
-| R1-F3 | fixed | orchestrator/acceptance.py:633-664, :427-440 | интерпретатор с путями только под исключёнными каталогами ведёт к неудаче сборки со строкой (указание 6, Е1) | строка о сбое на каждом прогоне проектов с venv в рабочей копии и сборка раз в час (проверено исполнением) | после запроса: нет допустимого пути — молча пусто; тест в tests/. Разработчик: `_interpreter_admitted` после запроса — нет пути вне исключённых (`run_dir`, `WORKTREES`, `PROJECTS`) или каталог `_pytest` (запрос отдаёт `pytest_core`) не допущен AC-2 → молча пусто, без сборки и `.failed`. Проверка по `_pytest` нужна, потому что в сценарии ревью `sys.base_prefix` лежит вне исключённых; тест `…guards.py::test_interpreter_with_pytest_under_excluded_dir_is_silent` (сценарий ревью: `WORKTREES` = каталог пакетов venv) |
-| R1-F4 | fixed | orchestrator/acceptance.py:470-484 | `.failed` нечисловой или с временем в будущем не удаляется (указание 8(а)) | отметка из будущего выключает шаблон без попыток сборки | удалить такую отметку, вернуть `None`; тест в tests/. Разработчик: `_failed_age` — нечисловое, NaN или будущее время → отметка удаляется, `None` (сборка); тест `…guards.py::test_damaged_failure_mark_is_removed_and_build_runs` (оба случая) |
-| R1-F5 | fixed | tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py:142-143 | заявка мутации «весь шаблон без фильтра» здесь не наблюдаема | ложная заявка сторожа | заявка на наблюдаемую мутацию (байткод `self.root` в префиксе). Разработчик: заявка переписана — «в префикс попадает байткод файла `self.root` … `assert_prefix_admitted` краснеет»; утверждения не тронуты |
+| R1-F1 | accepted | orchestrator/acceptance.py:385-404 | запрос и сборка шли через `-c <скрипт>` | — | исправлено: форма `[interp, "-"]` + `input=`. Тест `test_helpers_read_code_from_stdin_without_pytest_in_argv` зелёный и проверяет и `argv[1] == "-"`, и отсутствие подстроки |
+| R1-F2 | accepted | orchestrator/acceptance.py:301, :404, :498-499, :547, :604 | `shutil.rmtree` в шагах шаблона | — | исправлено: `_remove_tree` во всех шагах шаблона. `grep rmtree` по шагам шаблона пуст. Оставшиеся `shutil.rmtree` (`_remove_cache_dir` — уборка префикса и HOME прогона, :856-868) — законная уборка прогона |
+| R1-F3 | accepted | orchestrator/acceptance.py:607-624, :655-656 | интерпретатор с `_pytest` под исключёнными каталогами давал строку и `.failed` | — | исправлено: `_interpreter_admitted`. Проверено временной мутацией: при `if False and …` тест `test_interpreter_with_pytest_under_excluded_dir_is_silent` красный, код возвращён |
+| R1-F4 | accepted | orchestrator/acceptance.py:502-520 | повреждённая `.failed` не удалялась | — | исправлено: удаление и `None`. Оба случая покрывает параметризованный тест |
+| R1-F5 | accepted | tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py:142-144 | заявка мутации не была наблюдаема | — | исправлено: заявка переписана на наблюдаемую мутацию (байткод `self.root` в префиксе), утверждения не тронуты |
 
 ## Наблюдения для Оператора
-1. Указание 8(б) («место `None` — не сбой, строки нет») расходится с
-   требованием 1 SPEC («отключает шаблоны: … пустым префиксом и строкой о
-   сбое»). Код (`acceptance.py:614-615`) следует SPEC и печатает строку.
-   Нужно решение Оператора, какое из двух правил действует. Замечанием
-   разработчику не ставлю.
-2. Условие ANSWER-2 «мутация "в префикс копируется весь шаблон без фильтра
-   по `self.root`" убита» на заменённом утверждении неисполнимо по существу:
-   шаблон байткода `self.root` не содержит, поэтому мутация поведенчески
-   нейтральна (см. R1-F5). На приёмке стоит проверять мутацию «байткод
-   `self.root` попадает в префикс».
+1. (с итерации 1, не снято) Указание 8(б) («место `None` — строки нет»)
+   расходится с требованием 1 SPEC («…пустым префиксом и строкой о сбое»).
+   Код (`acceptance.py:630-631`) следует SPEC и печатает строку. Решение за
+   Оператором.
+2. (с итерации 1) На приёмке мутацию ANSWER-2 стоит формулировать как
+   «байткод `self.root` попадает в префикс». Мутация «весь шаблон без
+   фильтра» на этом тесте нейтральна.
+3. minor, не заведено в реестр: при 0 blocker/major незакрытая запись
+   заблокировала бы `approved` гейтом только из-за текста докстринга.
+   `tests/test_acceptance_pycache_guards.py::test_template_steps_never_call_shutil_rmtree`:
+   в заявке перечислена мутация «очистка префикса» (`_empty_prefix`), но
+   тест её не ловит. Проверено временной мутацией: при `shutil.rmtree` в
+   `_empty_prefix` все 5 тестов зелёные. На отбрасывании шаблона префикс
+   ещё пуст, и `_empty_prefix` ничего не удаляет. Сам код `_empty_prefix`
+   правильный (`_remove_tree`). Чтобы заявка стала честной, достаточно
+   убрать из неё «очистку префикса» или добавить сценарий сбоя посреди
+   копирования. Это можно сделать попутно в любой следующей правке файла.
 
 ## Вердикт
-changes_requested. Нужно исправить R1-F1…R1-F4 (код по указанию Оператора
-на гейте SPEC, пункты 1(а), 1(б), 6, 8(а)) с тестами в `tests/` на новые
-свойства и переписать заявку R1-F5. Залоченные файлы задачи и существующие
-тесты не править.
+approved. Все пять записей итерации 1 закрыты (`accepted`), blocker и
+major нет.
 
 ## Проверено исполнением
-- `artel.py plank-run 01M6ZEMZB8Q1PKRXMJBJSTPR7T` — отказ «планки нет»:
-  в зафиксированной ссылке нет `test_*.py`, критерии держат долгоживущие
-  файлы `tests/`.
-- `python3 -m pytest -q -p no:cacheprovider` по файлам
-  `tests/test_01m6zemzb8q1pkrxmjbjstpr7t_template_rules.py`,
-  `…_template_runs.py`, `tests/test_acceptance_pycache_script.py`,
-  `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`,
-  `tests/test_acceptance_pycache.py`,
-  `tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py` —
-  101 passed, 40 subtests passed (69,6 с).
-- Зонд `python3 -c …` (песочница `tests.sandbox`): `"pytest" in
-  acceptance._INTERPRETER_INFO_SCRIPT` → `True` (R1-F1). Два прогона
-  `run_plank` с профилем `pytest-own` на интерпретаторе venv при
-  `config.WORKTREES` = родитель venv: оба с кодом 0, первый — строка
-  «сборка не дала байткода пакета _pytest», второй — строка «не удалась
-  менее 3600 с назад», в месте шаблонов — `py-….failed` (R1-F3).
+- `python3 -m pytest -q -p no:cacheprovider tests/test_acceptance_pycache_guards.py tests/test_acceptance_pycache_script.py tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py tests/test_acceptance_pycache.py tests/test_acceptance.py tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py tests/test_01m6zemzb8q1pkrxmjbjstpr7t_template_rules.py`:
+  105 passed, 44 subtests passed (34 с).
+- `python3 -m pytest -q -p no:cacheprovider tests/test_01m6zemzb8q1pkrxmjbjstpr7t_template_runs.py tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py`:
+  48 passed, 6 subtests passed (238 с).
+- Временная мутация `_interpreter_admitted` (проверка снята): красный
+  `test_interpreter_with_pytest_under_excluded_dir_is_silent`, код возвращён.
+- Временная мутация `_empty_prefix` → `shutil.rmtree`: guards 5 passed
+  (наблюдение 3), код возвращён. После обеих мутаций `git status` чист.
+- `grep -n rmtree orchestrator/acceptance.py`: в шагах шаблона (строки 290-690)
+  вызовов `shutil.rmtree` нет.
 
 ## Предложения системе
-- PLAN разработчика не переносит пункты «Указания Оператора на гейте SPEC»
-  в таблицу покрытия. Четыре из восьми пунктов потерялись. Полезна строка
-  шаблона PLAN «пункты указания на гейте SPEC → шаг» (templates/PLAN.md).
+- Гейт реестра (`approved` только при всех `accepted`) не различает minor:
+  ревьюверу приходится выбирать между лишней итерацией ради формулировки
+  докстринга и выносом замечания из реестра
+  (`orchestrator/fsm_advance.py::review`, skills/review-checklist.md
+  «Вердикт» и «Реестр»). Полезен статус для minor, не блокирующий вердикт.
