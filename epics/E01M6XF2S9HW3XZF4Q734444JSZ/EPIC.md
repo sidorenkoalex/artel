@@ -18,3 +18,4 @@
 | 01M70RYVVZ5JPZ9NJ326MZ2KZH | Уборка doctor не удаляет базу живого suite-run, если каталог процесса не узнан | spec_writing | — |
 | 01M70RZS8Q09GSHWFGANE3FHX7 | Защищённые пути: маски со звёздочкой в no_paths действительно защищают | spec_writing | — |
 | 01M70S01R1H22M9EEYC2ATXSNG | Раннер compose: контейнеры стенда с init — процессы без родителя не копятся | spec_writing | — |
+| 01M70S13QH8BAE8JET84DPZA7B | Раннер compose: шаблон файла окружения — только с защищённого пути, копия удаляется после прогона | spec_writing | — |
