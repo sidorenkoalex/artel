@@ -23,8 +23,10 @@ schema_version: 5
   `template_dir`, `manifest_intact`, `publish_template`, `template_decision`,
   `command_interpreter`) и узел `_warm_prefix`:
   1. `command_interpreter` не распознал `command[0]` или он не разрешился
-     (абсолютный / от `run_dir` / `shutil.which` по PATH прогона) — молча
-     пусто (требование 9);
+     (абсолютный / от `run_dir` / `shutil.which` по PATH прогона), либо
+     файл после `os.path.realpath` начинается с `#!` (`_is_script`,
+     ANSWER-3: обёртка проекта или шим — не интерпретатор) — молча пусто,
+     без запроса и сборки (требование 9);
   2. место выключено или лежит под `ROOT`/`WORKTREES`/`PROJECTS` — строка;
   3. место заводится 0700 (`os.mkdir` + `chmod`), `lstat`; недоверено
      (`template_decision` → `untrusted`) — строка, в месте ничего не
@@ -166,6 +168,29 @@ schema_version: 5
 - В окружении шага роли нет `cat`/`ls` (`command not found`), а `python3
   <файл>` из каталога документов требует подтверждения, которого никто не
   даст: отладка вне pytest недоступна (`.artel/home`, PATH роли).
+
+## Возврат из verifying (ANSWER-3)
+- Причина: CI 2dd50ea0 (прогон 42627164308) — тесты
+  `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py` считали лишние вызовы
+  обёртки `WRAPPER` (скрипт с `#!`, имя проходит `_INTERPRETER_NAME`):
+  запрос и сборка шаблона запускали её.
+- Правка: `orchestrator/acceptance.py::_is_script` — первые два байта файла
+  после `os.path.realpath` равны `#!` (или файл не читается) → `_warm_prefix`
+  возвращается молча, как при нераспознанной команде. Настоящий интерпретатор
+  (venv — ссылка на исполняемый файл) распознаётся: AC-14 зелёный.
+- Новый тест `tests/test_acceptance_pycache_script.py::test_shebang_script_named_python3_runs_once_cold`
+  (отдельный файл: долгоживущие файлы задачи залочены): `pytest-own` с
+  командой `./bin/python3` (скрипт с `#!`) — счётчик вызовов ровно `["run 0"]`
+  (один вызов, префикс пуст в момент запуска), строки о сбое нет, место
+  шаблонов не создано. Мутация «проверка `_is_script` снята» — тест красный
+  (в счётчике три строки), код возвращён.
+- Прогон: `tests/test_acceptance_pycache_script.py`,
+  `tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py` (целиком),
+  `tests/test_01m6zemzb8q1pkrxmjbjstpr7t_template_rules.py`,
+  `tests/test_01m6zemzb8q1pkrxmjbjstpr7t_template_runs.py`,
+  `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`,
+  `tests/test_acceptance_pycache.py` — 124 passed, 40 subtests passed.
+  Существующие тесты не правились. Карта перегенерирована.
 
 ## Ответ Оператора (ANSWER-2)
 - Вопрос 1 — вариант A: утверждение `run_real` строки 65
