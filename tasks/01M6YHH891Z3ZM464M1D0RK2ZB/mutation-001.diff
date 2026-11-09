@@ -1,0 +1,18 @@
+diff --git a/orchestrator/acceptance.py b/orchestrator/acceptance.py
+index 5bc20883c..9c6544f36 100644
+--- a/orchestrator/acceptance.py
++++ b/orchestrator/acceptance.py
+@@ -3884,9 +3884,11 @@ def saved_suite_result(kind: str, key: str, *, tree: str | None = None,
+ def save_suite_result(kind: str, key: str, tree: str, outcome: str,
+                       output: str, log_path: Path | None) -> None:
+     if (not key or not tree or log_path is None or
+-            outcome not in (FULL_SUITE_GREEN, FULL_SUITE_RED)):
++            outcome not in (FULL_SUITE_GREEN, FULL_SUITE_RED, FULL_SUITE_TIMEOUT)):
+         return
+-    summary = run_summary_line(output)
++    if outcome == FULL_SUITE_TIMEOUT:
++        outcome = FULL_SUITE_RED
++    summary = run_summary_line(output) or "MUT"
+     if not summary:
+         return
+     data = {"key": key, "tree": tree, "source": kind,

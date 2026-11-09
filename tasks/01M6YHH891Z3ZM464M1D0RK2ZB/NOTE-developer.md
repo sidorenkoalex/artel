@@ -1,17 +1,17 @@
-# Записка developer — 01M6YHH891Z3ZM464M1D0RK2ZB
+# Записка developer — 01M6YHH891Z3ZM464M1D0RK2ZB (возврат с приёмки, ANSWER-3)
 
 ## Выяснено
-- Код: `config.SUITE_RUN_POLL_SEC = 1.0`. `suite_run._POLL_SEC` удалена, опрос `_wait`/`wait_request` и `mutation_run --wait` читает config.
-- Тестовый файл suite_run: копия config задаёт 0.1; `pids.discard(os.getpid())`; пределы 8/3; ac16 гейт сверяет outcome; ac24 сверяет отчёт без «не уложился» и `PYTEST_SUMMARY` в `<лог запуска без .log>-base.log`. Помощники `process_snapshot`/`path_needles`/`assert_no_process` лежат в SuiteRunSandbox; ac21 прощает пробу и корень только процессам `holder` и его потомкам по ppid.
-- Итоги прогонов: планка — 8 passed; долгоживущий — 3 passed; файл suite_run — 26 passed за 170 с серийно; mutation_run_flags — 40 passed.
-- Мутация «фон до отказа `--failed`» роняет ac20 (проверено, код возвращён).
+- ac16 гейт: `full_suite(..., command=[python, -m, pytest])`. Сразу после гейта стоит `assertEqual(len(base_calls()), 1)` (вызов гейта через обёртку), затем `before`, после suite-run ждём `before + 1`.
+- ac11: `phrase_number(out, "прошло:"/"упало:")` сверяется рядом с прежним `standalone`.
+- Прежние утверждения пришлось сохранить: залоченная планка AC-9 сверяет кортежи утверждений с базой (`assertEqual len(base_calls()) 1`, `assertTrue standalone(number, out)`).
+- Мутации лежат в каталоге документов: `mutation-001.diff` (save_suite_result: таймаут → красный) убивает ac16 гейта; `mutation-002.diff` (parse без строк хода) убивает ac11. Проверено на ветке, код возвращён.
+- Мутация «сохранять TIMEOUT как есть» не видна: `saved_suite_result` отбрасывает записи с исходом не green/red. Поэтому мутация пишет таймаут как red.
 
 ## Не сработало
-- `pytest -n` в шаге роли: все воркеры «node down». Гонял серийно.
-- Запись в /tmp из Bash роли отклонена: временную мутацию делал через Edit.
+- Первая версия правки без прежних утверждений: планка 1 failed (AC-9).
 
 ## Где остановился
-- PLAN.md ready, guard ок. AC-10 (mutation-run base/head) не гонял: это делает приёмка.
+- PLAN ready (шаг 3), guard ок, планка 8 passed, карта пересобрана. mutation-run base/head ×4 не гонял: это приёмка.
 
 ## Чего не хватило
-- Знания, что xdist в шаге роли не работает (предел процессов?).
+- Формы мутации из возврата приёмки: готового патча в каталоге задачи не было.

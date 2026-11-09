@@ -1,0 +1,13 @@
+diff --git a/orchestrator/suite_run.py b/orchestrator/suite_run.py
+index 7d3822cec..dbb298a37 100644
+--- a/orchestrator/suite_run.py
++++ b/orchestrator/suite_run.py
+@@ -446,7 +446,7 @@ def parse(green: bool, output: str, *, reported: bool = False) -> Parsed:
+         failed = counts.get("failed", 0) + counts.get("error", 0)
+         skipped = counts.get("skipped", 0)
+     else:
+-        values = list(statuses.values())
++        values = []
+         passed = values.count("PASSED")
+         failed = (values.count("FAILED") + values.count("ERROR")
+                   + len(parents))
