@@ -1,18 +1,21 @@
-# Записка developer — 01M6ZEMZB8Q1PKRXMJBJSTPR7T
+# Записка developer — 01M6ZEMZB8Q1PKRXMJBJSTPR7T (итерация ревью 1)
 
 ## Выяснено
-- Возврат ANSWER-3: обёртка `WRAPPER` в tests/test_01m462qaceh29rprd2rzhghqfm_suite_run.py — скрипт с `#!`,
-  имя проходит `_INTERPRETER_NAME`; запрос/сборка шаблона запускали её.
-- Правка: `acceptance._is_script` (первые 2 байта после realpath == `#!`, нечитаемый — тоже скрипт);
-  `_warm_prefix` молча выходит. Новый тест — tests/test_acceptance_pycache_script.py (отдельный файл,
-  долгоживущие залочены). Мутация (снять `_is_script`) — красный.
-- suite_run целиком, template_rules/runs, pycache, acceptance_pycache — 124 passed. Карта перегенерирована.
+- Указание Оператора на гейте SPEC (пп. 1-8) в бриф разработчика не входит — читается из
+  `artel.py log <id>` (запись «указание Оператора на гейте SPEC», 11:33:57Z).
+- R1-F1..F4 закрыты в orchestrator/acceptance.py: `_remove_tree` (без shutil.rmtree),
+  `_helper_run(interp, script, args, env)` → `[interp, "-", *args]`, `input=script`;
+  `_interpreter_admitted` (запрос отдаёт `pytest_core`); `_failed_age` удаляет повреждённую отметку.
+- R1-F5: заявка мутации в timeout_integrations переписана.
+- Новый тест tests/test_acceptance_pycache_guards.py — 5 passed.
 
 ## Не сработало
-- `sed -i` в Bash требует подтверждения — мутации делать через Edit.
+- `ls`/`cat`/`awk` в шаге нет или требуют подтверждения; листинг — через `python3 -c`.
 
 ## Где остановился
-- Шаг сдан: PLAN ready, раздел «Возврат из verifying (ANSWER-3)».
+- Шаг сдан: 4 мутации убиты, 13 соседних файлов — 243 passed; карта перегенерирована;
+  реестр REVIEW.md размечен `fixed`; PLAN ready (раздел «Возврат из ревью, итерация 1»), guard ок.
+- 8(б) (место None без строки) не менял: расходится с требованием 1 SPEC, ждёт решения Оператора.
 
 ## Чего не хватило
-- Ничего существенного.
+- Указания Оператора на гейте SPEC в брифе разработчика (искал в каталоге документов).

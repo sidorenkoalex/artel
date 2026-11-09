@@ -165,6 +165,10 @@ schema_version: 5
   аудиту SPEC, меняющей свойство прежней SPEC, полезен grep по утверждениям
   этого свойства во всём `tests/` (класс «меняемое свойство держит чужой
   тест»).
+- Бриф разработчика не несёт «Указание Оператора на гейте SPEC», хотя оно
+  входит в чек-лист приёмки (брифы test_author и reviewer его несут —
+  журнал «бриф: компонент»): четыре пункта потерялись до ревью
+  (`orchestrator/brief.py::developer_brief`).
 - В окружении шага роли нет `cat`/`ls` (`command not found`), а `python3
   <файл>` из каталога документов требует подтверждения, которого никто не
   даст: отладка вне pytest недоступна (`.artel/home`, PATH роли).
@@ -191,6 +195,38 @@ schema_version: 5
   `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`,
   `tests/test_acceptance_pycache.py` — 124 passed, 40 subtests passed.
   Существующие тесты не правились. Карта перегенерирована.
+
+## Возврат из ревью, итерация 1 (R1-F1…R1-F5)
+Указание Оператора на гейте SPEC (журнал задачи, 09.11 11:33:57Z) в бриф
+разработчика не входило; пункты сверены по журналу.
+
+| Пункт указания | Чем закрыт |
+|---|---|
+| 1(а) без `shutil.rmtree` в шагах шаблона | `acceptance._remove_tree` (os.walk/os.remove/os.rmdir) во всех шагах шаблона (R1-F2) |
+| 1(б) `[интерпретатор, "-"]`, код через stdin, без `-I` | `_helper_run(interpreter, script, args, env)` (R1-F1) |
+| 2, 3, 4, 5, 7 | долгоживущие файлы задачи (test_author), без изменений |
+| 6 (Е1) все пути под исключёнными — молча | `_interpreter_admitted`: нет пути вне `run_dir`/`WORKTREES`/`PROJECTS` или `_pytest` (новое поле `pytest_core` запроса) не допущен AC-2 — пусто, без сборки, без строки (R1-F3). Проверка по `_pytest` — потому что у `.venv` в рабочей копии `sys.base_prefix` вне исключённых, и «все пути» буквально не срабатывают |
+| 8(а) повреждённая `.failed` | `_failed_age`: нечисловое/NaN/будущее — удалить, `None` (R1-F4) |
+| 8(б) место `None` — без строки | не менялось: расходится с требованием 1 SPEC («отключает шаблоны … строкой о сбое»); ревью вынесло наблюдением для Оператора, код следует SPEC |
+| 8(в) `lstat`, ссылка вместо каталога — отказ | `lstat` был; добавлена явная проверка `S_ISDIR` — не каталог → «не доверено», строка |
+| 8(г) порог 0,5 с | свидетельство приёмки, замер выше |
+
+Тесты: новый `tests/test_acceptance_pycache_guards.py` (5 тестов, отдельный
+файл — долгоживущие файлы задачи залочены). Мутации, каждая — тест красный,
+код возвращён: форма `-c <скрипт>` в `_helper_run`; `shutil.rmtree` внутри
+`_remove_tree`; снятая проверка `_interpreter_admitted`; `_failed_age`
+отдаёт 0 на повреждённой отметке (оба параметра). R1-F5 — заявка мутации
+`test_ac1_missing_real_red_workers_two` переписана на наблюдаемую мутацию,
+утверждения не тронуты.
+
+Прогон (передний план): guards, `test_acceptance_pycache_script.py`,
+`test_01m6zemzb8q1pkrxmjbjstpr7t_{template_rules,template_runs,sandbox_place}.py`,
+`test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `test_acceptance_pycache.py`,
+`test_acceptance.py`, `test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py`,
+`test_01m4araxf7vss5xz8c99bx8de2_doctor_duration.py`,
+`test_full_suite_profile_timeout.py`, `test_acceptance_tests_flow.py`,
+`test_01m462qaceh29rprd2rzhghqfm_suite_run.py` — 243 passed, 55 subtests
+passed (407 с). Карта перегенерирована.
 
 ## Ответ Оператора (ANSWER-2)
 - Вопрос 1 — вариант A: утверждение `run_real` строки 65
