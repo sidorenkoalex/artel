@@ -2,7 +2,7 @@
 task: 01M6ZEMZB8Q1PKRXMJBJSTPR7T
 type: plan
 author_role: developer
-status: draft
+status: escalate
 schema_version: 5
 ---
 
@@ -97,6 +97,17 @@ schema_version: 5
   `tests/test_01m4araxf7vss5xz8c99bx8de2_doctor_duration.py`,
   `tests/test_full_suite_profile_timeout.py`, `tests/test_acceptance.py` —
   43 passed.
+- Повтор после подтяжки main (09.11, текущее дерево): все девять файлов выше
+  плюс `tests/test_acceptance_tests_flow.py` — 208 passed, 43 subtests passed.
+- `tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py` — 2 failed
+  (`SeparateSuiteScenarios::test_ac1_missing_real_red_workers_two`, оба
+  подтеста `reverse`), см. «Эскалация».
+- `tests/test_01m56kcvctw5bv9twth54tw9q9_pult_pytest_unchanged.py::…::test_ac7_…`,
+  подтест `two_sided._run_side` — красный в шаге роли, но не из-за задачи:
+  `two_sided.run` возвращает «git не ответил на голову ветки probe-…»
+  (`gitcmd.branch_head_sha`), до `place_env` и кода шаблона дело не
+  доходит; `gitcmd`/`two_sided` задача не трогает. Похоже на границу git
+  окружения роли; на CI проверит полный набор.
 
 Замер (`tasks/…/measure_warm.py`, `run_full_suite` проекта из трёх тестов,
 `FULL_SUITE_WORKERS=1`, 5 прогонов, медиана; машина роли под нагрузкой
@@ -136,3 +147,46 @@ schema_version: 5
   аудиту SPEC, меняющей свойство прежней SPEC, полезен grep по утверждениям
   этого свойства во всём `tests/` (класс «меняемое свойство держит чужой
   тест»).
+- В окружении шага роли нет `cat`/`ls` (`command not found`), а `python3
+  <файл>` из каталога документов требует подтверждения, которого никто не
+  даст: отладка вне pytest недоступна (`.artel/home`, PATH роли).
+
+## Эскалация
+
+**Вопросы** (один батч; блокирующий — первый):
+
+1. Существующий тест противоречит требованию 7 SPEC:
+   `tests/test_01m4xrcmd4fr2zbwyxf5774yvd_timeout_integrations.py::SeparateSuiteScenarios::test_ac1_missing_real_red_workers_two`,
+   помощник `run_real`, строка 65:
+   `self.assertEqual(list(cache.iterdir()), [])` — префикс полного прогона
+   пуст в момент вызова pytest. Требование 7 и AC-10 (`run_full_suite`)
+   требуют наполнять этот префикс шаблоном; команда теста —
+   `[sys.executable, "-m", "pytest", …]`, интерпретатор распознаётся (AC-8).
+   Раздела «Меняемое поведение» в SPEC нет, а «Не входит» запрещает правку
+   любого файла `tests/`, кроме `tests/sandbox.py`, — правка утверждения
+   требует мандата.
+   - A (рекомендую): мандат/`amend-tests` на строку 65 — вместо «префикс
+     пуст» проверять «у каждого файла префикса исходник (`acceptance.pycache_source`)
+     допущен `acceptance.template_admits` с исключённым `self.root`», либо
+     снять только это утверждение, остальные оставить (`caches` убраны после
+     прогона, `suite_lock.held_by_me()`).
+   - B: убрать полный прогон из мест наполнения — противоречит требованию 7,
+     AC-10 и главному эффекту задачи (полный набор — самый дорогой прогон);
+     не рекомендую.
+   - Дефолт при молчании: A, с заменой утверждения на проверку допуска.
+2. (неблокирующий) Замер требования 12 сделан на машине роли под нагрузкой
+   параллельного прогона: тёплый префикс 0,652 с при пороге 0,5 с «на
+   машине Оператора». Повторить замер на машине Оператора на приёмке
+   (`measure_warm.py` в каталоге документов)? Дефолт: да, на приёмке.
+
+**Контекст.** Реализация готова и лежит в ветке (WIP-чекпоинт 196c5e8f8 +
+обновлённая карта): `orchestrator/config.py`, `orchestrator/acceptance.py`
+(блок «шаблон байткода», `_place_env`/`_own_env`), `tests/sandbox.py`
+(мандат ANSWER-1). Долгоживущие файлы задачи, залоченный
+`test_01m3y7g6t3mk7a899521vf9n7b_pycache.py` и соседние тесты acceptance
+зелёные (раздел «Свидетельства»). Красный только названный тест: на
+строке 65 он видит в префиксе скопированный из шаблона байткод
+интерпретатора (`…/Users/…`) — ровно то, чего требует задача.
+
+**Блокирует.** Сдачу `ready`: с этим красным тестом не пройдут полный
+набор CI и гейт неослабления по исходам (`in_dev -> verifying`).
