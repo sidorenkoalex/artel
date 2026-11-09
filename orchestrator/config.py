@@ -6,6 +6,7 @@
 """
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -129,6 +130,40 @@ REQUIREMENTS_LOCK = ROOT / "requirements.lock"
 # `REQUIREMENTS_LOCK` выше, `runner.role_env` отказывает без согласованного
 # venv (требование 4).
 VENV_DIR = ROOT / ".artel" / "venv"
+
+
+# Шаблоны байткода путей интерпретатора (SPEC 01M6ZEMZB8Q1PKRXMJBJSTPR7T,
+# требования 1, 5, 8): свежий префикс прогона pytest пульта наполняется
+# копией шаблона своего интерпретатора (`acceptance._warm_prefix`). Место —
+# вне `ROOT` и не из `HOME` (HOME роли лежит под `ROOT`); переменная
+# `PYCACHE_TEMPLATES_ENV` переопределяет его — так `tests/sandbox.py`
+# уводит место и у дочерних процессов `artel.py`.
+PYCACHE_TEMPLATES_ENV = "PYCACHE_TEMPLATES_DIR"
+
+
+def pycache_templates_dir(environ, tmp_root: str, uid: int,
+                          root: str) -> str | None:
+    """Место шаблонов байткода: непустое значение переменной
+    `PYCACHE_TEMPLATES_ENV` из `environ`, иначе
+    `<tmp_root>/pycache-templates-<uid>`. Место, чей `realpath` лежит под
+    `root` (по границе компонента) или равен ему, — `None`: шаблоны
+    выключены, прогоны идут с пустым префиксом."""
+    place = environ.get(PYCACHE_TEMPLATES_ENV) or os.path.join(
+        tmp_root, f"pycache-templates-{uid}")
+    real, base = os.path.realpath(place), os.path.realpath(root)
+    if real == base or real.startswith(base.rstrip(os.sep) + os.sep):
+        return None
+    return place
+
+
+PYCACHE_TEMPLATES_DIR = pycache_templates_dir(
+    os.environ, tempfile.gettempdir(), os.getuid(), str(ROOT))
+# Предел одного процесса запроса сведений интерпретатора и сборки шаблона.
+PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC = 60
+# Срок отметки неудачи сборки: моложе — прогон идёт без шаблона и без
+# новой попытки (ANSWER-1, ответ 4).
+PYCACHE_TEMPLATE_RETRY_SEC = 3600
+
 FULL_SUITE_REUSE_MAX_AGE_SEC = 86400
 FULL_SUITE_BASE_EXCLUDED_PATHS = ("tasks", "docs/retro", "docs/backlog.md")
 

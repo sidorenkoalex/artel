@@ -9,6 +9,7 @@ import json
 import os
 import re
 import signal
+import site
 import subprocess
 import sys
 from pathlib import Path
@@ -52,6 +53,25 @@ class SeparateSuiteScenarios(TmpRootTest):
         (self.root / "tests" / "test_case.py").write_text(
             "import pytest\n" + "".join(bodies), encoding="utf-8")
 
+    def assert_prefix_admitted(self, cache):
+        # Префикс в момент вызова pytest несёт только байткод путей
+        # интерпретатора (шаблон, SPEC 01M6ZEMZB8Q1PKRXMJBJSTPR7T); пустой
+        # префикс (шаблона нет) тоже допустим, файл проекта — никогда.
+        paths = [sys.prefix, sys.base_prefix, sys.exec_prefix,
+                 *site.getsitepackages()]
+        project = os.path.realpath(self.root)
+        for path in cache.rglob("*"):
+            if path.is_dir():
+                continue
+            relative = path.relative_to(cache).as_posix()
+            source = acceptance.pycache_source(relative)
+            self.assertIsNotNone(source, relative)
+            self.assertTrue(acceptance.template_admits(
+                source, paths, [str(self.root)]), source)
+            real = os.path.realpath(source)
+            self.assertFalse(real == project
+                             or real.startswith(project + os.sep), source)
+
     def run_real(self, workers, red, reverse=False):
         self.scenario(red, reverse=reverse)
         original = subprocess.Popen
@@ -62,7 +82,7 @@ class SeparateSuiteScenarios(TmpRootTest):
             if "pytest" in argv:
                 self.assertTrue(suite_lock.held_by_me())
                 cache = Path(kwargs["env"]["PYTHONPYCACHEPREFIX"])
-                self.assertEqual(list(cache.iterdir()), [])
+                self.assert_prefix_admitted(cache)
                 caches.append(cache)
             proc = original(argv, *args, **kwargs)
             if "pytest" in argv:
@@ -119,6 +139,9 @@ class SeparateSuiteScenarios(TmpRootTest):
         Ловит мутацию: таймаут засчитывается за RED, skipped теряется из
         счётчика или нормализация workers=2 перестаёт равняться duration/3.
         Замена skipped на passed при прежней сумме 3 также проваливает тест.
+        Ловит мутацию: в префикс попадает байткод файла `self.root`
+        (наполнение копирует его рядом с шаблоном) — утверждение
+        `assert_prefix_admitted` краснеет.
         """
         for reverse in (False, True):
             with self.subTest(reverse=reverse):
