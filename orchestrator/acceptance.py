@@ -338,6 +338,18 @@ def _resolve_interpreter(head: str, run_dir: Path,
     return None
 
 
+def _is_script(path: str) -> bool:
+    """Файл после `os.path.realpath` начинается с `#!` — скрипт (обёртка
+    проекта, шим менеджера версий), а не исполняемый файл Python (ANSWER-3):
+    запрос и сборка шаблона исполнили бы код проекта вне прогона. Нечитаемый
+    файл — тоже не интерпретатор."""
+    try:
+        with open(os.path.realpath(path), "rb") as fh:
+            return fh.read(2) == b"#!"
+    except OSError:
+        return True
+
+
 class _TemplateUnavailable(Exception):
     """Шаблон в этом прогоне не используется; текст — причина."""
 
@@ -530,13 +542,14 @@ def _warm_prefix(prefix: str, head: str, run_dir: Path,
     """Наполнение свежего префикса `prefix` прогона шаблоном байткода
     интерпретатора `head` (требования 5-9). `env` — окружение запроса и
     сборки (без префикса и без `PYTHONDONTWRITEBYTECODE`). Интерпретатор
-    не распознан или не разрешился — префикс пуст, молча; любой иной отказ
+    не распознан, не разрешился или оказался скриптом с `#!` (ANSWER-3) —
+    префикс пуст, молча; любой иной отказ
     — пустой префикс и ровно одна строка `TEMPLATE_UNAVAILABLE` в stderr.
     Исход прогона от шаблона не зависит: исключений отсюда нет."""
     if command_interpreter([head]) is None:
         return
     interpreter = _resolve_interpreter(head, run_dir, search_path)
-    if interpreter is None:
+    if interpreter is None or _is_script(interpreter):
         return
     try:
         _warm_prefix_from_template(prefix, interpreter, run_dir, env)
