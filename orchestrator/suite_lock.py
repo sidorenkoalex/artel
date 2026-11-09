@@ -27,6 +27,9 @@ from . import config, liveness
 KIND_SUITE_RUN = "suite-run"
 KIND_GATE = "гейт"
 KIND_NOTES = "notes"
+# Произвольная команда Оператора под `suite-lock` (SPEC
+# 01M70RYD6YXA6DFKCRECSHRKBM): без задачи, с основанием `reason`.
+KIND_EXTERNAL = "внешний"
 
 # Замок, только что созданный соседом, ещё может быть пуст: столько секунд
 # пустой файл считается занятым, а не брошенным.
@@ -81,21 +84,25 @@ def _fresh(lock: Path) -> bool:
         return False
 
 
-def _payload(task_id, run, pid: int, kind: str) -> dict:
+def _payload(task_id, run, pid: int, kind: str, reason=None) -> dict:
     # Запись `suite-run` — прежней формы (задача, pid, номер прогона):
-    # вид держателя пишется только у прогонов гейтов и `notes`.
+    # вид держателя пишется только у прогонов гейтов, `notes` и внешней
+    # команды, основание — только у внешней команды.
     data = {"task_id": task_id, "pid": pid, "run": run}
     if kind != KIND_SUITE_RUN:
         data["kind"] = kind
+    if kind == KIND_EXTERNAL:
+        data["reason"] = reason
     return data
 
 
-def acquire(task_id, run=None, kind: str = KIND_SUITE_RUN) -> dict | None:
+def acquire(task_id, run=None, kind: str = KIND_SUITE_RUN,
+            reason=None) -> dict | None:
     """Замок за текущим процессом: `None` — взят, иначе держатель (без
     ожидания). Брошенный замок (pid мёртв) снимается и берётся заново."""
     lock = path()
     lock.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(_payload(task_id, run, os.getpid(), kind),
+    payload = json.dumps(_payload(task_id, run, os.getpid(), kind, reason),
                          ensure_ascii=False)
     for _ in range(3):
         try:
@@ -351,10 +358,13 @@ def _deliver(store, conn, claimed: list) -> int:
 
 def describe(holder: dict) -> str:
     """Держатель словами — для отказа и записи об ожидании: «suite-run
-    задачи <id> (pid N)», «гейта задачи <id> (pid N)», «notes (pid N)»."""
+    задачи <id> (pid N)», «гейта задачи <id> (pid N)», «notes (pid N)»,
+    «внешней команды «<основание>» (pid N)»."""
     pid = holder.get("pid")
     kind = holder.get("kind", KIND_SUITE_RUN)
     if kind == KIND_NOTES:
         return f"notes (pid {pid})"
+    if kind == KIND_EXTERNAL:
+        return f"внешней команды «{holder.get('reason')}» (pid {pid})"
     what = "гейта" if kind == KIND_GATE else KIND_SUITE_RUN
     return f"{what} задачи {holder.get('task_id')} (pid {pid})"
