@@ -15,3 +15,4 @@
 |---|---|---|---|
 | 01M70RYD6YXA6DFKCRECSHRKBM | Команда suite-lock: внешний прогон под замком полных прогонов машины | spec_writing | — |
 | 01M70RYN0GMSVJRFK5Y96N8MWP | Тест ожидания замка не зависит от нагрузки машины | spec_writing | — |
+| 01M70RYVVZ5JPZ9NJ326MZ2KZH | Уборка doctor не удаляет базу живого suite-run, если каталог процесса не узнан | spec_writing | — |
