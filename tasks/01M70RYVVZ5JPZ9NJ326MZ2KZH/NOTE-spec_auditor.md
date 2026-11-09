@@ -1,16 +1,19 @@
-# Записка spec_auditor
+# Записка spec_auditor (аудит 2, spec_sha 150eb7c9)
 
 ## Выяснено
-- orphans.py:74 берёт `/usr/sbin/lsof` по абсолютному пути, если он есть (на этой машине Darwin есть) — подмена `lsof` в PATH песочницы до `_live_suite_run_in` на macOS не доходит; AC-1/AC-2 в форме ТЗ на macOS не собираются.
-- hung_test_watchdog.py:179 зовёт `_temp_owner_alive` → orphans.py:117 `_live_suite_run_in`: новое «защищено при неизвестном cwd» меняет и сторожа (зависший pytest в базе без маркера перестаёт быть находкой) — в SPEC не названо.
-- Существующие тесты: tests/test_canary_doctor_owner.py:26 (run.json с os.getpid()), test_ac6/ac7/ac10 канарейки — по коду не ломаются при наличии /proc или lsof.
-- docs/codebase-map.md в COMMON_ZONES (config.py:938).
+- Факты SPEC о коде сходятся: orphans.py:62-83/74/76-77/115-117, hung_test_watchdog.py:68-81/172-183, __init__.py:155-158 и 175-181 (реэкспорт `_process_cwd` на :177).
+- orphans.py:75 зовёт `doctor._process_cwd` (имя фасада, связано при импорте): подмена `hung_test_watchdog._process_cwd` его не достанет. Канал подмены в AC-2 не назван.
+- check_hung_test_runs (hung_test_watchdog.py:221) пишет алерт в БД — AC-5 «малый» держится только при подмене alerts/БД.
+- Опыт (Python 3.13.12): подмена `os.readlink` глобально, бросающая OSError, ломает `Path.resolve()` — `/var/folders` не раскрывается в `/private/var/folders`.
+- В PATH роли нет lsof и ps (`which -a lsof` — не найден).
+- tests/test_report_outcome_module.py:1137-1155 подменяет lsof выдуманными pid 400k–900k; на Linux новый путь через /proc читается первым — сбой только при совпадении pid с реальным процессом.
+- Вердикт: concerns, В1–В5.
 
 ## Не сработало
-- ls /usr/sbin/lsof запрещён песочницей; `test -x` сработал.
+- Составные команды bash с `cd`/`|`/`$` песочница отклоняет — только одиночные вызовы.
 
 ## Где остановился
-- Вердикт fail, SPEC-AUDIT.md записан.
+- SPEC-AUDIT.md записан, guard прогнан.
 
 ## Чего не хватило
 - Ничего существенного.
