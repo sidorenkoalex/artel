@@ -1,17 +1,15 @@
-# NOTE-reviewer (iteration 1)
+# NOTE-reviewer (iteration 2)
 
 ## Выяснено
-- Диф соответствует SPEC по требованиям 1–9; ссылок на `suite_run._POLL_SEC` нет (grep).
-- Планка 8 passed; suite_run файл 26 passed за 177 с серийно; poll_step + mutation_run_flags 43 passed.
-- Временная мутация ac21 (Popen фона B перед отказом по замку) — LockTest красный; код возвращён.
-- Карта свежая (отличие только built_at_sha).
-- ac24 лог базы строится из вывода запуска (`launch`), не из `run.json` — наблюдение для Оператора (указание 3), не замечание.
+- Дифф итерации 2 = `git diff 55aef548f..HEAD`: только тестовый файл (ac11 phrase_number, ac16 гейт command + before+1) и built_at_sha карты.
+- Планка 8 passed; suite_run + poll_step — 29 passed за 240 с серийно.
+- mutation-001 + mutation-002 наложены git apply: ac16 гейт и ac11 красные; откат git apply -R, дерево чистое.
 
 ## Не сработало
-- `scripts/codebase_map.py --help` перегенерирует карту, а не печатает справку — откатил `git checkout -- docs/codebase-map.md`.
+- Составные Bash-команды с `;` требуют подтверждения — разбивать на отдельные вызовы; `cat`/`ls` в Bash недоступны.
 
 ## Где остановился
-- REVIEW.md записан: approved, реестр пуст.
+- REVIEW.md iteration 2 записан: approved, реестр пуст.
 
 ## Чего не хватило
-- Режима проверки свежести карты без записи.
+- Базы инкрементального диффа в пакете — взял sha CI прошлого вердикта.
