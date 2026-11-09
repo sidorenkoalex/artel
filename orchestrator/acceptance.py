@@ -202,16 +202,20 @@ _INTERPRETER_INFO_SCRIPT = (
     "import importlib.util, json, os, site, sys\n"
     "paths = [sys.prefix, sys.base_prefix, sys.exec_prefix]\n"
     "paths += list(getattr(site, 'getsitepackages', lambda: [])())\n"
+    "core = importlib.util.find_spec('_pytest')\n"
+    "core = list(core.submodule_search_locations or []) if core else []\n"
     "print(json.dumps({'executable': os.path.realpath(sys.executable),\n"
     "                  'version': sys.version, 'prefix': sys.prefix,\n"
     "                  'paths': paths, 'tag': sys.implementation.cache_tag,\n"
     "                  'xdist': importlib.util.find_spec('xdist') is not None,\n"
     "                  'timeout': importlib.util.find_spec('pytest_timeout')\n"
-    "                  is not None}))\n")
-# Пробный прогон сборки: pytest в пустом каталоге; argv процесса не несёт
-# элемента `pytest` — по нему тесты набора отличают вызов pytest прогона.
-# Запуск — тот же `python -m pytest`, что у прогона (`runpy`), с флагами
-# `_pytest_command`: импортируется тот же набор модулей.
+    "                  is not None, 'pytest_core': core}))\n")
+# Пробный прогон сборки: pytest в пустом каталоге. Код запроса и сборки
+# идёт через stdin (`[<интерпретатор>, "-"]`, указание Оператора на гейте
+# SPEC 1(б)): в argv нет ни элемента, ни подстроки `pytest` — по ним тесты
+# набора отличают вызов pytest прогона. Запуск — тот же `python -m pytest`,
+# что у прогона (`runpy`), с флагами `_pytest_command`: импортируется тот
+# же набор модулей.
 _TEMPLATE_BUILD_SCRIPT = (
     "import runpy, sys\n"
     "sys.argv = ['pytest', '-p', 'no:cacheprovider', '--rootdir=.',\n"
@@ -294,8 +298,32 @@ def publish_template(staging: str, final: str) -> bool:
             return True
         except OSError:
             pass
-    shutil.rmtree(staging, ignore_errors=True)
+    _remove_tree(staging)
     return False
+
+
+def _remove_tree(path: str) -> None:
+    """Удаление дерева шагов шаблона без `shutil.rmtree` (указание Оператора
+    на гейте SPEC 1(а)): подмена `acceptance.shutil.rmtree` в тестах уборки
+    видит только уборку префикса прогона. Сбой не поднимается — шаблон не
+    роняет прогон; ссылки удаляются сами, не по месту назначения."""
+    if os.path.islink(path) or os.path.isfile(path):
+        with contextlib.suppress(OSError):
+            os.remove(path)
+        return
+    for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+        for name in filenames:
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(dirpath, name))
+        for name in dirnames:
+            sub = os.path.join(dirpath, name)
+            with contextlib.suppress(OSError):
+                if os.path.islink(sub):
+                    os.remove(sub)
+                else:
+                    os.rmdir(sub)
+    with contextlib.suppress(OSError):
+        os.rmdir(path)
 
 
 def template_decision(owner_uid: int, mode: int, uid: int, present: bool,
@@ -354,14 +382,17 @@ class _TemplateUnavailable(Exception):
     """Шаблон в этом прогоне не используется; текст — причина."""
 
 
-def _helper_run(argv: list[str], env: dict) -> subprocess.CompletedProcess:
-    """Процесс запроса или сборки: пустой временный `cwd`, предел
-    `config.PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC`. Любое исключение и любой
-    вывод разбирает вызывающий; здесь сбой — `_TemplateUnavailable`."""
+def _helper_run(interpreter: str, script: str, args: list[str],
+                env: dict) -> subprocess.CompletedProcess:
+    """Процесс запроса или сборки: `[interpreter, "-", *args]`, код `script`
+    — через stdin; пустой временный `cwd`, предел
+    `config.PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC`. Без `-I`: он отбросил бы
+    `PYTHONPYCACHEPREFIX` сборки. Любое исключение и любой вывод разбирает
+    вызывающий; здесь сбой — `_TemplateUnavailable`."""
     cwd = tempfile.mkdtemp(prefix="artel-pycache-cwd-")
     try:
-        return subprocess.run(argv, cwd=cwd, env=env, capture_output=True,
-                              text=True, stdin=subprocess.DEVNULL,
+        return subprocess.run([interpreter, "-", *args], input=script, cwd=cwd,
+                              env=env, capture_output=True, text=True,
                               timeout=config.PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC,
                               start_new_session=True)
     except subprocess.TimeoutExpired:
@@ -370,13 +401,13 @@ def _helper_run(argv: list[str], env: dict) -> subprocess.CompletedProcess:
     except Exception as exc:  # noqa: BLE001 — сбой шаблона не роняет прогон
         raise _TemplateUnavailable(f"процесс не запустился ({exc})") from None
     finally:
-        _remove_cache_dir(cwd)
+        _remove_tree(cwd)
 
 
 def _interpreter_info(interpreter: str, env: dict) -> dict:
     """Сведения интерпретатора от него самого: реальный путь, версия,
     `sys.prefix`, пути, `cache_tag`, есть ли xdist."""
-    res = _helper_run([interpreter, "-c", _INTERPRETER_INFO_SCRIPT], env)
+    res = _helper_run(interpreter, _INTERPRETER_INFO_SCRIPT, [], env)
     try:
         if res.returncode != 0:
             raise ValueError(f"код {res.returncode}")
@@ -433,7 +464,7 @@ def _build_template(interpreter: str, info: dict, final: str, place: str,
         args = ["-p", "timeout"] if info.get("timeout") else []
         if info.get("xdist"):
             args += ["-p", "xdist", "-n", "1"]
-        _helper_run([interpreter, "-c", _TEMPLATE_BUILD_SCRIPT, *args], build_env)
+        _helper_run(interpreter, _TEMPLATE_BUILD_SCRIPT, args, build_env)
         # `cwd` пробного прогона — пустой каталог `_helper_run`, лежащий в
         # системном временном каталоге: вне путей интерпретатора.
         real_paths = _real_paths(info["paths"])
@@ -464,25 +495,28 @@ def _build_template(interpreter: str, info: dict, final: str, place: str,
         raise _TemplateUnavailable(f"сборка не удалась ({exc})") from None
     finally:
         if os.path.lexists(staging):
-            shutil.rmtree(staging, ignore_errors=True)
-        _remove_cache_dir(prefix)
+            _remove_tree(staging)
+        _remove_tree(prefix)
 
 
 def _failed_age(mark: str) -> float | None:
-    """Возраст отметки неудачи сборки в секундах; `None` — отметки нет."""
+    """Возраст отметки неудачи сборки в секундах; `None` — отметки нет.
+    Отметка с нечисловым содержимым или временем в будущем повреждена
+    (указание Оператора на гейте SPEC 8(а)): она удаляется, и сборка
+    пробуется — иначе сбитые часы выключили бы шаблон без попыток сборки."""
     try:
         with open(mark, encoding="utf-8") as fh:
             text = fh.read().strip()
     except OSError:
         return None
     try:
-        when = float(text)
+        age = time.time() - float(text)
     except ValueError:
-        try:
-            when = os.stat(mark).st_mtime
-        except OSError:
-            return None
-    return max(0.0, time.time() - when)
+        age = None
+    if age is None or age != age or age < 0:
+        _remove_tree(mark)
+        return None
+    return age
 
 
 def _place_ready(place: str) -> os.stat_result:
@@ -510,7 +544,7 @@ def _discard_template(template: str, place: str) -> None:
         os.rename(template, aside)
     except OSError:
         aside = template
-    shutil.rmtree(aside, ignore_errors=True)
+    _remove_tree(aside)
 
 
 def _fill(prefix: str, template: str, real_paths: list[str],
@@ -542,7 +576,8 @@ def _warm_prefix(prefix: str, head: str, run_dir: Path,
     """Наполнение свежего префикса `prefix` прогона шаблоном байткода
     интерпретатора `head` (требования 5-9). `env` — окружение запроса и
     сборки (без префикса и без `PYTHONDONTWRITEBYTECODE`). Интерпретатор
-    не распознан, не разрешился или оказался скриптом с `#!` (ANSWER-3) —
+    не распознан, не разрешился, оказался скриптом с `#!` (ANSWER-3) или
+    все его пути под исключёнными каталогами (`_interpreter_admitted`) —
     префикс пуст, молча; любой иной отказ
     — пустой префикс и ровно одна строка `TEMPLATE_UNAVAILABLE` в stderr.
     Исход прогона от шаблона не зависит: исключений отсюда нет."""
@@ -566,12 +601,27 @@ def _empty_prefix(prefix: str) -> None:
     """Префикс снова пуст: копирование, оборванное сбоем, не оставляет
     в нём половину шаблона."""
     for entry in os.listdir(prefix):
-        path = os.path.join(prefix, entry)
-        if os.path.isdir(path) and not os.path.islink(path):
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            with contextlib.suppress(OSError):
-                os.unlink(path)
+        _remove_tree(os.path.join(prefix, entry))
+
+
+def _interpreter_admitted(info: dict, real_paths: list[str],
+                          real_excluded: list[str]) -> bool:
+    """Шаблон интерпретатора возможен (указание Оператора на гейте SPEC 6,
+    Е1): хоть один его путь (не корень) лежит вне исключённых каталогов, и
+    пакет `_pytest`, если интерпретатор его нашёл, допущен AC-2. Иначе
+    (`.venv` внутри рабочей копии) байткода pytest в шаблоне не будет
+    никогда — интерпретатор пульту не известен: пустой префикс, без сборки
+    и без строки. Исключения — те же, что у наполнения: `cwd` прогона,
+    `config.WORKTREES`, `config.PROJECTS`; venv пульта `config.VENV_DIR`
+    под ними не лежит."""
+    if not any(p != os.sep and not any(_under(p, e) for e in real_excluded)
+               for p in real_paths):
+        return False
+    core = info.get("pytest_core")
+    if isinstance(core, list) and core and all(isinstance(d, str) for d in core):
+        return any(_admits_real(os.path.realpath(d), real_paths, real_excluded)
+                   for d in core)
+    return True
 
 
 def _warm_prefix_from_template(prefix: str, interpreter: str, run_dir: Path,
@@ -591,16 +641,21 @@ def _warm_prefix_from_template(prefix: str, interpreter: str, run_dir: Path,
         raise _TemplateUnavailable(f"место шаблонов {place} не заведено ({exc})") \
             from None
     uid = os.getuid()
-    if template_decision(st.st_uid, st.st_mode, uid, False, False, None,
-                         config.PYCACHE_TEMPLATE_RETRY_SEC) == "untrusted":
+    # Ссылка вместо каталога (`lstat`) — отказ места, как чужое место
+    # (указание Оператора на гейте SPEC 8(в)).
+    if not stat.S_ISDIR(st.st_mode) or template_decision(
+            st.st_uid, st.st_mode, uid, False, False, None,
+            config.PYCACHE_TEMPLATE_RETRY_SEC) == "untrusted":
         raise _TemplateUnavailable(
             f"место шаблонов {place} не доверено (владелец {st.st_uid}, права "
-            f"{stat.S_IMODE(st.st_mode):o})")
+            f"{stat.S_IMODE(st.st_mode):o}, тип {stat.S_IFMT(st.st_mode):o})")
     info = _interpreter_info(interpreter, env)
-    template = template_dir(info["executable"], info["version"], info["prefix"])
-    mark = template + _TEMPLATE_FAILED_SUFFIX
     real_paths = _real_paths(info["paths"])
     real_excluded = _real_paths([run_dir, config.WORKTREES, config.PROJECTS])
+    if not _interpreter_admitted(info, real_paths, real_excluded):
+        return
+    template = template_dir(info["executable"], info["version"], info["prefix"])
+    mark = template + _TEMPLATE_FAILED_SUFFIX
     present = os.path.isdir(template) and not os.path.islink(template)
     intact, admitted = (_read_template(template, real_paths, real_excluded)
                         if present else (False, {}))

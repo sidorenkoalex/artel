@@ -139,8 +139,9 @@ class SeparateSuiteScenarios(TmpRootTest):
         Ловит мутацию: таймаут засчитывается за RED, skipped теряется из
         счётчика или нормализация workers=2 перестаёт равняться duration/3.
         Замена skipped на passed при прежней сумме 3 также проваливает тест.
-        Ловит мутацию: в префикс копируется весь шаблон без фильтра по
-        `self.root` — байткод проекта оказывается в префиксе до pytest.
+        Ловит мутацию: в префикс попадает байткод файла `self.root`
+        (наполнение копирует его рядом с шаблоном) — утверждение
+        `assert_prefix_admitted` краснеет.
         """
         for reverse in (False, True):
             with self.subTest(reverse=reverse):
