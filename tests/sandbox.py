@@ -444,6 +444,12 @@ config.ROLES = _SANDBOX_ROLES_PATH
 config.MODELS_LOCAL = _SANDBOX_CONFIG_DIR / "models.yaml"
 config.MODELS_LOCAL.write_text(role_map_fixture().local_text,
                                encoding="utf-8")
+# Место шаблонов байткода интерпретатора (SPEC 01M6ZEMZB8Q1PKRXMJBJSTPR7T,
+# требование 2; мандат ANSWER-1) — тоже песочница процесса: и константа
+# `config`, и переменная окружения, которую наследуют дочерние `artel.py`
+# и вложенные pytest. Место по умолчанию машины тесты не трогают.
+config.PYCACHE_TEMPLATES_DIR = str(_SANDBOX_CONFIG_DIR / "pycache-templates")
+os.environ[config.PYCACHE_TEMPLATES_ENV] = config.PYCACHE_TEMPLATES_DIR
 # Наблюдение неослабления гоняет настоящий pytest на каждом изменённом
 # методе перехода `in_dev -> verifying`; существующие тесты гейта считают
 # запуски и записи журнала без него (SPEC 01M4NZ5W9ZTKGTW7DGZQGMP2GP,

@@ -22,6 +22,7 @@ import sqlite3
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -144,12 +145,477 @@ def _place_command(command, *args: str) -> list[str]:
     return [*own.command, *args, "-p", "no:cacheprovider"]
 
 
-def _place_env(command, run_dir: Path | None = None):
+@contextlib.contextmanager
+def _place_env(command, run_dir: Path | None = None,
+               interpreter: str | None = None) -> Iterator[dict[str, str]]:
     """Окружение прогона места: `_own_env` у `pytest-own`, иначе
     `_pytest_env` (копия окружения пульта). `run_dir` — каталог прогона
-    (`cwd` процесса) для каталога относительной команды профиля в PATH."""
+    (`cwd` процесса) для каталога относительной команды профиля в PATH.
+
+    С `run_dir` префикс прогона наполняется шаблоном байткода
+    интерпретатора (`_warm_prefix`, SPEC 01M6ZEMZB8Q1PKRXMJBJSTPR7T,
+    требование 7): у раннера пульта интерпретатор — `interpreter` (первый
+    элемент argv прогона) либо первый элемент `_pytest_command` места; у
+    `pytest-own` наполняет сам `_own_env`. Без `run_dir` (двусторонний
+    прогон) префикс пуст, как прежде. `_pytest_env` зовётся без
+    аргументов, наполнение — над отданным им окружением."""
     own = _own(command)
-    return _pytest_env() if own is None else _own_env(own, run_dir)
+    if own is not None:
+        with _own_env(own, run_dir) as env:
+            yield env
+        return
+    with _pytest_env() as env:
+        if run_dir is not None:
+            head = interpreter or _pytest_command(command=_head(command))[0]
+            base = {k: v for k, v in env.items()
+                    if k not in (_PREFIX_VAR, _NO_WRITE_VAR)}
+            _warm_prefix(env[_PREFIX_VAR], head, Path(run_dir),
+                         env.get("PATH"), base)
+        yield env
+
+
+# ------------------------------------------------ шаблон байткода
+#
+# Свежий `PYTHONPYCACHEPREFIX` прогона (SPEC 01M3Y7G6T3MK7A899521VF9N7B)
+# заставлял каждый прогон заново компилировать pytest, xdist и стандартную
+# библиотеку в главном процессе и в каждом рабочем. Шаблон — каталог в
+# формате префикса с байткодом только файлов путей своего интерпретатора и
+# манифестом хэшей (SPEC 01M6ZEMZB8Q1PKRXMJBJSTPR7T); перед вызовом pytest
+# пульт копирует в свежий префикс допущенные файлы шаблона. Байткод вне
+# путей интерпретатора (рабочая копия, `cwd`) по-прежнему компилируется
+# заново: в шаблон и префикс он не попадает.
+
+_PREFIX_VAR = "PYTHONPYCACHEPREFIX"
+_NO_WRITE_VAR = "PYTHONDONTWRITEBYTECODE"
+TEMPLATE_MANIFEST = "manifest.json"
+# Начало единственной строки о сбое шаблона в stderr пульта (требование 8).
+TEMPLATE_UNAVAILABLE = "шаблон байткода интерпретатора недоступен"
+_TEMPLATE_FAILED_SUFFIX = ".failed"
+_INTERPRETER_NAME = re.compile(r"python(3(\.\d+)?)?")
+# Тег интерпретатора; у модулей, переписанных pytest (плагины), к нему
+# добавлен хвост `-pytest-<версия>`.
+_CACHE_TAG = re.compile(r"[A-Za-z][\w-]*?(-pytest-\d[\w.]*)?")
+_OPT_LEVEL = re.compile(r"opt-\d+")
+
+# Запрос сведений интерпретатора: печатает их JSON одной строкой.
+_INTERPRETER_INFO_SCRIPT = (
+    "import importlib.util, json, os, site, sys\n"
+    "paths = [sys.prefix, sys.base_prefix, sys.exec_prefix]\n"
+    "paths += list(getattr(site, 'getsitepackages', lambda: [])())\n"
+    "print(json.dumps({'executable': os.path.realpath(sys.executable),\n"
+    "                  'version': sys.version, 'prefix': sys.prefix,\n"
+    "                  'paths': paths, 'tag': sys.implementation.cache_tag,\n"
+    "                  'xdist': importlib.util.find_spec('xdist') is not None,\n"
+    "                  'timeout': importlib.util.find_spec('pytest_timeout')\n"
+    "                  is not None}))\n")
+# Пробный прогон сборки: pytest в пустом каталоге; argv процесса не несёт
+# элемента `pytest` — по нему тесты набора отличают вызов pytest прогона.
+# Запуск — тот же `python -m pytest`, что у прогона (`runpy`), с флагами
+# `_pytest_command`: импортируется тот же набор модулей.
+_TEMPLATE_BUILD_SCRIPT = (
+    "import runpy, sys\n"
+    "sys.argv = ['pytest', '-p', 'no:cacheprovider', '--rootdir=.',\n"
+    "            '--confcutdir=.', *sys.argv[1:]]\n"
+    "runpy.run_module('pytest', run_name='__main__', alter_sys=True)\n")
+
+
+def pycache_source(relative_path: str) -> str | None:
+    """Абсолютный путь исходника файла `<каталог>/<имя>.<тег>.pyc` каталога
+    в формате `PYTHONPYCACHEPREFIX` (AC-1); `None` — не `.pyc`, без тега
+    интерпретатора или с уровнем оптимизации (`.opt-N.pyc`)."""
+    directory, _, name = relative_path.rpartition("/")
+    if not name.endswith(".pyc"):
+        return None
+    stem, sep, tag = name[:-len(".pyc")].partition(".")
+    if not stem or not sep or not _CACHE_TAG.fullmatch(tag) \
+            or _OPT_LEVEL.fullmatch(tag):
+        return None
+    return posixpath.join("/", directory, f"{stem}.py")
+
+
+def _under(real: str, base: str) -> bool:
+    return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
+
+
+def _real_paths(paths) -> list[str]:
+    return [os.path.realpath(str(p)) for p in paths if p]
+
+
+def _admits_real(real_source: str, real_paths: list[str],
+                 real_excluded: list[str]) -> bool:
+    if not any(_under(real_source, p) for p in real_paths if p != os.sep):
+        return False
+    return not any(_under(real_source, e) for e in real_excluded)
+
+
+def template_admits(source: str, interpreter_paths: list[str],
+                    excluded: list[str]) -> bool:
+    """Исходник допускается в шаблон и префикс (AC-2): лежит под одним из
+    путей интерпретатора (корень `/` не в счёт) и ни под одним
+    исключённым каталогом; все входы — после `os.path.realpath`, «лежит
+    под» — по границе компонента пути."""
+    return _admits_real(os.path.realpath(source), _real_paths(interpreter_paths),
+                        _real_paths(excluded))
+
+
+def template_dir(executable: str, version: str, prefix: str) -> str:
+    """Каталог шаблона интерпретатора (AC-3) — прямой потомок
+    `config.PYCACHE_TEMPLATES_DIR`. Ключ — реальный путь исполняемого
+    файла, `sys.version` и `sys.prefix`: исполняемый файл venv — ссылка на
+    базовый интерпретатор, и у разных venv одного Python реальный путь
+    общий, а `site-packages` разные."""
+    key = "\0".join((executable, version, prefix)).encode("utf-8")
+    name = "py-" + hashlib.sha256(key).hexdigest()[:32]
+    return os.path.join(str(config.PYCACHE_TEMPLATES_DIR), name)
+
+
+def manifest_intact(manifest_text: str | None, file_hashes: dict) -> bool:
+    """Шаблон цел (AC-5): манифест — JSON-объект «путь → sha256», его
+    ключи и значения совпадают с `file_hashes` (файлы каталога без
+    манифеста), и хотя бы один ключ ведёт в каталог `_pytest`."""
+    if manifest_text is None:
+        return False
+    try:
+        manifest = json.loads(manifest_text)
+    except ValueError:
+        return False
+    if not isinstance(manifest, dict) or manifest != dict(file_hashes):
+        return False
+    return any("_pytest" in str(key).split("/")[:-1] for key in manifest)
+
+
+def publish_template(staging: str, final: str) -> bool:
+    """Публикация собранного шаблона (AC-6): `final` нет — `staging`
+    переименовывается в него, `True`; `final` уже есть (сборщик проиграл
+    гонку) — `final` не трогается, `staging` удаляется, `False`."""
+    if not os.path.lexists(final):
+        try:
+            os.rename(staging, final)
+            return True
+        except OSError:
+            pass
+    shutil.rmtree(staging, ignore_errors=True)
+    return False
+
+
+def template_decision(owner_uid: int, mode: int, uid: int, present: bool,
+                      intact: bool, failed_age_sec: float | None,
+                      retry_sec: float) -> str:
+    """Что делать с шаблоном на прогоне (AC-7): `untrusted` — место чужое
+    или открыто группе/прочим; `fill`, `discard` — шаблон стоит, цел или
+    повреждён; `skip` — шаблона нет, свежая отметка неудачи; `build`."""
+    if owner_uid != uid or mode & 0o077:
+        return "untrusted"
+    if present:
+        return "fill" if intact else "discard"
+    if failed_age_sec is not None and failed_age_sec < retry_sec:
+        return "skip"
+    return "build"
+
+
+def command_interpreter(command: list[str]) -> str | None:
+    """Интерпретатор команды прогона (AC-8): первый элемент как есть, если
+    его базовое имя `python`, `python3` или `python3.<N>`; иначе `None`."""
+    if not command:
+        return None
+    head = command[0]
+    return head if _INTERPRETER_NAME.fullmatch(os.path.basename(head)) else None
+
+
+def _resolve_interpreter(head: str, run_dir: Path,
+                         search_path: str | None) -> str | None:
+    """Путь интерпретатора так, как его разрешит запуск прогона:
+    абсолютный — как есть, относительный с `/` — от `run_dir`, голое имя —
+    поиском по PATH окружения прогона; не исполняемый файл — `None`."""
+    if os.path.isabs(head):
+        path = head
+    elif "/" in head:
+        path = os.path.join(str(run_dir), head)
+    else:
+        path = shutil.which(head, path=search_path) if search_path else None
+    if path and os.path.isfile(path) and os.access(path, os.X_OK):
+        return path
+    return None
+
+
+class _TemplateUnavailable(Exception):
+    """Шаблон в этом прогоне не используется; текст — причина."""
+
+
+def _helper_run(argv: list[str], env: dict) -> subprocess.CompletedProcess:
+    """Процесс запроса или сборки: пустой временный `cwd`, предел
+    `config.PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC`. Любое исключение и любой
+    вывод разбирает вызывающий; здесь сбой — `_TemplateUnavailable`."""
+    cwd = tempfile.mkdtemp(prefix="artel-pycache-cwd-")
+    try:
+        return subprocess.run(argv, cwd=cwd, env=env, capture_output=True,
+                              text=True, stdin=subprocess.DEVNULL,
+                              timeout=config.PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC,
+                              start_new_session=True)
+    except subprocess.TimeoutExpired:
+        raise _TemplateUnavailable(
+            f"превышен предел {config.PYCACHE_TEMPLATE_BUILD_TIMEOUT_SEC} с") from None
+    except Exception as exc:  # noqa: BLE001 — сбой шаблона не роняет прогон
+        raise _TemplateUnavailable(f"процесс не запустился ({exc})") from None
+    finally:
+        _remove_cache_dir(cwd)
+
+
+def _interpreter_info(interpreter: str, env: dict) -> dict:
+    """Сведения интерпретатора от него самого: реальный путь, версия,
+    `sys.prefix`, пути, `cache_tag`, есть ли xdist."""
+    res = _helper_run([interpreter, "-c", _INTERPRETER_INFO_SCRIPT], env)
+    try:
+        if res.returncode != 0:
+            raise ValueError(f"код {res.returncode}")
+        info = json.loads(res.stdout)
+        if not (isinstance(info, dict)
+                and all(isinstance(info.get(k), str)
+                        for k in ("executable", "version", "prefix"))
+                and isinstance(info.get("paths"), list)
+                and all(isinstance(p, str) for p in info["paths"])):
+            raise ValueError("вывод не по форме")
+    except Exception as exc:  # noqa: BLE001 — вывод подмены или чужого процесса
+        raise _TemplateUnavailable(
+            f"сведения интерпретатора {interpreter} не получены ({exc})") from None
+    return info
+
+
+def _read_template(template: str, real_paths: list[str],
+                   real_excluded: list[str]) -> tuple[bool, dict]:
+    """(цел ли шаблон по AC-5, {путь: байты} допущенных AC-2 файлов). Файл
+    читается один раз: те же байты хэшируются для сверки с манифестом и
+    копируются в префикс — расхождение хэша при копировании и есть
+    нецелость шаблона."""
+    manifest_text, hashes, admitted = None, {}, {}
+    for dirpath, _dirnames, filenames in os.walk(template):
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, template).replace(os.sep, "/")
+            if os.path.islink(path):
+                hashes[rel] = ""
+                continue
+            with open(path, "rb") as fh:
+                blob = fh.read()
+            if rel == TEMPLATE_MANIFEST:
+                manifest_text = blob.decode("utf-8", errors="replace")
+                continue
+            hashes[rel] = hashlib.sha256(blob).hexdigest()
+            source = pycache_source(rel)
+            if source is not None and _admits_real(
+                    os.path.realpath(source), real_paths, real_excluded):
+                admitted[rel] = blob
+    return manifest_intact(manifest_text, hashes), admitted
+
+
+def _build_template(interpreter: str, info: dict, final: str, place: str,
+                    env: dict) -> None:
+    """Сборка шаблона пробным прогоном pytest в пустом каталоге с
+    отдельным префиксом; публикация — переименованием staging (`.`-имя в
+    месте шаблонов). Неудача — `_TemplateUnavailable`."""
+    staging = tempfile.mkdtemp(prefix=f".{os.path.basename(final)}.", dir=place)
+    prefix = tempfile.mkdtemp(prefix="artel-pycache-build-")
+    try:
+        build_env = {k: v for k, v in env.items() if k != _NO_WRITE_VAR}
+        build_env[_PREFIX_VAR] = prefix
+        args = ["-p", "timeout"] if info.get("timeout") else []
+        if info.get("xdist"):
+            args += ["-p", "xdist", "-n", "1"]
+        _helper_run([interpreter, "-c", _TEMPLATE_BUILD_SCRIPT, *args], build_env)
+        # `cwd` пробного прогона — пустой каталог `_helper_run`, лежащий в
+        # системном временном каталоге: вне путей интерпретатора.
+        real_paths = _real_paths(info["paths"])
+        real_excluded = _real_paths([config.WORKTREES, config.PROJECTS])
+        manifest = {}
+        for dirpath, _dirnames, filenames in os.walk(prefix):
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                rel = os.path.relpath(path, prefix).replace(os.sep, "/")
+                source = pycache_source(rel)
+                if os.path.islink(path) or source is None or not _admits_real(
+                        os.path.realpath(source), real_paths, real_excluded):
+                    continue
+                with open(path, "rb") as fh:
+                    blob = fh.read()
+                dest = os.path.join(staging, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as fh:
+                    fh.write(blob)
+                manifest[rel] = hashlib.sha256(blob).hexdigest()
+        if not any("_pytest" in rel.split("/")[:-1] for rel in manifest):
+            raise _TemplateUnavailable("сборка не дала байткода пакета _pytest")
+        with open(os.path.join(staging, TEMPLATE_MANIFEST), "w",
+                  encoding="utf-8") as fh:
+            json.dump(manifest, fh, sort_keys=True)
+        publish_template(staging, final)
+    except OSError as exc:
+        raise _TemplateUnavailable(f"сборка не удалась ({exc})") from None
+    finally:
+        if os.path.lexists(staging):
+            shutil.rmtree(staging, ignore_errors=True)
+        _remove_cache_dir(prefix)
+
+
+def _failed_age(mark: str) -> float | None:
+    """Возраст отметки неудачи сборки в секундах; `None` — отметки нет."""
+    try:
+        with open(mark, encoding="utf-8") as fh:
+            text = fh.read().strip()
+    except OSError:
+        return None
+    try:
+        when = float(text)
+    except ValueError:
+        try:
+            when = os.stat(mark).st_mtime
+        except OSError:
+            return None
+    return max(0.0, time.time() - when)
+
+
+def _place_ready(place: str) -> os.stat_result:
+    """`lstat` места шаблонов; место, которого нет, заводится с правами
+    0700 (права заведённого пультом каталога не зависят от umask)."""
+    try:
+        return os.lstat(place)
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(place) or ".", exist_ok=True)
+    try:
+        os.mkdir(place, 0o700)
+        os.chmod(place, 0o700)
+    except FileExistsError:
+        pass
+    return os.lstat(place)
+
+
+def _discard_template(template: str, place: str) -> None:
+    """Повреждённый шаблон — в сторону (`.`-имя) и удалить: следующий
+    прогон соберёт его заново."""
+    aside = os.path.join(place, f".discard-{os.path.basename(template)}-"
+                                f"{os.getpid()}-{time.monotonic_ns()}")
+    try:
+        os.rename(template, aside)
+    except OSError:
+        aside = template
+    shutil.rmtree(aside, ignore_errors=True)
+
+
+def _fill(prefix: str, template: str, real_paths: list[str],
+          real_excluded: list[str]) -> bool:
+    """Копия допущенных файлов целого шаблона в префикс; `False` —
+    шаблон не цел, префикс не тронут."""
+    intact, admitted = _read_template(template, real_paths, real_excluded)
+    if intact:
+        _copy_into(prefix, admitted)
+    return intact
+
+
+def _copy_into(prefix: str, admitted: dict) -> None:
+    """Копия (не ссылки) файлов шаблона в префикс: запись прогона в свой
+    префикс шаблон не меняет."""
+    made = set()
+    for rel, blob in admitted.items():
+        dest = os.path.join(prefix, rel)
+        folder = os.path.dirname(dest)
+        if folder not in made:
+            os.makedirs(folder, exist_ok=True)
+            made.add(folder)
+        with open(dest, "wb") as fh:
+            fh.write(blob)
+
+
+def _warm_prefix(prefix: str, head: str, run_dir: Path,
+                 search_path: str | None, env: dict) -> None:
+    """Наполнение свежего префикса `prefix` прогона шаблоном байткода
+    интерпретатора `head` (требования 5-9). `env` — окружение запроса и
+    сборки (без префикса и без `PYTHONDONTWRITEBYTECODE`). Интерпретатор
+    не распознан или не разрешился — префикс пуст, молча; любой иной отказ
+    — пустой префикс и ровно одна строка `TEMPLATE_UNAVAILABLE` в stderr.
+    Исход прогона от шаблона не зависит: исключений отсюда нет."""
+    if command_interpreter([head]) is None:
+        return
+    interpreter = _resolve_interpreter(head, run_dir, search_path)
+    if interpreter is None:
+        return
+    try:
+        _warm_prefix_from_template(prefix, interpreter, run_dir, env)
+    except _TemplateUnavailable as exc:
+        _empty_prefix(prefix)
+        print(f"{TEMPLATE_UNAVAILABLE}: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — сбой шаблона не роняет прогон
+        _empty_prefix(prefix)
+        print(f"{TEMPLATE_UNAVAILABLE}: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+
+
+def _empty_prefix(prefix: str) -> None:
+    """Префикс снова пуст: копирование, оборванное сбоем, не оставляет
+    в нём половину шаблона."""
+    for entry in os.listdir(prefix):
+        path = os.path.join(prefix, entry)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
+def _warm_prefix_from_template(prefix: str, interpreter: str, run_dir: Path,
+                               env: dict) -> None:
+    place = config.PYCACHE_TEMPLATES_DIR
+    if not place:
+        raise _TemplateUnavailable("место шаблонов лежит под каталогом пульта")
+    if any(_under(os.path.realpath(place), base)
+           for base in _real_paths([config.ROOT, config.WORKTREES,
+                                    config.PROJECTS])):
+        raise _TemplateUnavailable(
+            f"место шаблонов {place} лежит под каталогом пульта")
+    place = str(place)
+    try:
+        st = _place_ready(place)
+    except OSError as exc:
+        raise _TemplateUnavailable(f"место шаблонов {place} не заведено ({exc})") \
+            from None
+    uid = os.getuid()
+    if template_decision(st.st_uid, st.st_mode, uid, False, False, None,
+                         config.PYCACHE_TEMPLATE_RETRY_SEC) == "untrusted":
+        raise _TemplateUnavailable(
+            f"место шаблонов {place} не доверено (владелец {st.st_uid}, права "
+            f"{stat.S_IMODE(st.st_mode):o})")
+    info = _interpreter_info(interpreter, env)
+    template = template_dir(info["executable"], info["version"], info["prefix"])
+    mark = template + _TEMPLATE_FAILED_SUFFIX
+    real_paths = _real_paths(info["paths"])
+    real_excluded = _real_paths([run_dir, config.WORKTREES, config.PROJECTS])
+    present = os.path.isdir(template) and not os.path.islink(template)
+    intact, admitted = (_read_template(template, real_paths, real_excluded)
+                        if present else (False, {}))
+    decision = template_decision(st.st_uid, st.st_mode, uid, present, intact,
+                                 _failed_age(mark),
+                                 config.PYCACHE_TEMPLATE_RETRY_SEC)
+    if decision == "discard":
+        _discard_template(template, place)
+        raise _TemplateUnavailable(f"шаблон {template} повреждён и убран")
+    if decision == "skip":
+        raise _TemplateUnavailable(
+            f"сборка шаблона {template} не удалась менее "
+            f"{config.PYCACHE_TEMPLATE_RETRY_SEC} с назад ({mark})")
+    if decision == "build":
+        try:
+            _build_template(interpreter, info, template, place, env)
+        except _TemplateUnavailable:
+            with contextlib.suppress(OSError), open(mark, "w",
+                                                    encoding="utf-8") as fh:
+                fh.write(str(int(time.time())))
+            raise
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(mark)
+        if not _fill(prefix, template, real_paths, real_excluded):
+            _discard_template(template, place)
+            raise _TemplateUnavailable(f"шаблон {template} повреждён и убран")
+        return
+    _copy_into(prefix, admitted)
 
 
 # Системные каталоги в хвосте PATH прогона `pytest-own` (SPEC
@@ -207,6 +673,12 @@ def _own_env(profile, run_dir: Path | None = None) -> Iterator[dict[str, str]]:
         env.update(profile.env)
         env["HOME"] = home
         env["PYTHONPYCACHEPREFIX"] = cache_dir
+        if run_dir is not None:
+            base = {k: v for k, v in env.items()
+                    if k not in (_PREFIX_VAR, _NO_WRITE_VAR)}
+            _warm_prefix(cache_dir, profile.command[0] if profile.command
+                         else "", Path(run_dir), _own_path(profile, run_dir),
+                         base)
         yield env
     finally:
         _remove_cache_dir(cache_dir)
@@ -3360,7 +3832,7 @@ def _run_full_suite_now(argv: list[str], root: Path,
                                       profile=profile)
     if observe:
         global _last_process_snapshot, _last_run_completed_at
-        with _place_env(profile, root) as env:
+        with _place_env(profile, root, argv[0]) as env:
             proc = _launch(
                 argv, root, profile is not None, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -3382,7 +3854,7 @@ def _run_full_suite_now(argv: list[str], root: Path,
         _last_process_snapshot = _process_snapshot(proc.pid)
         return proc.returncode == 0, stdout + stderr
     try:
-        with _place_env(profile, root) as env:
+        with _place_env(profile, root, argv[0]) as env:
             res = _run_pytest(profile, argv, root, env, limit[0])
     except subprocess.TimeoutExpired as exc:
         output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
@@ -3437,7 +3909,7 @@ def _run_full_suite_to_log(argv: list[str], root: Path,
     01M5MJFSYW6MH0WD05CY8V75TX); его останавливают и ждут после отметки
     `_last_run_completed_at`."""
     timed_out = False
-    with _place_env(profile, root) as env, open(log, "wb") as fh, \
+    with _place_env(profile, root, argv[0]) as env, open(log, "wb") as fh, \
             _durations_reader(log, profile):
         env["PYTHONUNBUFFERED"] = "1"
         proc = _launch(argv, root, profile is not None, env=env, stdout=fh,
