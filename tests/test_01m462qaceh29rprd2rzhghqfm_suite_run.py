@@ -856,9 +856,12 @@ class TimeoutTest(SuiteRunSandbox):
         out = self.report(task_id, cwd=wt)
         self.assertIn("не уложился", out, self.explain(out))
         # Зелёных — P тестов ветки и тест базы проекта.
-        for number in (n_pass + 1, n_fail):
+        for phrase, number in (("прошло:", n_pass + 1), ("упало:", n_fail)):
             self.assertTrue(standalone(number, out),
                             f"числа {number} нет; {self.explain(out)}")
+            self.assertEqual(phrase_number(out, phrase), number,
+                             f"числа {number} рядом с «{phrase}» нет; "
+                             f"{self.explain(out)}")
         self.assertTrue(any(p.is_file() for p in self.paths_in(out)),
                         f"лога нет; {self.explain(out)}")
 
@@ -1070,15 +1073,21 @@ class BaseTimeoutTest(SuiteRunSandbox):
                  "--detach", str(gate), self.base_sha(target))
         with mock.patch.object(config, "FULL_SUITE_WORKERS", "1"), \
                 mock.patch.object(config, "FULL_SUITE_TIMEOUT_SEC", 3):
-            result = acceptance.full_suite(gate, self.task_id())
+            result = acceptance.full_suite(
+                gate, self.task_id(), command=[str(self.python), "-m", "pytest"])
         self.assertFalse(result.green, result.detail)
         self.assertEqual(result.outcome, acceptance.FULL_SUITE_TIMEOUT,
                          result.detail)
+        # Прогон гейта сам идёт через обёртку вне рабочей копии задачи —
+        # счёт прогонов базы `suite-run` начинается после него.
+        self.assertEqual(len(self.base_calls()), 1,
+                         "прогон гейта прошёл мимо обёртки профиля")
+        before = len(self.base_calls())
         self.release()
         task_id, wt = self.add_task(target, committed={block: passing(block)})
         self.launch(task_id, cwd=wt)
         out = self.report(task_id, cwd=wt)
-        self.assertEqual(len(self.base_calls()), 1,
+        self.assertEqual(len(self.base_calls()), before + 1,
                          f"база не прогнана после таймаута гейта; "
                          f"{self.explain(out)}")
 
