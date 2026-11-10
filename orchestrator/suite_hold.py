@@ -184,5 +184,9 @@ def cmd_suite_lock(argv: list[str]) -> int:
         except _Signalled as exc:
             return 128 + exc.signum
         finally:
+            # Сигнал посреди снятия оборвал бы его исключением мимо
+            # `except` — на время снятия сигналы не принимаются.
+            for s in _SIGNALS:
+                signal.signal(s, signal.SIG_IGN)
             # Чужой замок `release` не трогает — сверяет pid держателя.
             suite_lock.release()
