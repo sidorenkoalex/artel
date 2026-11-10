@@ -206,6 +206,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   workspace <id> | report | acceptance-dry-run <id> |
   plank-run <id> [<файл> | --wait <минуты>] |
   suite-run <id> [--wait <минуты> | --failed] |
+  suite-lock --reason "<основание>" [--limit <секунды>] -- <команда> [аргументы…] |
   suite-cost [--record <sha> | --record-latest] |
   mutation-run <id> --ref <base|head|worktree> --tests <путь>[,<путь>…]
         [--patches <a>-<b>] [--wait <минуты>] [--wait-lock <минуты>]
@@ -713,6 +714,9 @@ origin main или отставание ветки не определены; п
   suite_run команда `suite-run <id> [--wait <минуты> | --failed]`: полный
             прогон тестов проекта задачи фоном у пульта, сравнение с базой
             ветки, повтор упавших (SPEC 01M462QACEH29RPRD2RZHGHQFM)
+  suite_hold команда `suite-lock`: произвольная команда Оператора под замком
+            полных прогонов машины в пределе времени, снятие замка на любом
+            исходе (SPEC 01M70RYD6YXA6DFKCRECSHRKBM)
   suite_cost команда `suite-cost`: сводка цены набора тестов по отчёту
             junit CI `main`, её запись и прирост от задач (SPEC
             01M6Y44ZPXPQCNYDXQG6FMZPK5)
@@ -867,7 +871,7 @@ from orchestrator import (amend, answer, artifact_branch,  # noqa: E402
                           pool_seal, preflight, projects, prune, pull_main,
                           release,
                           report, runner, session, snapshot, store,
-                          suite_cost, suite_run,
+                          suite_cost, suite_hold, suite_run,
                           targets, task_files, venv, verify, version, watch,
                           workspace, zone_lock)
 from orchestrator.advance_gates import spec_audit  # noqa: E402
@@ -2806,6 +2810,10 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "plank-run": lambda: plank_run.cmd_plank_run(rest[0], *rest[1:]),
         "suite-run": lambda: suite_run.cmd_suite_run(rest),
+        # Держит замок машины за командой Оператора — вне белого списка
+        # ролей (SPEC 01M70RYD6YXA6DFKCRECSHRKBM, требование 8); код выхода —
+        # код команды.
+        "suite-lock": lambda: sys.exit(suite_hold.cmd_suite_lock(rest)),
         # Пишет сводку цены набора в БД пульта и ходит в API хостинга —
         # команда Оператора, вне белого списка ролей (SPEC
         # 01M6Y44ZPXPQCNYDXQG6FMZPK5, требование 6).
