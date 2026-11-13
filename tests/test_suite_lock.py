@@ -11,6 +11,7 @@
 import json
 import os
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -32,6 +33,45 @@ def foreign_lock(task_id: str = HOLDER_TASK, kind: str = suite_lock.KIND_GATE,
                                 "kind": kind}), encoding="utf-8")
 
 
+class PollClock:
+    """Заместитель ссылки `suite_lock.time`: часы ожидания идут только
+    паузами опроса (SPEC 01M70RYN0GMSVJRFK5Y96N8MWP).
+
+    `monotonic` не читает настоящие часы, `sleep(x)` продвигает его на `x`:
+    срок ожидания считается числом опросов, и медленная машина не
+    съедает его до второго опроса. Глобальный `time.monotonic` не
+    трогается — его читают `threading` и обвязка xdist. Каждый из
+    `monotonic` и `sleep` после `MAX_CALLS` вызовов бросает исключение:
+    ожидание без предела (с паузой или без) краснеет, а не виснет."""
+
+    MAX_CALLS = 1000
+
+    def __init__(self):
+        self.now = 0.0
+        self.calls = {"monotonic": 0, "sleep": 0}
+
+    def _count(self, name):
+        self.calls[name] += 1
+        if self.calls[name] > self.MAX_CALLS:
+            raise AssertionError(
+                f"ожидание замка не ограничено: больше {self.MAX_CALLS} "
+                f"вызовов {name}")
+
+    def monotonic(self):
+        self._count("monotonic")
+        return self.now
+
+    def sleep(self, sec):
+        self._count("sleep")
+        self.now += sec
+
+    def time(self):
+        return time.time()
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 class WaitAcquireTest(TmpRootTest):
 
     def test_wait_reports_holder_once_per_holder_and_gives_up_at_limit(self):
@@ -48,7 +88,7 @@ class WaitAcquireTest(TmpRootTest):
         не соблюдается (замок берётся поверх живого держателя — исход
         `None`, файл переписан); ожидание без предела — вызов не вернётся.
         """
-        patcher = mock.patch.object(suite_lock, "POLL_SEC", 0.01)
+        patcher = mock.patch.object(suite_lock, "time", PollClock())
         patcher.start()
         self.addCleanup(patcher.stop)
         foreign_lock()
